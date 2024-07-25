@@ -3,9 +3,9 @@
     Step 2. This will create a Langchain LCEL template from the file.
     Step 3. This will use the "gpt-4o-mini" and a temperature of 0 for the model.
     Step 4. This will run the prompt through the model using Langchain LCEL.
-    Step 5. This will print the result to the console.
+    Step 5. This will pretty print the result to the console using any markdown formatting that is present in the result.
     Step 6. This will strip the python result of the model. The python result will be encapsulated in triple backticks followed by the word "python". There might be other blocks in triple backticks that are not python. The program will only strip the python block.
-    Step 7. Finally, the program will write the python to a file with the same name as the input file but with a .py extension.
+    Step 7. Finally, the program will write the python to a file with the same name and path as the input file but with a .py extension. If a "-o" option is provided, the program will write the python to the file name provided. If the file already exists, the program will ask before overwriting it unless a "-force" is present. It will default to Yes if user presses Enter.
 
 % Here is an example of a Langchain LCEL program: ```from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
