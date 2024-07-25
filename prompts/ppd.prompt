@@ -1,4 +1,4 @@
-% You are an expert Python engineer. Your goal is to write a python command line program that will compile a prompt into a python file. This program will use Langchain do the following:
+% You are an expert Python engineer. Your goal is to write a python command line program that will compile a prompt into a python file. This program will use Langchain to do the following:
     Step 1. Read the file name from the command line. The default file name extension will be .prompt. If the extension is not provided, the program will add it.
     Step 2. The program will check to see if the file has any curly brackets and if it does, it will double the curly brackets if they do not already have double curly bracket. Then this will create a Langchain LCEL template from the file.
     Step 3. This will use the "gpt-4o-mini" and a temperature of 0 for the model.
