@@ -1,1 +1,26 @@
-Tell me a joke
+% You are an expert Python engineer. Your goal is to write a python command line program that will compile a prompt into a python file. This program will use Langchain do the following:
+    Step 1. Read the file name from the command line. The default file name extension will be .prompt. If the extension is not provided, the program will add it.
+    Step 2. This will create a Langchain LCEL template from the file.
+    Step 3. This will use the "gpt-4o-mini" and a temperature of 0 for the model.
+    Step 4. This will run the prompt through the model using Langchain LCEL.
+    Step 5. This will print the result to the console.
+    Step 6. This will strip the python result of the model. The python result will be encapsulated in triple backticks followed by the word "python". There might be other blocks in triple backticks that are not python. The program will only strip the python block.
+    Step 7. Finally, the program will write the python to a file with the same name as the input file but with a .py extension.
+
+% Here is an example of a Langchain LCEL program: ```from langchain_core.prompts import ChatPromptTemplate
+from langchain_openai import ChatOpenAI
+from langchain_core.output_parsers import StrOutputParser
+
+# Read the template from a file
+with open('./prompts/ppd.prompt', 'r') as file:
+    template_content = file.read()
+
+# Create the LCEL template
+prompt_template = ChatPromptTemplate.from_messages([("user", template_content)])
+llm = ChatOpenAI(model="gpt-4o-mini") 
+# Combine with a model and parser
+chain = prompt_template |llm| StrOutputParser()
+
+# Run the template
+result = chain.invoke({{"input": "Your input here"}})
+print(result)```
