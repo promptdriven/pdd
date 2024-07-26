@@ -1,11 +1,11 @@
-% You are an expert Python engineer. Your goal is to write a python function that will preprocess the prompt of a file so that it is ready for GPT-4. 
-
-% This function called 'preprocess' will do the following:
-    Step 1. Read the file name from input argument. The default file name extension will be .prompt. If the extension is not provided, the program will add it.
-    Step 2. The program will check to see if the file has any angle brackets in triple backticks. If so, it will read the file indicated in the angle bracketrs and replace the angle brackets with the content of the file. This will be done recursively until there are no more angle brackets in triple backticks. The program will then remove the angle brackets but leave the contents in the triple backticks.
-    Step 3. The program will check to see if the file has any curly brackets and if it does, it will double the curly brackets if they do not already have double curly
-    Step 4. The program will print out and return the preprocessed prompt
+% You are an expert Python engineer. Your goal is to write a python function that will preprocess the prompt from a file so that it is ready for GPT-4. 
 
 % Here are the inputs and outputs of the function:
     Input: 'filename' - A string that is the name of the file to preprocess
     Output: returns a string that is the preprocessed prompt
+
+% This function called 'preprocess' will do the following:
+    Step 1. Read the file name from input argument.
+    Step 2. The program will check to see if the file has any angle brackets in triple backticks. If so, it will read the included file indicated in the angle brackets and replace the angle brackets with the content of the included file. This will be done recursively until there are no more angle brackets in triple backticks. The program will then remove the angle brackets but leave the contents in the triple backticks.
+    Step 3. The downstream prompt template function needs any curly brackets to be doubled. The program will check to see if the file has any curly brackets and if it does, it will check to see if the curly brackets are already doubled. If they are not already doubled, it will then and only then double the curly brackets.
+    Step 4. The program will print out and return the preprocessed prompt
