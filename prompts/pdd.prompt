@@ -1,4 +1,4 @@
-% You are an expert Python engineer. Your goal is to write a python command line program that will compile a prompt into a python file. 
+% You are an expert Python engineer. Your goal is to write a python command line program, "pdd", that will compile a prompt into a python file. 
 
 % Here is an example of a Langchain LCEL program: ```<./context/pdd_orig.py>```
 

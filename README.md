@@ -5,5 +5,3 @@ TODO:
     create make files
     create readme
     run lint
-
-    read context from another file
