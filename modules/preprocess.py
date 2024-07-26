@@ -1,37 +1,38 @@
 import os
 import re
 
-def preprocess(filename):
-    def read_file(file_path):
-        with open(file_path, 'r') as f:
-            return f.read()
+def read_file_content(filename):
+    """Read the content of a file."""
+    with open(filename, 'r') as file:
+        return file.read()
 
-    def replace_includes(text):
-        # This regex finds text in triple backticks with angle brackets
-        pattern = r'```<([^>]+)>```'
-        while re.search(pattern, text):
-            text = re.sub(pattern, lambda m: read_file(m.group(1).strip()), text)
-        return text
-
-    def double_curly_braces(text):
-        # This regex finds single curly braces and doubles them if not already doubled
-        return re.sub(r'(?<!{){(?!{)', '{{', text)
-
-    # Step 1: Read the file content
-    if not os.path.isfile(filename):
-        raise FileNotFoundError(f"The file {filename} does not exist.")
+def replace_included_files(content):
+    """Recursively replace angle brackets in triple backticks with file content."""
+    pattern = r'```<([^>]+)>```'
     
-    content = read_file(filename)
+    while re.search(pattern, content):
+        content = re.sub(pattern, lambda match: read_file_content(match.group(1).strip()), content)
+    
+    return content
 
-    # Step 2: Replace angle brackets in triple backticks recursively
-    content = replace_includes(content)
+def double_curly_braces(content):
+    """Double the curly braces if they are not already doubled."""
+    return re.sub(r'(?<!{){(?!{)', '{{', content)
 
-    # Step 3: Double any curly brackets that are not already doubled
+def preprocess(filename):
+    """Preprocess the prompt from the specified file."""
+    # Step 1: Read the file content
+    content = read_file_content(filename)
+    
+    # Step 2: Replace angle brackets in triple backticks with file content
+    content = replace_included_files(content)
+    
+    # Step 3: Double the curly brackets if they are not already doubled
     content = double_curly_braces(content)
-
-    # Step 4: Print and return the preprocessed prompt
-    print(content)
+    
+    # Step 4: Return the preprocessed prompt
     return content
 
 # Example usage:
 # preprocessed_prompt = preprocess('your_file.txt')
+# print(preprocessed_prompt)
