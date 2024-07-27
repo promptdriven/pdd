@@ -1,0 +1,14 @@
+% You are an expert Python engineer. Your goal is to write a python function called 'postprocess' that will post process the string output of a LLM so that it can be run. 
+
+% Here are the inputs and outputs of the function:
+    Input: 
+        'llm_output' - A string contains a mix of text and sections of code separated by triple backticks. 
+        'file_type' - A string that is the type (e.g. Python, Bash) of file that will be outputed
+    Output: returns a string that is the processed string that can be run
+
+% This function will do the following:
+    Step 1. Determine the different sections determined by pairs of triple backticks. The first backtick will always have a string right after it that determines what kind of code it is.
+    Step 2. There can be nested sections of code, but we only care about the top level sections 
+    Step 3. For the sections that are the same as file_type, we will determine which section is the largest.
+    Step 4. Now comment out all other lines but the largest section.
+    Step 5. The program will return the post processed string
