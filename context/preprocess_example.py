@@ -2,7 +2,7 @@ Here's a concise example of how to use the `preprocess` function defined in your
 
 ```python
 # Assuming the preprocess function is defined in a module named 'preprocessor'
-from preprocessor import preprocess
+from context.preprocess_example import preprocess
 
 def main():
     filename = 'example.txt'  # Specify the path to your input file
