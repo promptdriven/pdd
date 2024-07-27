@@ -1,30 +1,26 @@
-from pdd.preprocess import preprocess
-from rich.console import Console   
-console = Console()     
+Here's a concise example of how to use the `preprocess` function defined in your module. This example assumes you have a text file named `example.txt` that contains some content with triple backticks and curly braces.
 
-prompt = """
-<prompt>
-    <shell>echo Hello World</shell>
-    <pdd>This is a comment</pdd>
-    <web>https://www.google.com</web>
-    {test}
-    {test2}
-    ```<TODO.md>```
+```python
+# Assuming the preprocess function is defined in a module named 'preprocessor'
+from context.preprocess_example import preprocess
 
-    <pdd>
-        multi-line
-        comment should not show up
-    </pdd>
-</prompt>
-"""
+def main():
+    filename = 'example.txt'  # Specify the path to your input file
+    try:
+        processed_content = preprocess(filename)
+        print("Processed Content:")
+        print(processed_content)
+    except FileNotFoundError as e:
+        print(e)
 
-recursive = False
-double_curly_brackets = True
-exclude_keys = ["test2"] # exclude test2 from being doubled
+if __name__ == "__main__":
+    main()
+```
 
-# Debug info
-console.print(f"[bold yellow]Debug: exclude_keys = {exclude_keys}[/bold yellow]")
+### Explanation:
+1. **Import the Function**: The `preprocess` function is imported from the module where it is defined.
+2. **Specify the Filename**: The path to the input file (`example.txt`) is specified.
+3. **Call the Function**: The `preprocess` function is called, and the processed content is printed.
+4. **Error Handling**: A `try-except` block is used to handle the case where the specified file does not exist. 
 
-processed = preprocess(prompt, recursive, double_curly_brackets, exclude_keys=exclude_keys)
-console.print("[bold white]Processed Prompt:[/bold white]")
-console.print(processed)
+Make sure to replace `'example.txt'` with the actual path to your file containing the content you want to preprocess.

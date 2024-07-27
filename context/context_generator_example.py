@@ -1,31 +1,24 @@
-import os
-from pdd.context_generator import context_generator
-from rich import print
+Here's a concise example of how to use the `context_generator` function you provided. This example assumes you have a Python file named `example_module.py` that you want to process and generate an output file named `output_example.txt`.
 
-# Ensure PDD_PATH environment variable is set
-pdd_path = os.getenv('PDD_PATH')
-if not pdd_path:
-    raise ValueError("PDD_PATH environment variable is not set")
+```python
+# Example usage of the context_generator function
 
-# Define input parameters
-code_module = "def add(a, b):\n    return a + b"
-prompt = "Write a function 'add' that adds two numbers."
-language = "python"
-strength = 0.5
-temperature = 0.0
+if __name__ == "__main__":
+    # Define the input and output file names
+    python_filename = 'example_module.py'
+    output_filename = 'output_example.txt'
+    
+    # Call the context_generator function
+    success = context_generator(python_filename, output_filename, force=False)
+    
+    # Check if the operation was successful
+    if success:
+        print("Context generation completed successfully.")
+    else:
+        print("Context generation failed.")
+```
 
-# Call the context_generator function
-example_code, total_cost, model_name = context_generator(
-    code_module=code_module,
-    prompt=prompt,
-    language=language,
-    strength=strength,
-    temperature=temperature,
-    verbose=True
-)
-
-# Print the results
-print("[bold]Generated Example Code:[/bold]")
-print(example_code)
-print(f"\n[bold]Total Cost:[/bold] ${total_cost:.6f}")
-print(f"[bold]Model Used:[/bold] {model_name}")
+### Instructions:
+1. Ensure you have the necessary modules installed and available in your environment.
+2. Create a Python file named `example_module.py` with some code that you want to generate an example for.
+3. Run the script above to generate the output file `output_example.txt` with the concise example based on the contents of `example_module.py`.
