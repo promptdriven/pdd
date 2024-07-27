@@ -1,0 +1,5 @@
+langchain_core==0.2.24
+langchain_openai==0.1.19
+rich==13.7.1
+tiktoken==0.7.0
+pipreqs
