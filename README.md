@@ -3,5 +3,8 @@ Prompt Driven Development Compiler
 
 TODO:
     create make files
-    create readme
+    make tests
     run lint
+    run tests
+    auto-includes
+    create readme
