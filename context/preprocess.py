@@ -19,9 +19,8 @@ if __name__ == "__main__":
 
 ### Explanation:
 1. **Import the Function**: The `preprocess` function is imported from the module where it is defined.
-2. **Specify the Filename**: The filename of the text file to be processed is specified.
+2. **Specify the Filename**: The path to the input file (`example.txt`) is specified.
 3. **Call the Function**: The `preprocess` function is called, and the processed content is printed.
-4. **Error Handling**: If the file does not exist, a `FileNotFoundError` is caught and printed.
+4. **Error Handling**: A `try-except` block is used to handle the case where the specified file does not exist. 
 
-### Note:
-Make sure to create an `example.txt` file with appropriate content that includes triple backticks and curly braces for testing the function.
+Make sure to replace `'example.txt'` with the actual path to your file containing the content you want to preprocess.
