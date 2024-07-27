@@ -1,6 +1,6 @@
 % You are an expert Python engineer. Your goal is to write a python command line program, "pdd", that will compile a prompt into a python file. 
 
-% Here is an example of a Langchain LCEL program: ```<./context/pdd_orig.py>```
+% Here is an example of a Langchain LCEL program: ```<./context/langchain_lcel.py>```
 
 % Here is how to preprocess the prompt from a file: ```from preprocess import preprocess
  preprocessed_prompt = preprocess('example.prompt')```                
