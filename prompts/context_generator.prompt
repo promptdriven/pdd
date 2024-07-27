@@ -18,5 +18,6 @@
     Step 4. Then this will create a Langchain LCEL template from the generated prompt.
     Step 5. This will use the "gpt-4o-mini" and a temperature of 0 for the model.
     Step 6. This will run the Python file through the model using Langchain LCEL being sure to pass the Python file text and python_filename in as JSON keys when the chain is invoked.
+    Step 7. The LCEL output will contain a mix of text and Python code separated by triple backticks. So that this Python example can run properly, add "#" before each line that isn't valid Python code. before and including the first triple backtick, and then including and after the next triple backtick to comment out all non-Python comments.
     Step 7. Finally, the function will write the Python example to the output_filename. If the file already exists, the program will ask before overwriting it unless a "force" is True.
     
