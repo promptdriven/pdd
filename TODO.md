@@ -3,6 +3,7 @@
 ## Features
 
 - [ ] create make files
+- [ ] create requirements.txt
 - [ ] make tests
 - [ ] auto reflect
 - [ ] run lint for context for better reflection
