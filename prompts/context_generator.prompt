@@ -2,6 +2,8 @@
 
 % Here is an example of a Langchain LCEL program: ```<./context/pdd_orig.py>```
 
+% Here is how to preprocess the prompt from a file: ```<./context/preprocess.py>``` 
+
 % Here are the inputs and outputs of the function:
     Input: 
         'python_filename' - A string that is the name of the file to read in
@@ -11,9 +13,10 @@
 
 % This function will do the following:
     Step 1. Read the Python file name from input argument.
-    Step 2. Write a prompt suitable for GPT-4 that will look at the Python file and generate a concise example of how to use the module properly.
-    Step 3. Then this will create a Langchain LCEL template from the generated prompt.
-    Step 4. This will use the "gpt-4o-mini" and a temperature of 0 for the model.
-    Step 5. This will run the Python file through the model using Langchain LCEL.
-    Step 6. Finally, the function will write the Python example to the output_filename. If the file already exists, the program will ask before overwriting it unless a "force" is True.
+    Step 2. Preprocess the file using the preprocess function from the preprocess module.
+    Step 3. Write a prompt suitable for GPT-4 that will look at the Python file and generate a concise example of how to use the module properly.
+    Step 4. Then this will create a Langchain LCEL template from the generated prompt.
+    Step 5. This will use the "gpt-4o-mini" and a temperature of 0 for the model.
+    Step 6. This will run the Python file through the model using Langchain LCEL being sure to pass the Python file text in as a JSON key when the chain is invoked.
+    Step 7. Finally, the function will write the Python example to the output_filename. If the file already exists, the program will ask before overwriting it unless a "force" is True.
     
