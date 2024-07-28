@@ -19,6 +19,7 @@
 ## Improvements
 
 - [ ] postprocess.prompt requires sonnet 3.5 and isn't stable
+- [ ] read from a csv file the comment and file extension 
 
 ## Documentation
 
