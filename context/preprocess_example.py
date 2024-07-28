@@ -1,26 +1,24 @@
-Here's a concise example of how to use the `preprocess` function defined in your module. This example assumes you have a text file named `example.txt` that contains some content with triple backticks and curly braces.
+# Here's a concise example of how to use the `preprocess` function from the provided module:
 
-```python
-# Assuming the preprocess function is defined in a module named 'preprocessor'
-from context.preprocess_example import preprocess
+# ```python
+# Import the preprocess function from the module
+from preprocess import preprocess
 
-def main():
-    filename = 'example.txt'  # Specify the path to your input file
-    try:
-        processed_content = preprocess(filename)
-        print("Processed Content:")
-        print(processed_content)
-    except FileNotFoundError as e:
-        print(e)
+# Specify the path to the file you want to preprocess
+filename = '../pdd/input_file.txt'
 
-if __name__ == "__main__":
-    main()
-```
+try:
+    # Call the preprocess function and store the result
+    processed_content = preprocess(filename)
+    
+    # Print the preprocessed content
+    print(processed_content)
+except FileNotFoundError as e:
+    print(e)
+# ```
 
-### Explanation:
-1. **Import the Function**: The `preprocess` function is imported from the module where it is defined.
-2. **Specify the Filename**: The path to the input file (`example.txt`) is specified.
-3. **Call the Function**: The `preprocess` function is called, and the processed content is printed.
-4. **Error Handling**: A `try-except` block is used to handle the case where the specified file does not exist. 
-
-Make sure to replace `'example.txt'` with the actual path to your file containing the content you want to preprocess.
+# ### Explanation:
+# 1. **Import the Function**: Import the `preprocess` function from the module where it is defined.
+# 2. **Specify the Filename**: Set the `filename` variable to the path of the file you want to preprocess.
+# 3. **Call the Function**: Use a try-except block to call `preprocess`, handling any potential `FileNotFoundError`.
+# 4. **Output the Result**: Print the processed content to see the results.

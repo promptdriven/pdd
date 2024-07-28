@@ -1,24 +1,26 @@
-Here's a concise example of how to use the `context_generator` function you provided. This example assumes you have a Python file named `example_module.py` that you want to process and generate an output file named `output_example.txt`.
+# To use the `context_generator` function defined in the provided code, you need to ensure that you have the necessary modules and functions (`preprocess`, `postprocess`, etc.) available in your environment. Below is a concise example of how to call the `context_generator` function from a Python script.
 
-```python
-# Example usage of the context_generator function
+# ### Example Usage
 
-if __name__ == "__main__":
-    # Define the input and output file names
-    python_filename = 'example_module.py'
-    output_filename = 'output_example.txt'
-    
-    # Call the context_generator function
-    success = context_generator(python_filename, output_filename, force=False)
-    
-    # Check if the operation was successful
-    if success:
-        print("Context generation completed successfully.")
-    else:
-        print("Context generation failed.")
-```
+# ```python
+# Import the context_generator function
+from context_generator import context_generator
 
-### Instructions:
-1. Ensure you have the necessary modules installed and available in your environment.
-2. Create a Python file named `example_module.py` with some code that you want to generate an example for.
-3. Run the script above to generate the output file `output_example.txt` with the concise example based on the contents of `example_module.py`.
+# Define the input Python file and output file
+input_python_file = 'path/to/your/module.py'  # Replace with the path to your Python file
+output_file = 'path/to/output/example_usage.py'  # Replace with the desired output file path
+
+# Call the context_generator function
+success = context_generator(input_python_file, output_file, force=True)
+
+# Check the result
+if success:
+    print("Context generation completed successfully.")
+else:
+    print("Context generation failed.")
+# ```
+
+# ### Notes:
+# - Replace `'path/to/your/module.py'` with the actual path to the Python file you want to process.
+# - Replace `'path/to/output/example_usage.py'` with the desired path for the output file where the generated example will be saved.
+# - The `force=True` argument allows overwriting the output file if it already exists. Set it to `False` if you want to avoid overwriting without confirmation.
