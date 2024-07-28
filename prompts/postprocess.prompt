@@ -3,12 +3,145 @@
 % Here are the inputs and outputs of the function:
     Input: 
         'llm_output' - A string contains a mix of text and sections of code separated by triple backticks. 
-        'file_type' - A string that is the type (e.g. Python, Bash) of file that will be outputed
-    Output: returns a string that is the processed string that can be run
+        'file_type' - A string that is the type (e.g. python, nash) of file that will be outputed by the LLM
+    Output: returns a string that is the processed string that contains a properly commented out program that can be run
+
+% Here are Line Comment Characters in Programming Languages
+
+| Language                 | Line Comment Character(s) |
+|--------------------------|---------------------------|
+| Ada                      | --                        |
+| AppleScript              | --                        |
+| Assembly (various)       | ; or #                    |
+| Bash                     | #                         |
+| Basic                    | '                         |
+| Batch (Windows)          | REM or ::                 |
+| C                        | //                        |
+| C++                      | //                        |
+| C#                       | //                        |
+| Clojure                  | ;                         |
+| COBOL                    | * or /                    |
+| CoffeeScript             | #                         |
+| CSS                      | /* (for single line too)  |
+| Dart                     | //                        |
+| Delphi                   | //                        |
+| Erlang                   | %                         |
+| F#                       | //                        |
+| Fortran                  | !                         |
+| Go                       | //                        |
+| Groovy                   | //                        |
+| Haskell                  | --                        |
+| HTML                     | <!-- (with --> to close)  |
+| Java                     | //                        |
+| JavaScript               | //                        |
+| Julia                    | #                         |
+| Kotlin                   | //                        |
+| LaTeX                    | %                         |
+| Lisp                     | ;                         |
+| Lua                      | --                        |
+| Makefile                 | #                         |
+| MATLAB                   | %                         |
+| Objective-C              | //                        |
+| OCaml                    | (*  *) (for single too)   |
+| Pascal                   | // or { }                 |
+| Perl                     | #                         |
+| PHP                      | // or #                   |
+| PowerShell               | #                         |
+| Python                   | #                         |
+| R                        | #                         |
+| Ruby                     | #                         |
+| Rust                     | //                        |
+| Scala                    | //                        |
+| Shell scripts            | #                         |
+| SQL                      | --                        |
+| Swift                    | //                        |
+| TypeScript               | //                        |
+| VB.NET                   | '                         |
+| Verilog                  | //                        |
+| VHDL                     | --                        |
+| XML                      | <!-- (with --> to close)  |
+| YAML                     | #                         |
+
+% Here is an example of llm_output: '''To implement the `context_generator` function as described, we will follow the steps outlined in your request. Below is the complete implementation of the function, which includes reading a Python file, preprocessing it, generating a prompt for the model, invoking the model, and writing the output to a specified file.
+
+```python
+import os
+
+def context_generator(python_filename: str, output_filename: str, force: bool = False) -> bool:
+    # Step 1: Read the Python file
+    try:
+        with open(python_filename, 'r') as file:
+            python_code = file.read()
+    except FileNotFoundError:
+        print(f"Error: The file {python_filename} does not exist.")
+        return False
+
+
+    # Step 3: Generate a prompt for GPT-4
+    prompt = f"""
+    You are an expert Python engineer. Based on the following Python code, generate a concise example of how to use the module properly.
+
+    Python Code:
+    ```python
+    {processed_content}
+    ```
+
+    return True
+```
+
+### Explanation of the Code:
+1. **File Reading**: The function attempts to read the specified Python file. If the file does not exist, it prints an error message and returns `False`.
+2. **Preprocessing**: It calls the `preprocess` function to process the content of the Python file.
+
+### Usage:
+You can call this function by providing the necessary arguments, like so:
+
+```python
+context_generator('your_python_file.py', 'output_example.py', force=False)
+```
+
+Make sure to replace `'your_python_file.py'` and `'output_example.py'` with the actual file names you want to use.
+To implement the context_generator function as described, we will follow the steps outlined in   
+your request. Below is the complete implementation of the function, which includes reading a     
+Python file, preprocessing it, generating a prompt for the model, invoking the model, and writing
+the output to a specified file.'''
+
+% Here is an example of the output string: '''#To implement the `context_generator` function as described, we will follow the steps outlined in your request. Below is the complete implementation of the function, which includes reading a Python file, preprocessing it, generating a prompt for the model, invoking the model, and writing the output to a specified file.
+
+#```python
+import os
+
+def context_generator(python_filename: str, output_filename: str, force: bool = False) -> bool:
+    # Step 1: Read the Python file
+    try:
+        with open(python_filename, 'r') as file:
+            python_code = file.read()
+    except FileNotFoundError:
+        print(f"Error: The file {python_filename} does not exist.")
+        return False
+
+
+    # Step 3: Generate a prompt for GPT-4
+    prompt = f"""
+    You are an expert Python engineer. Based on the following Python code, generate a concise example of how to use the module properly.
+
+    Python Code:
+    ```python
+    {processed_content}
+    ```
+
+    return True
+```
 
 % This function will do the following:
-    Step 1. Determine the different sections determined by pairs of triple backticks. The first backtick will always have a string right after it that determines what kind of code it is.
-    Step 2. There can be nested sections of code, but we only care about the top level sections 
+    Step 1. For the specified file_type, associate the right line comment character with the programming language (e.g. python is '#', c is '//'). Default to '#' to language is unknown.
+    Step 2. Find the top-level code sections via recursive function, 'find_section'. For a code section, the first backtick will always have a string right after it that determines what kind of code it is and the end of a section just has triple backticks. To properly return the list of top level-sections do the following sub-steps by iterating through lines of the string:
+        Step 2a. Find the start of a code block 
+        Step 2b. If another start of another code block is found call 'find_section' with a sub-section flag True. 
+        Step 2c. If not, but the end of a code block is found, we should do one of the following steps depending on the sub-section flag:
+            Step 2c_i: If it is a sub-section we should return with an empty list
+            Step 2c_ii: If it is not a sub-section we should know the end of the code block and we should record the program type and start/end lines into the output list
+        Step 2d. If all lines of the string are process, we should return the output list.
     Step 3. For the sections that are the same as file_type, we will determine which section is the largest.
-    Step 4. Now comment out all other lines but the largest section.
-    Step 5. The program will return the post processed string
+    Step 4. Now using the original llm_output string, comment out all lines of text until the start line of the largest section of the file_type we want and then resume commenting out the lines after end line of the largest section. Be sure the also comment out the triple backticks of the largest section. This will leave the executable part of largest section of code uncommented.
+    Step 5. The program will return the post processed string that contains a properly commented out program that can be run.

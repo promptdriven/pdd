@@ -14,11 +14,11 @@
 
 ## Bugs
 
-- [ ]
+- [ ] fix specifying output directory or output file flexibility 
 
 ## Improvements
 
-- [ ]
+- [ ] postprocess.prompt requires sonnet 3.5 and isn't stable
 
 ## Documentation
 
