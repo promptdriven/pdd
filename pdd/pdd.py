@@ -1,123 +1,109 @@
-# To create the command line program "pdd" that compiles a prompt into a Python file as described, we can use the `argparse` library for command line argument parsing, and the `rich` library for pretty printing. Below is a complete implementation of the program based on your requirements.
+# To create a command-line program named `pdd` that compiles a prompt into a Python file using the Langchain library, we can follow the steps outlined in your request. Below is a complete implementation of the program, including the necessary imports, command-line argument parsing, and the logic to handle the various steps you described.
 
-# ### Python Code for `pdd.py`
+# ### Python Code for `pdd`
 
 # ```python
 import os
 import sys
-import argparse
-from rich.console import Console
-from rich.markdown import Markdown
+import click
 from langchain_core.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 from langchain_core.output_parsers import StrOutputParser
-from preprocess import preprocess
-from postprocess import postprocess
+from rich.console import Console
+from rich.markdown import Markdown
 import tiktoken
+from postprocess import postprocess
 
-def main():
-    # Set up argument parser
-    parser = argparse.ArgumentParser(description="Compile a prompt into a Python file.")
-    parser.add_argument("filename", type=str, help="The prompt file name (without extension).")
-    parser.add_argument("-o", "--output", type=str, help="Output file name (with .py extension).")
-    parser.add_argument("--force", action="store_true", help="Force overwrite the output file if it exists.")
-    
-    args = parser.parse_args()
-    
-    # Ensure the filename has the correct extension
-    if not args.filename.endswith('.prompt'):
-        args.filename += '.prompt'
-    
-    # Check if the file exists
-    if not os.path.isfile(args.filename):
-        print(f"Error: The file '{args.filename}' does not exist.")
-        sys.exit(1)
+console = Console()
 
+@click.command()
+@click.argument('filename', type=click.Path(exists=True))
+@click.option('-o', '--output', type=click.Path(), help='Output file name (without extension)')
+@click.option('--force', is_flag=True, help='Force overwrite existing files')
+def pdd(filename, output, force):
+    """Compile a prompt from FILENAME into a Python file."""
+    
+    # Step 1: Ensure the filename has the correct extension
+    if not filename.endswith('.prompt'):
+        filename += '.prompt'
+    
+    # Step 2: Read the prompt from the file
+    with open(filename, 'r') as file:
+        prompt = file.read()
+    
     # Preprocess the prompt
-    preprocessed_prompt = preprocess(args.filename)
-    
-    # Create the LCEL template
-    prompt_template = PromptTemplate.from_template(preprocessed_prompt)
-    
-    # Initialize the model
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-    
-    # Count tokens in the prompt
-    encoding = tiktoken.get_encoding("cl100k_base")
-    token_count = len(encoding.encode(preprocessed_prompt))
-    
-    print(f"Running the model with {token_count} tokens in the prompt...")
-    
-    # Combine with a model and parser to output a string
-    chain = prompt_template | llm | StrOutputParser()
-    
-    # Run the template
-    result = chain.invoke({})
-    
-    # Pretty print the result
-    console = Console()
-    console.print(Markdown(result))
-    
-    # Count tokens in the result
-    result_token_count = len(encoding.encode(result))
-    print(f"Result contains {result_token_count} tokens.")
-    
-    # Postprocess the model output
-    processed_output = postprocess(result, file_type="python")
-    
-    # Determine output file name
-    output_filename = args.output if args.output else args.filename.replace('.prompt', '.py')
-    
-    # Check if the output file already exists
-    if os.path.isfile(output_filename):
-        if not args.force:
-            overwrite = input(f"The file '{output_filename}' already exists. Overwrite? (y/N): ")
-            if overwrite.lower() != 'y':
-                print("Operation cancelled.")
-                sys.exit(0)
-    
-    # Write the processed output to the file
-    with open(output_filename, 'w') as f:
-        f.write(processed_output)
-    
-    print(f"Python code has been written to '{output_filename}'.")
+    processed_prompt = postprocess(prompt, "python")  # Assuming we want to process for Python
 
-if __name__ == "__main__":
-    main()
+    # Step 3: Create the Langchain LCEL template
+    prompt_template = PromptTemplate.from_template(processed_prompt)
+    
+    # Step 4: Initialize the model
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+
+    # Step 5: Run the prompt through the model
+    encoding = tiktoken.get_encoding("cl100k_base")
+    token_count = len(encoding.encode(processed_prompt))
+    console.print(f"Running the model with {token_count} tokens in the prompt...")
+
+    chain = prompt_template | llm | StrOutputParser()
+    result = chain.invoke({})  # Assuming no additional input is needed
+
+    # Step 6: Pretty print the result
+    console.print(Markdown(result))
+    result_token_count = len(encoding.encode(result))
+    console.print(f"Result contains {result_token_count} tokens.")
+
+    # Step 7: Postprocess the model output
+    runnable_code = postprocess(result, "python")
+
+    # Step 8: Determine output filename
+    if output:
+        output_filename = output if output.endswith('.py') else output + '.py'
+    else:
+        output_filename = os.path.splitext(filename)[0] + '.py'
+
+    # Check if the output file exists
+    if os.path.exists(output_filename):
+        if not force:
+            confirm = click.prompt(f"{output_filename} already exists. Overwrite? (y/n)", default='y')
+            if confirm.lower() != 'y':
+                console.print("Operation cancelled.")
+                return
+
+    # Write the runnable code to the output file
+    with open(output_filename, 'w') as output_file:
+        output_file.write(runnable_code)
+    
+    console.print(f"Successfully wrote the runnable code to {output_filename}.")
+
+if __name__ == '__main__':
+    pdd()
 # ```
 
 # ### Explanation of the Code
 
-# 1. **Argument Parsing**: The program uses `argparse` to handle command line arguments, allowing the user to specify the input prompt file and optional output file.
+# 1. **Imports**: The necessary libraries are imported, including `click` for command-line interface, `langchain` for prompt handling, `rich` for pretty printing, and `tiktoken` for token counting.
 
-# 2. **File Handling**: It checks if the input file exists and ensures the correct file extension is used.
+# 2. **Command-Line Interface**: The `click` library is used to create a command-line interface. The `pdd` function is defined to handle the main logic.
 
-# 3. **Preprocessing**: The prompt is preprocessed using the `preprocess` function.
+# 3. **File Handling**: The program checks if the provided filename has the `.prompt` extension and reads the content of the file.
 
-# 4. **Langchain Setup**: The program sets up the Langchain components, including the prompt template and the model.
+# 4. **Prompt Processing**: The prompt is processed using the `postprocess` function.
 
-# 5. **Token Counting**: It counts the tokens in the prompt and prints a message indicating how many tokens are being processed.
+# 5. **Langchain Setup**: A prompt template is created, and the model is initialized with the specified parameters.
 
-# 6. **Model Invocation**: The prompt is run through the model, and the result is printed using the `rich` library for better formatting.
+# 6. **Model Invocation**: The prompt is run through the model, and the result is printed with token counts.
 
-# 7. **Postprocessing**: The output from the model is postprocessed to create runnable Python code.
+# 7. **Postprocessing**: The result is postprocessed to create runnable Python code.
 
-# 8. **File Writing**: The processed output is written to a specified output file, with checks for overwriting existing files unless the `--force` option is provided.
+# 8. **Output Handling**: The program checks if the output file already exists and prompts the user for confirmation before overwriting. The final runnable code is written to the specified output file.
 
-# ### Requirements
+# ### Usage
 
-# Make sure to install the necessary libraries if you haven't already:
-
-# ```bash
-# pip install langchain rich tiktoken
-# ```
-
-# ### Running the Program
-
-# You can run the program from the command line as follows:
+# To use the program, save the code in a file named `pdd.py`, and run it from the command line:
 
 # ```bash
-# python pdd.py example.prompt -o output.py --force
+# python pdd.py your_prompt_file.prompt -o output_file.py --force
 # ```
 
-# This command will read `example.prompt`, process it, and write the output to `output.py`, forcing an overwrite if the file already exists.
+# Make sure to replace `your_prompt_file.prompt` with the actual prompt file you want to process. The `-o` option is optional, and `--force` will overwrite existing files without prompting.
