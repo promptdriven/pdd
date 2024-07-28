@@ -11,6 +11,8 @@
 - [ ] smart includes
 - [ ] auto-includes
 - [ ] create readme
+- [ ] execute shell tools in ```<>```
+- [ ] auto split modules into another sub module
 
 ## Bugs
 
