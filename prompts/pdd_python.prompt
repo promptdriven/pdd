@@ -1,0 +1,40 @@
+% You are an expert Python engineer. Your goal is to write a python command line program, "pdd", that will compile a prompt into a code file or a code file into an example code file. All output to the console will be pretty print using the Python rich library.
+
+% Here is how the program will be used: pdd <input_prompt_file or input_code_file_to_generate_example_from>
+
+% Prompt file names have this format: 'basename_language.prompt' (e.g. pdd_python.prompt, makefile_makefile.prompt, setup_bash.prompt)
+
+% When given a prompt, the program will generate runnable code and example code if selected. When given a code file, an example file will be generated. By default, output files are written to the same directory as where the input file is. They will also have the same base name but with different extensions. Here are the options the program will support: 
+    '--force': When writing the output files, if a file already exists, the program will ask before overwriting it unless a "--force" is present where it will just overwrite the file. It will default to Yes if user presses Enter.
+    '-o': Path or filename of the output of the runnable code. If just a path is given it will use the same base name and have the appropriate code extension (e.g. Python would be .py)
+    '-oe': Output an example with either a given path or filename. If just a path is given it will use the same base name and add a '_example' with the appropriate code extension
+
+% Here are example command lines:
+    -'pdd context_generator.py' will generate 'context_generator_example.py' in the same directory
+    -'pdd context_generator.py -oe context/' will generate 'context_generator_example.py' in the './context' directory
+    -'pdd context_generator_python.prompt -o pdd/ -oe context/' will generate 'context_generator.py' in the './pdd' directory and 'context_generator_example.py' in the './context' directory. 'context_generator' is the basename.
+    -'pdd makefile_makefile.prompt' will generate 'makefile' in the same directory
+    -'pdd pdd_python.prompt -o pdd/pdd_v1.py will generate 'pdd_v1.py' in the './pdd' directory and no example will be generated
+
+% Here is an example of a Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
+
+% Here is an example how to preprocess the prompt from a file: ```<./context/preprocess_example.py>```                
+                                                            
+% Here is an example how to postprocess the model output result: ```<./context/postprocess_example.py>``` 
+
+% Here is an example how to generate an example from a code file: ```<./context/context_generator_example.py>``` 
+
+% Here is how to use tiktoken: ```encoding = tiktoken.get_encoding("cl100k_base")  # or another encoding name
+token_count = len(encoding.encode(preprocessed_prompt))```
+
+% This program will use Langchain to do the following:
+    Step 1. Read the file name from the command line. The default file name extension will be .prompt. If the extension is not provided, the program will add it. Extract the basename and language from the file name so the right file extension and language is used for subsequent steps. Also, from the basename generate the appropriate paths for the output files.
+    Step 2. If a prompt input do these steps:
+        Step 2a. Preprocess the prompt in the filename using the preprocess function from the preprocess module.
+        Step 2b. Then this will create a Langchain LCEL template from the processed prompt.
+        Step 2c. This will use the "gpt-4o-mini" and a temperature of 0 for the model.
+        Step 2d. This will run the prompt through the model using Langchain LCEL. It will pretty print a message letting the user know it is running and how many tokens (using tiktoken) are in the prompt.
+        Step 2e. This will pretty print the markdown formatting that is present in the result via the rich Markdown function. It will also pretty print the number of tokens in the result.
+        Step 2f. The code result of the model will contain a mix of text and code separated by triple backticks. Use postprocess to create a runnable code.
+        Step 2g. The program will write the runnable code to a file with the same name and path as the input file but with an appropriate code extension (e.g. '.sh' for bash, '' for makefile, '.py' for Python).
+    Step 3. If a code file is provided or a "-oe" option is provided, the program will generate example code using context_generator and write the example code to a file
