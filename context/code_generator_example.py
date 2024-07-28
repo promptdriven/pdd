@@ -1,33 +1,21 @@
+# Here's a concise example of how to use the `code_generator` function from the provided module:
+
+# ```python
 # Import the code_generator function from the module
-from pdd.code_generator import code_generator
+from code_generator import code_generator
 
-def main() -> None:
-    """
-    Main function to demonstrate the usage of the code_generator function.
-    It generates code based on a given prompt using a language model.
-    """
-    # Define the input parameters for the code_generator function
-    # prompt: str = "Create a Python function that calculates the factorial of a number."
-    # load the prompt from a file prompts/generate_test_python.prompt
-    with open("prompts/generate_test_python.prompt", "r") as file:
-        prompt = file.read()
-    language: str = "python"
-    strength: float = 0.5  # Strength of the LLM model (0.0 to 1.0)
-    temperature: float = 0.0  # Temperature for the LLM model (0.0 to 1.0)
-    verbose: bool = True  # Whether to print detailed information
+# Define the path to your prompt file and the desired output file type
+prompt_file_path = '../prompts/code_generator_python.prompt'  # Replace with your actual prompt file path
+output_file_type = 'python'  # Specify the desired output file type (e.g., 'python')
 
-    try:
-        # Call the code_generator function
-        runnable_code, total_cost, model_name = code_generator(prompt, language, strength, temperature, verbose)
+# Call the code_generator function
+runnable_code = code_generator(prompt_file_path, output_file_type)
 
-        # Output the results
-        print("Generated Code:")
-        print(runnable_code)
-        print(f"Total Cost: ${total_cost:.6f}")
-        print(f"Model Name: {model_name}")
+# Print the generated runnable code
+print(runnable_code)
+# ```
 
-    except Exception as e:
-        print(f"An error occurred: {e}")
-
-if __name__ == "__main__":
-    main()
+# ### Notes:
+# - Ensure that the `preprocess` and `postprocess` functions are correctly implemented and available in your environment.
+# - Make sure the `rich`, `langchain`, and `tiktoken` libraries are installed.
+# - Replace `'path/to/prompt.txt'` with the actual path to your prompt file.

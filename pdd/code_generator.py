@@ -1,171 +1,77 @@
-import json
-import re
-from typing import Tuple, Optional
+# To implement the `code_generator` function as described, we will follow the steps outlined in your prompt. The function will preprocess the prompt, create a Langchain LCEL template, run the model, and then postprocess the output to return runnable code. We will also use the `rich` library for pretty printing.
+
+# Here's how the implementation looks:
+
+# ```python
+import os
 from rich.console import Console
-from . import EXTRACTION_STRENGTH
-from .preprocess import preprocess
-from .llm_invoke import llm_invoke
-from .unfinished_prompt import unfinished_prompt
-from .continue_generation import continue_generation
-from .postprocess import postprocess
+from rich.markdown import Markdown
+from langchain_core.prompts import PromptTemplate
+from langchain_openai import ChatOpenAI
+from langchain_core.output_parsers import StrOutputParser
+from preprocess import preprocess
+from postprocess import postprocess
+import tiktoken
 
 console = Console()
 
-def code_generator(
-    prompt: str,
-    language: str,
-    strength: float,
-    temperature: float = 0.0,
-    time: Optional[float] = None,
-    verbose: bool = False,
-    preprocess_prompt: bool = True,
-    output_schema: Optional[dict] = None,
-) -> Tuple[str, float, str]:
-    """
-    Generate code from a prompt using a language model.
-
-    Args:
-        prompt (str): The raw prompt to be processed
-        language (str): The target programming language
-        strength (float): The strength of the LLM model (0 to 1)
-        temperature (float, optional): The temperature for the LLM model. Defaults to 0.0
-        time (Optional[float], optional): The time for the LLM model. Defaults to None
-        verbose (bool, optional): Whether to print detailed information. Defaults to False
-        preprocess_prompt (bool, optional): Whether to preprocess the prompt. Defaults to True
-        output_schema (Optional[dict], optional): JSON schema to enforce structured output. Defaults to None
-
-    Returns:
-        Tuple[str, float, str]: Tuple containing (runnable_code, total_cost, model_name)
-
-    Raises:
-        ValueError: If input parameters are invalid
-        Exception: For other unexpected errors
-    """
+def code_generator(prompt: str, file_type: str) -> str:
+    # Step 1: Preprocess the raw prompt
     try:
-        # Input validation
-        if not isinstance(prompt, str) or not prompt.strip():
-            raise ValueError("Prompt must be a non-empty string")
-        if not isinstance(language, str) or not language.strip():
-            raise ValueError("Language must be a non-empty string")
-        if not 0 <= strength <= 1:
-            raise ValueError("Strength must be between 0 and 1")
-        if not 0 <= temperature <= 2:
-            raise ValueError("Temperature must be between 0 and 2")
+        processed_prompt = preprocess(prompt)
+        console.print(f"[bold green]Preprocessed prompt successfully.[/bold green]")
+    except FileNotFoundError as e:
+        console.print(f"[bold red]Error: {e}[/bold red]")
+        return ""
 
-        total_cost = 0.0
-        model_name = ""
+    # Step 2: Create a Langchain LCEL template
+    prompt_template = PromptTemplate.from_template(processed_prompt)
+    
+    # Step 3: Initialize the model
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
-        # Step 1: Preprocess the prompt
-        if preprocess_prompt:
-            if verbose:
-                console.print("[bold blue]Step 1: Preprocessing prompt[/bold blue]")
+    # Step 4: Count tokens in the prompt
+    encoding = tiktoken.get_encoding("cl100k_base")
+    token_count = len(encoding.encode(processed_prompt))
+    console.print(f"[bold blue]Running the model with {token_count} tokens...[/bold blue]")
 
-            processed_prompt = preprocess(prompt, recursive=False, double_curly_brackets=True)
-        else:
-            processed_prompt = prompt
+    # Combine with a model and parser to output a string
+    chain = prompt_template | llm | StrOutputParser()
 
-        # Step 2: Generate initial response
-        if verbose:
-            console.print("[bold blue]Step 2: Generating initial response[/bold blue]")
-        
-        if 'data:image' in processed_prompt:
-            parts = re.split(r'(data:image/[^;]+;base64,[A-Za-z0-9+/=]+)', processed_prompt)
-            
-            content = []
-            for part in parts:
-                if part.startswith('data:image'):
-                    content.append({"type": "image_url", "image_url": {"url": part}})
-                elif part != "":
-                    content.append({"type": "text", "text": part})
-            
-            messages = [{"role": "user", "content": content}]
+    # Run the template
+    result = chain.invoke({})
+    
+    # Step 5: Pretty print the markdown result
+    console.print(Markdown(result))
+    result_token_count = len(encoding.encode(result))
+    console.print(f"[bold blue]Result contains {result_token_count} tokens.[/bold blue]")
 
-            response = llm_invoke(
-                messages=messages,
-                strength=strength,
-                temperature=temperature,
-                time=time,
-                verbose=verbose,
-                output_schema=output_schema,
-                language=language,
-            )
-        else:
-            response = llm_invoke(
-                prompt=processed_prompt,
-                input_json={},
-                strength=strength,
-                temperature=temperature,
-                time=time,
-                verbose=verbose,
-                output_schema=output_schema,
-                language=language,
-            )
-        initial_output = response['result']
-        total_cost += response['cost']
-        model_name = response['model_name']
+    # Step 6: Postprocess the model output
+    runnable_code = postprocess(result, file_type)
 
-        # Step 3: Check if generation is complete
-        if verbose:
-            console.print("[bold blue]Step 3: Checking completion status[/bold blue]")
-        last_chunk = initial_output[-600:] if len(initial_output) > 600 else initial_output
-        reasoning, is_finished, check_cost, _ = unfinished_prompt(
-            prompt_text=last_chunk,
-            strength=0.5,
-            temperature=0.0,
-            time=time,
-            language=language,
-            verbose=verbose
-        )
-        total_cost += check_cost
+    # Step 7: Return the runnable code
+    return runnable_code
+# ```
 
-        # Step 3a: Continue generation if incomplete
-        if not is_finished:
-            if verbose:
-                console.print("[bold yellow]Generation incomplete, continuing...[/bold yellow]")
-            final_output, continue_cost, continue_model = continue_generation(
-                formatted_input_prompt=processed_prompt,
-                llm_output=initial_output,
-                strength=strength,
-                temperature=temperature,
-                time=time,
-                language=language,
-                verbose=verbose
-            )
-            total_cost += continue_cost
-            model_name = continue_model
-        else:
-            final_output = initial_output
+# ### Explanation of the Code:
+# 1. **Imports**: We import necessary modules including `rich` for pretty printing, Langchain components for prompt handling, and the `preprocess` and `postprocess` functions.
+# 2. **Console Initialization**: We create a `Console` object from the `rich` library to handle pretty printing.
+# 3. **Function Definition**: The `code_generator` function takes a `prompt` (file path) and `file_type` (e.g., "python").
+# 4. **Preprocessing**: We attempt to preprocess the prompt. If the file is not found, we print an error message and return an empty string.
+# 5. **Prompt Template Creation**: We create a prompt template using the processed prompt.
+# 6. **Model Initialization**: We initialize the `ChatOpenAI` model with specified parameters.
+# 7. **Token Counting**: We count the tokens in the processed prompt and print the count.
+# 8. **Model Invocation**: We run the prompt through the model and capture the result.
+# 9. **Markdown Printing**: We pretty print the result using the `Markdown` function from `rich`.
+# 10. **Postprocessing**: We call the `postprocess` function to format the output into runnable code.
+# 11. **Return**: Finally, we return the runnable code.
 
-        # Step 4: Postprocess the output
-        if verbose:
-            console.print("[bold blue]Step 4: Postprocessing output[/bold blue]")
+# ### Usage:
+# To use this function, you would call it with the path to your prompt file and the desired output file type. For example:
 
-        # For structured JSON targets, skip extract_code to avoid losing or altering schema-constrained payloads.
-        if (isinstance(language, str) and language.strip().lower() == "json") or output_schema:
-            if isinstance(final_output, str):
-                runnable_code = final_output
-            else:
-                runnable_code = json.dumps(final_output)
-            postprocess_cost = 0.0
-            model_name_post = model_name
-        else:
-            runnable_code, postprocess_cost, model_name_post = postprocess(
-                llm_output=final_output,
-                language=language,
-                strength=EXTRACTION_STRENGTH,
-                temperature=0.0,
-                time=time,
-                verbose=verbose
-            )
-            total_cost += postprocess_cost
+# ```python
+# runnable_code = code_generator('path/to/prompt.txt', 'python')
+# print(runnable_code)
+# ```
 
-        return runnable_code, total_cost, model_name
-
-    except ValueError as ve:
-        if verbose:
-            console.print(f"[bold red]Validation Error: {str(ve)}[/bold red]")
-        raise
-    except Exception as e:
-        if verbose:
-            console.print(f"[bold red]Unexpected Error: {str(e)}[/bold red]")
-        raise
+# Make sure to have the necessary modules installed and available in your environment for this code to run successfully.
