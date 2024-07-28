@@ -3,7 +3,7 @@
 % Here are the inputs and outputs of the function:
     Input: 
         'llm_output' - A string contains a mix of text and sections of code separated by triple backticks. 
-        'file_type' - A string that is the type (e.g. python, nash) of file that will be outputed by the LLM
+        'file_type' - A string that is the type (e.g. python, bash) of file that will be outputed by the LLM
     Output: returns a string that is the processed string that contains a properly commented out program that can be run
 
 % Here are Line Comment Characters in Programming Languages
