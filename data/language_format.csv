@@ -1,0 +1,49 @@
+language,comment,extension
+Python,#,.py
+Java,//,.java
+C,//,.c
+C++,//,.cpp
+JavaScript,//,.js
+Ruby,#,.rb
+PHP,//,.php
+Swift,//,.swift
+Go,//,.go
+Rust,//,.rs
+TypeScript,//,.ts
+Kotlin,//,.kt
+Scala,//,.scala
+R,#,.R
+MATLAB,%,.m
+Perl,#,.pl
+Lua,--,.lua
+Shell,#,.sh
+Bash,#,.sh
+PowerShell,#,.ps1
+SQL,--,.sql
+HTML,<!-- -->,.html
+CSS,/**/,.css
+XML,<!-- -->,.xml
+YAML,#,.yml
+Makefile,#,
+CSV,del,.csv
+Dockerfile,#,
+JSON,del,.json
+Haskell,--,.hs
+Groovy,//,.groovy
+Objective-C,//,.m
+Assembly,;,.asm
+VBScript,',.vbs
+F#,//,.fs
+Dart,//,.dart
+Elixir,#,.ex
+Erlang,%,.erl
+Fortran,!,.f90
+Julia,#,.jl
+Lisp,;,.lisp
+Clojure,;,.clj
+OCaml,(* *),.ml
+Pascal,//,.pas
+Prolog,%,.pl
+Scheme,;,.scm
+Tcl,#,.tcl
+Visual Basic,',.vb
