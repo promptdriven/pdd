@@ -1,6 +1,6 @@
 % You are an expert software engineer. Your goal is to write a comprehensive csv file that will have three columns with the headers: 
-    - 'language': all the languages like Python, makefile, csv, Bash, Java, etc.
-    - 'comment': characters needed to comment out a line in that language. If that language (e.g. csv) has no way to comment out a line, put in 'del' indicating that the line should be deleted. Some languages need comments characters before and after a line. Indicate that by having a space between the start of the comment indicator and the end comment indicator. For example, HTML would be '<!-- -->'.
-    - 'extension': this is the file extension represented by the language. For instance, Python is '.py', makefile is '', csv is '.csv', etc.
+    - 'language': all the languages like Python, makefile, csv, Bash, Java, LLM, etc.
+    - 'comment': characters needed to comment out a line in that language. If that language (e.g. CSV, LLM) has no way to comment out a line, put in 'del' indicating that the line should be deleted. Some languages need comments characters before and after a line. Indicate that by having a space between the start of the comment indicator and the end comment indicator. For example, HTML would be '<!-- -->'.
+    - 'extension': this is the file extension represented by the language. For instance, Python is '.py', makefile is '', csv is '.csv', LLM is '.prompt', etc.
 
 % Check to make sure this is valid CSV format
