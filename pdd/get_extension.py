@@ -1,54 +1,41 @@
-"""Module to retrieve file extensions for programming languages."""
+# To implement the `get_extension` function as described, we will follow the steps outlined in your request. We'll use the `pandas` library to read the CSV file, and we'll handle the environment variable for the file path. Here's how you can implement this function:
 
+# ```python
+import os
 import pandas as pd
-from pdd.path_resolution import get_default_resolver
 
-def get_extension(language: str) -> str:
-    """
-    Retrieves the file extension for a given programming language.
-
-    Args:
-        language: The name of the programming language.
-
-    Returns:
-        The file extension (e.g., ".py") or an empty string if not found
-        or if the extension is invalid.
-
-    Raises:
-        ValueError: If the PDD_PATH environment variable is not set.
-        FileNotFoundError: If the language_format.csv file is not found.
-    """
-    # Step 1: Resolve CSV path from PDD_PATH
-    resolver = get_default_resolver()
-    try:
-        csv_file_path = resolver.resolve_data_file("data/language_format.csv")
-    except ValueError as exc:
-        raise ValueError("Environment variable PDD_PATH is not set.") from exc
+def get_extension(language):
+    # Step 1: Load the environment variable PDD_PATH
+    pdd_path = os.getenv('PDD_PATH')
+    if not pdd_path:
+        raise ValueError("Environment variable PDD_PATH is not set.")
+    
+    # Construct the full path to the CSV file
+    csv_file_path = os.path.join(pdd_path, 'data', 'language_format.csv')
     
     # Step 2: Lower case the language string
     language_lower = language.lower()
     
     # Step 3: Load the CSV file and look up the file extension
     try:
-        dataframe = pd.read_csv(csv_file_path)
-    except FileNotFoundError as exc:
-        raise FileNotFoundError(
-            f"The file {csv_file_path} does not exist."
-        ) from exc
+        df = pd.read_csv(csv_file_path)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"The file {csv_file_path} does not exist.")
     
     # Check if the language exists in the DataFrame
-    row = dataframe[dataframe['language'].str.lower() == language_lower]
+    row = df[df['language'].str.lower() == language_lower]
     
     # Step 4: Return the file extension or an empty string if not found
     if not row.empty:
         extension = row['extension'].values[0]
         return extension if isinstance(extension, str) and extension else ''
-
+    
     return ''
 
 # Example usage:
 # Assuming the environment variable PDD_PATH is set correctly
 # print(get_extension('Python'))  # Output: .py
+# ```
 
 # ### Explanation of the Code:
 # 1. **Environment Variable**: We use `os.getenv` to retrieve the `PDD_PATH` environment variable. If it's not set, we raise a `ValueError`.
