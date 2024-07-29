@@ -1,0 +1,14 @@
+provider,model,input,output
+OpenAI,gpt-4o-mini,0.15,0.60
+OpenAI,gpt-4-0125-preview,10,30
+OpenAI,gpt-4-1106-preview,10,30
+OpenAI,gpt-3.5-turbo-0125,0.50,1.50
+OpenAI,gpt-3.5-turbo,8,6
+OpenAI,gpt-4,30,60
+OpenAI,gpt-4-32k,60,120
+Anthropic,Claude 3 Opus,15,75
+Anthropic,Claude 3 Sonnet,3,15
+Anthropic,Claude 3 Haiku,0.25,1.25
+Google,Gemini-1.5-Pro,7,21
+Google,Gemini-1.0-Pro,0.50,1.50
+Google,Gemini-1.5-flash,0.35,0.70
