@@ -1,0 +1,93 @@
+% You are an expert software engineer. Your goal is to write a Makefile to handle generating python modules/tests/context, testing, cleaning, etc. 
+
+
+% Here is the help of pdd: ```python pdd/pdd.py -h
+usage: pdd.py [-h] [-o OUTPUT] [-oe OUTPUT_EXAMPLE] [--force] input_file
+
+Compile a prompt into a code file or a code file into an example code file.
+
+positional arguments:
+  input_file            Input prompt file or input code file to generate example from
+
+options:
+  -h, --help            show this help message and exit
+  -o OUTPUT, --output OUTPUT
+                        Path or filename of the output of the runnable code
+  -oe OUTPUT_EXAMPLE, --output_example OUTPUT_EXAMPLE
+                        Path or filename of the output example code
+  --force               Overwrite files without asking```
+  
+Here is an example directory structure: ```├── README.md
+├── TODO.md
+├── context
+│   ├── code_generator_example.py
+│   ├── context_generator_example.py
+│   ├── get_extension_example.py
+│   ├── langchain_lcel_example.py
+│   ├── postprocess_example.py
+│   ├── preprocess_example.py
+│   └── split
+│       └── 1
+│           ├── final_pdd_python.prompt
+│           ├── initial_pdd_python.prompt
+│           ├── pdd.py
+│           ├── split_get_extension.prompt
+│           └── sub_pdd_python.prompt
+├── data
+│   ├── language_format.csv
+│   └── llm_model.csv
+├── pdd
+│   ├── __pycache__
+│   │   ├── code_generator.cpython-312.pyc
+│   │   ├── context_generator.cpython-312.pyc
+│   │   ├── postprocess.cpython-312.pyc
+│   │   └── preprocess.cpython-312.pyc
+│   ├── code_generator.py
+│   ├── context_generator.py
+│   ├── get_extension.py
+│   ├── pdd.py
+│   ├── postprocess.py
+│   └── preprocess.py
+├── prompts
+│   ├── Makefile_makefile.prompt
+│   ├── code_generator_python.prompt
+│   ├── context_generator_python.prompt
+│   ├── get_extension_python.prompt
+│   ├── language_format_csv.prompt
+│   ├── llm_model_csv.prompt
+│   ├── pdd_python.prompt
+│   ├── postprocess_python.prompt
+│   └── preprocess_python.prompt
+├── requirements.txt
+├── staging
+│   ├── context
+│   │   ├── code_generator_example.py
+│   │   ├── context_generator_example.py
+│   │   ├── ge_example.py
+│   │   ├── get_extension_example.py
+│   │   ├── get_extension_python_example.py
+│   │   ├── langchain_lcel_example.py
+│   │   ├── postprocess_example.py
+│   │   └── preprocess_example.py
+│   ├── pdd
+│   │   ├── __pycache__
+│   │   │   ├── code_generator.cpython-312.pyc
+│   │   │   ├── context_generator.cpython-312.pyc
+│   │   │   ├── get_extension.cpython-312.pyc
+│   │   │   ├── pdd.cpython-312.pyc
+│   │   │   ├── postprocess.cpython-312.pyc
+│   │   │   └── preprocess.cpython-312.pyc
+│   │   ├── code_generator.py
+│   │   ├── context_generator.py
+│   │   ├── ge.py
+│   │   ├── get_extension.py
+│   │   ├── get_extension_example.py
+│   │   ├── get_extension_python.py
+│   │   ├── pdd.py
+│   │   ├── pdd2.py
+│   │   ├── postprocess.py
+│   │   └── preprocess.py
+│   └── tests
+│       └── testing.ipynb
+└── tests
+    └── testing.ipynb```
