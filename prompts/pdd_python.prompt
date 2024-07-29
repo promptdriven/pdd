@@ -26,10 +26,12 @@
 
 % Here is an example how to generate an example from a code file: ```<./context/context_generator_example.py>```
 
+% Here is an example how to lookup a file extension given a language: ```<./context/get_extension_example.py>```
+
 % This program will do the following:
     Step 1. Read the input file name from the command line. 
     Step 2. If file name has no extension, add '.prompt' to the file name.
-    Step 3. Extract the basename and language from the file name so the right code file extension (e.g. '.sh' for bash, '' for makefile, '.py' for Python) and language is used for all the subsequent steps. 
+    Step 3. Extract the basename and language from the file name. Use get_extension to get the file extension for the language. The file extension and language is used for all the subsequent steps. 
     Step 4. From the basename and file extension generate the appropriate file paths for the runnable and example output files considering the four possibilities. First determine which possibility for each of the outputs and then construct the proper file paths for each output.
     Step 5. If a prompt input (indicated by a '.prompt' input file extension) do these steps:
         Step 5a. Generate code from the input prompt file name using code_generator.

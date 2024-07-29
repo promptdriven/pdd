@@ -1,101 +1,105 @@
-# To create the command line program "pdd" as described, we will use Python's `argparse` for command line argument parsing, `os` for file path manipulations, and the `rich` library for pretty printing. Below is a complete implementation of the program:
+# To create the `pdd` command line program as described, we need to follow the steps outlined in the prompt. Below is the implementation of the `pdd` program in Python. This program will use the `rich` library for pretty printing and handle the various input and output scenarios as specified.
+
+# First, ensure you have the necessary modules installed:
+# ```sh
+# pip install rich
+# ```
+
+# Next, create the `pdd.py` script:
 
 # ```python
 import os
 import sys
 import argparse
 from rich.console import Console
-from rich.prompt import Confirm
 from code_generator import code_generator
 from context_generator import context_generator
+from get_extension import get_extension
 
 console = Console()
 
-def get_file_extension(language):
-    """Return the appropriate file extension based on the language."""
-    extensions = {
-        'python': '.py',
-        'bash': '.sh',
-        'makefile': '',
-        # Add more languages and their extensions as needed
-    }
-    return extensions.get(language, '.txt')  # Default to .txt if not found
-
 def main():
-    parser = argparse.ArgumentParser(description="Compile prompts into code files or generate example code.")
-    parser.add_argument('input_file', type=str, help='Input prompt or code file')
-    parser.add_argument('--force', action='store_true', help='Force overwrite existing files')
-    parser.add_argument('-o', '--output', type=str, help='Output path for runnable code')
-    parser.add_argument('-oe', '--output_example', type=str, help='Output path for example code')
+    parser = argparse.ArgumentParser(description="Compile a prompt into a code file or a code file into an example code file.")
+    parser.add_argument('input_file', help="Input prompt file or input code file to generate example from")
+    parser.add_argument('-o', '--output', help="Path or filename of the output of the runnable code")
+    parser.add_argument('-oe', '--output_example', help="Path or filename of the output example code")
+    parser.add_argument('--force', action='store_true', help="Overwrite files without asking")
 
     args = parser.parse_args()
-
     input_file = args.input_file
-    if not input_file.endswith('.prompt'):
-        if not os.path.splitext(input_file)[1]:  # No extension
-            input_file += '.prompt'
-    
-    basename, language = os.path.splitext(os.path.basename(input_file))[0].rsplit('_', 1)
-    file_extension = get_file_extension(language)
+    output = args.output
+    output_example = args.output_example
+    force = args.force
 
-    # Determine output paths
-    output_file = args.output if args.output else os.path.join(os.path.dirname(input_file), f"{basename}{file_extension}")
-    example_file = args.output_example if args.output_example else os.path.join(os.path.dirname(input_file), f"{basename}_example{file_extension}")
+    # Step 1: Read the input file name from the command line
+    if not os.path.exists(input_file):
+        console.print(f"[bold red]Error:[/bold red] The file '{input_file}' does not exist.")
+        sys.exit(1)
 
-    # Check for existing files
-    if os.path.exists(output_file) and not args.force:
-        if not Confirm.ask(f"{output_file} already exists. Overwrite?"):
-            console.print("Operation cancelled.")
-            sys.exit(0)
+    # Step 2: If file name has no extension, add '.prompt' to the file name
+    if '.' not in input_file:
+        input_file += '.prompt'
 
-    if os.path.exists(example_file) and not args.force:
-        if not Confirm.ask(f"{example_file} already exists. Overwrite?"):
-            console.print("Operation cancelled.")
-            sys.exit(0)
+    # Step 3: Extract the basename and language from the file name
+    basename, ext = os.path.splitext(os.path.basename(input_file))
+    if ext == '.prompt':
+        language = basename.split('_')[-1]
+    else:
+        language = ext[1:]
 
-    # Step 5: Handle prompt input
-    if input_file.endswith('.prompt'):
-        console.print(f"[bold green]Generating code from prompt: {input_file}[/bold green]")
-        runnable_code = code_generator(input_file, language)
-        with open(output_file, 'w') as f:
-            f.write(runnable_code)
-        console.print(f"[bold blue]Generated runnable code saved to: {output_file}[/bold blue]")
+    file_extension = get_extension(language)
 
-    # Step 6: Handle code file input
-    if not input_file.endswith('.prompt') or args.output_example:
-        console.print(f"[bold green]Generating example code from: {output_file}[/bold green]")
-        if input_file.endswith('.prompt'):
-            code_to_generate_example_from = output_file
+    # Step 4: Generate the appropriate file paths for the runnable and example output files
+    def construct_output_path(output, default_name):
+        if output is None:
+            return os.path.join(os.path.dirname(input_file), default_name)
+        elif os.path.isdir(output):
+            return os.path.join(output, default_name)
         else:
-            code_to_generate_example_from = input_file
-        
-        example_code = context_generator(code_to_generate_example_from)
-        with open(example_file, 'w') as f:
-            f.write(example_code)
-        console.print(f"[bold blue]Generated example code saved to: {example_file}[/bold blue]")
+            return output
+
+    runnable_output_path = construct_output_path(output, f"{basename}{file_extension}")
+    example_output_path = construct_output_path(output_example, f"{basename}_example{file_extension}")
+
+    # Step 5: If a prompt input, generate code from the input prompt file name using code_generator
+    if ext == '.prompt':
+        console.print(f"[bold green]Generating runnable code from prompt:[/bold green] {input_file}")
+        runnable_code = code_generator(input_file, language)
+        write_to_file(runnable_output_path, runnable_code, force)
+
+    # Step 6: If a code file is provided or a "-oe" option is provided, generate example code
+    if ext != '.prompt' or output_example:
+        console.print(f"[bold green]Generating example code from runnable code:[/bold green] {runnable_output_path}")
+        success = context_generator(runnable_output_path, example_output_path, force)
+        if success:
+            console.print(f"[bold green]Example code generated successfully:[/bold green] {example_output_path}")
+        else:
+            console.print(f"[bold red]Failed to generate example code.[/bold red]")
+
+def write_to_file(file_path, content, force):
+    if os.path.exists(file_path) and not force:
+        console.print(f"[bold yellow]Warning:[/bold yellow] The file '{file_path}' already exists. Overwrite? [y/N]")
+        response = input().strip().lower()
+        if response not in ['y', 'yes', '']:
+            console.print(f"[bold red]Aborted:[/bold red] The file '{file_path}' was not overwritten.")
+            return
+
+    with open(file_path, 'w') as f:
+        f.write(content)
+    console.print(f"[bold green]File written successfully:[/bold green] {file_path}")
 
 if __name__ == "__main__":
     main()
 # ```
 
-# ### Explanation of the Code:
-# 1. **Imports**: We import necessary libraries including `argparse` for command line parsing, `os` for file operations, and `rich` for pretty printing.
-# 2. **File Extension Mapping**: The `get_file_extension` function maps languages to their respective file extensions.
-# 3. **Argument Parsing**: We set up command line arguments using `argparse`.
-# 4. **File Handling**: The program checks if the input file has a `.prompt` extension and modifies it if necessary. It also constructs output file paths based on user input or defaults.
-# 5. **File Overwrite Confirmation**: Before writing to output files, the program checks if they already exist and prompts the user for confirmation unless the `--force` flag is set.
-# 6. **Code Generation**: Depending on whether the input is a prompt or a code file, it generates runnable code or example code using the respective functions (`code_generator` and `context_generator`).
-# 7. **File Writing**: Finally, it writes the generated code to the specified output files.
+# ### Explanation:
+# 1. **Argument Parsing**: The script uses `argparse` to handle command-line arguments.
+# 2. **File Existence Check**: It checks if the input file exists.
+# 3. **File Extension Handling**: If the input file has no extension, `.prompt` is added.
+# 4. **Basename and Language Extraction**: The script extracts the basename and language from the input file name.
+# 5. **Output Path Construction**: It constructs the appropriate output paths for runnable and example files.
+# 6. **Code Generation**: If the input is a prompt file, it generates runnable code using `code_generator`.
+# 7. **Example Code Generation**: If the input is a code file or the `-oe` option is provided, it generates example code using `context_generator`.
+# 8. **File Writing**: The script writes the generated code to the specified output files, handling overwrites based on the `--force` option.
 
-# ### Usage:
-# - To generate code from a prompt: `pdd pdd_python.prompt`
-# - To generate an example from a code file: `pdd context_generator.py`
-# - To specify output paths: `pdd pdd_python.prompt -o pdd/ -oe context/`
-
-# ### Requirements:
-# Make sure to install the required libraries:
-# ```bash
-# pip install rich langchain tiktoken
-# ```
-
-# This implementation should meet the requirements specified in your prompt. Adjust the `code_generator` and `context_generator` imports according to your project structure.
+# This script should be placed in a file named `pdd.py` and can be executed from the command line as described in the prompt.
