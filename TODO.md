@@ -16,7 +16,7 @@
 
 ## Bugs
 
-- [ ] fix specifying output directory or output file flexibility 
+- [ ] Makefile filename is not being generated correctly
 
 ## Improvements
 
