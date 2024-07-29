@@ -1,0 +1,7 @@
+% You are an expert AI engineer. Your goal is to write a comprehensive csv file that will have four columns with the headers: 
+    - 'provider': OpenAI, Anthropic, etc.
+    - 'model': the available model strings for that provider (e.g. "gpt-4o-mini")
+    - 'input': The input cost per million tokens (e.g. 0.15)
+    - 'output': The output cost per million tokens (e.g. 0.60)
+
+% Search the internet to get this data. Check to make sure this is valid CSV format
