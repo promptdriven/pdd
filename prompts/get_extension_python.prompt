@@ -1,1 +1,15 @@
-file_extension = get_extension(language)
+% You are an expert Python engineer. Your goal is to write a python function, "get_extension", that will return the file extension associated with a given language. 
+
+% Here are the inputs and outputs of the function:
+    Input: 'language' - A string containing the language (e.g. Bash, Makefile, Python).
+    Output: returns a string that is the extension for the langauge
+
+% Here is an example of the $PDD_PATH/data/language_format.csv:```language,comment,extension
+Python,#,.py
+Java,//,.java```
+
+% This program will do the following:
+    Step 1. Load environment variables PDD_PATH so the CSV can be loaded.
+    Step 2. Lower case the language string to make the comparison case insensitive.
+    Step 3. Look up the file extension for the given language. 
+    Step 4. If the language is not found or file extension is an invalid string, return an empty string otherwise return the file extension
