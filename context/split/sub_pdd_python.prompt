@@ -1,0 +1,10 @@
+% You are an expert Python engineer. Your goal is to write a python function, "get_extension", that will return the file extension associated with a given language. 
+
+% Here are the inputs and outputs of the function:
+    Input: 'language' - A string containing the language (e.g. Bash, Makefile, Python).
+    Output: returns a string that is the extension for the langauge
+
+% This program will do the following:
+    Step 1. Lower case the language string to make the comparison case insensitive.
+    Step 2. Look up the file extension for the given language
+    Step 3. Return the file extension
