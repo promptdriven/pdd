@@ -16,7 +16,7 @@
     example_sub_prompt: ```<./context/split/1/sub_pdd_python.prompt>```
     example_modified_prompt: ```<./context/split/1/final_pdd_python.prompt>```
 
-% Here is the input_prompt to split: ```<./context/split/2/pdd_python.prompt>```
+% Here is the input_prompt to split: ```<./context/split/2/initial_pdd_python.prompt>```
 % Here is the input_code: ```<./context/split/2/pdd.py>```
 % Here is the example_code: ```<./context/split/2/split_pdd_construct_output_path.py>```
 
