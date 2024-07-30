@@ -4,16 +4,10 @@
 
 % Prompt file names have this format: 'basename_language.prompt' (e.g. pdd_python.prompt, makefile_makefile.prompt, setup_bash.prompt)
 
-% There are four possibilities for the output files:
-    - File name given without path (e.g. 'output.py'): This will write the 'output.py' file in the same directory as the input file.
-    - File name given with path (e.g. './output.py'): This will write the 'output.py' file in the './' directory.
-    - Path given without file name (e.g. './context'): This will write the file with the basename and appropriate extension (for generated runnable code and generated example code) in the './context' directory.
-    - Nothing specified by user (default): This will write the file with the basename and appropriate extension in the same directory as the input file.
-
 % When given a prompt, the program will generate runnable code and example code if selected. When given a code file, an example file will be generated. Here are the options the program will support: 
     '--force': When writing the output files, if a file already exists, the program will ask before overwriting it unless a "--force" is present where it will just overwrite the file. It will default to Yes if user presses Enter.
-    '-o': Path or filename of the output of the runnable code. All four of the above possibilities are possible meaning for example, the user might just have "-o" or might have "-o ./output.py".
-    '-oe': Means program should generate example from runnable code. As will "-o" all four output possibilities are possible here.
+    '-o': Path or filename of the output of the runnable code.
+    '-oe': Means program should generate example from runnable code.
 
 % Here are example command lines:
     -'pdd context_generator.py' will generate 'context_generator_example.py' in the same directory
@@ -28,11 +22,13 @@
 
 % Here is an example how to lookup a file extension given a language: ```<./context/get_extension_example.py>```
 
+% Here is an example how to construct output paths: ```<./context/construct_output_paths_example.py>```
+
 % This program will do the following:
     Step 1. Read the input file name from the command line. 
     Step 2. If file name has no extension, add '.prompt' to the file name.
     Step 3. Extract the basename and language from the file name. Use get_extension to get the file extension for the language. The file extension and language is used for all the subsequent steps. 
-    Step 4. From the basename and file extension generate the appropriate file paths for the runnable and example output files considering the four possibilities. First determine which possibility for each of the outputs and then construct the proper file paths for each output.
+    Step 4. Use construct_output_paths to generate the appropriate file paths for the runnable and example output files.
     Step 5. If a prompt input (indicated by a '.prompt' input file extension) do these steps:
         Step 5a. Generate code from the input prompt file name using code_generator.
         Step 5b. The program will write the runnable code to a runnable file path from Step 4. 
