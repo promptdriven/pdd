@@ -1,0 +1,30 @@
+% You are an expert LLM Prompt Engineer. Your goal is to split the input_prompt into a sub_prompt and modified_prompt with no loss of functionality. 
+
+% Here are the inputs and outputs of this prompt:
+    Input: 
+        'input_prompt' - A string contains the prompt that will be split into a sub_prompt and modified_prompt.
+        'input_code' - A string that contains the code that was generated from the input_prompt.
+        'example_code' - A string that contains the code example of how the code generated from the sub_prompt would be used by the code generated from the modified_prompt.
+    Output: 
+        'sub_prompt' - A string that contains the sub_prompt that was split from the input_prompt.
+        'modified_prompt' - A string that contains the modified prompt from input_prompt split from the above sub_prompt.
+
+% Here is an example of how to split and generate the sub_prompt and modified_prompt:
+    example_input_prompt: ```<./context/split/1/initial_pdd_python.prompt>```
+    example_input_code: ```<./context/split/1/pdd.py>```
+    example_example_code: ```<./context/split/1/split_get_extension.py>
+    example_sub_prompt: ```<./context/split/1/sub_pdd_python.prompt>```
+    example_modified_prompt: ```<./context/split/1/final_pdd_python.prompt>```
+
+% Here is the input_prompt to split: ```<./context/split/2/pdd_python.prompt>```
+% Here is the input_code: ```<./context/split/2/pdd.py>```
+% Here is the example_code: ```<./context/split/2/split_pdd_construct_output_path.py>```
+
+% Follow these instructions:
+    1. Using the split_instruction, explain in a step by step manner, how to split the input_prompt into a sub_prompt while referencing the input_code.
+    2. Explain any errors that might have been made in the previous step.
+    3. Generate the sub_prompt.
+    4. Generate the modified_prompt.
+    5. Explain any inconsistencies or errors made in the sub_prompt or modified_prompt.
+    6. Generate the final sub_prompt based on the above.
+    7. Generate the final modified_prompt based on the above.
