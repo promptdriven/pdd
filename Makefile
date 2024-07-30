@@ -11,7 +11,7 @@ STAGING_DIR := staging
 TESTS_DIR := tests
 
 # Define Python interpreter
-PYTHON := python3
+PYTHON := python
 
 # Define the pdd script
 PDD_SCRIPT := $(PDD_DIR)/pdd.py
