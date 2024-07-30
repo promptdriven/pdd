@@ -1,0 +1,372 @@
+% You are an expert LLM Prompt Engineer. Your goal is to split the input_prompt into a sub_prompt and modified_prompt with no loss of functionality. 
+
+% Here are the inputs and outputs of this prompt:
+    Input: 
+        'input_prompt' - A string contains the prompt that will be split into a sub_prompt and modified_prompt.
+        'input_code' - A string that contains the code that was generated from the input_prompt.
+        'example_code' - A string that contains the code example of how the code generated from the sub_prompt would be used by the code generated from the modified_prompt.
+    Output: 
+        'sub_prompt' - A string that contains the sub_prompt that was split from the input_prompt.
+        'modified_prompt' - A string that contains the modified prompt from input_prompt split from the above sub_prompt.
+
+% Here is an example of how to split and generate the sub_prompt and modified_prompt:
+    example_input_prompt: ```% You are an expert Python engineer. Your goal is to write a python command line program, "pdd", that will compile a prompt into a code file or a code file into an example code file. All output to the console will be pretty print using the Python rich library.
+
+% Here is how the program will be used: pdd <input_prompt_file or input_code_file_to_generate_example_from>
+
+% Prompt file names have this format: 'basename_language.prompt' (e.g. pdd_python.prompt, makefile_makefile.prompt, setup_bash.prompt)
+
+% There are four possibilities for the output files:
+    - File name given without path (e.g. 'output.py'): This will write the 'output.py' file in the same directory as the input file.
+    - File name given with path (e.g. './output.py'): This will write the 'output.py' file in the './' directory.
+    - Path given without file name (e.g. './context'): This will write the file with the basename and appropriate extension (for generated runnable code and generated example code) in the './context' directory.
+    - Nothing specified by user (default): This will write the file with the basename and appropriate extension in the same directory as the input file.
+
+% When given a prompt, the program will generate runnable code and example code if selected. When given a code file, an example file will be generated. Here are the options the program will support: 
+    '--force': When writing the output files, if a file already exists, the program will ask before overwriting it unless a "--force" is present where it will just overwrite the file. It will default to Yes if user presses Enter.
+    '-o': Path or filename of the output of the runnable code. All four of the above possibilities are possible meaning for example, the user might just have "-o" or might have "-o ./output.py".
+    '-oe': Means program should generate example from runnable code. As will "-o" all four output possibilities are possible here.
+
+% Here are example command lines:
+    -'pdd context_generator.py' will generate 'context_generator_example.py' in the same directory
+    -'pdd context_generator.py -oe context/' will generate 'context_generator_example.py' in the './context' directory
+    -'pdd context_generator_python.prompt -o pdd/ -oe context/' will generate 'context_generator.py' in the './pdd' directory and 'context_generator_example.py' in the './context' directory. 'context_generator' is the basename.
+    -'pdd makefile_makefile.prompt' will generate 'makefile' in the same directory
+    -'pdd pdd_python.prompt -o pdd/pdd_v1.py will generate 'pdd_v1.py' in the './pdd' directory and no example will be generated
+
+% Here is an example how to generate code from the prompt from a file: ```<./context/code_generator_example.py>```                
+
+% Here is an example how to generate an example from a code file: ```<./context/context_generator_example.py>```
+
+% This program will do the following:
+    Step 1. Read the input file name from the command line. 
+    Step 2. If file name has no extension, add '.prompt' to the file name.
+    Step 3. Extract the basename and language from the file name so the right code file extension (e.g. '.sh' for bash, '' for makefile, '.py' for Python) and language is used for all the subsequent steps. 
+    Step 4. From the basename and file extension generate the appropriate file paths for the runnable and example output files considering the four possibilities. First determine which possibility for each of the outputs and then construct the proper file paths for each output.
+    Step 5. If a prompt input (indicated by a '.prompt' input file extension) do these steps:
+        Step 5a. Generate code from the input prompt file name using code_generator.
+        Step 5b. The program will write the runnable code to a runnable file path from Step 4. 
+    Step 6. If a code file (indicated by a input file extension that isn't '.prompt') is provided or a "-oe" option is provided, the program will generate example code from the runnable code of Step 5 or the input code file using context_generator and write the example code to the example file path from Step 4.```
+    example_input_code: ```# To create the command line program "pdd" as described, we will use Python's `argparse` for command line argument parsing, and the `rich` library for pretty printing. The program will handle both prompt files and code files, generating runnable code and example code as specified.
+
+# Here's a complete implementation of the `pdd` program:
+
+# ```python
+import os
+import sys
+import argparse
+from rich.console import Console
+from rich.prompt import Confirm
+from code_generator import code_generator
+from context_generator import context_generator
+
+console = Console()
+
+def get_file_paths(input_file, output_file, example_output_file):
+    # Extract basename and language from the input file
+    basename, ext = os.path.splitext(os.path.basename(input_file))
+    language = ext[1:]  # Remove the dot
+
+    # Determine output file paths
+    if output_file:
+        runnable_file_path = output_file
+    else:
+        runnable_file_path = os.path.join(os.path.dirname(input_file), f"{basename}.{get_extension(language)}")
+
+    if example_output_file:
+        example_file_path = example_output_file
+    else:
+        example_file_path = os.path.join(os.path.dirname(input_file), f"{basename}_example.{get_example_extension(language)}")
+
+    return runnable_file_path, example_file_path
+
+def get_extension(language):
+    extensions = {
+        'python': 'py',
+        'bash': 'sh',
+        'makefile': 'mk',
+        # Add more languages and their extensions as needed
+    }
+    return extensions.get(language, '')
+
+def get_example_extension(language):
+    return 'py'  # Assuming example files are always Python files for simplicity
+
+def confirm_overwrite(file_path):
+    if os.path.exists(file_path):
+        return Confirm.ask(f"{file_path} already exists. Do you want to overwrite it?", default=True)
+    return True
+
+def main():
+    parser = argparse.ArgumentParser(description="Compile prompts into code files or generate example code from code files.")
+    parser.add_argument('input', help='Input prompt file or code file to generate example from')
+    parser.add_argument('-o', '--output', help='Path or filename of the output runnable code')
+    parser.add_argument('-oe', '--output-example', help='Path or filename of the output example code')
+    parser.add_argument('--force', action='store_true', help='Force overwrite existing files without confirmation')
+
+    args = parser.parse_args()
+
+    input_file = args.input
+    if not input_file.endswith('.prompt'):
+        if not os.path.splitext(input_file)[1]:  # No extension, assume it's a code file
+            input_file += '.prompt'
+    
+    # Determine if input is a prompt or code file
+    is_prompt = input_file.endswith('.prompt')
+    
+    # Get output file paths
+    runnable_file_path, example_file_path = get_file_paths(input_file, args.output, args.output_example)
+
+    # Handle the runnable code generation
+    if is_prompt:
+        console.print(f"[bold green]Generating runnable code from prompt: {input_file}[/bold green]")
+        runnable_code = code_generator(input_file, get_extension(os.path.splitext(input_file)[1][1:]))
+        
+        if not args.force and not confirm_overwrite(runnable_file_path):
+            console.print("[bold red]Operation cancelled.[/bold red]")
+            return
+        
+        with open(runnable_file_path, 'w') as f:
+            f.write(runnable_code)
+        console.print(f"[bold blue]Runnable code written to: {runnable_file_path}[/bold blue]")
+
+    # Handle example code generation
+    if not is_prompt or args.output_example:
+        console.print(f"[bold green]Generating example code from: {runnable_file_path}[/bold green]")
+        success = context_generator(runnable_file_path, example_file_path, force=args.force)
+
+        if success:
+            console.print(f"[bold blue]Example code written to: {example_file_path}[/bold blue]")
+        else:
+            console.print("[bold red]Example generation failed.[/bold red]")
+
+if __name__ == "__main__":
+    main()
+# ```
+
+# ### Explanation of the Code:
+# 1. **Imports**: We import necessary modules including `argparse` for command line parsing, `os` for file path manipulations, and `rich` for console output.
+# 2. **Functions**:
+#    - `get_file_paths`: Determines the output file paths based on the input file and user-specified options.
+#    - `get_extension` and `get_example_extension`: Return the appropriate file extensions based on the language.
+#    - `confirm_overwrite`: Asks the user for confirmation if a file already exists.
+# 3. **Main Function**:
+#    - Parses command line arguments.
+#    - Checks if the input file is a prompt or a code file.
+#    - Generates runnable code from the prompt file and writes it to the specified output path.
+#    - Generates example code from the runnable code if specified.
+# 4. **Execution**: The script runs the `main` function when executed.
+
+# ### Usage:
+# - To run the program, save it as `pdd.py` and execute it from the command line:
+#   ```bash
+#   python pdd.py <input_prompt_file or input_code_file_to_generate_example_from> [options]
+#   ```
+
+# ### Requirements:
+# - Ensure you have the `rich`, `langchain`, and `tiktoken` libraries installed, along with the `code_generator` and `context_generator` modules available in your environment.```
+    example_example_code: ```file_extension = get_extension(language)```
+    example_sub_prompt: ```% You are an expert Python engineer. Your goal is to write a python function, "get_extension", that will return the file extension associated with a given language. 
+
+% Here are the inputs and outputs of the function:
+    Input: 'language' - A string containing the language (e.g. Bash, Makefile, Python).
+    Output: returns a string that is the extension for the langauge
+
+% This program will do the following:
+    Step 1. Lower case the language string to make the comparison case insensitive.
+    Step 2. Look up the file extension for the given language
+    Step 3. Return the file extension```
+    example_modified_prompt: ```% You are an expert Python engineer. Your goal is to write a python command line program, "pdd", that will compile a prompt into a code file or a code file into an example code file. All output to the console will be pretty print using the Python rich library.
+
+% Here is how the program will be used: pdd <input_prompt_file or input_code_file_to_generate_example_from>
+
+% Prompt file names have this format: 'basename_language.prompt' (e.g. pdd_python.prompt, makefile_makefile.prompt, setup_bash.prompt)
+
+% There are four possibilities for the output files:
+    - File name given without path (e.g. 'output.py'): This will write the 'output.py' file in the same directory as the input file.
+    - File name given with path (e.g. './output.py'): This will write the 'output.py' file in the './' directory.
+    - Path given without file name (e.g. './context'): This will write the file with the basename and appropriate extension (for generated runnable code and generated example code) in the './context' directory.
+    - Nothing specified by user (default): This will write the file with the basename and appropriate extension in the same directory as the input file.
+
+% When given a prompt, the program will generate runnable code and example code if selected. When given a code file, an example file will be generated. Here are the options the program will support: 
+    '--force': When writing the output files, if a file already exists, the program will ask before overwriting it unless a "--force" is present where it will just overwrite the file. It will default to Yes if user presses Enter.
+    '-o': Path or filename of the output of the runnable code. All four of the above possibilities are possible meaning for example, the user might just have "-o" or might have "-o ./output.py".
+    '-oe': Means program should generate example from runnable code. As will "-o" all four output possibilities are possible here.
+
+% Here are example command lines:
+    -'pdd context_generator.py' will generate 'context_generator_example.py' in the same directory
+    -'pdd context_generator.py -oe context/' will generate 'context_generator_example.py' in the './context' directory
+    -'pdd context_generator_python.prompt -o pdd/ -oe context/' will generate 'context_generator.py' in the './pdd' directory and 'context_generator_example.py' in the './context' directory. 'context_generator' is the basename.
+    -'pdd makefile_makefile.prompt' will generate 'makefile' in the same directory
+    -'pdd pdd_python.prompt -o pdd/pdd_v1.py will generate 'pdd_v1.py' in the './pdd' directory and no example will be generated
+
+% Here is an example how to generate code from the prompt from a file: ```<./context/code_generator_example.py>```                
+
+% Here is an example how to generate an example from a code file: ```<./context/context_generator_example.py>```
+
+% Here is an example how to lookup a file extension given a language: ```<./context/get_extension_example.py>```
+
+% This program will do the following:
+    Step 1. Read the input file name from the command line. 
+    Step 2. If file name has no extension, add '.prompt' to the file name.
+    Step 3. Extract the basename and language from the file name. Use get_extension to get the file extension for the language. The file extension and language is used for all the subsequent steps. 
+    Step 4. From the basename and file extension generate the appropriate file paths for the runnable and example output files considering the four possibilities. First determine which possibility for each of the outputs and then construct the proper file paths for each output.
+    Step 5. If a prompt input (indicated by a '.prompt' input file extension) do these steps:
+        Step 5a. Generate code from the input prompt file name using code_generator.
+        Step 5b. The program will write the runnable code to a runnable file path from Step 4. 
+    Step 6. If a code file (indicated by a input file extension that isn't '.prompt') is provided or a "-oe" option is provided, the program will generate example code from the runnable code of Step 5 or the input code file using context_generator and write the example code to the example file path from Step 4.```
+
+% Here is the input_prompt to split: ```% You are an expert Python engineer. Your goal is to write a python command line program, "pdd", that will compile a prompt into a code file or a code file into an example code file. All output to the console will be pretty print using the Python rich library.
+
+% Here is how the program will be used: pdd <input_prompt_file or input_code_file_to_generate_example_from>
+
+% Prompt file names have this format: 'basename_language.prompt' (e.g. pdd_python.prompt, makefile_makefile.prompt, setup_bash.prompt)
+
+% There are four possibilities for the output files:
+    - File name given without path (e.g. 'output.py'): This will write the 'output.py' file in the same directory as the input file.
+    - File name given with path (e.g. './output.py'): This will write the 'output.py' file in the './' directory.
+    - Path given without file name (e.g. './context'): This will write the file with the basename and appropriate extension (for generated runnable code and generated example code) in the './context' directory.
+    - Nothing specified by user (default): This will write the file with the basename and appropriate extension in the same directory as the input file.
+
+% When given a prompt, the program will generate runnable code and example code if selected. When given a code file, an example file will be generated. Here are the options the program will support: 
+    '--force': When writing the output files, if a file already exists, the program will ask before overwriting it unless a "--force" is present where it will just overwrite the file. It will default to Yes if user presses Enter.
+    '-o': Path or filename of the output of the runnable code. All four of the above possibilities are possible meaning for example, the user might just have "-o" or might have "-o ./output.py".
+    '-oe': Means program should generate example from runnable code. As will "-o" all four output possibilities are possible here.
+
+% Here are example command lines:
+    -'pdd context_generator.py' will generate 'context_generator_example.py' in the same directory
+    -'pdd context_generator.py -oe context/' will generate 'context_generator_example.py' in the './context' directory
+    -'pdd context_generator_python.prompt -o pdd/ -oe context/' will generate 'context_generator.py' in the './pdd' directory and 'context_generator_example.py' in the './context' directory. 'context_generator' is the basename.
+    -'pdd makefile_makefile.prompt' will generate 'makefile' in the same directory
+    -'pdd pdd_python.prompt -o pdd/pdd_v1.py will generate 'pdd_v1.py' in the './pdd' directory and no example will be generated
+
+% Here is an example how to generate code from the prompt from a file: ```<./context/code_generator_example.py>```                
+
+% Here is an example how to generate an example from a code file: ```<./context/context_generator_example.py>```
+
+% Here is an example how to lookup a file extension given a language: ```<./context/get_extension_example.py>```
+
+% This program will do the following:
+    Step 1. Read the input file name from the command line. 
+    Step 2. If file name has no extension, add '.prompt' to the file name.
+    Step 3. Extract the basename and language from the file name. Use get_extension to get the file extension for the language. The file extension and language is used for all the subsequent steps. 
+    Step 4. From the basename and file extension generate the appropriate file paths for the runnable and example output files considering the four possibilities. First determine which possibility for each of the outputs and then construct the proper file paths for each output.
+    Step 5. If a prompt input (indicated by a '.prompt' input file extension) do these steps:
+        Step 5a. Generate code from the input prompt file name using code_generator.
+        Step 5b. The program will write the runnable code to a runnable file path from Step 4. 
+    Step 6. If a code file (indicated by a input file extension that isn't '.prompt') is provided or a "-oe" option is provided, the program will generate example code from the runnable code of Step 5 or the input code file using context_generator and write the example code to the example file path from Step 4.```
+% Here is the input_code: ```# To create the `pdd` command line program as described, we need to follow the steps outlined in the prompt. Below is the implementation of the `pdd` program in Python. This program will use the `rich` library for pretty printing and handle the various input and output scenarios as specified.
+
+# First, ensure you have the necessary modules installed:
+# ```sh
+# pip install rich
+# ```
+
+# Next, create the `pdd.py` script:
+
+# ```python
+import os
+import sys
+import argparse
+from rich.console import Console
+from code_generator import code_generator
+from context_generator import context_generator
+from get_extension import get_extension
+
+console = Console()
+
+def main():
+    parser = argparse.ArgumentParser(description="Compile a prompt into a code file or a code file into an example code file.")
+    parser.add_argument('input_file', help="Input prompt file or input code file to generate example from")
+    parser.add_argument('-o', '--output', help="Path or filename of the output of the runnable code")
+    parser.add_argument('-oe', '--output_example', help="Path or filename of the output example code")
+    parser.add_argument('--force', action='store_true', help="Overwrite files without asking")
+
+    args = parser.parse_args()
+    input_file = args.input_file
+    output = args.output
+    output_example = args.output_example
+    force = args.force
+
+    # Step 1: Read the input file name from the command line
+    if not os.path.exists(input_file):
+        console.print(f"[bold red]Error:[/bold red] The file '{input_file}' does not exist.")
+        sys.exit(1)
+
+    # Step 2: If file name has no extension, add '.prompt' to the file name
+    if '.' not in input_file:
+        input_file += '.prompt'
+
+    # Step 3: Extract the basename and language from the file name
+    basename, ext = os.path.splitext(os.path.basename(input_file))
+    if ext == '.prompt':
+        language = basename.split('_')[-1]
+    else:
+        language = ext[1:]
+
+    file_extension = get_extension(language)
+
+    # Step 4: Generate the appropriate file paths for the runnable and example output files
+    def construct_output_path(output, default_name):
+        if output is None:
+            return os.path.join(os.path.dirname(input_file), default_name)
+        elif os.path.isdir(output):
+            return os.path.join(output, default_name)
+        else:
+            return output
+
+    runnable_output_path = construct_output_path(output, f"{basename}{file_extension}")
+    example_output_path = construct_output_path(output_example, f"{basename}_example{file_extension}")
+
+    # Step 5: If a prompt input, generate code from the input prompt file name using code_generator
+    if ext == '.prompt':
+        console.print(f"[bold green]Generating runnable code from prompt:[/bold green] {input_file}")
+        runnable_code = code_generator(input_file, language)
+        write_to_file(runnable_output_path, runnable_code, force)
+
+    # Step 6: If a code file is provided or a "-oe" option is provided, generate example code
+    if ext != '.prompt' or output_example:
+        console.print(f"[bold green]Generating example code from runnable code:[/bold green] {runnable_output_path}")
+        success = context_generator(runnable_output_path, example_output_path, force)
+        if success:
+            console.print(f"[bold green]Example code generated successfully:[/bold green] {example_output_path}")
+        else:
+            console.print(f"[bold red]Failed to generate example code.[/bold red]")
+
+def write_to_file(file_path, content, force):
+    if os.path.exists(file_path) and not force:
+        console.print(f"[bold yellow]Warning:[/bold yellow] The file '{file_path}' already exists. Overwrite? [y/N]")
+        response = input().strip().lower()
+        if response not in ['y', 'yes', '']:
+            console.print(f"[bold red]Aborted:[/bold red] The file '{file_path}' was not overwritten.")
+            return
+
+    with open(file_path, 'w') as f:
+        f.write(content)
+    console.print(f"[bold green]File written successfully:[/bold green] {file_path}")
+
+if __name__ == "__main__":
+    main()
+# ```
+
+# ### Explanation:
+# 1. **Argument Parsing**: The script uses `argparse` to handle command-line arguments.
+# 2. **File Existence Check**: It checks if the input file exists.
+# 3. **File Extension Handling**: If the input file has no extension, `.prompt` is added.
+# 4. **Basename and Language Extraction**: The script extracts the basename and language from the input file name.
+# 5. **Output Path Construction**: It constructs the appropriate output paths for runnable and example files.
+# 6. **Code Generation**: If the input is a prompt file, it generates runnable code using `code_generator`.
+# 7. **Example Code Generation**: If the input is a code file or the `-oe` option is provided, it generates example code using `context_generator`.
+# 8. **File Writing**: The script writes the generated code to the specified output files, handling overwrites based on the `--force` option.
+
+# This script should be placed in a file named `pdd.py` and can be executed from the command line as described in the prompt.```
+% Here is the example_code: ```runnable_output_path, example_output_path = construct_output_paths(
+    basename, # the basename of the file
+    file_extension, # the file extension based on the language
+    argv_output_path # string from the '-o' flag
+    argv_example_output_path # string from the '-oe' flag
+    )```
+
+% Follow these instructions:
+    1. Generate the sub_prompt.
+    2. Generate the modified_prompt.
