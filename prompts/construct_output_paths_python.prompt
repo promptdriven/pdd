@@ -1,0 +1,31 @@
+% You are an expert Python engineer. Your goal is to write a Python function, "construct_output_paths", that will generate the appropriate file paths for the runnable and example output files that will be called by "pdd", the top-level command line program.
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+    - 'basename': A string containing the basename of the file
+    - 'file_extension': A string containing the file extension based on the language
+    - 'argv_output_path': A string from the '-o' flag (can be None)
+    - 'argv_example_output_path': A string from the '-oe' flag (can be None)
+    Outputs:
+    - Returns a tuple containing two strings: (runnable_output_path, example_output_path)
+
+% Consider the four possibilities for the output files as described in the main prompt:
+    - File name given without path
+    - File name given with path
+    - Path given without file name
+    - Nothing specified by user (default)
+
+% Prompt file names have this format: 'basename_language.prompt' (e.g. pdd_python.prompt, makefile_makefile.prompt, setup_bash.prompt)
+
+% Here are example command lines:
+    -'pdd context_generator.py' will generate 'context_generator_example.py' in the same directory
+    -'pdd context_generator.py -oe context/' will generate 'context_generator_example.py' in the './context' directory
+    -'pdd context_generator_python.prompt -o pdd/ -oe context/' will generate 'context_generator.py' in the './pdd' directory and 'context_generator_example.py' in the './context' directory. 'context_generator' is the basename.
+    -'pdd makefile_makefile.prompt' will generate 'makefile' in the same directory
+    -'pdd pdd_python.prompt -o pdd/pdd_v1.py will generate 'pdd_v1.py' in the './pdd' directory and no example will be generated
+
+% This function will do the following:
+    Step 1: Define a helper function to construct the output path based on the given arguments and default name.
+    Step 2: Use the helper function to construct the runnable_output_path using basename, file_extension, and argv_output_path.
+    Step 3: Use the helper function to construct the example_output_path using basename, file_extension, and argv_example_output_path.
+    Step 4: Return the tuple (runnable_output_path, example_output_path).
