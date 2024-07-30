@@ -20,7 +20,7 @@
 
 ## Bugs
 
-- [ ] Makefile filename is not being generated correctly
+- [ ] 
 
 ## Improvements
 
