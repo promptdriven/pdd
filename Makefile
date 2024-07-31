@@ -1,88 +1,122 @@
-# To create a Makefile that handles generating Python modules, tests, context, testing, and cleaning, we can define several targets. These targets will include generating code from prompts, running tests, and cleaning up generated files and compiled bytecode.
-
-# Here's a Makefile that accomplishes these tasks:
+# Creating a comprehensive `Makefile` for your project involves defining various targets to handle generating Python modules, running tests, cleaning up, generating `requirements.txt` using `pipreqs`, and deploying files from staging to production. Below is an example `Makefile` that covers these tasks:
 
 # ```Makefile
 # Define directories
-PROMPTS_DIR := prompts
-CONTEXT_DIR := context
-PDD_DIR := pdd
+SRC_DIR := pdd
 STAGING_DIR := staging
+CONTEXT_DIR := context
+PROMPTS_DIR := prompts
 TESTS_DIR := tests
+
+# Define files
+REQUIREMENTS := requirements.txt
 
 # Define Python interpreter
 PYTHON := python
 
-# Define the pdd script
-PDD_SCRIPT := $(PDD_DIR)/pdd.py
-
-# Define the prompt files
-PROMPT_FILES := $(wildcard $(PROMPTS_DIR)/*.prompt)
-
-# Define the output files
-OUTPUT_FILES := $(patsubst $(PROMPTS_DIR)/%.prompt, $(STAGING_DIR)/pdd/%.py, $(PROMPT_FILES))
-
-# Help target
-.PHONY: help
-help:
-	@echo "Available targets:"
-	@echo "  generate    - Generate Python modules from prompts"
-	@echo "  test        - Run tests"
-	@echo "  clean       - Clean generated files and bytecode"
-	@echo "  help        - Show this help message"
+# Default target
+.PHONY: all
+all: generate_modules generate_tests generate_context
 
 # Generate Python modules from prompts
-.PHONY: generate
-generate: $(OUTPUT_FILES)
+.PHONY: generate_modules
+generate_modules:
+	@echo "Generating modules from prompts..."
+	@for prompt in $(PROMPTS_DIR)/*.prompt; do \
+		base_name=$$(basename $$prompt .prompt); \
+		case $$base_name in \
+			*_makefile) \
+				output_file=$(STAGING_DIR)/"Makefile"; \
+				;; \
+			*_csv) \
+				output_file=$(STAGING_DIR)/$(SRC_DIR)/$$base_name.csv; \
+				;; \
+			*_python) \
+				output_file=$(STAGING_DIR)/$(SRC_DIR)/$$base_name.py; \
+				;; \
+			*) \
+				echo "Unknown prompt type for $$prompt"; \
+				exit 1; \
+				;; \
+		esac; \
+		$(PYTHON) $(SRC_DIR)/pdd.py -o $$output_file $$prompt; \
+	done
 
-$(STAGING_DIR)/pdd/%.py: $(PROMPTS_DIR)/%.prompt
-	@mkdir -p $(dir $@)
-	$(PYTHON) $(PDD_SCRIPT) -o $@ $<
+# Generate test files from prompts
+.PHONY: generate_tests
+generate_tests:
+	@echo "Generating test files from prompts..."
+	@for prompt in $(PROMPTS_DIR)/*.prompt; do \
+		output_file=$(TESTS_DIR)/$$(basename $$prompt .prompt)_test.py; \
+		$(PYTHON) $(SRC_DIR)/pdd.py -o $$output_file $$prompt; \
+	done
+
+# Generate context files from prompts
+.PHONY: generate_context
+generate_context:
+	@echo "Generating context files from prompts..."
+	@for prompt in $(PROMPTS_DIR)/*.prompt; do \
+		output_file=$(CONTEXT_DIR)/$$(basename $$prompt .prompt)_example.py; \
+		$(PYTHON) $(SRC_DIR)/pdd.py -oe $$output_file $$prompt; \
+	done
 
 # Run tests
 .PHONY: test
 test:
-	$(PYTHON) -m unittest discover -s $(TESTS_DIR)
+	@echo "Running tests..."
+	@$(PYTHON) -m unittest discover -s $(TESTS_DIR)
 
-# Clean generated files and bytecode
+# Clean generated files
 .PHONY: clean
 clean:
-	@echo "Cleaning generated files and bytecode..."
-	@find $(STAGING_DIR) -name '*.pyc' -delete
-	@find $(STAGING_DIR) -name '__pycache__' -delete
-	@find $(STAGING_DIR) -type f -name '*.py' -delete
-	@find $(CONTEXT_DIR) -name '*.pyc' -delete
-	@find $(CONTEXT_DIR) -name '__pycache__' -delete
-	@find $(CONTEXT_DIR) -type f -name '*_example.py' -delete
+	@echo "Cleaning generated files..."
+	@rm -f $(SRC_DIR)/*.pyc
+	@rm -f $(SRC_DIR)/*.pyo
+	@rm -f $(SRC_DIR)/*~
+	@rm -f $(CONTEXT_DIR)/*_example.py
+	@rm -f $(TESTS_DIR)/*_test.py
+
+# Generate requirements.txt using pipreqs
+.PHONY: requirements
+requirements:
+	@echo "Generating requirements.txt..."
+	@pipreqs . --force
+
+# Deploy files from staging to production
+.PHONY: deploy
+deploy:
+	@echo "Deploying files from staging to production..."
+	@cp -r $(STAGING_DIR)/* .
+
+# Help message
+.PHONY: help
+help:
+	@echo "Usage: make [target]"
+	@echo "Targets:"
+	@echo "  all                Generate modules, tests, and context files"
+	@echo "  generate_modules   Generate Python modules from prompts"
+	@echo "  generate_tests     Generate test files from prompts"
+	@echo "  generate_context   Generate context files from prompts"
+	@echo "  test               Run tests"
+	@echo "  clean              Clean generated files"
+	@echo "  requirements       Generate requirements.txt using pipreqs"
+	@echo "  deploy             Deploy files from staging to production"
+	@echo "  help               Show this help message"
 
 # Default target
 .DEFAULT_GOAL := help
 # ```
 
 # ### Explanation:
+# 1. **Directories and Files**: Variables are defined for directories and files to make the Makefile more maintainable.
+# 2. **Default Target**: The default target is set to `help` to show usage information when `make` is run without arguments.
+# 3. **Generate Modules**: The `generate_modules` target uses a loop to process each `.prompt` file in the `prompts` directory and generate corresponding Python modules in the `pdd` directory.
+# 4. **Generate Tests**: The `generate_tests` target similarly processes `.prompt` files to generate test files in the `tests` directory.
+# 5. **Generate Context**: The `generate_context` target generates context example files in the `context` directory.
+# 6. **Test**: The `test` target runs all tests using Python's `unittest` module.
+# 7. **Clean**: The `clean` target removes generated files to clean up the workspace.
+# 8. **Requirements**: The `requirements` target generates a `requirements.txt` file using `pipreqs`.
+# 9. **Deploy**: The `deploy` target copies files from the `staging` directory to the root directory.
+# 10. **Help**: The `help` target provides usage information for the Makefile.
 
-# 1. **Directories and Variables**:
-#    - `PROMPTS_DIR`, `CONTEXT_DIR`, `PDD_DIR`, `STAGING_DIR`, `TESTS_DIR`: Define the directories used in the project.
-#    - `PYTHON`: Define the Python interpreter.
-#    - `PDD_SCRIPT`: Path to the `pdd.py` script.
-#    - `PROMPT_FILES`: List of all prompt files in the `prompts` directory.
-#    - `OUTPUT_FILES`: List of output files to be generated in the `staging/pdd` directory.
-
-# 2. **Help Target**:
-#    - Provides a help message listing available targets.
-
-# 3. **Generate Target**:
-#    - Generates Python modules from prompt files using the `pdd.py` script.
-#    - Uses pattern rules to match prompt files to their corresponding output files.
-
-# 4. **Test Target**:
-#    - Runs tests using Python's `unittest` module.
-
-# 5. **Clean Target**:
-#    - Cleans up generated files and bytecode.
-#    - Uses `find` to delete `.pyc` files, `__pycache__` directories, and generated Python files.
-
-# 6. **Default Target**:
-#    - Sets the default target to `help` to display the help message when `make` is run without arguments.
-
-# This Makefile provides a structured way to manage the generation of Python modules, running tests, and cleaning up the project directory.
+# This Makefile should cover the tasks you described and can be extended or modified as needed for your specific project requirements.
