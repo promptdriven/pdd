@@ -1,12 +1,24 @@
-% You are an expert Python engineer. Your goal is to write a python function, "llm_selector", that will return the the next more powerful model based on the specified rules. 
+% You are an expert Python engineer. Your goal is to write a python function, "llm_selector", that will return the appropriate Langchain llm model. 
 
 % Here are the inputs and outputs of the function:
-    Input: path to a csv file that contains all the models and their input/output cost per million tokens and a base model (e.g. gpt-4-mini).
-    Output: the name of the next powerful model. (e.g. gpt-4)
+    Input: 
+        'power' - Floating point number with 0 being the base model and 1 being the model with the highest ELO score.
+        'temperature' - Floating point number indicating the temperature of the LLM.
+    Output: 
+        'llm' - Instantiated LLM model with the appropriate parameters.
+        'input_cost' - Cost per million input tokens
+        'output_cost' - Cost per million output tokens
 
-% Here is an example of the $PDD_PATH/data/llm_model.csv:```provider,model,input,output,humaneval
-OpenAI,gpt-4-1106-preview,10,30,.7
-OpenAI,gpt-3.5-turbo-0125,0.50,1.50,.7```
+% Here is an example of a Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
 
-% To select the next most powerful model from the given CSV file - $PDD_PATH/data/llm_model.csv 
-The cost of the current base model is calculated using average of the input and output cost per million tokens for example, gpt-4o-mini the cost would be (0.50 + 0.60) / 2 = 0.6. You have to implement the python function, "llm_selector" that chooses the model which has cost higher than the base model.
+% Here is an example of the $PDD_PATH/data/llm_model.csv:```provider,model,input,output,coding_arena_elo
+OpenAI,gpt-4o-mini,0.15,0.60,1281
+OpenAI,gpt-4o,5,15,1295
+Anthropic,claude-3-5-sonnet-20240620,3,15,1300
+Google,gemini-1.5-pro,3.5,7,1264```
+
+% Here are the rules to follow when selecting the appropriate model:
+    - If environmental variable $PDD_MODEL_DEFAULT is set, use that as the base model, otherwise it is "gpt-4o-mini".
+    - According to the power select the appropriate LLM model.
+    - If there is a model with the same or higher ELO ranking at or below the same average cost of input and output token cost.
+    
