@@ -33,7 +33,7 @@ class Joke(BaseModel):
     punchline: str = Field(description="answer to resolve the joke")
 
 
-llm = ChatGoogleGenerativeAI(model="gemini-pro")
+llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0)
 # Set up a parser
 parser = JsonOutputParser(pydantic_object=Joke)
 
@@ -58,7 +58,7 @@ class Action(BaseModel):
     action_input: str = Field(description="Input for the action")
 
 # Initialize the LLM
-llm = ChatAnthropic(model='claude-3-opus-20240229')
+llm = ChatAnthropic(model='claude-3-opus-20240229', temperature=0)
 
 # Create the RetryOutputParser
 retry_parser = RetryOutputParser.from_llm(parser=Action, llm=llm)
