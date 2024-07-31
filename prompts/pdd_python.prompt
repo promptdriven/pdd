@@ -8,6 +8,8 @@
     '--force': When writing the output files, if a file already exists, the program will ask before overwriting it unless a "--force" is present where it will just overwrite the file. It will default to Yes if user presses Enter.
     '-o': Path or filename of the output of the runnable code.
     '-oe': Means program should generate example from runnable code.
+    '-$': Means we need to select the next more powerful model.
+    '-$$': Means we need to select a model than is more powerful the next more powerful model.
 
 % Here are example command lines:
     -'pdd context_generator.py' will generate 'context_generator_example.py' in the same directory
@@ -30,6 +32,7 @@
     Step 3. Extract the basename and language from the file name. Use get_extension to get the file extension for the language. The file extension and language is used for all the subsequent steps. 
     Step 4. Use construct_output_paths to generate the appropriate file paths for the runnable and example output files.
     Step 5. If a prompt input (indicated by a '.prompt' input file extension) do these steps:
-        Step 5a. Generate code from the input prompt file name using code_generator.
-        Step 5b. The program will write the runnable code to a runnable file path from Step 4. 
+        Step 5a. If '-$' option was specified use llm_selector to chose the llm model and pass it to code_generator. Pass optional empty if '-$' is not specified.
+        Step 5b. Generate code from the input prompt file name using code_generator.
+        Step 5c. The program will write the runnable code to a runnable file path from Step 4. 
     Step 6. If a code file (indicated by a input file extension that isn't '.prompt') is provided or a "-oe" option is provided, the program will generate example code from the runnable code of Step 5 or the input code file using context_generator and write the example code to the example file path from Step 4.

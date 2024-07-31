@@ -3,6 +3,7 @@
 % Here are the inputs and outputs of the function:
     Input: 
         'prompt' - A string containing the filepath of the raw prompt to be processed.
+        'model' - Optional field for the model to use. If it is not present default to gpt-4o-mini.
         'file_type' - A string that is the type (e.g. python, bash) of file that will be outputed by the LLM
     Output: returns a string that is runnable code
 
@@ -18,7 +19,7 @@ token_count = len(encoding.encode(preprocessed_prompt))```
 % This program will use Langchain to do the following:
     Step 1. Preprocess the raw prompt using the preprocess function from the preprocess module.
     Step 2. Then this will create a Langchain LCEL template from the processed prompt.
-    Step 3. This will use the "gpt-4o-mini" and a temperature of 0 for the model.
+    Step 3. This will use the input model and a temperature of 0 for the model.
     Step 4. This will run the prompt through the model using Langchain LCEL. It will pretty print a message letting the user know it is running and how many tokens (using tiktoken) are in the prompt.
     Step 5. This will pretty print the markdown formatting that is present in the result via the rich Markdown function. It will also pretty print the number of tokens in the result.
     Step 6. The code result of the model will contain a mix of text and code separated by triple backticks. Use postprocess to create a runnable code.
