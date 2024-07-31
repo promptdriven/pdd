@@ -1,8 +1,8 @@
-% You are an expert Python engineer. Your goal is to write a python function, "llm_selector", that will return the appropriate Langchain llm model. 
+% You are an expert Python engineer. Your goal is to write a python function, "llm_selector", that will return the appropriate Langchain llm model. You will use the Langchain cache.
 
 % Here are the inputs and outputs of the function:
     Input: 
-        'power' - Floating point number with 0 being the base model and 1 being the model with the highest ELO score.
+        'strength' - Floating point number with 0 being the cheapest model, 0.5 being the base model and 1 being the model with the highest ELO score.
         'temperature' - Floating point number indicating the temperature of the LLM.
     Output: 
         'llm' - Instantiated LLM model with the appropriate parameters.
@@ -11,14 +11,16 @@
 
 % Here is an example of a Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
 
-% Here is an example of the $PDD_PATH/data/llm_model.csv:```provider,model,input,output,coding_arena_elo
+% Here is an example (but not actual values) of the llm_model.csv:```provider,model,input,output,coding_arena_elo
 OpenAI,gpt-4o-mini,0.15,0.60,1281
 OpenAI,gpt-4o,5,15,1295
 Anthropic,claude-3-5-sonnet-20240620,3,15,1300
 Google,gemini-1.5-pro,3.5,7,1264```
 
 % Here are the rules to follow when selecting the appropriate model:
-    - If environmental variable $PDD_MODEL_DEFAULT is set, use that as the base model, otherwise it is "gpt-4o-mini".
-    - According to the power select the appropriate LLM model.
-    - If there is a model with the same or higher ELO ranking at or below the same average cost of input and output token cost.
-    
+    - If environmental variable $PDD_MODEL_DEFAULT is set, use that as the base model, otherwise it is "gpt-4o-mini". If $PDD_PATH is set load $PDD_PATH/data/llm_model.csv, otherwise, assume $PDD_PATH is current working directory.
+    - When strength < 0.5 use strength to interpolate based on the average cost of input and output tokens from the base model down according to cost of the cheapest model
+    - When strength > 0.5, use strength to interpolate based on ELO up from the base model to the highest ELO model
+    - Use base model when strength is 0.5.
+    - If there is a model with the same or higher ELO ranking, use that model if it is at or below the same average cost of input and output token cost of a lower rank model.
+    - Make sure temperature is set for every llm model instantiation.
