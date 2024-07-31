@@ -1,4 +1,4 @@
-% You are an expert software engineer. Your goal is to write a Makefile to handle generating python modules/tests/context, testing, cleaning, etc. 
+% You are an expert software engineer. Your goal is to write a Makefile to handle generating python modules (.py)/Makefile/csv/context (examples), testing, cleaning, generating requirements.txt from pipreqs, production (e.g. copy files from staging to pdd), etc. 
 
 
 % Here is the help of pdd: ```python pdd/pdd.py -h
@@ -19,6 +19,7 @@ options:
   
 Here is an example directory structure: ```├── README.md
 ├── TODO.md
+├── Makefile
 ├── context
 │   ├── code_generator_example.py
 │   ├── context_generator_example.py
@@ -38,10 +39,6 @@ Here is an example directory structure: ```├── README.md
 │   └── llm_model.csv
 ├── pdd
 │   ├── __pycache__
-│   │   ├── code_generator.cpython-312.pyc
-│   │   ├── context_generator.cpython-312.pyc
-│   │   ├── postprocess.cpython-312.pyc
-│   │   └── preprocess.cpython-312.pyc
 │   ├── code_generator.py
 │   ├── context_generator.py
 │   ├── get_extension.py
@@ -49,45 +46,44 @@ Here is an example directory structure: ```├── README.md
 │   ├── postprocess.py
 │   └── preprocess.py
 ├── prompts
-│   ├── Makefile_makefile.prompt
+│   ├── Makefile_makefile.prompt (generates Makefile in staging)
 │   ├── code_generator_python.prompt
 │   ├── context_generator_python.prompt
 │   ├── get_extension_python.prompt
-│   ├── language_format_csv.prompt
+│   ├── language_format_csv.prompt (generates language_format.csv in staging/data)
 │   ├── llm_model_csv.prompt
 │   ├── pdd_python.prompt
 │   ├── postprocess_python.prompt
 │   └── preprocess_python.prompt
 ├── requirements.txt
 ├── staging
+│   ├── Makefile
+│   ├── data
+│   │   ├── language_format.csv
+│   │   ├── llm_model.csv
 │   ├── context
 │   │   ├── code_generator_example.py
 │   │   ├── context_generator_example.py
-│   │   ├── ge_example.py
 │   │   ├── get_extension_example.py
-│   │   ├── get_extension_python_example.py
 │   │   ├── langchain_lcel_example.py
 │   │   ├── postprocess_example.py
 │   │   └── preprocess_example.py
 │   ├── pdd
 │   │   ├── __pycache__
-│   │   │   ├── code_generator.cpython-312.pyc
-│   │   │   ├── context_generator.cpython-312.pyc
-│   │   │   ├── get_extension.cpython-312.pyc
-│   │   │   ├── pdd.cpython-312.pyc
-│   │   │   ├── postprocess.cpython-312.pyc
-│   │   │   └── preprocess.cpython-312.pyc
 │   │   ├── code_generator.py
 │   │   ├── context_generator.py
-│   │   ├── ge.py
 │   │   ├── get_extension.py
 │   │   ├── get_extension_example.py
-│   │   ├── get_extension_python.py
 │   │   ├── pdd.py
-│   │   ├── pdd2.py
 │   │   ├── postprocess.py
 │   │   └── preprocess.py
 │   └── tests
 │       └── testing.ipynb
 └── tests
     └── testing.ipynb```
+
+% Rules to follow:
+  - The Makefile needs to use wildcards to ensure all files and found and generated
+  - Prompt file names have this format: '<basename>_<language>.prompt' (e.g. pdd_python.prompt, Makefile_makefile.prompt, setup_bash.prompt). Be sure to not include the '_<language>' as part of the output file.
+  - Prompts have different output file extensions depending on the language. For instance, '_makefile.prompt' has no file extensions, '_csv.prompt' end in '.csv', '_python.prompt' end in '.py', etc. As a result, there needs to be separate generate for each type of language.
+  - Print out the commands as they run
