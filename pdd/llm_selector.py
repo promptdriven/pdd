@@ -12,6 +12,23 @@
 import os
 import pandas as pd
 from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_anthropic import ChatAnthropic
+from langchain_community.cache import SQLiteCache
+from langchain.globals import set_llm_cache
+
+# Setup cache to save money and increase speeds
+set_llm_cache(SQLiteCache(database_path=".langchain.db"))
+
+def instantiate_llm(provider, model, temperature):
+    if provider == 'OpenAI':
+        return ChatOpenAI(model=model, temperature=temperature)
+    elif provider == 'Google':
+        return ChatGoogleGenerativeAI(model=model, temperature=temperature)
+    elif provider == 'Anthropic':
+        return ChatAnthropic(model=model, temperature=temperature)
+    else:
+        raise ValueError(f"Unknown provider: {provider}")
 
 def llm_selector(strength, temperature):
     # Load environment variables
@@ -39,20 +56,27 @@ def llm_selector(strength, temperature):
         # Interpolate up based on ELO
         highest_elo_model_row = df.loc[df['coding_arena_elo'].idxmax()]
         target_elo = base_model_elo + (highest_elo_model_row['coding_arena_elo'] - base_model_elo) * (strength - 0.5) / 0.5
-        selected_model_row = df[df['coding_arena_elo'] >= target_elo].sort_values(by='coding_arena_elo', ascending=False).iloc[0]
+        # Calculate the absolute difference between each row's elo and the target_elo
+        df['elo_difference'] = abs(df['coding_arena_elo'] - target_elo)
+
+        # Select the row with the smallest difference
+        selected_model_row = df.loc[df['elo_difference'].idxmin()]
+
+        # selected_model_row = df[df['coding_arena_elo'] >= target_elo].sort_values(by='coding_arena_elo', ascending=False).iloc[0]
     else:
         # Use base model
         selected_model_row = base_model_row
     
     # Instantiate the selected model
-    llm = ChatOpenAI(model=selected_model_row['model'], temperature=temperature)
-    
+    # llm = ChatOpenAI(model=selected_model_row['model'], temperature=temperature)
+    llm = instantiate_llm(selected_model_row['provider'], selected_model_row['model'], temperature)
+    print("Selected model:", selected_model_row['model'])
     # Return the model and costs
     return llm, selected_model_row['input'], selected_model_row['output']
 
 # Example usage
-llm, input_cost, output_cost = llm_selector(0.7, 0.7)
-print(f"Selected LLM: {llm}, Input Cost: {input_cost}, Output Cost: {output_cost}")
+# llm, input_cost, output_cost = llm_selector(0.7, 0.7)
+# print(f"Selected LLM: {llm}, Input Cost: {input_cost}, Output Cost: {output_cost}")
 # ```
 
 # ### Explanation:
