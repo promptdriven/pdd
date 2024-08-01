@@ -58,7 +58,7 @@ class Action(BaseModel):
     action_input: str = Field(description="Input for the action")
 
 # Initialize the LLM
-llm = ChatAnthropic(model='claude-3-opus-20240229', temperature=0)
+llm = ChatAnthropic(model='claude-3-5-sonnet-20240620', temperature=0)
 
 # Create the RetryOutputParser
 retry_parser = RetryOutputParser.from_llm(parser=Action, llm=llm)

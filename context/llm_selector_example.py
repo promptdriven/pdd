@@ -1,27 +1,26 @@
-# Here's a concise example of how to use the `llm_selector` function from the `pdd/llm_selector.py` module:
+# Here's a concise example of how to use the `llm_selector` function from the provided module:
 
 # ```python
-import os
-from pdd.llm_selector import llm_selector
+# Import the llm_selector function from the module
+from llm_selector import llm_selector
 
-# Set environment variables (for demonstration purposes)
-os.environ['PDD_MODEL_DEFAULT'] = 'gpt-4o-mini'
-os.environ['PDD_PATH'] = '/path/to/your/data'
+# Set the desired strength and temperature for model selection
+strength = 1  # Value between 0 and 1
+temperature = 0.8  # Value for controlling randomness in responses
 
-# Call the llm_selector function with desired strength and temperature
-strength = 0.3  # Adjust strength between 0 and 1
-temperature = 0.7  # Set the desired temperature for the model
-
-# Get the selected model and costs
+# Call the llm_selector function to get the LLM model and its costs
 llm, input_cost, output_cost = llm_selector(strength, temperature)
 
-# Output the results
-print(f"Selected LLM: {llm}, Input Cost: {input_cost}, Output Cost: {output_cost}")
+# Print the selected LLM model and its associated costs
+print("Selected LLM Model:", llm)
+print("Input Cost:", input_cost)
+print("Output Cost:", output_cost)
 # ```
 
 # ### Explanation:
-# 1. **Environment Variables**: Set the necessary environment variables for the model selection.
-# 2. **Function Call**: Call `llm_selector` with specific `strength` and `temperature` values.
-# 3. **Output**: Print the selected model and its associated costs. 
+# 1. **Importing**: The `llm_selector` function is imported from the module.
+# 2. **Parameters**: The `strength` and `temperature` parameters are defined.
+# 3. **Function Call**: The `llm_selector` function is called with the specified parameters, returning the selected LLM model and its costs.
+# 4. **Output**: The selected model and its costs are printed to the console. 
 
-# Make sure to replace `'/path/to/your/data'` with the actual path where your `llm_model.csv` file is located.
+# Make sure to have the necessary environment variables set and the CSV file in the correct location for the function to work properly.
