@@ -1,8 +1,11 @@
-% You are an expert Python engineer. Your goal is to write a python command line program, "pdd", that will compile a prompt into a code file or a code file into an example code file. All output to the console will be pretty print using the Python rich library.
+% You are an expert Python engineer. Your goal is to write a python command line program, "pdd", that will compile a prompt into a code file or a code file into an example code file. All output to the console will be pretty print using the Python rich library. The CLI arguments will be handled using the Python click library.
 
 % Here is how the program will be used: pdd <input_prompt_file> or <input_code_file_to_generate_example_from>
 
-% Prompt file names have this format: 'basename_language.prompt' (e.g. pdd_python.prompt, makefile_makefile.prompt, setup_bash.prompt)
+% Prompt file names have this format: '<basename>_<language>.prompt'. For example:
+    - 'pdd_cli_python.prompt' -> basename is 'pdd_cli' and language is 'python'
+    - 'Makefile_makefile.prompt' -> basename is 'Makefile' and language is 'makefile'
+    - 'setup_bash.prompt' -> basename is 'setup' and language is 'bash'
 
 % When given a prompt, the program will generate runnable code and example code if selected. When given a code file, an example file will be generated. Here are the options the program will support: 
     '--force': When writing the output files, if a file already exists, the program will ask before overwriting it unless a "--force" is present where it will just overwrite the file. It will default to Yes if user presses Enter.
