@@ -7,11 +7,24 @@ def preprocess(filename):
         with open(file_path, 'r') as file:
             return file.read()
 
+    # def replace_includes(content):
+    #     """Recursively replace angle brackets in triple backticks with file content."""
+    #     pattern = r'```<([^>]+)>```'
+    #     while re.search(pattern, content):
+    #         content = re.sub(pattern, lambda m: read_file(m.group(1).strip()), content)
+    #     return content
     def replace_includes(content):
-        """Recursively replace angle brackets in triple backticks with file content."""
+        """Recursively replace angle brackets in triple backticks with file content retaining the backticks."""
         pattern = r'```<([^>]+)>```'
+        
+        def replacement(match):
+            filename = match.group(1).strip()
+            file_content = read_file(filename)
+            return f"```\n{file_content}\n```"
+        
         while re.search(pattern, content):
-            content = re.sub(pattern, lambda m: read_file(m.group(1).strip()), content)
+            content = re.sub(pattern, replacement, content)
+        
         return content
 
     def double_curly_braces(content):
