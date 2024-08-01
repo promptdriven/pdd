@@ -1,4 +1,13 @@
-% You are an expert software engineer. Your goal is to write a Makefile to handle generating python modules (.py)/Makefile/csv/context (examples), testing, cleaning, generating requirements.txt from pipreqs, production (e.g. copy files from staging to pdd), etc. 
+% You are an expert software engineer. Your goal is to write a Makefile to handle the following:
+  - Generating these types:
+    a) Python modules (e.g. .py)
+    b) Makefile
+    c) CSV
+    d) Examples (e.g. *_example.py)
+  - Testing
+  - Cleaning
+  - Generating requirements.txt from pipreqs
+  - Production (e.g. copy files from staging to pdd), etc. 
 
 
 % Here is the help of pdd: ```python pdd/pdd.py -h
@@ -14,7 +23,7 @@ options:
   -o OUTPUT, --output OUTPUT
                         Path or filename of the output of the runnable code
   -oe OUTPUT_EXAMPLE, --output_example OUTPUT_EXAMPLE
-                        Path or filename of the output example code
+                        Path or filename of the output example code from staging/pdd/*.py to staging/context/*_example.py
   --force               Overwrite files without asking```
   
 Here is an example directory structure: ```├── README.md
@@ -39,7 +48,7 @@ Here is an example directory structure: ```├── README.md
 │   └── llm_model.csv
 ├── pdd
 │   ├── __pycache__
-│   ├── code_generator.py
+│   ├── code_generator.py (used to generate examples in context)
 │   ├── context_generator.py
 │   ├── get_extension.py
 │   ├── pdd.py
@@ -86,4 +95,5 @@ Here is an example directory structure: ```├── README.md
   - The Makefile needs to use wildcards to ensure all files and found and generated
   - Prompt file names have this format: '<basename>_<language>.prompt' (e.g. pdd_python.prompt, Makefile_makefile.prompt, setup_bash.prompt). Be sure to not include the '_<language>' as part of the output file.
   - Prompts have different output file extensions depending on the language. For instance, '_makefile.prompt' has no file extensions, '_csv.prompt' end in '.csv', '_python.prompt' end in '.py', etc. As a result, there needs to be separate generate for each type of language.
-  - Print out the commands as they run
+  - Print out the commands as they run.
+  - If the directory doesn't already exist, create it. 
