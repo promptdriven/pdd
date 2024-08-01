@@ -1,6 +1,6 @@
 % You are an expert Python engineer. Your goal is to write a python command line program, "pdd", that will compile a prompt into a code file or a code file into an example code file. All output to the console will be pretty print using the Python rich library.
 
-% Here is how the program will be used: pdd <input_prompt_file or input_code_file_to_generate_example_from>
+% Here is how the program will be used: pdd <input_prompt_file> or <input_code_file_to_generate_example_from>
 
 % Prompt file names have this format: 'basename_language.prompt' (e.g. pdd_python.prompt, makefile_makefile.prompt, setup_bash.prompt)
 
@@ -8,14 +8,13 @@
     '--force': When writing the output files, if a file already exists, the program will ask before overwriting it unless a "--force" is present where it will just overwrite the file. It will default to Yes if user presses Enter.
     '-o': Path or filename of the output of the runnable code.
     '-oe': Means program should generate example from runnable code.
-    '-$': Means we need to select the next more powerful model.
-    '-$$': Means we need to select a model than is more powerful the next more powerful model.
+    '-$': Is the strength of the model to use. It is a float between 0 and 1. If not specified, it will default to 0.5. If specified, it will be passed to the code_generator function.
 
 % Here are example command lines:
     -'pdd context_generator.py' will generate 'context_generator_example.py' in the same directory
     -'pdd context_generator.py -oe context/' will generate 'context_generator_example.py' in the './context' directory
     -'pdd context_generator_python.prompt -o pdd/ -oe context/' will generate 'context_generator.py' in the './pdd' directory and 'context_generator_example.py' in the './context' directory. 'context_generator' is the basename.
-    -'pdd makefile_makefile.prompt' will generate 'makefile' in the same directory
+    -'pdd Makefile_makefile.prompt' will generate 'Makefile' in the same directory
     -'pdd pdd_python.prompt -o pdd/pdd_v1.py will generate 'pdd_v1.py' in the './pdd' directory and no example will be generated
 
 % Here is an example how to generate code from the prompt from a file: ```<./context/code_generator_example.py>```                
@@ -29,10 +28,9 @@
 % This program will do the following:
     Step 1. Read the input file name from the command line. 
     Step 2. If file name has no extension, add '.prompt' to the file name.
-    Step 3. Extract the basename and language from the file name. Use get_extension to get the file extension for the language. The file extension and language is used for all the subsequent steps. 
+    Step 3. Extract the basename and language from the file name. Use get_extension to get the file extension for the language. The file extension and language is used for all the subsequent steps. Keep in mind that not all files have a '_' in the file name. Also, if there isn't an '_', the file extension is the same as the input file extension.
     Step 4. Use construct_output_paths to generate the appropriate file paths for the runnable and example output files.
     Step 5. If a prompt input (indicated by a '.prompt' input file extension) do these steps:
-        Step 5a. If '-$' option was specified use llm_selector to chose the llm model and pass it to code_generator. Pass optional empty if '-$' is not specified.
-        Step 5b. Generate code from the input prompt file name using code_generator.
-        Step 5c. The program will write the runnable code to a runnable file path from Step 4. 
+        Step 5a. Generate code from using code_generator.
+        Step 5b. The program will write the runnable code to a runnable file path from Step 4. 
     Step 6. If a code file (indicated by a input file extension that isn't '.prompt') is provided or a "-oe" option is provided, the program will generate example code from the runnable code of Step 5 or the input code file using context_generator and write the example code to the example file path from Step 4.
