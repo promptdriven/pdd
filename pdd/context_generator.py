@@ -20,7 +20,11 @@ def context_generator(python_filename: str, output_filename: str, force: bool = 
         return False
 
     # Step 3: Write a prompt suitable for GPT-4.
-    prompt = f"Generate a concise example of how to use the following module properly:\n\n```{processed_content}```\n\nFilename: ```{python_filename}```"
+    prompt = f"""% Generate a concise example of how to use the following module properly:```{processed_content}```
+
+    % Filename: ```{python_filename}```
+    
+    % Be sure to document what the input and output parameters are and assume the example will be in the same directory as the module."""
 
     # Step 4: Create a Langchain LCEL template from the generated prompt.
     prompt_template = PromptTemplate.from_template(prompt)
