@@ -1,80 +1,87 @@
-import sys
-import os
-import argparse
-from typing import Tuple, Optional
-from rich import print
-from rich.console import Console
-from rich.prompt import Confirm
+# Certainly! I'll create a Python command-line program called "pdd" that meets your requirements. Here's the implementation:
 
+# ```python
+import click
+from rich import print
+import os
 from code_generator import code_generator
 from context_generator import context_generator
 from get_extension import get_extension
 from construct_output_paths import construct_output_paths
 
-console = Console()
-
-def parse_arguments() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="PDD: Prompt-Driven Development Tool")
-    parser.add_argument("input_file", help="Input prompt file or code file")
-    parser.add_argument("--force", action="store_true", help="Overwrite existing files without confirmation")
-    parser.add_argument("-o", "--output", help="Path or filename of the output runnable code")
-    parser.add_argument("-oe", "--example_output", help="Path for the example code output")
-    parser.add_argument("-$", "--strength", type=float, default=0.5, help="Strength of the model to use (0-1)")
-    return parser.parse_args()
-
-def extract_basename_and_language(filename: str) -> Tuple[str, str]:
-    basename, ext = os.path.splitext(filename)
-    if '_' in basename:
-        basename, language = basename.rsplit('_', 1)
-        # remove path from basename
-        basename = os.path.basename(basename)
-    else:
-        language = ext.lstrip('.')
-    return basename, language
-
-def write_file(content: str, filepath: str, force: bool) -> bool:
-    if os.path.exists(filepath) and not force:
-        if not Confirm.ask(f"[yellow]File {filepath} already exists. Overwrite?[/yellow]", default=True):
-            return False
-    
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    with open(filepath, 'w') as f:
-        f.write(content)
-    return True
-
-def main():
-    args = parse_arguments()
-
+@click.command()
+@click.argument('input_file', type=click.Path(exists=True))
+@click.option('--force', is_flag=True, help='Overwrite existing files without confirmation')
+@click.option('-o', 'output_path', type=click.Path(), help='Path or filename of the output runnable code')
+@click.option('-oe', 'example_output_path', type=click.Path(), help='Path or filename of the output example code')
+@click.option('-$', 'strength', type=float, default=0.5, help='Strength of the model to use (0-1)')
+def pdd(input_file, force, output_path, example_output_path, strength):
+    """
+    Generate runnable code and/or example code from a prompt or code file.
+    """
     # Step 1 & 2: Read input file and add '.prompt' if no extension
-    input_file = args.input_file if os.path.splitext(args.input_file)[1] else f"{args.input_file}.prompt"
+    if not os.path.splitext(input_file)[1]:
+        input_file += '.prompt'
 
     # Step 3: Extract basename and language, get file extension
-    basename, language = extract_basename_and_language(input_file)
+    basename, ext = os.path.splitext(os.path.basename(input_file))
+    if '_' in basename:
+        basename, language = basename.rsplit('_', 1)
+    else:
+        language = ext[1:]  # Remove the leading dot
     file_extension = get_extension(language)
-    print(f"basename: {basename}, language: {language}, file_extension: {file_extension}")
-    # Step 4: Construct output paths
+
+    # Step 4: Generate output paths
     runnable_path, example_path = construct_output_paths(
-        basename, file_extension, args.output, args.example_output
+        basename, file_extension, output_path, example_output_path
     )
 
     # Step 5: Handle prompt input
-    if input_file.endswith('.prompt'):
-        console.print(f"[bold green]Generating code from prompt: {input_file}[/bold green]")
-        runnable_code = code_generator(input_file, language, args.strength)
-        if write_file(runnable_code, runnable_path, args.force):
-            console.print(f"[green]Runnable code written to: {runnable_path}[/green]")
+    if ext == '.prompt':
+        # Step 5a: Generate code from prompt
+        result_code = code_generator(input_file, language, strength)
+
+        # Step 5b: Write runnable code
+        write_file(runnable_path, result_code, force)
+        print(f"[green]Runnable code written to: {runnable_path}[/green]")
+
+        # Input for example generation
+        input_for_example = runnable_path
+    else:
+        input_for_example = input_file
+
+    # Step 6: Generate example code if needed
+    if ext != '.prompt' or example_output_path:
+        success = context_generator(input_for_example, example_path, force)
+        if success:
+            print(f"[green]Example code written to: {example_path}[/green]")
         else:
-            console.print("[red]Failed to write runnable code.[/red]")
+            print("[red]Failed to generate example code.[/red]")
+
+def write_file(path, content, force):
+    """Write content to file, asking for confirmation if file exists and force is False."""
+    if os.path.exists(path) and not force:
+        if not click.confirm(f"File {path} already exists. Overwrite?", default=True):
+            print("[yellow]Operation cancelled.[/yellow]")
             return
 
-    # Step 6: Generate example code
-    if not input_file.endswith('.prompt') or args.example_output:
-        console.print(f"[bold blue]Generating example code from: {runnable_path or input_file}[/bold blue]")
-        success = context_generator(runnable_path or input_file, example_path, args.force)
-        if success:
-            console.print(f"[green]Example code written to: {example_path}[/green]")
-        else:
-            console.print("[red]Failed to generate example code.[/red]")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'w') as f:
+        f.write(content)
 
 if __name__ == "__main__":
-    main()
+    pdd()
+# ```
+
+# This implementation does the following:
+
+# 1. We use `click` to handle command-line arguments and options.
+# 2. The `rich` library is used for pretty-printing output.
+# 3. The `pdd` function is the main entry point, decorated with `click.command()` to handle CLI arguments.
+# 4. We implement the steps as described in your requirements:
+#    - Reading the input file and adding '.prompt' if there's no extension.
+#    - Extracting the basename and language, and getting the file extension.
+#    - Generating output paths using `construct_output_paths`.
+#    - Handling prompt input by generating code with `code_generator`.
+#    - Generating example code with `context_generator` when needed.
+# 5. The `write_file` function handles
