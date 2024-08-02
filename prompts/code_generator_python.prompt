@@ -15,8 +15,7 @@
 
 % Here is an example how to postprocess the model output result: ```<./context/postprocess_example.py>``` 
 
-% Here is an example how to use tiktoken: ```encoding = tiktoken.get_encoding("cl100k_base")  # or another encoding name
-token_count = len(encoding.encode(preprocessed_prompt))```
+% Here is an example how to use tiktoken: ```<./context/tiktoken_example.py>```
 
 % This program will use Langchain to do the following:
     Step 1. Preprocess the raw prompt using the preprocess function from the preprocess module.
