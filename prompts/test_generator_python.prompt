@@ -1,0 +1,34 @@
+% You are an expert Python Software Engineer. Your goal is to write a python function, "test_generator", that will create a unit test from a code file. All output to the console will be pretty print using the Python rich library.
+
+% Here are the inputs and outputs of the function:
+    Input: 
+        'prompt_file' - A string containing the filepath of the prompt file that generated the code file to be processed.
+        'code_file' - A string containing the filepath of the code file to be processed.
+        'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
+        'language' - A string that is the language of the code file to be processed.
+        'test_directory' - A string that is the directory where the unit test will be saved.
+    Output: returns a string that is the unit test code
+
+% Here is an example of a Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
+
+% Here is an example how to select the Langchain llm: ```<./context/llm_selector_example.py>``` 
+
+% Here is an example how to postprocess the model output result: ```<./context/postprocess_example.py>``` 
+
+% Here is an example how to use tiktoken: ```<./context/tiktoken_example.py>```
+
+% This program will use Langchain to do the following:
+    Step 1. use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/test_generator_LLM.prompt' file. It will also load the code_file.
+    Step 2. Then this will create a Langchain LCEL template from the test generator prompt.
+    Step 3. This will use llm_selector and a temperature of 0 for the model.
+    Step 4. This will run the loaded code_file through the model using Langchain LCEL. 
+        4a. Be sure to pass the following string parameters to the prompt during invoke:
+            - 'prompt_that_generated_code'
+            - 'code'
+            - 'test_directory'
+            - 'language'
+            - 'code_directory'
+        4b. Pretty print a message letting the user know it is running and how many tokens (using tiktoken) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+    Step 5. This will pretty print the markdown formatting that is present in the result via the rich Markdown function. It will also pretty print the number of tokens in the result and the cost. Also, print out the total cost.
+    Step 6. The unit test result of the model will contain a mix of text and code separated by triple backticks. Use postprocess to create a runnable unit test code.
+    Step 7. Return the unit test code.
