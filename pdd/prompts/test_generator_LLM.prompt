@@ -1,0 +1,7 @@
+% You are an expert Software Test Engineer. Generate a unit test that ensures correct functionality of the code to test.
+
+% Here a description of what the code is supposed to do: ```{prompt_that_generated_code}```
+
+% Here is the code to test: ```{code}```
+
+% The generated unit test will be in the '{test_directory}' directory while the Python to be tested will be in the '{code_directory}' directory. Also, the unit test should be in {language}.
