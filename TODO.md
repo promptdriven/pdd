@@ -2,7 +2,6 @@
 
 ## Features
 
-- [ ] create requirements.txt
 - [ ] make tests
 - [ ] auto reflect
 - [ ] run lint for context for better reflection
@@ -23,13 +22,14 @@
 
 ## Bugs
 
-- [ ] example making
+- [ ] example making doesn't have proper filename with only a directory
 
 ## Improvements
 
 - [ ] postprocess.prompt requires sonnet 3.5 and isn't stable
 - [ ] read from a csv file the comment 
 - [ ] changes to <include> </include>
+- [ ] total cost of makefile runs
 
 ## Documentation
 
