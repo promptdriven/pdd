@@ -99,8 +99,20 @@ def example(ctx, code_file, output):
     verbose = ctx.obj['VERBOSE']
     quiet = ctx.obj['QUIET']
 
-    basename, language = os.path.splitext(os.path.basename(code_file))[0].rsplit('_', 1)
-    file_extension = get_extension(language)
+    # Split the filename and extension
+    basename, file_extension = os.path.splitext(os.path.basename(code_file))
+    
+    # Try to split the basename by the last underscore
+    parts = basename.rsplit('_', 1)
+    
+    if len(parts) == 2:
+        # If there's an underscore, use it to separate basename and language
+        basename, language = parts
+        extension = get_extension(language)
+    else:
+        # If there's no underscore, use the original extension
+        language = None
+        extension = file_extension
 
     if not output:
         output = f"{basename}_example{file_extension}"
