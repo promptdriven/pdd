@@ -4,29 +4,16 @@
     b) Makefile
     c) CSV
     d) Examples (e.g. *_example.py)
+    e) Tests
   - Testing
   - Cleaning
   - Generating requirements.txt from pipreqs
   - Production (e.g. copy files from staging to pdd), etc. 
 
 
-% Here is the help of pdd: ```python pdd/pdd.py -h
-usage: pdd.py [-h] [-o OUTPUT] [-oe OUTPUT_EXAMPLE] [--force] input_file
-
-Compile a prompt into a code file or a code file into an example code file.
-
-positional arguments:
-  input_file            Input prompt file or input code file to generate example from
-
-options:
-  -h, --help            show this help message and exit
-  -o OUTPUT, --output OUTPUT
-                        Path or filename of the output of the runnable code
-  -oe OUTPUT_EXAMPLE, --output_example OUTPUT_EXAMPLE
-                        Path or filename of the output example code from staging/pdd/*.py to staging/context/*_example.py
-  --force               Overwrite files without asking```
+% Here is the help of pdd: ```<./context/README.md>```
   
-Here is an example directory structure: ```├── README.md
+% Here is an example directory structure: ```├── README.md
 ├── TODO.md
 ├── Makefile
 ├── context
@@ -66,7 +53,7 @@ Here is an example directory structure: ```├── README.md
 │   └── preprocess_python.prompt
 ├── requirements.txt
 ├── staging
-│   ├── Makefile
+│   ├── Makefile (will be initially tested here and then moved to the base directory of pdd)
 │   ├── data
 │   │   ├── language_format.csv
 │   │   ├── llm_model.csv
@@ -96,4 +83,5 @@ Here is an example directory structure: ```├── README.md
   - Prompt file names have this format: '<basename>_<language>.prompt' (e.g. pdd_python.prompt, Makefile_makefile.prompt, setup_bash.prompt). Be sure to not include the '_<language>' as part of the output file.
   - Prompts have different output file extensions depending on the language. For instance, '_makefile.prompt' has no file extensions, '_csv.prompt' end in '.csv', '_python.prompt' end in '.py', etc. As a result, there needs to be separate generate for each type of language.
   - Print out the commands as they run.
-  - If the directory doesn't already exist, create it. 
+  - If the directory doesn't already exist, create it.
+  - To run 'pdd', use the command: ```python pdd/pdd.py```

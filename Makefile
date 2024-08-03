@@ -1,84 +1,96 @@
+# Based on your requirements and the given directory structure, here's a Makefile that should handle all the specified tasks:
+
+# ```makefile
 # Directories
-PROMPT_DIR := prompts
 STAGING_DIR := staging
-PDD_DIR := pdd
-CONTEXT_DIR := context
-DATA_DIR := data
-TEST_DIR := tests
+PDD_DIR := $(STAGING_DIR)/pdd
+DATA_DIR := $(STAGING_DIR)/data
+CONTEXT_DIR := $(STAGING_DIR)/context
+TESTS_DIR := $(STAGING_DIR)/tests
+PROMPTS_DIR := prompts
 
-# Python script
-PDD_SCRIPT := $(PDD_DIR)/pdd.py
+# Python files
+PY_PROMPTS := $(wildcard $(PROMPTS_DIR)/*_python.prompt)
+PY_OUTPUTS := $(patsubst $(PROMPTS_DIR)/%_python.prompt,$(PDD_DIR)/%.py,$(PY_PROMPTS))
 
-# Wildcards for different file types
-PYTHON_PROMPTS := $(wildcard $(PROMPT_DIR)/*_python.prompt)
-MAKEFILE_PROMPTS := $(wildcard $(PROMPT_DIR)/*_makefile.prompt)
-CSV_PROMPTS := $(wildcard $(PROMPT_DIR)/*_csv.prompt)
+# Makefile
+MAKEFILE_PROMPT := $(PROMPTS_DIR)/Makefile_makefile.prompt
+MAKEFILE_OUTPUT := $(STAGING_DIR)/Makefile
 
-PYTHON_OUTPUTS := $(patsubst $(PROMPT_DIR)/%_python.prompt,$(STAGING_DIR)/$(PDD_DIR)/%.py,$(PYTHON_PROMPTS))
-MAKEFILE_OUTPUTS := $(patsubst $(PROMPT_DIR)/%_makefile.prompt,$(STAGING_DIR)/%,$(MAKEFILE_PROMPTS))
-CSV_OUTPUTS := $(patsubst $(PROMPT_DIR)/%_csv.prompt,$(STAGING_DIR)/$(DATA_DIR)/%.csv,$(CSV_PROMPTS))
+# CSV files
+CSV_PROMPTS := $(wildcard $(PROMPTS_DIR)/*_csv.prompt)
+CSV_OUTPUTS := $(patsubst $(PROMPTS_DIR)/%_csv.prompt,$(DATA_DIR)/%.csv,$(CSV_PROMPTS))
 
-EXAMPLE_SOURCES := $(wildcard $(STAGING_DIR)/$(PDD_DIR)/*.py)
-EXAMPLE_OUTPUTS := $(patsubst $(STAGING_DIR)/$(PDD_DIR)/%.py,$(STAGING_DIR)/$(CONTEXT_DIR)/%_example.py,$(EXAMPLE_SOURCES))
+# Example files
+EXAMPLE_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(CONTEXT_DIR)/%_example.py,$(PY_OUTPUTS))
 
-# Default target
-all: generate test
+# Test files
+TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/%_test.py,$(PY_OUTPUTS))
 
-# Generate all files
-generate: python_files makefile_files csv_files example_files
+.PHONY: all clean test requirements production
+
+all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
 # Generate Python files
-python_files: $(PYTHON_OUTPUTS)
-
-$(STAGING_DIR)/$(PDD_DIR)/%.py: $(PROMPT_DIR)/%_python.prompt
-	@mkdir -p $(@D)
+$(PDD_DIR)/%.py: $(PROMPTS_DIR)/%_python.prompt
 	@echo "Generating $@"
-	@python $(PDD_SCRIPT) $< -o $@ --force
+	@mkdir -p $(PDD_DIR)
+	@python pdd/pdd.py generate --output $@ $<
 
 # Generate Makefile
-makefile_files: $(MAKEFILE_OUTPUTS)
-
-$(STAGING_DIR)/%: $(PROMPT_DIR)/%_makefile.prompt
-	@mkdir -p $(@D)
+$(MAKEFILE_OUTPUT): $(MAKEFILE_PROMPT)
 	@echo "Generating $@"
-	@python $(PDD_SCRIPT) $< -o $@ --force
+	@mkdir -p $(STAGING_DIR)
+	@python pdd/pdd.py generate --output $@ $<
 
 # Generate CSV files
-csv_files: $(CSV_OUTPUTS)
-
-$(STAGING_DIR)/$(DATA_DIR)/%.csv: $(PROMPT_DIR)/%_csv.prompt
-	@mkdir -p $(@D)
+$(DATA_DIR)/%.csv: $(PROMPTS_DIR)/%_csv.prompt
 	@echo "Generating $@"
-	@python $(PDD_SCRIPT) $< -o $@ --force
+	@mkdir -p $(DATA_DIR)
+	@python pdd/pdd.py generate --output $@ $<
 
 # Generate example files
-example_files: $(EXAMPLE_OUTPUTS)
-
-$(STAGING_DIR)/$(CONTEXT_DIR)/%_example.py: $(STAGING_DIR)/$(PDD_DIR)/%.py
-	@mkdir -p $(@D)
+$(CONTEXT_DIR)/%_example.py: $(PDD_DIR)/%.py
 	@echo "Generating example for $<"
-	@python $(PDD_SCRIPT) $< -oe $@ --force
+	@mkdir -p $(CONTEXT_DIR)
+	@python pdd/pdd.py example --output $@ $<
+
+# Generate test files
+$(TESTS_DIR)/%_test.py: $(PDD_DIR)/%.py $(PROMPTS_DIR)/%_python.prompt
+	@echo "Generating test for $<"
+	@mkdir -p $(TESTS_DIR)
+	@python pdd/pdd.py test --output $@ $^
 
 # Run tests
 test:
 	@echo "Running tests"
-	@jupyter nbconvert --to notebook --execute $(TEST_DIR)/testing.ipynb
-
-# Clean generated files
-clean:
-	@echo "Cleaning generated files"
-	@rm -rf $(STAGING_DIR)
+	@python -m unittest discover -v $(TESTS_DIR)
 
 # Generate requirements.txt
 requirements:
 	@echo "Generating requirements.txt"
 	@pipreqs . --force
 
+# Clean generated files
+clean:
+	@echo "Cleaning generated files"
+	@rm -rf $(STAGING_DIR)
+
 # Production: copy files from staging to pdd
 production:
 	@echo "Copying files to production"
-	@rsync -av --exclude='__pycache__' $(STAGING_DIR)/$(PDD_DIR)/ $(PDD_DIR)/
-	@rsync -av $(STAGING_DIR)/$(DATA_DIR)/ $(DATA_DIR)/
-	@rsync -av $(STAGING_DIR)/$(CONTEXT_DIR)/ $(CONTEXT_DIR)/
+	@mkdir -p pdd
+	@cp -r $(PDD_DIR)/* pdd/
+	@cp -r $(DATA_DIR) .
+	@cp $(MAKEFILE_OUTPUT) .
+# ```
 
-.PHONY: all generate python_files makefile_files csv_files example_files test clean requirements production
+# This Makefile covers all the requirements you specified:
+
+# 1. It generates Python modules, Makefile, CSV files, examples, and tests.
+# 2. It includes a test target to run all tests.
+# 3. It has a clean target to remove all generated files.
+# 4. It includes a target to generate requirements.txt using pipreqs.
+# 5. It has a production target to copy files from staging to the main pdd directory.
+
+# The Makefile uses wildcards to find all
