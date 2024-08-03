@@ -7,7 +7,6 @@
 - [ ] run lint for context for better reflection
 - [ ] smart includes
 - [ ] auto-includes
-- [ ] create readme
 - [ ] execute shell tools in ```<>``` <shell> </shell>
 - [ ] auto split modules into another sub module
 - [ ] auto check inconsistencies between modules
@@ -16,7 +15,7 @@
 - [ ] auto run diff to show difference in prompt modifications
 - [ ] routlellm
 - [ ] XML converter
-- [ ] larger prompt to smallef prompts split
+- [ ] larger prompt to smaller prompts split
 - [ ] database of examples to reference
 
 ## Bugs
