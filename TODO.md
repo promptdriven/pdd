@@ -11,7 +11,6 @@
 - [ ] auto split modules into another sub module
 - [ ] auto check inconsistencies between modules
 - [ ] implement changes across modules
-- [ ] print out the processed prompt without doing anything
 - [ ] auto run diff to show difference in prompt modifications
 - [ ] routlellm
 - [ ] XML converter
