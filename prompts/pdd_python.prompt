@@ -8,6 +8,8 @@
     - pdd/context
     - pdd/data
 
+% Here is how to use the Python Click library to create a command line program: ```<./context/click_example.py>```
+
 % Extract the basename and language from the file name. Use get_extension to get the file extension for the language. The file extension and language is used for the subsequent functionality below. Keep in mind that not all files have a '_' in the file name. Here is an example how to lookup a file extension given a language: ```<./context/get_extension_example.py>```
 
 % To generate runnable code from a prompt file, use code_generator. If file name has no extension, add '.prompt' to the file name. Here is an example how to generate code from the prompt from a file: ```<./context/code_generator_example.py>```
@@ -16,4 +18,4 @@
 
 % To generate a unit test from code and it's prompt file, use test_generator. Here is an example how to generate a unit test from a code file: ```<./context/test_generator_example.py>```
 
-% To proprocess a prompt from a prompt file, use preprocess. Here is an example of how to preprocess the prompt from a file: ```<./context/preprocess_example.py>```       
+% To preprocess a prompt from a prompt file, use preprocess. Here is an example of how to preprocess the prompt from a file: ```<./context/preprocess_example.py>```
