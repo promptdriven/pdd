@@ -5,7 +5,6 @@
 - [ ] make tests
 - [ ] auto reflect
 - [ ] run lint for context for better reflection
-- [ ] model/strength selector
 - [ ] smart includes
 - [ ] auto-includes
 - [ ] create readme
