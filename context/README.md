@@ -20,7 +20,7 @@ Examples:
 ## Basic Usage
 
 ```
-pdd [GLOBAL OPTIONS] COMMAND1 [ARGS]... [COMMAND2 [ARGS]...]...
+pdd [GLOBAL OPTIONS] COMMAND [OPTIONS] [ARGS]...
 ```
 
 ## Global Options
@@ -31,27 +31,21 @@ These options can be used with any command:
 - `--strength FLOAT`: Set the strength of the AI model (0.0 to 1.0, default is 0.5).
 - `--verbose`: Increase output verbosity for more detailed information.
 - `--quiet`: Decrease output verbosity for minimal information.
-- `--no-preprocess`: Skip the default preprocessing step (use with caution).
-
-## Default Preprocessing
-
-By default, PDD automatically preprocesses prompts for all commands that use prompt files. This ensures consistency and optimizes the prompts for better results. If you need to skip preprocessing for any reason, use the `--no-preprocess` global option.
 
 ## Commands
 
-PDD supports multi-command chaining, allowing you to execute multiple commands in a single line. Commands will be executed in the order they are specified.
+Here are the main commands:
 
 ### 1. Generate
 
-Create runnable code and/or example code from a prompt file.
+Create runnable code from a prompt file.
 
 ```
 pdd generate [OPTIONS] PROMPT_FILE
 ```
 
 Options:
-- `--output FILE`: Specify where to save the generated runnable code.
-- `--example-output FILE`: Specify where to save the generated example code.
+- `--output LOCATION`: Specify where to save the generated code. Can be a filename, full path, or directory. Default file name is <basename>.<language file extension>
 
 ### 2. Example
 
@@ -62,7 +56,7 @@ pdd example [OPTIONS] CODE_FILE
 ```
 
 Options:
-- `--example-output FILE`: Specify where to save the generated example code.
+- `--output LOCATION`: Specify where to save the generated example code. Can be a filename, full path, or directory. Default file name is <basename>_example.<language file extension>
 
 ### 3. Test
 
@@ -73,35 +67,41 @@ pdd test [OPTIONS] CODE_FILE PROMPT_FILE
 ```
 
 Options:
-- `--test-output DIRECTORY`: Specify where to save the generated test file.
-- `--language [python|javascript|java|cpp]`: Specify the programming language.
+- `--output LOCATION`: Specify where to save the generated test file. Can be a filename, full path, or directory. Default file name is <basename>_test.<language file extension>
+- `--language`: Specify the programming language. Defaults to language specified by the prompt file name.
 
 ### 4. Preprocess
 
-Explicitly preprocess prompts. This command is mainly used for viewing or debugging the preprocessing step, as preprocessing happens automatically for other commands.
+Preprocess prompts and save the results.
 
 ```
-pdd preprocess [SUBCOMMAND] [OPTIONS] PROMPT_FILES...
+pdd preprocess [OPTIONS] PROMPT_FILE
 ```
 
-Subcommands:
-- `view`: Show preprocessed prompts.
-- `apply`: Apply preprocessing to prompts and save the results.
-
-Options for `view` and `apply`:
+Options:
+- `--output LOCATION`: Specify where to save the preprocessed prompt. Can be a filename, full path, or directory. Default file name is <basename>_<language>_preprocessed.prompt
 - `--diff`: Show diff between original and preprocessed prompts.
-- `--output FILE`: Save preprocessed prompts or diff to a file.
+
+## Output Location Specification
+
+For all commands that generate or modify files, the `--output` option allows flexible specification of the output location:
+
+1. Filename only: If you provide just a filename (e.g., `--output result.py`), the file will be created in the current working directory.
+2. Full path: If you provide a full path (e.g., `--output /home/user/projects/result.py`), the file will be created at that exact location.
+3. Directory: If you provide a directory name (e.g., `--output ./generated/`), a file with an automatically generated name will be created in that directory.
+
+If the `--output` option is not provided, PDD will use default naming conventions and save the file in the current working directory.
 
 ## Multi-Command Chaining
 
-PDD allows you to chain multiple commands in a single invocation. This feature enables you to perform complex workflows efficiently. Commands are executed in the order they are specified.
+PDD supports multi-command chaining, allowing you to execute multiple commands in a single line. Commands will be executed in the order they are specified.
 
-Example of multi-command chaining:
+Basic syntax for multi-command chaining:
+```
+pdd [GLOBAL OPTIONS] COMMAND1 [OPTIONS] [ARGS]... [COMMAND2 [OPTIONS] [ARGS]...]...
+```
 
-Generate code, create an example, and run tests in one go:
-```
-pdd generate app_python.prompt --output src/app.py example src/app.py --example-output examples/usage.py test src/app.py app_python.prompt --test-output tests/
-```
+This feature enables you to perform complex workflows efficiently.
 
 ## Getting Help
 
@@ -117,23 +117,28 @@ pdd COMMAND --help
 
 ## Additional Features
 
-- Tab completion for commands and options in compatible shells.
+- Tab completion for commands and options in compatible shells (use `pdd --install-completion`).
 - Colorized output for better readability.
 - Progress indicators for long-running operations.
 
 ## Examples of Common Workflows
 
-1. Generate code, create an example, and run tests (with default preprocessing):
+1. Preprocess a prompt, generate code, create an example, and generate tests (using multi-command chaining):
 ```
-pdd generate app_python.prompt --output src/app.py example src/app.py --example-output examples/usage.py test src/app.py app_python.prompt --test-output tests/
-```
-
-2. Generate code and create examples for multiple prompts (skipping preprocessing):
-```
-pdd --no-preprocess generate api_python.prompt --output src/api.py generate database_sql.prompt --output src/db.py example src/api.py example src/db.py
+pdd preprocess --output preprocessed/ app_python.prompt generate --output src/app.py preprocessed/app_python_preprocessed.prompt example --output examples/ src/app.py test --output tests/ --language python src/app.py app_python.prompt
 ```
 
-3. View the results of preprocessing without applying changes:
+2. Generate code and create examples for multiple prompts (using multi-command chaining):
 ```
-pdd preprocess view app_python.prompt utils_python.prompt --diff
+pdd generate --output src/api.py api_python.prompt generate --output src/db.py database_sql.prompt example --output examples/api_usage.py src/api.py example --output examples/db_usage.py src/db.py
+```
+
+3. Preprocess a prompt and view the diff:
+```
+pdd preprocess --output preprocessed/app_python_preprocessed.prompt --diff app_python.prompt
+```
+
+4. Preprocess multiple prompts and generate code for each (using multi-command chaining):
+```
+pdd preprocess --output preprocessed/ api_python.prompt preprocess --output preprocessed/ db_sql.prompt generate --output src/ preprocessed/api_python_preprocessed.prompt generate --output src/ preprocessed/db_sql_preprocessed.prompt
 ```
