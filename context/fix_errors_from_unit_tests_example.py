@@ -1,57 +1,52 @@
+# Here's a concise example of how to use the `fix_errors_from_unit_tests` function, along with documentation for its input and output parameters. This example assumes that the function is located in the same directory as the script.
+
+# ### Example Usage
+
+# ```python
+# Filename: staging/pdd/example_usage.py
+
 import os
-from pdd.fix_errors_from_unit_tests import fix_errors_from_unit_tests
-from rich import print as rprint
+from fix_errors_from_unit_tests import fix_errors_from_unit_tests
+# print current working directory
+print(os.getcwd())
+# Set the PDD_PATH environment variable to the directory containing the prompts
+os.environ['PDD_PATH'] = './'
 
-def main() -> None:
-    """
-    Main function to demonstrate the usage of fix_errors_from_unit_tests.
-    Sets up example inputs, calls the function, and prints the results.
-    """
-    # Example inputs
-    unit_test = """
-def test_add():
-    assert add(2, 3) == 5
-    assert add(-1, 1) == 0
-    assert add(0, 0) == 1  # This test case is incorrect
+# Define the inputs for the function
+unit_test = """
+def test_addition():
+    assert add(1, 1) == 3  # Intentional error
 """
-    
-    code = """
+
+code = """
 def add(a, b):
-    import numpy as np
-
-    # Simple attempt to see if both 'a' and 'b' can be cast to float
-    try:
-        float(a)
-        float(b)
-    except (TypeError, ValueError):
-        _ = np.asscalar(np.array([42]))
-
-    # Return the usual result
     return a + b
 """
-    
-    prompt = "Write a function that adds two numbers"
-    error = """AssertionError: assert 0 == 1 
-        DeprecationWarning: np.asscalar(a) is deprecated since NumPy v1.16, use 'np.ndarray.item()' instead _ = np.asscalar(np.array([42]))""" # String of the Error message from the unit test
 
-    error_file = "error_logs.log"       # This is the fix results file
-    strength = 0.85  # LLM strength (0 to 1)
-    temperature = 1.0  # LLM temperature
+error = "AssertionError: assert 2 == 3"
+strength = 0.7
 
-    # Call the function (now synchronous)
-    update_unit_test, update_code, fixed_unit_test, fixed_code, analysis_results, total_cost, model_name = fix_errors_from_unit_tests(
-        unit_test, code, prompt, error, error_file, strength, temperature, verbose=True
-    )
+# Call the function to fix the errors in the code
+fixed_code = fix_errors_from_unit_tests(unit_test, code, error, strength)
 
-    # Print results
-    rprint(f"[bold]Results:[/bold]")
-    rprint(f"Update unit test: {update_unit_test}")
-    rprint(f"Update code: {update_code}")
-    rprint(f"Fixed unit test:\n{fixed_unit_test}")
-    rprint(f"Fixed code:\n{fixed_code}")
-    rprint(f"Analysis results: {analysis_results}")
-    rprint(f"Total cost: ${total_cost:.6f}")
-    rprint(f"Model used: {model_name}")
+# Print the fixed code
+print("Fixed Code:")
+print(fixed_code)
+# ```
 
-if __name__ == "__main__":
-    main()
+# ### Function Documentation
+
+# #### `fix_errors_from_unit_tests(unit_test: str, code: str, error: str, strength: float) -> str`
+
+# **Input Parameters:**
+# - `unit_test` (str): A string containing the unit test code that has errors.
+# - `code` (str): A string containing the original code that the unit test is testing.
+# - `error` (str): A string describing the error encountered during the unit test execution.
+# - `strength` (float): A float value representing the strength of the model selection (typically between 0 and 1).
+
+# **Output:**
+# - Returns a string containing the fixed code that resolves the errors identified in the unit test.
+
+# ### Notes
+# - Ensure that the `PDD_PATH` environment variable is set correctly to point to the directory containing the prompt files.
+# - The `llm_selector` and `postprocess` functions must be available in your environment for the `fix_errors_from_unit_tests` function to work correctly.

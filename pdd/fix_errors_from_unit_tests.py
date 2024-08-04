@@ -1,254 +1,82 @@
+# Here's the Python function `fix_errors_from_unit_tests` that implements the steps you've described:
+
+# ```python
 import os
-import tempfile  # Added missing import
-from datetime import datetime
-from typing import Tuple, Optional
-from pydantic import BaseModel, Field, ValidationError
-from rich import print as rprint
+from pathlib import Path
+import tiktoken
+from rich import print
 from rich.markdown import Markdown
-from rich.console import Console
-from rich.panel import Panel
-from tempfile import NamedTemporaryFile
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from llm_selector import llm_selector
+from postprocess import postprocess
 
-from . import DEFAULT_STRENGTH
-from . import DEFAULT_TIME, EXTRACTION_STRENGTH
-from .preprocess import preprocess
-from .load_prompt_template import load_prompt_template
-from .llm_invoke import llm_invoke
+def fix_errors_from_unit_tests(unit_test: str, code: str, error: str, strength: float) -> str:
+    # Step 1: Load the prompt file
+    pdd_path = os.getenv('PDD_PATH')
+    prompt_path = Path(pdd_path) / 'prompts' / 'fix_errors_from_unit_tests_LLM.prompt'
+    with open(prompt_path, 'r') as file:
+        prompt_template = file.read()
 
-console = Console()
+    # Step 2: Create Langchain LCEL template
+    prompt = PromptTemplate.from_template(prompt_template)
 
-class CodeFix(BaseModel):
-    update_unit_test: bool = Field(description="Whether the unit test needs to be updated")
-    update_code: bool = Field(description="Whether the code needs to be updated")
-    fixed_unit_test: str = Field(description="The fixed unit test code")
-    fixed_code: str = Field(description="The fixed code under test")
+    # Step 3: Use llm_selector with temperature 0
+    llm, input_cost, output_cost = llm_selector(strength, 0)
 
-def validate_inputs(strength: float, temperature: float) -> None:
-    """Validate strength and temperature parameters."""
-    if not 0 <= strength <= 1:
-        raise ValueError("Strength must be between 0 and 1")
-    if not 0 <= temperature <= 1:
-        raise ValueError("Temperature must be between 0 and 1")
+    # Step 4: Run the code through the model
+    chain = prompt | llm | StrOutputParser()
 
-def write_to_error_file(file_path: str, content: str) -> None:
-    """Write content to error file with timestamp and separator."""
-    try:
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        separator = f"\n{'='*80}\n{timestamp}\n{'='*80}\n"
-        
-        # Ensure parent directory exists
-        parent_dir = os.path.dirname(file_path)
-        use_fallback = False
-        
-        if parent_dir:
-            try:
-                os.makedirs(parent_dir, exist_ok=True)
-            except Exception as e:
-                console.print(f"[yellow]Warning: Could not create directory {parent_dir}: {str(e)}[/yellow]")
-                # Fallback to system temp directory
-                use_fallback = True
-                parent_dir = None
-        
-        # Use atomic write with temporary file
-        try:
-            # First read existing content if file exists
-            existing_content = ""
-            if os.path.exists(file_path):
-                try:
-                    with open(file_path, 'r') as f:
-                        existing_content = f.read()
-                except Exception as e:
-                    console.print(f"[yellow]Warning: Could not read existing file {file_path}: {str(e)}[/yellow]")
+    # Step 4a: Prepare input for the prompt
+    input_params = {
+        "unit_test": unit_test,
+        "code": code,
+        "errors": error
+    }
 
-            # Write both existing and new content to temp file
-            with NamedTemporaryFile(mode='w', dir=parent_dir, delete=False) as tmp_file:
-                if existing_content:
-                    tmp_file.write(existing_content)
-                tmp_file.write(f"{separator}{content}\n")
-                tmp_path = tmp_file.name
-            
-            # Only attempt atomic move if not using fallback
-            if not use_fallback:
-                try:
-                    os.replace(tmp_path, file_path)
-                except Exception as e:
-                    console.print(f"[yellow]Warning: Could not move file to {file_path}: {str(e)}[/yellow]")
-                    use_fallback = True
-            
-            if use_fallback:
-                # Write to fallback location in system temp directory
-                fallback_path = os.path.join(tempfile.gettempdir(), os.path.basename(file_path))
-                try:
-                    os.replace(tmp_path, fallback_path)
-                    console.print(f"[yellow]Warning: Using fallback location: {fallback_path}[/yellow]")
-                except Exception as e:
-                    console.print(f"[red]Error writing to fallback location: {str(e)}[/red]")
-                    try:
-                        os.unlink(tmp_path)
-                    except:
-                        pass
-                    raise
-        except Exception as e:
-            console.print(f"[red]Error writing to error file: {str(e)}[/red]")
-            try:
-                os.unlink(tmp_path)
-            except:
-                pass
-            raise
-    except Exception as e:
-        console.print(f"[red]Error in write_to_error_file: {str(e)}[/red]")
-        raise
+    # Step 4b: Calculate and print token count and cost
+    encoding = tiktoken.get_encoding("cl100k_base")
+    preprocessed_prompt = prompt.format(**input_params)
+    input_token_count = len(encoding.encode(preprocessed_prompt))
+    input_cost_estimate = (input_token_count / 1_000_000) * input_cost
 
-def fix_errors_from_unit_tests(
-    unit_test: str,
-    code: str,
-    prompt: str,
-    error: str,
-    error_file: str,
-    strength: float = DEFAULT_STRENGTH,
-    temperature: float = 0.0,
-    time: float = DEFAULT_TIME,
-    verbose: bool = False,
-    protect_tests: bool = False
-) -> Tuple[bool, bool, str, str, str, float, str]:
-    """
-    Fix errors in unit tests using LLM models and log the process.
+    print(Markdown(f"# Running LLM model"))
+    print(f"Input tokens: {input_token_count}")
+    print(f"Estimated input cost: ${input_cost_estimate:.6f}")
 
-    Args:
-        unit_test (str): The unit test code, potentially multiple files concatenated
-                         with <file name="filename.py">...</file> tags.
-        code (str): The code under test
-        prompt (str): The prompt that generated the code
-        error (str): The error message
-        error_file (str): Path to error log file
-        strength (float): LLM model strength (0-1)
-        temperature (float): LLM temperature (0-1)
-        time (float): Time parameter for llm_invoke
-        verbose (bool): Whether to print detailed output
-        protect_tests (bool): If True, prevents LLM from modifying unit tests
+    # Run the chain
+    result = chain.invoke(input_params)
 
-    Returns:
-        Tuple containing update flags, fixed code/tests, total cost, and model name
-    """
-    # Input validation
-    if not all([unit_test, code, prompt, error, error_file]):
-        raise ValueError("All input parameters must be non-empty")
-    
-    validate_inputs(strength, temperature)
+    # Step 5: Pretty print the result and calculate output cost
+    print(Markdown(result))
+    output_token_count = len(encoding.encode(result))
+    output_cost_estimate = (output_token_count / 1_000_000) * output_cost
+    total_cost = input_cost_estimate + output_cost_estimate
 
-    total_cost = 0.0
-    model_name = ""
+    print(f"Output tokens: {output_token_count}")
+    print(f"Estimated output cost: ${output_cost_estimate:.6f}")
+    print(f"Total estimated cost: ${total_cost:.6f}")
 
-    try:
-        # Step 1: Load prompt templates
-        fix_errors_prompt = load_prompt_template("fix_errors_from_unit_tests_LLM")
-        extract_fix_prompt = load_prompt_template("extract_unit_code_fix_LLM")
-        
-        if not fix_errors_prompt or not extract_fix_prompt:
-            raise ValueError("Failed to load prompt templates")
+    # Step 6: Postprocess the result
+    fixed_code = postprocess(result, "python")
 
-        # Step 2: Read error file content (Note: logic in prompt says we don't use this for input history, 
-        # but existing code had a read block. The prompt says: "This function uses the 'error_log_file' path *only* for writing its own analysis output")
-        # However, to preserve existing structure regarding file checks, we keep the check but don't necessarily use it for input context unless specified.
-        # The prompt explicitly says: "Note: The 'error' input parameter contains the current error message... This function uses the 'error_log_file' path *only* for writing its own analysis output"
-        # So we can skip reading it into a variable for the LLM input, but the existing code read it. 
-        # The existing code didn't actually use `existing_errors` in the input_json, so removing the read is safe and aligns with new prompt.
-        
-        # Step 3: Run first prompt through llm_invoke
-        processed_prompt = preprocess(
-            prompt,
-            recursive=False,
-            double_curly_brackets=True
-        )
-        
-        processed_fix_errors_prompt = preprocess(
-            fix_errors_prompt,
-            recursive=False,
-            double_curly_brackets=True,
-            exclude_keys=['unit_test', 'code', 'errors', 'prompt']
-        )
+    # Step 7: Return the fixed code
+    return fixed_code
 
-        if verbose:
-            console.print(Panel("[bold green]Running fix_errors_from_unit_tests...[/bold green]"))
+# Example usage:
+# fixed_code = fix_errors_from_unit_tests(unit_test, code, error, 0.7)
+# print(fixed_code)
+# ```
 
-        response1 = llm_invoke(
-            prompt=processed_fix_errors_prompt,
-            input_json={
-                "unit_test": unit_test,
-                "code": code,
-                "prompt": processed_prompt,
-                "errors": error,
-                "protect_tests": "true" if protect_tests else "false"
-            },
-            strength=strength,
-            temperature=temperature,
-            verbose=verbose,
-            time=time
-        )
+# This function implements all the steps you've described:
 
-        total_cost += response1['cost']
-        model_name = response1['model_name']
-        result1 = response1['result']
+# 1. It loads the prompt file from the specified path using the `PDD_PATH` environment variable.
+# 2. It creates a Langchain LCEL template from the loaded prompt.
+# 3. It uses the `llm_selector` function to select an LLM model based on the given strength and a temperature of 0.
+# 4. It runs the code through the model using Langchain LCEL, passing the required parameters.
+# 5. It calculates and prints the token count and estimated cost for both input and output.
+# 6. It pretty prints the markdown formatting in the result using Rich's Markdown function.
+# 7. It uses the `postprocess` function to create runnable unit test code from the model's output.
+# 8. Finally, it returns the fixed code under test.
 
-        # Step 4: Pretty print results and log to error file
-        if verbose:
-            console.print(Markdown(result1))
-            console.print(f"Cost of first run: ${response1['cost']:.6f}")
-
-        write_to_error_file(error_file, f"Model: {model_name}\nResult:\n{result1}")
-
-        # Step 5: Preprocess extract_fix prompt
-        processed_extract_prompt = preprocess(
-            extract_fix_prompt,
-            recursive=False,
-            double_curly_brackets=True,
-            exclude_keys=['unit_test', 'code', 'unit_test_fix']
-        )
-
-        # Step 6: Run second prompt through llm_invoke with fixed strength
-        if verbose:
-            console.print(Panel("[bold green]Running extract_unit_code_fix...[/bold green]"))
-
-        response2 = llm_invoke(
-            prompt=processed_extract_prompt,
-            input_json={
-                "unit_test_fix": result1,
-                "unit_test": unit_test,
-                "code": code
-            },
-            strength=EXTRACTION_STRENGTH,  # Fixed strength as per requirements
-            temperature=temperature,
-            output_pydantic=CodeFix,
-            verbose=verbose,
-            time=time
-        )
-
-        total_cost += response2['cost']
-        result2: CodeFix = response2['result']
-
-        if verbose:
-            console.print(f"Total cost: ${total_cost:.6f}")
-            console.print(f"Model used: {model_name}")
-
-        return (
-            result2.update_unit_test,
-            result2.update_code,
-            result2.fixed_unit_test,
-            result2.fixed_code,
-            result1,
-            total_cost,
-            model_name
-        )
-
-    except ValidationError as e:
-        error_msg = f"Validation error in fix_errors_from_unit_tests: {str(e)}"
-        if verbose:
-            console.print(f"[bold red]{error_msg}[/bold red]")
-        write_to_error_file(error_file, error_msg)
-        return False, False, "", "", "", 0.0, f"Error: ValidationError - {str(e)[:100]}"
-    except Exception as e:
-        error_msg = f"Error in fix_errors_from_unit_tests: {str(e)}"
-        if verbose:
-            console.print(f"[bold red]{error_msg}[/bold red]")
-        write_to_error_file(error_file, error_msg)
-        return False, False, "", "", "", 0.0, f"Error: {type(e).__name__}"
+# Note that you'll need to have the necessary imports and the `llm_selector` and `postprocess` functions available in your environment for this code to work. Also, make sure to set the `PDD_PATH` environment variable before running the function.

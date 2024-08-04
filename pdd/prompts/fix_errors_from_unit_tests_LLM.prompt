@@ -1,83 +1,12 @@
-% You are an expert Software Engineer. Your goal is to diagnose and fix the errors from a unit_test run on the code_under_test. The error might be in the code_under_test or the unit_test or both.
+% You are an expert Software Engineer. Your goal is to fix the errors from a unit test run on the code under test.
 
-% Here is the unit_test for the code_under_test: <unit_test>{unit_test}</unit_test>
+% Here is the unit test for the code under test: ```{unit_test}```
 
-% Here is the code_under_test: <code_under_test>{code}</code_under_test>
+% Here is the code under test: ```{code}```
 
-% Here is the prompt that generated the code_under_test: <prompt>{prompt}</prompt>
+% Here are the errors from the unit test run: ```{errors}```
 
-% This prompt is run iteratively. Here are the current errors and past potential fix attempts, if any, from the unit test and verification program run(s): <errors>{errors}</errors>
-
-% If the verfication program fails to run, the code_under_test and unit_test are unchanged from the previous iteration.
-
-% TEST PROTECTION MODE: {protect_tests}
-% If protect_tests is "true":
-%   - The unit_test file is PROTECTED and MUST NOT be modified
-%   - You can READ the test to understand expected behavior, but you MUST only fix the code_under_test
-%   - The test file represents the correct specification; the bug is in the code
-%   - Do NOT suggest changes to the test file; only output fixed code_under_test
-%   - Set update_unit_test=false in your output
-
-% IMPORTANT: The original prompt is the authoritative specification for what the code should do.
-% When analyzing errors:
-%   - If the code doesn't match the prompt specification, fix the CODE
-%   - If the unit_test expects behavior not specified in the prompt, fix the TEST
-%   - Never add functionality to the code that isn't specified in the prompt
-%   - Tests should verify prompt-specified behavior, not arbitrary expectations
-
-<pdd>
-<examples>
-    <example_1>
-    % Here is an example_unit_test for the example_code_under_test: <example_unit_test><include>context/fix_errors_from_unit_tests/1/test_conflicts_in_prompts.py</include></example_unit_test>
-    
-    % Here is an example_code_under_test that fully passes the example_unit_test: <example_code_under_test><include>context/fix_errors_from_unit_tests/1/conflicts_in_prompts.py</include></example_code_under_test>
-
-    % Here is the prompt that generated the example_code_under_test: <example_prompt><include>context/fix_errors_from_unit_tests/1/conflicts_in_prompts_python.prompt</include></example_prompt>
-    </example_1>
-
-    <example_2>
-    % Here is an example_unit_test for the example_code_under_test: <example_unit_test><include>context/fix_errors_from_unit_tests/2/test_code_generator.py</include></example_unit_test>
-
-    % Here is an example_code_under_test that fully passes the example_unit_test: <example_code_under_test><include>context/fix_errors_from_unit_tests/2/code_generator.py</include></example_code_under_test>
-
-    % Here is the prompt that generated the example_code_under_test: <example_prompt><include>context/fix_errors_from_unit_tests/2/code_generator_python.prompt</include></example_prompt>
-    </example_2>
-
-    <example_3>
-    % Here is an example_unit_test for the example_code_under_test: <example_unit_test><include>context/fix_errors_from_unit_tests/3/test_context_generator.py</include></example_unit_test>
-
-    % Here is an example_code_under_test that fully passes the example_unit_test: <example_code_under_test><include>context/fix_errors_from_unit_tests/3/context_generator.py</include></example_code_under_test>
-
-    % Here is the prompt that generated the example_code_under_test: <example_prompt><include>context/fix_errors_from_unit_tests/3/context_generator_python.prompt</include></example_prompt>
-    </example_3>
-
-
-    <example_4>
-    % Here is an example_unit_test for the example_code_under_test: <example_unit_test><include>context/fix_errors_from_unit_tests/4/test_detect_change.py</include></example_unit_test>
-
-    % Here is an example_code_under_test that fully passes the example_unit_test: <example_code_under_test><include>context/fix_errors_from_unit_tests/4/detect_change.py</include></example_code_under_test>
-
-    % Here is the prompt that generated the example_code_under_test: <example_prompt><include>context/fix_errors_from_unit_tests/4/detect_change_python.prompt</include></example_prompt>
-    </example_4>
-
-    <example_5>
-    % Here is an example_unit_test for the example_code_under_test: <example_unit_test><include>context/fix_errors_from_unit_tests/4/test_detect_change_1_0_1.py</include></example_unit_test>
-
-    % Here is an example_code_under_test that didn't fully pass the example_unit_test: <example_code_under_test><include>context/fix_errors_from_unit_tests/4/detect_change_1_0_1.py</include></example_code_under_test>
-
-    % Here is an example error/fix log showing how the issues were resolved: <example_error_fix_log><include>context/fix_errors_from_unit_tests/4/error.log</include></example_error_fix_log>
-    </example_5>
-</examples>
-</pdd>
-
-<instructions>
 % Follow these steps to solve these errors:
-    Step 1. Compare the prompt to the code_under_test and explain differences, if any.
-    Step 2. Compare the prompt to the unit_test and explain differences, if any.
-    Step 3. For each prior attempted fix for the code_under_test and unit_test (if any), explain in a few paragraphs for each attempt why it might not have worked.
-    Step 4. Write several paragraphs explaining the root cause of each of the errors and each of the warnings in the code_under_test and unit_test.
-    Step 5. Explain in detail step by step how to solve each of the errors and warnings. For each error and warning, there should be several paragraphs description of the solution steps. Sometimes logging or print statements can help debug the code in subsequent iterations. It is important to make sure the tests are still sufficiently comprehensive to catch potential errors.
-    Step 6. Review the above steps and correct for any errors and warnings in the code under test or unit test.
-    Step 7. For the code that need changes, write the corrected code_under_test and/or corrected unit_test in its/their entirety.
-    Step 8. CRITICAL: You MUST preserve ALL existing test functions from the original unit_test. Only modify the tests that are failing. Do not remove, skip, or omit any test functions that were present in the original unit_test, even if they seem unrelated to the current errors. The output must include every single test function from the input.
-</instructions>
+    Step 1. Explain in detail step by step why there is an error.
+    Step 2. Explain in detail step by step how to solve the error.
+    Step 3. For the code that need changes, write the corrected code and/or corrected unit test in its/their entirety.
