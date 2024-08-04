@@ -34,7 +34,9 @@
     Step 7. Then this will create a second Langchain LCEL template from the extract_unit_code_fix prompt.
     Step 8. This will use llm_selector with a strength setting of 0.5 instead of the strength function input above and a temperature of 0 for the llm model. However, instead of using String output, it will use the JSON output parser to get these keys: 'update_unit_test', 'update_code', 'fixed_unit_test' and 'fixed_code'.
     Step 9. This will run the code through the model using Langchain LCEL from Step 8. 
-        9a. Be sure to pass the following string parameter to the prompt during invoke:
+        9a. Be sure to pass the following string parameters to the prompt during invoke:
             - 'unit_test_fix': This is the result of the Langchain LCEL from Step 4.
+            - 'unit_test'
+            - 'code'
         9b. Pretty print a message letting the user know it is running and how many tokens (using tiktoken) are in the prompt and the cost.
-    Step 10. Print the total cost of both runs and return 'update_unit_test', 'update_code', 'fixed_unit_test' and 'fixed_code' from the JSON output parser.
+    Step 10. Print the total cost of both runs and return 'update_unit_test', 'update_code', 'fixed_unit_test' and 'fixed_code' as individual values from the JSON output parser.

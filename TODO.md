@@ -18,6 +18,7 @@
 - [ ] auto record which model works for each prompt
 - [ ] fix the prompt based on diffs to the code file
 - [ ] Use perplexica to automatically find context
+- [ ] fix error messages when example runs
 
 ## Bugs
 
