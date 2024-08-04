@@ -14,8 +14,10 @@
 - [ ] routlellm
 - [ ] XML converter
 - [ ] larger prompt to smaller prompts split
-- [ ] database of examples to reference
+- [ ] online database of examples to reference
 - [ ] auto record which model works for each prompt
+- [ ] fix the prompt based on diffs to the code file
+- [ ] Use perplexica to automatically find context
 
 ## Bugs
 
