@@ -1,108 +1,149 @@
-import pytest
-from pdd.context_generator import context_generator
-from rich import print
+# Certainly! Below is a unit test for the `context_generator` function. This test will be placed in the `staging/tests` directory and will test the function located in the `staging/pdd` directory.
 
-def test_context_generator_basic_functionality():
-    """
-    Test the basic functionality of the context_generator function.
-    This test ensures that the function can generate a concise example code snippet
-    for a given code module and prompt.
-    """
-    code_module = "numpy"
-    prompt = "Generate a concise example of how to use numpy to create an array."
-    example_code, total_cost, model_name = context_generator(code_module, prompt, verbose=True)
+# First, ensure you have the necessary directory structure:
+# ```
+# staging/
+# ├── pdd/
+# │   └── context_generator.py
+# └── tests/
+#     └── test_context_generator.py
+# ```
 
-    assert example_code is not None, "Example code should not be None"
-    assert isinstance(example_code, str), "Example code should be a string"
-    assert total_cost >= 0, "Total cost should be a non-negative float"
-    assert isinstance(model_name, str), "Model name should be a string"
+# Here is the content for `test_context_generator.py`:
 
-def test_context_generator_missing_code_module():
-    """
-    Test the context_generator function with a missing code_module input.
-    This test ensures that the function handles the case where the code_module is not provided.
-    """
-    code_module = ""
-    prompt = "Generate a concise example of how to use numpy to create an array."
-    example_code, total_cost, model_name = context_generator(code_module, prompt, verbose=True)
+# ```python
+import os
+import unittest
+from unittest.mock import patch, mock_open, MagicMock
+from staging.pdd.context_generator import context_generator
 
-    assert example_code is None, "Example code should be None for missing code_module"
-    assert total_cost == 0.0, "Total cost should be 0.0 for missing code_module"
-    assert model_name is None, "Model name should be None for missing code_module"
+class TestContextGenerator(unittest.TestCase):
 
-def test_context_generator_missing_prompt():
-    """
-    Test the context_generator function with a missing prompt input.
-    This test ensures that the function handles the case where the prompt is not provided.
-    """
-    code_module = "numpy"
-    prompt = ""
-    example_code, total_cost, model_name = context_generator(code_module, prompt, verbose=True)
+    @patch('staging.pdd.context_generator.os.path.isfile')
+    @patch('staging.pdd.context_generator.preprocess')
+    @patch('staging.pdd.context_generator.ChatOpenAI')
+    @patch('staging.pdd.context_generator.PromptTemplate')
+    @patch('staging.pdd.context_generator.StrOutputParser')
+    @patch('staging.pdd.context_generator.postprocess')
+    @patch('builtins.open', new_callable=mock_open)
+    def test_context_generator_success(self, mock_open, mock_postprocess, mock_StrOutputParser, mock_PromptTemplate, mock_ChatOpenAI, mock_preprocess, mock_isfile):
+        # Mocking the file existence check
+        mock_isfile.side_effect = lambda filename: filename in ['test.py', 'output.py']
 
-    assert example_code is None, "Example code should be None for missing prompt"
-    assert total_cost == 0.0, "Total cost should be 0.0 for missing prompt"
-    assert model_name is None, "Model name should be None for missing prompt"
+        # Mocking the preprocess function
+        mock_preprocess.return_value = "processed content"
 
+        # Mocking the Langchain components
+        mock_prompt_template = MagicMock()
+        mock_PromptTemplate.from_template.return_value = mock_prompt_template
 
-def test_context_generator_invalid_strength():
-    """
-    Test the context_generator function with an invalid strength input.
-    This test ensures that the function handles the case where the strength is out of the valid range.
-    """
-    code_module = "numpy"
-    prompt = "Generate a concise example of how to use numpy to create an array."
-    strength = 1.5  # Invalid strength, should be between 0 and 1
-    example_code, total_cost, model_name = context_generator(code_module, prompt, strength=strength, verbose=True)
+        mock_llm = MagicMock()
+        mock_ChatOpenAI.return_value = mock_llm
 
-    assert example_code is None, "Example code should be None for invalid strength"
-    assert total_cost == 0.0, "Total cost should be 0.0 for invalid strength"
-    assert model_name is None, "Model name should be None for invalid strength"
+        mock_chain = MagicMock()
+        mock_prompt_template.__or__.return_value = mock_chain
+        mock_llm.__or__.return_value = mock_chain
+        mock_chain.__or__.return_value = mock_chain
 
-def test_context_generator_invalid_temperature():
-    """
-    Test the context_generator function with an invalid temperature input.
-    This test ensures that the function handles the case where the temperature is out of the valid range.
-    """
-    code_module = "numpy"
-    prompt = "Generate a concise example of how to use numpy to create an array."
-    temperature = 1.5  # Invalid temperature, should be between 0 and 1
-    example_code, total_cost, model_name = context_generator(code_module, prompt, temperature=temperature, verbose=True)
+        mock_chain.invoke.return_value = "raw output"
 
-    assert example_code is None, "Example code should be None for invalid temperature"
-    assert total_cost == 0.0, "Total cost should be 0.0 for invalid temperature"
-    assert model_name is None, "Model name should be None for invalid temperature"
+        # Mocking the postprocess function
+        mock_postprocess.return_value = "final processed output"
 
-def test_context_generator_incomplete_generation():
-    """
-    Test the context_generator function with an incomplete generation scenario.
-    This test ensures that the function correctly identifies and handles incomplete generation.
-    """
-    import os
-    # Ensure included context file exists for preprocessing
-    os.makedirs("context", exist_ok=True)
-    code_module = "numpy"
-    prompt = "Generate a concise example of how to use numpy to create an array."
-    # Mocking an incomplete generation by returning a truncated response
-    example_code, total_cost, model_name = context_generator(code_module, prompt, verbose=True)
+        # Running the function
+        result = context_generator('test.py', 'output.py', force=True)
 
-    assert example_code is not None, "Example code should not be None for incomplete generation"
-    assert isinstance(example_code, str), "Example code should be a string"
-    assert total_cost >= 0, "Total cost should be a non-negative float"
-    assert isinstance(model_name, str), "Model name should be a string"
+        # Assertions
+        self.assertTrue(result)
+        mock_preprocess.assert_called_once_with('test.py')
+        mock_PromptTemplate.from_template.assert_called_once()
+        mock_ChatOpenAI.assert_called_once_with(model="gpt-4o-mini", temperature=0)
+        mock_chain.invoke.assert_called_once()
+        mock_postprocess.assert_called_once_with("raw output", 'python')
+        mock_open.assert_called_once_with('output.py', 'w')
+        mock_open().write.assert_called_once_with("final processed output")
 
-def test_context_generator_postprocessing():
-    """
-    Test the context_generator function's postprocessing step.
-    This test ensures that the function correctly extracts code from the model output.
-    """
-    code_module = "numpy"
-    prompt = "Generate a concise example of how to use numpy to create an array."
-    example_code, total_cost, model_name = context_generator(code_module, prompt, verbose=True)
+    @patch('staging.pdd.context_generator.os.path.isfile')
+    def test_context_generator_file_not_exist(self, mock_isfile):
+        # Mocking the file existence check
+        mock_isfile.return_value = False
 
-    assert example_code is not None, "Example code should not be None after postprocessing"
-    assert isinstance(example_code, str), "Example code should be a string"
-    assert total_cost >= 0, "Total cost should be a non-negative float"
-    assert isinstance(model_name, str), "Model name should be a string"
+        # Running the function
+        result = context_generator('nonexistent.py', 'output.py')
 
-if __name__ == "__main__":
-    pytest.main()
+        # Assertions
+        self.assertFalse(result)
+
+    @patch('staging.pdd.context_generator.os.path.isfile')
+    @patch('staging.pdd.context_generator.preprocess')
+    def test_context_generator_preprocess_failure(self, mock_preprocess, mock_isfile):
+        # Mocking the file existence check
+        mock_isfile.return_value = True
+
+        # Mocking the preprocess function to raise an exception
+        mock_preprocess.side_effect = Exception("Preprocess error")
+
+        # Running the function
+        result = context_generator('test.py', 'output.py')
+
+        # Assertions
+        self.assertFalse(result)
+        mock_preprocess.assert_called_once_with('test.py')
+
+    @patch('staging.pdd.context_generator.os.path.isfile')
+    @patch('staging.pdd.context_generator.preprocess')
+    @patch('staging.pdd.context_generator.ChatOpenAI')
+    @patch('staging.pdd.context_generator.PromptTemplate')
+    @patch('staging.pdd.context_generator.StrOutputParser')
+    @patch('staging.pdd.context_generator.postprocess')
+    @patch('builtins.open', new_callable=mock_open)
+    def test_context_generator_write_failure(self, mock_open, mock_postprocess, mock_StrOutputParser, mock_PromptTemplate, mock_ChatOpenAI, mock_preprocess, mock_isfile):
+        # Mocking the file existence check
+        mock_isfile.side_effect = lambda filename: filename in ['test.py', 'output.py']
+
+        # Mocking the preprocess function
+        mock_preprocess.return_value = "processed content"
+
+        # Mocking the Langchain components
+        mock_prompt_template = MagicMock()
+        mock_PromptTemplate.from_template.return_value = mock_prompt_template
+
+        mock_llm = MagicMock()
+        mock_ChatOpenAI.return_value = mock_llm
+
+        mock_chain = MagicMock()
+        mock_prompt_template.__or__.return_value = mock_chain
+        mock_llm.__or__.return_value = mock_chain
+        mock_chain.__or__.return_value = mock_chain
+
+        mock_chain.invoke.return_value = "raw output"
+
+        # Mocking the postprocess function
+        mock_postprocess.return_value = "final processed output"
+
+        # Mocking the open function to raise an exception
+        mock_open.side_effect = Exception("Write error")
+
+        # Running the function
+        result = context_generator('test.py', 'output.py', force=True)
+
+        # Assertions
+        self.assertFalse(result)
+        mock_preprocess.assert_called_once_with('test.py')
+        mock_PromptTemplate.from_template.assert_called_once()
+        mock_ChatOpenAI.assert_called_once_with(model="gpt-4o-mini", temperature=0)
+        mock_chain.invoke.assert_called_once()
+        mock_postprocess.assert_called_once_with("raw output", 'python')
+        mock_open.assert_called_once_with('output.py', 'w')
+
+if __name__ == '__main__':
+    unittest.main()
+# ```
+
+# This unit test covers the following scenarios:
+# 1. Successful execution of the `context_generator` function.
+# 2. The case where the input file does not exist.
+# 3. The case where the `preprocess` function raises an exception.
+# 4. The case where writing to the output file fails.
+
+# Make sure to adjust the import paths if your directory structure differs. This test uses the `unittest` framework and mocks external dependencies to isolate the function's behavior.
