@@ -4,8 +4,8 @@
     b) Makefile
     c) CSV
     d) Examples (e.g. *_example.py)
-    e) Tests
-  - Testing
+    e) Tests (e.g. test_*.py)
+  - Testing- Be sure to incude the staging Python modules directory in the PYTHONPATH when running tests so it can find the modules.
   - Cleaning
   - Generating requirements.txt from pipreqs
   - Production (e.g. copy files from staging to pdd), etc. 
@@ -74,6 +74,13 @@
 │   │   ├── postprocess.py
 │   │   └── preprocess.py
 │   └── tests
+│   │   ├── test_code_generator.py
+│   │   ├── test_context_generator.py
+│   │   ├── test_get_extension.py
+│   │   ├── test_get_extension_example.py
+│   │   ├── test_pdd.py
+│   │   ├── test_postprocess.py
+│   │   └── test_preprocess.py
 │       └── testing.ipynb
 └── tests
     └── testing.ipynb```
