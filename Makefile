@@ -25,7 +25,7 @@ CSV_OUTPUTS := $(patsubst $(PROMPTS_DIR)/%_csv.prompt,$(DATA_DIR)/%.csv,$(CSV_PR
 EXAMPLE_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(CONTEXT_DIR)/%_example.py,$(PY_OUTPUTS))
 
 # Test files
-TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/%_test.py,$(PY_OUTPUTS))
+TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 
 .PHONY: all clean test requirements production
 
@@ -35,7 +35,7 @@ all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_O
 $(PDD_DIR)/%.py: $(PROMPTS_DIR)/%_python.prompt
 	@echo "Generating $@"
 	@mkdir -p $(PDD_DIR)
-	@python pdd/pdd.py generate --output $@ $<
+	@python pdd/pdd.py --strength 1 generate --output $@ $<
 
 # Generate Makefile
 $(MAKEFILE_OUTPUT): $(MAKEFILE_PROMPT)
@@ -56,15 +56,15 @@ $(CONTEXT_DIR)/%_example.py: $(PDD_DIR)/%.py
 	@python pdd/pdd.py example --output $@ $<
 
 # Generate test files
-$(TESTS_DIR)/%_test.py: $(PDD_DIR)/%.py $(PROMPTS_DIR)/%_python.prompt
+$(TESTS_DIR)/test_%.py: $(PDD_DIR)/%.py $(PROMPTS_DIR)/%_python.prompt
 	@echo "Generating test for $<"
 	@mkdir -p $(TESTS_DIR)
-	@python pdd/pdd.py test --output $@ $^
+	@python pdd/pdd.py --strength .8 test --output $@ $^
 
 # Run tests
 test:
 	@echo "Running tests"
-	@python -m unittest discover -v $(TESTS_DIR)
+	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python -m unittest discover -v $(TESTS_DIR)
 
 # Generate requirements.txt
 requirements:
