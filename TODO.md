@@ -2,7 +2,6 @@
 
 ## Features
 
-- [ ] make tests
 - [ ] auto reflect
 - [ ] run lint for context for better reflection
 - [ ] smart includes
@@ -16,6 +15,7 @@
 - [ ] XML converter
 - [ ] larger prompt to smaller prompts split
 - [ ] database of examples to reference
+- [ ] auto record which model works for each prompt
 
 ## Bugs
 
