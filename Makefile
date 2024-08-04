@@ -35,7 +35,7 @@ all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_O
 $(PDD_DIR)/%.py: $(PROMPTS_DIR)/%_python.prompt
 	@echo "Generating $@"
 	@mkdir -p $(PDD_DIR)
-	@python pdd/pdd.py --strength 1 generate --output $@ $<
+	@python pdd/pdd.py --strength .9 generate --output $@ $<
 
 # Generate Makefile
 $(MAKEFILE_OUTPUT): $(MAKEFILE_PROMPT)

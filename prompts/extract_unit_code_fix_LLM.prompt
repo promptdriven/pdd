@@ -1,6 +1,10 @@
-% You are an expert Software Engineer. Your goal is to extract a JSON from a analysis of a unit test bug fix report. If there is a choice of updating the unit test or the code under test, you should chose to update the unit test.
+% You are an expert Software Engineer. Your goal is to extract a JSON from a analysis of a unit test bug fix report. If there is a choice of updating the unit test or the code under test, you should chose to update the code under test.
 
 % Here is the unit test bug fix report: ```{unit_test_fix}```
+
+% Here is the unit test code: ```{unit_test}```
+
+% Here is the code under test: ```{code}```
 
 % Output a JSON object with the following keys:
     - 'explanation': String explanation of whether the code under test needs to be fix and/or if the unit test needs to be fixed.

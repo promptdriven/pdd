@@ -9,7 +9,7 @@ import os
 from fix_errors_from_unit_tests import fix_errors_from_unit_tests
 
 # Set the PDD_PATH environment variable to the directory containing the prompt files
-os.environ['PDD_PATH'] = '../../'
+os.environ['PDD_PATH'] = './'
 
 # Define the inputs for the function
 unit_test = """
