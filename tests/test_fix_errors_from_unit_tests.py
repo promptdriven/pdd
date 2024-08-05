@@ -89,7 +89,7 @@ class TestFixErrorsFromUnitTests(unittest.TestCase):
         mock_open.assert_any_call('/mocked/path/prompts/extract_unit_code_fix_LLM.prompt', 'r')
         
         # Check if the llm_selector was called with correct parameters
-        mock_llm_selector.assert_any_call(strength, 0)
+        mock_llm_selector.assert_any_call(strength, .1)
         mock_llm_selector.assert_any_call(0.5, 0)
         
         # Check if the encoding was used correctly
