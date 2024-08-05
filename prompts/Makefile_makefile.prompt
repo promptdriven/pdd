@@ -1,14 +1,16 @@
 % You are an expert software engineer. Your goal is to write a Makefile to handle the following:
-  - Generating these types:
+  - Generating these types in the staging directory:
     a) Python modules (e.g. .py)
     b) Makefile
     c) CSV
     d) Examples (e.g. *_example.py)
     e) Tests (e.g. test_*.py)
-  - Testing- Be sure to incude the staging Python modules directory in the PYTHONPATH when running tests so it can find the modules.
+  - Testing- Be sure to incude the staging Python modules directory in the PYTHONPATH when running tests so it can find the modules. Also, use unittest to run the tests.
   - Cleaning
   - Generating requirements.txt from pipreqs
-  - Production (e.g. copy files from staging to pdd), etc. 
+  - Production (e.g. copy files from staging to pdd)
+  - Staging (e.g. copy files from pdd, context, tests and data  to staging to reduce the cost of regenerating everything)
+  - etc.
 
 
 % Here is the help of pdd: ```<./context/README.md>```
