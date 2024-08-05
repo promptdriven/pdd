@@ -82,6 +82,20 @@ Options:
 - `--output LOCATION`: Specify where to save the preprocessed prompt. Can be a filename, full path, or directory. Default file name is <basename>_<language>_preprocessed.prompt
 - `--diff`: Show diff between original and preprocessed prompts.
 
+### 5. Fix
+
+Fix errors in code and unit test based on error messages.
+
+```
+pdd fix [OPTIONS] UNIT_TEST_FILE CODE_FILE ERROR_FILE
+```
+
+Options:
+- `--output-test LOCATION`: Specify where to save the fixed unit test file. Can be a filename, full path, or directory. Default file name is <basename>_fixed_test.<language file extension>
+- `--output-code LOCATION`: Specify where to save the fixed code file. Can be a filename, full path, or directory. Default file name is <basename>_fixed.<language file extension>
+
+This command attempts to fix errors in both the unit test and the code being tested. It uses the provided error file to understand the issues and generate appropriate fixes. The command produces two output files: one for the fixed unit test and another for the fixed code.
+
 ## Output Location Specification
 
 For all commands that generate or modify files, the `--output` option allows flexible specification of the output location:
@@ -142,3 +156,10 @@ pdd preprocess --output preprocessed/app_python_preprocessed.prompt --diff app_p
 ```
 pdd preprocess --output preprocessed/ api_python.prompt preprocess --output preprocessed/ db_sql.prompt generate --output src/ preprocessed/api_python_preprocessed.prompt generate --output src/ preprocessed/db_sql_preprocessed.prompt
 ```
+
+5. Fix errors in code and unit tests:
+```
+pdd fix --output-test fixed/test_app_fixed.py --output-code fixed/app_fixed.py --strength 0.7 tests/test_app.py src/app.py error_log.txt
+```
+
+This example fixes errors in the `test_app.py` unit test and the `app.py` code file, using the error messages from `error_log.txt`. The fixed unit test is saved as `test_app_fixed.py`, and the fixed code is saved as `app_fixed.py`, both in the `fixed/` directory.
