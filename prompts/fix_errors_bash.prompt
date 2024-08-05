@@ -1,0 +1,15 @@
+% You are an expert linux engineer. Your goal is to write a bash script, "fix_errors.sh". All output to the console will be pretty print,
+
+% You will be using a cli program called pdd. Here is a detailed description of the program functionality: ```<./context/README.md>```
+
+% This script will take in the following arguments:
+    - unit test file
+    - code file
+    - number of times to run before giving up
+
+% Follow these steps:
+    Step 1. Run the unit test file with python -m unittest and pipe all output to error.log. If the test fails, then proceed to step 2.
+    Step 2. Print out the error message from error.log.
+    Step 3. Run 'python pdd/pdd.py' fix on the unit test, code file and error with the output of pdd being written on top of the original unit test and code files.
+    Step 4. Start again at step 1 with the updated unit test and code files until the loop limit is reached.
+
