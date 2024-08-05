@@ -1,50 +1,27 @@
-# To create the `pdd` command line program using the Click library and the Rich library for pretty printing, we need to follow these steps:
-
-# 1. **Set up the project structure**.
-# 2. **Implement the CLI commands**.
-# 3. **Integrate the required functionalities**.
-
-# Let's start by setting up the project structure and then move on to implementing the CLI commands.
-
-# ### Project Structure
-
-# ```
-# pdd/
-# ├── pdd/
-# │   ├── __init__.py
-# │   ├── pdd.py
-# │   ├── code_generator.py
-# │   ├── context_generator.py
-# │   ├── test_generator.py
-# │   ├── preprocess.py
-# │   └── get_extension.py
-# ├── prompts/
-# ├── context/
-# ├── data/
-# └── setup.py
-# ```
-
-# ### Implementing the CLI Commands
-
-# First, let's create the `pdd.py` file inside the `pdd` directory. This file will contain the main CLI logic.
+# To create the `pdd` command line program using the Python Click library and the rich library for pretty printing, we will follow the structure and functionality described. Below is the implementation of the `pdd.py` script:
 
 # ```python
-# pdd/pdd/pdd.py
-
 import os
 import click
 from rich import print
 from rich.console import Console
-from rich.traceback import install
-
+from get_extension import get_extension
 from code_generator import code_generator
 from context_generator import context_generator
 from test_generator import test_generator
 from preprocess import preprocess
-from get_extension import get_extension
+from fix_errors_from_unit_tests import fix_errors_from_unit_tests
 
-install()
 console = Console()
+
+def extract_basename_language(filename):
+    if '_' in filename:
+        basename, language = filename.rsplit('_', 1)
+        language = language.replace('.prompt', '')
+    else:
+        basename = filename.replace('.prompt', '')
+        language = None
+    return basename, language
 
 @click.group(chain=True)
 @click.option('--force', is_flag=True, help='Overwrite existing files without asking for confirmation.')
@@ -66,28 +43,19 @@ def cli(ctx, force, strength, verbose, quiet):
 @click.pass_context
 def generate(ctx, prompt_file, output):
     """Create runnable code from a prompt file."""
-    force = ctx.obj['FORCE']
-    strength = ctx.obj['STRENGTH']
-    verbose = ctx.obj['VERBOSE']
-    quiet = ctx.obj['QUIET']
+    basename, language = extract_basename_language(prompt_file)
+    if not language:
+        console.print("[red]Error: Language not specified in the prompt file name.[/red]")
+        return
 
-    if not prompt_file.endswith('.prompt'):
-        prompt_file += '.prompt'
-
-    basename, language = os.path.splitext(os.path.basename(prompt_file))[0].rsplit('_', 1)
     file_extension = get_extension(language)
-
-    if not output:
-        output = f"{basename}{file_extension}"
+    output = output or f"{basename}{file_extension}"
+    strength = ctx.obj['STRENGTH']
 
     result_code = code_generator(prompt_file, language, strength)
-
-    if force or not os.path.exists(output):
-        with open(output, 'w') as f:
-            f.write(result_code)
-        console.print(f"Generated code saved to [bold green]{output}[/bold green]")
-    else:
-        console.print(f"[bold red]Error:[/bold red] File {output} already exists. Use --force to overwrite.")
+    with open(output, 'w') as f:
+        f.write(result_code)
+    console.print(f"[green]Generated code saved to {output}[/green]")
 
 @cli.command()
 @click.argument('code_file')
@@ -95,68 +63,43 @@ def generate(ctx, prompt_file, output):
 @click.pass_context
 def example(ctx, code_file, output):
     """Create an example file from an existing code file."""
+    basename, language = extract_basename_language(code_file)
+    if not language:
+        console.print("[red]Error: Language not specified in the code file name.[/red]")
+        return
+
+    file_extension = get_extension(language)
+    output = output or f"{basename}_example{file_extension}"
     force = ctx.obj['FORCE']
-    verbose = ctx.obj['VERBOSE']
-    quiet = ctx.obj['QUIET']
-
-    # Split the filename and extension
-    basename, file_extension = os.path.splitext(os.path.basename(code_file))
-    
-    # Try to split the basename by the last underscore
-    parts = basename.rsplit('_', 1)
-    
-    if len(parts) == 2:
-        # If there's an underscore, use it to separate basename and language
-        basename, language = parts
-        extension = get_extension(language)
-    else:
-        # If there's no underscore, use the original extension
-        language = None
-        extension = file_extension
-
-    if not output:
-        output = f"{basename}_example{file_extension}"
 
     success = context_generator(code_file, output, force)
-
     if success:
-        console.print(f"Example code saved to [bold green]{output}[/bold green]")
+        console.print(f"[green]Example code saved to {output}[/green]")
     else:
-        console.print(f"[bold red]Error:[/bold red] Failed to generate example code.")
+        console.print("[red]Failed to generate example code.[/red]")
 
 @cli.command()
 @click.argument('code_file')
 @click.argument('prompt_file')
 @click.option('--output', type=click.Path(), help='Specify where to save the generated test file.')
-@click.option('--language', help='Specify the programming language. Defaults to language specified by the prompt file name.')
+@click.option('--language', type=str, help='Specify the programming language.')
 @click.pass_context
 def test(ctx, code_file, prompt_file, output, language):
     """Generate a unit test file for a given code file and its corresponding prompt."""
-    force = ctx.obj['FORCE']
-    strength = ctx.obj['STRENGTH']
-    verbose = ctx.obj['VERBOSE']
-    quiet = ctx.obj['QUIET']
-
-    if not prompt_file.endswith('.prompt'):
-        prompt_file += '.prompt'
-
+    basename, prompt_language = extract_basename_language(prompt_file)
+    language = language or prompt_language
     if not language:
-        _, language = os.path.splitext(os.path.basename(prompt_file))[0].rsplit('_', 1)
+        console.print("[red]Error: Language not specified in the prompt file name or command option.[/red]")
+        return
 
     file_extension = get_extension(language)
-    basename, _ = os.path.splitext(os.path.basename(code_file))
-
-    if not output:
-        output = f"{basename}_test{file_extension}"
+    output = output or f"{basename}_test{file_extension}"
+    strength = ctx.obj['STRENGTH']
 
     test_code = test_generator(prompt_file, code_file, strength, language, os.path.dirname(output))
-
-    if force or not os.path.exists(output):
-        with open(output, 'w') as f:
-            f.write(test_code)
-        console.print(f"Test code saved to [bold green]{output}[/bold green]")
-    else:
-        console.print(f"[bold red]Error:[/bold red] File {output} already exists. Use --force to overwrite.")
+    with open(output, 'w') as f:
+        f.write(test_code)
+    console.print(f"[green]Generated test code saved to {output}[/green]")
 
 @cli.command()
 @click.argument('prompt_file')
@@ -165,92 +108,59 @@ def test(ctx, code_file, prompt_file, output, language):
 @click.pass_context
 def preprocess_cmd(ctx, prompt_file, output, diff):
     """Preprocess prompts and save the results."""
-    force = ctx.obj['FORCE']
-    verbose = ctx.obj['VERBOSE']
-    quiet = ctx.obj['QUIET']
-
-    if not prompt_file.endswith('.prompt'):
-        prompt_file += '.prompt'
-
-    basename, language = os.path.splitext(os.path.basename(prompt_file))[0].rsplit('_', 1)
-
-    if not output:
-        output = f"{basename}_{language}_preprocessed.prompt"
+    basename, language = extract_basename_language(prompt_file)
+    output = output or f"{basename}_{language}_preprocessed.prompt"
 
     processed_content = preprocess(prompt_file)
-
-    if force or not os.path.exists(output):
-        with open(output, 'w') as f:
-            f.write(processed_content)
-        console.print(f"Preprocessed prompt saved to [bold green]{output}[/bold green]")
-    else:
-        console.print(f"[bold red]Error:[/bold red] File {output} already exists. Use --force to overwrite.")
+    with open(output, 'w') as f:
+        f.write(processed_content)
+    console.print(f"[green]Preprocessed prompt saved to {output}[/green]")
 
     if diff:
         with open(prompt_file, 'r') as original_file:
             original_content = original_file.read()
-        console.print(f"[bold blue]Diff between original and preprocessed prompts:[/bold blue]")
-        console.print(f"[bold red]Original:[/bold red]\n{original_content}")
-        console.print(f"[bold green]Preprocessed:[/bold green]\n{processed_content}")
+        console.print("[yellow]Diff between original and preprocessed prompts:[/yellow]")
+        console.print_diff(original_content, processed_content)
+
+@cli.command()
+@click.argument('unit_test_file')
+@click.argument('code_file')
+@click.argument('error_file')
+@click.option('--output-test', type=click.Path(), help='Specify where to save the fixed unit test file.')
+@click.option('--output-code', type=click.Path(), help='Specify where to save the fixed code file.')
+@click.pass_context
+def fix(ctx, unit_test_file, code_file, error_file, output_test, output_code):
+    """Fix errors in code and unit test based on error messages."""
+    with open(unit_test_file, 'r') as f:
+        unit_test = f.read()
+    with open(code_file, 'r') as f:
+        code = f.read()
+    with open(error_file, 'r') as f:
+        error = f.read()
+
+    strength = ctx.obj['STRENGTH']
+    updated_unit_test, updated_code, fixed_unit_test, fixed_code = fix_errors_from_unit_tests(unit_test, code, error, strength)
+
+    if updated_unit_test:
+        output_test = output_test or f"{os.path.splitext(unit_test_file)[0]}_fixed{os.path.splitext(unit_test_file)[1]}"
+        with open(output_test, 'w') as f:
+            f.write(fixed_unit_test)
+        console.print(f"[green]Fixed unit test saved to {output_test}[/green]")
+
+    if updated_code:
+        output_code = output_code or f"{os.path.splitext(code_file)[0]}_fixed{os.path.splitext(code_file)[1]}"
+        with open(output_code, 'w') as f:
+            f.write(fixed_code)
+        console.print(f"[green]Fixed code saved to {output_code}[/green]")
 
 if __name__ == "__main__":
     cli()
 # ```
 
-# ### Additional Files
+# ### Explanation:
+# 1. **Global Options**: The global options (`--force`, `--strength`, `--verbose`, `--quiet`) are set up using `click.pass_context` to pass the context object.
+# 2. **Commands**: Each command (`generate`, `example`, `test`, `preprocess`, `fix`) is defined with its specific options and arguments.
+# 3. **Functionality**: The commands use the provided functions (`code_generator`, `context_generator`, `test_generator`, `preprocess`, `fix_errors_from_unit_tests`) to perform their tasks.
+# 4. **Output Handling**: The output is handled using the rich library for pretty printing.
 
-# Ensure you have the following files in the `pdd` directory:
-
-# - `code_generator.py`
-# - `context_generator.py`
-# - `test_generator.py`
-# - `preprocess.py`
-# - `get_extension.py`
-
-# Each of these files should contain the respective functions as described in the examples provided.
-
-# ### Example `setup.py`
-
-# To make the `pdd` command available globally, you can create a `setup.py` file:
-
-# ```python
-# # setup.py
-
-# from setuptools import setup, find_packages
-
-# setup(
-#     name='pdd',
-#     version='0.1',
-#     packages=find_packages(),
-#     include_package_data=True,
-#     install_requires=[
-#         'click',
-#         'rich',
-#     ],
-#     entry_points={
-#         'console_scripts': [
-#             'pdd=pdd.pdd:cli',
-#         ],
-#     },
-# )
-# ```
-
-# ### Installation
-
-# To install the `pdd` command line tool, navigate to the root directory of your project and run:
-
-# ```sh
-# pip install -e .
-# ```
-
-# This will install the `pdd` command globally, allowing you to use it from anywhere in your terminal.
-
-# ### Usage
-
-# You can now use the `pdd` command as described in the detailed description. For example:
-
-# ```sh
-# pdd preprocess --output preprocessed/ app_python.prompt generate --output src/app.py preprocessed/app_python_preprocessed.prompt example --output examples/ src/app.py test --output tests/ --language python src/app.py app_python.prompt
-# ```
-
-# This setup provides a robust and flexible CLI tool for prompt-driven development, leveraging the power of Click for command line parsing and Rich for pretty printing.
+# This script should be placed in the `pdd/pdd/` directory as `pdd.py`. Ensure that the required modules (`get_extension`, `code_generator`, `context_generator`, `test_generator`, `preprocess`, `fix_errors_from_unit_tests`) are correctly implemented and available in the Python path.
