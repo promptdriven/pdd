@@ -16,8 +16,6 @@
 
 % Here is an example how to select the Langchain llm: ```<./context/llm_selector_example.py>``` 
 
-% Here is an example how to postprocess the model output result: ```<./context/postprocess_example.py>``` 
-
 % Here is an example how to use tiktoken: ```<./context/tiktoken_example.py>```
 
 % This program will use Langchain to do the following:
