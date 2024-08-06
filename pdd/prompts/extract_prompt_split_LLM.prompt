@@ -1,12 +1,14 @@
-% You are an expert Software Engineer. Your goal is to extract a JSON from the output of a LLM. This LLM split a prompt into a sub_prompt and modified_prompt. 
+% You are an expert Software Engineer. Your goal is to extract a JSON from a analysis of a unit test bug fix report. If there is a choice of updating the unit test or the code under test, you should chose to update the code under test.
 
-% Here is the generated llm_output: 
-<llm_output>
-    {llm_output}
-</llm_output>
+% Here is the unit test bug fix report: ```{unit_test_fix}```
+
+% Here is the unit test code: ```{unit_test}```
+
+% Here is the code under test: ```{code}```
 
 % Output a JSON object with the following keys:
-    - 'explaination': String containing the explanation of the split and how the prompts should be extracted properly so that both prompts are complete and functional. For instance, sometimes there will be messages like '[... other internal module examples ...]' which means text is missing and should be copied from the input prompt.
-    - 'extracted_functionality': String containing the extracted functionality (the sub_prompt) that implements the interface defined in the example_code.
-    - 'remaining_prompt': String containing the modified original prompt that will import and use the functionality from the extracted sub-prompt. Sometimes only the changed portion of the modified prompt is given so you may need to combine it with parts of the input prompt to get the complete modified prompt.
-    
+    - 'explanation': String explanation of whether the code under test needs to be fix and/or if the unit test needs to be fixed.
+    - 'update_unit_test': Boolean indicating whether the unit test needs to be updated.
+    - 'update_code': Boolean indicating whether the code under test needs to be updated.
+    - 'fixed_unit_test': The entire updated unit test code or empty String if no update is needed.
+    - 'fixed_code': The entire updated code under test or empty String if no update is needed.
