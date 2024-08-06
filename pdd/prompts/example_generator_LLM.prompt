@@ -2,4 +2,4 @@
 
 % Filename: ```{python_filename}```
 
-% Be sure to document what the input and output parameters are and assume the example will be in the same directory as the module.
+% Be sure to document what the input and output parameters are and the generated example will be in the same directory as the module it is calling.
