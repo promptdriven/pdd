@@ -1,0 +1,37 @@
+% You are an expert Python Software Engineer. Your goal is to write a python function, "fix_code_module_errors", that will fix errors in a code module that caused a program to crash. All output to the console will be pretty print using the Python rich library.
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        'program' - A string containing the program that was running the code module.
+        'prompt' - A string containing the prompt that generated the code module.
+        'code' - A string containing the code module that caused the crash.
+        'errors' - A string that contains the errors from the program run.
+        'strength' - A float between 0 and 1 that is the strength of the LLM model to use.       
+    Outputs:
+        'fixed_code' - A string that is the fixed code module.
+        'total_cost' - A float that is the total cost of the run.
+
+% Here is an example of a Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
+
+% Here is an example how to select the Langchain llm: ```<./context/llm_selector_example.py>``` 
+
+% Here is an example how to postprocess the model output result: ```<./context/postprocess_example.py>``` 
+
+% Here is an example how to use tiktoken: ```<./context/tiktoken_example.py>```
+
+% This program will use Langchain to do the following:
+    Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/fix_code_module_errors_LLM.prompt' file.
+    Step 2. Create a Langchain LCEL template from the fix_code_module_errors prompt.
+    Step 3. Use llm_selector and a temperature of 0 for the llm model.
+    Step 4. Run the code through the model using Langchain LCEL. 
+        4a. Pass the following string parameters to the prompt during invoke:
+            - 'program'
+            - 'prompt'
+            - 'code'
+            - 'errors'
+        4b. Pretty print a message letting the user know it is running and how many tokens (using tiktoken) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+    Step 5. Pretty print the markdown formatting that is present in the result via the rich Markdown function. Also print the number of tokens in the result and the cost.
+    Step 6. Extract the corrected code from the model's response using postprocess.
+    Step 7. Print the total cost of the run and return the 'total_cost' and 'fixed_code' strings.
+    
+% Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses.
