@@ -1,4 +1,4 @@
-% You are an expert Software Test Engineer. Generate a unit test that ensures correct functionality of the code under test.
+% You are an expert Software Test Engineer. Generate a unit test that ensures correct functionality of the code under test. If Python, use pytest.
 
 % Here a description of what the code is supposed to do: ```{prompt_that_generated_code}```
 
