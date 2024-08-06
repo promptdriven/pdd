@@ -1,63 +1,45 @@
-from pdd.fix_code_module_errors import fix_code_module_errors
+# Here's a concise example of how to use the `fix_code_module_errors` function from the `fix_code_module_errors.py` module. This example includes documentation for the input and output parameters.
 
-def main():
-    # Original program with an error
-    program_with_error = """
-def calculate_sum(numbers):
-    return sum(numbers)
+# ### Example Usage
 
-result = calculate_sum("123")  # Error: trying to sum a string
-print(result)
+# ```python
+# Import the function from the module
+from fix_code_module_errors import fix_code_module_errors
+
+# Define the input parameters
+program = "Example Program"
+prompt = "Fix the following code errors."
+code = """
+def add(a, b):
+    return a + b
+
+print(add(5, '10'))  # This will cause a TypeError
 """
+errors = "TypeError: unsupported operand type(s) for +: 'int' and 'str'"
+strength = 1  # Adjust the strength as needed
 
-    # Original prompt that generated the code
-    original_prompt = "Write a function that calculates the sum of numbers"
+# Call the function to fix code errors
+fixed_code, total_cost = fix_code_module_errors(program, prompt, code, errors, strength)
 
-    # Original code module with the error
-    code_module = """
-def calculate_sum(numbers):
-    return sum(numbers)
-"""
+# Print the results
+if fixed_code is not None:
+    print("Fixed Code:")
+    print(fixed_code)
+    print(f"Total Cost: ${total_cost:.6f}")
+else:
+    print("Failed to fix the code.")
+# ```
 
-    # Error message received when running the program
-    error_message = """
-TypeError: unsupported operand type(s) for +: 'int' and 'str'
-  File "example.py", line 4, in <module>
-    result = calculate_sum("123")
-  File "example.py", line 2, in calculate_sum
-    return sum(numbers)
-"""
+# ### Input Parameters
+# - `program` (str): A description or name of the program being analyzed.
+# - `prompt` (str): A prompt that instructs the model on what to do with the code.
+# - `code` (str): The code snippet that contains errors.
+# - `errors` (str): A description of the errors present in the code.
+# - `strength` (int): A parameter that influences the model's behavior (e.g., creativity or strictness).
 
-    # Call the function to fix the errors
-    update_program, update_code, fixed_program, fixed_code, program_code_fix, total_cost, model_name = fix_code_module_errors(
-        program=program_with_error,    # The program containing the error (str)
-        prompt=original_prompt,        # The original prompt used to generate the code (str)
-        code=code_module,             # The code module containing the error (str)
-        errors=error_message,         # The error message received (str)
-        strength=0.5,                 # Model strength (float between 0-1, higher = stronger model)
-        temperature=0,                 # Temperature for model output (float, 0 = deterministic)
-        verbose=True                  # Whether to print debug information (bool)
-    )
+# ### Output Parameters
+# - `fixed_code` (str): The corrected version of the input code.
+# - `total_cost` (float): The total cost incurred during the execution of the function, based on token usage.
 
-    """
-    Returns:
-        update_program (bool): Whether the program needs updating
-        update_code (bool): Whether the code module needs updating
-        fixed_program (str): The fixed program code
-        fixed_code (str): The fixed code module
-        program_code_fix (str): The raw output of the first LLM invoke which attempts to fix the program crash
-        total_cost (float): Total cost in USD for the API calls
-        model_name (str): Name of the model used for fixing
-    """
-
-    # Print the results
-    print(f"Program needs update: {update_program}")
-    print(f"Code needs update: {update_code}")
-    print(f"\nFixed program:\n{fixed_program}")
-    print(f"\nFixed code module:\n{fixed_code}")
-    print(f"\nProgram code fix raw output:\n{program_code_fix}")
-    print(f"\nTotal cost: ${total_cost:.4f}")
-    print(f"Model used: {model_name}")
-
-if __name__ == "__main__":
-    main()
+# ### Note
+# Make sure to set the `PDD_PATH` environment variable to the directory containing the prompt file before running the example.
