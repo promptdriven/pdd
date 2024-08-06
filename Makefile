@@ -76,12 +76,28 @@ clean:
 	@echo "Cleaning generated files"
 	@rm -rf $(STAGING_DIR)
 
+staging:
+	@echo "Copying files to staging"
+	@mkdir -p staging
+	@cp -r pdd $(PDD_DIR)
+	@touch pdd/*
+	@cp -r data $(DATA_DIR)
+	@touch data/*
+	@cp -r context $(CONTEXT_DIR)
+	@touch context/*
+	@cp -r tests $(TESTS_DIR)
+	@touch tests/*
+	@cp Makefile $(MAKEFILE_OUTPUT)
+	@touch Makefile
+
 # Production: copy files from staging to pdd
 production:
 	@echo "Copying files to production"
 	@mkdir -p pdd
 	@cp -r $(PDD_DIR)/* pdd/
 	@cp -r $(DATA_DIR) .
+	@cp -r $(CONTEXT_DIR) .
+	@cp -r $(TESTS_DIR) .
 	@cp $(MAKEFILE_OUTPUT) .
 # ```
 
