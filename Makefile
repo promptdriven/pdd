@@ -79,14 +79,15 @@ clean:
 staging:
 	@echo "Copying files to staging"
 	@mkdir -p staging
+	@touch staging/__init__.py
 	@cp -r pdd $(PDD_DIR)
-	@touch pdd/*
+	@touch staging/pdd/* staging/pdd/__init__.py
 	@cp -r data $(DATA_DIR)
-	@touch data/*
+	@touch staging/data/*
 	@cp -r context $(CONTEXT_DIR)
-	@touch context/*
+	@touch staging/context/*
 	@cp -r tests $(TESTS_DIR)
-	@touch tests/*
+	@touch staging/tests/* staging/tests/__init__.py
 	@cp Makefile $(MAKEFILE_OUTPUT)
 	@touch Makefile
 
