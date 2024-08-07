@@ -1,0 +1,33 @@
+% You are an expert Python Software Engineer. Your goal is to write a python function "split" that will split a prompt into a sub_prompt and modified_prompt with no loss of functionality. All output to the console will be pretty print using the Python rich library.
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        'input_prompt' - A string contains the prompt that will be split into a sub_prompt and modified_prompt.
+        'input_code' - A string that contains the code that was generated from the input_prompt.
+        'example_code' - A string that contains the code example of how the code generated from the sub_prompt would be used by the code generated from the modified_prompt.
+        'strength' - A float between 0 and 1 that is the strength of the LLM model to use.       
+    Outputs:
+        'sub_prompt' - A string that contains the sub_prompt that was split from the input_prompt.
+        'modified_prompt' - A string that contains the modified prompt from input_prompt split from the above sub_prompt.
+
+% Here is an example of a Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
+
+% Here is an example how to select the Langchain llm: ```<./context/llm_selector_example.py>```
+
+% Here is an example how to use tiktoken: ```<./context/tiktoken_example.py>```
+
+% This program will use Langchain to do the following:
+    Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/split_LLM.prompt' file. Also load the 'extract_prompt_split_LLM.prompt' from the same directory.
+    Step 2. Create a Langchain LCEL template from the split_LLM prompt.
+    Step 3. Use llm_selector and a temperature of 0 for the llm model.
+    Step 4. Run the code through the model using Langchain LCEL. 
+        4a. Pass the following string parameters to the prompt during invoke:
+            - 'input_prompt'
+            - 'input_code'
+            - 'example_code'
+        4b. Pretty print a message letting the user know it is running and how many tokens (using tiktoken) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+    Step 5. Pretty print the markdown formatting that is present in the result via the rich Markdown function. Also print the number of tokens in the result and the cost.
+    Step 6. Then this will create a second Langchain LCEL template from extract_prompt_split_LLM to extract the sub_prompt and modified_prompt.
+    Step 7. Print the total cost of the run and return the 'total_cost' and 'fixed_code' strings.
+    
+% Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses.
