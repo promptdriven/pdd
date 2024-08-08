@@ -51,21 +51,75 @@ chain = prompt | llm | parser
 result = chain.invoke({"query": "Tell me a joke."})
 print(result)
 
+# get DEEKSEEK_API_KEY environmental variable
+import os
+
+# Get DEEKSEEK_API_KEY environmental variable
+deepseek_api_key = os.getenv('DEEKSEEK_API_KEY')
+
+# Ensure the API key is retrieved successfully
+if deepseek_api_key is None:
+    raise ValueError("DEEKSEEK_API_KEY environment variable is not set")
+
+llm = ChatOpenAI(
+    model='deepseek-chat', 
+    openai_api_key=deepseek_api_key, 
+    openai_api_base='https://api.deepseek.com',
+    temperature=0
+)
+
+# Chain the components
+chain = prompt | llm | parser
+
+# Invoke the chain with a query
+result = chain.invoke({"query": "Write joke about the sky"})
+print("deepseek",result)
 
 
-class Action(BaseModel):
-    action: str
-    action_input: str = Field(description="Input for the action")
+from langchain_fireworks import Fireworks 
 
-# Initialize the LLM
-llm = ChatAnthropic(model='claude-3-5-sonnet-20240620', temperature=0)
+llm = Fireworks(
+    model="accounts/fireworks/models/mixtral-8x7b-instruct",
+    temperature=0)
+# Chain the components
+chain = prompt | llm | parser
 
-# Create the RetryOutputParser
-retry_parser = RetryOutputParser.from_llm(parser=Action, llm=llm)
+# Invoke the chain with a query
+result = chain.invoke({"query": "Tell me a joke about the president"})
+print("fireworks",result)
 
-# Example of a bad response
-bad_response = '{"action": "search"}'  # Missing action_input
 
-# Attempt to parse the bad response with the retry parser
-parsed_result = retry_parser.parse_with_prompt(bad_response, prompt_value="Please provide a valid action with input.")
-print(parsed_result)
+
+from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
+from langchain_openai import OpenAI
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough, ConfigurableField
+
+
+prompt = ChatPromptTemplate.from_template(
+    "Tell me a short joke about {topic}"
+)
+chat_openai = ChatOpenAI(model="gpt-3.5-turbo")
+openai = OpenAI(model="gpt-3.5-turbo-instruct")
+anthropic = ChatAnthropic(model="claude-2")
+model = (
+    chat_openai
+    .with_fallbacks([anthropic])
+    .configurable_alternatives(
+        ConfigurableField(id="model"),
+        default_key="chat_openai",
+        openai=openai,
+        anthropic=anthropic,
+    )
+)
+
+chain = (
+    {"topic": RunnablePassthrough()} 
+    | prompt 
+    | model 
+    | StrOutputParser()
+)
+result = chain.invoke({"topic": "Tell me a joke about the president"})
+print("config alt:",result)
