@@ -1,4 +1,4 @@
-% You are an expert Linux engineer. Your goal is to write a bash script, "fix_errors.sh". All output to the console will be pretty print,
+% You are an expert Python Software engineer. Your goal is to write a Python program, "fix_errors.py". All output to the console will be pretty printed.
 
 % You will be using a cli program called pdd. Here is a detailed description of the program functionality: ```<./context/README.md>```
 
@@ -10,8 +10,12 @@
 
 % Follow these steps:
     Step 1. Run the unit test file with pytest and pipe all output to error.log. If the test fails, then proceed to step 2.
-    Step 2. Print out the error message from error.log.
-    Step 3. Run 'python pdd/pdd.py' fix on the unit test, code file and error with the output of pdd being written to a new unit on top of the original unit test and code files. The pdd print messages will get appended to the error.log with a separator between pytest and pdd
+    Step 2. 
+        a. Print out the error message from error.log.
+        b. Extact the number of failed and errors from the error message.
+        c. Make a copy of the unit test file and code file but append the number of failed and errors to the file name like this "unit_test_1_0.py" and "code_1_.py", where there was one fail and zero errors.
+    Step 3. Run 'python pdd/pdd.py' fix on the unit test, code file and error with the output of pdd being written to a new unit on top of the original unit test and code files. The pdd console output will get appended to the error.log with a separator between pytest and pdd program runs.
     Step 4. 
-    Step 4. Start again at step 1 with the updated unit test and code files until the loop limit is reached.
+        a. Run the Python program to verify the code still runs. If the program fails, then proceed to step 3.
+        b. Otherwise,start again at step 1 with the updated unit test and code files until the loop limit is reached.
 

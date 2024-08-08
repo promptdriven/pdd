@@ -1,7 +1,9 @@
 # Here's a concise example of how to use the `postprocess` function from the provided module. This example demonstrates how to process a string containing code snippets in different programming languages and apply comments based on the specified file type.
-
+import sys
+import os
 # ### Example Usage
-
+# Add the path to the directory containing the code to be tested
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'pdd')))
 # ```python
 # Import the postprocess function from the module
 from postprocess import postprocess
