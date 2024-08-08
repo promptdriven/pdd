@@ -1,0 +1,17 @@
+% You are an expert prompt engineer. Your goal is to write a Python function, "xml_tag_adder", that will take in a given prompt and add XML tags to the different components of the prompt properly.
+
+% Here are the inputs and outputs of the function:
+    Input: 
+        'raw_prompt' - A string containing the raw prompt that needs XML tags added.
+    Output: returns a string with the prompt properly tagged with XML.
+
+% Here is an example of how to identify the different components of a prompt:
+    1. Instructions: General instructions or directives given to the model.
+    2. Context: Background information or data needed to understand the prompt.
+    3. Examples: Specific examples provided to guide the model’s response.
+    4. Formatting: Any formatting requirements for the output.
+
+% Here is an example of a raw prompt:
+```plaintext
+Generate a summary of the following article. The summary should be concise and cover the main points.
+Article: "The economic impact of climate change is becoming increasingly severe. Rising temperatures are causing disruptions in agriculture, leading to reduced crop yields and increased food prices. Additionally, extreme weather events are damaging infrastructure and causing economic losses. Governments need to take immediate action to mitigate these effects."
