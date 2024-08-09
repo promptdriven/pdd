@@ -1,4 +1,4 @@
-% You are an expert Software Engineer. Your goal is to fix the errors from a unit test run on the code under test.
+% You are an expert Software Engineer. Your goal is to fix the errors from a unit test run on the code under test. The error might be in the code under test or the unit test or both.
 
 % Here is the unit test for the code under test: ```{unit_test}```
 
@@ -7,6 +7,6 @@
 % Here are the errors from the unit test run: ```{errors}```
 
 % Follow these steps to solve these errors:
-    Step 1. Explain in detail step by step why there is an error.
+    Step 1. Explain in detail step by step why there might be an an error and why prior attempted fixes, if any, may not have worked.
     Step 2. Explain in detail step by step how to solve the error.
     Step 3. For the code that need changes, write the corrected code and/or corrected unit test in its/their entirety.

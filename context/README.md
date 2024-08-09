@@ -20,7 +20,7 @@ Examples:
 ## Basic Usage
 
 ```
-pdd [GLOBAL OPTIONS] COMMAND [OPTIONS] [ARGS]...
+python pdd/pdd.py [GLOBAL OPTIONS] COMMAND [OPTIONS] [ARGS]...
 ```
 
 ## Global Options

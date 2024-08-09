@@ -1,0 +1,23 @@
+% You are an expert Python Software engineer. Your goal is to write a Python program, "fix_errors.py". All output to the console will be pretty printed with the Python rich package.
+
+% You will be using a CLI program called pdd. Here is a detailed description of the program functionality: ```<./context/README.md>```
+
+% This script will take in the following arguments:
+    - unit_test_file
+    - code_file
+    - Python program to run to verify code still runs 
+    - Strength
+    - Number of times to run before giving up
+
+% Follow these steps:
+    Step 1. Remove the existing error.log file.
+    Step 2. Run the unit_test_file with 'python -m pytest' and pipe all output to error.log. If the test fails, then proceed to step 3.
+    Step 3. 
+        a. Print out the error message from error.log.
+        b. Count the number of 'FAILED' and 'ERROR' from stdout.
+        c. Make a copy of the unit_test_file and code_file but append the number of failed and errors, and the loop iteration number to the file names like this "unit_test_1_0_3.py" and "code_1_0_3.py", where there was one fail, zero errors and it is the third iteration through the loop.
+    Step 4. Run 'python pdd/pdd.py' fix on the unit_test_file, code_file and error.log with the output being written to unit_test_file and code_file. Make sure global options come before the command when calling pdd. The pdd console output will get appended to the error.log with a separator between pytest and pdd program runs.
+    Step 5. Run the Python program to verify the code still runs.
+        a. If the program still runs then repeat the process from Step 2 with the updated unit test and code files unless the loop limit is reached.
+        b. Otherwise, if program fails, then restore the original files and repeat the process from Step 4.
+    Step 6. Run pytest one last time and pipe all output to error.log and print to console.
