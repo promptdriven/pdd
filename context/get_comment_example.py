@@ -4,7 +4,7 @@
 
 # ```python
 # Import the function from the module
-from pdd.get_comment import get_comment
+from get_comment import get_comment
 
 # Example usage
 if __name__ == "__main__":
