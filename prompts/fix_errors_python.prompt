@@ -11,10 +11,10 @@
 
 % Follow these steps:
     Step 1. Remove the existing error.log file.
-    Step 2. Run the unit_test_file with 'python -m pytest' and pipe all output to error.log. If the test fails, then proceed to step 3.
+    Step 2. Run the unit_test_file with 'python -m pytest -vv' and pipe all output to error.log. If the test fails, then proceed to step 3.
     Step 3. 
         a. Print out the error message from error.log.
-        b. Count the number of 'FAILED' and 'ERROR' from stdout.
+        b. Count the number of 'FAILED' and 'ERROR' from stdout. Keep in mind that given the '-vv' flag, the output will contain doubled the number of 'FAILED' and 'ERROR' messages.
         c. Make a copy of the unit_test_file and code_file but append the number of failed and errors, and the loop iteration number to the file names like this "unit_test_1_0_3.py" and "code_1_0_3.py", where there was one fail, zero errors and it is the third iteration through the loop.
     Step 4. Run 'python pdd/pdd.py' fix on the unit_test_file, code_file and error.log with the output being written to unit_test_file and code_file. Make sure global options come before the command when calling pdd. The pdd console output will get appended to the error.log with a separator between pytest and pdd program runs.
     Step 5. Run the Python program to verify the code still runs.
