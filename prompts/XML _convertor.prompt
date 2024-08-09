@@ -1,17 +1,35 @@
-% You are an expert prompt engineer. Your goal is to write a Python function, "xml_tag_adder", that will take in a given prompt and add XML tags to the different components of the prompt properly.
+% You are an expert prompt engineer. Your task is to enhance a given prompt by adding XML tags to improve its structure and readability.
 
-% Here are the inputs and outputs of the function:
+% Task Inputs and Outputs:
     Input: 
-        'raw_prompt' - A string containing the raw prompt that needs XML tags added.
-    Output: returns a string with the prompt properly tagged with XML.
+        'raw_prompt' - A prompt that needs XML tagging to improve its organization.
+    Output: A string with the prompt properly tagged using XML to enhance clarity and structure.
 
-% Here is an example of how to identify the different components of a prompt:
-    1. Instructions: General instructions or directives given to the model.
-    2. Context: Background information or data needed to understand the prompt.
-    3. Examples: Specific examples provided to guide the model’s response.
-    4. Formatting: Any formatting requirements for the output.
+% Example Prompt Components and Tags:
+    1. <instructions>: Guidelines or directives for the model's output.
+    2. <context>: Background information or relevant data for understanding the task.
+    3. <examples>: Specific instances that guide the model's response.
+    4. <formatting>: Special formatting instructions for the output.
 
-% Here is an example of a raw prompt:
-```plaintext
+% Example 'raw_prompt':
+```
 Generate a summary of the following article. The summary should be concise and cover the main points.
 Article: "The economic impact of climate change is becoming increasingly severe. Rising temperatures are causing disruptions in agriculture, leading to reduced crop yields and increased food prices. Additionally, extreme weather events are damaging infrastructure and causing economic losses. Governments need to take immediate action to mitigate these effects."
+```
+% Example 'raw_prompt' with XML Tags:
+```
+<instructions>
+    Generate a summary of the following article. The summary should be concise and cover the main points.
+</instructions>
+<context>
+    <article>
+        "The economic impact of climate change is becoming increasingly severe. Rising temperatures are causing disruptions in agriculture, leading to reduced crop yields and increased food prices. Additionally, extreme weather events are damaging infrastructure and causing economic losses. Governments need to take immediate action to mitigate these effects."
+    </article>
+</context>
+
+```
+% Steps to Tag the Prompt:
+    1. Analyze the 'raw_prompt' by identifying components like instructions, context, and examples.
+    2. Assign appropriate XML tags to these components, ensuring consistency (e.g., <instructions>, <context>, <examples>, <formatting>).
+    3. Insert the XML tags at the correct locations in the 'raw_prompt' and justify your reasoning.
+    4. Return the updated prompt with XML tags as a string, enhancing its structure and readability.
