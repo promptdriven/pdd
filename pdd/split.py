@@ -1,131 +1,119 @@
-from typing import Tuple, Optional
-from rich import print as rprint
+# To achieve the goal of splitting a prompt into a `sub_prompt` and `modified_prompt` using Langchain and other tools, we need to follow the steps outlined in the prompt. Below is the implementation of the `split_prompt` function, which includes error handling and pretty printing using the `rich` library.
+
+# First, ensure you have the necessary libraries installed:
+# ```bash
+# pip install langchain rich tiktoken
+# ```
+
+# Now, let's implement the `split_prompt` function:
+
+# ```python
+import os
+from rich import print
+from rich.console import Console
 from rich.markdown import Markdown
-from pydantic import BaseModel, Field
-from .load_prompt_template import load_prompt_template
-from .preprocess import preprocess
-from .llm_invoke import llm_invoke
+from langchain_core.prompts import PromptTemplate
+from langchain_openai import ChatOpenAI
+from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_anthropic import ChatAnthropic
+from langchain_community.cache import SQLiteCache
+from langchain.globals import set_llm_cache
+from langchain_core.pydantic_v1 import BaseModel, Field
+from langchain.output_parsers import RetryOutputParser
+import tiktoken
 
-from . import EXTRACTION_STRENGTH, DEFAULT_STRENGTH, DEFAULT_TEMPERATURE, DEFAULT_TIME
-
-class PromptSplit(BaseModel):
-    extracted_functionality: str = Field(description="The extracted functionality as a sub-module prompt")
-    remaining_prompt: str = Field(description="The modified original prompt that will import the extracted functionality")
-
-def split(
-    input_prompt: str,
-    input_code: str,
-    example_code: str,
-    strength: float = DEFAULT_STRENGTH,
-    temperature: float = DEFAULT_TEMPERATURE,
-    time: Optional[float] = DEFAULT_TIME,
-    verbose: bool = False
-) -> Tuple[Tuple[str, str], float, str]:
-    """
-    Split a prompt into extracted functionality and remaining prompt.
-
-    Args:
-        input_prompt (str): The prompt to split.
-        input_code (str): The code generated from the input_prompt.
-        example_code (str): Example code showing usage.
-        strength (float): LLM strength parameter (0-1).
-        temperature (float): LLM temperature parameter (0-1).
-        time (Optional[float]): Time allocation for the LLM.
-        verbose (bool): Whether to print detailed information.
-
-    Returns:
-        Tuple[Tuple[str, str], float, str]: 
-            ((extracted_functionality, remaining_prompt), total_cost, model_name)
-            where model_name is the name of the model used (returned as the second to last tuple element)
-            and total_cost is the aggregated cost from all LLM invocations.
-    """
-    total_cost = 0.0
-    model_name = ""
-
-
-    # Input validation
-    if not all([input_prompt, input_code, example_code]):
-        raise ValueError("All input parameters (input_prompt, input_code, example_code) must be provided")
+# Define the function
+def split_prompt(input_prompt, input_code, example_code, strength):
+    console = Console()
     
-    if not 0 <= strength <= 1 or not 0 <= temperature <= 1:
-        raise ValueError("Strength and temperature must be between 0 and 1")
-
     try:
-        # 1. Load prompt templates
-        split_prompt = load_prompt_template("split_LLM")
-        extract_prompt = load_prompt_template("extract_prompt_split_LLM")
+        # Step 1: Load the prompt files
+        pdd_path = os.getenv('PDD_PATH')
+        if not pdd_path:
+            raise ValueError("PDD_PATH environment variable is not set.")
         
-        if not split_prompt or not extract_prompt:
-            raise ValueError("Failed to load prompt templates")
-
-        # 2. Preprocess prompts
-        processed_split_prompt = preprocess(
-            split_prompt,
-            recursive=False,
-            double_curly_brackets=True,
-            exclude_keys=['input_prompt', 'input_code', 'example_code']
-        )
+        split_llm_prompt_path = os.path.join(pdd_path, 'prompts', 'split_LLM.prompt')
+        extract_prompt_split_llm_path = os.path.join(pdd_path, 'prompts', 'extract_prompt_split_LLM.prompt')
         
-        processed_extract_prompt = preprocess(
-            extract_prompt,
-            recursive=False,
-            double_curly_brackets=False
-        )
-
-        # 3. First LLM invocation
-        if verbose:
-            rprint("[bold blue]Running initial prompt split...[/bold blue]")
-
-        split_response = llm_invoke(
-            prompt=processed_split_prompt,
-            input_json={
-                "input_prompt": input_prompt,
-                "input_code": input_code,
-                "example_code": example_code
-            },
-            strength=strength,
-            temperature=temperature,
-            time=time,
-            verbose=verbose
-        )
-        total_cost += split_response["cost"]
-        # Capture the model name from the first invocation.
-        model_name = split_response["model_name"]
-
-        # 4. Extract JSON with second LLM invocation
-        if verbose:
-            rprint("[bold blue]Extracting split prompts...[/bold blue]")
-
-        extract_response = llm_invoke(
-            prompt=processed_extract_prompt,
-            input_json={"llm_output": split_response["result"]},
-            strength=EXTRACTION_STRENGTH,  # Fixed strength for extraction
-            temperature=temperature,
-            output_pydantic=PromptSplit,
-            verbose=verbose,
-            time=time  # Pass time to the second llm_invoke call
-        )
-        total_cost += extract_response["cost"]
-
-        # Extract results
-        result: PromptSplit = extract_response["result"]
-        extracted_functionality = result.extracted_functionality
-        remaining_prompt = result.remaining_prompt
-
-        # 5. Print verbose output if requested
-        if verbose:
-            rprint("\n[bold green]Final Results:[/bold green]")
-            rprint(Markdown(f"### Extracted Functionality\n{extracted_functionality}"))
-            rprint(Markdown(f"### Remaining Prompt\n{remaining_prompt}"))
-            rprint(f"[bold cyan]Total Cost: ${total_cost:.6f}[/bold cyan]")
-            rprint(f"[bold cyan]Model used: {model_name}[/bold cyan]")
-
-        # 6. Return results with standardized order: (result_data, cost, model_name)
-        return (extracted_functionality, remaining_prompt), total_cost, model_name
-
+        with open(split_llm_prompt_path, 'r') as file:
+            split_llm_prompt = file.read()
+        
+        with open(extract_prompt_split_llm_path, 'r') as file:
+            extract_prompt_split_llm = file.read()
+        
+        # Step 2: Create Langchain LCEL template from the split_LLM prompt
+        prompt_template = PromptTemplate.from_template(split_llm_prompt)
+        
+        # Step 3: Use llm_selector and a temperature of 0 for the llm model
+        from llm_selector import llm_selector
+        llm, input_cost, output_cost = llm_selector(strength, 0)
+        
+        # Step 4: Run the code through the model using Langchain LCEL
+        chain = prompt_template | llm | StrOutputParser()
+        
+        # Prepare the input for the prompt
+        prompt_input = {
+            "input_prompt": input_prompt,
+            "input_code": input_code,
+            "example_code": example_code
+        }
+        
+        # Calculate token count and cost
+        encoding = tiktoken.get_encoding("cl100k_base")
+        token_count = len(encoding.encode(str(prompt_input)))
+        cost = (token_count / 1_000_000) * input_cost
+        
+        # Pretty print the running message
+        console.print(f"[bold green]Running the model...[/bold green]")
+        console.print(f"Token count: {token_count}")
+        console.print(f"Estimated cost: ${cost:.6f}")
+        
+        # Invoke the chain
+        result = chain.invoke(prompt_input)
+        
+        # Pretty print the result
+        console.print(Markdown(result))
+        result_token_count = len(encoding.encode(result))
+        result_cost = (result_token_count / 1_000_000) * output_cost
+        console.print(f"Result token count: {result_token_count}")
+        console.print(f"Result cost: ${result_cost:.6f}")
+        
+        # Step 6: Create a second Langchain LCEL template from extract_prompt_split_LLM
+        extract_prompt_template = PromptTemplate.from_template(extract_prompt_split_llm)
+        extract_chain = extract_prompt_template | llm | JsonOutputParser()
+        
+        # Invoke the chain to extract sub_prompt and modified_prompt
+        extract_result = extract_chain.invoke(result)
+        
+        # Pretty print the total cost
+        total_cost = cost + result_cost
+        console.print(f"Total cost: ${total_cost:.6f}")
+        
+        return extract_result['sub_prompt'], extract_result['modified_prompt']
+    
     except Exception as e:
-        # Print an error message, then raise an exception that includes
-        # the prefix "Error in split function: …" in its final message.
-        rprint(f"[bold red]Error in split function: {str(e)}[/bold red]")
-        # Re-raise using the same exception type but with a modified message.
-        raise type(e)(f"Error in split function: {str(e)}") from e
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        return None, None
+
+# Example usage
+input_prompt = "Your input prompt here"
+input_code = "Your input code here"
+example_code = "Your example code here"
+strength = 0.5
+
+sub_prompt, modified_prompt = split_prompt(input_prompt, input_code, example_code, strength)
+print(f"Sub Prompt: {sub_prompt}")
+print(f"Modified Prompt: {modified_prompt}")
+# ```
+
+# ### Explanation:
+# 1. **Environment Variable**: The function checks for the `PDD_PATH` environment variable and loads the necessary prompt files.
+# 2. **Prompt Templates**: It creates Langchain LCEL templates from the loaded prompts.
+# 3. **LLM Selection**: It uses the `llm_selector` function to select the appropriate LLM model based on the provided strength.
+# 4. **Token Calculation**: It calculates the number of tokens in the input and estimates the cost using `tiktoken`.
+# 5. **Model Invocation**: It runs the model and pretty prints the result using `rich`.
+# 6. **Extraction**: It uses another Langchain LCEL template to extract the `sub_prompt` and `modified_prompt`.
+# 7. **Error Handling**: It handles potential errors gracefully and prints error messages using `rich`.
+
+# This function should be able to split the prompt as required and provide detailed output and cost information.
