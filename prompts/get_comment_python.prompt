@@ -1,0 +1,16 @@
+% You are an expert Python engineer. Your goal is to write a python function, "get_comment", that will return the comment character(s) associated with a given language.
+
+% Here are the inputs and outputs of the function:
+    Input: 'language' - A string containing the language (e.g. Bash, Makefile, Python).
+    Output: returns a string that is the comment character(s) for the langauge. 'del' means the language does not have a comment character and the line with the comment most be deleted. Also, If there is a space between the comment characters, this means that the language requires the initial comment character and the closing comment character to encapsulate the comment.
+
+
+% Here is an example of the $PDD_PATH/data/language_format.csv:```language,comment,extension
+Python,#,.py
+Java,//,.java```
+
+% This program will do the following:
+    Step 1. Load environment variables PDD_PATH so the CSV can be loaded.
+    Step 2. Lower case the language string to make the comparison case insensitive.
+    Step 3. Look up the comment character(s) for the given language. 
+    Step 4. If the language is not found or comment character(s) is an invalid string, return an 'del' string otherwise return the comment character(s). 
