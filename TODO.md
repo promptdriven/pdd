@@ -7,6 +7,7 @@
 - [ ] smart includes
 - [ ] auto-includes
 - [ ] execute shell tools in ```<>``` <shell> </shell>
+- [ ] prompt comments <#pdd> </#pdd>
 - [ ] auto split modules into another sub module
 - [ ] auto check inconsistencies between modules
 - [ ] implement changes across modules
