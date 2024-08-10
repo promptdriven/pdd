@@ -9,7 +9,7 @@ import sys
 def run_pytest(unit_test_file):
     """Run pytest on the given unit test file and capture output."""
     result = subprocess.run(
-        ['python', '-m', 'pytest', #'-v',
+        ['python', '-m', 'pytest', '-vv',
         unit_test_file],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -24,8 +24,8 @@ def run_pytest(unit_test_file):
 
 def extract_errors(log_content):
     """Extract the number of failed tests and errors from the pytest output."""
-    failed = log_content.count('FAILED')
-    errors = log_content.count('ERROR')
+    failed = int(log_content.count('FAILED') / 2)
+    errors = int(log_content.count('ERROR') / 2)
 
     return failed, errors
 
