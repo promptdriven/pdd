@@ -9,12 +9,19 @@
         'sub_prompt' - A string that contains the sub_prompt that was split from the input_prompt.
         'modified_prompt' - A string that contains the modified prompt from input_prompt split from the above sub_prompt.
 
-% Here is an example of how to split and generate the sub_prompt and modified_prompt:
-    example_input_prompt: ```<./context/split/1/initial_pdd_python.prompt>```
-    example_input_code: ```<./context/split/1/pdd.py>```
-    example_example_code: ```<./context/split/1/split_get_extension.py>```
-    example_sub_prompt: ```<./context/split/1/sub_pdd_python.prompt>```
-    example_modified_prompt: ```<./context/split/1/final_pdd_python.prompt>```
+% Here is example_1 of how to split and generate the sub_prompt and modified_prompt:
+    example_1_input_prompt: ```<./context/split/1/initial_pdd_python.prompt>```
+    example_1_input_code: ```<./context/split/1/pdd.py>```
+    example_1_example_code: ```<./context/split/1/split_get_extension.py>```
+    example_1_sub_prompt: ```<./context/split/1/sub_pdd_python.prompt>```
+    example_1_modified_prompt: ```<./context/split/1/final_pdd_python.prompt>```
+
+% Here is example_2 of how to split and generate the sub_prompt and modified_prompt:
+    example_2_input_prompt: ```<./context/split/2/initial_pdd_python.prompt>```
+    example_2_input_code: ```<./context/split/2/pdd.py>```
+    example_2_example_code: ```<./context/split/2/split_pdd_construct_output_path.py>```
+    example_2_sub_prompt: ```<./context/split/2/sub_pdd_python.prompt>```
+    example_2_modified_prompt: ```<./context/split/2/final_pdd_python.prompt>```
 
 % Here is the input_prompt to split: ```{input_prompt}```
 % Here is the input_code: ```{input_code}```
