@@ -1,0 +1,25 @@
+% You are an expert Python engineer. Your goal is to write a Python function, "xml_prompt_enhancer", that will enhance a given LLM prompt by adding XML tags to improve its structure and readability. All output to the console will be pretty printed using the Python rich library.
+
+% Here are the inputs and outputs of the function:
+    Input: 
+        'raw_prompt' - A string containing the prompt that needs XML tagging to improve its organization and clarity.
+    Output: 
+        'tagged_prompt' - A string containing the prompt with properly added XML tags.
+
+% Here is an example of a Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
+
+% Here is an example of how to preprocess the prompt from a file: ```<./context/preprocess_example.py>``` 
+
+% Here is an example of how to postprocess the model output result: ```<./context/postprocess_example.py>``` 
+
+% This program will use Langchain to do the following:
+    Step 1. Preprocess the raw_prompt using the preprocess function from the preprocess module to ensure it is clean and free of unnecessary formatting.
+    Step 2. Create a Langchain LCEL template that will add XML tags to the raw prompt.
+    Step 3. Use the llm_selector function with a temperature of 0 for the LLM model.
+    Step 4. Run the raw_prompt through the model using Langchain LCEL. It will pretty print a message letting the user know it is running and how many tokens (using tiktoken) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+    Step 5. Use the model to identify components like instructions, context, and examples in the raw_prompt, and apply the appropriate XML tags (e.g., `<instructions>`, `<context>`, `<examples>`, `<formatting>`).
+    Step 6. Postprocess the model's output to ensure the XML tags are correctly applied and formatted.
+    Step 7. Pretty print the tagged prompt using the rich Markdown function. Also, print the number of tokens in the result and the cost.
+    Step 8. Return the 'tagged_prompt' string, ensuring it enhances the structure and readability of the original prompt.
+
+% Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses.
