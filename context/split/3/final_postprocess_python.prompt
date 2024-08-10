@@ -1,0 +1,108 @@
+% You are an expert Python engineer. Your goal is to write a python function called 'postprocess' that will post-process the string output of a LLM so that the code can be run. 
+
+% Here are the inputs and outputs of the function:
+    Input: 
+        'llm_output' - A string contains a mix of text and sections of code separated by triple backticks. 
+        'language' - A string that is the type (e.g. python, bash) of file that will be outputed by the LLM
+    Output: returns a string that is the processed string that contains a properly commented out comments so that code can be run
+
+% Here is an example how to get the lookup the comment line characters given a language: ```<./context/get_comment_example.py>```
+
+% Here is an example how to comment out a line of code: ```<./context/comment_line_example.py>```
+
+% Here is an example how to find code sections in LLM output: ```<./context/find_section_example.py>```
+
+% Here is an example of llm_output: '''To implement the `context_generator` function as described, we will follow the steps outlined in your request. Below is the complete implementation of the function, which includes reading a Python file, preprocessing it, generating a prompt for the model, invoking the model, and writing the output to a specified file.
+
+```python
+import os
+
+def context_generator(python_filename: str, output_filename: str, force: bool = False) -> bool:
+    # Step 1: Read the Python file
+    try:
+        with open(python_filename, 'r') as file:
+            python_code = file.read()
+    except FileNotFoundError:
+        print(f"Error: The file {python_filename} does not exist.")
+        return False
+
+
+    # Step 3: Generate a prompt for GPT-4
+    prompt = f"""
+    You are an expert Python engineer. Based on the following Python code, generate a concise example of how to use the module properly.
+
+    Python Code:
+    ```python
+    {processed_content}
+    ```
+
+    return True
+```
+
+### Explanation of the Code:
+1. **File Reading**: The function attempts to read the specified Python file. If the file does not exist, it prints an error message and returns `False`.
+2. **Preprocessing**: It calls the `preprocess` function to process the content of the Python file.
+
+### Usage:
+You can call this function by providing the necessary arguments, like so:
+
+```python
+context_generator('your_python_file.py', 'output_example.py', force=False)
+```
+
+Make sure to replace `'your_python_file.py'` and `'output_example.py'` with the actual file names you want to use.
+To implement the context_generator function as described, we will follow the steps outlined in   
+your request. Below is the complete implementation of the function, which includes reading a     
+Python file, preprocessing it, generating a prompt for the model, invoking the model, and writing
+the output to a specified file.'''
+
+% Here is an example of the Output string that would be returned: '''#To implement the `context_generator` function as described, we will follow the steps outlined in your request. Below is the complete implementation of the function, which includes reading a Python file, preprocessing it, generating a prompt for the model, invoking the model, and writing the output to a specified file.
+#
+#```python
+import os
+
+def context_generator(python_filename: str, output_filename: str, force: bool = False) -> bool:
+    # Step 1: Read the Python file
+    try:
+        with open(python_filename, 'r') as file:
+            python_code = file.read()
+    except FileNotFoundError:
+        print(f"Error: The file {python_filename} does not exist.")
+        return False
+
+
+    # Step 3: Generate a prompt for GPT-4
+    prompt = f"""
+    You are an expert Python engineer. Based on the following Python code, generate a concise example of how to use the module properly.
+
+    Python Code:
+    ```python
+    {processed_content}
+    ```
+
+    return True
+#```
+#
+#### Explanation of the Code:
+#1. **File Reading**: The function attempts to read the specified Python file. If the file does not exist, it prints an error message and returns `False`.
+#2. **Preprocessing**: It calls the `preprocess` function to process the content of the Python file.
+#
+#### Usage:
+#You can call this function by providing the necessary arguments, like so:
+#
+#```python
+#context_generator('your_python_file.py', 'output_example.py', force=False)
+#```
+#
+#Make sure to replace `'your_python_file.py'` and `'output_example.py'` with the actual file names you want to use.
+#To implement the context_generator function as described, we will follow the steps outlined in   
+#your request. Below is the complete implementation of the function, which includes reading a     
+#Python file, preprocessing it, generating a prompt for the model, invoking the model, and writing
+#the output to a specified file.'''
+
+% This function will do the following:
+    Step 1. For the specified file_type, associate the right comment line character with the programming language using the get_comment function.
+    Step 2. Use the find_section function to find the top-level code sections in the llm_output.
+    Step 3. For the sections that are the same as file_type, determine which section is the largest.
+    Step 4. Now using the original llm_output string, comment out, using the comment_line function, all lines of text until the start line of the largest section of the file_type we want and then resume commenting out the lines after end line of the largest section. Be sure to also comment out the triple backticks of the largest section. This will leave the executable part of largest section of code uncommented.
+    Step 5. The program will return the post processed string that contains a properly commented out program that can be run.
