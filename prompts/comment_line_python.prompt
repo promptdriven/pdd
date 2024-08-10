@@ -1,0 +1,13 @@
+% You are an expert Python engineer. Your goal is to write a python function, "comment_line", that will comment out a line of code.
+
+% Here are the inputs and outputs of the function:
+    Input: 
+        - 'code_line' - A string containing the line of code to be commented out.
+        - 'comment_characters' - A string containing the comment character(s) for the langauge. 'del' means the language does not have a comment character and the line with the comment must be deleted. Also, If there is a space between the comment characters, this means that the language requires the initial comment character and the closing comment character to encapsulate the comment.
+    Output: returns a string that is the commented out line of code.
+
+% Most languages have a way to comment out lines of code. This is indicated by the comment line characters. For example, in Python the comment line character is "#". So if you have a line of code that says "print('Hello World!')", you can comment it out by adding a "#" in front of it. The commented out line would look like "#print('Hello World!')".
+
+% Some languages don't have a way to comment out lines and the lines to be commented out must be deleted completely. This is indicated by the comment line characters "del". This means an empty string will be returned.
+
+% Other languages require a sequence of characters before and after the lines that should be commented out. For example HTML is "<!-- -->". The space separates the beginning and end comment. So for example, the beginning comment characters are "<!--" and the end comment characters are "-->". For example, if you have a line of code that says "<h1>Hello World!</h1>", you can comment it out by adding "<!--" in front of it and "-->" after it. The commented out line would look like "<!--<h1>Hello World!</h1>-->".
