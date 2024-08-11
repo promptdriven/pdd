@@ -5,17 +5,12 @@
 #```python
 # Filename: example_usage.py
 
-from pdd.postprocess_0 import postprocess_0
+from postprocess_0 import postprocess_0
 
 def main():
     # Example LLM output containing multiple code sections
     llm_output = """
-    More comments
-    ```python
-    print("This is another Python code block")
-    ```
-    Some text
-    ```python
+    Here is some text.
     
     def hello_world():
         print("Hello, World!")
@@ -26,15 +21,6 @@ def main():
 
     def another_function():
         return True
-    ```
-    That was the code
-    ```java
-    public class HelloWorld {
-        public static void main(String[] args) {
-            System.out.println("Hello, World!");
-        }
-    }
-    ```    
     """
 
     # Specify the programming language we are interested in

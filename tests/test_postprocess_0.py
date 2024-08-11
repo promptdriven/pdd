@@ -2,7 +2,7 @@
 #
 #```python
 import pytest
-from pdd.postprocess_0 import postprocess_0
+from postprocess_0 import postprocess_0
 
 def test_postprocess_0():
     # Test input
