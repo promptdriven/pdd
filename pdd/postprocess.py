@@ -1,33 +1,68 @@
-from get_comment import get_comment
-from comment_line import comment_line
-from find_section import find_section
+import os
+import json
+import tiktoken
+from rich import print as rprint
+from rich.markdown import Markdown
+from postprocess_0 import postprocess_0
+from llm_selector import llm_selector
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.runnables import RunnablePassthrough
 
-def postprocess(llm_output: str, language: str) -> str:
-    comment_char = get_comment(language)
-    lines = llm_output.splitlines()
-    sections = find_section(lines)
+def postprocess(llm_output, language, strength=0.9, temperature=0):
+    # Step 1: Use postprocess_0 if strength is 0
+    if strength == 0:
+        extracted_code = postprocess_0(llm_output, language)
+        return extracted_code, 0.0
 
-    # Find the largest section of the specified language
-    largest_section = None
-    max_size = 0
-    for code_lang, start, end in sections:
-        if code_lang.lower() == language.lower():
-            size = end - start + 1
-            if size > max_size:
-                max_size = size
-                largest_section = (start, end)
+    # Step 2: Load the extract_code_LLM prompt
+    pdd_path = os.getenv('PDD_PATH')
+    if not pdd_path:
+        raise EnvironmentError("PDD_PATH environment variable is not set")
+    
+    prompt_path = os.path.join(pdd_path, 'prompts', 'extract_code_LLM.prompt')
+    try:
+        with open(prompt_path, 'r') as file:
+            extract_code_prompt = file.read()
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Prompt file not found at {prompt_path}")
 
-    processed_lines = []
-    in_largest_section = False
-    for i, line in enumerate(lines):
-        if largest_section and i == largest_section[0] + 1:# - 1:  # Start of largest code block
-            in_largest_section = True
-        elif largest_section and i == largest_section[1]:# + 1:  # End of largest code block
-            in_largest_section = False
+    # Step 3: Create a Langchain LCEL template
+    prompt_template = PromptTemplate.from_template(extract_code_prompt)
+    parser = JsonOutputParser()
 
-        if in_largest_section:
-            processed_lines.append(line)
-        else:
-            processed_lines.append(comment_line(line, comment_char))
+    # Step 4: Use llm_selector to get the LLM model
+    llm, input_cost, output_cost = llm_selector(strength, temperature)
 
-    return '\n'.join(processed_lines)
+    # Step 5: Run the code through the model using Langchain LCEL
+    chain = prompt_template | llm | parser
+
+    # Prepare the input for the model
+    input_data = {
+        "llm_output": llm_output,
+        "language": language
+    }
+
+    # Calculate token count using tiktoken
+    encoding = tiktoken.get_encoding("cl100k_base")
+    token_count = len(encoding.encode(json.dumps(input_data)))
+
+    # Pretty print the running message
+    rprint(f"Running model with {token_count} tokens. Estimated cost: ${input_cost * token_count / 1_000_000:.6f}")
+
+    # Invoke the chain
+    result = chain.invoke(input_data)
+
+    # Step 5c: Access the 'extracted_code' key
+    extracted_code = result.get('extracted_code', "Error: 'extracted_code' not found in the result")
+
+    # Calculate output token count and total cost
+    output_token_count = len(encoding.encode(extracted_code))
+    total_cost = (input_cost * token_count + output_cost * output_token_count) / 1_000_000
+
+    # Step 5d: Pretty print the extracted code
+    rprint(Markdown(extracted_code))
+    rprint(f"Output tokens: {output_token_count}, Output cost: ${output_cost * output_token_count / 1_000_000:.6f}, Total cost: ${total_cost:.6f}")
+
+    # Step 6: Return the extracted code and total cost
+    return extracted_code, total_cost

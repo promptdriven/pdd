@@ -1,9 +1,7 @@
 # Here's a concise example of how to use the `postprocess` function from the provided module. This example demonstrates how to process a string containing code snippets in different programming languages and apply comments based on the specified file type.
-import sys
-import os
+
 # ### Example Usage
-# Add the path to the directory containing the code to be tested
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'pdd')))
+
 # ```python
 # Import the postprocess function from the module
 from postprocess import postprocess
@@ -14,6 +12,10 @@ Here is some Python code:
 ```python
 def hello_world():
     print("Hello, world!")
+    prompt = '''```bash
+    echo "Hello, world!"
+    ```'''
+    print(prompt)
 ```
 And here is some Java code:
 ```java
@@ -26,17 +28,20 @@ public class HelloWorld {
 """
 
 # Specify the file type for processing
-file_type = "python"
+language = "python"
+strength = .9
+temperature = 0
 
 # Call the postprocess function
-processed_output = postprocess(llm_output, file_type)
+processed_output, total_cost = postprocess(llm_output, language, strength=strength, temperature=temperature)
 
 # Print the processed output
 print(processed_output)
+print('total cost:',total_cost)
 # ```
 
 # ### Explanation
 # - The `llm_output` string contains code snippets in Python and Java.
-# - The `file_type` is set to `"python"`, indicating that we want to process the Python code.
-# - The `postprocess` function is called with the `llm_output` and `file_type`, which returns a modified string where the largest Python code section is commented appropriately.
+# - The `language` is set to `"python"`, indicating that we want to process the Python code.
+# - The `postprocess` function is called with the `llm_output` and `language`, which returns a modified string where the largest Python code section is commented appropriately.
 # - Finally, the processed output is printed, showing the comments added to the relevant section.
