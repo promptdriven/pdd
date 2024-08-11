@@ -4,7 +4,7 @@
 # File: staging/tests/test_find_section.py
 
 import pytest
-from pdd.find_section import find_section
+from staging.pdd.find_section import find_section
 
 def test_find_section_basic():
     lines = [
