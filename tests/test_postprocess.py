@@ -1,108 +1,123 @@
-# Here's a unit test for the `postprocess` function in the provided code. This test will be placed in the 'staging/tests' directory, while the code to be tested is in the 'staging/pdd' directory.
+# Certainly! I'll create a unit test for the `postprocess` function using pytest. The test will be placed in the 'staging/tests' directory, and it will import the function from the 'staging/pdd' directory. Here's the unit test:
 
 # ```python
-import sys
-import os
-import unittest
+# File: staging/tests/test_postprocess.py
 
-# Add the path to the directory containing the code to be tested
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'pdd')))
+import pytest
+from staging.pdd.postprocess import postprocess
 
-from postprocess import postprocess
+def test_postprocess():
+    # Test input
+    llm_output = '''This is some text before the code.
 
-class TestPostprocess(unittest.TestCase):
-
-    def test_postprocess_python(self):
-        input_str = """This is a test.
 ```python
-def hello_world():
+def example_function():
     print("Hello, World!")
 ```
-This is after the code block."""
-        expected_output = """# This is a test.
-# ```python
-def hello_world():
+
+This is some text after the code.
+
+```bash
+echo "This is a bash command"
+```
+
+More text at the end.'''
+
+    expected_output = '''#This is some text before the code.
+#
+#```python
+def example_function():
     print("Hello, World!")
-# ```
-# This is after the code block."""
-        self.assertEqual(postprocess(input_str, "python"), expected_output)
+#```
+#
+#This is some text after the code.
+#
+#```bash
+#echo "This is a bash command"
+#```
+#
+#More text at the end.'''
 
-    def test_postprocess_java(self):
-        input_str = """This is a test.
-```java
-public class HelloWorld {
-    public static void main(String[] args) {
-        System.out.println("Hello, World!");
-    }
-}
+    # Test for Python
+    result_python = postprocess(llm_output, "python")
+    assert result_python == expected_output, "Python postprocessing failed"
+
+    # Test for Bash
+    expected_output_bash = '''#This is some text before the code.
+#
+#```python
+#def example_function():
+#    print("Hello, World!")
+#```
+#
+#This is some text after the code.
+#
+#```bash
+echo "This is a bash command"
+#```
+#
+#More text at the end.'''
+
+    result_bash = postprocess(llm_output, "bash")
+    assert result_bash == expected_output_bash, "Bash postprocessing failed"
+
+def test_postprocess_no_code_section():
+    llm_output = "This is just plain text without any code sections."
+    expected_output = "#This is just plain text without any code sections."
+
+    result = postprocess(llm_output, "python")
+    assert result == expected_output, "Postprocessing text without code sections failed"
+
+def test_postprocess_multiple_same_language_sections():
+    llm_output = '''```python
+def func1():
+    pass
 ```
-This is after the code block."""
-        expected_output = """// This is a test.
-// ```java
-public class HelloWorld {
-    public static void main(String[] args) {
-        System.out.println("Hello, World!");
-    }
-}
-// ```
-// This is after the code block."""
-        self.assertEqual(postprocess(input_str, "java"), expected_output)
 
-    def test_postprocess_no_code_block(self):
-        input_str = "This is a test without any code block."
-        expected_output = "# This is a test without any code block."
-        self.assertEqual(postprocess(input_str, "python"), expected_output)
+Some text.
 
-    def test_postprocess_multiple_code_blocks(self):
-        input_str = """This is a test.
 ```python
-def hello():
-    print("Hello")
-```
-This is between code blocks.
-```python
-def world():
-    print("World")
-```
-This is after the code blocks."""
-        expected_output = """# This is a test.
-# ```python
-def hello():
-    print("Hello")
-def world():
-    print("World")
-# ```
-# This is between code blocks.
-# ```python
-# def world():
-#     print("World")
-# ```
-# This is after the code blocks."""
-        self.assertEqual(postprocess(input_str, "python"), expected_output)
+def func2():
+    print("This is the larger section")
+    print("It should be uncommented")
+```'''
 
-    def test_postprocess_unknown_language(self):
-        input_str = """This is a test.
-```unknown
-Some code in an unknown language
-```
-This is after the code block."""
-        expected_output = """# This is a test.
-# ```unknown
-# Some code in an unknown language
-# ```
-# This is after the code block."""
-        self.assertEqual(postprocess(input_str, "unknown"), expected_output)
+    expected_output = '''#```python
+#def func1():
+#    pass
+#```
+#
+#Some text.
+#
+#```python
+def func2():
+    print("This is the larger section")
+    print("It should be uncommented")
+#```'''
 
-if __name__ == '__main__':
-    unittest.main()
+    result = postprocess(llm_output, "python")
+    assert result == expected_output, "Postprocessing multiple Python sections failed"
+
+def test_postprocess_empty_input():
+    llm_output = ""
+    expected_output = ""
+
+    result = postprocess(llm_output, "python")
+    assert result == expected_output, "Postprocessing empty input failed"
+
 # ```
 
 # This unit test covers several scenarios:
 
-# 1. Testing with Python code block
-# 2. Testing with Java code block
-# 3. Testing with no code block
-# 4. Testing with multiple Python code blocks
-# 5. Testing with an unknown language
+# 1. The main test case (`test_postprocess`) checks both Python and Bash postprocessing with a mixed input containing both languages.
+# 2. `test_postprocess_no_code_section` tests the function's behavior when there are no code sections in the input.
+# 3. `test_postprocess_multiple_same_language_sections` checks if the function correctly handles multiple code sections of the same language and uncomments only the largest one.
+# 4. `test_postprocess_empty_input` tests the function's behavior with an empty input string.
 
-# The test cases check if the `postprocess` function correctly handles different input scenarios and produces the expected output. The test file imports the `postprocess` function from the 'staging/pdd' directory and runs multiple assertions to ensure the function works as intended.
+# To run these tests, make sure you have pytest installed and run the following command from the root directory of your project:
+
+# ```
+# pytest staging/tests/test_postprocess.py
+# ```
+
+# This test suite should provide good coverage for the `postprocess` function and help ensure its correct functionality across various scenarios.

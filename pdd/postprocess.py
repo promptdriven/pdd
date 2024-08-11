@@ -1,97 +1,33 @@
-import re
-from typing import List, Tuple
+from get_comment import get_comment
+from comment_line import comment_line
+from find_section import find_section
 
-def find_section(lines: List[str], start: int, sub_section: bool = False) -> Tuple[List[Tuple[str, int, int]], int]:
-    sections = []
-    i = start
-    while i < len(lines):
-        if lines[i].strip().startswith("```"):
-            lang = lines[i].strip()[3:].strip()
-            start_line = i
-            i += 1
-            while i < len(lines):
-                if lines[i].strip() == "```":
-                    if sub_section:
-                        return [], i
-                    sections.append((lang, start_line, i))
-                    break
-                elif lines[i].strip().startswith("```"):
-                    sub_sections, i = find_section(lines, i, True)
-                i += 1
-        i += 1
-    return sections, i
+def postprocess(llm_output: str, language: str) -> str:
+    comment_char = get_comment(language)
+    lines = llm_output.splitlines()
+    sections = find_section(lines)
 
-def postprocess(llm_output: str, file_type: str) -> str:
-    comment_chars = {
-    "ada": "--",
-    "applescript": "--",
-    "assembly": ";",
-    "bash": "#",
-    "basic": "'",
-    "batch": "REM",
-    "c": "//",
-    "cpp": "//",
-    "csharp": "//",
-    "clojure": ";",
-    "cobol": "*",
-    "coffeescript": "#",
-    "css": "/*",
-    "dart": "//",
-    "delphi": "//",
-    "erlang": "%",
-    "fortran": "!",
-    "go": "//",
-    "groovy": "//",
-    "haskell": "--",
-    "html": "<!--",
-    "java": "//",
-    "javascript": "//",
-    "julia": "#",
-    "kotlin": "//",
-    "latex": "%",
-    "lisp": ";",
-    "lua": "--",
-    "makefile": "#",
-    "matlab": "%",
-    "objectivec": "//",
-    "ocaml": "(*",
-    "pascal": "//",
-    "perl": "#",
-    "php": "//",
-    "powershell": "#",
-    "python": "#",
-    "r": "#",
-    "ruby": "#",
-    "rust": "//",
-    "scala": "//",
-    "shell": "#",
-    "sql": "--",
-    "swift": "//",
-    "typescript": "//",
-    "vbnet": "'",
-    "verilog": "//",
-    "vhdl": "--",
-    "xml": "<!--",
-    "yaml": "#"
-    }
-    comment_char = comment_chars.get(file_type.lower(), "#")
-    
-    lines = llm_output.split("\n")
-    sections, _ = find_section(lines, 0)
-    
-    relevant_sections = [s for s in sections if s[0].lower() == file_type.lower()]
-    if not relevant_sections:
-        return comment_char + "\n" + comment_char.join(lines)
-    
-    largest_section = max(relevant_sections, key=lambda x: x[2] - x[1])
-    
+    # Find the largest section of the specified language
+    largest_section = None
+    max_size = 0
+    for code_lang, start, end in sections:
+        if code_lang.lower() == language.lower():
+            size = end - start + 1
+            if size > max_size:
+                max_size = size
+                largest_section = (start, end)
+
     processed_lines = []
+    in_largest_section = False
     for i, line in enumerate(lines):
-        if i == largest_section[1] or i == largest_section[2]:
-            processed_lines.append(comment_char + " " + line)
-        elif i > largest_section[1] and i < largest_section[2]:
+        if largest_section and i == largest_section[0] + 1:# - 1:  # Start of largest code block
+            in_largest_section = True
+        elif largest_section and i == largest_section[1]:# + 1:  # End of largest code block
+            in_largest_section = False
+
+        if in_largest_section:
             processed_lines.append(line)
         else:
-            processed_lines.append(comment_char + " " + line if line.strip() else line)
-    
-    return "\n".join(processed_lines)
+            processed_lines.append(comment_line(line, comment_char))
+
+    return '\n'.join(processed_lines)
