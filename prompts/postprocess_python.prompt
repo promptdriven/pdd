@@ -10,103 +10,15 @@
 
 % Here is an example how to comment out a line of code: ```<./context/comment_line_example.py>```
 
-% Here is an example of llm_output: '''To implement the `context_generator` function as described, we will follow the steps outlined in your request. Below is the complete implementation of the function, which includes reading a Python file, preprocessing it, generating a prompt for the model, invoking the model, and writing the output to a specified file.
+% Here is an example how to find code sections in LLM output: ```<./context/find_section_example.py>```
 
-```python
-import os
+% Here is an example of llm_output: '''```<./context/unrunnable_raw_llm_output.py>```'''
 
-def context_generator(python_filename: str, output_filename: str, force: bool = False) -> bool:
-    # Step 1: Read the Python file
-    try:
-        with open(python_filename, 'r') as file:
-            python_code = file.read()
-    except FileNotFoundError:
-        print(f"Error: The file {python_filename} does not exist.")
-        return False
-
-
-    # Step 3: Generate a prompt for GPT-4
-    prompt = f"""
-    You are an expert Python engineer. Based on the following Python code, generate a concise example of how to use the module properly.
-
-    Python Code:
-    ```python
-    {processed_content}
-    ```
-
-    return True
-```
-
-### Explanation of the Code:
-1. **File Reading**: The function attempts to read the specified Python file. If the file does not exist, it prints an error message and returns `False`.
-2. **Preprocessing**: It calls the `preprocess` function to process the content of the Python file.
-
-### Usage:
-You can call this function by providing the necessary arguments, like so:
-
-```python
-context_generator('your_python_file.py', 'output_example.py', force=False)
-```
-
-Make sure to replace `'your_python_file.py'` and `'output_example.py'` with the actual file names you want to use.
-To implement the context_generator function as described, we will follow the steps outlined in   
-your request. Below is the complete implementation of the function, which includes reading a     
-Python file, preprocessing it, generating a prompt for the model, invoking the model, and writing
-the output to a specified file.'''
-
-% Here is an example of the Output string that would be returned: '''#To implement the `context_generator` function as described, we will follow the steps outlined in your request. Below is the complete implementation of the function, which includes reading a Python file, preprocessing it, generating a prompt for the model, invoking the model, and writing the output to a specified file.
-#
-#```python
-import os
-
-def context_generator(python_filename: str, output_filename: str, force: bool = False) -> bool:
-    # Step 1: Read the Python file
-    try:
-        with open(python_filename, 'r') as file:
-            python_code = file.read()
-    except FileNotFoundError:
-        print(f"Error: The file {python_filename} does not exist.")
-        return False
-
-
-    # Step 3: Generate a prompt for GPT-4
-    prompt = f"""
-    You are an expert Python engineer. Based on the following Python code, generate a concise example of how to use the module properly.
-
-    Python Code:
-    ```python
-    {processed_content}
-    ```
-
-    return True
-#```
-#
-#### Explanation of the Code:
-#1. **File Reading**: The function attempts to read the specified Python file. If the file does not exist, it prints an error message and returns `False`.
-#2. **Preprocessing**: It calls the `preprocess` function to process the content of the Python file.
-#
-#### Usage:
-#You can call this function by providing the necessary arguments, like so:
-#
-#```python
-#context_generator('your_python_file.py', 'output_example.py', force=False)
-#```
-#
-#Make sure to replace `'your_python_file.py'` and `'output_example.py'` with the actual file names you want to use.
-#To implement the context_generator function as described, we will follow the steps outlined in   
-#your request. Below is the complete implementation of the function, which includes reading a     
-#Python file, preprocessing it, generating a prompt for the model, invoking the model, and writing
-#the output to a specified file.'''
+% Here is an example of the Output string that would be returned: '''<./context/postprocessed_runnable_llm_output.py>'''
 
 % This function will do the following:
     Step 1. For the specified file_type, associate the right comment line character with the programming language using the get_comment function.
-    Step 2. Find the top-level code sections via recursive function, 'find_section'. For a code section, the first backtick will always have a string right after it that determines what kind of code it is and the end of a section just has triple backticks. To properly return the list of top level-sections do the following sub-steps by iterating through lines of the string:
-        Step 2a. Find the start of a code block 
-        Step 2b. If another start of another code block is found, call 'find_section' recursively with a sub-section flag True. 
-        Step 2c. If not, but the end of a code block is found, we should do one of the following steps depending on the sub-section flag:
-            Step 2c_i: If it is a sub-section we should return with an empty list
-            Step 2c_ii: If it is not a sub-section we should know the end of the code block and we should record the program type and start/end lines into the output list
-        Step 2d. If all lines of the string are process, we should return the output list.
-    Step 3. For the sections that are the same as file_type, we will determine which section is the largest.
-    Step 4. Now using the original llm_output string, comment out, using the comment_line function, all lines of text until the start line of the largest section of the file_type we want and then resume commenting out the lines after end line of the largest section. Be sure the also comment out the triple backticks of the largest section. This will leave the executable part of largest section of code uncommented.
+    Step 2. Use the find_section function to find the top-level code sections in the llm_output.
+    Step 3. For the sections that are the same as file_type, determine which section is the largest.
+    Step 4. Now using the original llm_output string, comment out, using the comment_line function, all lines of text until the start line of the largest section of the file_type we want and then resume commenting out the lines after end line of the largest section. This will leave the executable part of largest section of code uncommented.
     Step 5. The program will return the post processed string that contains a properly commented out program that can be run.
