@@ -18,7 +18,7 @@
 % Here is an example how to use tiktoken: ```<./context/tiktoken_example.py>```
 
 % This program will use Langchain to do the following:
-    Step 1. use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/test_generator_LLM.prompt' file. It will also load the code_file.
+    Step 1. use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/test_generator_LLM.prompt' file. It will also load the prompt_file and code_file.
     Step 2. Then this will create a Langchain LCEL template from the test generator prompt.
     Step 3. This will use llm_selector and a temperature of 0 for the model.
     Step 4. This will run the loaded code_file through the model using Langchain LCEL. 
