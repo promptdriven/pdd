@@ -34,7 +34,7 @@
 
 # ```python
 # Import the function from the module
-from pdd.comment_line import comment_line
+from comment_line import comment_line
 
 # Example 1: Python style comment
 python_comment = comment_line("print('Hello World!')", "#")
