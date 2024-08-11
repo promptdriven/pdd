@@ -101,8 +101,8 @@ def context_generator(python_filename: str, output_filename: str, force: bool = 
 #the output to a specified file.'''
 
 % This function will do the following:
-    Step 1. For the specified file_type, associate the right comment line character with the programming language using the get_comment function.
+    Step 1. For the specified language, associate the right comment line character with the programming language using the get_comment function.
     Step 2. Use the find_section function to find the top-level code sections in the llm_output.
-    Step 3. For the sections that are the same as file_type, determine which section is the largest.
-    Step 4. Now using the original llm_output string, comment out, using the comment_line function, all lines of text until the start line of the largest section of the file_type we want and then resume commenting out the lines after end line of the largest section. This will leave the executable part of largest section of code uncommented.
+    Step 3. For the sections that are the same as language, determine which section is the largest.
+    Step 4. Now using the original llm_output string, comment out, using the comment_line function, all lines of text until the start line of the largest section of the language we want and then resume commenting out the lines after end line of the largest section. This will leave the executable part of largest section of code uncommented.
     Step 5. The program will return the post processed string that contains a properly commented out program that can be run.
