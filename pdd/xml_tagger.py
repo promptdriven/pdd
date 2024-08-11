@@ -1,137 +1,64 @@
-"""XML tagging module for improving prompt structure with XML tags.
-
-This module provides functionality to enhance LLM prompts by adding XML tags,
-making them more structured and readable for better processing.
-"""
-
-from typing import Tuple
+import os
 from rich import print as rprint
 from rich.markdown import Markdown
-from pydantic import BaseModel, Field
-from .load_prompt_template import load_prompt_template
-from .llm_invoke import llm_invoke
-from . import EXTRACTION_STRENGTH
-from . import DEFAULT_TIME
+import tiktoken
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
+from llm_selector import llm_selector
+from langchain_core.runnables import RunnablePassthrough
 
-class XMLOutput(BaseModel):
-    """Pydantic model for XML-tagged prompt output."""
-    xml_tagged: str = Field(description="The XML-tagged version of the prompt")
-
-def xml_tagger(
-    raw_prompt: str,
-    strength: float,
-    temperature: float,
-    verbose: bool = False,
-    time: float = DEFAULT_TIME
-) -> Tuple[str, float, str]:
-    """
-    Enhance a given LLM prompt by adding XML tags to improve its structure and readability.
-
-    Args:
-        raw_prompt (str): The prompt that needs XML tagging
-        strength (float): The strength parameter for the LLM model (0-1)
-        temperature (float): The temperature parameter for the LLM model (0-1)
-        verbose (bool): Whether to print detailed information
-        time (float): The time allocation for the LLM calls
-
-    Returns:
-        Tuple[str, float, str]: (xml_tagged, total_cost, model_name)
-    """
+def xml_tagger(raw_prompt, strength, temperature):
     try:
-        # Input validation
-        if not raw_prompt or not isinstance(raw_prompt, str):
-            raise ValueError("raw_prompt must be a non-empty string")
-        if not 0 <= strength <= 1:
-            raise ValueError("strength must be between 0 and 1")
-        if not 0 <= temperature <= 1:
-            raise ValueError("temperature must be between 0 and 1")
+        # Step 1: Load the prompt files
+        pdd_path = os.getenv('PDD_PATH')
+        if not pdd_path:
+            raise ValueError("PDD_PATH environment variable is not set")
 
-        total_cost = 0.0
-        model_name = ""
+        with open(os.path.join(pdd_path, 'prompts/xml_convertor_LLM.prompt'), 'r') as file:
+            xml_convertor_prompt = file.read()
 
-        # Step 1: Load prompt templates
-        xml_converter_prompt = load_prompt_template("xml_convertor_LLM")
-        extract_xml_prompt = load_prompt_template("extract_xml_LLM")
+        with open(os.path.join(pdd_path, 'prompts/extract_xml_LLM.prompt'), 'r') as file:
+            extract_xml_prompt = file.read()
 
-        if not xml_converter_prompt or not extract_xml_prompt:
-            raise ValueError("Failed to load prompt templates")
+        # Step 2: Create a Langchain LCEL template from xml_convertor prompt
+        xml_convertor_template = PromptTemplate.from_template(xml_convertor_prompt)
 
-        # Step 2: First LLM invoke for XML conversion
-        if verbose:
-            rprint("[blue]Running XML conversion...[/blue]")
+        # Step 3: Use the llm_selector function for the LLM model
+        llm, input_cost, output_cost = llm_selector(strength, temperature)
 
-        conversion_response = llm_invoke(
-            prompt=xml_converter_prompt,
-            input_json={"raw_prompt": raw_prompt},
-            strength=strength,
-            temperature=temperature,
-            verbose=verbose,
-            time=time
-        )
+        # Step 4: Run the code through the model using Langchain LCEL
+        chain = xml_convertor_template | llm | StrOutputParser()
 
-        xml_generated_analysis = conversion_response.get('result', '')
-        total_cost += conversion_response.get('cost', 0.0)
-        model_name = conversion_response.get('model_name', '')
+        # Step 4a: Pass the 'raw_prompt' to the prompt
+        encoding = tiktoken.get_encoding("cl100k_base")
+        token_count = len(encoding.encode(raw_prompt))
+        rprint(f"[bold green]Running XML conversion...[/bold green]")
+        rprint(f"Token count: {token_count}, Cost: ${input_cost * token_count / 1_000_000:.6f}")
 
-        if verbose:
-            rprint("[green]Intermediate XML result:[/green]")
-            rprint(Markdown(xml_generated_analysis))
+        xml_generated_analysis = chain.invoke({"raw_prompt": raw_prompt})
 
-        # Step 3: Second LLM invoke for XML extraction
-        if verbose:
-            rprint("[blue]Extracting final XML structure...[/blue]")
+        # Step 5: Create a Langchain LCEL template from the extract_xml prompt
+        extract_xml_template = PromptTemplate.from_template(extract_xml_prompt)
+        parser = JsonOutputParser()
 
-        extraction_response = llm_invoke(
-            prompt=extract_xml_prompt,
-            input_json={"xml_generated_analysis": xml_generated_analysis},
-            strength=EXTRACTION_STRENGTH,  # Fixed strength for extraction
-            temperature=temperature,
-            verbose=verbose,
-            output_pydantic=XMLOutput,
-            time=time
-        )
+        chain = extract_xml_template | llm | parser
 
-        result: XMLOutput = extraction_response.get('result')
-        total_cost += extraction_response.get('cost', 0.0)
+        # Step 5a: Pass the 'xml_generated_analysis' to the prompt
+        token_count = len(encoding.encode(xml_generated_analysis))
+        rprint(f"[bold green]Extracting XML...[/bold green]")
+        rprint(f"Token count: {token_count}, Cost: ${output_cost * token_count / 1_000_000:.6f}")
 
-        # Step 4: Print results if verbose
-        if verbose:
-            rprint("[green]Final XML-tagged prompt:[/green]")
-            rprint(Markdown(result.xml_tagged))
-            rprint(f"[yellow]Total cost: ${total_cost:.6f}[/yellow]")
-            rprint(f"[yellow]Model used: {model_name}[/yellow]")
+        result = chain.invoke({"xml_generated_analysis": xml_generated_analysis})
 
-        # Step 5 & 6: Return results
-        return result.xml_tagged, total_cost, model_name
+        # Step 6: Pretty print the extracted tagged prompt
+        xml_tagged = result['xml_tagged']
+        rprint(Markdown(xml_tagged))
+        token_count = len(encoding.encode(xml_tagged))
+        rprint(f"Token count: {token_count}, Cost: ${output_cost * token_count / 1_000_000:.6f}")
 
-    except Exception as error:
-        rprint(f"[red]Error in xml_tagger: {str(error)}[/red]")
-        raise
+        # Step 7: Return the 'xml_tagged' string
+        return xml_tagged
 
-def main():
-    """Example usage of the xml_tagger function"""
-    try:
-        sample_prompt = """
-        Write a function that calculates the factorial of a number.
-        The function should handle negative numbers and return appropriate error messages.
-        Include examples of usage and error cases.
-        """
-
-        tagged_result, cost, model = xml_tagger(
-            raw_prompt=sample_prompt,
-            strength=0.7,
-            temperature=0.8,
-            verbose=True,
-            time=0.5
-        )
-
-        rprint("[blue]XML Tagging Complete[/blue]")
-        rprint(f"Total Cost: ${cost:.6f}")
-        rprint(f"Model Used: {model}")
-        rprint(f"Result length: {len(tagged_result)}")
-
-    except Exception as error:
-        rprint(f"[red]Error in main: {str(error)}[/red]")
-
-if __name__ == "__main__":
-    main()
+    except Exception as e:
+        rprint(f"[bold red]Error:[/bold red] {e}")
+        return None
