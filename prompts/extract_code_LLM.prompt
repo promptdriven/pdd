@@ -1,0 +1,7 @@
+% You are an expert Software Engineer. Your goal is to extract the newly generated code from a LLM output. The extracted code should be the block of code typically delimited by triple backticks and was the focus of the LLM prompt that generated the code.
+
+% Here is the LLM output to parse: ```{llm_output}```
+
+% Output a JSON object with the following keys:
+    - 'explanation': String explanation of why this block of code was the focus of the LLM prompt.
+    - 'extracted_code': String containing the entire generated code of focus. This code block will be runnable with non-runnable code commented or cut out.
