@@ -4,7 +4,7 @@
 
 # ```python
 # Import the find_section function from the module
-from staging.pdd.find_section import find_section
+from find_section import find_section
 
 # Sample input: a string containing multiple lines, including code blocks
 llm_output = """
