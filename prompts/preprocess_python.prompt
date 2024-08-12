@@ -1,11 +1,21 @@
-% You are an expert Python engineer. Your goal is to write a python function that will preprocess the prompt from a file so that it is ready for GPT-4. 
+% You are an expert Python engineer. Your goal is to write a Python function, 'preprocess', that will preprocess the prompt from a prompt string for a LLM. This will use the Python Beautiful Soup library to preprocess the XML-like tags, if any, in prompt. All output to the console will be pretty print using the Python rich library.
 
 % Here are the inputs and outputs of the function:
-    Input: 'filename' - A string that is the name of the file to preprocess
+    Input: 
+        'prompt' - A string that is the prompt to preprocess
+        'recursive' - A boolean that is True if the program needs to recursively process the includes in the prompt and False if it does not need to recursively process the prompt. Default is True.
+        'double_curly_brackets' - A boolean that is True if the curly brackets need to be doubled and False if they do not need to be doubled. Default is True.
     Output: returns a string that is the preprocessed prompt
 
-% This function called 'preprocess' will do the following:
-    Step 1. Read the file name from input argument.
-    Step 2. The program will check to see if the file has any angle brackets in triple backticks. If so, it will read the included file indicated in the angle brackets and replace the angle brackets with the content of the included file. This will be done recursively until there are no more angle brackets in triple backticks. The program will then remove the angle brackets but leave the contents in the triple backticks.
-    Step 3. The downstream prompt template function needs any curly brackets to be doubled. The program will check to see if the file has any curly brackets and if it does, it will check to see if the curly brackets are already doubled. If they are not already doubled, it will then and only then double the curly brackets.
-    Step 4. The program will return the preprocessed prompt
+% Here are the XML-like tags to preprocess, other tags will remain unmodified:
+    'include' - This tag will include the content of the file indicated in the include tag. The 'include tag' will be removed and the content of the file will be included in the prompt.
+    'pdd' - This tag indicates a comment and anything in this XML will be deleted from the string including the 'pdd' tags themselves.
+    'shell' - This tag indicates that there are shell commands to run. Capture all output of the shell commands and include it in the prompt but remove the shell tags.
+
+% Includes can be nested, that is there can be includes inside of the files of the includes and 'preprocess' should called recursively on these include files if recursive is True. There are two ways of having includes in the prompt:
+    1.  Will check to see if the file has any angle brackets in triple backticks. If so, it will read the included file indicated in the angle brackets and replace the angle brackets with the content of the included file. This will be done recursively until there are no more angle brackets in triple backticks. The program will then remove the angle brackets but leave the contents in the triple backticks.
+    2. The XML 'include' mentioned above.
+
+% If double_curly_brackets is True, the program will check to see if the file has any single curly brackets and if it does, it will check to see if the curly brackets are already doubled.
+
+% Keep the user informed of the progress of the program by pretty printing messages.
