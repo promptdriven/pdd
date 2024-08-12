@@ -2,38 +2,40 @@
 
 % Here are the inputs and outputs of the function:
     Inputs:
-        'input_prompt' - A string containing the prompt that will be split into a sub_prompt and modified_prompt.
-        'input_code' - A string containing the code that was generated from the input_prompt.
-        'example_code' - A string containing the code example of how the code generated from the sub_prompt would be used by the code generated from the modified_prompt.
-        'strength' - A float value representing the strength parameter for the LLM model.
-    Outputs:
-        'sub_prompt' - A string containing the sub_prompt that was split from the input_prompt.
-        'modified_prompt' - A string containing the modified prompt from input_prompt split from the sub_prompt.
+        - 'input_prompt': A string containing the prompt that will be split into a sub_prompt and modified_prompt.
+        - 'input_code': A string containing the code that was generated from the input_prompt.
+        - 'example_code': A string containing the code example of how the code generated from the sub_prompt would be used by the code generated from the modified_prompt.
+        - 'strength': A float value representing the strength parameter for the LLM model, used to influence the model's behavior.
 
-% Here is an example of a Langchain LCEL program:
+    Outputs:
+        - 'sub_prompt': A string containing the sub_prompt that was split from the input_prompt.
+        - 'modified_prompt': A string containing the modified prompt from input_prompt split from the sub_prompt.
+
+% Example inputs:
+    input_prompt = "Create a Python function that..."
+    input_code = "def function_name(): ..."
+    example_code = "function_name() should return ..."
+
+% Example usage of the Langchain LCEL program:
 <./context/langchain_lcel_example.py>
-% Here is an example of how to select the Langchain LLM:
+% Example of selecting a Langchain LLM:
 <./context/llm_selector_example.py>
-% Here is an example of how to use tiktoken:
+% Example of using tiktoken:
 <./context/tiktoken_example.py>
 
-% This program will use Langchain to do the following:
-    Step 1. Use the $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/split_LLM.prompt' and '$PDD_PATH/prompts/extract_prompt_split_LLM.prompt' files.
-    Step 2. Create a Langchain LCEL template from the split_LLM prompt so that it returns a string output.
-    Step 3. Use the llm_selector function to select the LLM model with a temperature of 0.
-    Step 4. Run the input through the model using Langchain LCEL:
-        4a. Pass the following string parameters to the prompt during invocation:
-            - 'input_prompt'
-            - 'input_code'
-            - 'example_code'
-        4b. Pretty print a message informing the user that the model is running, including the number of tokens (calculated using tiktoken) in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
-        4c. The string output of the LCEL will contain the processed split data.
-    Step 5. The model output will include the sub_prompt and modified_prompt. Create a Langchain LCEL template from the extract_prompt_split_LLM prompt that has a JSON output.
-        5a. Pass the following string parameters to the prompt during invocation:
-            - 'processed_split_data'
-        5b. Pretty print a message letting the user know it is running and how many tokens (using tiktoken) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
-        5c. The JSON output of the LCEL will have the keys 'sub_prompt' and 'modified_prompt' that contain the extracted split prompts.
-    Step 6. Pretty print the extracted sub_prompt and modified_prompt using the rich Markdown function. Also, print the number of tokens in the result and the cost.
-    Step 7. Return the 'sub_prompt' and 'modified_prompt' strings.
+% Steps to be followed by the function:
+    1. Load the '$PDD_PATH/prompts/split_LLM.prompt' and '$PDD_PATH/prompts/extract_prompt_split_LLM.prompt' files.
+    2. Create a Langchain LCEL template from the split_LLM prompt to return a string output.
+    3. Use the llm_selector function to select the LLM model with a temperature of 0.
+    4. Run the input through the model using Langchain LCEL:
+        - a. Pass the following string parameters to the prompt during invocation: 'input_prompt', 'input_code', 'example_code'.
+        - b. Calculate the token count using tiktoken and pretty print the running message, including the token count and estimated cost (using the provided cost formula: cost_per_token = $0.0001).
+        - c. Process the model's output, which includes the sub_prompt and modified_prompt.
+    5. Create a Langchain LCEL template from the extract_prompt_split_LLM prompt that outputs JSON:
+        - a. Pass the 'processed_split_data' string to the template.
+        - b. Calculate the token count using tiktoken and pretty print the running message with the token count and cost.
+        - c. Extract 'sub_prompt' and 'modified_prompt' from the JSON output.
+    6. Pretty print the extracted sub_prompt and modified_prompt using Rich's Markdown function. Include token counts and costs.
+    7. Return the 'sub_prompt' and 'modified_prompt' strings.
 
-% Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses.
+% Ensure the function handles edge cases, such as missing inputs or model errors, and provide clear error messages.
