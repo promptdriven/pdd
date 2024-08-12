@@ -1,46 +1,22 @@
-# Here's a concise example of how to use the `test_generator` function from the `test_generator.py` module, along with documentation for the input and output parameters.
-
-# ### Example Usage of `test_generator`
-
-# ```python
-# Filename: staging/pdd/example_usage.py
-
 from test_generator import test_generator
 
-# Define parameters for the test_generator function
-prompt_file = "path/to/prompt_file"  # Path to the prompt file
-code_file = "path/to/code_file"        # Path to the code file to be tested
-strength = 0.7                          # Strength parameter for the LLM
-language = "python"                     # Programming language of the code
-test_directory = "path/to/test/directory"  # Directory to save generated tests
+# Define the input parameters
+prompt: str = "Generate a function, 'add', that takes two arguments, 'a' and 'b', and returns their sum."
+code: str = """
+def add(a, b):
+    return a + b
+"""
+strength: float = 0.5  # Model selection strength
+temperature: float = 0  # Sampling temperature
+language: str = "python"  # Programming language of the code
 
-# Generate the test code
-test_code = test_generator(
-    prompt_file=prompt_file,
-    code_file=code_file,
-    strength=strength,
-    language=language,
-    test_directory=test_directory
-)
+# Call the test_generator function
+try:
+    unit_test, total_cost = test_generator(prompt, code, strength, temperature, language)
 
-# Print the generated test code
-print(test_code)
-# ```
-
-# ### Documentation
-
-# #### Function: `test_generator`
-
-# **Parameters:**
-# - `prompt_file` (str): The path to the prompt file that guides the test generation.
-# - `code_file` (str): The path to the source code file for which tests are to be generated.
-# - `strength` (float): A value between 0 and 1 that influences the creativity of the generated tests.
-# - `language` (str): The programming language of the code (e.g., "python").
-# - `test_directory` (str): The directory where the generated test files will be saved.
-
-# **Returns:**
-# - `str`: The generated unit test code as a string.
-
-# ### Notes
-# - Ensure that the `PDD_PATH` environment variable is set correctly to locate the prompt files.
-# - The example assumes that the `test_generator.py` module is in the same directory as the `example_usage.py` script. Adjust the import statement as necessary based on your project structure.
+    # Print the results
+    print("Generated Unit Test:")
+    print(unit_test)
+    print(f"Total Cost: ${total_cost:.6f}")
+except Exception as e:
+    print(f"An error occurred: {e}")
