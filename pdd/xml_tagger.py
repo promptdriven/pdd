@@ -21,7 +21,7 @@ def xml_tagger(raw_prompt, strength, temperature):
             extract_xml_prompt = file.read()
 
         # Step 2: Create a Langchain LCEL template from xml_convertor prompt
-        xml_convertor_template = PromptTemplate.from_template(xml_convertor_prompt)
+        xml_convertor_template = PromptTemplate.from_template( )
 
         # Step 3: Use the llm_selector function for the LLM model
         llm, input_cost, output_cost = llm_selector(strength, temperature)
