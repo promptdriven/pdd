@@ -66,7 +66,7 @@ def test_generator(prompt_file: str, code_file: str, strength: float, language: 
     print(f"[bold]Total estimated cost: ${total_cost:.6f}[/bold]")
 
     # Step 6: Postprocess the result
-    processed_result = postprocess(result, language)
+    processed_result, total_cost = postprocess(result, language)
 
     # Step 7: Return the unit test code
     return processed_result
