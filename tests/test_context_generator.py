@@ -1,149 +1,76 @@
-# Certainly! Below is a unit test for the `context_generator` function. This test will be placed in the `staging/tests` directory and will test the function located in the `staging/pdd` directory.
+import pytest
+from unittest.mock import patch, mock_open
+from context_generator import context_generator
 
-# First, ensure you have the necessary directory structure:
-# ```
-# staging/
-# ├── pdd/
-# │   └── context_generator.py
-# └── tests/
-#     └── test_context_generator.py
-# ```
+@pytest.fixture
+def mock_environment():
+    with patch.dict('os.environ', {'PDD_PATH': '/mock/path'}):
+        yield
 
-# Here is the content for `test_context_generator.py`:
+@pytest.fixture
+def mock_file_content():
+    return "Mock prompt content"
 
-# ```python
-import os
-import unittest
-from unittest.mock import patch, mock_open, MagicMock
-from staging.pdd.context_generator import context_generator
+@pytest.fixture
+def mock_llm_selector():
+    return patch('context_generator.llm_selector', return_value=(None, 0.001, 0.002))
 
-class TestContextGenerator(unittest.TestCase):
+@pytest.fixture
+def mock_preprocess():
+    return patch('context_generator.preprocess', return_value="Processed prompt")
 
-    @patch('staging.pdd.context_generator.os.path.isfile')
-    @patch('staging.pdd.context_generator.preprocess')
-    @patch('staging.pdd.context_generator.ChatOpenAI')
-    @patch('staging.pdd.context_generator.PromptTemplate')
-    @patch('staging.pdd.context_generator.StrOutputParser')
-    @patch('staging.pdd.context_generator.postprocess')
-    @patch('builtins.open', new_callable=mock_open)
-    def test_context_generator_success(self, mock_open, mock_postprocess, mock_StrOutputParser, mock_PromptTemplate, mock_ChatOpenAI, mock_preprocess, mock_isfile):
-        # Mocking the file existence check
-        mock_isfile.side_effect = lambda filename: filename in ['test.py', 'output.py']
+@pytest.fixture
+def mock_postprocess():
+    return patch('context_generator.postprocess', return_value=("Example code", 0.001))
 
-        # Mocking the preprocess function
-        mock_preprocess.return_value = "processed content"
+@pytest.fixture
+def mock_chain_invoke():
+    return patch('langchain_core.prompts.PromptTemplate.from_template.return_value.__or__.return_value.__or__.return_value.invoke', return_value="Raw model output")
 
-        # Mocking the Langchain components
-        mock_prompt_template = MagicMock()
-        mock_PromptTemplate.from_template.return_value = mock_prompt_template
+def test_context_generator_success(mock_environment, mock_file_content, mock_llm_selector, mock_preprocess, mock_postprocess, mock_chain_invoke):
+    with patch('builtins.open', mock_open(read_data=mock_file_content)):
+        with mock_llm_selector, mock_preprocess, mock_postprocess, mock_chain_invoke:
+            example_code, total_cost = context_generator("test_module", "test prompt")
+    
+    assert isinstance(example_code, str)
+    assert isinstance(total_cost, float)
+    assert example_code == "Example code"
+    assert total_cost > 0
 
-        mock_llm = MagicMock()
-        mock_ChatOpenAI.return_value = mock_llm
+def test_context_generator_file_not_found(mock_environment):
+    with patch('builtins.open', side_effect=FileNotFoundError):
+        with pytest.raises(FileNotFoundError):
+            context_generator("test_module", "test prompt")
 
-        mock_chain = MagicMock()
-        mock_prompt_template.__or__.return_value = mock_chain
-        mock_llm.__or__.return_value = mock_chain
-        mock_chain.__or__.return_value = mock_chain
+def test_context_generator_environment_variable_not_set():
+    with patch.dict('os.environ', clear=True):
+        with pytest.raises(ValueError, match="PDD_PATH environment variable is not set"):
+            context_generator("test_module", "test prompt")
 
-        mock_chain.invoke.return_value = "raw output"
+def test_context_generator_model_invocation_error(mock_environment, mock_file_content, mock_llm_selector, mock_preprocess):
+    with patch('builtins.open', mock_open(read_data=mock_file_content)):
+        with mock_llm_selector, mock_preprocess:
+            with patch('langchain_core.prompts.PromptTemplate.from_template.return_value.__or__.return_value.__or__.return_value.invoke', side_effect=Exception("Model error")):
+                with pytest.raises(RuntimeError, match="Error during model invocation: Model error"):
+                    context_generator("test_module", "test prompt")
 
-        # Mocking the postprocess function
-        mock_postprocess.return_value = "final processed output"
+def test_context_generator_custom_parameters(mock_environment, mock_file_content, mock_llm_selector, mock_preprocess, mock_postprocess, mock_chain_invoke):
+    with patch('builtins.open', mock_open(read_data=mock_file_content)):
+        with mock_llm_selector, mock_preprocess, mock_postprocess, mock_chain_invoke:
+            example_code, total_cost = context_generator("test_module", "test prompt", language="java", strength=0.7, temperature=0.5)
+    
+    assert isinstance(example_code, str)
+    assert isinstance(total_cost, float)
 
-        # Running the function
-        result = context_generator('test.py', 'output.py', force=True)
-
-        # Assertions
-        self.assertTrue(result)
-        mock_preprocess.assert_called_once_with('test.py')
-        mock_PromptTemplate.from_template.assert_called_once()
-        mock_ChatOpenAI.assert_called_once_with(model="gpt-4o-mini", temperature=0)
-        mock_chain.invoke.assert_called_once()
-        mock_postprocess.assert_called_once_with("raw output", 'python')
-        mock_open.assert_called_once_with('output.py', 'w')
-        mock_open().write.assert_called_once_with("final processed output")
-
-    @patch('staging.pdd.context_generator.os.path.isfile')
-    def test_context_generator_file_not_exist(self, mock_isfile):
-        # Mocking the file existence check
-        mock_isfile.return_value = False
-
-        # Running the function
-        result = context_generator('nonexistent.py', 'output.py')
-
-        # Assertions
-        self.assertFalse(result)
-
-    @patch('staging.pdd.context_generator.os.path.isfile')
-    @patch('staging.pdd.context_generator.preprocess')
-    def test_context_generator_preprocess_failure(self, mock_preprocess, mock_isfile):
-        # Mocking the file existence check
-        mock_isfile.return_value = True
-
-        # Mocking the preprocess function to raise an exception
-        mock_preprocess.side_effect = Exception("Preprocess error")
-
-        # Running the function
-        result = context_generator('test.py', 'output.py')
-
-        # Assertions
-        self.assertFalse(result)
-        mock_preprocess.assert_called_once_with('test.py')
-
-    @patch('staging.pdd.context_generator.os.path.isfile')
-    @patch('staging.pdd.context_generator.preprocess')
-    @patch('staging.pdd.context_generator.ChatOpenAI')
-    @patch('staging.pdd.context_generator.PromptTemplate')
-    @patch('staging.pdd.context_generator.StrOutputParser')
-    @patch('staging.pdd.context_generator.postprocess')
-    @patch('builtins.open', new_callable=mock_open)
-    def test_context_generator_write_failure(self, mock_open, mock_postprocess, mock_StrOutputParser, mock_PromptTemplate, mock_ChatOpenAI, mock_preprocess, mock_isfile):
-        # Mocking the file existence check
-        mock_isfile.side_effect = lambda filename: filename in ['test.py', 'output.py']
-
-        # Mocking the preprocess function
-        mock_preprocess.return_value = "processed content"
-
-        # Mocking the Langchain components
-        mock_prompt_template = MagicMock()
-        mock_PromptTemplate.from_template.return_value = mock_prompt_template
-
-        mock_llm = MagicMock()
-        mock_ChatOpenAI.return_value = mock_llm
-
-        mock_chain = MagicMock()
-        mock_prompt_template.__or__.return_value = mock_chain
-        mock_llm.__or__.return_value = mock_chain
-        mock_chain.__or__.return_value = mock_chain
-
-        mock_chain.invoke.return_value = "raw output"
-
-        # Mocking the postprocess function
-        mock_postprocess.return_value = "final processed output"
-
-        # Mocking the open function to raise an exception
-        mock_open.side_effect = Exception("Write error")
-
-        # Running the function
-        result = context_generator('test.py', 'output.py', force=True)
-
-        # Assertions
-        self.assertFalse(result)
-        mock_preprocess.assert_called_once_with('test.py')
-        mock_PromptTemplate.from_template.assert_called_once()
-        mock_ChatOpenAI.assert_called_once_with(model="gpt-4o-mini", temperature=0)
-        mock_chain.invoke.assert_called_once()
-        mock_postprocess.assert_called_once_with("raw output", 'python')
-        mock_open.assert_called_once_with('output.py', 'w')
-
-if __name__ == '__main__':
-    unittest.main()
-# ```
-
-# This unit test covers the following scenarios:
-# 1. Successful execution of the `context_generator` function.
-# 2. The case where the input file does not exist.
-# 3. The case where the `preprocess` function raises an exception.
-# 4. The case where writing to the output file fails.
-
-# Make sure to adjust the import paths if your directory structure differs. This test uses the `unittest` framework and mocks external dependencies to isolate the function's behavior.
+@pytest.mark.parametrize("strength,temperature", [
+    (0.1, 0),
+    (0.9, 1),
+    (0.5, 0.5),
+])
+def test_context_generator_different_model_params(mock_environment, mock_file_content, mock_llm_selector, mock_preprocess, mock_postprocess, mock_chain_invoke, strength, temperature):
+    with patch('builtins.open', mock_open(read_data=mock_file_content)):
+        with mock_llm_selector, mock_preprocess, mock_postprocess, mock_chain_invoke:
+            example_code, total_cost = context_generator("test_module", "test prompt", strength=strength, temperature=temperature)
+    
+    assert isinstance(example_code, str)
+    assert isinstance(total_cost, float)
