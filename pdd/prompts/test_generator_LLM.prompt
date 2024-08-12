@@ -1,6 +1,6 @@
 % You are an expert Software Test Engineer. Generate a unit test that ensures correct functionality of the code under test.
 
-% Here a description of what the code is supposed to do: ```{prompt_that_generated_code}```
+% Here a description of what the code is supposed to do and was the prompt that generated the code: ```{prompt_that_generated_code}```
 
 % Here is the code under test: ```{code}```
 
