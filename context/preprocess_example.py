@@ -1,24 +1,21 @@
-# Here's a concise example of how to use the `preprocess` function from the provided module:
-
-# ```python
-# Import the preprocess function from the module
 from preprocess import preprocess
+from rich.console import Console   
+console = Console()     
+prompt = """
+<prompt>
+    <include>example.txt</include>
+    <shell>echo Hello World</shell>
+    <pdd>This is a comment</pdd>
+    ```<file_to_include.txt>```
+</prompt>
+"""
+# load prompts/pdd_python.prompt
+with open("prompts/pdd_python.prompt", "r") as file:
+    prompt = file.read()
 
-# Specify the path to the file you want to preprocess
-filename = '../pdd/input_file.txt'
+recursive = False
+double_curly_brackets = True
 
-try:
-    # Call the preprocess function and store the result
-    processed_content = preprocess(filename)
-    
-    # Print the preprocessed content
-    print(processed_content)
-except FileNotFoundError as e:
-    print(e)
-# ```
-
-# ### Explanation:
-# 1. **Import the Function**: Import the `preprocess` function from the module where it is defined.
-# 2. **Specify the Filename**: Set the `filename` variable to the path of the file you want to preprocess.
-# 3. **Call the Function**: Use a try-except block to call `preprocess`, handling any potential `FileNotFoundError`.
-# 4. **Output the Result**: Print the processed content to see the results.
+processed = preprocess(prompt, recursive, double_curly_brackets)
+console.print("[bold white]Processed Prompt:[/bold white]")
+console.print(processed)

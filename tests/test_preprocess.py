@@ -1,87 +1,101 @@
-# Here's a unit test for the `preprocess` function in Python. This test will be placed in the 'staging/tests' directory, while the code to be tested is in the 'staging/pdd' directory.
+import pytest
+from unittest.mock import patch, mock_open
+from preprocess import preprocess, process_backtick_includes, process_xml_tags, double_curly
+from bs4 import BeautifulSoup
+import subprocess
 
-# ```python
-import unittest
-import os
-import sys
+@pytest.fixture
+def sample_prompt() -> str:
+    """Fixture providing a sample prompt for testing."""
+    return """
+    Here's an include: ```<sample.txt>```
+    <include>another_file.txt</include>
+    <pdd>This is a comment that will be removed</pdd>
+    <shell>echo "Hello, World!"</shell>
+    This is a {variable} that will be doubled.
+    """
 
-# Add the path to the directory containing the code to be tested
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'pdd')))
+@patch('builtins.open', new_callable=mock_open, read_data="Included content")
+@patch('subprocess.run')
+def test_preprocess(mock_subprocess_run, mock_file, sample_prompt: str) -> None:
+    """Test the preprocess function with a sample prompt."""
+    mock_subprocess_run.return_value.stdout = "Hello, World!"
 
-from preprocess import preprocess
+    result = preprocess(sample_prompt)
 
-class TestPreprocess(unittest.TestCase):
-    def setUp(self):
-        self.test_dir = os.path.dirname(os.path.abspath(__file__))
-        self.test_file = os.path.join(self.test_dir, 'test_input.txt')
-        self.include_file = os.path.join(self.test_dir, 'include_file.txt')
+    assert "```Included content```" in result
+    assert "Included content" in result  # For XML include
+    assert "This is a comment that will be removed" not in result
+    assert "Hello, World!" in result
+    assert "This is a {{variable}} that will be doubled." in result
 
-    def test_file_not_found(self):
-        with self.assertRaises(FileNotFoundError):
-            preprocess('non_existent_file.txt')
+def test_process_backtick_includes() -> None:
+    """Test processing of backtick includes."""
+    text = "Test ```<file.txt>``` content"
+    with patch('builtins.open', new_callable=mock_open, read_data="Included text"):
+        result = process_backtick_includes(text, False)
+    assert result == "Test ```Included text``` content"
 
-    def test_replace_includes(self):
-        with open(self.include_file, 'w') as f:
-            f.write('Included content')
-        
-        with open(self.test_file, 'w') as f:
-            f.write('Test content\n```<{}>```\nMore content'.format(self.include_file))
-        
-        result = preprocess(self.test_file)
-        expected = 'Test content\n```\nIncluded content\n```\nMore content'
-        self.assertEqual(result, expected)
+def test_process_xml_tags() -> None:
+    """Test processing of XML tags."""
+    xml = "<include>file.txt</include><pdd>Comment</pdd><shell>echo 'Test'</shell>"
+    soup = BeautifulSoup(xml, 'html.parser')
+    
+    with patch('builtins.open', new_callable=mock_open, read_data="Included content"):
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value.stdout = "Test output"
+            result = process_xml_tags(soup, False)
 
-    def test_double_curly_braces(self):
-        with open(self.test_file, 'w') as f:
-            f.write('Test {content} with {braces}')
-        
-        result = preprocess(self.test_file)
-        expected = 'Test {{content}} with {{braces}}'
-        self.assertEqual(result, expected)
+    assert "Included content" in result
+    assert "Comment" not in result
+    assert "Test output" in result
 
-    def test_already_doubled_braces(self):
-        with open(self.test_file, 'w') as f:
-            f.write('Test {{content}} with {{braces}}')
-        
-        result = preprocess(self.test_file)
-        expected = 'Test {{content}} with {{braces}}'
-        self.assertEqual(result, expected)
+def test_double_curly() -> None:
+    """Test doubling of curly brackets."""
+    text = "This is a {test} with {curly} brackets"
+    result = double_curly(text)
+    assert result == "This is a {{test}} with {{curly}} brackets"
 
-    def test_complex_scenario(self):
-        with open(self.include_file, 'w') as f:
-            f.write('Included {content}')
-        
-        with open(self.test_file, 'w') as f:
-            f.write('Test content\n```<{}>```\nMore {{braces}}'.format(self.include_file))
-        
-        result = preprocess(self.test_file)
-        expected = 'Test content\n```\nIncluded {{content}}\n```\nMore {{braces}}'
-        self.assertEqual(result, expected)
+def test_recursive_processing() -> None:
+    """Test recursive processing of includes."""
+    nested_prompt = "```<outer.txt>```"
+    outer_content = "Outer content ```<inner.txt>```"
+    inner_content = "Inner content"
 
-    def tearDown(self):
-        if os.path.exists(self.test_file):
-            os.remove(self.test_file)
-        if os.path.exists(self.include_file):
-            os.remove(self.include_file)
+    with patch('builtins.open') as mock_open:
+        mock_open.side_effect = [
+            mock_open(read_data=outer_content).return_value,
+            mock_open(read_data=inner_content).return_value
+        ]
+        result = preprocess(nested_prompt, recursive=True)
 
-if __name__ == '__main__':
-    unittest.main()
-# ```
+    assert "Outer content ```Inner content```" in result
 
-# This unit test covers the following scenarios:
+def test_non_recursive_processing() -> None:
+    """Test non-recursive processing of includes."""
+    nested_prompt = "```<outer.txt>```"
+    outer_content = "Outer content ```<inner.txt>```"
 
-# 1. Attempting to preprocess a non-existent file (should raise FileNotFoundError)
-# 2. Replacing includes (content within ```<file>```)
-# 3. Doubling curly braces
-# 4. Handling already doubled curly braces
-# 5. A complex scenario combining includes and curly brace doubling
+    with patch('builtins.open', new_callable=mock_open, read_data=outer_content):
+        result = preprocess(nested_prompt, recursive=False)
 
-# The test creates temporary files for testing and cleans them up afterwards. It uses the `unittest` framework, which is part of Python's standard library.
+    assert "Outer content ```<inner.txt>```" in result
 
-# To run this test, make sure it's in the 'staging/tests' directory, and the `preprocess_python.py` file is in the 'staging/pdd' directory. Then, from the 'staging' directory, you can run:
+def test_no_double_curly_brackets() -> None:
+    """Test processing without doubling curly brackets."""
+    prompt = "This is a {test} prompt"
+    result = preprocess(prompt, double_curly_brackets=False)
+    assert result == "This is a {test} prompt"
 
-# ```
-# python -m unittest tests.test_preprocess
-# ```
+def test_file_not_found() -> None:
+    """Test handling of file not found error."""
+    prompt = "```<nonexistent.txt>```"
+    with pytest.raises(FileNotFoundError):
+        preprocess(prompt)
 
-# This test suite should provide good coverage of the `preprocess` function's functionality and help ensure its correct behavior.
+def test_shell_command_error() -> None:
+    """Test handling of shell command error."""
+    prompt = "<shell>invalid_command</shell>"
+    with patch('subprocess.run', side_effect=subprocess.CalledProcessError(1, 'invalid_command')):
+        with pytest.raises(subprocess.CalledProcessError):
+            preprocess(prompt)
