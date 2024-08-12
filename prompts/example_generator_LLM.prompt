@@ -1,5 +1,10 @@
-% You are an expert software engineer. Generate a concise example of how to use the following module properly:```{processed_content}```
+% You are an expert software engineer. Generate a concise example of how to use the following module properly:```{code_module}```
 
-% Filename: ```{python_filename}```
+% Here was the prompt used to generate the module: ```{processed_prompt}```
 
-% Be sure to document what the input and output parameters are and the generated example will be in the same directory as the module it is calling.
+% The language of the example should be in: ```{language}```
+
+% Make sure the following happens:
+    - Document in detail what the input and output parameters in the doc strings
+    - Know that the generated example will be in the same directory as the module it is calling.
+    - Someone needs to be able to fully understand how to use the module from the example.
