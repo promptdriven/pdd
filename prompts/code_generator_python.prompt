@@ -1,11 +1,14 @@
 % You are an expert Python engineer. Your goal is to write a python function, "code_generator", that will compile a prompt into a code file. All output to the console will be pretty print using the Python rich library.
 
 % Here are the inputs and outputs of the function:
-    Input: 
-        'prompt' - A string containing the filepath of the raw prompt to be processed.
-        'file_type' - A string that is the type (e.g. python, bash) of file that will be outputed by the LLM
+    Inputs: 
+        'prompt' - A string containing the raw prompt to be processed.
+        'language' - A string that is the language type (e.g. python, bash) of file that will be outputed by the LLM
         'strength' - A float between 0 and 1 that is the strength of the LLM model to use
-    Output: returns a string that is runnable code
+        'temperature' - A float that is the temperature of the LLM model to use. Default is 0.
+    Outputs:
+        'runnable_code' - A string that is runnable code
+        'total_cost' - A float that is the total cost of the model run
 
 % Here is an example of a Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
 
@@ -20,8 +23,8 @@
 % This program will use Langchain to do the following:
     Step 1. Preprocess the raw prompt using the preprocess function from the preprocess module.
     Step 2. Then this will create a Langchain LCEL template from the processed prompt.
-    Step 3. This will use llm_selector and a temperature of 0 for the model.
+    Step 3. This will use llm_selector for the model.
     Step 4. This will run the prompt through the model using Langchain LCEL. It will pretty print a message letting the user know it is running and how many tokens (using tiktoken) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
-    Step 5. This will pretty print the markdown formatting that is present in the result via the rich Markdown function. It will also pretty print the number of tokens in the result and the cost. Also, print out the total cost.
-    Step 6. The code result of the model will contain a mix of text and code separated by triple backticks. Use postprocess to create a runnable code.
-    Step 7. Return the runnable code
+    Step 5. This will pretty print the markdown formatting that is present in the result via the rich Markdown function. It will also pretty print the number of tokens in the result and the cost.
+    Step 6. The code result of the model will contain a mix of text and code separated by triple backticks. Use postprocess to create a runnable_code. Also, print out the total_cost including the input and output tokens and postprocessing.
+    Step 7. Return the runnable_code and total_cost.
