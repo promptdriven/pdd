@@ -34,6 +34,7 @@
 - [ ] fix make file production and prepopulate
 - [ ] put in context of the prompt for the fix
 - [ ] have fix remember what was the closest code passing and start from that to hill climb
+- [ ] more accurate token counter
 
 ## Documentation
 
