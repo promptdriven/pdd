@@ -45,7 +45,7 @@ pdd generate [OPTIONS] PROMPT_FILE
 ```
 
 Options:
-- `--output LOCATION`: Specify where to save the generated code. Can be a filename, full path, or directory. Default file name is <basename>.<language file extension>
+- `--output LOCATION`: Specify where to save the generated code. Can be a filename, full path, or directory. Default file name is <basename>.<language_file_extension>
 
 ### 2. Example
 
@@ -56,7 +56,7 @@ pdd example [OPTIONS] CODE_FILE
 ```
 
 Options:
-- `--output LOCATION`: Specify where to save the generated example code. Can be a filename, full path, or directory. Default file name is <basename>_example.<language file extension>
+- `--output LOCATION`: Specify where to save the generated example code. Can be a filename, full path, or directory. Default file name is <basename>_example.<language_file_extension>
 
 ### 3. Test
 
@@ -67,7 +67,7 @@ pdd test [OPTIONS] CODE_FILE PROMPT_FILE
 ```
 
 Options:
-- `--output LOCATION`: Specify where to save the generated test file. Can be a filename, full path, or directory. Default file name is <basename>_test.<language file extension>
+- `--output LOCATION`: Specify where to save the generated test file. Can be a filename, full path, or directory. Default file name is <basename>_test.<language_file_extension>
 - `--language`: Specify the programming language. Defaults to language specified by the prompt file name.
 
 ### 4. Preprocess
@@ -91,8 +91,8 @@ pdd fix [OPTIONS] UNIT_TEST_FILE CODE_FILE ERROR_FILE
 ```
 
 Options:
-- `--output-test LOCATION`: Specify where to save the fixed unit test file. Can be a filename, full path, or directory. Default file name is <basename>_fixed_test.<language file extension>
-- `--output-code LOCATION`: Specify where to save the fixed code file. Can be a filename, full path, or directory. Default file name is <basename>_fixed.<language file extension>
+- `--output-test LOCATION`: Specify where to save the fixed unit test file. Can be a filename, full path, or directory. Default file name is <basename>_fixed_test.<language_file_extension>
+- `--output-code LOCATION`: Specify where to save the fixed code file. Can be a filename, full path, or directory. Default file name is <basename>_fixed.<language_file_extension>
 
 This command attempts to fix errors in both the unit test and the code being tested. It uses the provided error file to understand the issues and generate appropriate fixes. The command produces two output files: one for the fixed unit test and another for the fixed code.
 
