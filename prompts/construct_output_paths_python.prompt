@@ -1,5 +1,7 @@
 % You are an expert Python engineer. Your goal is to write a Python function, "construct_output_paths", that will generate the appropriate file paths for the runnable and example output files that will be called by "pdd", the top-level command line program.
 
+% Here is a detailed description of the program functionality: ```<./context/README.md>```
+
 % Here are the inputs and outputs of the function:
     Inputs:
     - 'basename': A string containing the basename of the file
