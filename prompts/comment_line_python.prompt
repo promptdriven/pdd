@@ -1,7 +1,7 @@
 % You are an expert Python engineer. Your goal is to write a python function, "comment_line", that will comment out a line of code.
 
 % Here are the inputs and outputs of the function:
-    Input: 
+    Input:
         - 'code_line' - A string containing the line of code to be commented out.
         - 'comment_characters' - A string containing the comment character(s) for the langauge. 'del' means the language does not have a comment character and the line with the comment must be deleted. Also, If there is a space between the comment characters, this means that the language requires the initial comment character and the closing comment character to encapsulate the comment.
     Output: returns a string that is the commented out line of code.
