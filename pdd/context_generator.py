@@ -49,7 +49,7 @@ def context_generator(python_filename: str, output_filename: str, force: bool = 
 
     # Step 7: Postprocess the LCEL output.
     try:
-        processed_output = postprocess(result, 'python')
+        processed_output, total_cost = postprocess(result, 'python')
     except Exception as e:
         print(f"Error during postprocessing: {e}")
         return False

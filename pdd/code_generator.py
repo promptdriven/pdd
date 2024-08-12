@@ -59,7 +59,7 @@ def code_generator(prompt: str, file_type: str, strength: float) -> str:
     print(f"Total cost: ${total_cost:.6f}")
 
     # Step 6: Postprocess the model output to create runnable code
-    runnable_code = postprocess(result, file_type)
+    runnable_code, total_cost = postprocess(result, file_type)
 
     # Step 7: Return the runnable code
     return runnable_code
