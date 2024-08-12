@@ -2,6 +2,7 @@
 
 # ```makefile
 # Directories
+PROD_DIR := pdd
 STAGING_DIR := staging
 PDD_DIR := $(STAGING_DIR)/pdd
 DATA_DIR := $(STAGING_DIR)/data
@@ -35,41 +36,41 @@ all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_O
 $(PDD_DIR)/%.py: $(PROMPTS_DIR)/%_python.prompt
 	@echo "Generating $@"
 	@mkdir -p $(PDD_DIR)
-	@python pdd/pdd.py --strength 1 generate --output $@ $<
+	@PYTHONPATH=$(PROD_DIR) python pdd/pdd.py --strength 1 generate --output $@ $<
 
 # Generate Makefile
 $(MAKEFILE_OUTPUT): $(MAKEFILE_PROMPT)
 	@echo "Generating $@"
 	@mkdir -p $(STAGING_DIR)
-	@python pdd/pdd.py generate --output $@ $<
+	@PYTHONPATH=$(PROD_DIR) python pdd/pdd.py generate --output $@ $<
 
 # Generate CSV files
 $(DATA_DIR)/%.csv: $(PROMPTS_DIR)/%_csv.prompt
 	@echo "Generating $@"
 	@mkdir -p $(DATA_DIR)
-	@python pdd/pdd.py generate --output $@ $<
+	@PYTHONPATH=$(PROD_DIR) python pdd/pdd.py generate --output $@ $<
 
 # Generate example files
 $(CONTEXT_DIR)/%_example.py: $(PDD_DIR)/%.py
 	@echo "Generating example for $<"
 	@mkdir -p $(CONTEXT_DIR)
-	@python pdd/pdd.py example --output $@ $<
+	@PYTHONPATH=$(PROD_DIR) python pdd/pdd.py example --output $@ $<
 
 # Generate test files
 $(TESTS_DIR)/test_%.py: $(PDD_DIR)/%.py $(PROMPTS_DIR)/%_python.prompt
 	@echo "Generating test for $<"
 	@mkdir -p $(TESTS_DIR)
-	@python pdd/pdd.py --strength 1 test --output $@ $^
+	@PYTHONPATH=$(PROD_DIR) python pdd/pdd.py --strength 1 test --output $@ $^
 
 # Run tests
 test:
-	@echo "Running tests"
+	@echo "Running staging tests"
 	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python -m pytest -vv $(TESTS_DIR)
 
 # Generate requirements.txt
 requirements:
 	@echo "Generating requirements.txt"
-	@pipreqs . --force
+	@PYTHONPATH=$(PROD_DIR) pipreqs . --force
 
 # Clean generated files
 clean:
