@@ -10,9 +10,7 @@
 
 % Here is how to use the Python Click library to create a command line program: ```<./context/click_example.py>```
 
-% Extract the basename and language from the file name. Use get_extension to get the file extension for the language. The file extension and language is used for the subsequent functionality below. Be able to handle files missing a '_' in the file name. Here is an example how to lookup a file extension given a language: ```<./context/get_extension_example.py>```
-
-% To generate runnable code from a prompt file, use code_generator. If file name has no extension, add '.prompt' to the file name. Here is an example how to generate code from the prompt from a file: ```<./context/code_generator_example.py>```
+% To generate runnable code from a prompt file, use code_generator.  Here is an example how to generate code from the prompt from a file: ```<./context/code_generator_example.py>```
 
 % To generate example code from a code file, use context_generator. Here is an example how to generate an example from a code file: ```<./context/context_generator_example.py>```
 
