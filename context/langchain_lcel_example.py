@@ -1,13 +1,21 @@
+import os
 from langchain_core.prompts import PromptTemplate
-from langchain_openai import ChatOpenAI
-from langchain_core.output_parsers import StrOutputParser
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_anthropic import ChatAnthropic
 from langchain_community.cache import SQLiteCache
 from langchain.globals import set_llm_cache
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.pydantic_v1 import BaseModel, Field
 from langchain.output_parsers import RetryOutputParser
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough, ConfigurableField
+
+from langchain_fireworks import Fireworks 
+from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
+from langchain_openai import OpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
+from langchain_together import Together
 
 # Define a base output parser (e.g., PydanticOutputParser)
 from pydantic import BaseModel, Field
@@ -15,6 +23,8 @@ from pydantic import BaseModel, Field
 
 # Setup cache to save money and increase speeds
 set_llm_cache(SQLiteCache(database_path=".langchain.db"))
+
+
 # Create the LCEL template. Make note of the variable {topic} which will be filled in later.
 prompt_template = PromptTemplate.from_template("Tell me a joke about {topic}")
 
@@ -51,8 +61,6 @@ chain = prompt | llm | parser
 result = chain.invoke({"query": "Tell me a joke."})
 print(result)
 
-# get DEEKSEEK_API_KEY environmental variable
-import os
 
 # Get DEEKSEEK_API_KEY environmental variable
 deepseek_api_key = os.getenv('DEEKSEEK_API_KEY')
@@ -76,8 +84,6 @@ result = chain.invoke({"query": "Write joke about the sky"})
 print("deepseek",result)
 
 
-from langchain_fireworks import Fireworks 
-
 llm = Fireworks(
     model="accounts/fireworks/models/mixtral-8x7b-instruct",
     temperature=0)
@@ -90,12 +96,6 @@ print("fireworks",result)
 
 
 
-from langchain_anthropic import ChatAnthropic
-from langchain_openai import ChatOpenAI
-from langchain_openai import OpenAI
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnablePassthrough, ConfigurableField
 
 
 prompt = ChatPromptTemplate.from_template(
@@ -123,3 +123,20 @@ chain = (
 )
 result = chain.invoke({"topic": "Tell me a joke about the president"})
 print("config alt:",result)
+
+
+
+llm = ChatGroq(temperature=0, model_name="mixtral-8x7b-32768")
+system = "You are a helpful assistant."
+human = "{text}"
+prompt = ChatPromptTemplate.from_messages([("system", system), ("human", human)])
+
+chain = prompt | llm | StrOutputParser()
+print(chain.invoke({"text": "Explain the importance of low latency LLMs."}))
+
+
+llm = Together(
+    model="meta-llama/Llama-3-70b-chat-hf",
+)
+chain = prompt | llm | StrOutputParser()
+print(chain.invoke({"text": "Explain the importance of together.ai."}))
