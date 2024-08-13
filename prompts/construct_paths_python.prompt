@@ -25,6 +25,6 @@
 % This function will do the following:
     Step 1. Construct the input file paths using above rules.
     Step 2. Load the input files into the input_strings dictionary with the pdd description examples as the keys. Alert the user of any errors in loading the input files.
-    Step 3. Construct the output file paths using the above rules.
+    Step 3. Construct the output file paths using the above rules using a separate sub-function. It should construct the full file path including the output file name for the output files following the rules in the "Output Location Specification" section of the pdd program description.
     Step 4. If the output files already exist, and force isn't true, check with the user if the program should overwrite.
     Step 5. Return the outputs
