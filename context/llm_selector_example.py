@@ -21,6 +21,6 @@ print("Output Cost:", output_cost)
 # 1. **Importing**: The `llm_selector` function is imported from the module.
 # 2. **Parameters**: The `strength` and `temperature` parameters are defined.
 # 3. **Function Call**: The `llm_selector` function is called with the specified parameters, returning the selected LLM model and its costs.
-# 4. **Output**: The selected model and its costs are printed to the console. 
+# 4. **Output**: The selected model and its costs are printed to the console. The cost from llm_selector is in dollars per million tokens.
 
 # Make sure to have the necessary environment variables set and the CSV file in the correct location for the function to work properly.
