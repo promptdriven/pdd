@@ -1,13 +1,12 @@
-# import anthropic
+import anthropic
 
-# # Initialize the Anthropic client
-# client = anthropic.Anthropic()
+# Initialize the Anthropic client
+client = anthropic.Anthropic()
 
-# # Text you want to count tokens for
-# text = "Sample text"
+# Text you want to count tokens for
+text = "Sample text"
 
-# # Count tokens
-# # not accurate for 3.0 and above models
-# total_tokens = client.count_tokens(text)
+# Count tokens
+total_tokens = client.count_tokens(text, model="claude-3-sonnet-20240229")
 
-# print(f"Number of tokens: {total_tokens}")
+print(f"Number of tokens: {total_tokens}")
