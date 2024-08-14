@@ -1,7 +1,7 @@
 provider,model,input,output,coding_arena_elo,base_url,api_key
 OpenAI,gpt-4o-mini,0.15,0.60,1283,
-OpenAI,gpt-4o-2024-08-06,2.5,10,1295,
-OpenAI,deepseek-coder,0.14,0.28,1264,https://api.deepseek.com,DEEPSEEK_API_KEY
+OpenAI,gpt-4o-2024-08-06,2.5,10,1333,
+OpenAI,deepseek-coder,0.14,0.28,1263,https://api.deepseek.com,DEEPSEEK_API_KEY
 Anthropic,claude-3-5-sonnet-20240620,3,15,1299,
-Google,gemini-1.5-pro-exp-0801,3.5,7,1274,
-Fireworks,accounts/fireworks/models/llama-v3p1-405b-instruct,3,3,1273,
+Google,gemini-1.5-pro-exp-0801,3.5,7,1273,
+Fireworks,accounts/fireworks/models/llama-v3p1-405b-instruct,3,3,1280,
