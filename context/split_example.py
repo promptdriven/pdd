@@ -4,14 +4,24 @@
 #
 #```python
 # Import the split function from the module
-from split_prompt import split
+from split import split
 
 # Define input parameters
-input_prompt = "What are the benefits of using Python?"
-input_code = "def benefits_of_python(): pass"
-example_code = "def example(): return 'This is an example.'"
-strength = 0.5  # Model strength (0 to 1)
-temperature = 0.7  # Sampling temperature (0 to 1)
+
+# load context/split/4/initial_construct_paths_python.prompt into input_prompt
+with open('./context/split/4/initial_construct_paths_python.prompt', 'r') as file:
+    input_prompt = file.read()
+
+# load context/split/4/construct_paths.py into input_code
+with open('./context/split/4/construct_paths.py', 'r') as file:
+    input_code = file.read()
+
+# load context/split/4/split_construction_paths_generate_output_filename.py into example_code
+with open('./context/split/4/split_construct_paths_generate_output_filename.py', 'r') as file:
+    example_code = file.read() 
+    
+strength = 1  # Model strength (0 to 1)
+temperature = 0  # Sampling temperature (0 to 1)
 
 # Call the split function
 sub_prompt, modified_prompt, total_cost = split(input_prompt, input_code, example_code, strength, temperature)
