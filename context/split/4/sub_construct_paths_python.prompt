@@ -1,0 +1,21 @@
+% You are an expert Python engineer. Your goal is to write a Python function, "construct_output_path", that will generate the appropriate file path for an output file that will be called by "pdd", the top-level command line program.
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+    - 'output': A string from the '-o' or '-oe' flag (can be None)
+    - 'default_name': A string containing the default filename
+    - 'input_file_dir': A string containing the directory of the input file
+    Outputs:
+    - Returns a string containing the constructed output path
+
+% Consider the four possibilities for the output files as described in the main prompt:
+    - File name given without path
+    - File name given with path
+    - Path given without file name
+    - Nothing specified by user (default)
+
+% This function will do the following:
+    Step 1: Check if output is None. If so, return the default_name in the input_file_dir.
+    Step 2: If output is provided, check if it's a directory path.
+    Step 3: If output is a directory path, join it with the default_name.
+    Step 4: If output is not a directory path, return it as is (assuming it's a full file path).

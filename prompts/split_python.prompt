@@ -1,4 +1,4 @@
-% You are an expert Python Software Engineer. Your goal is to write a Python function, "split", that will split a prompt into a sub_prompt and modified_prompt with no loss of functionality. All output to the console will be pretty printed using the Python rich library.
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "split", that will split a prompt into a sub_prompt and modified_prompt with no loss of functionality. All output to the console will be pretty printed using the Python Rich library.
 
 % Here are the inputs and outputs of the function:
     Inputs:
@@ -12,6 +12,8 @@
         - 'modified_prompt': A string containing the modified prompt from input_prompt split from the sub_prompt.
         - 'total_cost': A float value representing the total cost of running the function.
 
+% Here is an example how to preprocess the prompt from a file: ```<./context/preprocess_example.py>```
+
 % Example usage of the Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
 
 % Example of selecting a Langchain LLM using llm_selector: ```<./context/llm_selector_example.py>```
@@ -20,7 +22,8 @@
 
 % Steps to be followed by the function:
     1. Load the '$PDD_PATH/prompts/split_LLM.prompt' and '$PDD_PATH/prompts/extract_prompt_split_LLM.prompt' files.
-    2. Create a Langchain LCEL template from the split_LLM prompt to return a string output.
+    2. Preprocess the split_LLM prompt using the preprocess function from the preprocess module.
+    2. Create a Langchain LCEL template from the processed split_LLM prompt to return a string output.
     3. Use the llm_selector function for the LLM model.
     4. Run the input through the model using Langchain LCEL:
         - a. Pass the following string parameters to the prompt during invocation: 'input_prompt', 'input_code', 'example_code'.
