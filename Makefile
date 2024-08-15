@@ -77,17 +77,18 @@ clean:
 	@echo "Cleaning generated files"
 	@rm -rf $(STAGING_DIR)
 
+.PHONY: staging
 staging:
 	@echo "Copying files to staging"
 	@mkdir -p staging
 	@touch staging/__init__.py
-	@cp -r pdd $(PDD_DIR)
+	@cp -r pdd/* $(PDD_DIR)
 	@touch staging/pdd/* staging/pdd/__init__.py
-	@cp -r data $(DATA_DIR)
+	@cp -r data/* $(DATA_DIR)
 	@touch staging/data/*
-	@cp -r context $(CONTEXT_DIR)
+	@cp -r context/* $(CONTEXT_DIR)
 	@touch staging/context/*
-	@cp -r tests $(TESTS_DIR)
+	@cp -r tests/* $(TESTS_DIR)
 	@touch staging/tests/* staging/tests/__init__.py
 	@cp Makefile $(MAKEFILE_OUTPUT)
 	@touch Makefile
