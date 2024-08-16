@@ -1,26 +1,36 @@
-# Here's a concise example of how to use the `llm_selector` function from the provided module:
-
-# ```python
-# Import the llm_selector function from the module
+import os
 from llm_selector import llm_selector
 
-# Set the desired strength and temperature for model selection
-strength = 1  # Value between 0 and 1
-temperature = 0.8  # Value for controlling randomness in responses
 
-# Call the llm_selector function to get the LLM model and its costs
-llm, input_cost, output_cost = llm_selector(strength, temperature)
+def main() -> None:
+    """
+    Main function to demonstrate the usage of the llm_selector function.
+    Sets up environment variables, calls the llm_selector function, and prints the results.
+    """
+    try:
+        # Set environment variables for the example
+        # os.environ['PDD_PATH'] = '/path/to/your/data'  # Update this path to your actual data directory
+        os.environ['PDD_MODEL_DEFAULT'] = 'gpt-4o-mini'  # Set your default model
 
-# Print the selected LLM model and its associated costs
-print("Selected LLM Model:", llm)
-print("Input Cost:", input_cost)
-print("Output Cost:", output_cost)
-# ```
+        # Input parameters
+        strength: float = 0.7  # Strength of the model selection (0.0 to 1.0)
+        temperature: float = 0.5  # Temperature for the model (controls randomness)
 
-# ### Explanation:
-# 1. **Importing**: The `llm_selector` function is imported from the module.
-# 2. **Parameters**: The `strength` and `temperature` parameters are defined.
-# 3. **Function Call**: The `llm_selector` function is called with the specified parameters, returning the selected LLM model and its costs.
-# 4. **Output**: The selected model and its costs are printed to the console. The cost from llm_selector is in dollars per million tokens.
+        # Get the selected LLM and related information
+        llm, token_counter, input_cost, output_cost = llm_selector(strength, temperature)
+        sample_text = "Sample text for token counting."
+        token_count = token_counter(sample_text)
 
-# Make sure to have the necessary environment variables set and the CSV file in the correct location for the function to work properly.
+        # Output the results
+        print(f"Selected LLM: {llm}")
+        print(f"Token Counter: {token_counter}")
+        print(f"Counting tokens in the following text: '{sample_text}'")
+        print(f"The number of tokens in the text is: {token_count}")
+        print(f"Input Cost: {input_cost} per million tokens")
+        print(f"Output Cost: {output_cost} per million tokens")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+
+if __name__ == "__main__":
+    main()
