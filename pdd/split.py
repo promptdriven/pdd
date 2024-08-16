@@ -18,7 +18,7 @@ def split(input_prompt, input_code, example_code, strength, temperature):
     if not pdd_path:
         raise ValueError("PDD_PATH environment variable is not set")
 
-    split_llm_prompt_path = os.path.join(pdd_path, 'prompts', 'split_LLM.prompt')
+    split_llm_prompt_path = os.path.join(pdd_path, 'prompts/xml', 'split_xml_LLM.prompt')
     extract_prompt_split_llm_prompt_path = os.path.join(pdd_path, 'prompts', 'extract_prompt_split_LLM.prompt')
 
     with open(split_llm_prompt_path, 'r') as file:

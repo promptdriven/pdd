@@ -16,27 +16,27 @@
 </instructions>
 
 <examples>
-    <example>
+    <example1>
         <example_input_prompt>example_1_input_prompt: ```<./context/split/1/initial_pdd_python.prompt>```</example_input_prompt>
         <example_input_code>example_1_input_code: ```<./context/split/1/pdd.py>```</example_input_code>
         <example_example_code>example_1_example_code: ```<./context/split/1/split_get_extension.py>```</example_example_code>
         <example_sub_prompt>example_1_sub_prompt: ```<./context/split/1/sub_pdd_python.prompt>```</example_sub_prompt>
         <example_modified_prompt>example_1_modified_prompt: ```<./context/split/1/final_pdd_python.prompt>```</example_modified_prompt>
-    </example>
-    <example>
+    </example1>
+    <example2>
         <example_input_prompt>example_2_input_prompt: ```<./context/split/2/initial_pdd_python.prompt>```</example_input_prompt>
         <example_input_code>example_2_input_code: ```<./context/split/2/pdd.py>```</example_input_code>
         <example_example_code>example_2_example_code: ```<./context/split/2/split_pdd_construct_output_path.py>```</example_example_code>
         <example_sub_prompt>example_2_sub_prompt: ```<./context/split/2/sub_pdd_python.prompt>```</example_sub_prompt>
         <example_modified_prompt>example_2_modified_prompt: ```<./context/split/2/final_pdd_python.prompt>```</example_modified_prompt>
-    </example>
-    <example>
+    </example2>
+    <example3>
         <example_input_prompt>example_3_input_prompt: ```<./context/split/3/initial_pdd_python.prompt>```</example_input_prompt>
         <example_input_code>example_3_input_code: ```<./context/split/3/pdd.py>```</example_input_code>
         <example_example_code>example_3_example_code: ```<./context/split/3/split_pdd_construct_output_path.py>```</example_example_code>
         <example_sub_prompt>example_3_sub_prompt: ```<./context/split/3/sub_pdd_python.prompt>```</example_sub_prompt>
         <example_modified_prompt>example_3_modified_prompt: ```<./context/split/3/final_pdd_python.prompt>```</example_modified_prompt>
-    </example>
+    </example3>
 </examples>
 
 <task>
