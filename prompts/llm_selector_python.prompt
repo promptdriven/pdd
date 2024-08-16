@@ -6,16 +6,19 @@
         'temperature' - Floating point number indicating the temperature of the LLM.
     Output: 
         'llm' - Instantiated LLM model with the appropriate parameters.
+        'token_counter' - Token counter function for the LLM model.
         'input_cost' - Cost per million input tokens
         'output_cost' - Cost per million output tokens
 
 % Here is an example of a Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
 
-% Here is an example (but not actual values) of the llm_model.csv:```provider,model,input,output,coding_arena_elo
-OpenAI,gpt-4o-mini,0.15,0.60,1281
-OpenAI,gpt-4o,5,15,1295
-Anthropic,claude-3-5-sonnet-20240620,3,15,1300
-Google,gemini-1.5-pro,3.5,7,1264```
+% Here is an exmaple of a token counter function: ```<./context/llm_token_counter_example.py>```
+
+% Here is an example (but not actual values) of the llm_model.csv:```provider,model,input,output,coding_arena_elo, base_url, api_key, counter, encoder
+OpenAI,gpt-4o-mini,0.15,0.60,1281, https://api.openai.com, OPENAI_API_KEY, tiktoken, o200k_base
+OpenAI,gpt-4o,5,15,1295, https://api.openai.com, OPENAI_API_KEY, tiktoken, o200k_base
+Anthropic,claude-3-5-sonnet-20240620,3,15,1300, https://api.anthropic.com, ANTHROPIC_API_KEY, anthropic, claude-3-sonnet-20240229
+Google,gemini-1.5-pro,3.5,7,1264, https://api.google.com, GOOGLE_API_KEY, tiktoken, o200k_base```
 
 % Here are the rules to follow when selecting the appropriate model:
     - If environmental variable $PDD_MODEL_DEFAULT is set, use that as the base model, otherwise it is "gpt-4o-mini". If $PDD_PATH is set load $PDD_PATH/data/llm_model.csv, otherwise, assume $PDD_PATH is current working directory.
