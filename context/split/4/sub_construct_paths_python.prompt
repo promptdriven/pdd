@@ -1,21 +1,24 @@
-% You are an expert Python engineer. Your goal is to write a Python function, "construct_output_path", that will generate the appropriate file path for an output file that will be called by "pdd", the top-level command line program.
+% You are an expert Python software engineer. Your task is to implement a function called `generate_output_filename` that creates appropriate output filenames for different commands in a Python program.
 
-% Here are the inputs and outputs of the function:
-    Inputs:
-    - 'output': A string from the '-o' or '-oe' flag (can be None)
-    - 'default_name': A string containing the default filename
-    - 'input_file_dir': A string containing the directory of the input file
-    Outputs:
-    - Returns a string containing the constructed output path
+% Inputs: The function should take the following parameters:
+    - `command` (string): The command being executed (e.g., 'generate', 'example', 'test', 'preprocess', 'fix')
+    - `key` (string): The output dictionary key (e.g., 'output', 'output-test')
+    - `basename` (string): The base name of the file
+    - `language` (string): The programming language of the file
+    - `file_extension` (string): The file extension to be used
 
-% Consider the four possibilities for the output files as described in the main prompt:
-    - File name given without path
-    - File name given with path
-    - Path given without file name
-    - Nothing specified by user (default)
+% Outputs: The function should return a string representing the generated output filename.
 
-% This function will do the following:
-    Step 1: Check if output is None. If so, return the default_name in the input_file_dir.
-    Step 2: If output is provided, check if it's a directory path.
-    Step 3: If output is a directory path, join it with the default_name.
-    Step 4: If output is not a directory path, return it as is (assuming it's a full file path).
+% Follow these rules for generating the output filename:
+    1. For the 'generate' command: Return `f"{basename}{file_extension}"`
+    2. For the 'example' command: Return `f"{basename}_example{file_extension}"`
+    3. For the 'test' command: Return `f"test_{basename}{file_extension}"`
+    4. For the 'preprocess' command: Return `f"{basename}_{language or 'unknown'}_preprocessed.prompt"`
+    5. For the 'fix' command:
+    - If the key is 'output-test', return `f"test_{basename}_fixed{file_extension}"`
+    - Otherwise, return `f"{basename}_fixed{file_extension}"`
+    6. For any other command: Return `f"{basename}_output{file_extension}"`
+
+% Implement the function to handle all these cases efficiently and return the appropriate filename as a string, accordingly.
+
+% Ensure the function handles all cases correctly and returns the appropriate filename string, language, and file extension. The function should be robust and able to handle various edge cases, such as missing file extensions or languages.
