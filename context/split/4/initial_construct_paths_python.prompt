@@ -2,6 +2,8 @@
 
 % Here is a detailed description of the program functionality: ```<./context/README.md>```
 
+% Here is an example how to lookup a file extension given a language: ```<./context/get_extension_example.py>```
+
 % Here are the inputs and outputs of the function:
     Inputs:
     - 'input_file_paths' (dict) - A dictionary to the paths of the input files with the keys being those specified in the examples from the pdd program description.
@@ -17,8 +19,6 @@
 % If the file name has no extension, add the appropriate file extension (e.g '.prompt' to input file for the 'generate' command) to the file name.
 
 % If the command is 'generate' extract the basename and language from the input_file_path. Use get_extension to get the file extension for the language. The file extension and language is used for the subsequent functionality below. Be able to handle files missing a '_' in the file name. 
-
-% Here is an example how to lookup a file extension given a language: ```<./context/get_extension_example.py>```
 
 % Unless quiet is True, print out the input and output file paths that are being used and the steps being done below.
 

@@ -1,4 +1,4 @@
-% You are an expert Python software engineer. Your goal is to write a Python function, "construct_paths", that will generate and check the appropriate input and output file paths and then load the input files. This function will will be used by pdd to do this function. All output to the console will be pretty print using the Python rich library. The CLI will be handled using the Python Click library.
+% You are an expert Python software engineer. Your goal is to write a Python function, "construct_paths", that will generate and check the appropriate input and output file paths and then load the input files. This function will use the "generate_output_filename" function to determine the output file names. All output to the console will be pretty print using the Python rich library. The CLI will be handled using the Python Click library.
 
 % Here is a detailed description of the program functionality: ```<./context/README.md>```
 
@@ -16,7 +16,7 @@
 
 % If the file name has no extension, add the appropriate file extension (e.g '.prompt' to input file for the 'generate' command) to the file name.
 
-% If the command is 'generate' extract the basename and language from the input_file_path. Use get_extension to get the file extension for the language. The file extension and language is used for the subsequent functionality below. Be able to handle files missing a '_' in the file name. 
+% If the command is 'generate' extract the basename and language from the input_file_path. Use get_extension to get the file extension for the language. The file extension and language is used for the subsequent functionality below. Be able to handle files missing a '_' in the file name.
 
 % Here is an example how to lookup a file extension given a language: ```<./context/get_extension_example.py>```
 
@@ -25,6 +25,6 @@
 % This function will do the following:
     Step 1. Construct the input file paths using above rules.
     Step 2. Load the input files into the input_strings dictionary with the pdd description examples as the keys. Alert the user of any errors in loading the input files.
-    Step 3. Construct the output file paths using the above rules using a separate sub-function. It should construct the full file path including the output file name for the output files following the rules in the "Output Location Specification" section of the pdd program description.
+    Step 3. Construct the output file paths using the above rules using the "generate_output_filename" function. It should construct the full file path including the output file name for the output files following the rules in the "Output Location Specification" section of the pdd program description.
     Step 4. If the output files already exist, and force isn't true, check with the user if the program should overwrite.
     Step 5. Return the outputs
