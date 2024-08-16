@@ -8,9 +8,19 @@
     Output: 
         'token_counter_function' - function that returns token count
 
+% Here is an example how to use tiktoken: ```<./context/tiktoken_example.py>```
+
+% Here is an example how to use anthropic: ```<./context/anthropic_counter_example.py>```
+
+% Here is an example how to use autotokenizer: ```<./context/autotokenizer_example.py>```
+
+
 
 
 % Here are the rules to follow when selecting the appropriate model:
-    - If the encoder is 'o200k_base' and the counter is 'tiktoken', the token counter function should be 'tiktoken'.
-    - If the encoder is 'deepseek-coder-7b-instruct-v1.5' and the counter is 'autotokenizer', the token counter function should be 'autotokenizer'.
-    - If the encoder is 'claude-3-sonnet-20240229' and the counter is 'anthropic', the token counter function should be 'anthropic'.
+    - If the counter is 'tiktoken', the token counter function should be 'tiktoken' with encoder.
+
+    - If the counter is 'anthropic', the token counter function should be 'anthropic'.
+
+    - If the counter is 'autotokenizer', the token counter function should be 'autotokenizer' with encoder.
+
