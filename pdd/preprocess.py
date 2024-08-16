@@ -13,14 +13,19 @@ def preprocess(filename):
         
         def replacement(match):
             filename = match.group(1).strip()
-            file_content = read_file(filename)
+            print(f"Reading file in replacement: {filename}")
+            try:
+                file_content = read_file(filename)
+            except FileNotFoundError:
+                return f"""```{match}```"""
             return f"""```
 {file_content}
 ```"""
         
         while re.search(pattern, content):
+            print(content)
             content = re.sub(pattern, replacement, content)
-        
+        print("finished:",content)
         return content
 
     def double_curly_braces(content):
@@ -34,7 +39,7 @@ def preprocess(filename):
     # Step 1: Read the file content
     if not os.path.isfile(filename):
         raise FileNotFoundError(f"The file {filename} does not exist.")
-    
+    print(f"Reading file: {filename}")
     content = read_file(filename)
 
     # Step 2: Replace angle brackets in triple backticks
