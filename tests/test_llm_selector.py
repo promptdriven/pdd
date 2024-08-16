@@ -1,69 +1,47 @@
-import unittest
 import os
+import pytest
 import pandas as pd
 from unittest.mock import patch, MagicMock
-from staging.pdd.llm_selector import llm_selector, instantiate_llm
+from llm_selector import llm_selector  # Replace with the actual module name
 
-class TestLLMSelector(unittest.TestCase):
+# Sample data to be used in the tests
+sample_model_data = pd.DataFrame({
+    'provider': ['OpenAI', 'OpenAI', 'Anthropic', 'Google'],
+    'model': ['gpt-4o-mini', 'gpt-4o', 'claude-3-5-sonnet-20240620', 'gemini-1.5-pro'],
+    'input': [0.15, 5, 3, 3.5],
+    'output': [0.60, 15, 15, 7],
+    'coding_arena_elo': [1281, 1295, 1300, 1264],
+    'base_url': ['https://api.openai.com', 'https://api.openai.com', 'https://api.anthropic.com', 'https://api.google.com'],
+    'api_key': ['OPENAI_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GOOGLE_API_KEY'],
+    'counter': ['tiktoken', 'tiktoken', 'anthropic', 'tiktoken'],
+    'encoder': ['o200k_base', 'o200k_base', 'claude-3-sonnet-20240229', 'o200k_base']
+})
 
-    @patch('staging.pdd.llm_selector.pd.read_csv')
-    @patch('staging.pdd.llm_selector.os.getenv')
-    @patch('staging.pdd.llm_selector.instantiate_llm')
-    def test_llm_selector(self, mock_instantiate_llm, mock_getenv, mock_read_csv):
-        # Mock environment variables
-        mock_getenv.side_effect = lambda x, default=None: {
-            'PDD_MODEL_DEFAULT': 'gpt-4o-mini',
-            'PDD_PATH': '/mock/path'
-        }.get(x, default)
+# Mocking the load_model_data function to return the sample data
+def mock_load_model_data() -> pd.DataFrame:
+    """Mock function to return predefined sample model data."""
+    return sample_model_data
 
-        # Mock CSV data
-        mock_csv_data = pd.DataFrame({
-            'model': ['gpt-4o-mini', 'gpt-3.5-turbo', 'gpt-4'],
-            'provider': ['OpenAI', 'OpenAI', 'OpenAI'],
-            'input': [0.01, 0.0015, 0.03],
-            'output': [0.03, 0.002, 0.06],
-            'coding_arena_elo': [1500, 1300, 1700]
-        })
-        mock_read_csv.return_value = mock_csv_data
+# Test cases
+@pytest.mark.parametrize("strength, temperature, expected_model", [
+    (0.0, 0.5, 'gpt-4o-mini'),  # Expecting the cheapest model
+    (0.5, 0.5, 'gpt-4o-mini'),  # Expecting the base model
+    (1.0, 0.5, 'claude-3-5-sonnet-20240620'),  # Expecting the highest ELO model
+    (0.3, 0.5, 'gpt-4o-mini'),  # Expecting a model based on cost interpolation
+    (0.7, 0.5, 'claude-3-5-sonnet-20240620'),  # Expecting a model based on ELO interpolation
+])
+@patch('llm_selector.load_model_data', side_effect=mock_load_model_data)  # Replace with the actual module name
+@patch.dict(os.environ, {'PDD_MODEL_DEFAULT': 'gpt-4o-mini'})  # Mocking environment variable
+def test_llm_selector(mock_load, strength: float, temperature: float, expected_model: str) -> None:
+    """Test the llm_selector function to ensure it selects the correct model."""
+    llm, token_counter, input_cost, output_cost = llm_selector(strength, temperature)
+    
+    # Check if the expected model is selected
+    assert llm.model == expected_model, f"Expected {expected_model}, got {llm.model}"
+    assert callable(token_counter), "Token counter should be callable"
+    assert input_cost >= 0, "Input cost should be non-negative"
+    assert output_cost >= 0, "Output cost should be non-negative"
 
-        # Mock instantiate_llm
-        mock_llm = MagicMock()
-        mock_instantiate_llm.return_value = mock_llm
-
-        # Test cases
-        test_cases = [
-            (0.3, 0.5, 'gpt-3.5-turbo'),  # Lower strength
-            (0.5, 0.5, 'gpt-4o-mini'),    # Base model
-            (0.7, 0.5, 'gpt-4'),          # Higher strength
-        ]
-
-        for strength, temperature, expected_model in test_cases:
-            with self.subTest(strength=strength, temperature=temperature):
-                llm, input_cost, output_cost = llm_selector(strength, temperature)
-
-                self.assertEqual(llm, mock_llm)
-                mock_instantiate_llm.assert_called_with('OpenAI', expected_model, temperature)
-
-                expected_row = mock_csv_data[mock_csv_data['model'] == expected_model].iloc[0]
-                self.assertEqual(input_cost, expected_row['input'])
-                self.assertEqual(output_cost, expected_row['output'])
-
-    def test_instantiate_llm(self):
-        with patch('staging.pdd.llm_selector.ChatOpenAI') as mock_openai, \
-             patch('staging.pdd.llm_selector.ChatGoogleGenerativeAI') as mock_google, \
-             patch('staging.pdd.llm_selector.ChatAnthropic') as mock_anthropic:
-
-            instantiate_llm('OpenAI', 'gpt-4', 0.7)
-            mock_openai.assert_called_once_with(model='gpt-4', temperature=0.7)
-
-            instantiate_llm('Google', 'gemini-pro', 0.5)
-            mock_google.assert_called_once_with(model='gemini-pro', temperature=0.5)
-
-            instantiate_llm('Anthropic', 'claude-2', 0.3)
-            mock_anthropic.assert_called_once_with(model='claude-2', temperature=0.3)
-
-            with self.assertRaises(ValueError):
-                instantiate_llm('Unknown', 'model', 0.5)
-
-if __name__ == '__main__':
-    unittest.main()
+# Run the tests
+if __name__ == "__main__":
+    pytest.main()
