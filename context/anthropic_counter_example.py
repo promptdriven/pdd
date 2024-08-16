@@ -7,6 +7,7 @@ client = anthropic.Anthropic()
 text = "Sample text"
 
 # Count tokens
-total_tokens = client.count_tokens(text, model="claude-3-sonnet-20240229")
+# not accurate for 3.0 and above models
+total_tokens = client.count_tokens(text)
 
 print(f"Number of tokens: {total_tokens}")
