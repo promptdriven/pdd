@@ -12,7 +12,7 @@
 
 % Here is an example of a Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
 
-% Here is an exmaple of a token counter function: ```<./context/llm_token_counter_example.py>```
+% Here is an example of a token counter function: ```<./context/llm_token_counter_example.py>```
 
 % Here is an example (but not actual values) of the llm_model.csv:```provider,model,input,output,coding_arena_elo, base_url, api_key, counter, encoder
 OpenAI,gpt-4o-mini,0.15,0.60,1281, https://api.openai.com, OPENAI_API_KEY, tiktoken, o200k_base
