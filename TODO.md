@@ -21,10 +21,12 @@
 - [ ] Use perplexica to automatically find context
 - [ ] fix error messages when example runs
 - [ ] infinite code generation
+- [ ] execute up to a budget amount
 
 ## Bugs
 
 - [ ] example making doesn't have proper filename with only a directory
+- [ ] pipreqs for only valid python files
 
 ## Improvements
 
