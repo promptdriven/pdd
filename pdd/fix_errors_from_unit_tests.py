@@ -36,7 +36,7 @@ def fix_errors_from_unit_tests(unit_test, code, error, strength):
     fix_errors_template = PromptTemplate.from_template(fix_errors_prompt)
     
     # Step 3: Use llm_selector and a temperature of 0 for the llm model
-    llm, input_cost, output_cost = llm_selector(strength, 0)
+    llm, token_counter, input_cost, output_cost = llm_selector(strength, 0)
     
     # Step 4: Run the code through the model using Langchain LCEL
     chain = fix_errors_template | llm | StrOutputParser()
@@ -72,7 +72,7 @@ def fix_errors_from_unit_tests(unit_test, code, error, strength):
     extract_fix_template = PromptTemplate.from_template(extract_fix_prompt)
     
     # Step 8: Use llm_selector with a strength setting of 0.5 and a temperature of 0
-    llm, input_cost, output_cost = llm_selector(0.5, 0)
+    llm, token_counter, input_cost, output_cost = llm_selector(0.5, 0)
     
     from langchain.output_parsers import PydanticOutputParser
     parser = PydanticOutputParser(pydantic_object=FixResult)

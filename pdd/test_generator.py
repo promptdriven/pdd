@@ -32,7 +32,7 @@ def test_generator(prompt_file: str, code_file: str, strength: float, language: 
     prompt_template = PromptTemplate.from_template(test_generator_prompt)
 
     # Step 3: Use llm_selector
-    llm, input_cost, output_cost = llm_selector(strength, temperature=0)
+    llm, token_counter, input_cost, output_cost = llm_selector(strength, temperature=0)
 
     # Step 4: Run the code through the model
     chain = prompt_template | llm | StrOutputParser()
