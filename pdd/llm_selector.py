@@ -90,7 +90,7 @@ def llm_selector(strength: float, temperature: float):
 
     # Get the token counter function
     token_counter = llm_token_counter(counter_type, encoder)
-
+    print(f"Selected LLM: {model_name}, Input Cost: {input_cost}, Output Cost: {output_cost}")
     return llm, token_counter, input_cost, output_cost
 
 # Example usage

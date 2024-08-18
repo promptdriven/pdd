@@ -32,7 +32,7 @@ def code_generator(prompt: str, file_type: str, strength: float) -> str:
 
     # Step 3: Use llm_selector and a temperature of 0 for the model
     temperature = 0
-    llm, input_cost, output_cost = llm_selector(strength, temperature)
+    llm, token_counter, input_cost, output_cost = llm_selector(strength, temperature)
 
     # Step 4: Run the prompt through the model using Langchain LCEL
     chain = prompt_template | llm | StrOutputParser()
