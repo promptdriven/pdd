@@ -45,18 +45,19 @@ def generate_output_paths(
         Raises:
             ValueError: If an unknown command is provided.
         """
+        
         if cmd == "generate":
-            return f"{basename}.{file_extension}"
+            return f"{basename}{file_extension}"
         elif cmd == "example":
-            return f"{basename}_example.{file_extension}"
+            return f"{basename}_example{file_extension}"
         elif cmd == "test":
-            return f"test_{basename}.{file_extension}"
+            return f"test_{basename}{file_extension}"
         elif cmd == "preprocess":
             return f"{basename}_{language}_preprocessed.prompt"
         elif cmd == "fix":
             return {
-                "output-test": f"test_{basename}_fixed.{file_extension}",
-                "output-code": f"{basename}_fixed.{file_extension}"
+                "output-test": f"test_{basename}_fixed{file_extension}",
+                "output-code": f"{basename}_fixed{file_extension}"
             }
         elif cmd == "split":
             return {
@@ -99,7 +100,7 @@ def generate_output_paths(
             elif value:
                 # Use the user-specified path if provided
                 path = Path(value)
-                if path.suffix == f".{file_extension}":
+                if path.suffix:  # If the path includes a filename
                     result[key] = str(path)
                 else:
                     result[key] = str(path / default_filename)
