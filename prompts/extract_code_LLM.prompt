@@ -13,7 +13,7 @@
     - Should have clear and concise variable and function names and be fully-typed.
     - Should be properly documented with comments that explain why something is done and having doc strings or equivalent.
     - Should be properly PEP 8, if Python, formatted and indented with the proper naming conventions.
-    - Never add example calling unless it is already in the code block.
+    - Never add example calling unless it is already in the code block and if it is a submodule have the conditional main execution for the example.
     - All the functionality of the code block should still be present.
 
 % Output a JSON object with the following keys:
