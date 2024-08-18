@@ -1,22 +1,19 @@
 from test_generator import test_generator
 
 # Define the input parameters
-prompt: str = "Generate a function, 'add', that takes two arguments, 'a' and 'b', and returns their sum."
+prompt: str = "Create an additon function that takes two arguments and returns their sum."
 code: str = """
 def add(a, b):
     return a + b
 """
-strength: float = 0.5  # Model selection strength
-temperature: float = 0  # Sampling temperature
+strength: float = 1  # Model strength parameter
+temperature: float = 0.5  # Temperature parameter for randomness
 language: str = "python"  # Programming language of the code
 
 # Call the test_generator function
-try:
-    unit_test, total_cost = test_generator(prompt, code, strength, temperature, language)
+unit_test_code, total_cost = test_generator(prompt, code, strength, temperature, language)
 
-    # Print the results
-    print("Generated Unit Test:")
-    print(unit_test)
-    print(f"Total Cost: ${total_cost:.6f}")
-except Exception as e:
-    print(f"An error occurred: {e}")
+# Print the results
+print("Generated Unit Test Code:")
+print(unit_test_code)
+print(f"Total Cost of Operation: ${total_cost:.6f}")
