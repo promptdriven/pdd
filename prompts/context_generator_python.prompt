@@ -15,11 +15,9 @@
 
 % Here is how to preprocess the prompt from a file: ```<./context/preprocess_example.py>``` 
 
-% Here is an example how to select the Langchain llm: ```<./context/llm_selector_example.py>``` 
+% Here is an example how to select the Langchain llm and count tokens: ```<./context/llm_selector_example.py>``` 
 
 % Here is how to postprocess the LCEL output string: ```<./context/postprocess_example.py>``` 
-
-% Here is an example how to use tiktoken: ```<./context/tiktoken_example.py>```
 
 % This function will use Langchain to do the following:
     Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/example_generator_LLM.prompt' file.
@@ -31,7 +29,7 @@
             - 'code_module'
             - 'processed_prompt'
             - 'language'
-        5b. Pretty print a message letting the user know it is running and how many tokens (using tiktoken) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens. 
+        5b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens. 
     Step 6. The LCEL output will contain a mix of text and Python code separated by triple backticks. Use postprocess to create a runnable example_code. Also, print out the total_cost including the input and output tokens and postprocessing.
     Step 7. Return the example_code and total_cost.
     
