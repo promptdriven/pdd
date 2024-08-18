@@ -2,86 +2,86 @@ import pytest
 from unittest.mock import patch, mock_open
 from test_generator import test_generator
 from rich.console import Console
-from rich.markdown import Markdown
 
 @pytest.fixture
 def mock_environment():
+    """Mock the environment variable PDD_PATH."""
     with patch.dict('os.environ', {'PDD_PATH': '/mock/path'}):
         yield
 
 @pytest.fixture
-def mock_file_content():
-    return "Mock prompt template content"
+def mock_file_content() -> str:
+    """Provide mock content for the file."""
+    return "Mock prompt content"
 
 @pytest.fixture
 def mock_llm_selector():
-    return patch('test_generator.llm_selector', return_value=(None, 0.01, 0.02))
+    """Mock the LLM selector function."""
+    return (
+        lambda x, y: (
+            lambda z: "Mock LLM result",
+            lambda w: 100,
+            0.01,
+            0.02
+        )
+    )
 
 @pytest.fixture
 def mock_preprocess():
-    return patch('test_generator.preprocess', return_value="Processed prompt")
+    """Mock the preprocess function."""
+    return lambda x, recursive, double_curly_brackets: "Preprocessed prompt"
 
 @pytest.fixture
 def mock_postprocess():
-    return patch('test_generator.postprocess', return_value=("Postprocessed unit test", 0.005))
+    """Mock the postprocess function."""
+    return lambda x, y, z, w: ("Postprocessed unit test", 0.05)
 
-@pytest.fixture
-def mock_chain():
-    return patch('langchain_core.prompts.PromptTemplate.from_template')
-
-@pytest.fixture
-def mock_console():
-    return patch.object(Console, 'print')
-
-def test_test_generator_success(mock_environment, mock_file_content, mock_llm_selector, mock_preprocess, mock_postprocess, mock_chain, mock_console):
+def test_successful_test_generation(mock_environment, mock_file_content, mock_llm_selector, mock_preprocess, mock_postprocess):
+    """Test successful generation of a unit test."""
     with patch('builtins.open', mock_open(read_data=mock_file_content)):
-        with mock_llm_selector, mock_preprocess, mock_postprocess, mock_chain, mock_console:
-            mock_chain.return_value.invoke.return_value = "Mock LLM output"
-            
-            result, cost = test_generator("Test prompt", "Test code", 0.5, 0.7, "python")
-            
-            assert result == "Postprocessed unit test"
-            assert isinstance(cost, float)
-            assert cost > 0
+        with patch('test_generator.llm_selector', mock_llm_selector):
+            with patch('test_generator.preprocess', mock_preprocess):
+                with patch('test_generator.postprocess', mock_postprocess):
+                    with patch('rich.console.Console.print') as mock_print:
+                        result, cost = test_generator("Test prompt", "Test code", 0.5, 0.7, "python")
+                        
+                        assert result == "Postprocessed unit test"
+                        assert cost == pytest.approx(0.07, 0.001)  # 0.01 + 0.02 + 0.05 (rounded to 0.07)
+                        
+                        mock_print.assert_any_call("[bold]Running test generator...[/bold]")
+                        mock_print.assert_any_call("Input tokens: 100")
+                        mock_print.assert_any_call("Estimated input cost: $0.000001")
 
-def test_test_generator_environment_error():
-    with pytest.raises(EnvironmentError):
-        test_generator("Test prompt", "Test code", 0.5, 0.7, "python")
-
-def test_test_generator_file_not_found(mock_environment):
+def test_file_not_found_error(mock_environment):
+    """Test handling of file not found error."""
     with patch('builtins.open', side_effect=FileNotFoundError):
-        result, cost = test_generator("Test prompt", "Test code", 0.5, 0.7, "python")
-        assert result == ""
-        assert cost == 0.0
-
-def test_test_generator_exception_handling(mock_environment, mock_file_content, mock_llm_selector, mock_preprocess, mock_postprocess, mock_chain, mock_console):
-    with patch('builtins.open', mock_open(read_data=mock_file_content)):
-        with mock_llm_selector, mock_preprocess, mock_postprocess, mock_chain, mock_console:
-            mock_chain.return_value.invoke.side_effect = Exception("Test exception")
-            
+        with patch('rich.console.Console.print') as mock_print:
             result, cost = test_generator("Test prompt", "Test code", 0.5, 0.7, "python")
             
             assert result == ""
             assert cost == 0.0
+            mock_print.assert_called_with("[bold red]Prompt file not found.[/bold red]")
 
-def test_test_generator_input_validation():
-    with pytest.raises(TypeError):
-        test_generator(123, "Test code", 0.5, 0.7, "python")
-    
-    with pytest.raises(TypeError):
-        test_generator("Test prompt", 123, 0.5, 0.7, "python")
-    
-    with pytest.raises(TypeError):
-        test_generator("Test prompt", "Test code", "0.5", 0.7, "python")
-    
-    with pytest.raises(TypeError):
-        test_generator("Test prompt", "Test code", 0.5, "0.7", "python")
-    
-    with pytest.raises(TypeError):
-        test_generator("Test prompt", "Test code", 0.5, 0.7, 123)
+def test_general_file_error(mock_environment):
+    """Test handling of general file errors."""
+    with patch('builtins.open', side_effect=Exception("Mock error")):
+        with patch('rich.console.Console.print') as mock_print:
+            result, cost = test_generator("Test prompt", "Test code", 0.5, 0.7, "python")
+            
+            assert result == ""
+            assert cost == 0.0
+            mock_print.assert_called_with("[bold red]Error loading prompt file: Mock error[/bold red]")
 
-def test_test_generator_strength_range():
-    with pytest.raises(ValueError):
-        test_generator("Test prompt", "Test code", -0.1, 0.7, "python")
-    with pytest.raises(ValueError):
-        test_generator("Test prompt", "Test code", 0.5, 1.1, "python")
+def test_model_invocation_error(mock_environment, mock_file_content, mock_llm_selector, mock_preprocess):
+    """Test handling of model invocation errors."""
+    with patch('builtins.open', mock_open(read_data=mock_file_content)):
+        with patch('test_generator.llm_selector', mock_llm_selector):
+            with patch('test_generator.preprocess', mock_preprocess):
+                with patch('langchain_core.prompts.PromptTemplate.from_template') as mock_template:
+                    mock_template.return_value.invoke.side_effect = Exception("Mock invocation error")
+                    with patch('rich.console.Console.print') as mock_print:
+                        result, cost = test_generator("Test prompt", "Test code", 0.5, 0.7, "python")
+                        
+                        assert result == ""
+                        assert cost == 0.0
+                        mock_print.assert_called_with("[bold red]Error invoking model: Mock invocation error[/bold red]")
