@@ -41,6 +41,8 @@
 - [ ] put in context of the prompt for the fix
 - [ ] have fix remember what was the closest code passing and start from that to hill climb
 - [ ] more accurate token counter
+- [ ] Analyze errors first before trying to fix
+- [ ] Check to see if unit test are aligned to the prompt
 
 ## Documentation
 
