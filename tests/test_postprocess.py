@@ -1,123 +1,70 @@
-# Certainly! I'll create a unit test for the `postprocess` function using pytest. The test will be placed in the 'staging/tests' directory, and it will import the function from the 'staging/pdd' directory. Here's the unit test:
-
-# ```python
-# File: staging/tests/test_postprocess.py
-
 import pytest
-from staging.pdd.postprocess import postprocess
+from unittest.mock import patch, mock_open
+from postprocess import postprocess
+from rich.console import Console
 
-def test_postprocess():
-    # Test input
-    llm_output = '''This is some text before the code.
+# Mock environment variable
+@pytest.fixture(autouse=True)
+def mock_env_var():
+    with patch.dict('os.environ', {'PDD_PATH': '/mock/path'}):
+        yield
 
-```python
-def example_function():
-    print("Hello, World!")
-```
+# Mock console to capture output
+@pytest.fixture
+def mock_console(monkeypatch):
+    mock_console = Console(file=None)
+    monkeypatch.setattr("postprocess.console", mock_console)
+    return mock_console
 
-This is some text after the code.
+# Mock functions and classes
+@pytest.fixture
+def mock_dependencies(monkeypatch):
+    monkeypatch.setattr("postprocess.postprocess_0", lambda x, y: "Mocked postprocess_0 output")
+    monkeypatch.setattr("postprocess.llm_selector", lambda x, y: (None, lambda z: len(z), 0.01, 0.02))
+    monkeypatch.setattr("postprocess.PromptTemplate", lambda template, input_variables: None)
+    monkeypatch.setattr("postprocess.JsonOutputParser", lambda pydantic_object: None)
+    monkeypatch.setattr("langchain_core.prompts.PromptTemplate.format", lambda self, **kwargs: "Mocked prompt")
 
-```bash
-echo "This is a bash command"
-```
+def test_postprocess_strength_zero(mock_dependencies):
+    result, cost = postprocess("Test input", "python", strength=0)
+    assert result == "Mocked postprocess_0 output"
+    assert cost == 0.0
 
-More text at the end.'''
+def test_postprocess_normal_execution(mock_dependencies, mock_console):
+    with patch("builtins.open", mock_open(read_data="Mock prompt template")):
+        with patch("postprocess.chain.invoke") as mock_invoke:
+            mock_invoke.return_value = {"extracted_code": "def test():\n    pass"}
+            result, cost = postprocess("Test input", "python")
+    
+    assert "def test():" in result
+    assert cost > 0
 
-    expected_output = '''#This is some text before the code.
-#
-#```python
-def example_function():
-    print("Hello, World!")
-#```
-#
-#This is some text after the code.
-#
-#```bash
-#echo "This is a bash command"
-#```
-#
-#More text at the end.'''
+def test_postprocess_missing_pdd_path():
+    with patch.dict('os.environ', clear=True):
+        with pytest.raises(ValueError, match="PDD_PATH environment variable is not set"):
+            postprocess("Test input", "python")
 
-    # Test for Python
-    result_python = postprocess(llm_output, "python")
-    assert result_python == expected_output, "Python postprocessing failed"
+def test_postprocess_error_handling(mock_dependencies, mock_console):
+    with patch("builtins.open", mock_open(read_data="Mock prompt template")):
+        with patch("postprocess.chain.invoke", side_effect=Exception("Test error")):
+            result, cost = postprocess("Test input", "python")
+    
+    assert result == ""
+    assert cost == 0.0
 
-    # Test for Bash
-    expected_output_bash = '''#This is some text before the code.
-#
-#```python
-#def example_function():
-#    print("Hello, World!")
-#```
-#
-#This is some text after the code.
-#
-#```bash
-echo "This is a bash command"
-#```
-#
-#More text at the end.'''
+def test_postprocess_remove_backticks(mock_dependencies, mock_console):
+    with patch("builtins.open", mock_open(read_data="Mock prompt template")):
+        with patch("postprocess.chain.invoke") as mock_invoke:
+            mock_invoke.return_value = {"extracted_code": "```python\ndef test():\n    pass\n```"}
+            result, cost = postprocess("Test input", "python")
+    
+    assert result == "def test():\n    pass"
+    assert "```" not in result
 
-    result_bash = postprocess(llm_output, "bash")
-    assert result_bash == expected_output_bash, "Bash postprocessing failed"
-
-def test_postprocess_no_code_section():
-    llm_output = "This is just plain text without any code sections."
-    expected_output = "#This is just plain text without any code sections."
-
-    result = postprocess(llm_output, "python")
-    assert result == expected_output, "Postprocessing text without code sections failed"
-
-def test_postprocess_multiple_same_language_sections():
-    llm_output = '''```python
-def func1():
-    pass
-```
-
-Some text.
-
-```python
-def func2():
-    print("This is the larger section")
-    print("It should be uncommented")
-```'''
-
-    expected_output = '''#```python
-#def func1():
-#    pass
-#```
-#
-#Some text.
-#
-#```python
-def func2():
-    print("This is the larger section")
-    print("It should be uncommented")
-#```'''
-
-    result = postprocess(llm_output, "python")
-    assert result == expected_output, "Postprocessing multiple Python sections failed"
-
-def test_postprocess_empty_input():
-    llm_output = ""
-    expected_output = ""
-
-    result = postprocess(llm_output, "python")
-    assert result == expected_output, "Postprocessing empty input failed"
-
-# ```
-
-# This unit test covers several scenarios:
-
-# 1. The main test case (`test_postprocess`) checks both Python and Bash postprocessing with a mixed input containing both languages.
-# 2. `test_postprocess_no_code_section` tests the function's behavior when there are no code sections in the input.
-# 3. `test_postprocess_multiple_same_language_sections` checks if the function correctly handles multiple code sections of the same language and uncomments only the largest one.
-# 4. `test_postprocess_empty_input` tests the function's behavior with an empty input string.
-
-# To run these tests, make sure you have pytest installed and run the following command from the root directory of your project:
-
-# ```
-# pytest staging/tests/test_postprocess.py
-# ```
-
-# This test suite should provide good coverage for the `postprocess` function and help ensure its correct functionality across various scenarios.
+def test_postprocess_missing_extracted_code(mock_dependencies, mock_console):
+    with patch("builtins.open", mock_open(read_data="Mock prompt template")):
+        with patch("postprocess.chain.invoke") as mock_invoke:
+            mock_invoke.return_value = {}
+            result, cost = postprocess("Test input", "python")
+    
+    assert "Error: No extracted code found in the output" in result
