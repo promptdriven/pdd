@@ -24,6 +24,7 @@
 - [ ] execute up to a budget amount
 - [ ] increase the number of unit tests to generate
 - [ ] tally up all costs into a csv file
+- [ ] use context caching during fixing errors
 
 ## Bugs
 
