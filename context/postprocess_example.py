@@ -1,47 +1,26 @@
-# Here's a concise example of how to use the `postprocess` function from the provided module. This example demonstrates how to process a string containing code snippets in different programming languages and apply comments based on the specified file type.
+from postprocess_new import postprocess
 
-# ### Example Usage
 
-# ```python
-# Import the postprocess function from the module
-from postprocess import postprocess
 
-# Sample LLM output containing code snippets
+# Example LLM output containing code
 llm_output = """
-Here is some Python code:
+Here is a simple Python function:
 ```python
 def hello_world():
     print("Hello, world!")
-    prompt = '''```bash
-    echo "Hello, world!"
-    ```'''
-    print(prompt)
 ```
-And here is some Java code:
-```java
-public class HelloWorld {
-    public static void main(String[] args) {
-        System.out.println("Hello, world!");
-    }
-}
-```
+You can use this function in your application.
 """
 
-# Specify the file type for processing
+# Specify the programming language and model parameters
 language = "python"
-strength = .9
-temperature = 0
+strength = 0.9  # Model strength
+temperature = 0.5  # Model temperature
 
 # Call the postprocess function
-processed_output, total_cost = postprocess(llm_output, language, strength=strength, temperature=temperature)
+extracted_code, total_cost = postprocess(llm_output, language, strength, temperature)
 
-# Print the processed output
-print(processed_output)
-print('total cost:',total_cost)
-# ```
-
-# ### Explanation
-# - The `llm_output` string contains code snippets in Python and Java.
-# - The `language` is set to `"python"`, indicating that we want to process the Python code.
-# - The `postprocess` function is called with the `llm_output` and `language`, which returns a modified string where the largest Python code section is commented appropriately.
-# - Finally, the processed output is printed, showing the comments added to the relevant section.
+# Print the results
+print("Extracted Code:")
+print(extracted_code)
+print(f"Total Cost: ${total_cost:.6f}")

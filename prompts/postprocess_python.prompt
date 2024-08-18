@@ -12,9 +12,7 @@
 
 % Here is an example of a Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
 
-% Here is an example how to select the Langchain llm: ```<./context/llm_selector_example.py>```
-
-% Here is an example how to use tiktoken: ```<./context/tiktoken_example.py>```
+% Here is an example how to select the Langchain llm and count tokens: ```<./context/llm_selector_example.py>```
 
 % Here is an example how to use postprocess_0 which is a zero cost postprocessing: ```<./context/postprocess_0_example.py>```
 
@@ -27,9 +25,9 @@
         5a. Pass the following string parameters to the prompt during invoke:
             - 'llm_output'
             - 'language'
-        5b. Pretty print a message letting the user know it is running and how many tokens (using tiktoken) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+        5b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
         5c. The dictionary output of the LCEL will have the key 'extracted_code' that contains the processed code string. Be sure to access this key using the get method with a default error message.
-        5d. If the first and last line have triple backticks delete both lines.
+        5d. If the first and last line have triple backticks delete the entire first and last line. There will be the name of the language after the first triple backticks and that should be removed as well.
         5e. Pretty print the extracted_code using the rich Markdown function. Also, print the number of tokens in the result, the output token cost and the total_cost.
     Step 6. Return the 'extracted_code' string from the JSON and the total_cost.
 
