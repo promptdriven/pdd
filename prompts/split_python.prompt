@@ -16,23 +16,21 @@
 
 % Example usage of the Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
 
-% Example of selecting a Langchain LLM using llm_selector: ```<./context/llm_selector_example.py>```
-
-% Example of using tiktoken: ```<./context/tiktoken_example.py>```
+% Example of selecting a Langchain LLM and counting tokens using llm_selector: ```<./context/llm_selector_example.py>```
 
 % Steps to be followed by the function:
     1. Load the '$PDD_PATH/prompts/split_LLM.prompt' and '$PDD_PATH/prompts/extract_prompt_split_LLM.prompt' files.
-    2. Preprocess the split_LLM prompt using the preprocess function from the preprocess module.
+    2. Preprocess the split_LLM prompt using the preprocess function from the preprocess module and double the curly brackets.
     2. Create a Langchain LCEL template from the processed split_LLM prompt to return a string output.
-    3. Use the llm_selector function for the LLM model.
+    3. Use the llm_selector function for the LLM model and token counting.
     4. Run the input through the model using Langchain LCEL:
         - a. Pass the following string parameters to the prompt during invocation: 'input_prompt', 'input_code', 'example_code'.
-        - b. Calculate the input and output token count using tiktoken and pretty print the running message, including the token count and estimated cost. The cost from llm_selector is in dollars per million tokens.
+        - b. Calculate the input and output token count using token_counter from llm_selector and pretty print the output of 4a, including the token count and estimated cost. The cost from llm_selector is in dollars per million tokens.
     5. Create a Langchain LCEL template from the extract_prompt_split_LLM prompt that outputs JSON:
         - a. Pass the following string parameters to the prompt during invocation: 'llm_output' (this string is from Step 4).
-        - b. Calculate input and ouput token count using tiktoken and pretty print the running message with the token count and cost.
-        - c. get 'sub_prompt' and 'modified_prompt' from the JSON output.
+        - b. Calculate input and output token count using token_counter from llm_selector and pretty print the running message with the token count and cost.
+        - c. Use 'get' function to extract 'sub_prompt' and 'modified_prompt' key values using from the dictionary output.
     6. Pretty print the extracted sub_prompt and modified_prompt using Rich Markdown function. Include token counts and costs.
-    7. Return the 'sub_prompt' and 'modified_prompt' strings and the total_cost.
+    7. Return the 'sub_prompt' and 'modified_prompt' strings and the total_cost of both invokes.
 
 % Ensure the function handles edge cases, such as missing inputs or model errors, and provide clear error messages.
