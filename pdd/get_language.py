@@ -13,7 +13,6 @@ def get_language(extension: str) -> str:
 
     Raises:
         ValueError: If PDD_PATH environment variable is not set.
-        FileNotFoundError: If the CSV file is not found.
     """
     # Step 1: Load environment variable PDD_PATH
     pdd_path = os.environ.get('PDD_PATH')
@@ -21,12 +20,12 @@ def get_language(extension: str) -> str:
         raise ValueError("PDD_PATH environment variable is not set")
 
     # Step 2: Ensure the extension starts with a dot and convert to lowercase
-    if not extension.startswith('.'): 
+    if not extension.startswith('.'):
         extension = '.' + extension
     extension = extension.lower()
 
     # Step 3 & 4: Look up the language name and handle exceptions
-    csv_path = os.path.join(pdd_path, 'language_format.csv')
+    csv_path = os.path.join(pdd_path, 'data', 'language_format.csv')
     try:
         with open(csv_path, 'r') as csvfile:
             reader = csv.DictReader(csvfile)
@@ -35,7 +34,7 @@ def get_language(extension: str) -> str:
                     language = row['language'].strip()
                     return language if language else ''
     except FileNotFoundError:
-        raise FileNotFoundError(f"CSV file not found at {csv_path}")
+        print(f"CSV file not found at {csv_path}")
     except csv.Error as e:
         print(f"Error reading CSV file: {e}")
 
