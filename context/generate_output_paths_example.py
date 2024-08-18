@@ -8,7 +8,7 @@ def main() -> None:
     """
     # Define the command and parameters
     command: str = "generate"
-    output_locations: dict = {
+    output_locations: dict = { # the keys are the names of the output locations specifications (e.g. "output-modified", "output-sub") in the 'pdd' documentation for the output options
         "output": "/path/to/output/directory/",
     }
     basename: str = "my_file"
@@ -16,7 +16,7 @@ def main() -> None:
     file_extension: str = "py"
 
     try:
-        # Generate output paths
+        # Generate output paths (same keys as the output_locations dictionary)
         output_paths: dict = generate_output_paths(command, output_locations, basename, language, file_extension)
 
         # Print the generated output paths
