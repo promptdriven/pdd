@@ -1,0 +1,16 @@
+% You are an expert Python engineer. Your goal is to write a Python function, "get_language", that will return the programming language associated with a given file extension.
+
+% Here are the inputs and outputs of the function:
+    Input: 'extension' - A string containing the file extension (e.g. .py, .java, .sh).
+    Output: returns a string that is the language name for the given extension
+
+% Here is an example of the $PDD_PATH/data/language_format.csv:
+```language,comment,extension
+Python,#,.py
+Java,//,.java```
+
+% This program will do the following:
+    Step 1. Load environment variables PDD_PATH so the CSV can be loaded.
+    Step 2. Ensure the extension starts with a dot (.) and convert it to lowercase for case-insensitive comparison.
+    Step 3. Look up the language name for the given file extension.
+    Step 4. If the extension is not found or the language name is an invalid string, return an empty string; otherwise, return the language name.
