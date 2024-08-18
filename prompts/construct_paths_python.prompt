@@ -1,30 +1,39 @@
-% You are an expert Python software engineer. Your goal is to write a Python function, "construct_paths", that will generate and check the appropriate input and output file paths and then load the input files. This function will use the "generate_output_filename" function to determine the output file names. All output to the console will be pretty print using the Python rich library. The CLI will be handled using the Python Click library.
-
-% Here is a detailed description of the program functionality: ```<./context/README.md>```
+% You are an expert Python software engineer. Your goal is to write a Python function, "construct_paths", that will generate and check the appropriate input and output file paths and then load the input files. All output to the console will be pretty print using the Python rich library. The CLI will be handled using the Python Click library.
 
 % Here are the inputs and outputs of the function:
     Inputs:
-    - 'input_file_paths' (dict) - A dictionary to the paths of the input files with the keys being those specified in the examples from the pdd program description.
+    - 'input_file_paths' (dict) - A dictionary to the paths of the input files with the keys being those specified in the examples from the pdd program description. For example, the 'generate' command has the 'prompt_file' key, 'example' has 'code_file' key, etc.
     - 'force' (boolean) - A flag that indicates whether to overwrite the output files if they already exist.
     - 'quiet' (boolean) - A flag that indicates whether to suppress the output.
     - 'command' (string) - pdd command that was run.
-    - 'command_options' (dict) - A dictionary of the command options for the given command.
+    - 'command_options' (dict) - A dictionary of the command options for the given command. For example it could have the 'language' key for the 'test' command or output locations for other commands.
     Outputs:
     - 'input_strings' (dict) - A dictionary with the keys being the pdd description examples and the values being the input file strings.
     - 'output_file_paths' (dict)- A dictionary with the keys being the loaded input files and output files paths.
     - 'language' (string) - The language of the output file.
 
+% Here is a detailed description of the program functionality: ```<./context/README.md>```
+
+% Here is an example of how to lookup a file extension given a language: ```<./context/get_extension_example.py>```
+
+% Here is an example of how to lookup a language given a file extension: ```<./context/get_language_example.py>```
+
+$ Here is how to generate the output paths: ```<./context/generate_output_paths_example.py>```
+
 % If the file name has no extension, add the appropriate file extension (e.g '.prompt' to input file for the 'generate' command) to the file name.
 
 % If the command is 'generate' extract the basename and language from the input_file_path. Use get_extension to get the file extension for the language. The file extension and language is used for the subsequent functionality below. Be able to handle files missing a '_' in the file name.
 
-% Here is an example how to lookup a file extension given a language: ```<./context/get_extension_example.py>```
-
 % Unless quiet is True, print out the input and output file paths that are being used and the steps being done below.
 
+Follow these steps:
+    Step A. List out all the ways the basename can be extracted from the input file path for each of the commands. For example, the basename is always the first input file without the directory, language or file extension.
+    Step B. List out all the ways language can be extracted from the input file path or command_options.
+    Step C. Write out the construct_paths function.
+
 % This function will do the following:
-    Step 1. Construct the input file paths using above rules.
+    Step 1. Construct the input file paths using above rules according to the different commands.
     Step 2. Load the input files into the input_strings dictionary with the pdd description examples as the keys. Alert the user of any errors in loading the input files.
-    Step 3. Construct the output file paths using the above rules using the "generate_output_filename" function. It should construct the full file path including the output file name for the output files following the rules in the "Output Location Specification" section of the pdd program description.
-    Step 4. If the output files already exist, and force isn't true, check with the user if the program should overwrite.
+    Step 3. Construct the output file paths using the above rules using the "generate_output_paths" function. Be sure to remove non-output keys from the command_options dictionary before passing it to the "generate_output_paths" function output_location dictionary parameters.
+    Step 4. If the output files already exist, and force isn't true, check with the user if the program should overwrite. If the user presses 'n' or 'N' then exit the program. If the user presses enter, 'y' or 'Y' then overwrite the output files.
     Step 5. Return the outputs
