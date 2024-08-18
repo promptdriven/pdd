@@ -4,35 +4,40 @@ from generate_output_paths import generate_output_paths
 
 def test_generate_default_naming():
     output_locations = {'output': None}
-    result = generate_output_paths('generate', output_locations, 'app', 'python', 'py')
+    result = generate_output_paths('generate', output_locations, 'app', 'python', '.py')
     assert result == {'output': 'app.py'}
 
 def test_generate_custom_directory():
     output_locations = {'output': '/custom/dir'}
-    result = generate_output_paths('generate', output_locations, 'app', 'python', 'py')
+    result = generate_output_paths('generate', output_locations, 'app', 'python', '.py')
     assert result == {'output': '/custom/dir/app.py'}
 
 def test_generate_custom_full_path():
     output_locations = {'output': '/custom/dir/custom_name.py'}
-    result = generate_output_paths('generate', output_locations, 'app', 'python', 'py')
+    result = generate_output_paths('generate', output_locations, 'app', 'python', '.py')
     assert result == {'output': '/custom/dir/custom_name.py'}
 
 def test_generate_environment_variable():
     os.environ['PDD_GENERATE_OUTPUT_PATH'] = '/env/dir'
     output_locations = {'output': None}
-    result = generate_output_paths('generate', output_locations, 'app', 'python', 'py')
+    result = generate_output_paths('generate', output_locations, 'app', 'python', '.py')
     assert result == {'output': '/env/dir/app.py'}
     del os.environ['PDD_GENERATE_OUTPUT_PATH']
 
 def test_example_default_naming():
     output_locations = {'output': None}
-    result = generate_output_paths('example', output_locations, 'app', 'python', 'py')
+    result = generate_output_paths('example', output_locations, 'app', 'python', '.py')
     assert result == {'output': 'app_example.py'}
 
 def test_test_default_naming():
     output_locations = {'output': None}
-    result = generate_output_paths('test', output_locations, 'app', 'python', 'py')
+    result = generate_output_paths('test', output_locations, 'app', 'python', '.py')
     assert result == {'output': 'test_app.py'}
+
+def test_test_custom_path():
+    output_locations = {'output': 'output/'}
+    result = generate_output_paths('generate', output_locations, 'app', 'python', '.py')
+    assert result == {'output': 'output/app.py'}
 
 def test_preprocess_default_naming():
     output_locations = {'output': None}
@@ -41,12 +46,12 @@ def test_preprocess_default_naming():
 
 def test_fix_default_naming():
     output_locations = {'output-test': None, 'output-code': None}
-    result = generate_output_paths('fix', output_locations, 'app', 'python', 'py')
+    result = generate_output_paths('fix', output_locations, 'app', 'python', '.py')
     assert result == {'output-test': 'test_app_fixed.py', 'output-code': 'app_fixed.py'}
 
 def test_fix_custom_paths():
     output_locations = {'output-test': '/test/dir', 'output-code': '/code/dir'}
-    result = generate_output_paths('fix', output_locations, 'app', 'python', 'py')
+    result = generate_output_paths('fix', output_locations, 'app', 'python', '.py')
     assert result == {'output-test': '/test/dir/test_app_fixed.py', 'output-code': '/code/dir/app_fixed.py'}
 
 def test_split_default_naming():
