@@ -1,74 +1,93 @@
-#To create a unit test for the `split` function, we will use the `pytest` framework. The test will verify that the function correctly splits the input prompt into `sub_prompt` and `modified_prompt`, and calculates the `total_cost`. We will also handle edge cases such as missing environment variables and invalid inputs.
-#
-#Here's how you can set up the unit test:
-#
-#1. **Directory Structure**:
-#   - `staging/pdd/split.py`: Contains the `split` function.
-#   - `staging/tests/test_split.py`: Contains the unit tests for the `split` function.
-#
-#2. **Unit Test Code**:
-#
-#```python
-# staging/tests/test_split.py
-
-import os
 import pytest
 from unittest.mock import patch, mock_open
-from split import split
+from split import split, Console
 
-# Mock data for testing
-mock_input_prompt = "This is a test prompt."
-mock_input_code = "print('Hello, World!')"
-mock_example_code = "example usage"
-mock_strength = 0.5
-mock_temperature = 0.7
-mock_llm_output = '{"sub_prompt": "This is a", "modified_prompt": "test prompt."}'
-mock_result = {"sub_prompt": "This is a", "modified_prompt": "test prompt."}
+# Mock data
+mock_input_prompt = "Test input prompt"
+mock_input_code = "def test_function():\n    pass"
+mock_example_code = "example_code = test_function()"
+mock_strength = 0.7
+mock_temperature = 0.5
 
-# Mock functions
-def mock_llm_selector(strength, temperature):
-    return lambda x: mock_llm_output, 0.01, 0.01
+mock_split_llm_prompt = "Split LLM prompt content"
+mock_extract_prompt_split_llm = "Extract prompt split LLM content"
 
-def mock_tiktoken_get_encoding(name):
-    class MockEncoding:
-        def encode(self, text):
-            return text.split()
-    return MockEncoding()
+mock_llm_output = "LLM output content"
+mock_json_output = {
+    "sub_prompt": "Extracted sub prompt",
+    "modified_prompt": "Extracted modified prompt"
+}
 
 @pytest.fixture
-def setup_env():
-    os.environ['PDD_PATH'] = '/mock/path'
-    yield
-    del os.environ['PDD_PATH']
+def mock_environment(monkeypatch):
+    monkeypatch.setenv('PDD_PATH', '/mock/path')
 
-@patch('builtins.open', new_callable=mock_open, read_data='mock prompt')
-@patch('staging.pdd.split.llm_selector', side_effect=mock_llm_selector)
-@patch('staging.pdd.split.tiktoken.get_encoding', side_effect=mock_tiktoken_get_encoding)
-def test_split_function(mock_open, mock_llm_selector, mock_get_encoding, setup_env):
+@pytest.fixture
+def mock_file_reads(mock_environment):
+    with patch("builtins.open", mock_open(read_data="mock content")) as mock_file:
+        yield mock_file
+
+@pytest.fixture
+def mock_llm_selector():
+    with patch("split.llm_selector") as mock_selector:
+        mock_selector.return_value = (
+            lambda x: "LLM output content",  # mock LLM
+            lambda x: 100,  # mock token counter
+            0.00001,  # mock input cost
+            0.00002   # mock output cost
+        )
+        yield mock_selector
+
+@pytest.fixture
+def mock_preprocess():
+    with patch("split.preprocess") as mock_prep:
+        mock_prep.return_value = "Preprocessed content"
+        yield mock_prep
+
+@pytest.fixture
+def mock_json_parser():
+    with patch("split.JsonOutputParser") as mock_parser:
+        mock_parser.return_value.parse.return_value = mock_json_output
+        yield mock_parser
+
+def test_split_successful_execution(mock_file_reads, mock_llm_selector, mock_preprocess, mock_json_parser):
     sub_prompt, modified_prompt, total_cost = split(
         mock_input_prompt, mock_input_code, mock_example_code, mock_strength, mock_temperature
     )
 
-    assert sub_prompt == "This is a"
-    assert modified_prompt == "test prompt."
+    assert sub_prompt == mock_json_output["sub_prompt"]
+    assert modified_prompt == mock_json_output["modified_prompt"]
+    assert isinstance(total_cost, float)
     assert total_cost > 0
 
-def test_missing_pdd_path():
-    with pytest.raises(ValueError, match="PDD_PATH environment variable is not set"):
-        split(mock_input_prompt, mock_input_code, mock_example_code, mock_strength, mock_temperature)
+def test_split_file_read_error(mock_environment):
+    with patch("builtins.open", side_effect=FileNotFoundError):
+        sub_prompt, modified_prompt, total_cost = split(
+            mock_input_prompt, mock_input_code, mock_example_code, mock_strength, mock_temperature
+        )
 
-# Additional tests can be added to cover more edge cases and scenarios
-#```
-#
-#3. **Explanation**:
-#   - **Mocking**: We use `unittest.mock.patch` to mock the `open` function, `llm_selector`, and `tiktoken.get_encoding` to simulate the behavior of external dependencies.
-#   - **Fixtures**: The `setup_env` fixture sets up and tears down the environment variable `PDD_PATH`.
-#   - **Test Cases**:
-#     - `test_split_function`: Tests the main functionality of the `split` function, ensuring it returns the expected `sub_prompt`, `modified_prompt`, and `total_cost`.
-#     - `test_missing_pdd_path`: Tests the error handling when the `PDD_PATH` environment variable is not set.
-#
-#4. **Running the Tests**:
-#   - Ensure you have `pytest` installed in your environment.
-#   - Run the tests using the command: `pytest staging/tests/test_split.py`.
-#
-#This setup provides a basic framework for testing the `split` function, including handling of environment variables and mocking of external dependencies. You can expand the tests to cover additional edge cases and scenarios as needed.
+    assert sub_prompt == ""
+    assert modified_prompt == ""
+    assert total_cost == 0.0
+
+def test_split_llm_selector_error(mock_file_reads, mock_preprocess):
+    with patch("split.llm_selector", side_effect=Exception("LLM selector error")):
+        sub_prompt, modified_prompt, total_cost = split(
+            mock_input_prompt, mock_input_code, mock_example_code, mock_strength, mock_temperature
+        )
+
+    assert sub_prompt == ""
+    assert modified_prompt == ""
+    assert total_cost == 0.0
+
+def test_split_json_parsing_error(mock_file_reads, mock_llm_selector, mock_preprocess):
+    with patch("split.JsonOutputParser") as mock_parser:
+        mock_parser.return_value.parse.side_effect = ValueError("JSON parsing error")
+        sub_prompt, modified_prompt, total_cost = split(
+            mock_input_prompt, mock_input_code, mock_example_code, mock_strength, mock_temperature
+        )
+
+    assert sub_prompt == ""
+    assert modified_prompt == ""
+    assert isinstance(total_cost, float)
+    assert total_cost > 0
