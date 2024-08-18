@@ -46,7 +46,7 @@ pdd generate [GLOBAL OPTIONS] [OPTIONS] PROMPT_FILE
 ```
 
 Options:
-- `--output LOCATION`: Specify where to save the generated code. If an environment variable `PDD_GENERATE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output LOCATION`: Specify where to save the generated code. The default file name is `<basename>.<language_file_extension>`. If an environment variable `PDD_GENERATE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 
 ### 2. Example
 
@@ -57,7 +57,7 @@ pdd example [GLOBAL OPTIONS] [OPTIONS] CODE_FILE
 ```
 
 Options:
-- `--output LOCATION`: Specify where to save the generated example code. If an environment variable `PDD_EXAMPLE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output LOCATION`: Specify where to save the generated example code. The default file name is `<basename>_example.<language_file_extension>`. If an environment variable `PDD_EXAMPLE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 
 ### 3. Test
 
@@ -68,7 +68,7 @@ pdd test [GLOBAL OPTIONS] [OPTIONS] CODE_FILE PROMPT_FILE
 ```
 
 Options:
-- `--output LOCATION`: Specify where to save the generated test file. If an environment variable `PDD_TEST_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output LOCATION`: Specify where to save the generated test file. The default file name is `test_<basename>.<language_file_extension>`. If an environment variable `PDD_TEST_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--language`: Specify the programming language. Defaults to the language specified by the prompt file name.
 
 ### 4. Preprocess
@@ -80,7 +80,7 @@ pdd preprocess [GLOBAL OPTIONS] [OPTIONS] PROMPT_FILE
 ```
 
 Options:
-- `--output LOCATION`: Specify where to save the preprocessed prompt. If an environment variable `PDD_PREPROCESS_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output LOCATION`: Specify where to save the preprocessed prompt. The default file name is `<basename>_<language>_preprocessed.prompt`. If an environment variable `PDD_PREPROCESS_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--diff`: Show diff between original and preprocessed prompts.
 - `--xml`: Automatically insert XML delimiters for long and complex prompts to structure the content better.
 
@@ -93,8 +93,8 @@ pdd fix [GLOBAL OPTIONS] [OPTIONS] UNIT_TEST_FILE CODE_FILE ERROR_FILE
 ```
 
 Options:
-- `--output-test LOCATION`: Specify where to save the fixed unit test file. If an environment variable `PDD_FIX_TEST_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
-- `--output-code LOCATION`: Specify where to save the fixed code file. If an environment variable `PDD_FIX_CODE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output-test LOCATION`: Specify where to save the fixed unit test file. The default file name is `test_<basename>_fixed.<language_file_extension>`. If an environment variable `PDD_FIX_TEST_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output-code LOCATION`: Specify where to save the fixed code file. The default file name is `<basename>_fixed.<language_file_extension>`. If an environment variable `PDD_FIX_CODE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 
 ### 6. Split
 
@@ -105,9 +105,9 @@ pdd split [GLOBAL OPTIONS] [OPTIONS] INPUT_PROMPT INPUT_CODE EXAMPLE_CODE
 ```
 
 Options:
-- `--output-sub LOCATION`: Specify where to save the generated sub-prompt. If an environment variable `PDD_SPLIT_SUB_PROMPT_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
-- `--output-modified LOCATION`: Specify where to save the modified prompt. If an environment variable `PDD_SPLIT_MODIFIED_PROMPT_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
-- `--output-cost LOCATION`: Specify where to save the cost estimation report. If an environment variable `PDD_SPLIT_COST_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output-sub LOCATION`: Specify where to save the generated sub-prompt. The default file name is `sub_<basename>.prompt`. If an environment variable `PDD_SPLIT_SUB_PROMPT_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output-modified LOCATION`: Specify where to save the modified prompt. The default file name is `modified_<basename>.prompt`. If an environment variable `PDD_SPLIT_MODIFIED_PROMPT_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output-cost LOCATION`: Specify where to save the cost estimation report. The default file name is `cost_<basename>.txt`. If an environment variable `PDD_SPLIT_COST_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 
 ## Output Location Specification
 
@@ -117,6 +117,7 @@ For all commands that generate or modify files, the `--output` option (or its va
 2. **Full path**: If you provide a full path (e.g., `--output /home/user/projects/result.py`), the file will be created at that exact location.
 3. **Directory**: If you provide a directory name (e.g., `--output ./generated/`), a file with an automatically generated name will be created in that directory.
 4. **Environment Variable**: If the `--output` option is not provided, and an environment variable specific to the command (`PDD_GENERATE_OUTPUT_PATH`, `PDD_EXAMPLE_OUTPUT_PATH`, `PDD_TEST_OUTPUT_PATH`, `PDD_PREPROCESS_OUTPUT_PATH`, `PDD_FIX_TEST_OUTPUT_PATH`, `PDD_FIX_CODE_OUTPUT_PATH`, `PDD_SPLIT_SUB_PROMPT_OUTPUT_PATH`, `PDD_SPLIT_MODIFIED_PROMPT_OUTPUT_PATH`, `PDD_SPLIT_COST_OUTPUT_PATH`) is set, PDD will use the path specified by this variable. Otherwise, it will use default naming conventions and save the file in the current working directory.
+5. **No Output Location**: If no output location is specified and no environment variable is set, the file will be saved in the current working directory with a default name given the command.
 
 ## Multi-Command Chaining
 
@@ -131,24 +132,28 @@ This feature enables you to perform complex workflows efficiently.
 
 ## Getting Help
 
-For general help:
-```
-pdd --help
-```
+PDD provides comprehensive help features:
 
-For help on a specific command:
-```
-pdd COMMAND --help
-```
+1. **General Help**:
+   ```
+   pdd --help
+   ```
+   Displays a list of available commands and options.
+
+2. **Command-Specific Help**:
+   ```
+   pdd COMMAND --help
+   ```
+   Provides detailed help for a specific command, including available options and usage examples.
 
 ## Additional Features
 
-- **Tab Completion**: PDD supports tab completion for commands and options in compatible shells. Install tab completion by running:
+- **Tab Completion**: PDD supports tab completion for commands and options in compatible shells. You can install tab completion by running:
   ```
   pdd --install-completion
   ```
-- **Colorized Output**: For better readability, PDD provides colorized output in compatible terminals.
-- **Progress Indicators**: Long-running operations include progress indicators to keep you informed of the task status.
+- **Colorized Output**: PDD provides colorized output for better readability in compatible terminals.
+- **Progress Indicators**: For long-running operations, PDD includes progress indicators to keep you informed of the task's status.
 
 ## Examples of Common Workflows
 
