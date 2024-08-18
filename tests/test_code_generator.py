@@ -1,60 +1,87 @@
-import unittest
+import pytest
 from unittest.mock import patch, MagicMock
-import sys
-import os
-
-# Add the path to the directory containing the code_generator.py file
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'pdd')))
-
 from code_generator import code_generator
+from rich.console import Console
 
-class TestCodeGenerator(unittest.TestCase):
+@pytest.fixture
+def mock_console() -> MagicMock:
+    """Fixture to mock the Console object."""
+    return MagicMock(spec=Console)
 
-    @patch('code_generator.preprocess')
-    @patch('code_generator.llm_selector')
-    @patch('code_generator.PromptTemplate')
-    @patch('code_generator.postprocess')
-    @patch('code_generator.tiktoken.get_encoding')
-    @patch('code_generator.print')
-    def test_code_generator(self, mock_print, mock_get_encoding, mock_postprocess, mock_prompt_template, mock_llm_selector, mock_preprocess):
-        # Mock the necessary functions and objects
-        mock_preprocess.return_value = "Processed prompt"
-        mock_llm = MagicMock()
-        mock_llm_selector.return_value = (mock_llm, 0.01, 0.02)
+@pytest.fixture
+def mock_preprocess() -> MagicMock:
+    """Fixture to mock the preprocess function."""
+    with patch('code_generator.preprocess') as mock:
+        mock.return_value = "Preprocessed prompt"
+        yield mock
+
+@pytest.fixture
+def mock_llm_selector() -> MagicMock:
+    """Fixture to mock the llm_selector function."""
+    with patch('code_generator.llm_selector') as mock:
+        mock.return_value = (MagicMock(), lambda x: len(x), 0.01, 0.02)
+        yield mock
+
+@pytest.fixture
+def mock_postprocess() -> MagicMock:
+    """Fixture to mock the postprocess function."""
+    with patch('code_generator.postprocess') as mock:
+        mock.return_value = ("Runnable code", 0.005)
+        yield mock
+
+def test_code_generator_basic_functionality(mock_console: MagicMock, mock_preprocess: MagicMock, mock_llm_selector: MagicMock, mock_postprocess: MagicMock) -> None:
+    """Test the basic functionality of the code_generator function."""
+    prompt = "Sample prompt"
+    language = "python"
+    strength = 0.7
+    temperature = 0.2
+
+    with patch('code_generator.PromptTemplate.from_template') as mock_prompt_template, \
+         patch('code_generator.StrOutputParser') as mock_str_output_parser:
+        
         mock_chain = MagicMock()
         mock_chain.invoke.return_value = "Model output"
-        mock_prompt_template.from_template.return_value.__or__.return_value.__or__.return_value = mock_chain
-        mock_postprocess.return_value = "Runnable code"
-        mock_get_encoding.return_value.encode.return_value = [1] * 100  # Simulate 100 tokens
+        mock_prompt_template.return_value.__or__.return_value.__or__.return_value = mock_chain
 
-        # Test the code_generator function
-        result = code_generator("test_prompt.txt", "python", 0.8)
+        runnable_code, total_cost = code_generator(prompt, language, strength, temperature)
 
-        # Assertions
-        self.assertEqual(result, "Runnable code")
-        mock_preprocess.assert_called_once_with("test_prompt.txt")
-        mock_llm_selector.assert_called_once_with(0.8, 0)
-        mock_prompt_template.from_template.assert_called_once_with("Processed prompt")
-        mock_postprocess.assert_called_once_with("Model output", "python")
+    assert isinstance(runnable_code, str)
+    assert isinstance(total_cost, float)
+    assert runnable_code == "Runnable code"
+    assert total_cost == pytest.approx(0.005 + (len("Preprocessed prompt") / 1_000_000 * 0.01) + (len("Model output") / 1_000_000 * 0.02))
 
-        # Check if the print function was called with the expected arguments
-        mock_print.assert_any_call("[bold green]Running the model...[/bold green]")
-        mock_print.assert_any_call("Token count in prompt: 100")
-        mock_print.assert_any_call("Estimated cost: $0.000001")
+def test_code_generator_input_validation() -> None:
+    """Test input validation for the code_generator function."""
+    with pytest.raises(ValueError):
+        code_generator("prompt", "python", 1.5, 0.2)  # strength > 1
+    
+    with pytest.raises(ValueError):
+        code_generator("prompt", "python", 0.7, 2.0)  # temperature > 1
 
-    @patch('code_generator.preprocess')
-    @patch('code_generator.print')
-    def test_code_generator_file_not_found(self, mock_print, mock_preprocess):
-        # Simulate a FileNotFoundError in preprocess
-        mock_preprocess.side_effect = FileNotFoundError("File not found")
+def test_code_generator_empty_prompt(mock_console: MagicMock, mock_preprocess: MagicMock, mock_llm_selector: MagicMock, mock_postprocess: MagicMock) -> None:
+    """Test the code_generator function with an empty prompt."""
+    with patch('code_generator.PromptTemplate.from_template'), \
+         patch('code_generator.StrOutputParser'):
+        runnable_code, total_cost = code_generator("", "python", 0.7, 0.2)
+    
+    assert runnable_code == "Runnable code"
+    assert total_cost > 0
 
-        # Test the code_generator function with a non-existent file
-        result = code_generator("non_existent_file.txt", "python", 0.8)
+def test_code_generator_different_language(mock_console: MagicMock, mock_preprocess: MagicMock, mock_llm_selector: MagicMock, mock_postprocess: MagicMock) -> None:
+    """Test the code_generator function with a different language."""
+    with patch('code_generator.PromptTemplate.from_template'), \
+         patch('code_generator.StrOutputParser'):
+        runnable_code, total_cost = code_generator("prompt", "javascript", 0.7, 0.2)
+    
+    mock_postprocess.assert_called_with("Model output", "javascript", 0.7, 0.2)
 
-        # Assertions
-        self.assertEqual(result, "")
-        mock_preprocess.assert_called_once_with("non_existent_file.txt")
-        mock_print.assert_called_with("[bold red]Error:[/bold red] File not found")
+def test_code_generator_zero_strength_and_temperature(mock_console: MagicMock, mock_preprocess: MagicMock, mock_llm_selector: MagicMock, mock_postprocess: MagicMock) -> None:
+    """Test the code_generator function with zero strength and temperature."""
+    with patch('code_generator.PromptTemplate.from_template'), \
+         patch('code_generator.StrOutputParser'):
+        runnable_code, total_cost = code_generator("prompt", "python", 0, 0)
+    
+    mock_llm_selector.assert_called_with(0, 0)
 
-if __name__ == '__main__':
-    unittest.main()
+if __name__ == "__main__":
+    pytest.main([__file__])

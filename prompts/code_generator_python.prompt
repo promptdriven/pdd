@@ -3,7 +3,7 @@
 % Here are the inputs and outputs of the function:
     Inputs: 
         'prompt' - A string containing the raw prompt to be processed.
-        'language' - A string that is the language type (e.g. python, bash) of file that will be outputed by the LLM
+        'language' - A string that is the language type (e.g. python, bash) of file that will be outputed by the LLM.
         'strength' - A float between 0 and 1 that is the strength of the LLM model to use
         'temperature' - A float that is the temperature of the LLM model to use. Default is 0.
     Outputs:
@@ -12,19 +12,17 @@
 
 % Here is an example of a Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
 
-% Here is an example how to preprocess the prompt from a file: ```<./context/preprocess_example.py>```                
+% Here is an example how to preprocess the prompt from a file: ```<./context/preprocess_example.py>```
 
-% Here is an example how to select the Langchain llm: ```<./context/llm_selector_example.py>``` 
+% Here is an example how to select the Langchain llm and count tokens: ```<./context/llm_selector_example.py>```
 
-% Here is an example how to postprocess the model output result: ```<./context/postprocess_example.py>``` 
-
-% Here is an example how to use tiktoken: ```<./context/tiktoken_example.py>```
+% Here is an example how to postprocess the model output result: ```<./context/postprocess_example.py>```
 
 % This program will use Langchain to do the following:
     Step 1. Preprocess the raw prompt using the preprocess function from the preprocess module.
     Step 2. Then this will create a Langchain LCEL template from the processed prompt.
     Step 3. This will use llm_selector for the model.
-    Step 4. This will run the prompt through the model using Langchain LCEL. It will pretty print a message letting the user know it is running and how many tokens (using tiktoken) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+    Step 4. This will run the prompt through the model using Langchain LCEL. It will pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
     Step 5. This will pretty print the markdown formatting that is present in the result via the rich Markdown function. It will also pretty print the number of tokens in the result and the cost.
     Step 6. The code result of the model will contain a mix of text and code separated by triple backticks. Use postprocess to create a runnable_code. Also, print out the total_cost including the input and output tokens and postprocessing.
     Step 7. Return the runnable_code and total_cost.
