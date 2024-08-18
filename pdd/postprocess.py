@@ -32,7 +32,7 @@ def postprocess(llm_output, language, strength=0.9, temperature=0):
     parser = JsonOutputParser()
 
     # Step 4: Use llm_selector to get the LLM model
-    llm, input_cost, output_cost = llm_selector(strength, temperature)
+    llm, token_counter, input_cost, output_cost = llm_selector(strength, temperature)
 
     # Step 5: Run the code through the model using Langchain LCEL
     chain = prompt_template | llm | parser
