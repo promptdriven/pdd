@@ -1,0 +1,54 @@
+% You are an expert LLM Prompt Engineer. Your goal is to change the input_prompt into a modified_prompt according to the change_prompt. 
+
+% Here are the inputs and outputs of this prompt:
+    Input: 
+        'input_prompt' - A string that contains the prompt that will be modified by the change_prompt.
+        'input_code' - A string that contains the code that was generated from the input_prompt.
+        'change_prompt' - A string that contains the instructions of how to modify the input_prompt.
+    Output: 
+        'modified_prompt' - A string that contains the modified prompt that was changed based on the change_prompt.
+
+% Here is example_1 of how to change the input_prompt to the modified_prompt:
+    example_1_input_prompt: ```<./context/change/1/initial_code_generator_python.prompt>```
+    example_1_input_code: ```<./context/change/1/initial_code_generator.py>```
+    example_1_change_prompt: ```<./context/change/1/change.prompt>```
+    example_1_modified_prompt: ```<./context/change/1/final_code_generator_python.prompt>```
+
+% Here is example_2 of how to change the input_prompt to the modified_prompt:
+    example_2_input_prompt: ```<./context/change/2/initial_context_generator_python.prompt>```
+    example_2_input_code: ```<./context/change/2/initial_context_generator.py>```
+    example_2_change_prompt: ```<./context/change/2/change.prompt>```
+    example_2_modified_prompt: ```<./context/change/2/final_context_generator_python.prompt>```
+
+% Here is example_3 of how to change the input_prompt to the modified_prompt:
+    example_3_input_prompt: ```<./context/change/3/initial_test_generator_python.prompt>```
+    example_3_input_code: ```<./context/change/3/intial_test_generator.py>```
+    example_3_change_prompt: ```<./context/change/3/change.prompt>```
+    example_3_modified_prompt: ```<./context/change/3/final_test_generator_python.prompt>```
+
+% Here is example_4 of how to change the input_prompt to the modified_prompt:
+    example_4_input_prompt: ```<./context/change/4/initial_postprocess_python.prompt>```
+    example_4_input_code: ```<./context/change/4/initial_postprocess.py>```
+    example_4_change_prompt: ```<./context/change/4/change.prompt>```
+    example_4_modified_prompt: ```<./context/change/4/final_postprocess_python.prompt>```
+
+% Here is example_5 of how to change the input_prompt to the modified_prompt:
+    example_5_input_prompt: ```<./context/change/5/initial_split_python.prompt>```
+    example_5_input_code: ```<./context/change/5/initial_split.py>```
+    example_5_change_prompt: ```<./context/change/5/change.prompt>```
+    example_5_modified_prompt: ```<./context/change/5/final_split_python.prompt>```
+
+% Here is example_5 of how to change the input_prompt to the modified_prompt:
+    example_5_input_prompt: ```<./context/change/5/initial_split_python.prompt>```
+    example_5_input_code: ```<./context/change/5/initial_split.py>```
+    example_5_change_prompt: ```<./context/change/5/change.prompt>```
+    example_5_modified_prompt: ```<./context/change/5/final_split_python.prompt>```
+
+% Here is the input_prompt to split: ```<./context/change/6/initial_xml_tagger_python.prompt>```
+% Here is the input_code: ```{<./context/change/6/initial_xml_tagger.py>}```
+% Here is the change_prompt to implement: ```<./context/change/6/change.prompt>```
+
+% Follow these instructions:
+    Step 1. Explain in detai step by step the ramifications of the change_prompt on the input_prompt.
+    Step 2. Explain in detai step by step what changes need to be made to the input_prompt to generate the modified_prompt based on Step 1.
+    Step 3. Generate the modified_prompt based on Step 2.
