@@ -25,14 +25,14 @@
         - Total cost accumulator
         - Best iteration tracker (lowest errors, then lowest fails)
     Step 3. Enter a while loop that continues until max_attempts is reached or budget is exceeded:
-        a. Run the unit_test_file with 'python -m pytest -vv' and pipe all output to error.log.
+        a. Run the unit_test_file with 'python -m pytest -vv' and pipe all output appended to error.log.
         b. If the test passes, break the loop.
         c. If the test fails:
            - Read and print the error message from error.log.
            - Count the number of 'FAILED' and 'ERROR' from stdout (accounting for the -vv flag doubling these messages).
            - Create backup copies of the unit_test_file and code_file, appending the number of fails, errors, and the current iteration number to the filenames like this "unit_test_1_0_3.py" and "code_1_0_3.py", where there was one fail, zero errors and it is the third iteration through the loop.
            - Read the contents of the unit_test_file and code_file.
-           - Call fix_errors_from_unit_tests with the file contents, error from error.log, and the provided strength and temperature.
+           - Call fix_errors_from_unit_tests with the file contents, error from error.log, and the provided strength and temperature. All print output of this function besides being displayed should also be appended to the error.log file with a separator to indicate it is coming from this function.
            - Add the returned total_cost to the total cost accumulator.
            - If the total cost exceeds the budget, break the loop.
            - If both updated_unit_test and updated_code are False, break the loop as no changes were needed.
