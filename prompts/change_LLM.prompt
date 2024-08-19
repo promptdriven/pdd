@@ -38,17 +38,30 @@
     example_5_change_prompt: ```<./context/change/5/change.prompt>```
     example_5_modified_prompt: ```<./context/change/5/final_split_python.prompt>```
 
-% Here is example_5 of how to change the input_prompt to the modified_prompt:
-    example_5_input_prompt: ```<./context/change/5/initial_split_python.prompt>```
-    example_5_input_code: ```<./context/change/5/initial_split.py>```
-    example_5_change_prompt: ```<./context/change/5/change.prompt>```
-    example_5_modified_prompt: ```<./context/change/5/final_split_python.prompt>```
+% Here is example_6 of how to change the input_prompt to the modified_prompt:
+    example_6_input_prompt: ```<./context/change/6/initial_xml_tagger_python.prompt>```
+    example_6_input_code: ```<./context/change/6/initial_xml_tagger.py>```
+    example_6_change_prompt: ```<./context/change/6/change.prompt>```
+    example_6_modified_prompt: ```<./context/change/6/final_xml_tagger_python.prompt>```
 
-% Here is the input_prompt to split: ```<./context/change/6/initial_xml_tagger_python.prompt>```
-% Here is the input_code: ```{<./context/change/6/initial_xml_tagger.py>}```
-% Here is the change_prompt to implement: ```<./context/change/6/change.prompt>```
+% Here is example_7 of how to change the input_prompt to the modified_prompt:
+    example_7_input_prompt: ```<./context/change/7/initial_fix_errors_python.prompt>```
+    example_7_input_code: ```<./context/change/7/initial_fix_errors.py>```
+    example_7_change_prompt: ```<./context/change/7/change.prompt>```
+    example_7_modified_prompt: ```<./context/change/7/final_fix_errors_python.prompt>```
+
+% Here is example_8 of how to change the input_prompt to the modified_prompt:
+    example_8_input_prompt: ```<./context/change/8/initial_fix_errors_from_unit_tests_python.prompt>```
+    example_8_input_code: ```<./context/change/8/initial_fix_errors_from_unit_tests.py>```
+    example_8_change_prompt: ```<./context/change/8/change.prompt>```
+    example_8_modified_prompt: ```<./context/change/8/final_fix_errors_from_unit_tests_python.prompt>```
+
+
+% Here is the input_prompt to change: ```<./context/change/9/initial_fix_error_loop_python.prompt>```
+% Here is the input_code: ```{<./context/change/9/initial_fix_error_loop.py>}```
+% Here is the change_prompt to implement: ```<./context/change/9/change.prompt>```
 
 % Follow these instructions:
-    Step 1. Explain in detai step by step the ramifications of the change_prompt on the input_prompt.
-    Step 2. Explain in detai step by step what changes need to be made to the input_prompt to generate the modified_prompt based on Step 1.
-    Step 3. Generate the modified_prompt based on Step 2.
+    Step 1. Explain in detail step by step the ramifications of the change_prompt on the input_prompt.
+    Step 2. Explain in detail step by step what changes need to be made to the input_prompt to generate the modified_prompt based on Step 1.
+    Step 3. Generate the modified_prompt based on Step 2. Except for the change, the rest of the existing functionality of the input_prompt should remain. Structure the prompt similar to the example prompts more esp. including the descriptions of the inputs and outputs.
