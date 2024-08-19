@@ -1,44 +1,35 @@
-# Here's a concise example of how to use the provided module, along with documentation for the input and output parameters. This example assumes that the module is saved in the file `staging/pdd/fix_errors_from_unit_tests.py`.
-
-# ### Example Usage
-
-# ```python
-# Filename: example_usage.py
-
 from fix_errors_from_unit_tests import fix_errors_from_unit_tests
 
-if __name__ == "__main__":
-    # Define the inputs
-    unit_test = "def test_add():\n    assert add(1, 2) == 3"  # A unit test that is expected to fail
-    code = "def add(a, b):\n    return a + b"  # The code that the unit test is testing
-    error = "NameError: name 'add' is not defined"  # The error message indicating the issue
-    strength = 0.8  # A strength parameter for the LLM selection
+# Define the inputs
+unit_test_code = """
+def test_addition():
+    assert add(1, 2) == 4  # Intentional error
+"""
 
+code_under_test = """
+def add(a, b):
+    return a + b
+"""
+
+error_message = "AssertionError: assert 3 == 4"
+strength = 0.7  # Adjust the strength for LLM selection
+temperature = 0  # Adjust the temperature for LLM selection
+
+try:
     # Call the function to fix errors
-    updated_unit_test, updated_code, fixed_unit_test, fixed_code = fix_errors_from_unit_tests(unit_test, code, error, strength)
+    update_unit_test, update_code, fixed_unit_test, fixed_code, total_cost = fix_errors_from_unit_tests(
+        unit_test=unit_test_code,
+        code=code_under_test,
+        error=error_message,
+        strength=strength,
+        temperature=temperature
+    )
 
-    # Print the results
-    print("Updated Unit Test:", updated_unit_test)
-    print("Updated Code:", updated_code)
-    print("Fixed Unit Test:", fixed_unit_test)
-    print("Fixed Code:", fixed_code)
-# ```
-
-# ### Input Parameters
-
-# - `unit_test` (str): The unit test code that is expected to fail due to an error.
-# - `code` (str): The implementation code that the unit test is testing.
-# - `error` (str): The error message that indicates what went wrong during the unit test execution.
-# - `strength` (float): A parameter that influences the selection of the language model (LLM) used for fixing the errors. It typically ranges from 0 to 1.
-
-# ### Output Parameters
-
-# The function returns four values:
-# - `updated_unit_test` (bool): Indicates whether the unit test needs to be updated.
-# - `updated_code` (bool): Indicates whether the code needs to be updated.
-# - `fixed_unit_test` (str): The corrected version of the unit test code.
-# - `fixed_code` (str): The corrected version of the implementation code.
-
-# ### Note
-
-# Make sure to set the `PDD_PATH` environment variable to the directory containing the prompt files before running the example. This is necessary for the function to locate the required prompt templates.
+    # Output the results
+    print(f"Update Unit Test: {update_unit_test}")
+    print(f"Update Code: {update_code}")
+    print(f"Fixed Unit Test:\n{fixed_unit_test}")
+    print(f"Fixed Code:\n{fixed_code}")
+    print(f"Total Cost: ${total_cost:.6f}")
+except Exception as e:
+    print(f"An error occurred: {e}")
