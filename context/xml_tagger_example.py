@@ -8,8 +8,13 @@ def main() -> None:
     """
     # Define the raw prompt, strength, and temperature
     raw_prompt: str = "Write a story about a magical forest"
-    strength: float = 0.7  # Strength parameter for LLM selection
-    temperature: float = 0.5  # Temperature parameter for LLM selection
+    strength: float = .9  # Strength parameter for LLM selection
+    temperature: float = 0  # Temperature parameter for LLM selection
+
+    # load prompts/change_LLM.prompt into raw_prompt
+    prompt_path = os.path.join(os.getenv("PDD_PATH"), "prompts", "change_LLM.prompt")
+    with open(prompt_path, "r") as file:
+        raw_prompt = file.read()
 
     try:
         # Call the xml_tagger function
