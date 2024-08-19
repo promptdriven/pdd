@@ -34,4 +34,4 @@ Make your tone concise and professional. Follow this structure:
     Step 1. Write out the analysis of the input_raw_prompt by identifying components like instructions, context, and examples.
     Step 2. Assign appropriate XML tags to these components, ensuring consistency (e.g., `<instructions>`, `<context>`, `<examples>`, `<formatting>`).
     Step 3. Insert the XML tags at the correct locations in the input_raw_prompt without introducing any new content. Only add tags to existing content.
-    Step 4. Return the updated prompt with XML tags as a string, enhancing its structure and readability.
+    Step 4. Return the updated prompt with XML tags as a string, enhancing its structure and readability without also including the initial and ending triple backticks for the xml code block.  
