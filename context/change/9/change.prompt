@@ -1,0 +1,42 @@
+% Update the prompt use the latest definition of fix_errors_from_unit_tests as shown in this example: ```from fix_errors_from_unit_tests import fix_errors_from_unit_tests
+
+# Define the inputs
+unit_test_code = """
+def test_addition():
+    assert add(1, 2) == 4  # Intentional error
+"""
+
+code_under_test = """
+def add(a, b):
+    return a + b
+"""
+
+error_message = "AssertionError: assert 3 == 4"
+strength = 0.7  # Adjust the strength for LLM selection
+temperature = 0  # Adjust the temperature for LLM selection
+
+try:
+    # Call the function to fix errors
+    update_unit_test, update_code, fixed_unit_test, fixed_code, total_cost = fix_errors_from_unit_tests(
+        unit_test=unit_test_code,
+        code=code_under_test,
+        error=error_message,
+        strength=strength,
+        temperature=temperature
+    )
+
+    # Output the results
+    print(f"Update Unit Test: {update_unit_test}")
+    print(f"Update Code: {update_code}")
+    print(f"Fixed Unit Test:\n{fixed_unit_test}")
+    print(f"Fixed Code:\n{fixed_code}")
+    print(f"Total Cost: ${total_cost:.6f}")
+except Exception as e:
+    print(f"An error occurred: {e}")```
+
+% Also, output the total cost of all the runs and take in an 'budget' input to stop the iterations if the total cost exceeds the budget.
+
+% Before finishing the function, copy back the iteration of fixed_unit_test and fixed_code that meets these criteria in priority order:
+    1) Had the lowest number of 'ERROR's
+    2) Had the lowest number of 'FAILED's
+This is so that the function saves the most successful iteration of the fixed code and unit test where error's are prioritized over fail's. Be sure to also consider the last run when decided which iteration to copy back. If the last run is the best, no need to copy back.
