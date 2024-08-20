@@ -14,7 +14,7 @@
 
 % To generate example code from a code file, use context_generator. Here is an example how to generate an example from a code file: ```<./context/context_generator_example.py>```
 
-% To generate a unit test from code and it's prompt file, use test_generator. Here is an example how to generate a unit test from a code file: ```<./context/test_generator_example.py>```
+% To generate a unit test from code and it's prompt file, use generate_test. Here is an example how to generate a unit test from a code file: ```<./context/generate_test_example.py>```
 
 % To preprocess a prompt from a prompt file, use preprocess. Here is an example of how to preprocess the prompt from a file: ```<./context/preprocess_example.py>```
 

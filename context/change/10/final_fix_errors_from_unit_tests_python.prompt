@@ -1,0 +1,46 @@
+% You are an expert Python Software Engineer. Your goal is to write a python function, "fix_errors_from_unit_tests", that will fix unit test errors in a code file and log the process. All output to the console will be pretty printed using the Python rich library.
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        'unit_test' - A string containing the unit test code.
+        'code' - A string containing the code under test.
+        'error' - A string that contains the errors that need to be fixed.
+        'error_file' - A string containing the path to the file where error logs will be appended.
+        'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
+        'temperature' - A float that controls the randomness of the LLM's output.
+    Outputs:
+        'update_unit_test': Boolean indicating whether the unit test needs to be updated.
+        'update_code': Boolean indicating whether the code under test needs to be updated.
+        'fixed_unit_test' - A string that is the fixed unit test.
+        'fixed_code' - A string that is the fixed code under test.
+        'total_cost' - A float representing the total cost of the LCEL runs.
+
+% Here is an example of a Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
+
+% Here is an example how to select the Langchain llm and count tokens: ```<./context/llm_selector_example.py>``` 
+
+% This program will use Langchain to do the following:
+    Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/fix_errors_from_unit_tests_LLM.prompt' file. Also load the 'extract_unit_code_fix_LLM.prompt' from the same directory.
+    Step 2. Read the contents of the error_file specified in the input. Handle any file I/O errors gracefully.
+    Step 3. Then this will create a Langchain LCEL template from the fix_errors_from_unit_tests prompt.
+    Step 4. This will use llm_selector with the provided strength and temperature for the llm model.
+    Step 5. This will run the code through the model using Langchain LCEL. 
+        5a. Be sure to pass the following string parameters to the prompt during invoke:
+            - 'unit_test'
+            - 'code'
+            - 'errors'
+        5b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+        5c. Append the output of this LCEL run to the error_file, adding a clear separator to distinguish it from previous content. Handle any file I/O errors gracefully.
+    Step 6. This will pretty print the markdown formatting that is present in the result via the rich Markdown function to both the console and the error_file. It will also pretty print the number of tokens in the result and the cost. Also, print out the cost of this run.
+    Step 7. Then this will create a second Langchain LCEL template from the extract_unit_code_fix prompt.
+    Step 8. This will use llm_selector with a strength setting of 0.5 and the provided temperature for the llm model. However, instead of using String output, it will use the JSON output parser to use the 'get' function to extract the value of these keys: 'update_unit_test', 'update_code', 'fixed_unit_test' and 'fixed_code'.
+    Step 9. This will run the code through the model using Langchain LCEL from Step 8. 
+        9a. Be sure to pass the following string parameters to the prompt during invoke:
+            - 'unit_test_fix': This is the result of the Langchain LCEL from Step 5.
+            - 'unit_test'
+            - 'code'
+        9b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost.
+    Step 10. Calculate the total cost by summing the costs from both LCEL runs.
+    Step 11. Print the total cost of both runs and return 'update_unit_test', 'update_code', 'fixed_unit_test', 'fixed_code', and 'total_cost' as individual values from the JSON output parser.
+
+% Ensure that the function handles potential errors gracefully, such as missing input parameters, issues with the LLM model responses, or file I/O errors when reading from or writing to the error_file.
