@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, mock_open
-from test_generator import test_generator
+from generate_test import test_generator
 from rich.console import Console
 
 @pytest.fixture

@@ -1,4 +1,4 @@
-from test_generator import test_generator
+from generate_test import test_generator
 
 # Define the input parameters
 prompt: str = "Create an additon function that takes two arguments and returns their sum."
