@@ -9,6 +9,7 @@
         'token_counter' - Token counter function for the LLM model.
         'input_cost' - Cost per million input tokens
         'output_cost' - Cost per million output tokens
+        'model_name' - Name of the selected model
 
 % Here is an example of a Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
 
