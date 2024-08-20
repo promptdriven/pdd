@@ -1,31 +1,33 @@
 from fix_errors_from_unit_tests import fix_errors_from_unit_tests
 
-# Define the inputs
-unit_test_code = """
+# Define the inputs for the function
+unit_test: str = """
 def test_addition():
-    assert add(1, 2) == 4  # Intentional error
+    assert add(1, 1) == 3  # Intentional error
 """
 
-code_under_test = """
+code: str = """
 def add(a, b):
     return a + b
 """
 
-error_message = "AssertionError: assert 3 == 4"
-strength = 0.7  # Adjust the strength for LLM selection
-temperature = 0  # Adjust the temperature for LLM selection
+error: str = "AssertionError: assert 2 == 3"
+error_file: str = "error_log.txt"
+strength: float = 0.7  # Strength parameter for LLM selection
+temperature: float = 0 # Temperature parameter for LLM selection
 
 try:
-    # Call the function to fix errors
+    # Call the function to fix errors in the unit tests
     update_unit_test, update_code, fixed_unit_test, fixed_code, total_cost = fix_errors_from_unit_tests(
-        unit_test=unit_test_code,
-        code=code_under_test,
-        error=error_message,
+        unit_test=unit_test,
+        code=code,
+        error=error,
+        error_file=error_file,
         strength=strength,
         temperature=temperature
     )
 
-    # Output the results
+    # Print the results
     print(f"Update Unit Test: {update_unit_test}")
     print(f"Update Code: {update_code}")
     print(f"Fixed Unit Test:\n{fixed_unit_test}")
