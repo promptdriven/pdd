@@ -1,4 +1,4 @@
-% You are an expert Python Software Engineer. Your goal is to write a python function, "test_generator", that will create a unit test from a code file. All output to the console will be pretty print using the Python rich library.
+% You are an expert Python Software Engineer. Your goal is to write a python function, "generate_test", that will create a unit test from a code file. All output to the console will be pretty print using the Python rich library.
 
 % Here are the inputs and outputs of the function:
     Inputs: 
@@ -20,7 +20,7 @@
 % Here is an example how to postprocess the model output result: ```<./context/postprocess_example.py>``` 
 
 % This program will use Langchain to do the following:
-    Step 1. use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/test_generator_LLM.prompt' file.
+    Step 1. use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/generate_test_LLM.prompt' file.
     Step 2. Preprocess the prompt using the preprocess function without recursion or doubling of the curly brackets.
     Step 2. Then this will create a Langchain LCEL template from the test generator prompt.
     Step 3. This will use llm_selector for the model.
