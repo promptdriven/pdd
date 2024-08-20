@@ -7,6 +7,7 @@ from rich import print as rprint
 from rich.markdown import Markdown
 from llm_selector import llm_selector
 
+
 def xml_tagger(raw_prompt: str, strength: float, temperature: float) -> Tuple[str, float]:
     """
     Converts a raw prompt into XML format and extracts XML tags using Langchain.
@@ -19,6 +20,14 @@ def xml_tagger(raw_prompt: str, strength: float, temperature: float) -> Tuple[st
     Returns:
         Tuple[str, float]: The extracted XML tags and the total cost of processing.
     """
+    # Input validation
+    if not isinstance(raw_prompt, str):
+        raise TypeError("raw_prompt must be a string")
+    if not isinstance(strength, (int, float)):
+        raise TypeError("strength must be a number")
+    if not isinstance(temperature, (int, float)):
+        raise TypeError("temperature must be a number")
+
     try:
         # Step 1: Load prompts
         pdd_path = os.getenv('PDD_PATH')
@@ -61,7 +70,7 @@ def xml_tagger(raw_prompt: str, strength: float, temperature: float) -> Tuple[st
         # Step 6: Pretty print result
         output_tokens = token_counter(xml_tagged)
         output_cost_usd = (output_tokens / 1_000_000) * output_cost
-        rprint("\n[bold]Extracted XML:[/bold]")
+        rprint(f"\n[bold]Extracted XML:[/bold]")
         rprint(Markdown(f"```xml\n{xml_tagged}\n```"))
         rprint(f"Output tokens: {output_tokens}")
         rprint(f"Estimated output cost: ${output_cost_usd:.6f}")
