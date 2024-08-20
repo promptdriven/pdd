@@ -43,6 +43,7 @@
 - [ ] more accurate token counter
 - [ ] Analyze errors first before trying to fix
 - [ ] Check to see if unit test are aligned to the prompt
+- [ ] Use existing good prompt code example to generate code for the prompt
 
 ## Documentation
 
