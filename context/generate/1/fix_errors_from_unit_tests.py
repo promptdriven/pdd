@@ -10,14 +10,13 @@ from llm_selector import llm_selector
 # Setup cache to save money and increase speeds
 set_llm_cache(SQLiteCache(database_path=".langchain.db"))
 
-def fix_errors_from_unit_tests(unit_test: str, code: str, error: str, error_file: str, strength: float, temperature: float):
+def fix_errors_from_unit_tests(unit_test: str, code: str, error: str, strength: float, temperature: float):
     """
-    Fix errors in unit tests using LLM models and log the process.
+    Fix errors in unit tests using LLM models.
 
     :param unit_test: The unit test code as a string.
     :param code: The code to be tested as a string.
     :param error: The error message from the unit test.
-    :param error_file: The path to the file where error logs will be appended.
     :param strength: The strength parameter for LLM selection.
     :param temperature: The temperature parameter for LLM selection.
     :return: A tuple containing flags for updates and the fixed code and unit test.
@@ -34,54 +33,39 @@ def fix_errors_from_unit_tests(unit_test: str, code: str, error: str, error_file
         with open(os.path.join(pdd_path, 'prompts', 'extract_unit_code_fix_LLM.prompt'), 'r') as file:
             extract_fix_prompt = file.read()
 
-        # Step 2: Read the contents of the error_file
-        try:
-            with open(error_file, 'a') as ef:
-                ef.write("\n--- New Run ---\n")
-        except IOError as e:
-            rprint(f"[bold red]Error reading error file: {e}[/bold red]")
-            return False, False, '', '', 0.0
-
-        # Step 3: Create Langchain LCEL template for fix_errors_from_unit_tests
+        # Step 2: Create Langchain LCEL template for fix_errors_from_unit_tests
         fix_errors_template = PromptTemplate.from_template(fix_errors_prompt)
 
-        # Step 4: Use llm_selector with provided strength and temperature
+        # Step 3: Use llm_selector with provided strength and temperature
         llm, token_counter, input_cost, output_cost = llm_selector(strength, temperature)
 
-        # Step 5: Run the code through the model using Langchain LCEL
+        # Step 4: Run the code through the model using Langchain LCEL
         chain = fix_errors_template | llm | StrOutputParser()
         input_data = {"unit_test": unit_test, "code": code, "errors": error}
         prompt_tokens = token_counter(str(input_data))
         cost_run_1 = (prompt_tokens / 1_000_000) * input_cost
 
-        # 5a: Pretty print running message
+        # 4a: Pretty print running message
         rprint(f"[bold green]Running fix_errors_from_unit_tests...[/bold green]")
         rprint(f"Prompt tokens: {prompt_tokens}, Cost: ${cost_run_1:.6f}")
 
         # Invoke the chain
         result_1 = chain.invoke(input_data)
 
-        # 5c: Append the output to the error_file
-        try:
-            with open(error_file, 'a') as ef:
-                ef.write(result_1 + "\n")
-        except IOError as e:
-            rprint(f"[bold red]Error writing to error file: {e}[/bold red]")
-
-        # Step 6: Pretty print the markdown formatting and cost
+        # Step 5: Pretty print the markdown formatting and cost
         rprint(Markdown(result_1))
         result_tokens = token_counter(result_1)
         cost_result_1 = (result_tokens / 1_000_000) * output_cost
         rprint(f"Result tokens: {result_tokens}, Cost: ${cost_result_1:.6f}")
 
-        # Step 7: Create a second Langchain LCEL template for extract_unit_code_fix
+        # Step 6: Create a second Langchain LCEL template for extract_unit_code_fix
         extract_fix_template = PromptTemplate.from_template(extract_fix_prompt)
 
-        # Step 8: Use llm_selector with strength 0.5 and provided temperature
+        # Step 7: Use llm_selector with strength 0.5 and provided temperature
         llm, token_counter, input_cost, output_cost = llm_selector(0.5, temperature)
         parser = JsonOutputParser()
 
-        # Step 9: Run the code through the model using Langchain LCEL
+        # Step 8: Run the code through the model using Langchain LCEL
         chain = extract_fix_template | llm | parser
         input_data_2 = {
             "unit_test_fix": result_1,
@@ -91,21 +75,17 @@ def fix_errors_from_unit_tests(unit_test: str, code: str, error: str, error_file
         prompt_tokens_2 = token_counter(str(input_data_2))
         cost_run_2 = (prompt_tokens_2 / 1_000_000) * input_cost
 
-        # 9a: Pretty print running message
+        # 8a: Pretty print running message
         rprint(f"[bold green]Running extract_unit_code_fix...[/bold green]")
         rprint(f"Prompt tokens: {prompt_tokens_2}, Cost: ${cost_run_2:.6f}")
 
         # Invoke the chain
         result_2 = chain.invoke(input_data_2)
 
-        result_tokens = token_counter(str(result_2))
-        cost_result_2 = (result_tokens / 1_000_000) * output_cost
-        
-        rprint(f"Result tokens: {result_tokens}, Cost: ${cost_result_1:.6f}")
-        # Step 10: Calculate the total cost
-        total_cost = cost_run_1 + cost_result_1 + cost_run_2 + cost_result_2
+        # Step 9: Calculate the total cost
+        total_cost = cost_run_1 + cost_result_1 + cost_run_2
 
-        # Step 11: Print the total cost and return results
+        # Step 10: Print the total cost and return results
         rprint(f"Total cost of both runs: ${total_cost:.6f}")
 
         return (
