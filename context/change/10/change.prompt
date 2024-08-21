@@ -1,1 +1,1 @@
-Add error_file to the inputs of the fix_errors_from_unit_tests function. This file will be used appended with the output of the first LCEL run that is also printed out.
+Add error_file to the inputs of the fix_errors_from_unit_tests function. This file will be used appended with the output of the first LCEL run that is also printed out. Have a separator for the output of the LCEL from what is in the error file already so it is easy to know what part of the log came from what function.
