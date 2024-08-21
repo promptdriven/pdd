@@ -1,7 +1,5 @@
 import os
-from tabnanny import verbose
-from pdd.update_prompt import update_prompt
-from pdd import DEFAULT_STRENGTH
+from update_prompt import update_prompt
 
 def main() -> None:
     """
@@ -11,7 +9,7 @@ def main() -> None:
     input_prompt = "Please add two numbers and return the sum."
     input_code = "def add(a, b): return a + b"
     modified_code = "def mul_numbers(x, y): return x * y"
-    strength = DEFAULT_STRENGTH  # Example strength parameter for the LLM
+    strength = 0.9  # Example strength parameter for the LLM
     temperature = 0  # Example temperature parameter for the LLM
 
     try:
@@ -21,8 +19,7 @@ def main() -> None:
             input_code=input_code,
             modified_code=modified_code,
             strength=strength,
-            temperature=temperature,
-            verbose=True
+            temperature=temperature
         )
 
         # Check the results
