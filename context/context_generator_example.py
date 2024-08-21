@@ -1,7 +1,7 @@
 from context_generator import context_generator
 
 # Define the parameters for the code generation
-code_module: str = "math_operations"  # The code module to generate examples for
+code_module: str = "def add(a,b): return a+b"  # The code module to generate examples for
 prompt: str = "Create a function that adds two numbers."  # The prompt to guide the example generation
 language: str = "python"  # The programming language for the example
 strength: float = .9  # The strength parameter for model selection
