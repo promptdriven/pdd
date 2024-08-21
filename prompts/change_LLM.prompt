@@ -62,10 +62,16 @@
     example_9_change_prompt: ```<./context/change/9/change.prompt>```
     example_9_modified_prompt: ```<./context/change/9/final_fix_error_loop_python.prompt>```
 
+% Here is example_10 of how to change the input_prompt to the modified_prompt:
+    example_10_input_prompt: ```<./context/change/10/initial_fix_errors_from_unit_tests_python.prompt>```
+    example_10_input_code: ```<./context/change/10/initial_fix_errors_from_unit_tests.py>```
+    example_10_change_prompt: ```<./context/change/10/change.prompt>```
+    example_10_modified_prompt: ```<./context/change/10/final_fix_errors_from_unit_tests_python.prompt>```
 
-% Here is the input_prompt to change: ```<./context/change/10/initial_fix_errors_from_unit_tests_python.prompt>```
-% Here is the input_code: ```{<./context/change/10/initial_fix_errors_from_unit_tests.py>}```
-% Here is the change_prompt to implement: ```<./context/change/10/change.prompt>```
+
+% Here is the input_prompt to change: ```{input_prompt}```
+% Here is the input_code: ```{input_code}```
+% Here is the change_prompt to implement: ```{change_prompt}```
 
 % Follow these instructions:
     Step 1. Explain in detail step by step the ramifications of the change_prompt on the input_prompt.
