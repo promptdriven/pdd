@@ -23,6 +23,11 @@ def context_generator(code_module: str, prompt: str, language: str = "python", s
     Returns:
         Tuple[str, float]: The generated example code and the total cost.
     """
+    if not isinstance(code_module, str):
+        raise TypeError("code_module must be a string")
+    if not isinstance(prompt, str):
+        raise TypeError("prompt must be a string")
+    
     # Step 1: Load the prompt file
     pdd_path = os.getenv('PDD_PATH')
     if not pdd_path:
@@ -38,7 +43,7 @@ def context_generator(code_module: str, prompt: str, language: str = "python", s
     prompt_template = PromptTemplate.from_template(example_generator_prompt)
 
     # Step 3: Use llm_selector for the model
-    llm, token_counter, input_cost, output_cost = llm_selector(strength, temperature)
+    llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
 
     # Step 4: Preprocess the prompt
     processed_prompt = preprocess(prompt, recursive=False, double_curly_brackets=False)

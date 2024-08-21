@@ -13,14 +13,19 @@ def mock_prompt_file():
 
 @pytest.fixture
 def mock_llm_selector():
-    return (
-        lambda x, y: (
+    def mock_selector(strength, temperature):
+        import pandas as pd
+        data = {'model': ['gpt-4'], 'input_cost': [0.15], 'output_cost': [0.6]}
+        df = pd.DataFrame(data)
+        base_model_row = df[df['model'] == 'gpt-4'].iloc[0]
+        return (
             lambda z: "Mock LLM output",
             lambda w: 100,
-            0.00002,
-            0.00004
+            base_model_row['input_cost'],
+            base_model_row['output_cost'],
+            'gpt-4'
         )
-    )
+    return mock_selector
 
 @pytest.fixture
 def mock_preprocess():
@@ -42,14 +47,18 @@ def test_context_generator_success(mock_environment, mock_prompt_file, mock_llm_
                         assert isinstance(cost, float)
                         assert cost > 0
 
-def test_context_generator_missing_env_variable():
+def test_context_generator_missing_env_variable(monkeypatch):
+    monkeypatch.delenv('PDD_PATH', raising=False)
+    
     with pytest.raises(ValueError, match="PDD_PATH environment variable is not set"):
         context_generator("test_module", "test prompt")
+
 
 def test_context_generator_file_not_found(mock_environment):
     with patch('builtins.open', side_effect=FileNotFoundError):
         with pytest.raises(FileNotFoundError, match="Prompt file not found at the specified path"):
             context_generator("test_module", "test prompt")
+
 
 def test_context_generator_invalid_parameters(mock_environment, mock_prompt_file):
     with patch('builtins.open', mock_open(read_data=mock_prompt_file)):
@@ -57,6 +66,7 @@ def test_context_generator_invalid_parameters(mock_environment, mock_prompt_file
             context_generator(123, "test prompt")  # Invalid code_module type
         with pytest.raises(TypeError):
             context_generator("test_module", 123)  # Invalid prompt type
+
 
 def test_context_generator_output_types(mock_environment, mock_prompt_file, mock_llm_selector, mock_preprocess, mock_postprocess):
     with patch('builtins.open', mock_open(read_data=mock_prompt_file)):
