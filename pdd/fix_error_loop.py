@@ -22,90 +22,114 @@ def fix_error_loop(
 
     :param unit_test_file: Path to the unit test file.
     :param code_file: Path to the code file.
-    :param verification_program: Program used for verification.
-    :param strength: Strength parameter for error fixing.
-    :param temperature: Temperature parameter for error fixing.
+    :param verification_program: Path to the verification program.
+    :param strength: Strength parameter for the error fixing function.
+    :param temperature: Temperature parameter for the error fixing function.
     :param max_attempts: Maximum number of attempts to fix errors.
-    :param budget: Budget for the total cost of fixing errors.
-    :return: Tuple indicating success, updated unit test, updated code, number of attempts, and total cost.
+    :param budget: Maximum budget for fixing errors.
+    :return: Tuple containing success status, final unit test content, final code content, number of attempts, and total cost.
     """
 
-    # Step 1: Remove existing error.log file
-    if os.path.exists("error.log"):
-        os.remove("error.log")
+    error_log = "error_log.txt"
+    if os.path.exists(error_log):
+        os.remove(error_log)
 
-    # Step 2: Initialize variables
     attempts = 0
     total_cost = 0.0
-    best_iteration = {"fails": float('inf'), "errors": float('inf'), "attempt": 0}
+    success = False
 
-    # Step 3: Main loop
+    # Read initial contents of unit test and code files
+    with open(unit_test_file, 'r') as f:
+        unit_test_content = f.read()
+    with open(code_file, 'r') as f:
+        code_content = f.read()
+
+    # Keep track of the last working version
+    last_working_unit_test = unit_test_content
+    last_working_code = code_content
+
     while attempts < max_attempts and total_cost < budget:
         attempts += 1
-        console.print(Panel(f"Attempt {attempts}", style="bold magenta"))
+        console.print(Panel(f"[bold cyan]Attempt {attempts}[/bold cyan]"))
 
-        # Run pytest and capture output
         try:
-            result = subprocess.run(
-                ["python", "-m", "pytest", "-vv", unit_test_file],
-                capture_output=True,
-                text=True
-            )
-            with open("error.log", "a") as log_file:
-                log_file.write(result.stdout + result.stderr)
-        except subprocess.SubprocessError as e:
-            console.print(f"[bold red]Error running pytest: {e}[/bold red]")
-            continue
+            result = subprocess.run(['python', '-m', 'pytest', '-vv', unit_test_file], 
+                                    capture_output=True, text=True)
+            with open(error_log, 'w') as f:  # Use 'w' mode to overwrite previous errors
+                f.write(result.stdout)
+                f.write(result.stderr)
 
-        # Check if tests passed
-        if result.returncode == 0:
-            console.print("[bold green]All tests passed. Exiting loop.[/bold green]")
-            break
+            if result.returncode == 0:
+                console.print("[bold green]All tests passed![/bold green]")
+                success = True
+                break
 
-        # Parse error message and count fails/errors
-        error_message = result.stdout + result.stderr
-        fails = error_message.count("FAILED")
-        errors = error_message.count("ERROR")
-        console.print(f"[yellow]Fails: {fails}, Errors: {errors}[/yellow]")
+            console.print("[bold red]Test failed. Error message:[/bold red]")
+            console.print(result.stderr)
 
-        # Create backup files
-        backup_suffix = f"{fails}_{errors}_{attempts}"
-        unit_test_backup = f"{unit_test_file[:-3]}_{backup_suffix}.py"
-        code_backup = f"{code_file[:-3]}_{backup_suffix}.py"
-        shutil.copy(unit_test_file, unit_test_backup)
-        shutil.copy(code_file, code_backup)
+            fails = result.stdout.count("FAILED")
+            errors = result.stdout.count("ERROR")
+            fails //= 2  # Account for -vv flag doubling the messages
+            errors //= 2
 
-        # Read file contents
-        with open(unit_test_file, "r") as f:
-            unit_test_content = f.read()
-        with open(code_file, "r") as f:
-            code_content = f.read()
+            backup_unit_test = f"unit_test_{fails}_{errors}_{attempts}.py"
+            backup_code = f"code_{fails}_{errors}_{attempts}.py"
+            shutil.copy(unit_test_file, backup_unit_test)
+            shutil.copy(code_file, backup_code)
 
-        # Call fix_errors_from_unit_tests
-        try:
-            update_unit_test, update_code, fixed_unit_test, fixed_code, iteration_cost = fix_errors_from_unit_tests(
+            with open(error_log, 'r') as f:
+                error_content = f.read()
+
+            console.print("[bold yellow]Attempting to fix errors...[/bold yellow]")
+            update_unit_test, update_code, fixed_unit_test, fixed_code, fix_cost = fix_errors_from_unit_tests(
                 unit_test=unit_test_content,
                 code=code_content,
-                error=error_message,
+                error=error_content,
+                error_file=error_log,
                 strength=strength,
                 temperature=temperature
             )
-            total_cost += iteration_cost
 
-            with open("error.log", "a") as log_file:
-                log_file.write(f"\n{'='*50}\nFix attempt output:\n")
-                log_file.write(f"Update Unit Test: {update_unit_test}\n")
-                log_file.write(f"Update Code: {update_code}\n")
-                log_file.write(f"Fixed Unit Test:\n{fixed_unit_test}\n")
-                log_file.write(f"Fixed Code:\n{fixed_code}\n")
-                log_file.write(f"Iteration Cost: ${iteration_cost:.6f}\n{'='*50}\n")
+            total_cost += fix_cost
+            console.print(f"[bold]Cost for this fix attempt: ${fix_cost:.6f}[/bold]")
+            console.print(f"[bold]Total cost so far: ${total_cost:.6f}[/bold]")
+
+            if total_cost > budget:
+                console.print("[bold red]Budget exceeded. Stopping.[/bold red]")
+                break
+
+            if not update_unit_test and not update_code:
+                console.print("[bold yellow]No changes were needed. Stopping.[/bold yellow]")
+                break
+
+            if update_unit_test or update_code:
+                # Apply changes
+                unit_test_content = fixed_unit_test
+                code_content = fixed_code
+                with open(unit_test_file, 'w') as f:
+                    f.write(fixed_unit_test)
+                with open(code_file, 'w') as f:
+                    f.write(fixed_code)
+
+                console.print("[bold]Running verification program...[/bold]")
+                verification_result = subprocess.run(['python', verification_program], 
+                                                     capture_output=True, text=True)
+                
+                if verification_result.returncode == 0:
+                    console.print("[bold green]Verification passed. Saving this version.[/bold green]")
+                    last_working_unit_test = unit_test_content
+                    last_working_code = code_content
+                else:
+                    console.print("[bold red]Verification failed. Reverting to last working version.[/bold red]")
+                    unit_test_content = last_working_unit_test
+                    code_content = last_working_code
+                    with open(unit_test_file, 'w') as f:
+                        f.write(last_working_unit_test)
+                    with open(code_file, 'w') as f:
+                        f.write(last_working_code)
 
         except Exception as e:
-            console.print(f"[bold red]Error in fix_errors_from_unit_tests: {e}[/bold red]")
-            continue
-
-        if total_cost > budget:
-            console.print("[bold red]Budget exceeded. Exiting loop.[/bold red]")
+            console.print(f"[bold red]An error occurred: {e}[/bold red]")
             break
 
-    return (result.returncode == 0, update_unit_test, update_code, attempts, total_cost)
+    return (success, unit_test_content, code_content, attempts, total_cost)
