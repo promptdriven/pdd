@@ -1,7 +1,7 @@
 from generate_test import generate_test
 
 # Define the input parameters
-prompt: str = "Create an additon function that takes two arguments and returns their sum."
+prompt: str = "Create an addition function that takes two arguments and returns their sum."
 code: str = """
 def add(a, b):
     return a + b
