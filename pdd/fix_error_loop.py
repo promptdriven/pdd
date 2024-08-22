@@ -102,12 +102,15 @@ def fix_error_loop(
                 console.print("[bold yellow]No changes were needed. Stopping.[/bold yellow]")
                 break
 
-            if update_unit_test or update_code:
+            if update_unit_test:
                 # Apply changes
                 unit_test_content = fixed_unit_test
-                code_content = fixed_code
                 with open(unit_test_file, 'w') as f:
                     f.write(fixed_unit_test)
+          
+            if update_code:
+                # Apply changes
+                code_content = fixed_code
                 with open(code_file, 'w') as f:
                     f.write(fixed_code)
 
@@ -117,14 +120,10 @@ def fix_error_loop(
                 
                 if verification_result.returncode == 0:
                     console.print("[bold green]Verification passed. Saving this version.[/bold green]")
-                    last_working_unit_test = unit_test_content
                     last_working_code = code_content
                 else:
                     console.print("[bold red]Verification failed. Reverting to last working version.[/bold red]")
-                    unit_test_content = last_working_unit_test
                     code_content = last_working_code
-                    with open(unit_test_file, 'w') as f:
-                        f.write(last_working_unit_test)
                     with open(code_file, 'w') as f:
                         f.write(last_working_code)
 
