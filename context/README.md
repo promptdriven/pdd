@@ -28,7 +28,7 @@ python pdd/pdd.py [GLOBAL OPTIONS] COMMAND [OPTIONS] [ARGS]...
 These options can be used with any command:
 
 - `--force`: Overwrite existing files without asking for confirmation.
-- `--strength`: Set the strength of the AI model (default is 0.5).
+- `--strength FLOAT`: Set the strength of the AI model (0.0 to 1.0, default is 0.5).
 - `--temperature`: Set the temperature of the AI model (default is 0.0).
 - `--verbose`: Increase output verbosity for more detailed information.
 - `--quiet`: Decrease output verbosity for minimal information.
@@ -207,24 +207,53 @@ For all commands that generate or modify files, the `--output` option (or its va
 
 ## Multi-Command Chaining
 
-PDD supports multi-command chaining, allowing you to execute multiple commands in a single line. Commands will be executed in the order they are specified.
+PDD supports multi-command chaining, allowing you to execute multiple commands in a single line. Commands will be executed in the order they are specified. This feature enables you to perform complex workflows efficiently, combining various PDD operations into a single, streamlined process.
 
 Basic syntax for multi-command chaining:
 ```
 pdd [GLOBAL OPTIONS] COMMAND1 [OPTIONS] [ARGS]... [COMMAND2 [OPTIONS] [ARGS]...]...
 ```
 
-This feature enables you to perform complex workflows efficiently. Here's an example of multi-command chaining:
+Here are some examples of multi-command chaining to illustrate its power and flexibility:
 
+1. Generate code, create an example, and run tests in one go:
 ```
-pdd --output-cost usage.csv generate --output src/app.py app.prompt test --output tests/test_app.py src/app.py app.prompt example --output examples/app_example.py src/app.py
+pdd generate app_python.prompt --output src/app.py example src/app.py --output examples/usage.py test src/app.py app_python.prompt --output tests/test_app.py
 ```
+This chain will:
+- Generate code from `app_python.prompt` and save it to `src/app.py`
+- Create an example based on `src/app.py` and save it to `examples/usage.py`
+- Generate a test file for `src/app.py` using `app_python.prompt` and save it to `tests/test_app.py`
 
-This command chain will:
-1. Enable cost tracking and save the results to `usage.csv`
-2. Generate code from `app.prompt` and save it to `src/app.py`
-3. Create a test file for the generated code and save it to `tests/test_app.py`
-4. Create an example file based on the generated code and save it to `examples/app_example.py`
+2. Preprocess a prompt, generate code, and create an example with cost tracking:
+```
+pdd --output-cost usage.csv preprocess app_python.prompt --output preprocessed/app_python_preprocessed.prompt generate preprocessed/app_python_preprocessed.prompt --output src/app.py example src/app.py --output examples/usage.py
+```
+This chain will:
+- Enable cost tracking and save the results to `usage.csv`
+- Preprocess `app_python.prompt` and save the result to `preprocessed/app_python_preprocessed.prompt`
+- Generate code from the preprocessed prompt and save it to `src/app.py`
+- Create an example based on `src/app.py` and save it to `examples/usage.py`
+
+3. Split a large prompt, generate code from the sub-prompt, and create a test:
+```
+pdd split large_app_python.prompt --output-sub sub_prompts/module_python.prompt --output-modified modified_prompts/main_app_python.prompt generate sub_prompts/module_python.prompt --output src/module.py test src/module.py sub_prompts/module_python.prompt --output tests/test_module.py
+```
+This chain will:
+- Split `large_app_python.prompt` into a sub-prompt and a modified main prompt
+- Generate code from the sub-prompt and save it to `src/module.py`
+- Create a test file for `src/module.py` using the sub-prompt and save it to `tests/test_module.py`
+
+4. Update a prompt based on code changes, then generate new code and tests:
+```
+pdd update app_python.prompt src/original_app.py src/modified_app.py --output updated_prompts/updated_app_python.prompt generate updated_prompts/updated_app_python.prompt --output src/new_app.py test src/new_app.py updated_prompts/updated_app_python.prompt --output tests/test_new_app.py
+```
+This chain will:
+- Update `app_python.prompt` based on changes between `original_app.py` and `modified_app.py`
+- Generate new code from the updated prompt and save it to `src/new_app.py`
+- Create a test file for the new code and save it to `tests/test_new_app.py`
+
+These examples demonstrate how you can combine multiple PDD commands to create sophisticated workflows, automating complex development tasks in a single command line invocation.
 
 ## Getting Help
 
