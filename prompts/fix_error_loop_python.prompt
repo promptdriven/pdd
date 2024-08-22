@@ -19,7 +19,7 @@
 % Here is an example of the fix_errors_from_unit_tests function that will be used: ```<./context/fix_errors_from_unit_tests_example.py>```
 
 % This function will do the following:
-    Step 1. Remove the existing error.log file if it exists.
+    Step 1. Remove the existing 'error.log' file if it exists.
     Step 2. Initialize variables:
         - Counter for the number of attempts
         - Total cost accumulator
@@ -36,10 +36,11 @@
            - Add the returned total_cost to the total cost accumulator.
            - If the total cost exceeds the budget, break the loop.
            - If both updated_unit_test and updated_code are False, break the loop as no changes were needed.
-           - If either updated_unit_test or updated_code is True:
-              * Write the fixed_unit_test and fixed_code back to their respective files.
+           - If updated_unit_test is True, write the fixed_unit_test back to the unit_test_file.           
+           - If updated_code is True:
+              * Write the fixed_code back to the code_file.
               * Run the verification_program to check if the code still runs.
-              * If the verification fails, restore the original files from the backups and continue the loop.
+              * If the verification fails, restore the original file from the backup and continue the loop.
               * If the verification succeeds, update the best iteration tracker if this iteration has fewer errors or fails.
         d. Increment the attempt counter.
     Step 4. After the loop ends, run pytest one last time, pipe the output to error.log, and print it to the console.
