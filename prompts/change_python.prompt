@@ -19,8 +19,8 @@
 % Example of selecting a Langchain LLM and counting tokens using llm_selector: ```<./context/llm_selector_example.py>```
 
 % Steps to be followed by the function:
-    1. Load the '$PDD_PATH/prompts/change_LLM.prompt' and '$PDD_PATH/prompts/extract_prompt_change_LLM.prompt' files.
-    2. Preprocess the change_LLM prompt using the preprocess function from the preprocess module and double the curly brackets.
+    1. Load the '$PDD_PATH/prompts/xml/change_LLM.prompt' and '$PDD_PATH/prompts/extract_prompt_change_LLM.prompt' files.
+    2. Preprocess the change_LLM prompt using the preprocess function from the preprocess module and the curly bracket should be false.
     2. Create a Langchain LCEL template from the processed change_LLM prompt to return a string output.
     3. Use the llm_selector function for the LLM model and token counting.
     4. Run the input_prompt through the model using Langchain LCEL:
