@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch, mock_open
+from unittest.mock import patch, mock_open, MagicMock
 from change import change
 from rich.console import Console
 
@@ -14,7 +14,7 @@ mock_change_llm_prompt = "Change LLM prompt content"
 mock_extract_prompt = "Extract prompt content"
 mock_processed_change_llm = "Processed Change LLM prompt"
 mock_change_result = "Changed LLM output"
-mock_extract_result = {"modified_prompt": "Modified prompt content"}
+mock_extract_result = {"modified_prompt": "Modified prompt content"}  # Ensure this key exists
 
 @pytest.fixture
 def mock_environment(monkeypatch):
@@ -33,7 +33,7 @@ def mock_dependencies():
          patch("change.StrOutputParser") as mock_str_output_parser, \
          patch("change.JsonOutputParser") as mock_json_output_parser, \
          patch("change.Console") as mock_console:
-        
+
         mock_preprocess.return_value = mock_processed_change_llm
         mock_llm_selector.return_value = (
             lambda x: x,  # mock LLM function
@@ -42,12 +42,13 @@ def mock_dependencies():
             0.00002,  # mock output cost
             "gpt-3.5-turbo"  # mock model name
         )
-        mock_prompt_template.from_template.return_value.side_effect = [
-            lambda x: mock_change_result,
-            lambda x: mock_extract_result
-        ]
+        mock_prompt_template.from_template.return_value.invoke.return_value = mock_change_result
         mock_str_output_parser.return_value = lambda x: x
-        mock_json_output_parser.return_value = lambda x: x
+        
+        # Ensure the JSON parser returns the expected result
+        mock_json_parser = MagicMock()
+        mock_json_parser.invoke.return_value = {"modified_prompt": "Modified prompt content"}
+        mock_json_output_parser.return_value = mock_json_parser
 
         yield
 
@@ -70,11 +71,12 @@ def test_change_file_not_found(mock_environment, missing_file):
         
         assert "Error: Prompt file not found." in str(exc_info.value)
 
+
 def test_change_missing_json_key(mock_file_reads, mock_dependencies):
     with patch("change.JsonOutputParser") as mock_json_output_parser:
-        mock_json_output_parser.return_value = lambda x: {}  # Return empty dict to simulate missing key
+        mock_json_output_parser.return_value.invoke.return_value = {}  # Return empty dict to simulate missing key
         
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(KeyError) as exc_info:
             change(mock_input_prompt, mock_input_code, mock_change_prompt, mock_strength, mock_temperature)
         
-        assert "Error: Missing key in JSON output." in str(exc_info.value)
+        assert "'modified_prompt' key is missing from the extracted result" in str(exc_info.value)
