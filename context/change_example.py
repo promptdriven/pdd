@@ -1,16 +1,15 @@
-import os
-from your_module import change  # Replace 'your_module' with the actual module name
+from change import change 
 
 def main() -> None:
     """
     Main function to demonstrate the usage of the `change` function.
     """
     # Define input parameters
-    input_prompt: str = "What is the capital of France?"
-    input_code: str = "print('Hello, World!')"
-    change_prompt: str = "Make the question more specific."
-    strength: float = 0.7  # Adjust the strength of the model
-    temperature: float = 0.5  # Adjust the randomness of the output
+    input_prompt: str = "Please add two numbers and return the sum."
+    input_code: str = "def add(a, b): return a + b"
+    change_prompt: str = "Multiple the numbers instead"
+    strength: float = .5  # Adjust the strength of the model
+    temperature: float = 0  # Adjust the randomness of the output
 
     try:
         # Call the change function

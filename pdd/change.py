@@ -6,8 +6,12 @@ from preprocess import preprocess
 from llm_selector import llm_selector
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
-
+from langchain.globals import set_debug
 console = Console()
+
+# Enable debug mode to see intermediate chain outputs
+# set_debug(True)
+
 
 def change(input_prompt: str, input_code: str, change_prompt: str, strength: float, temperature: float) -> Tuple[str, float, str]:
     """
@@ -26,14 +30,14 @@ def change(input_prompt: str, input_code: str, change_prompt: str, strength: flo
     try:
         # Step 1: Load prompts
         pdd_path = os.getenv('PDD_PATH', '')
-        with open(f'{pdd_path}/prompts/change_LLM.prompt', 'r') as file:
+        with open(f'{pdd_path}/prompts/xml/change_LLM.prompt', 'r') as file:
             change_llm_prompt = file.read()
         with open(f'{pdd_path}/prompts/extract_prompt_change_LLM.prompt', 'r') as file:
             extract_prompt = file.read()
 
         # Step 2: Preprocess change_LLM prompt
-        processed_change_llm = preprocess(change_llm_prompt, recursive=False, double_curly_brackets=True)
-
+        processed_change_llm = preprocess(change_llm_prompt, recursive=False, double_curly_brackets=False)
+        print(processed_change_llm)
         # Step 3: Use llm_selector
         llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
 
@@ -47,7 +51,8 @@ def change(input_prompt: str, input_code: str, change_prompt: str, strength: flo
             "change_prompt": change_prompt
         })
 
-        input_tokens = token_counter(processed_change_llm + input_prompt + input_code + change_prompt)
+        input_tokens = token_counter(processed_change_llm 
+                                     + input_prompt + input_code + change_prompt)
         output_tokens = token_counter(change_result)
         change_cost = (input_tokens * input_cost + output_tokens * output_cost) / 1_000_000
 
