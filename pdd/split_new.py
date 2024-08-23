@@ -41,7 +41,7 @@ def split(input_prompt: str, input_code: str, example_code: str, strength: float
         prompt_template = PromptTemplate.from_template(processed_split_llm_prompt)
 
         # Step 4: Use the llm_selector function
-        llm, token_counter, input_cost, output_cost = llm_selector(strength, temperature)
+        llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
 
         # Step 4a: Run the input through the model
         chain = prompt_template | llm | StrOutputParser()

@@ -46,7 +46,7 @@ def fix_errors_from_unit_tests(unit_test: str, code: str, error: str, error_file
         fix_errors_template = PromptTemplate.from_template(fix_errors_prompt)
 
         # Step 4: Use llm_selector with provided strength and temperature
-        llm, token_counter, input_cost, output_cost = llm_selector(strength, temperature)
+        llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
 
         # Step 5: Run the code through the model using Langchain LCEL
         chain = fix_errors_template | llm | StrOutputParser()
@@ -78,7 +78,7 @@ def fix_errors_from_unit_tests(unit_test: str, code: str, error: str, error_file
         extract_fix_template = PromptTemplate.from_template(extract_fix_prompt)
 
         # Step 8: Use llm_selector with strength 0.5 and provided temperature
-        llm, token_counter, input_cost, output_cost = llm_selector(0.5, temperature)
+        llm, token_counter, input_cost, output_cost, model_name = llm_selector(0.5, temperature)
         parser = JsonOutputParser()
 
         # Step 9: Run the code through the model using Langchain LCEL
