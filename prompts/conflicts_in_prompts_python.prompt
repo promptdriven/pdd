@@ -1,0 +1,37 @@
+% You are an expert Python engineer. Your goal is to write a Python function, "conflicts_in_prompts", that takes two prompts as input and finds conflicts between them and suggests how to resolve those conflicts.
+
+% Here are the inputs and outputs of the function:
+    Inputs: 
+        'prompt1' - First prompt in the pair of prompts we are comparing.
+        'prompt2' - Second prompt in the pair of prompts we are comparing.
+        'strength' - A float that is the strength of the LLM model to use. Default is 0.5.
+        'temperature' - A float that is the temperature of the LLM model to use. Default is 0.
+    Outputs:
+        'conflicts' - a list of dictionaries containing the conflicts found in the prompts. Each dictionary has the following keys:
+            - 'description' - A brief description of the conflict.
+            - 'explanation' - A detailed explanation of why this is a conflict.
+            - 'suggestion1' - A suggestion on how to modify prompt1 to resolve the conflict.
+            - 'suggestion2' - A suggestion on how to modify prompt2 to resolve the conflict.
+
+% Here is an example of a Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
+
+
+% Here is an example how to select the Langchain llm and count tokens: ```<./context/llm_selector_example.py>``` 
+ 
+
+% This function will use Langchain to do the following:
+    Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/conflict_LLM.prompt' and '$PDD_PATH/prompts/extract_conflict_LLM.prompt' files.
+    Step 2. Then this will create a Langchain LCEL template from the conflict_LLM prompt.
+    Step 3. This will use llm_selector for the model.
+    Step 4. Run the prompts through the model using Langchain LCEL. 
+        4a. Pass the following string parameters to the prompt during invoke:
+            - 'PROMPT1'
+            - 'PROMPT2'
+        4b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens. 
+    Step 5. Create a Langchain LCEL template from the extract_conflict_LLM prompt that outputs JSON:
+        5a. Pass the following string parameters to the prompt during invocation: 'llm_output' (this string is from Step 4).
+        5b. Calculate input and output token count using token_counter from llm_selector and pretty print the running message with the token count and cost.
+        5c. Use 'get' function to extract 'conflicts' list values using from the dictionary output.
+
+    Step 6. Return the list of conflicts with nested fields and total_cost.
+    
