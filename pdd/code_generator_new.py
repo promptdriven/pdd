@@ -31,7 +31,7 @@ def code_generator(prompt: str, language: str, strength: float, temperature: flo
     prompt_template = PromptTemplate.from_template(processed_prompt)
 
     # Step 3: Use llm_selector for the model
-    llm, token_counter, input_cost, output_cost = llm_selector(strength, temperature)
+    llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
 
     # Step 4: Run the prompt through the model
     chain = prompt_template | llm | StrOutputParser()

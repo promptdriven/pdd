@@ -8,6 +8,8 @@
     - pdd/context
     - pdd/data
 
+% Some of the pdd commands will have the same name as some of the below functions. Be sure to import the functions with a different name to avoid conflicts.
+
 % Here is how to use the Python Click library to create a command line program: ```<./context/click_example.py>```
 
 % Here is an example of how to load the input files and generate the output paths using construct_paths: ```<./context/construct_paths_example.py>```
@@ -28,6 +30,6 @@
 
 % 'split' command: To split a prompt file into multiple prompt files, use the 'split' function. Here is an example of how to split a prompt file into multiple prompt files: ```<./context/split_example.py>```
 
-% 'change' command: To change the prompt file, use the 'change' function. Here is an example of how to change the prompt file: ```<./context/change_example.py>```
+% 'change' command: To change the prompt file, use the 'change' function. Keep in mind that the change prompt is also an input file that needs to be loaded by construct_paths. Here is an example of how to change the prompt file: ```<./context/change_example.py>```
 
 % 'update' command: To update the prompt file, use the 'update_prompt' function. Here is an example of how to update the prompt file: ```<./context/update_prompt_example.py>```
