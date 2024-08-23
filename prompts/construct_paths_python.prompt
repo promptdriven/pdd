@@ -28,7 +28,7 @@ $ Here is how to generate the output paths: ```<./context/generate_output_paths_
 
 Follow these steps:
     Step A. List out all the ways the basename can be extracted from the input file path for each of the commands. For example, the basename is always the first input file without the directory, language or file extension.
-    Step B. List out all the ways language can be extracted from the input file path or command_options.
+    Step B. List out all the ways language can be extracted from the input file path or command_options. Ensure that if the 'language' key is present in command_options, it is not None before using it.
     Step C. Write out the construct_paths function.
 
 % This function will do the following:

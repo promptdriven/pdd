@@ -5,7 +5,7 @@
     - `output_locations` (dict): The output dictionary with keys (e.g., 'output', 'output-test') and the value of those options if specified by user.
     - `basename` (string): The base name of the file.
     - `language` (string): The programming language of the file.
-    - `file_extension` (string): The file extension to be used.
+    - `file_extension` (string): The file extension to be used. It will already have the '.' in front of it.
 
 % Outputs: The function should return a dictionary representing the generated output filename(s) with the full path for each of the keys in the `output_locations` dictionary.
 
