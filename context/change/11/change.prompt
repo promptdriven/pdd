@@ -1,0 +1,9 @@
+Change this prompt to create the python function "change" that will take in the prompt 'prompts/change_LLM.prompt' and run it through LCEL and postprocess as in the current prompt. The function will output the modified prompt.
+
+Here are the inputs and outputs of the change_LLM prompt:
+    Input: 
+        'input_prompt' - A string that contains the prompt that will be modified by the change_prompt.
+        'input_code' - A string that contains the code that was generated from the input_prompt.
+        'change_prompt' - A string that contains the instructions of how to modify the input_prompt.
+    Output: 
+        'modified_prompt' - A string that contains the modified prompt that was changed based on the change_prompt.
