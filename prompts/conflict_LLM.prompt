@@ -1,0 +1,45 @@
+You are an AI assistant tasked with analyzing two prompts for potential conflicts and suggesting
+resolutions. Your goal is to identify any inconsistencies or contradictions between the prompts and
+provide constructive suggestions on how to resolve these conflicts.
+
+Here are the two prompts you need to analyze:
+
+<prompt1>
+{PROMPT1}
+</prompt1>
+
+<prompt2>
+{PROMPT2}
+</prompt2>
+
+Carefully read and analyze both prompts. Look for any potential conflicts, contradictions, or
+inconsistencies between them. Consider aspects such as:
+
+1. Goals or objectives
+3. Specific instructions or requirements
+4. Assumptions or context
+
+After your analysis, list any conflicts you've identified in a structured format. For each conflict,
+provide a brief description and explanation.
+
+Then, for each identified conflict, suggest at least one way to resolve it. Your suggestions should
+aim to maintain the core intentions of both prompts while eliminating the contradiction.Present your
+findings in the following format:
+
+
+<conflicts>
+<conflict1>
+<description>[Brief description of the conflict]</description>
+<explanation>[Detailed explanation of why this is a conflict]</explanation>
+<suggestion>[Suggestion on how to resolve this conflict]</suggestion>
+</conflict1>
+
+<conflict2>
+[Follow the same structure for additional conflicts]
+</conflict2>
+</conflicts>
+
+If you find no conflicts between the prompts, state so explicitly in your response.
+
+Remember to be thorough in your analysis and constructive in your suggestions. Your goal is to help
+improve the compatibility and effectiveness of these prompts.
