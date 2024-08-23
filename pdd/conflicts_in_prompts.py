@@ -1,149 +1,101 @@
-from typing import List, Tuple
-from pydantic import BaseModel, Field
-from rich import print as rprint
-from rich.markdown import Markdown
-from .load_prompt_template import load_prompt_template
-from .llm_invoke import llm_invoke
-from . import EXTRACTION_STRENGTH, DEFAULT_STRENGTH, DEFAULT_TIME
+import os
+from typing import List, Dict, Tuple
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.pydantic_v1 import BaseModel, Field
+from langchain_core.output_parsers import StrOutputParser
+from llm_selector import llm_selector
 
-class ConflictChange(BaseModel):
-    prompt_name: str = Field(description="Name of the prompt that needs to be changed")
-    change_instructions: str = Field(description="Detailed instructions on how to change the prompt")
 
-class ConflictResponse(BaseModel):
-    changes_list: List[ConflictChange] = Field(description="List of changes needed to resolve conflicts")
+class Conflict(BaseModel):
+    description: str = Field(description="A brief description of the conflict")
+    explanation: str = Field(description="A detailed explanation of why this is a conflict")
+    suggestion1: str = Field(description="A suggestion on how to modify prompt1 to resolve the conflict")
+    suggestion2: str = Field(description="A suggestion on how to modify prompt2 to resolve the conflict")
 
-def conflicts_in_prompts(
-    prompt1: str,
-    prompt2: str,
-    strength: float = DEFAULT_STRENGTH,
-    temperature: float = 0,
-    time: float = DEFAULT_TIME,
-    verbose: bool = False
-) -> Tuple[List[dict], float, str]:
+
+class ConflictOutput(BaseModel):
+    conflicts: List[Conflict] = Field(description="List of conflicts found in the prompts")
+
+
+def conflicts_in_prompts(prompt1: str, prompt2: str, strength: float = 0.5, temperature: float = 0) -> Tuple[List[Dict[str, str]], float]:
     """
-    Analyze two prompts for conflicts and suggest resolutions.
+    Analyze conflicts between two prompts using Langchain LCEL.
 
-    Args:
-        prompt1 (str): First prompt to compare
-        prompt2 (str): Second prompt to compare
-        strength (float): Model strength (0-1)
-        temperature (float): Model temperature (0-1)
-        time (float): Time budget for LLM calls.
-        verbose (bool): Whether to print detailed information
-
-    Returns:
-        Tuple[List[dict], float, str]: (changes list, total cost, model name)
+    :param prompt1: The first prompt to analyze.
+    :param prompt2: The second prompt to analyze.
+    :param strength: The strength parameter for the LLM selector.
+    :param temperature: The temperature parameter for the LLM selector.
+    :return: A tuple containing a list of conflicts and the total cost of analysis.
     """
-    # Input validation - let these raise ValueError directly
-    if not prompt1 or not prompt2:
-        raise ValueError("Both prompts must be provided")
-    if not (0 <= strength <= 1):
-        raise ValueError("Strength must be between 0 and 1")
-    if not (0 <= temperature <= 1):
-        raise ValueError("Temperature must be between 0 and 1")
-
-    total_cost = 0.0
-    model_name = ""
+    # Step 1: Load prompts
+    pdd_path = os.getenv('PDD_PATH')
+    if not pdd_path:
+        raise ValueError("PDD_PATH environment variable is not set")
 
     try:
-        # Step 1: Load prompt templates
-        conflict_prompt = load_prompt_template("conflict_LLM")
-        extract_prompt = load_prompt_template("extract_conflict_LLM")
+        with open(f"{pdd_path}/prompts/conflict_LLM.prompt", "r") as f:
+            conflict_prompt_template = f.read()
 
-        if not conflict_prompt or not extract_prompt:
-            raise ValueError("Failed to load prompt templates")
+        with open(f"{pdd_path}/prompts/extract_conflict_LLM.prompt", "r") as f:
+            extract_prompt_template = f.read()
+    except FileNotFoundError as e:
+        raise FileNotFoundError(f"Prompt file not found: {e}")
 
-        # Step 2: First LLM call to analyze conflicts
-        input_json = {
-            "PROMPT1": prompt1,
-            "PROMPT2": prompt2
-        }
+    # Step 2: Create Langchain LCEL template for conflict analysis
+    conflict_prompt = PromptTemplate.from_template(conflict_prompt_template)
 
-        if verbose:
-            rprint("[blue]Analyzing prompts for conflicts...[/blue]")
+    # Step 3: Use llm_selector for the model
+    llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
 
-        conflict_response = llm_invoke(
-            prompt=conflict_prompt,
-            input_json=input_json,
-            strength=strength,
-            temperature=temperature,
-            time=time,
-            verbose=verbose
-        )
+    # Step 4: Run the prompts through the model
+    conflict_chain = conflict_prompt | llm | StrOutputParser()
 
-        total_cost += conflict_response['cost']
-        model_name = conflict_response['model_name']
+    # Calculate token count and cost for conflict analysis
+    conflict_input = conflict_prompt.format(PROMPT1=prompt1, PROMPT2=prompt2)
+    conflict_token_count = token_counter(conflict_input)
+    conflict_cost = (conflict_token_count * input_cost) / 1_000_000
 
-        if verbose:
-            rprint(Markdown(conflict_response['result']))
-
-        # Step 3: Second LLM call to extract structured conflicts
-        extract_input = {
-            "llm_output": conflict_response['result']
-        }
-
-        if verbose:
-            rprint("[blue]Extracting structured conflict information...[/blue]")
-
-        extract_response = llm_invoke(
-            prompt=extract_prompt,
-            input_json=extract_input,
-            strength=EXTRACTION_STRENGTH,
-            temperature=temperature,
-            time=time,
-            output_pydantic=ConflictResponse,
-            verbose=verbose
-        )
-
-        total_cost += extract_response['cost']
-        
-        # Get the changes list from the Pydantic model
-        changes_list = [
-            change.dict() 
-            for change in extract_response['result'].changes_list
-        ]
-
-        # Step 4: Return results
-        return changes_list, total_cost, model_name
-
-    except Exception as e:
-        error_msg = f"Error in conflicts_in_prompts: {str(e)}"
-        if verbose:
-            rprint(f"[red]{error_msg}[/red]")
-        if isinstance(e, ValueError):
-            raise e
-        raise RuntimeError(error_msg)
-
-def main():
-    """
-    Example usage of the conflicts_in_prompts function.
-    """
-    # Example prompts
-    prompt1 = "Write a formal business email in a serious tone."
-    prompt2 = "Write a casual, funny email with jokes."
+    print(f"Running conflict analysis using {model_name}...")
+    print(f"Input tokens: {conflict_token_count}")
+    print(f"Estimated cost: ${conflict_cost:.6f}")
 
     try:
-        changes_list, total_cost, model_name = conflicts_in_prompts(
-            prompt1=prompt1,
-            prompt2=prompt2,
-            strength=0.7,
-            temperature=0,
-            time=DEFAULT_TIME,
-            verbose=True
-        )
-
-        rprint("\n[green]Results:[/green]")
-        rprint(f"[blue]Model Used:[/blue] {model_name}")
-        rprint(f"[blue]Total Cost:[/blue] ${total_cost:.6f}")
-        
-        rprint("\n[blue]Suggested Changes:[/blue]")
-        for change in changes_list:
-            rprint(f"[yellow]Prompt:[/yellow] {change['prompt_name']}")
-            rprint(f"[yellow]Instructions:[/yellow] {change['change_instructions']}\n")
-
+        conflict_output = conflict_chain.invoke({"PROMPT1": prompt1, "PROMPT2": prompt2})
     except Exception as e:
-        rprint(f"[red]Error in main: {str(e)}[/red]")
+        raise RuntimeError(f"Error during conflict analysis: {e}")
 
+    # Step 5: Create Langchain LCEL template for extracting conflicts
+    extract_prompt = PromptTemplate.from_template(extract_prompt_template)
+    parser = JsonOutputParser(pydantic_object=ConflictOutput)
+
+    extract_chain = extract_prompt | llm | parser
+
+    # Calculate token count and cost for extraction
+    extract_input = extract_prompt.format(llm_output=conflict_output)
+    extract_token_count = token_counter(extract_input)
+    extract_cost = (extract_token_count * input_cost) / 1_000_000
+
+    print(f"\nExtracting conflicts from analysis...")
+    print(f"Input tokens: {extract_token_count}")
+    print(f"Estimated cost: ${extract_cost:.6f}")
+
+    try:
+        extract_output = extract_chain.invoke({"llm_output": conflict_output})
+    except Exception as e:
+        raise RuntimeError(f"Error during conflict extraction: {e}")
+
+    # Step 6: Return the list of conflicts and total cost
+    conflicts = extract_output.get("conflicts", [])
+    total_cost = conflict_cost + extract_cost
+
+    return conflicts, total_cost
+
+
+# Example usage
 if __name__ == "__main__":
-    main()
+    prompt1 = "Write a story about a brave knight."
+    prompt2 = "Write a story about a peaceful farmer."
+    conflicts, total_cost = conflicts_in_prompts(prompt1, prompt2)
+    print(f"Conflicts: {conflicts}")
+    print(f"Total cost: ${total_cost:.6f}")
