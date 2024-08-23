@@ -12,12 +12,12 @@ from construct_paths import construct_paths
 from code_generator import code_generator
 from context_generator import context_generator
 from generate_test import generate_test
-from preprocess import preprocess
+from preprocess import preprocess as preprocess_func
 from xml_tagger import xml_tagger
 from fix_errors_from_unit_tests import fix_errors_from_unit_tests
 from fix_error_loop import fix_error_loop
-from split import split
-from change import change
+from split import split as split_func
+from change import change as change_func
 from update_prompt import update_prompt
 
 console = Console()
@@ -209,7 +209,7 @@ def preprocess(ctx, prompt_file: str, output: str, xml: bool):
                     ctx.obj['TEMPERATURE']
                 )
             else:
-                processed_prompt = preprocess(
+                processed_prompt = preprocess_func(
                     input_strings['prompt_file'],
                     recursive=False,
                     double_curly_brackets=True
@@ -341,7 +341,7 @@ def split(ctx, input_prompt: str, input_code: str, example_code: str, output_sub
         with Progress() as progress:
             task = progress.add_task("[green]Splitting prompt...", total=100)
             
-            sub_prompt, modified_prompt, total_cost = split(
+            sub_prompt, modified_prompt, total_cost = split_func(
                 input_strings['input_prompt'],
                 input_strings['input_code'],
                 input_strings['example_code'],
@@ -376,7 +376,7 @@ def split(ctx, input_prompt: str, input_code: str, example_code: str, output_sub
 @click.pass_context
 def change(ctx, input_prompt: str, input_code: str, change_prompt: str, output: str):
     """Modify an input prompt file based on a change prompt and the corresponding input code."""
-    input_file_paths = {'input_prompt': input_prompt, 'input_code': input_code}
+    input_file_paths = {'input_prompt': input_prompt, 'input_code': input_code, 'change_prompt': change_prompt}
     command_options = {'output': output or os.getenv('PDD_CHANGE_OUTPUT_PATH')}
 
     try:
@@ -391,10 +391,10 @@ def change(ctx, input_prompt: str, input_code: str, change_prompt: str, output: 
         with Progress() as progress:
             task = progress.add_task("[green]Modifying prompt...", total=100)
             
-            modified_prompt, total_cost, model_name = change(
+            modified_prompt, total_cost, model_name = change_func(
                 input_strings['input_prompt'],
                 input_strings['input_code'],
-                change_prompt,
+                input_strings['change_prompt'],
                 ctx.obj['STRENGTH'],
                 ctx.obj['TEMPERATURE']
             )

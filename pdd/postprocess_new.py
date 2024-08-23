@@ -49,7 +49,7 @@ def postprocess(llm_output: str, language: str, strength: float = 0.9, temperatu
         parser = JsonOutputParser(pydantic_object=ExtractedCode)
 
         # Step 4: Use llm_selector for the LLM model
-        llm, token_counter, input_cost, output_cost = llm_selector(strength, temperature)
+        llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
 
         # Step 5: Run the code through the model
         chain = prompt | llm | parser

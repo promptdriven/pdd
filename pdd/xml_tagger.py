@@ -8,6 +8,9 @@ from rich.markdown import Markdown
 from llm_selector import llm_selector
 
 
+from langchain.globals import set_debug
+set_debug(True)
+
 def xml_tagger(raw_prompt: str, strength: float, temperature: float) -> Tuple[str, float]:
     """
     Converts a raw prompt into XML format and extracts XML tags using Langchain.
@@ -40,7 +43,7 @@ def xml_tagger(raw_prompt: str, strength: float, temperature: float) -> Tuple[st
             extract_xml_prompt = f.read()
 
         # Step 2 & 3: Create LCEL template and select LLM
-        llm, token_counter, input_cost, output_cost = llm_selector(strength, temperature)
+        llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
 
         # Step 4: Run XML conversion
         xml_convertor_template = PromptTemplate.from_template(xml_convertor_prompt)
