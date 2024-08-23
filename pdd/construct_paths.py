@@ -29,7 +29,9 @@ def construct_paths(input_file_paths: Dict[str, str], force: bool, quiet: bool, 
 
     def extract_language(file_path: str, command_options: Dict[str, str]) -> str:
         if 'language' in command_options:
-            return command_options['language']
+            # if language is not None, return it
+            if command_options['language']:
+                return command_options['language']
         
         filename = os.path.basename(file_path)
         if '_' in filename:
