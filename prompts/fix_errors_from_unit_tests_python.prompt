@@ -5,7 +5,7 @@
         'unit_test' - A string containing the unit test code.
         'code' - A string containing the code under test.
         'error' - A string that contains the errors that need to be fixed.
-        'error_file' - A string containing the path to the file where error logs will be appended.
+        'error_file' - A string containing the path to the file where error logs will be appended. If the file does not exist, it should be created.
         'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
         'temperature' - A float that controls the randomness of the LLM's output.
     Outputs:
