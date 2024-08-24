@@ -85,10 +85,10 @@ Options:
 
 ### 2. Example
 
-Create an example file from an existing code file.
+Create an example file from an existing code file and the prompt that generated the code file.
 
 ```
-pdd example [GLOBAL OPTIONS] [OPTIONS] CODE_FILE
+pdd example [GLOBAL OPTIONS] [OPTIONS] CODE_FILE PROMPT_FILE
 ```
 
 Options:
@@ -218,22 +218,22 @@ Here are some examples of multi-command chaining to illustrate its power and fle
 
 1. Generate code, create an example, and run tests in one go:
 ```
-pdd generate app_python.prompt --output src/app.py example src/app.py --output examples/usage.py test src/app.py app_python.prompt --output tests/test_app.py
+pdd generate app_python.prompt --output src/app.py example src/app.py app_python.prompt --output examples/usage.py test src/app.py app_python.prompt --output tests/test_app.py
 ```
 This chain will:
 - Generate code from `app_python.prompt` and save it to `src/app.py`
-- Create an example based on `src/app.py` and save it to `examples/usage.py`
+- Create an example based on `src/app.py` using `app_python.prompt` and save it to `examples/usage.py`
 - Generate a test file for `src/app.py` using `app_python.prompt` and save it to `tests/test_app.py`
 
 2. Preprocess a prompt, generate code, and create an example with cost tracking:
 ```
-pdd --output-cost usage.csv preprocess app_python.prompt --output preprocessed/app_python_preprocessed.prompt generate preprocessed/app_python_preprocessed.prompt --output src/app.py example src/app.py --output examples/usage.py
+pdd --output-cost usage.csv preprocess app_python.prompt --output preprocessed/app_python_preprocessed.prompt generate preprocessed/app_python_preprocessed.prompt --output src/app.py example src/app.py app_python.prompt --output examples/usage.py
 ```
 This chain will:
 - Enable cost tracking and save the results to `usage.csv`
 - Preprocess `app_python.prompt` and save the result to `preprocessed/app_python_preprocessed.prompt`
 - Generate code from the preprocessed prompt and save it to `src/app.py`
-- Create an example based on `src/app.py` and save it to `examples/usage.py`
+- Create an example based on `src/app.py` and using `app_python.prompt` and save it to `examples/usage.py`
 
 3. Split a large prompt, generate code from the sub-prompt, and create a test:
 ```
@@ -300,12 +300,12 @@ You can set environment variables to define default output paths for each comman
 
 1. Preprocess a prompt file, generate code, create an example, and generate tests (using multi-command chaining):
 ```
-pdd preprocess --output preprocessed/ --temperature 0.0 app_python.prompt generate --output src/app.py --temperature 0.0 preprocessed/app_python_preprocessed.prompt example --output examples/ --temperature 0.0 src/app.py test --output tests/ --language python --temperature 0.0 src/app.py app_python.prompt
+pdd preprocess --output preprocessed/ --temperature 0.0 app_python.prompt generate --output src/app.py --temperature 0.0 preprocessed/app_python_preprocessed.prompt example --output examples/ --temperature 0.0 src/app.py app_python.prompt test --output tests/ --language python --temperature 0.0 src/app.py app_python.prompt
 ```
 
 2. Generate code and create examples for multiple prompt files (using multi-command chaining):
 ```
-pdd generate --output src/api.py --temperature 0.0 api_python.prompt generate --output src/db.py --temperature 0.0 database_sql.prompt example --output examples/api_usage.py --temperature 0.0 src/api.py example --output examples/db_usage.py --temperature 0.0 src/db.py
+pdd generate --output src/api.py --temperature 0.0 api_python.prompt generate --output src/db.py --temperature 0.0 database_sql.prompt example --output examples/api_usage.py api_usage_python.prompt --temperature 0.0 src/api.py example --output examples/db_usage.py app_python.prompt --temperature 0.0 src/db.py
 ```
 
 3. Preprocess a prompt file and view the diff:
