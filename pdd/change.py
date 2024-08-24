@@ -11,6 +11,19 @@ from langchain.globals import set_debug
 console = Console()
 
 def change(input_prompt: str, input_code: str, change_prompt: str, strength: float, temperature: float) -> Tuple[str, float, str]:
+    """
+    Processes input prompts using a language model to generate and extract modified prompts.
+
+    Args:
+        input_prompt (str): The initial input prompt.
+        input_code (str): The input code to be modified.
+        change_prompt (str): The prompt describing the changes to be made.
+        strength (float): The strength parameter for the language model.
+        temperature (float): The temperature parameter for the language model.
+
+    Returns:
+        Tuple[str, float, str]: A tuple containing the modified prompt, total cost, and model name.
+    """
     try:
         pdd_path = os.getenv('PDD_PATH', '')
         with open(f'{pdd_path}/prompts/xml/change_LLM.prompt', 'r') as file:
