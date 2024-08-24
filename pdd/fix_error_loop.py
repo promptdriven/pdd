@@ -15,7 +15,8 @@ def fix_error_loop(
     strength: float,
     temperature: float,
     max_attempts: int,
-    budget: float
+    budget: float,
+    error_log_file: str = "error_log.txt"
 ) -> Tuple[bool, str, str, int, float]:
     """
     Attempts to fix errors in the code by running unit tests and applying fixes.
@@ -27,12 +28,12 @@ def fix_error_loop(
     :param temperature: Temperature parameter for the error fixing function.
     :param max_attempts: Maximum number of attempts to fix errors.
     :param budget: Maximum budget for fixing errors.
+    :param error_log_file: Path to the error log file (default: "error_log.txt").
     :return: Tuple containing success status, final unit test content, final code content, number of attempts, and total cost.
     """
 
-    error_log = "error_log.txt"
-    if os.path.exists(error_log):
-        os.remove(error_log)
+    if os.path.exists(error_log_file):
+        os.remove(error_log_file)
 
     attempts = 0
     total_cost = 0.0
@@ -55,7 +56,7 @@ def fix_error_loop(
         try:
             result = subprocess.run(['python', '-m', 'pytest', '-vv', unit_test_file], 
                                     capture_output=True, text=True)
-            with open(error_log, 'w') as f:  # Use 'w' mode to overwrite previous errors
+            with open(error_log_file, 'w') as f:  # Use 'w' mode to overwrite previous errors
                 f.write(result.stdout)
                 f.write(result.stderr)
 
@@ -77,7 +78,7 @@ def fix_error_loop(
             shutil.copy(unit_test_file, backup_unit_test)
             shutil.copy(code_file, backup_code)
 
-            with open(error_log, 'r') as f:
+            with open(error_log_file, 'r') as f:
                 error_content = f.read()
 
             console.print("[bold yellow]Attempting to fix errors...[/bold yellow]")
@@ -85,7 +86,7 @@ def fix_error_loop(
                 unit_test=unit_test_content,
                 code=code_content,
                 error=error_content,
-                error_file=error_log,
+                error_file=error_log_file,
                 strength=strength,
                 temperature=temperature
             )

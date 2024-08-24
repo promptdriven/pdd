@@ -91,6 +91,7 @@ def generate(ctx, prompt_file: str, output: str):
     except Exception as e:
         console.print(f"[red]An error occurred: {e}[/red]")
 
+
 @cli.command()
 @click.argument('code_file', type=click.Path(exists=True))
 @click.argument('prompt_file', type=click.Path(exists=True))
@@ -277,7 +278,8 @@ def fix(ctx, unit_test_file: str, code_file: str, error_file: str, output_test: 
                     ctx.obj['STRENGTH'],
                     ctx.obj['TEMPERATURE'],
                     max_attempts,
-                    budget
+                    budget,
+                    error_file
                 )
                 update_unit_test = update_code = True
             else:

@@ -9,6 +9,7 @@
         'temperature' - A float that represents the temperature parameter for the LLM model.
         'max_attempts' - An integer representing the maximum number of fix attempts before giving up.
         'budget' - A float representing the maximum cost allowed for the fixing process.
+        'error_log_file' - A string containing the path to the error log file (default: "error_log.txt").
     Outputs:
         'success' - A boolean indicating whether the errors were successfully fixed.
         'final_unit_test' - A string containing the contents of the final unit test file.
@@ -19,20 +20,20 @@
 % Here is an example of the fix_errors_from_unit_tests function that will be used: ```<./context/fix_errors_from_unit_tests_example.py>```
 
 % This function will do the following:
-    Step 1. Remove the existing 'error.log' file if it exists.
+    Step 1. Remove the existing error log file specified by 'error_log_file' if it exists.
     Step 2. Initialize variables:
         - Counter for the number of attempts
         - Total cost accumulator
         - Best iteration tracker (lowest errors, then lowest fails)
     Step 3. Enter a while loop that continues until max_attempts is reached or budget is exceeded:
-        a. Run the unit_test_file with 'python -m pytest -vv' and pipe all output appended to error.log.
+        a. Run the unit_test_file with 'python -m pytest -vv' and pipe all output appended to the specified error log file.
         b. If the test passes, break the loop.
         c. If the test fails:
-           - Read and print the error message from error.log.
+           - Read and print the error message from the error log file.
            - Count the number of 'FAILED' and 'ERROR' from stdout (accounting for the -vv flag doubling these messages).
            - Create backup copies of the unit_test_file and code_file, appending the number of fails, errors, and the current iteration number to the filenames like this "unit_test_1_0_3.py" and "code_1_0_3.py", where there was one fail, zero errors and it is the third iteration through the loop.
            - Read the contents of the unit_test_file and code_file.
-           - Call fix_errors_from_unit_tests with the file contents, error from error.log, error.log and the provided strength and temperature. All print output of this function besides being displayed should also be appended to the error.log file with a separator to indicate it is coming from this function.
+           - Call fix_errors_from_unit_tests with the file contents, error from the error log file, the error log file, and the provided strength and temperature. All print output of this function besides being displayed should also be appended to the error log file with a separator to indicate it is coming from this function.
            - Add the returned total_cost to the total cost accumulator.
            - If the total cost exceeds the budget, break the loop.
            - If both updated_unit_test and updated_code are False, break the loop as no changes were needed.
@@ -43,7 +44,7 @@
               * If the verification fails, restore the original file from the backup and continue the loop.
               * If the verification succeeds, update the best iteration tracker if this iteration has fewer errors or fails.
         d. Increment the attempt counter.
-    Step 4. After the loop ends, run pytest one last time, pipe the output to error.log, and print it to the console.
+    Step 4. After the loop ends, run pytest one last time, pipe the output to the error log file, and print it to the console.
     Step 5. If the last run isn't the best iteration, copy back the files from the best iteration.
     Step 6. Return the success status, final unit test contents, final code contents, total number of attempts, and total cost.
 
