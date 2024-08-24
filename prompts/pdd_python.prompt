@@ -18,13 +18,13 @@
 
 % 'example' command: To generate example code from a code file, use context_generator. Here is an example how to generate an example from a code file: ```<./context/context_generator_example.py>```
 
-% 'test' command: To generate a unit test from code and it's prompt file, use generate_test. Here is an example how to generate a unit test from a code file: ```<./context/generate_test_example.py>```
+% 'test' command: To generate a unit test from code and its prompt file, use generate_test. Here is an example how to generate a unit test from a code file: ```<./context/generate_test_example.py>```
 
 % 'preprocess' command: To preprocess a prompt from a prompt file, use preprocess. Here is an example of how to preprocess the prompt from a file: ```<./context/preprocess_example.py>```
 
 % 'preprocess --xml' sub-command: To preprocess a prompt from a prompt file and output the result in XML format, use xml_tagger. Here is an example of how to preprocess the prompt from a file and output the result in XML format: ```<./context/xml_tagger_example.py>```
 
-% 'fix' command: To fix errors in code and unit test based on error messages use fix_errors_from_unit_tests. Be sure to load the required files for this function and only save the output files if there is an update. Here is an example how to fix errors in code and unit test based on error messages: ```<./context/fix_errors_from_unit_tests_example.py>```
+% 'fix' command: To fix errors in code and unit test based on error messages use fix_errors_from_unit_tests. Be sure to load the required files for this function and only save the output files if there is an update. Note that the 'error_file' argument does not need to exist beforehand. Here is an example how to fix errors in code and unit test based on error messages: ```<./context/fix_errors_from_unit_tests_example.py>```
 
 % 'fix --loop' sub-command: To loop on the above fix errors in code and unit tests use fix_error_loop. Here is an example how to loop on the above fix errors in code and unit tests: ```<./context/fix_error_loop_example.py>```
 
