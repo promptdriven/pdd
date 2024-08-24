@@ -36,8 +36,13 @@ def fix_errors_from_unit_tests(unit_test: str, code: str, error: str, error_file
 
         # Step 2: Read the contents of the error_file
         try:
-            with open(error_file, 'a') as ef:
-                ef.write("\n--- New LLM Fixing Run ---\n")
+            # if error file does not exist, create it
+            if not os.path.exists(error_file):
+                with open(error_file, 'w') as ef:
+                    ef.write("")
+            else:
+                with open(error_file, 'a') as ef:
+                    ef.write("\n--- New LLM Fixing Run ---\n")
         except IOError as e:
             rprint(f"[bold red]Error reading error file: {e}[/bold red]")
             return False, False, '', '', 0.0
