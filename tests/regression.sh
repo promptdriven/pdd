@@ -29,7 +29,7 @@ run_pdd_command example get_extension.py "$PROMPTS_PATH/get_extension_python.pro
 run_pdd_command test get_extension.py "$PROMPTS_PATH/get_extension_python.prompt"
 run_pdd_command preprocess "$PROMPTS_PATH/get_extension_python.prompt"
 run_pdd_command preprocess --xml --output get_extension_python_xml.prompt "$PROMPTS_PATH/get_extension_python.prompt"
-run_pdd_command update get_extension.py "$PROMPTS_PATH/get_extension_python.prompt" "$PDD_PATH/pdd/get_extension.py"
+run_pdd_command update "$PROMPTS_PATH/get_extension_python.prompt" "$PDD_PATH/pdd/get_extension.py" get_extension.py 
 
 # Run change command
 echo "Running change command"
