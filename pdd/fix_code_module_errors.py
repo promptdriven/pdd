@@ -1,165 +1,74 @@
+import os
+from pathlib import Path
 from typing import Tuple
-from pydantic import BaseModel, Field, ValidationError
+import tiktoken
 from rich import print
 from rich.markdown import Markdown
-from .load_prompt_template import load_prompt_template
-from .llm_invoke import llm_invoke
-from . import EXTRACTION_STRENGTH, DEFAULT_TIME, DEFAULT_STRENGTH
-import json
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from llm_selector import llm_selector
+from postprocess import postprocess
 
-class CodeFix(BaseModel):
-    update_program: bool = Field(description="Indicates if the program needs updating")
-    update_code: bool = Field(description="Indicates if the code module needs updating")
-    fixed_program: str = Field(description="The fixed program code")
-    fixed_code: str = Field(description="The fixed code module")
-
-def validate_inputs(
-    program: str,
-    prompt: str,
-    code: str,
-    errors: str,
-    strength: float
-) -> None:
-    """Validate input parameters."""
-    if not all([program, prompt, code, errors]):
-        raise ValueError("All string inputs (program, prompt, code, errors) must be non-empty")
-    
-    if not isinstance(strength, (int, float)):
-        raise ValueError("Strength must be a number")
-    
-    if not 0 <= strength <= 1:
-        raise ValueError("Strength must be between 0 and 1")
-
-def fix_code_module_errors(
-    program: str,
-    prompt: str,
-    code: str,
-    errors: str,
-    strength: float = DEFAULT_STRENGTH,
-    temperature: float = 0,
-    time: float = DEFAULT_TIME,
-    verbose: bool = False,
-    program_path: str = "",
-    code_path: str = "",
-) -> Tuple[bool, bool, str, str, str, float, str]:
+def fix_code_module_errors(program: str, prompt: str, code: str, errors: str, strength: float) -> Tuple[str, float]:
     """
-    Fix errors in a code module that caused a program to crash and/or have errors.
+    Fixes errors in a code module by leveraging a language model.
+
+    Args:
+        program (str): The name of the program.
+        prompt (str): The prompt to be used.
+        code (str): The code containing errors.
+        errors (str): The errors to be fixed.
+        strength (float): The strength parameter for model selection.
+
+    Returns:
+        Tuple[str, float]: A tuple containing the fixed code and the total cost.
     """
     try:
-        # Validate inputs
-        validate_inputs(program, prompt, code, errors, strength)
-
-        # Step 1: Load prompt templates
-        fix_prompt = load_prompt_template("fix_code_module_errors_LLM")
-        extract_prompt = load_prompt_template("extract_program_code_fix_LLM")
+        # Step 1: Load the prompt file
+        pdd_path = os.getenv('PDD_PATH')
+        if not pdd_path:
+            raise ValueError("PDD_PATH environment variable is not set")
         
-        if not all([fix_prompt, extract_prompt]):
-            raise ValueError("Failed to load one or more prompt templates")
+        prompt_path = Path(pdd_path) / "prompts" / "fix_code_module_errors_LLM.prompt"
+        with open(prompt_path, 'r') as file:
+            prompt_template = file.read()
 
-        total_cost = 0
-        model_name = ""
+        # Step 2: Create Langchain LCEL template
+        lcel_template = PromptTemplate.from_template(prompt_template)
 
-        # Step 2: First LLM invoke for error analysis
-        input_json = {
-            "program": program,
-            "prompt": prompt,
-            "code": code,
-            "errors": errors,
-            "program_path": program_path,
-            "code_path": code_path,
-        }
+        # Step 3: Use llm_selector
+        temperature = 0
+        llm, input_cost, output_cost = llm_selector(strength, temperature)
 
-        if verbose:
-            print("[blue]Running initial error analysis...[/blue]")
+        # Step 4: Run the code through the model
+        chain = lcel_template | llm | StrOutputParser()
 
-        first_response = llm_invoke(
-            prompt=fix_prompt,
-            input_json=input_json,
-            strength=strength,
-            temperature=temperature,
-            time=time,
-            verbose=verbose
-        )
+        # Calculate token count and cost
+        encoding = tiktoken.get_encoding("cl100k_base")
+        preprocessed_prompt = lcel_template.format(program=program, prompt=prompt, code=code, errors=errors)
+        token_count = len(encoding.encode(preprocessed_prompt))
+        prompt_cost = (token_count / 1_000_000) * input_cost
 
-        total_cost += first_response.get('cost', 0)
-        model_name = first_response.get('model_name', '')
-        program_code_fix = first_response['result']
+        print(Markdown(f"Running LLM with {token_count} tokens. Estimated cost: ${prompt_cost:.6f}"))
 
-        # Check if the LLM response is None or an error string
-        if program_code_fix is None:
-            error_msg = "LLM returned None result during error analysis"
-            if verbose:
-                print(f"[red]{error_msg}[/red]")
-            raise RuntimeError(error_msg)
-        elif isinstance(program_code_fix, str) and program_code_fix.startswith("ERROR:"):
-            error_msg = f"LLM failed to analyze errors: {program_code_fix}"
-            if verbose:
-                print(f"[red]{error_msg}[/red]")
-            raise RuntimeError(error_msg)
+        # Invoke the chain
+        result = chain.invoke({"program": program, "prompt": prompt, "code": code, "errors": errors})
 
-        if verbose:
-            print("[green]Error analysis complete[/green]")
-            print(Markdown(program_code_fix))
-            print(f"[yellow]Current cost: ${total_cost:.6f}[/yellow]")
+        # Step 5: Pretty print the result
+        print(Markdown(result))
+        result_token_count = len(encoding.encode(result))
+        result_cost = (result_token_count / 1_000_000) * output_cost
+        print(Markdown(f"Result contains {result_token_count} tokens. Estimated cost: ${result_cost:.6f}"))
 
-        # Step 4: Second LLM invoke for code extraction
-        extract_input = {
-            "program_code_fix": program_code_fix,
-            "program": program,
-            "code": code
-        }
+        # Step 6: Extract corrected code
+        fixed_code, postprocess_cost = postprocess(result, "python", strength=strength, temperature=temperature)
 
-        if verbose:
-            print("[blue]Extracting code fixes...[/blue]")
+        # Step 7: Calculate and print total cost
+        total_cost = prompt_cost + result_cost + postprocess_cost
+        print(Markdown(f"Total cost of the run: ${total_cost:.6f}"))
 
-        second_response = llm_invoke(
-            prompt=extract_prompt,
-            input_json=extract_input,
-            strength=EXTRACTION_STRENGTH,  # Fixed strength for extraction
-            temperature=temperature,
-            time=time,
-            verbose=verbose,
-            output_pydantic=CodeFix
-        )
+        return fixed_code, total_cost
 
-        total_cost += second_response.get('cost', 0)
-
-        # Step 5: Extract values from Pydantic result
-        result = second_response['result']
-
-        if isinstance(result, str):
-            try:
-                result_dict = json.loads(result)
-            except json.JSONDecodeError:
-                result_dict = {"result": result}
-            result = CodeFix.model_validate(result_dict)
-        elif isinstance(result, dict):
-            result = CodeFix.model_validate(result)
-        elif not isinstance(result, CodeFix):
-            result = CodeFix.model_validate({"result": str(result)})
-
-        if verbose:
-            print("[green]Code extraction complete[/green]")
-            print(f"[yellow]Total cost: ${total_cost:.6f}[/yellow]")
-            print(f"[blue]Model used: {model_name}[/blue]")
-
-        # Step 7: Return results
-        return (
-            result.update_program,
-            result.update_code,
-            result.fixed_program,
-            result.fixed_code,
-            program_code_fix,
-            total_cost,
-            model_name
-        )
-
-    except ValueError as ve:
-        print(f"[red]Value Error: {str(ve)}[/red]")
-        raise
-    except ValidationError:
-        print("[red]Validation Error: Invalid result format[/red]")
-        raise
     except Exception as e:
-        print(f"[red]Unexpected error: {str(e)}[/red]")
-        raise
+        print(f"An error occurred: {str(e)}")
+        return "", 0.0
