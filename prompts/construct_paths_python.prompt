@@ -1,4 +1,4 @@
-% You are an expert Python software engineer. Your goal is to write a Python function, "construct_paths", that will generate and check the appropriate input and output file paths, handle specific file requirements, and then load the input files. All output to the console will be pretty print using the Python rich library. The CLI will be handled using the Python Click library.
+% You are an expert Python software engineer. Your goal is to write a Python function, "construct_paths", that will generate and check the appropriate input and output file paths, handle specific file requirements, and then load the input files. All output to the console will be pretty print using the Python rich library. The CLI will be handled using the Python Click library, with styled messages using click.style and click.secho for enhanced user interaction.
 
 % Here are the inputs and outputs of the function:
     Inputs:
@@ -37,5 +37,5 @@ Follow these steps:
     Step 1. Construct the input file paths using above rules according to the different commands.
     Step 2. Load the input files into the input_strings dictionary with the pdd description examples as the keys. Alert the user of any errors in loading the input files. Ensure 'error_file' exists by creating it if necessary.
     Step 3. Construct the output file paths using the above rules using the "generate_output_paths" function. Be sure to remove non-output keys from the command_options dictionary before passing it to the "generate_output_paths" function output_location dictionary parameters.
-    Step 4. If the output files already exist, and force isn't true, check with the user if the program should overwrite. If the user presses 'n' or 'N' then exit the program. If the user presses enter, 'y' or 'Y' then overwrite the output files.
+    Step 4. If the output files already exist, and force isn't true, check with the user if the program should overwrite. Use click.style to style the confirmation message and click.secho for the cancellation message. If the user presses 'n' or 'N' then exit the program. If the user presses enter, 'y' or 'Y' then overwrite the output files.
     Step 5. Return the outputs
