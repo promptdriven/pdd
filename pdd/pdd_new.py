@@ -235,7 +235,7 @@ def preprocess(ctx, prompt_file: str, output: str, xml: bool):
 @cli.command()
 @click.argument('unit_test_file', type=click.Path(exists=True))
 @click.argument('code_file', type=click.Path(exists=True))
-@click.argument('error_file', type=click.Path(exists=True))
+@click.argument('error_file', type=click.Path(exists=False))
 @click.option('--output-test', type=click.Path(), help='Specify where to save the fixed unit test file.')
 @click.option('--output-code', type=click.Path(), help='Specify where to save the fixed code file.')
 @click.option('--loop', is_flag=True, help='Enable iterative fixing process.')
