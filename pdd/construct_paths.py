@@ -101,8 +101,10 @@ def construct_paths(input_file_paths: Dict[str, str], force: bool, quiet: bool, 
         if not force:
             for path in output_file_paths.values():
                 if os.path.exists(path):
-                    if not click.confirm(f"[yellow]File {path} already exists. Overwrite?[/yellow]", default=True):
-                        print("[red]Operation cancelled.[/red]")
+                    # Styled message using click.style()
+                    message = click.style(f"File {path} already exists. Overwrite?", fg="yellow")
+                    if not click.confirm(message, default=True):
+                        click.secho("Operation cancelled.", fg="red")
                         raise click.Abort()
 
         # Step 5: Return outputs
