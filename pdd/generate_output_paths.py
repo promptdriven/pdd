@@ -58,17 +58,17 @@ def generate_output_paths(command: str, output_locations: Dict[str, Optional[str
 
     for key, output in output_locations.items():
         if command == "fix":
-            if key == "output-test":
+            if key == "output_test":
                 env_value = get_env_var(test_env_var)
                 result[key] = get_full_path(output or env_value, test_default_name)
-            elif key == "output-code":
+            elif key == "output_code":
                 env_value = get_env_var(code_env_var)
                 result[key] = get_full_path(output or env_value, code_default_name)
         elif command == "split":
-            if key == "output-sub":
+            if key == "output_sub":
                 env_value = get_env_var(sub_env_var)
                 result[key] = get_full_path(output or env_value, sub_default_name)
-            elif key == "output-modified":
+            elif key == "output_modified":
                 env_value = get_env_var(modified_env_var)
                 result[key] = get_full_path(output or env_value, modified_default_name)
         else:
