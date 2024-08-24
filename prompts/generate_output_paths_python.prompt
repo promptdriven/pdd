@@ -2,7 +2,7 @@
 
 % Inputs: The function should take the following parameters:
     - `command` (string): The command being executed (e.g., 'generate', 'example', 'test', 'preprocess', 'fix').
-    - `output_locations` (dict): The output dictionary with keys (e.g., 'output', 'output-test') and the value of those options if specified by user.
+    - `output_locations` (dict): The output dictionary with keys (e.g., 'output', 'output_test') and the value of those options if specified by user.
     - `basename` (string): The base name of the file.
     - `language` (string): The programming language of the file.
     - `file_extension` (string): The file extension to be used. It will already have the '.' in front of it.
@@ -19,3 +19,5 @@
     Step 1. List out all the different ways output locations can be constructed.
     Step 2. List out the default naming conventions for each command.
     Step 3. Write the code that implements the function to implement all these cases efficiently from Step 1 and 2.
+
+% Note: For the 'fix' and 'split' commands, use underscores in the keys of the `output_locations` dictionary (e.g., 'output_test', 'output_code', 'output_sub', 'output_modified') instead of hyphens.
