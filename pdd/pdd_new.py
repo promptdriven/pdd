@@ -19,7 +19,8 @@ from fix_error_loop import fix_error_loop
 from split import split as split_func
 from change import change as change_func
 from update_prompt import update_prompt
-
+from langchain.globals import set_debug
+set_debug(False)
 console = Console()
 
 def log_cost(output_cost_file: str, model: str, command: str, cost: float, input_files: list, output_files: list):
@@ -92,11 +93,12 @@ def generate(ctx, prompt_file: str, output: str):
 
 @cli.command()
 @click.argument('code_file', type=click.Path(exists=True))
+@click.argument('prompt_file', type=click.Path(exists=True))
 @click.option('--output', type=click.Path(), help='Specify where to save the generated example code.')
 @click.pass_context
-def example(ctx, code_file: str, output: str):
-    """Create an example file from an existing code file."""
-    input_file_paths = {'code_file': code_file}
+def example(ctx, code_file: str, prompt_file: str, output: str):
+    """Create an example file from an existing code file and its corresponding prompt."""
+    input_file_paths = {'code_file': code_file, 'prompt_file': prompt_file}
     command_options = {'output': output or os.getenv('PDD_EXAMPLE_OUTPUT_PATH')}
 
     try:
@@ -113,7 +115,7 @@ def example(ctx, code_file: str, output: str):
             
             example_code, total_cost = context_generator(
                 input_strings['code_file'],
-                "Generate an example for this code.",
+                input_strings['prompt_file'],
                 language,
                 ctx.obj['STRENGTH'],
                 ctx.obj['TEMPERATURE']
@@ -125,7 +127,7 @@ def example(ctx, code_file: str, output: str):
             f.write(example_code)
 
         if ctx.obj['OUTPUT_COST']:
-            log_cost(ctx.obj['OUTPUT_COST'], 'AI_MODEL', 'example', total_cost, [code_file], [output_file_paths['output']])
+            log_cost(ctx.obj['OUTPUT_COST'], 'AI_MODEL', 'example', total_cost, [code_file, prompt_file], [output_file_paths['output']])
 
         if not ctx.obj['QUIET']:
             console.print(f"[green]Example generated and saved to {output_file_paths['output']}[/green]")
