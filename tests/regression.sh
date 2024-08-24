@@ -42,7 +42,7 @@ echo "Running fix commands"
 run_pdd_command fix test_get_extension.py get_extension.py error.log
 run_pdd_command fix --loop --output-test test.py --output-code code.py \
                     --verification-program get_extension_example.py --max-attempts 2 \
-                    test_get_extension.py get_extension.py error.log
+                    test_get_extension.py get_extension.py error_loop.log
 
 # Run split command
 echo "Running split command"

@@ -7,8 +7,9 @@ code_file: str = f'staging/pdd/{base}.py'          # Path to your code file
 verification_program: str = f'staging/context/{base}_example.py'          # Path to your verification program
 strength: float = 1                            # Strength parameter for error fixing
 temperature: float = 0                         # Temperature parameter for error fixing
-max_attempts: int = 3                           # Maximum number of attempts to fix errors
+max_attempts: int = 5                           # Maximum number of attempts to fix errors
 budget: float = 100.0                            # Maximum budget for fixing errors
+error_log_file = "error_log.txt"  # Path to the error log file
 
 # Call the function
 success: bool
@@ -25,7 +26,8 @@ try:
         strength,
         temperature,
         max_attempts,
-        budget
+        budget,
+        error_log_file=error_log_file
     )
 
     # Output the results
