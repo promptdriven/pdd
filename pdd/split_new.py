@@ -8,6 +8,8 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_community.cache import SQLiteCache
 from langchain.globals import set_llm_cache
 from llm_selector import llm_selector
+from langchain.globals import set_debug
+set_debug(False)
 
 # Set up the Rich console for pretty printing
 console = Console()
@@ -61,7 +63,7 @@ def split(input_prompt: str, input_code: str, example_code: str, strength: float
         console.print(f"Input Tokens: {input_tokens}, Output Tokens: {output_tokens}, Estimated Cost: ${total_cost:.6f}")
 
         # Step 5: Create a Langchain LCEL template for JSON output
-        processed_extract_prompt = preprocess(extract_prompt_split_llm, recursive=False, double_curly_brackets=True)
+        processed_extract_prompt = preprocess(extract_prompt_split_llm, recursive=False, double_curly_brackets=False)
         json_parser = JsonOutputParser()
         json_prompt_template = PromptTemplate.from_template(processed_extract_prompt)
 
