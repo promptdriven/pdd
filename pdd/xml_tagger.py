@@ -8,8 +8,7 @@ from rich.markdown import Markdown
 from llm_selector import llm_selector
 
 
-from langchain.globals import set_debug
-set_debug(True)
+
 
 def xml_tagger(raw_prompt: str, strength: float, temperature: float) -> Tuple[str, float]:
     """
