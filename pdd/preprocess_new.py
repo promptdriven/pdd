@@ -33,6 +33,16 @@ def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool
     console.print(Panel("Preprocessing complete", style="bold green"))
     return prompt
 
+def get_file_path(file_name: str) -> str:
+    """
+    Get the full file path based on PDD_PATH environment variable.
+
+    :param file_name: The name of the file to locate.
+    :return: The full path to the file.
+    """
+    pdd_path = os.getenv('PDD_PATH', '')
+    return os.path.join(pdd_path, file_name)
+
 def process_backtick_includes(text: str, recursive: bool) -> str:
     """
     Process includes within triple backticks in the text.
@@ -46,14 +56,15 @@ def process_backtick_includes(text: str, recursive: bool) -> str:
     
     for match in matches:
         console.print(f"Processing include: [cyan]{match}[/cyan]")
+        file_path = get_file_path(match)
         try:
-            with open(match, 'r') as file:
+            with open(file_path, 'r') as file:
                 content = file.read()
                 if recursive:
                     content = preprocess(content, recursive, False)
                 text = text.replace(f"```<{match}>```", f"```{content}```")
         except FileNotFoundError:
-            console.print(f"[bold red]Warning:[/bold red] File not found: {match}")
+            console.print(f"[bold red]Warning:[/bold red] File not found: {file_path}")
     
     return text
 
@@ -67,7 +78,8 @@ def process_xml_tags(soup: BeautifulSoup, recursive: bool) -> str:
     """
     # Process include tags
     for include in soup.find_all('include'):
-        file_path = include.string.strip()
+        file_name = include.string.strip()
+        file_path = get_file_path(file_name)
         console.print(f"Processing XML include: [cyan]{file_path}[/cyan]")
         try:
             with open(file_path, 'r') as file:
