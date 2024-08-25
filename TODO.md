@@ -25,6 +25,7 @@
 - [ ] increase the number of unit tests to generate
 - [ ] tally up all costs into a csv file
 - [ ] use context caching during fixing errors
+- [ ] debugger that matches prompt lines to code lines
 
 ## Bugs
 
