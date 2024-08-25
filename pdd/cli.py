@@ -3,7 +3,6 @@ import click
 from rich.console import Console
 from rich.table import Table
 from rich.progress import Progress
-from typing import Dict, Any, Tuple
 import csv
 from datetime import datetime
 
