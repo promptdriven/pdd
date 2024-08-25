@@ -8,18 +8,20 @@ import csv
 from datetime import datetime
 
 # Import necessary functions from other modules
-from construct_paths import construct_paths
-from code_generator import code_generator
-from context_generator import context_generator
-from generate_test import generate_test
-from preprocess import preprocess as preprocess_func
-from xml_tagger import xml_tagger
-from fix_errors_from_unit_tests import fix_errors_from_unit_tests
-from fix_error_loop import fix_error_loop
-from split import split as split_func
-from change import change as change_func
-from update_prompt import update_prompt
+from .construct_paths import construct_paths
+from .code_generator import code_generator
+from .context_generator import context_generator
+from .generate_test import generate_test
+from .preprocess import preprocess as preprocess_func
+from .xml_tagger import xml_tagger
+from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
+from .fix_error_loop import fix_error_loop
+from .split import split as split_func
+from .change import change as change_func
+from .update_prompt import update_prompt
 from langchain.globals import set_debug
+import subprocess
+
 set_debug(False)
 console = Console()
 
@@ -469,21 +471,55 @@ def update(ctx, input_prompt: str, input_code: str, modified_code: str, output: 
     except Exception as e:
         console.print(f"[red]An error occurred: {e}[/red]")
 
+def get_paths_for_shell(shell):
+    """
+    Determines the completion script path and shell RC file path based on the shell type.
+
+    Parameters:
+    - shell: The shell type (e.g., "bash", "zsh", "fish").
+
+    Returns:
+    - completion_script_path: The path where the completion script will be saved.
+    - shell_rc_path: The path to the shell's RC file.
+    """
+    home_dir = os.path.expanduser("~")
+    
+    if shell == "bash":
+        completion_script_path = os.path.join(home_dir, ".pdd-complete.bash")
+        shell_rc_path = os.path.join(home_dir, ".bashrc")
+    elif shell == "zsh":
+        completion_script_path = os.path.join(home_dir, ".pdd-complete.zsh")
+        shell_rc_path = os.path.join(home_dir, ".zshrc")
+    elif shell == "fish":
+        completion_script_path = os.path.join(home_dir, ".config", "fish", "completions", "pdd.fish")
+        shell_rc_path = os.path.join(home_dir, ".config", "fish", "config.fish")
+    else:
+        raise ValueError(f"Unsupported shell type: {shell}")
+    
+    return completion_script_path, shell_rc_path
+
 @cli.command()
 def install_completion():
     """Install tab completion for compatible shells."""
-    import subprocess
-    import sys
-
     shell = os.environ.get('SHELL', '').split('/')[-1]
     if shell in ['bash', 'zsh', 'fish']:
-        script = f"_{shell}_source"
-        result = subprocess.run([sys.executable, '-m', 'click_completion', script], capture_output=True, text=True)
-        if result.returncode == 0:
-            console.print(f"[green]To enable tab completion, add the following to your ~/.{shell}rc file:[/green]")
-            console.print(result.stdout)
-        else:
-            console.print(f"[red]Failed to generate completion script: {result.stderr}[/red]")
+        completion_script_path, shell_rc_path = get_paths_for_shell(shell)
+        
+        # Generate the completion script based on the shell type
+        completion_command = f"_PDD_COMPLETE={shell}_source pdd > {completion_script_path}"
+        subprocess.run(completion_command, shell=True, check=True)
+        
+        # Add the source command to the shell's RC file if it's not already there
+        source_command = f"source {completion_script_path}"
+        with open(shell_rc_path, 'a+') as rc_file:
+            rc_file.seek(0)
+            lines = rc_file.readlines()
+            if source_command not in lines:
+                rc_file.write(f"\n# Enable pdd completion\n{source_command}\n")
+                print(f"Added {source_command} to {shell_rc_path}")
+                print("Restart your shell or run `source {shell_rc_path}` to enable completion.")
+            else:
+                print(f"{source_command} is already present in {shell_rc_path}")
     else:
         console.print("[yellow]Automatic installation is not supported for your shell. Please refer to Click documentation for manual installation.[/yellow]")
 

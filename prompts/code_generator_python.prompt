@@ -1,4 +1,4 @@
-% You are an expert Python engineer. Your goal is to write a python function, "code_generator", that will compile a prompt into a code file. All output to the console will be pretty print using the Python rich library.
+% You are an expert Python engineer. Your goal is to write a python function, "code_generator", that will compile a prompt into a code file. All output to the console will be pretty print using the Python rich library. Ensure that the imports for the preprocess, llm_selector, and postprocess modules are relative, indicating they are part of the same package or directory.
 
 % Here are the inputs and outputs of the function:
     Inputs: 
