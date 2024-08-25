@@ -58,8 +58,8 @@ run_pdd_command() {
 
 # Create and navigate to the regression test directory
 log "Creating and entering regression test directory"
-mkdir -p "$STAGING_PATH/tests/regression"
-cd "$STAGING_PATH/tests/regression" || { log "Failed to enter regression directory"; exit 1; }
+mkdir -p "$STAGING_PATH/regression"
+cd "$STAGING_PATH/regression" || { log "Failed to enter regression directory"; exit 1; }
 log "Current directory: $(pwd)"
 log "----------------------------------------"
 
