@@ -70,7 +70,7 @@ test:
 # Generate requirements.txt
 requirements:
 	@echo "Generating requirements.txt"
-	@PYTHONPATH=$(PROD_DIR) pipreqs ./pdd --force 
+	@PYTHONPATH=$(PROD_DIR) pipreqs ./pdd --force --savepath ./requirements.txt
 
 # Clean generated files
 clean:
@@ -108,6 +108,10 @@ regression:
 	@mkdir -p staging/tests/regression
 	@rm -f staging/tests/regression/*
 	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/regression.sh
+
+install:
+	@echo "Installing pdd"
+	@pip install -e .
 # ```
 
 # This Makefile covers all the requirements you specified:
