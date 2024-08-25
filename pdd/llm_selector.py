@@ -6,7 +6,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_fireworks import Fireworks
 from langchain_groq import ChatGroq
 from langchain_together import Together
-from llm_token_counter import llm_token_counter
+from .llm_token_counter import llm_token_counter
 
 def llm_selector(strength: float, temperature: float):
     """
@@ -14,7 +14,7 @@ def llm_selector(strength: float, temperature: float):
 
     :param strength: A float representing the desired strength of the model.
     :param temperature: A float representing the desired temperature for the model.
-    :return: A tuple containing the selected LLM, token counter function, input cost, and output cost.
+    :return: A tuple containing the selected LLM, token counter function, input cost, output cost, and model name.
     """
     # Load environment variables
     base_model = os.getenv('PDD_MODEL_DEFAULT', 'gpt-4o-mini')
@@ -37,7 +37,7 @@ def llm_selector(strength: float, temperature: float):
     base_output_cost = base_model_row['output']
     base_elo = base_model_row['coding_arena_elo']
 
-    # Calculate average costs for all models
+      # Calculate average costs for all models
     df['average_cost'] = (df['input'] + df['output']) / 2
 
     if strength < 0.5:
@@ -63,6 +63,7 @@ def llm_selector(strength: float, temperature: float):
     
     if not higher_elo_models.empty:
         selected_row = higher_elo_models.iloc[0]
+
 
     # Extract model details
     model_name = selected_row['model']
@@ -91,9 +92,12 @@ def llm_selector(strength: float, temperature: float):
     # Get the token counter function
     token_counter = llm_token_counter(counter_type, encoder)
     print(f"Selected LLM: {model_name}, Input Cost: {input_cost}, Output Cost: {output_cost}")
-    return llm, token_counter, input_cost, output_cost
+    return llm, token_counter, input_cost, output_cost, model_name  # Return model_name separately
 
 # Example usage
 if __name__ == "__main__":
-    llm, token_counter, input_cost, output_cost = llm_selector(1, 0.7)
-    print(f"Selected LLM: {llm}, Input Cost: {input_cost}, Output Cost: {output_cost}")
+    i = 0
+    while i < 1:
+        llm, token_counter, input_cost, output_cost, model_name = llm_selector(i, 0)
+        print(f"Strength: {i}, Selected LLM: {model_name}, Input Cost: {input_cost}, Output Cost: {output_cost}")
+        i += 0.1

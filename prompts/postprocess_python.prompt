@@ -32,3 +32,5 @@
     Step 6. Return the 'extracted_code' string from the JSON and the total_cost.
 
 % Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses.
+
+% Note: Use relative imports for 'postprocess_0' and 'llm_selector' to ensure compatibility within the package structure.
