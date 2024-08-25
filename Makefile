@@ -105,8 +105,8 @@ production:
 
 regression:
 	@echo "Running regression tests"
-	@mkdir -p staging/tests/regression
-	@@find staging/tests/regression -type f -delete
+	@mkdir -p staging/regression
+	@@find staging/regression -type f ! -name ".*" -delete
 	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/regression.sh
 
 install:
