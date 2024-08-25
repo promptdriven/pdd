@@ -1,86 +1,82 @@
-# To achieve the desired functionality, we will create a Python function named `code_generator` that follows the steps outlined. This function will use Langchain to process a prompt, select an appropriate LLM model, run the prompt through the model, and postprocess the result to generate runnable code. We'll also use the `rich` library for pretty printing.
-
-# Here's the complete implementation:
-
-# ```python
 import os
-from rich import print
+from rich.console import Console
 from rich.markdown import Markdown
-from preprocess import preprocess
-from llm_selector import llm_selector
-from postprocess import postprocess
-import tiktoken
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain.globals import set_llm_cache
-from langchain_community.cache import SQLiteCache
-from langchain_core.pydantic_v1 import BaseModel, Field
+from .preprocess import preprocess
+from .llm_selector import llm_selector
+from .postprocess import postprocess
 
-# Setup cache to save money and increase speeds
-set_llm_cache(SQLiteCache(database_path=".langchain.db"))
+console = Console()
 
-def code_generator(prompt: str, file_type: str, strength: float) -> str:
+def code_generator(prompt: str, language: str, strength: float, temperature: float = 0) -> tuple[str, float]:
+    """
+    Generate code from a prompt using Langchain and various processing steps.
+
+    Args:
+    prompt (str): The raw prompt to be processed.
+    language (str): The target programming language.
+    strength (float): The strength of the LLM model (0 to 1).
+    temperature (float): The temperature of the LLM model. Default is 0.
+
+    Returns:
+    tuple[str, float]: A tuple containing the runnable code and the total cost.
+    """
     # Step 1: Preprocess the raw prompt
-    try:
-        processed_prompt = preprocess(prompt)
-    except FileNotFoundError as e:
-        print(f"[bold red]Error:[/bold red] {e}")
-        return ""
+    processed_prompt = preprocess(prompt, recursive=False, double_curly_brackets=True)
+    console.print("[bold green]Preprocessed Prompt:[/bold green]")
+    console.print(processed_prompt)
 
-    # Step 2: Create a Langchain LCEL template from the processed prompt
+    # Step 2: Create Langchain LCEL template
     prompt_template = PromptTemplate.from_template(processed_prompt)
 
-    # Step 3: Use llm_selector and a temperature of 0 for the model
-    temperature = 0
-    llm, token_counter, input_cost, output_cost = llm_selector(strength, temperature)
+    # Step 3: Use llm_selector for the model
+    llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
 
-    # Step 4: Run the prompt through the model using Langchain LCEL
+    # Step 4: Run the prompt through the model
     chain = prompt_template | llm | StrOutputParser()
-
-    # Calculate token count using tiktoken
-    encoding = tiktoken.get_encoding("cl100k_base")
-    token_count = len(encoding.encode(processed_prompt))
-    cost = (token_count / 1_000_000) * input_cost
-
-    print(f"[bold green]Running the model...[/bold green]")
-    print(f"Token count in prompt: {token_count}")
-    print(f"Estimated cost: ${cost:.6f}")
+    
+    input_tokens = token_counter(processed_prompt)
+    input_cost_actual = (input_tokens / 1_000_000) * input_cost
+    
+    console.print(f"[bold yellow]Running prompt through model...[/bold yellow]")
+    console.print(f"Input tokens: {input_tokens}")
+    console.print(f"Estimated input cost: ${input_cost_actual:.6f}")
 
     result = chain.invoke({})
 
-    # Step 5: Pretty print the markdown formatting in the result
-    print(Markdown(result))
-    result_token_count = len(encoding.encode(result))
-    result_cost = (result_token_count / 1_000_000) * output_cost
-    total_cost = cost + result_cost
+    # Step 5: Pretty print the result and calculate output cost
+    console.print("[bold green]Model Output:[/bold green]")
+    console.print(Markdown(result))
 
-    print(f"Token count in result: {result_token_count}")
-    print(f"Result cost: ${result_cost:.6f}")
-    print(f"Total cost: ${total_cost:.6f}")
+    output_tokens = token_counter(result)
+    output_cost_actual = (output_tokens / 1_000_000) * output_cost
+    
+    console.print(f"Output tokens: {output_tokens}")
+    console.print(f"Estimated output cost: ${output_cost_actual:.6f}")
 
-    # Step 6: Postprocess the model output to create runnable code
-    runnable_code, total_cost = postprocess(result, file_type)
+    # Step 6: Postprocess the result
+    runnable_code, postprocess_cost = postprocess(result, language, strength, temperature)
+    
+    total_cost = input_cost_actual + output_cost_actual + postprocess_cost
+    
+    console.print("[bold green]Postprocessed Code:[/bold green]")
+    console.print(runnable_code)
+    console.print(f"[bold cyan]Total cost: ${total_cost:.6f}[/bold cyan]")
 
-    # Step 7: Return the runnable code
-    return runnable_code
+    # Step 7: Return the runnable code and total cost
+    return runnable_code, total_cost
 
 # Example usage
 if __name__ == "__main__":
-    prompt_path = "path/to/your/prompt.txt"
-    file_type = "python"
-    strength = 0.8
-
-    code = code_generator(prompt_path, file_type, strength)
-    print(f"[bold blue]Generated Code:[/bold blue]\n{code}")
-# ```
-
-# ### Explanation:
-# 1. **Preprocess the Prompt**: The `preprocess` function is used to preprocess the raw prompt from the file.
-# 2. **Create LCEL Template**: A Langchain LCEL template is created from the processed prompt.
-# 3. **Select LLM Model**: The `llm_selector` function is used to select an appropriate LLM model based on the given strength and a fixed temperature of 0.
-# 4. **Run the Model**: The prompt is run through the model using Langchain LCEL. The token count and estimated cost are calculated and printed.
-# 5. **Pretty Print Result**: The result is pretty printed using the `rich` library's `Markdown` function. The token count and cost of the result are also printed.
-# 6. **Postprocess the Result**: The result is postprocessed to create runnable code.
-# 7. **Return Runnable Code**: The runnable code is returned.
-
-# This function integrates all the required steps and uses the `rich` library for pretty printing, ensuring that the output is user-friendly and informative.
+    sample_prompt = """
+    <prompt>
+        Write a Python function that calculates the factorial of a number.
+        <pdd>example.txt</pdd>
+    </prompt>
+    """
+    
+    runnable_code, total_cost = code_generator(sample_prompt, "python", 0.7, 0.2)
+    console.print("[bold magenta]Final Runnable Code:[/bold magenta]")
+    console.print(runnable_code)
+    console.print(f"[bold magenta]Final Total Cost: ${total_cost:.6f}[/bold magenta]")

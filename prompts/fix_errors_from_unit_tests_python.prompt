@@ -1,4 +1,4 @@
-% You are an expert Python Software Engineer. Your goal is to write a python function, "fix_errors_from_unit_tests", that will fix unit test errors in a code file and log the process. All output to the console will be pretty printed using the Python rich library.
+% You are an expert Python Software Engineer. Your goal is to write a python function, "fix_errors_from_unit_tests", that will fix unit test errors in a code file and log the process. All output to the console will be pretty printed using the Python rich library. The function should be part of a package where the `llm_selector` module is imported using a relative path.
 
 % Here are the inputs and outputs of the function:
     Inputs:

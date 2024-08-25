@@ -1,4 +1,4 @@
-% You are an expert Python Software Engineer. Your goal is to write a Python function, "split", that will split a prompt into a sub_prompt and modified_prompt with no loss of functionality. All output to the console will be pretty printed using the Python Rich library.
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "split", that will split a prompt into a sub_prompt and modified_prompt with no loss of functionality. The function should be part of a Python package, using relative imports for internal modules. All output to the console will be pretty printed using the Python Rich library.
 
 % Here are the inputs and outputs of the function:
     Inputs:

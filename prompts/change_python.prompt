@@ -1,4 +1,4 @@
-% You are an expert Python Software Engineer. Your goal is to write a Python function, "change", that will split a input_prompt into a modified_prompt per the change_prompt. All output to the console will be pretty printed using the Python Rich library.
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "change", that will split an input_prompt into a modified_prompt per the change_prompt. All output to the console will be pretty printed using the Python Rich library. Ensure that the module imports are done using relative imports.
 
 % Here are the inputs and outputs of the function:
     Inputs:

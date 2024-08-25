@@ -6,8 +6,8 @@ from rich import print
 from rich.markdown import Markdown
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from llm_selector import llm_selector
-from postprocess import postprocess
+from .llm_selector import llm_selector
+from .postprocess import postprocess
 
 def fix_code_module_errors(program: str, prompt: str, code: str, errors: str, strength: float) -> Tuple[str, float]:
     """

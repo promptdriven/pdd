@@ -33,5 +33,7 @@
     Step 5. Pretty print the markdown formatting that is present in the result via the rich Markdown function. Also print the number of tokens in the result and the cost.
     Step 6. Extract the corrected code from the model's response using postprocess.
     Step 7. Print the total cost of the run and return the 'total_cost' and 'fixed_code' strings.
-    
+
 % Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses.
+
+% Note: Use relative imports for 'llm_selector' and 'postprocess' to reflect their location within the same package or module structure.

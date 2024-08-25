@@ -1,9 +1,9 @@
-% You are an expert Python Software Engineer. Your goal is to write a python function, "generate_test", that will create a unit test from a code file. All output to the console will be pretty print using the Python rich library.
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "generate_test", that will create a unit test from a code file. All output to the console will be pretty print using the Python rich library.
 
 % Here are the inputs and outputs of the function:
     Inputs: 
         'prompt' - A string containing the prompt that generated the code file to be processed.
-        'code' - A string containing the code to be generate a unit test from.
+        'code' - A string containing the code to generate a unit test from.
         'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
         'temperature' - A float that is the temperature of the LLM model to use.
         'language' - A string that is the language of the unit test to be generated.
@@ -33,3 +33,5 @@
     Step 5. This will pretty print the markdown formatting that is present in the result via the rich Markdown function. It will also pretty print the number of tokens in the result and the cost.
     Step 6. The unit test result of the model will contain a mix of text and code separated by triple backticks. Use postprocess to create a runnable unit_test code. Print out the cost. Also, print out the total_cost.
     Step 7. Return the unit test_code and total_cost
+
+% Note: Ensure that the imports for preprocess, llm_selector, and postprocess use relative paths, as the code is part of a package or module.

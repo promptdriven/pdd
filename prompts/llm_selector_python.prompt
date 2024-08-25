@@ -28,3 +28,5 @@ Google,gemini-1.5-pro,3.5,7,1264, https://api.google.com, GOOGLE_API_KEY, tiktok
     - Use base model when strength is 0.5.
     - If there is a model with the same or higher ELO ranking, use that model if it is at or below the same average cost of input and output token cost of a lower rank model.
     - Make sure temperature is set for every llm model instantiation.
+
+% Note: The `llm_token_counter` function should be imported using a relative import, as it is part of the same package or module structure.
