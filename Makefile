@@ -70,7 +70,7 @@ test:
 # Generate requirements.txt
 requirements:
 	@echo "Generating requirements.txt"
-	@PYTHONPATH=$(PROD_DIR) pipreqs ./pdd --force --savepath ./requirements.txt
+	@PYTHONPATH=$(PROD_DIR) pipreqs ./pdd --force 
 
 # Clean generated files
 clean:
@@ -105,7 +105,8 @@ production:
 
 regression:
 	@echo "Running regression tests"
-	rm staging/tests/regression/*
+	@mkdir -p staging/tests/regression
+	@rm -f staging/tests/regression/*
 	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/regression.sh
 # ```
 
