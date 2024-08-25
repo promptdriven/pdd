@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, mock_open, MagicMock
-from xml_tagger import xml_tagger
+from pdd.xml_tagger import xml_tagger
 
 @pytest.fixture
 def mock_environment():
@@ -20,7 +20,7 @@ def mock_file_reads():
 
 @pytest.fixture
 def mock_llm_selector():
-    with patch('xml_tagger.llm_selector') as mock:
+    with patch('pdd.xml_tagger.llm_selector') as mock:
         mock.return_value = (
             lambda x: "Mocked LLM Response",
             lambda x: 100,  # token counter
@@ -31,7 +31,7 @@ def mock_llm_selector():
 
 @pytest.fixture
 def mock_rich_print():
-    with patch('xml_tagger.rprint') as mock:
+    with patch('pdd.xml_tagger.rprint') as mock:
         yield mock
 
 
@@ -51,9 +51,9 @@ def test_xml_tagger_success(mock_environment, mock_file_reads, mock_llm_selector
     mock_llm_selector.return_value = (mock_llm, mock_token_counter, 0.01, 0.02)
 
     # Mock the PromptTemplate and chain invocations
-    with patch('xml_tagger.PromptTemplate') as mock_prompt_template, \
-         patch('xml_tagger.StrOutputParser') as mock_str_parser, \
-         patch('xml_tagger.JsonOutputParser') as mock_json_parser:
+    with patch('pdd.xml_tagger.PromptTemplate') as mock_prompt_template, \
+         patch('pdd.xml_tagger.StrOutputParser') as mock_str_parser, \
+         patch('pdd.xml_tagger.JsonOutputParser') as mock_json_parser:
         
         mock_prompt_template.from_template.return_value = MagicMock()
         mock_str_parser.return_value = MagicMock()
@@ -81,42 +81,6 @@ def test_xml_tagger_success(mock_environment, mock_file_reads, mock_llm_selector
     mock_llm_selector.assert_called_once_with(strength, temperature)
     assert mock_token_counter
     
-    import pytest
-from unittest.mock import patch, mock_open
-from xml_tagger import xml_tagger
-
-@pytest.fixture
-def mock_environment():
-    with patch.dict('os.environ', {'PDD_PATH': '/mock/path'}):
-        yield
-
-@pytest.fixture
-def mock_file_reads():
-    mock_xml_convertor = "XML Convertor Prompt"
-    mock_extract_xml = "Extract XML Prompt"
-    with patch('builtins.open', mock_open(read_data=mock_xml_convertor)) as m:
-        m.side_effect = [
-            mock_open(read_data=mock_xml_convertor).return_value,
-            mock_open(read_data=mock_extract_xml).return_value
-        ]
-        yield
-
-@pytest.fixture
-def mock_llm_selector():
-    with patch('xml_tagger.llm_selector') as mock:
-        mock.return_value = (
-            lambda x: "Mocked LLM Response",
-            lambda x: 100,  # token counter
-            0.01,  # input cost
-            0.02   # output cost
-        )
-        yield mock
-
-@pytest.fixture
-def mock_rich_print():
-    with patch('xml_tagger.rprint') as mock:
-        yield mock
-
 def test_xml_tagger_missing_env_var():
     with patch.dict('os.environ', clear=True):
         xml_tagged, total_cost = xml_tagger("Test", 0.7, 0.5)
