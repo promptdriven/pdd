@@ -70,7 +70,7 @@ test:
 # Generate requirements.txt
 requirements:
 	@echo "Generating requirements.txt"
-	@PYTHONPATH=$(PROD_DIR) pipreqs ./pdd --force 
+	@PYTHONPATH=$(PROD_DIR) pipreqs ./pdd --force --savepath ./requirements.txt
 
 # Clean generated files
 clean:
