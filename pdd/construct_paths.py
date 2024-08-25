@@ -2,9 +2,9 @@ import os
 import click
 from rich import print
 from typing import Dict, Tuple
-from get_extension import get_extension
-from get_language import get_language
-from generate_output_paths import generate_output_paths
+from .get_extension import get_extension
+from .get_language import get_language
+from .generate_output_paths import generate_output_paths
 
 def construct_paths(input_file_paths: Dict[str, str], force: bool, quiet: bool, command: str, command_options: Dict[str, str]) -> Tuple[Dict[str, str], Dict[str, str], str]:
     """
