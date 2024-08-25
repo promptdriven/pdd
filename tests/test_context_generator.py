@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, mock_open
-from context_generator import context_generator
+from pdd.context_generator import context_generator
 from rich.console import Console
 
 @pytest.fixture

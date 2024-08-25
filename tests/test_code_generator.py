@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, MagicMock
-from code_generator import code_generator
+from pdd.code_generator import code_generator
 from rich.console import Console
 
 @pytest.fixture
@@ -11,21 +11,21 @@ def mock_console() -> MagicMock:
 @pytest.fixture
 def mock_preprocess() -> MagicMock:
     """Fixture to mock the preprocess function."""
-    with patch('code_generator.preprocess') as mock:
+    with patch('pdd.code_generator.preprocess') as mock:
         mock.return_value = "Preprocessed prompt"
         yield mock
 
 @pytest.fixture
 def mock_llm_selector() -> MagicMock:
     """Fixture to mock the llm_selector function."""
-    with patch('code_generator.llm_selector') as mock:
+    with patch('pdd.code_generator.llm_selector') as mock:
         mock.return_value = (MagicMock(), lambda x: len(x), 0.01, 0.02)
         yield mock
 
 @pytest.fixture
 def mock_postprocess() -> MagicMock:
     """Fixture to mock the postprocess function."""
-    with patch('code_generator.postprocess') as mock:
+    with patch('pdd.code_generator.postprocess') as mock:
         mock.return_value = ("Runnable code", 0.005)
         yield mock
 
@@ -36,8 +36,8 @@ def test_code_generator_basic_functionality(mock_console: MagicMock, mock_prepro
     strength = 0.7
     temperature = 0.2
 
-    with patch('code_generator.PromptTemplate.from_template') as mock_prompt_template, \
-         patch('code_generator.StrOutputParser') as mock_str_output_parser:
+    with patch('pdd.code_generator.PromptTemplate.from_template') as mock_prompt_template, \
+         patch('pdd.code_generator.StrOutputParser') as mock_str_output_parser:
         
         mock_chain = MagicMock()
         mock_chain.invoke.return_value = "Model output"
@@ -60,8 +60,8 @@ def test_code_generator_input_validation() -> None:
 
 def test_code_generator_empty_prompt(mock_console: MagicMock, mock_preprocess: MagicMock, mock_llm_selector: MagicMock, mock_postprocess: MagicMock) -> None:
     """Test the code_generator function with an empty prompt."""
-    with patch('code_generator.PromptTemplate.from_template'), \
-         patch('code_generator.StrOutputParser'):
+    with patch('pdd.code_generator.PromptTemplate.from_template'), \
+         patch('pdd.code_generator.StrOutputParser'):
         runnable_code, total_cost = code_generator("", "python", 0.7, 0.2)
     
     assert runnable_code == "Runnable code"
@@ -69,16 +69,16 @@ def test_code_generator_empty_prompt(mock_console: MagicMock, mock_preprocess: M
 
 def test_code_generator_different_language(mock_console: MagicMock, mock_preprocess: MagicMock, mock_llm_selector: MagicMock, mock_postprocess: MagicMock) -> None:
     """Test the code_generator function with a different language."""
-    with patch('code_generator.PromptTemplate.from_template'), \
-         patch('code_generator.StrOutputParser'):
+    with patch('pdd.code_generator.PromptTemplate.from_template'), \
+         patch('pdd.code_generator.StrOutputParser'):
         runnable_code, total_cost = code_generator("prompt", "javascript", 0.7, 0.2)
     
     mock_postprocess.assert_called_with("Model output", "javascript", 0.7, 0.2)
 
 def test_code_generator_zero_strength_and_temperature(mock_console: MagicMock, mock_preprocess: MagicMock, mock_llm_selector: MagicMock, mock_postprocess: MagicMock) -> None:
     """Test the code_generator function with zero strength and temperature."""
-    with patch('code_generator.PromptTemplate.from_template'), \
-         patch('code_generator.StrOutputParser'):
+    with patch('pdd.code_generator.PromptTemplate.from_template'), \
+         patch('pdd.code_generator.StrOutputParser'):
         runnable_code, total_cost = code_generator("prompt", "python", 0, 0)
     
     mock_llm_selector.assert_called_with(0, 0)
