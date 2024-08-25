@@ -5,7 +5,7 @@ from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
 from langchain_core.runnables import RunnablePassthrough
 from rich import print as rprint
 from rich.markdown import Markdown
-from llm_selector import llm_selector
+from .llm_selector import llm_selector
 
 
 
