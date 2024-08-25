@@ -4,7 +4,7 @@ import subprocess
 from typing import Tuple
 from rich.console import Console
 from rich.panel import Panel
-from fix_errors_from_unit_tests import fix_errors_from_unit_tests
+from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
 
 console = Console()
 
