@@ -4,7 +4,7 @@ from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.pydantic_v1 import BaseModel, Field
 from langchain_core.output_parsers import StrOutputParser
-from llm_selector import llm_selector
+from .llm_selector import llm_selector
 
 
 class Conflict(BaseModel):

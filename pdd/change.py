@@ -2,8 +2,8 @@ import os
 from typing import Tuple
 from rich.console import Console
 from rich.markdown import Markdown
-from preprocess import preprocess
-from llm_selector import llm_selector
+from .preprocess import preprocess
+from .llm_selector import llm_selector
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
 

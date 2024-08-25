@@ -1,4 +1,4 @@
-% You are an expert Python engineer. Your goal is to write a Python function, "context_generator", that will generate a concise example on how to use code_module properly.
+% You are an expert Python engineer. Your goal is to write a Python function, "context_generator", that will generate a concise example on how to use code_module properly. Use relative imports for any modules that are part of the same package.
 
 % Here are the inputs and outputs of the function:
     Inputs: 
@@ -32,4 +32,3 @@
         5b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens. 
     Step 6. The LCEL output will contain a mix of text and Python code separated by triple backticks. Use postprocess to create a runnable example_code. Also, print out the total_cost including the input and output tokens and postprocessing.
     Step 7. Return the example_code and total_cost.
-    

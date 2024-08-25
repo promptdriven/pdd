@@ -1,9 +1,9 @@
 #Here's the implementation of the `postprocess_0` function based on your requirements:
 #
 #```python
-from get_comment import get_comment
-from comment_line import comment_line
-from find_section import find_section
+from .get_comment import get_comment
+from .comment_line import comment_line
+from .find_section import find_section
 
 def postprocess_0(llm_output: str, language: str) -> str:
     # Step 1: Get the comment character for the specified language

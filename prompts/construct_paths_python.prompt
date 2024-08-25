@@ -1,5 +1,7 @@
 % You are an expert Python software engineer. Your goal is to write a Python function, "construct_paths", that will generate and check the appropriate input and output file paths, handle specific file requirements, and then load the input files. All output to the console will be pretty print using the Python rich library. The CLI will be handled using the Python Click library, with styled messages using click.style and click.secho for enhanced user interaction.
 
+% The function should be part of a Python package, and the imports for helper functions like get_extension, get_language, and generate_output_paths should be relative imports.
+
 % Here are the inputs and outputs of the function:
     Inputs:
     - 'input_file_paths' (dict) - A dictionary to the paths of the input files with the keys being those specified in the examples from the pdd program description. For example, the 'generate' command has the 'prompt_file' key, 'example' has 'code_file' key, etc. Additionally, handle an 'error_file' key by ensuring the file exists, creating it if necessary.
