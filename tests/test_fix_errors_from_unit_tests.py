@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, mock_open
-from fix_errors_from_unit_tests import fix_errors_from_unit_tests
+from pdd.fix_errors_from_unit_tests import fix_errors_from_unit_tests
 
 @pytest.fixture
 def mock_environment():
@@ -17,7 +17,7 @@ def mock_file_contents():
 
 @pytest.fixture
 def mock_llm_selector():
-    with patch('fix_errors_from_unit_tests.llm_selector') as mock:
+    with patch('pdd.fix_errors_from_unit_tests.llm_selector') as mock:
         mock.return_value = (
             lambda x: 'LLM response',  # Mock LLM
             lambda x: 100,  # Mock token counter
@@ -35,9 +35,9 @@ def mock_file_open(mock_file_contents):
 
 def test_fix_errors_from_unit_tests_success(mock_environment, mock_file_contents, mock_llm_selector, mock_file_open):
     with patch('builtins.open', mock_file_open):
-        with patch('fix_errors_from_unit_tests.PromptTemplate.from_template') as mock_prompt:
+        with patch('pdd.fix_errors_from_unit_tests.PromptTemplate.from_template') as mock_prompt:
             mock_prompt.return_value.format.return_value = 'Formatted prompt'
-            with patch('fix_errors_from_unit_tests.JsonOutputParser') as mock_parser:
+            with patch('pdd.fix_errors_from_unit_tests.JsonOutputParser') as mock_parser:
                 mock_parser.return_value.parse.return_value = {
                     'update_unit_test': True,
                     'update_code': True,

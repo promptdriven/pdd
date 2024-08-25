@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, mock_open, MagicMock
-from generate_test import generate_test
+from pdd.generate_test import generate_test
 from rich.console import Console
 from langchain_core.output_parsers import StrOutputParser
 
@@ -41,9 +41,9 @@ def mock_postprocess():
 def test_successful_test_generation(mock_environment, mock_file_content, mock_llm_selector, mock_preprocess, mock_postprocess):
     """Test successful generation of a unit test."""
     with patch('builtins.open', mock_open(read_data=mock_file_content)):
-        with patch('generate_test.llm_selector', mock_llm_selector):
-            with patch('generate_test.preprocess', mock_preprocess):
-                with patch('generate_test.postprocess', mock_postprocess):
+        with patch('pdd.generate_test.llm_selector', mock_llm_selector):
+            with patch('pdd.generate_test.preprocess', mock_preprocess):
+                with patch('pdd.generate_test.postprocess', mock_postprocess):
                     with patch('rich.console.Console.print') as mock_print:
                         with patch('langchain_core.prompts.PromptTemplate.from_template') as mock_template:
                             mock_chain = mock_template.return_value | mock_llm_selector(0.5, 0.7)[0] | StrOutputParser()
@@ -81,8 +81,8 @@ def test_general_file_error(mock_environment):
 def test_model_invocation_error(mock_environment, mock_file_content, mock_llm_selector, mock_preprocess):
     """Test handling of model invocation errors."""
     with patch('builtins.open', mock_open(read_data=mock_file_content)):
-        with patch('generate_test.llm_selector', mock_llm_selector):
-            with patch('generate_test.preprocess', mock_preprocess):
+        with patch('pdd.generate_test.llm_selector', mock_llm_selector):
+            with patch('pdd.generate_test.preprocess', mock_preprocess):
                 with patch('langchain_core.prompts.PromptTemplate.from_template') as mock_template:
                     mock_chain = mock_template.return_value | mock_llm_selector(0.5, 0.7)[0] | StrOutputParser()
                     mock_chain.invoke.side_effect = Exception("Mock invocation error")

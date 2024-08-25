@@ -2,7 +2,7 @@ import unittest
 import os
 import pandas as pd
 from unittest.mock import patch
-from staging.pdd.get_extension import get_extension
+from pdd.get_extension import get_extension
 
 class TestGetExtension(unittest.TestCase):
 

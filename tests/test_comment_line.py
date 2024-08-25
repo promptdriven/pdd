@@ -16,7 +16,7 @@
 
 #    ```python
 import pytest
-from comment_line import comment_line
+from pdd.comment_line import comment_line
 
 def test_comment_line_single_character():
     # Test for single comment character (Python style)

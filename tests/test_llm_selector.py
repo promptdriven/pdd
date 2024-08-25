@@ -2,7 +2,7 @@ import os
 import pytest
 import pandas as pd
 from unittest.mock import patch, MagicMock
-from llm_selector import llm_selector
+from pdd.llm_selector import llm_selector
 from io import StringIO
 
 # Sample data for mocking the CSV file

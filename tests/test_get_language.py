@@ -1,6 +1,6 @@
 import pytest
 import os
-from get_language import get_language
+from pdd.get_language import get_language
 
 # Mock CSV data
 mock_csv_data = """language,comment,extension

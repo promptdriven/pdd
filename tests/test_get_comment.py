@@ -18,7 +18,7 @@
 import os
 import pytest
 from unittest import mock
-from staging.pdd.get_comment import get_comment
+from pdd.get_comment import get_comment
 
 # Mock data for the CSV file
 mock_csv_data = """language,comment

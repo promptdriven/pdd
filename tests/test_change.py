@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, mock_open, MagicMock
-from change import change
+from pdd.change import change
 from rich.console import Console
 
 # Mock data
@@ -27,12 +27,12 @@ def mock_file_reads(mock_environment):
 
 @pytest.fixture
 def mock_dependencies():
-    with patch("change.preprocess") as mock_preprocess, \
-         patch("change.llm_selector") as mock_llm_selector, \
-         patch("change.PromptTemplate") as mock_prompt_template, \
-         patch("change.StrOutputParser") as mock_str_output_parser, \
-         patch("change.JsonOutputParser") as mock_json_output_parser, \
-         patch("change.Console") as mock_console:
+    with patch("pdd.change.preprocess") as mock_preprocess, \
+         patch("pdd.change.llm_selector") as mock_llm_selector, \
+         patch("pdd.change.PromptTemplate") as mock_prompt_template, \
+         patch("pdd.change.StrOutputParser") as mock_str_output_parser, \
+         patch("pdd.change.JsonOutputParser") as mock_json_output_parser, \
+         patch("pdd.change.Console") as mock_console:
 
         mock_preprocess.return_value = mock_processed_change_llm
         mock_llm_selector.return_value = (
@@ -73,7 +73,7 @@ def test_change_file_not_found(mock_environment, missing_file):
 
 
 def test_change_missing_json_key(mock_file_reads, mock_dependencies):
-    with patch("change.JsonOutputParser") as mock_json_output_parser:
+    with patch("pdd.change.JsonOutputParser") as mock_json_output_parser:
         mock_json_output_parser.return_value.invoke.return_value = {}  # Return empty dict to simulate missing key
         
         with pytest.raises(KeyError) as exc_info:

@@ -1,7 +1,7 @@
 import pytest
 import os
 import tempfile
-from fix_error_loop import fix_error_loop
+from pdd.fix_error_loop import fix_error_loop
 
 @pytest.fixture
 def temp_files():

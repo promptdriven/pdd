@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, mock_open
-from construct_paths import construct_paths
+from pdd.construct_paths import construct_paths
 from click import Abort
 
 @pytest.fixture
@@ -9,19 +9,19 @@ def mock_file_content():
 
 @pytest.fixture
 def mock_get_extension():
-    with patch('construct_paths.get_extension') as mock:
+    with patch('pdd.construct_paths.get_extension') as mock:
         mock.return_value = '.py'
         yield mock
 
 @pytest.fixture
 def mock_get_language():
-    with patch('construct_paths.get_language') as mock:
+    with patch('pdd.construct_paths.get_language') as mock:
         mock.return_value = 'python'
         yield mock
 
 @pytest.fixture
 def mock_generate_output_paths():
-    with patch('construct_paths.generate_output_paths') as mock:
+    with patch('pdd.construct_paths.generate_output_paths') as mock:
         mock.return_value = {'output': '/path/to/output.py'}
         yield mock
 
