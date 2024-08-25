@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, mock_open
-from postprocess import postprocess
+from pdd.postprocess import postprocess
 from rich.console import Console
 
 # Mock environment variable
@@ -13,16 +13,16 @@ def mock_env_var():
 @pytest.fixture
 def mock_console(monkeypatch):
     mock_console = Console(file=None)
-    monkeypatch.setattr("postprocess.console", mock_console)
+    monkeypatch.setattr("pdd.postprocess.console", mock_console)
     return mock_console
 
 # Mock functions and classes
 @pytest.fixture
 def mock_dependencies(monkeypatch):
-    monkeypatch.setattr("postprocess.postprocess_0", lambda x, y: "Mocked postprocess_0 output")
-    monkeypatch.setattr("postprocess.llm_selector", lambda x, y: (None, lambda z: len(z), 0.01, 0.02))
-    monkeypatch.setattr("postprocess.PromptTemplate", lambda template, input_variables: None)
-    monkeypatch.setattr("postprocess.JsonOutputParser", lambda pydantic_object: None)
+    monkeypatch.setattr("pdd.postprocess.postprocess_0", lambda x, y: "Mocked postprocess_0 output")
+    monkeypatch.setattr("pdd.postprocess.llm_selector", lambda x, y: (None, lambda z: len(z), 0.01, 0.02))
+    monkeypatch.setattr("pdd.postprocess.PromptTemplate", lambda template, input_variables: None)
+    monkeypatch.setattr("pdd.postprocess.JsonOutputParser", lambda pydantic_object: None)
     monkeypatch.setattr("langchain_core.prompts.PromptTemplate.format", lambda self, **kwargs: "Mocked prompt")
 
 def test_postprocess_strength_zero(mock_dependencies):
@@ -32,7 +32,7 @@ def test_postprocess_strength_zero(mock_dependencies):
 
 def test_postprocess_normal_execution(mock_dependencies, mock_console):
     with patch("builtins.open", mock_open(read_data="Mock prompt template")):
-        with patch("postprocess.chain.invoke") as mock_invoke:
+        with patch("pdd.postprocess.chain.invoke") as mock_invoke:
             mock_invoke.return_value = {"extracted_code": "def test():\n    pass"}
             result, cost = postprocess("Test input", "python")
     
@@ -46,7 +46,7 @@ def test_postprocess_missing_pdd_path():
 
 def test_postprocess_error_handling(mock_dependencies, mock_console):
     with patch("builtins.open", mock_open(read_data="Mock prompt template")):
-        with patch("postprocess.chain.invoke", side_effect=Exception("Test error")):
+        with patch("pdd.postprocess.chain.invoke", side_effect=Exception("Test error")):
             result, cost = postprocess("Test input", "python")
     
     assert result == ""
@@ -54,7 +54,7 @@ def test_postprocess_error_handling(mock_dependencies, mock_console):
 
 def test_postprocess_remove_backticks(mock_dependencies, mock_console):
     with patch("builtins.open", mock_open(read_data="Mock prompt template")):
-        with patch("postprocess.chain.invoke") as mock_invoke:
+        with patch("pdd.postprocess.chain.invoke") as mock_invoke:
             mock_invoke.return_value = {"extracted_code": "```python\ndef test():\n    pass\n```"}
             result, cost = postprocess("Test input", "python")
     
@@ -63,7 +63,7 @@ def test_postprocess_remove_backticks(mock_dependencies, mock_console):
 
 def test_postprocess_missing_extracted_code(mock_dependencies, mock_console):
     with patch("builtins.open", mock_open(read_data="Mock prompt template")):
-        with patch("postprocess.chain.invoke") as mock_invoke:
+        with patch("pdd.postprocess.chain.invoke") as mock_invoke:
             mock_invoke.return_value = {}
             result, cost = postprocess("Test input", "python")
     

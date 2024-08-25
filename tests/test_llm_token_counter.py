@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, MagicMock
-from llm_token_counter import llm_token_counter  # Replace with the actual module name
+from pdd.llm_token_counter import llm_token_counter  # Replace with the actual module name
 
 def test_llm_token_counter_tiktoken() -> None:
     """Test the tiktoken counter by mocking the get_encoding function."""

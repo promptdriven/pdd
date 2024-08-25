@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, mock_open
-from preprocess import preprocess, process_backtick_includes, process_xml_tags, double_curly
+from pdd.preprocess import preprocess, process_backtick_includes, process_xml_tags, double_curly
 from bs4 import BeautifulSoup
 import subprocess
 

@@ -1,6 +1,6 @@
 import os
 import pytest
-from generate_output_paths import generate_output_paths
+from pdd.generate_output_paths import generate_output_paths
 
 def test_generate_default_naming():
     output_locations = {'output': None}
