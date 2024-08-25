@@ -105,7 +105,8 @@ production:
 
 regression:
 	@echo "Running regression tests"
-	rm staging/tests/regression/*
+	@mkdir -p staging/tests/regression
+	@rm -f staging/tests/regression/*
 	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/regression.sh
 # ```
 
