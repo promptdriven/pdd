@@ -65,6 +65,7 @@ $(TESTS_DIR)/test_%.py: $(PDD_DIR)/%.py $(PROMPTS_DIR)/%_python.prompt
 # Run tests
 test:
 	@echo "Running staging tests"
+	@cd $(STAGING_DIR)
 	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python -m pytest -vv $(TESTS_DIR)
 
 # Generate requirements.txt
