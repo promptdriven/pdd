@@ -20,13 +20,13 @@
 
 % Here is an example of how to lookup a language given a file extension: ```<./context/get_language_example.py>```
 
-$ Here is how to generate the output paths: ```<./context/generate_output_paths_example.py>```
+% Here is how to generate the output paths: ```<./context/generate_output_paths_example.py>```
 
 % If the file name has no extension, add the appropriate file extension (e.g '.prompt' to input file for the 'generate' command) to the file name.
 
 % If the command is 'generate' extract the basename and language from the input_file_path. Use get_extension to get the file extension for the language. The file extension and language is used for the subsequent functionality below. Be able to handle files missing a '_' in the file name.
 
-% For 'fix', 'example', and 'test' commands, adjust the basename extraction to strip the 'test_' prefix and file extension. Determine the language directly from the file extension.
+% For 'fix', 'example', and 'test' commands, adjust the basename extraction to use os.path.splitext and os.path.basename to strip the 'test_' prefix and file extension. Determine the language directly from the file extension using os.path.splitext to get the extension without the leading dot.
 
 % Unless quiet is True, print out the input and output file paths that are being used and the steps being done below.
 

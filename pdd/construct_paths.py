@@ -76,20 +76,16 @@ def construct_paths(input_file_paths: Dict[str, str], force: bool, quiet: bool, 
 
         # Extract basename and language
         primary_input = list(input_file_paths.values())[0]
-        # if command is 'fix' strip the 'test_' prefix from the basename and the file extension to get basename
         if command == 'fix' or command == 'example' or command == 'test':
             if command == 'fix':
-                basename = primary_input.replace('test_', '')
+                basename = os.path.splitext(os.path.basename(primary_input).replace('test_', ''))[0]
             else:
-                basename = primary_input
-            # strip file extension if it exists
-            if '.' in basename:
-                basename = basename.split('.')[0]
+                basename = os.path.splitext(os.path.basename(primary_input))[0]
         else:
             basename = extract_basename(primary_input)
-        
+
         if command == 'fix' or command == 'test' or command == 'example':
-            language = get_language(primary_input.split('.')[1])
+            language = get_language(os.path.splitext(primary_input)[1][1:])
         else:
             language = extract_language(primary_input, command_options)
 
