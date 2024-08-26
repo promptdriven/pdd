@@ -32,7 +32,7 @@ def change(input_prompt: str, input_code: str, change_prompt: str, strength: flo
             extract_prompt = file.read()
 
         # Step 2: Preprocess change_LLM prompt
-        processed_change_llm = preprocess(change_llm_prompt, recursive=False, double_curly_brackets=True)
+        processed_change_llm = preprocess(change_llm_prompt, recursive=False, double_curly_brackets=False)
 
         # Step 3: Use llm_selector
         llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
@@ -40,11 +40,12 @@ def change(input_prompt: str, input_code: str, change_prompt: str, strength: flo
         # Step 4: Create and run LCEL template for change_LLM
         change_template = PromptTemplate.from_template(processed_change_llm)
         change_chain = change_template | llm | StrOutputParser()
+        processed_change_prompt = preprocess(change_prompt, recursive=False, double_curly_brackets=False)
 
         change_result = change_chain.invoke({
             "input_prompt": input_prompt,
             "input_code": input_code,
-            "change_prompt": change_prompt
+            "change_prompt": processed_change_prompt
         })
 
         input_tokens = token_counter(processed_change_llm + input_prompt + input_code + change_prompt)

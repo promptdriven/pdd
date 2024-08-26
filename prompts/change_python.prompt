@@ -20,20 +20,20 @@
 
 % Steps to be followed by the function:
     1. Load the '$PDD_PATH/prompts/xml/change_LLM.prompt' and '$PDD_PATH/prompts/extract_prompt_change_LLM.prompt' files.
-    2. Preprocess the change_LLM prompt using the preprocess function from the preprocess module and the curly bracket should be false.
-    2. Create a Langchain LCEL template from the processed change_LLM prompt to return a string output.
-    3. Use the llm_selector function for the LLM model and token counting.
-    4. Run the input_prompt through the model using Langchain LCEL:
+    2. Preprocess the change_LLM prompt using the preprocess function from the preprocess module and set double_curly_brackets to false.
+    3. Create a Langchain LCEL template from the processed change_LLM prompt to return a string output.    
+    4. Use the llm_selector function for the LLM model and token counting.
+    5. Run the input_prompt through the model using Langchain LCEL:
         - a. Pass the following string parameters to the prompt during invocation:             
             * 'input_prompt'
             * 'input_code'
-            * 'change_prompt'
+            * 'change_prompt' (preprocess this with double_curly_brackets set to false)
         - b. Calculate the input and output token count using token_counter from llm_selector and pretty print the output of 4a, including the token count and estimated cost. The cost from llm_selector is in dollars per million tokens.
-    5. Create a Langchain LCEL template from the extract_prompt_change_LLM prompt that outputs JSON:
+    6. Create a Langchain LCEL template from the extract_prompt_change_LLM prompt that outputs JSON:
         - a. Pass the following string parameters to the prompt during invocation: 'llm_output' (this string is from Step 4).
         - b. Calculate input and output token count using token_counter from llm_selector and pretty print the running message with the token count and cost.
         - c. Use 'get' function to extract 'modified_prompt' key values using from the dictionary output.
-    6. Pretty print the extracted modified_prompt using Rich Markdown function. Include token counts and costs.
-    7. Return the 'modified_prompt' string, the total_cost of both invokes and model_name use for the change_LLM prompt.
+    7. Pretty print the extracted modified_prompt using Rich Markdown function. Include token counts and costs.
+    8. Return the 'modified_prompt' string, the total_cost of both invokes and model_name use for the change_LLM prompt.
 
 % Ensure the function handles edge cases, such as missing inputs or model errors, and provide clear error messages.
