@@ -14,7 +14,7 @@
     </output>
 </instructions>
 
-```<./prompts/xml/change_example_partial.prompt>```
+```<./prompts/xml/change_example_partial_processed.prompt>```
 
 <context>
     Here is the input_prompt to change: ```{input_prompt}```
