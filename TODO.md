@@ -40,7 +40,6 @@
 - [ ] Analyze errors first before trying to fix
 - [ ] Check to see if unit test are aligned to the prompt
 - [ ] Use existing good prompt code example to generate code for the prompt
-- [ ] pass in module name of where modules are kept into example (hardcoded to 'pdd')
 
 ## Documentation
 
