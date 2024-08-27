@@ -1,186 +1,76 @@
-from typing import Tuple, Optional
-import ast
-import textwrap
-import warnings
-from pydantic import BaseModel, Field
-from rich import print as rprint
-from .load_prompt_template import load_prompt_template
-from .llm_invoke import llm_invoke
-from . import DEFAULT_STRENGTH, DEFAULT_TIME
+import os
+import json
+from rich import print
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.runnables import RunnablePassthrough
+from langchain_openai import ChatOpenAI
+from .llm_selector import llm_selector
 
-class PromptAnalysis(BaseModel):
-    reasoning: str = Field(description="Structured reasoning for the completeness assessment")
-    is_finished: bool = Field(description="Boolean indicating whether the prompt is complete")
-
-def unfinished_prompt(
-    prompt_text: str,
-    strength: float = DEFAULT_STRENGTH,
-    temperature: float = 0,
-    time: float = DEFAULT_TIME,
-    language: Optional[str] = None,
-    verbose: bool = False
-) -> Tuple[str, bool, float, str]:
+def unfinished_prompt(prompt_text: str, strength: float = 0.5, temperature: float = 0.0):
     """
-    Analyze whether a given prompt is complete or needs to continue.
+    Process the given prompt text using a language model, calculate token costs, and return the reasoning,
+    completion status, total cost, and model name.
 
-    Args:
-        prompt_text (str): The prompt text to analyze
-        strength (float, optional): Strength of the LLM model. Defaults to 0.5.
-        temperature (float, optional): Temperature of the LLM model. Defaults to 0.
-        time (float, optional): Time budget for LLM calls. Defaults to DEFAULT_TIME.
-        verbose (bool, optional): Whether to print detailed information. Defaults to False.
-
-    Returns:
-        Tuple[str, bool, float, str]: Contains:
-            - reasoning: Structured reasoning for the completeness assessment
-            - is_finished: Boolean indicating whether the prompt is complete
-            - total_cost: Total cost of the analysis
-            - model_name: Name of the LLM model used
-
-    Raises:
-        ValueError: If input parameters are invalid
-        Exception: If there's an error loading the prompt template or invoking the LLM
+    :param prompt_text: The text to be processed by the language model.
+    :param strength: The strength parameter for the LLM model selection.
+    :param temperature: The temperature parameter for the LLM model selection.
+    :return: A tuple containing reasoning, completion status, total cost, and model name.
     """
+    # Step 1: Use $PDD_PATH environment variable to get the path to the project
+    pdd_path = os.getenv('PDD_PATH')
+    if not pdd_path:
+        raise ValueError("PDD_PATH environment variable is not set")
+
+    prompt_file_path = os.path.join(pdd_path, 'prompts', 'unfinished_prompt_LLM.prompt')
     try:
-        # Input validation
-        if not isinstance(prompt_text, str) or not prompt_text.strip():
-            raise ValueError("Prompt text must be a non-empty string")
-        
-        if not 0 <= strength <= 1:
-            raise ValueError("Strength must be between 0 and 1")
-        
-        if not 0 <= temperature <= 1:
-            raise ValueError("Temperature must be between 0 and 1")
+        with open(prompt_file_path, 'r') as file:
+            unfinished_prompt_template = file.read()
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Prompt file not found at {prompt_file_path}")
 
-        # Step 0a: Strip trailing code fences (language-agnostic).
-        # Closing ``` is a markdown artifact, not part of any programming language.
-        clean_text = prompt_text
-        if clean_text.rstrip().endswith("```"):
-            clean_text = clean_text.rstrip()
-            clean_text = clean_text[:clean_text.rfind("```")].rstrip("\n")
+    # Step 2: Create a Langchain LCEL template from unfinished_prompt_LLM prompt
+    prompt_template = PromptTemplate.from_template(unfinished_prompt_template)
+    parser = JsonOutputParser()
 
-        # Step 0b: Fast syntactic completeness check for Python tails.
-        # Apply when language explicitly 'python' or when the text likely looks like Python.
-        def _looks_like_python(text: str) -> bool:
-            lowered = text.strip().lower()
-            py_signals = (
-                "def ", "class ", "import ", "from ",
-            )
-            if any(sig in lowered for sig in py_signals):
-                return True
-            # Heuristic: has 'return ' without JS/TS markers
-            if "return " in lowered and not any(tok in lowered for tok in ("function", "=>", ";", "{", "}")):
-                return True
-            # Heuristic: colon-introduced blocks and indentation
-            if ":\n" in text or "\n    " in text:
-                return True
-            return False
-
-        should_try_python_parse = (language or "").lower() == "python" or _looks_like_python(clean_text)
-        if should_try_python_parse:
-            dedented = textwrap.dedent(clean_text)
-            # Try parsing as-is, dedented, then wrapped in a function body
-            # (handles indented tails like "    return a + b" that are valid
-            # inside a function but fail ast.parse at module scope).
-            candidates = [clean_text, dedented]
-            if dedented.strip():
-                candidates.append(
-                    f"def _wrapper_():\n{textwrap.indent(dedented, '    ')}"
-                )
-            for candidate in candidates:
-                try:
-                    with warnings.catch_warnings():
-                        warnings.simplefilter("ignore", SyntaxWarning)
-                        ast.parse(candidate)
-                    reasoning = "Syntactic Python check passed (ast.parse succeeded); treating as finished."
-                    if verbose:
-                        rprint("[green]" + reasoning + "[/green]")
-                    return (
-                        reasoning,
-                        True,
-                        0.0,
-                        "syntactic_check"
-                    )
-                except SyntaxError:
-                    continue
-
-        # Step 1: Load the prompt template
-        if verbose:
-           rprint("[blue]Loading prompt template...[/blue]")
-        
-        prompt_template = load_prompt_template("unfinished_prompt_LLM")
-        if not prompt_template:
-            raise Exception("Failed to load prompt template")
-
-        # Step 2: Prepare input and invoke LLM
-        input_json = {"PROMPT_TEXT": clean_text}
-        # Optionally pass a language hint to the prompt
-        if language:
-            input_json["LANGUAGE"] = language
-        
-        if verbose:
-            rprint("[blue]Invoking LLM model...[/blue]")
-            try:
-                rprint(f"Input text: {prompt_text}")
-            except:
-                print(f"Input text: {prompt_text}")
-            rprint(f"Model strength: {strength}")
-            rprint(f"Temperature: {temperature}")
-
-        response = llm_invoke(
-            prompt=prompt_template,
-            input_json=input_json,
-            strength=strength,
-            temperature=temperature,
-            time=time,
-            verbose=verbose,
-            output_pydantic=PromptAnalysis,
-            language=language,
-        )
-
-        # Step 3: Extract and return results
-        result = response['result']
-        total_cost = response['cost']
-        model_name = response['model_name']
-
-        # Defensive type checking: ensure we got a PromptAnalysis, not a raw string
-        if not isinstance(result, PromptAnalysis):
-            raise TypeError(
-                f"Expected PromptAnalysis from llm_invoke, got {type(result).__name__}. "
-                f"This typically indicates JSON parsing failed. Value: {repr(result)[:200]}"
-            )
-
-        if verbose:
-           rprint("[green]Analysis complete![/green]")
-           rprint(f"Reasoning: {result.reasoning}")
-           rprint(f"Is finished: {result.is_finished}")
-           rprint(f"Total cost: ${total_cost:.6f}")
-           rprint(f"Model used: {model_name}")
-
-        return (
-            result.reasoning,
-            result.is_finished,
-            total_cost,
-            model_name
-        )
-
+    # Step 3: Use the llm_selector function for the LLM model
+    try:
+        llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
     except Exception as e:
-        rprint("[red]Error in unfinished_prompt:[/red]", str(e))
-        raise
+        raise RuntimeError(f"Error selecting LLM model: {e}")
+
+    # Step 4: Run the prompt text through the model using Langchain LCEL
+    chain = prompt_template | llm | parser
+
+    # 4a: Pass the following string parameters to the prompt during invoke
+    input_data = {"PROMPT_TEXT": prompt_text}
+
+    # 4b: Pretty print a message letting the user know it is running
+    token_count = token_counter(prompt_text)
+    print(f"Running analysis on the prompt. Token count: {token_count}, Estimated cost: ${(token_count / 1_000_000) * input_cost:.6f}")
+
+    # Invoke the chain
+    try:
+        result = chain.invoke(input_data)
+    except Exception as e:
+        raise RuntimeError(f"Error during LLM invocation: {e}")
+
+    # 4c: Access the keys 'reasoning' and 'is_finished'
+    reasoning = result.get('reasoning', "No reasoning provided.")
+    is_finished = result.get('is_finished', False)
+
+    # 4d: Pretty print the reasoning and completion status
+    output_token_count = token_counter(json.dumps(result))
+    total_cost = (token_count / 1_000_000) * input_cost + (output_token_count / 1_000_000) * output_cost
+    print(f"Reasoning: {reasoning}")
+    print(f"Is Finished: {is_finished}")
+    print(f"Output Token Count: {output_token_count}, Output Token Cost: ${(output_token_count / 1_000_000) * output_cost:.6f}")
+    print(f"Total Cost: ${total_cost:.6f}")
+
+    # Step 5: Return the 'reasoning', 'is_finished', 'total_cost', and 'model_name'
+    return reasoning, is_finished, total_cost, model_name
 
 # Example usage
 if __name__ == "__main__":
-    sample_prompt = "Write a function that"
-    try:
-        reasoning, is_finished, cost, model = unfinished_prompt(
-            prompt_text=sample_prompt,
-            time=DEFAULT_TIME,
-            verbose=True
-        )
-        rprint("\n[blue]Results:[/blue]")
-        rprint(f"Complete? {'Yes' if is_finished else 'No'}")
-        rprint(f"Reasoning: {reasoning}")
-        rprint(f"Cost: ${cost:.6f}")
-        rprint(f"Model: {model}")
-    except Exception as e:
-        rprint("[red]Error in example:[/red]", str(e))
+    reasoning, is_finished, total_cost, model_name = unfinished_prompt("This is a test prompt.")
+    print(f"Reasoning: {reasoning}, Is Finished: {is_finished}, Total Cost: {total_cost}, Model Name: {model_name}")
