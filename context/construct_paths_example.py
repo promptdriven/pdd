@@ -1,4 +1,4 @@
-from construct_paths import construct_paths
+from pdd.construct_paths import construct_paths
 
 def main() -> None:
     """
@@ -7,12 +7,13 @@ def main() -> None:
     """
     # Define input file paths
     input_file_paths = { # Keys are the lower case version of the command inputs (e.g. "test" command would have the keys "code_file" and "prompt_file")
-        "prompt_file": "prompts/get_extension_python.prompt"
+        "code_file": "../pdd/unfinished_prompt.py",
+        "prompt_file": "../prompts/unfinished_prompt_python.prompt"
     }
 
     # Define command options
     command_options = { # This dictionary contains the command options that are passed to the construct_paths function. For instance the "test" command would have the keys "output" and "language".
-        "output": "output/"
+        "output": None
     }
 
     # Call the construct_paths function
@@ -21,7 +22,7 @@ def main() -> None:
             input_file_paths=input_file_paths,
             force=False,  # Set to True to overwrite existing files
             quiet=False,  # Set to True to suppress output messages
-            command="generate",  # Command can be 'generate', 'test', etc.
+            command="example",  # Command can be 'generate', 'test', etc.
             command_options=command_options
         )
 

@@ -39,8 +39,10 @@ def context_generator(code_module: str, prompt: str, language: str = "python", s
     except FileNotFoundError:
         raise FileNotFoundError("Prompt file not found at the specified path")
 
+    processed_example_generator_prompt = preprocess(example_generator_prompt, recursive=False, double_curly_brackets=False)
+
     # Step 2: Create Langchain LCEL template
-    prompt_template = PromptTemplate.from_template(example_generator_prompt)
+    prompt_template = PromptTemplate.from_template(processed_example_generator_prompt)
 
     # Step 3: Use llm_selector for the model
     llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
