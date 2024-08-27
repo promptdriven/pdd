@@ -9,7 +9,7 @@
     Output: returns a string that is the preprocessed prompt
 
 % Here are the XML-like tags to preprocess, other tags will remain unmodified:
-    'include' - This tag will include the content of the file indicated in the include tag. The 'include tag' will be removed and the content of the file will be included in the prompt.
+    'include' - This tag will include the content of the file indicated in the include tag. The 'include tag' will be directly replaced with the content of the file in the prompt, without wrapping it in a new tag.
     'pdd' - This tag indicates a comment and anything in this XML will be deleted from the string including the 'pdd' tags themselves.
     'shell' - This tag indicates that there are shell commands to run. Capture all output of the shell commands and include it in the prompt but remove the shell tags.
 
