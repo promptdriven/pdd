@@ -24,6 +24,7 @@
 - [ ] tally up all costs into a csv file
 - [ ] use context caching during fixing errors
 - [ ] debugger that matches prompt lines to code lines
+- [ ] auto make new unit tests based on failures
 
 ## Bugs
 
@@ -39,6 +40,7 @@
 - [ ] Analyze errors first before trying to fix
 - [ ] Check to see if unit test are aligned to the prompt
 - [ ] Use existing good prompt code example to generate code for the prompt
+- [ ] pass in module name of where modules are kept into example (hardcoded to 'pdd')
 
 ## Documentation
 
