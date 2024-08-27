@@ -3,10 +3,10 @@ from rich.console import Console
 console = Console()     
 prompt = """
 <prompt>
-    <include>example.txt</include>
+    <include>Makefile</include>
     <shell>echo Hello World</shell>
     <pdd>This is a comment</pdd>
-    ``` <file_to_include.txt>```
+    ```<TODO.md>```
 </prompt>
 """
 

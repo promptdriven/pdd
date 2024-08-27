@@ -1,101 +1,105 @@
+import os
 import pytest
 from unittest.mock import patch, mock_open
-from pdd.preprocess import preprocess, process_backtick_includes, process_xml_tags, double_curly
-from bs4 import BeautifulSoup
+from pdd.preprocess import preprocess
 import subprocess
 
-@pytest.fixture
-def sample_prompt() -> str:
-    """Fixture providing a sample prompt for testing."""
-    return """
-    Here's an include: ```<sample.txt>```
-    <include>another_file.txt</include>
-    <pdd>This is a comment that will be removed</pdd>
-    <shell>echo "Hello, World!"</shell>
-    This is a {variable} that will be doubled.
-    """
+# Helper function to mock environment variable
+def set_pdd_path(path: str) -> None:
+    """Set the PDD_PATH environment variable to the specified path."""
+    os.environ['PDD_PATH'] = path
 
-@patch('builtins.open', new_callable=mock_open, read_data="Included content")
-@patch('subprocess.run')
-def test_preprocess(mock_subprocess_run, mock_file, sample_prompt: str) -> None:
-    """Test the preprocess function with a sample prompt."""
-    mock_subprocess_run.return_value.stdout = "Hello, World!"
-
-    result = preprocess(sample_prompt)
-
-    assert "```Included content```" in result
-    assert "Included content" in result  # For XML include
-    assert "This is a comment that will be removed" not in result
-    assert "Hello, World!" in result
-    assert "This is a {{variable}} that will be doubled." in result
-
+# Test for processing includes in triple backticks
 def test_process_backtick_includes() -> None:
-    """Test processing of backtick includes."""
-    text = "Test ```<file.txt>``` content"
-    with patch('builtins.open', new_callable=mock_open, read_data="Included text"):
-        result = process_backtick_includes(text, False)
-    assert result == "Test ```Included text``` content"
+    """Test processing of includes within triple backticks."""
+    set_pdd_path('/mock/path')
+    mock_file_content = "Included content"
+    prompt = "This is a test ```<include_file.txt>```"
+    expected_output = "This is a test ```Included content```"
 
-def test_process_xml_tags() -> None:
-    """Test processing of XML tags."""
-    xml = "<include>file.txt</include><pdd>Comment</pdd><shell>echo 'Test'</shell>"
-    soup = BeautifulSoup(xml, 'html.parser')
-    
-    with patch('builtins.open', new_callable=mock_open, read_data="Included content"):
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value.stdout = "Test output"
-            result = process_xml_tags(soup, False)
+    with patch('builtins.open', mock_open(read_data=mock_file_content)):
+        assert preprocess(prompt, recursive=False, double_curly_brackets=False) == expected_output
 
-    assert "Included content" in result
-    assert "Comment" not in result
-    assert "Test output" in result
+# Test for processing XML-like include tags
+def test_process_xml_include_tag() -> None:
+    """Test processing of XML-like include tags."""
+    set_pdd_path('/mock/path')
+    mock_file_content = "Included content"
+    prompt = "This is a test <include>include_file.txt</include>"
+    expected_output = "This is a test Included content"
 
-def test_double_curly() -> None:
+    with patch('builtins.open', mock_open(read_data=mock_file_content)):
+        assert preprocess(prompt, recursive=False, double_curly_brackets=False) == expected_output
+
+# Test for processing XML-like pdd tags
+def test_process_xml_pdd_tag() -> None:
+    """Test processing of XML-like pdd tags."""
+    prompt = "This is a test <pdd>This is a comment</pdd>"
+    expected_output = "This is a test "
+
+    assert preprocess(prompt, recursive=False, double_curly_brackets=False) == expected_output
+
+# Test for processing XML-like shell tags
+def test_process_xml_shell_tag() -> None:
+    """Test processing of XML-like shell tags."""
+    prompt = "This is a test <shell>echo Hello</shell>"
+    expected_output = "This is a test Hello\n"
+
+    with patch('subprocess.run') as mock_run:
+        mock_run.return_value.stdout = "Hello\n"
+        assert preprocess(prompt, recursive=False, double_curly_brackets=False) == expected_output
+
+# Test for doubling curly brackets
+def test_double_curly_brackets() -> None:
     """Test doubling of curly brackets."""
-    text = "This is a {test} with {curly} brackets"
-    result = double_curly(text)
-    assert result == "This is a {{test}} with {{curly}} brackets"
+    prompt = "This is a test {key}"
+    expected_output = "This is a test {{key}}"
 
+    assert preprocess(prompt, recursive=False, double_curly_brackets=True) == expected_output
+
+# Test for excluding keys from doubling curly brackets
+def test_exclude_keys_from_doubling() -> None:
+    """Test excluding specific keys from doubling curly brackets."""
+    prompt = "This is a test {key} and {exclude}"
+    expected_output = "This is a test {{key}} and {exclude}"
+
+    assert preprocess(prompt, recursive=False, double_curly_brackets=True, exclude_keys=['exclude']) == expected_output
+
+# Test for recursive processing
 def test_recursive_processing() -> None:
     """Test recursive processing of includes."""
-    nested_prompt = "```<outer.txt>```"
-    outer_content = "Outer content ```<inner.txt>```"
-    inner_content = "Inner content"
+    set_pdd_path('/mock/path')
+    mock_file_content = "Nested include ```<nested_file.txt>```"
+    nested_file_content = "Nested content"
+    prompt = "This is a test ```<include_file.txt>```"
+    expected_output = "This is a test ```Nested include ```Nested content``````"
 
-    with patch('builtins.open') as mock_open:
-        mock_open.side_effect = [
-            mock_open(read_data=outer_content).return_value,
-            mock_open(read_data=inner_content).return_value
-        ]
-        result = preprocess(nested_prompt, recursive=True)
+    with patch('builtins.open', mock_open(read_data=mock_file_content)) as mock_file:
+        mock_file.side_effect = [mock_open(read_data=mock_file_content).return_value,
+                                 mock_open(read_data=nested_file_content).return_value]
+        assert preprocess(prompt, recursive=True, double_curly_brackets=False) == expected_output
 
-    assert "Outer content ```Inner content```" in result
-
-def test_non_recursive_processing() -> None:
-    """Test non-recursive processing of includes."""
-    nested_prompt = "```<outer.txt>```"
-    outer_content = "Outer content ```<inner.txt>```"
-
-    with patch('builtins.open', new_callable=mock_open, read_data=outer_content):
-        result = preprocess(nested_prompt, recursive=False)
-
-    assert "Outer content ```<inner.txt>```" in result
-
-def test_no_double_curly_brackets() -> None:
-    """Test processing without doubling curly brackets."""
-    prompt = "This is a {test} prompt"
-    result = preprocess(prompt, double_curly_brackets=False)
-    assert result == "This is a {test} prompt"
-
+# Test for handling file not found
 def test_file_not_found() -> None:
     """Test handling of file not found error."""
-    prompt = "```<nonexistent.txt>```"
-    with pytest.raises(FileNotFoundError):
-        preprocess(prompt)
+    set_pdd_path('/mock/path')
+    prompt = "This is a test ```<missing_file.txt>```"
+    expected_output = "This is a test ```<missing_file.txt>```"
 
+    with patch('builtins.open', side_effect=FileNotFoundError):
+        assert preprocess(prompt, recursive=False, double_curly_brackets=False) == expected_output
+
+# Test for handling shell command error
 def test_shell_command_error() -> None:
     """Test handling of shell command error."""
-    prompt = "<shell>invalid_command</shell>"
+    prompt = "This is a test <shell>invalid_command</shell>"
+    expected_output = "This is a test Error: Command 'invalid_command' returned non-zero exit status 1."
+
     with patch('subprocess.run', side_effect=subprocess.CalledProcessError(1, 'invalid_command')):
-        with pytest.raises(subprocess.CalledProcessError):
-            preprocess(prompt)
+        assert preprocess(prompt, recursive=False, double_curly_brackets=False) == expected_output
+
+# Ensure to clean up the environment variable after tests
+def teardown_module(module) -> None:
+    """Clean up the environment variable after tests."""
+    if 'PDD_PATH' in os.environ:
+        del os.environ['PDD_PATH']
