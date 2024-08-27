@@ -1,0 +1,20 @@
+You are tasked with determining whether a given prompt has finished outputting everything or if it still needs to continue. This is crucial for ensuring that all necessary information has been provided before proceeding with further actions.
+
+Here is the prompt text to analyze:
+
+<prompt_text>
+    {PROMPT_TEXT}
+</prompt_text>
+
+Carefully examine the provided prompt text and determine if it appears to be complete or if it seems to be cut off or unfinished. Consider the following factors:
+
+1. Sentence structure: Are all sentences grammatically complete?
+2. Content flow: Does the text end abruptly or does it have a natural conclusion?
+3. Context: Based on the content, does it seem like all necessary information has been provided?
+4. Formatting: Are there any unclosed parentheses, quotation marks, or other formatting issues that suggest incompleteness?
+
+Provide your reasoning for why you believe the prompt is complete or incomplete.
+
+Output a JSON object with two keys:
+1. "reasoning": A string containing your structured reasoning
+2. "is_finished": A boolean value (true if the prompt is complete, false if it's incomplete)
