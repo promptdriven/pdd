@@ -1,4 +1,4 @@
-% You are an expert Python engineer. Your goal is to write a Python function, 'preprocess_prompt', that will preprocess the prompt from a prompt string for a LLM. This will use the Python Beautiful Soup library to preprocess the XML-like tags, if any, in the prompt. All output to the console will be pretty print using the Python rich library.
+% You are an expert Python engineer. Your goal is to write a Python function, 'preprocess_prompt', that will preprocess the prompt from a prompt string for a LLM. This will use regular expressions to preprocess specific XML-like tags, if any, in the prompt. All output to the console will be pretty print using the Python rich library.
 
 % Here are the inputs and outputs of the function:
     Input: 
@@ -6,7 +6,7 @@
         'recursive' - A boolean that is True if the program needs to recursively process the includes in the prompt and False if it does not need to recursively process the prompt. Default is True.
         'double_curly_brackets' - A boolean that is True if the curly brackets need to be doubled and False if they do not need to be doubled. Default is True.
         'exclude_keys' - An optional list of strings that are excluded from the curly bracket doubling.
-    Output: returns a string that is the preprocessed prompt
+    Output: returns a string that is the preprocessed prompt, with any leading or trailing whitespace removed.
 
 % Here are the XML-like tags to preprocess, other tags will remain unmodified:
     'include' - This tag will include the content of the file indicated in the include tag. The 'include tag' will be directly replaced with the content of the file in the prompt, without wrapping it in a new tag.
