@@ -6,5 +6,5 @@
 
 % Make sure the following happens:
     - Document in detail what the input and output parameters in the doc strings
-    - Know that the generated example will be in the same directory as the module it is calling.
     - Someone needs to be able to fully understand how to use the module from the example.
+<include>./context/example.prompt</include>

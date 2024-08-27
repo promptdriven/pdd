@@ -86,11 +86,10 @@ def process_xml_tags(soup: BeautifulSoup, recursive: bool) -> str:
                 content = file.read()
                 if recursive:
                     content = preprocess(content, recursive, False)
-                new_tag = soup.new_tag("div")
-                new_tag.string = content
-                include.replace_with(new_tag)
+                include.replace_with(content)  # Direct replacement without wrapping in a new tag
         except FileNotFoundError:
             console.print(f"[bold red]Warning:[/bold red] File not found: {file_path}")
+
 
     # Remove comment tags
     for comment in soup.find_all('pdd'):

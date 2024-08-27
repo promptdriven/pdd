@@ -1,4 +1,4 @@
-from preprocess import preprocess
+from pdd.preprocess import preprocess
 from rich.console import Console   
 console = Console()     
 prompt = """
@@ -27,5 +27,14 @@ console.print("[bold white]Processed change_LLM Prompt:[/bold white]")
 console.print(processed)
 
 # write the processed prompt to a file
-with open('prompts/xml/change_LLM_processed.prompt', 'w') as file:
+with open('prompts/xml/change_example_full.prompt', 'w') as file:
     file.write(processed)
+    
+# load prompts/change_LLM.prompt
+with open('prompts/example_generator_LLM.prompt', 'r') as file:
+    example_generator_LLM_prompt = file.read()
+    
+# call preprocess on change_LLM_prompt
+processed = preprocess(example_generator_LLM_prompt, recursive, False)
+console.print("[bold white]Processed change_LLM Prompt:[/bold white]")
+console.print(processed)

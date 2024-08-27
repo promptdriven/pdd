@@ -1,5 +1,5 @@
 import os
-from llm_selector import llm_selector
+from pdd.llm_selector import llm_selector
 
 def main() -> None:
     """
