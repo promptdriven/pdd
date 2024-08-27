@@ -1,9 +1,6 @@
-# Based on your requirements and the given directory structure, here's a Makefile that should handle all the specified tasks:
-
-# ```makefile
 # Directories
 PROD_DIR := pdd
-STAGING_DIR := staging
+STAGING_DIR := .
 PDD_DIR := $(STAGING_DIR)/pdd
 DATA_DIR := $(STAGING_DIR)/data
 CONTEXT_DIR := $(STAGING_DIR)/context
@@ -28,7 +25,7 @@ EXAMPLE_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(CONTEXT_DIR)/%_example.py,$(PY_O
 # Test files
 TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 
-.PHONY: all clean test requirements production
+.PHONY: all clean test requirements production coverage
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -67,6 +64,12 @@ test:
 	@echo "Running staging tests"
 	@cd $(STAGING_DIR)
 	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python -m pytest -vv $(TESTS_DIR)
+
+# Run tests with coverage
+coverage:
+	@echo "Running tests with coverage"
+	@cd $(STAGING_DIR)
+	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH pytest --cov=$(PDD_DIR) --cov-report=term-missing --cov-report=html $(TESTS_DIR)
 
 # Generate requirements.txt
 requirements:
@@ -113,14 +116,3 @@ regression:
 install:
 	@echo "Installing pdd"
 	@pip install -e .
-# ```
-
-# This Makefile covers all the requirements you specified:
-
-# 1. It generates Python modules, Makefile, CSV files, examples, and tests.
-# 2. It includes a test target to run all tests.
-# 3. It has a clean target to remove all generated files.
-# 4. It includes a target to generate requirements.txt using pipreqs.
-# 5. It has a production target to copy files from staging to the main pdd directory.
-
-# The Makefile uses wildcards to find all
