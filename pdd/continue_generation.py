@@ -1,192 +1,104 @@
-from typing import Tuple, Optional
-import logging
+import os
 from rich.console import Console
-from rich.syntax import Syntax
-from pydantic import BaseModel, Field
-from .load_prompt_template import load_prompt_template
-from .preprocess import preprocess
-from .llm_invoke import llm_invoke
-from .unfinished_prompt import unfinished_prompt
-from . import EXTRACTION_STRENGTH, DEFAULT_TIME
+from rich.markdown import Markdown
+from pdd.preprocess import preprocess
+from pdd.llm_selector import llm_selector
+from pdd.unfinished_prompt import unfinished_prompt
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 
 console = Console()
-logger = logging.getLogger(__name__)
 
-# Maximum number of generation loops to prevent infinite loops
-MAX_GENERATION_LOOPS = 20
-
-class TrimResultsStartOutput(BaseModel):
-    explanation: str = Field(description="The explanation of how you determined what to cut out")
-    code_block: str = Field(description="The trimmed code block from the start")
-
-class TrimResultsOutput(BaseModel):
-    explanation: str = Field(description="The explanation of the code block")
-    trimmed_continued_generation: str = Field(description="The trimmed continuation of the generation")
-
-def continue_generation(
-    formatted_input_prompt: str,
-    llm_output: str,
-    strength: float,
-    temperature: float,
-    time: float = DEFAULT_TIME,
-    language: Optional[str] = None,
-    verbose: bool = False
-) -> Tuple[str, float, str]:
+def continue_generation(formatted_input_prompt: str, llm_output: str, strength: float, temperature: float):
     """
-    Continue generating a prompt using a large language model until completion.
-    
-    Args:
-        formatted_input_prompt (str): The input prompt with variables substituted.
-        llm_output (str): Current output from the LLM to be checked and continued.
-        strength (float): Strength parameter for the LLM model (0-1).
-        temperature (float): Temperature parameter for the LLM model (0-2).
-        time (float): Time budget for LLM calls.
-        verbose (bool): Whether to print detailed information.
-        
-    Returns:
-        Tuple[str, float, str]: Final LLM output, total cost, and model name.
+    Continues text generation using a language model, handling incomplete outputs and calculating costs.
+
+    :param formatted_input_prompt: The input prompt formatted for the model.
+    :param llm_output: The initial output from the language model.
+    :param strength: The strength parameter for the LLM selector.
+    :param temperature: The temperature parameter for the LLM selector.
+    :return: The final output, total cost, and model name.
     """
     try:
-        # Validate inputs
-        if not 0 <= strength <= 1:
-            raise ValueError("Strength parameter must be between 0 and 1")
-        if not 0 <= temperature <= 2:
-            raise ValueError("Temperature parameter must be between 0 and 2")
-        if not llm_output:
-            raise ValueError("LLM output cannot be empty")
-
-        # Step 1: Load prompt templates
-        prompts = {
-            'continue': load_prompt_template('continue_generation_LLM'),
-            'trim_start': load_prompt_template('trim_results_start_LLM'),
-            'trim': load_prompt_template('trim_results_LLM')
-        }
+        # Step 1: Load the continue_generation_LLM.prompt file
+        pdd_path = os.getenv('PDD_PATH', '.')
+        prompt_file_path = os.path.join(pdd_path, 'prompts', 'continue_generation_LLM.prompt')
         
-        if not all(prompts.values()):
-            raise ValueError("Failed to load one or more prompt templates")
+        with open(prompt_file_path, 'r') as file:
+            continue_generation_prompt = file.read()
 
-        # Step 2: Preprocess prompts
-        processed_prompts = {
-            key: preprocess(prompt, recursive=True, double_curly_brackets=False)
-            for key, prompt in prompts.items()
-        }
-
-        # Initialize tracking variables
-        total_cost = 0.0
-        model_name = ""
-        loop_count = 0
-
-        # Step 3: Trim start of output
-        trim_start_response = llm_invoke(
-            prompt=processed_prompts['trim_start'],
-            input_json={"LLM_OUTPUT": llm_output},
-            strength=EXTRACTION_STRENGTH,
-            temperature=0,
-            time=time,
-            output_pydantic=TrimResultsStartOutput,
-            verbose=verbose,
-            language=language,
+        # Step 2: Preprocess the continue_generation prompt
+        processed_prompt = preprocess(continue_generation_prompt, recursive=False, double_curly_brackets=False)
+        
+        # Step 3: Create a Langchain LCEL template
+        prompt_template = PromptTemplate.from_template(processed_prompt)
+        
+        # Step 4: Use the llm_selector function
+        llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
+        
+        # Step 5: Run the input through the model
+        chain = prompt_template | llm | StrOutputParser()
+        result = chain.invoke({
+            "FORMATTED_INPUT_PROMPT": formatted_input_prompt,
+            "LLM_OUTPUT": llm_output
+        })
+        
+        # Calculate token counts and costs
+        input_token_count = token_counter(formatted_input_prompt)
+        output_token_count = token_counter(result)
+        total_cost = (input_token_count * input_cost + output_token_count * output_cost) / 1_000_000
+        
+        console.print(f"[bold white]Initial Output:[/bold white] {result}")
+        console.print(f"[bold white]Input Token Count:[/bold white] {input_token_count}")
+        console.print(f"[bold white]Output Token Count:[/bold white] {output_token_count}")
+        console.print(f"[bold white]Estimated Cost:[/bold white] ${total_cost:.6f}")
+        
+        # Step 6: Detect if the generation is incomplete
+        reasoning, is_finished, additional_cost, _ = unfinished_prompt(
+            prompt_text=result,
+            strength=.9,
+            temperature=temperature
         )
-        total_cost += trim_start_response['cost']
-        code_block = trim_start_response['result'].code_block
-
-        # Step 4: Continue generation loop
-        while loop_count < MAX_GENERATION_LOOPS:
-            loop_count += 1
-            if verbose:
-                console.print(f"[cyan]Generation loop {loop_count}[/cyan]")
+        
+        total_cost += additional_cost
+        i = 0
+        # Step 7: Loop if incomplete
+        while not is_finished:
+            print("********Loop: ", i)
+            i += 1
+            llm_output += result
+            result = chain.invoke({
+                "FORMATTED_INPUT_PROMPT": formatted_input_prompt,
+                "LLM_OUTPUT": llm_output
+            })
             
-            # Check for maximum loops reached
-            if loop_count >= MAX_GENERATION_LOOPS:
-                logger.warning(f"Reached maximum generation loops ({MAX_GENERATION_LOOPS}), terminating")
-                console.print(f"[yellow]Warning: Reached maximum generation loops ({MAX_GENERATION_LOOPS}), terminating[/yellow]")
-                break
-
-            # Generate continuation
-            continue_response = llm_invoke(
-                prompt=processed_prompts['continue'],
-                input_json={
-                    "FORMATTED_INPUT_PROMPT": formatted_input_prompt,
-                    "LLM_OUTPUT": code_block
-                },
-                strength=strength,
-                temperature=temperature,
-                time=time,
-                verbose=verbose,
-                language=language,
+            output_token_count = token_counter(result)
+            total_cost += (output_token_count * output_cost) / 1_000_000
+            
+            console.print(f"[bold white]Intermediate Output:[/bold white] {result}")
+            console.print(f"[bold white]Output Token Count:[/bold white] {output_token_count}")
+            console.print(f"[bold white]Estimated Cost:[/bold white] ${total_cost:.6f}")
+            
+            reasoning, is_finished, additional_cost, _ = unfinished_prompt(
+                prompt_text=result,
+                strength=.9,
+                temperature=temperature
             )
             
-            total_cost += continue_response['cost']
-            model_name = continue_response['model_name']
-            continue_result = continue_response['result']
-
-            if verbose:
-                try:
-                    preview = (continue_result[:160] + '...') if isinstance(continue_result, str) and len(continue_result) > 160 else continue_result
-                except Exception:
-                    preview = "<non-str>"
-                console.print(f"[blue]Continue model:[/blue] {model_name}")
-                console.print(f"[blue]Continue preview:[/blue] {preview!r}")
-
-            # If the model produced no continuation, avoid an endless loop
-            if not isinstance(continue_result, str) or not continue_result.strip():
-                logger.warning("Empty continuation received; stopping to avoid loop.")
-                break
-
-            # Build prospective new block and check completeness on the updated tail
-            new_code_block = code_block + continue_result
-            last_chunk = new_code_block[-600:] if len(new_code_block) > 600 else new_code_block
-            reasoning, is_finished, check_cost, check_model = unfinished_prompt(
-                prompt_text=last_chunk,
-                strength=0.5,
-                temperature=0,
-                time=time,
-                language=language,
-                verbose=verbose
-            )
-            total_cost += check_cost
-
-            if verbose:
-                console.print(f"[magenta]Tail length:[/magenta] {len(last_chunk)}")
-                # Show a safe, shortened representation of the tail
-                try:
-                    tail_preview = (last_chunk[-200:] if len(last_chunk) > 200 else last_chunk)
-                except Exception:
-                    tail_preview = "<unprintable tail>"
-                console.print(f"[magenta]Tail preview (last 200 chars):[/magenta]\n{tail_preview}")
-                console.print(f"[magenta]Unfinished check model:[/magenta] {check_model}")
-                console.print(f"[magenta]is_finished:[/magenta] {is_finished}")
-                console.print(f"[magenta]Reasoning:[/magenta] {reasoning}")
-
-            if not is_finished:
-                code_block = new_code_block
-                # Continue to next iteration
-            else:
-                # Trim and append final continuation
-                trim_response = llm_invoke(
-                    prompt=processed_prompts['trim'],
-                    input_json={
-                        "CONTINUED_GENERATION": continue_result,
-                        "GENERATED_RESULTS": code_block[-200:]
-                    },
-                    strength=EXTRACTION_STRENGTH,
-                    temperature=0,
-                    time=time,
-                    output_pydantic=TrimResultsOutput,
-                    verbose=verbose,
-                    language=language,
-                )
-                total_cost += trim_response['cost']
-                code_block += trim_response['result'].trimmed_continued_generation
-                break
-
-        if verbose:
-            syntax = Syntax(code_block, "python", theme="monokai", line_numbers=True)
-            console.print("[bold green]Final Generated Code:[/bold green]")
-            console.print(syntax)
-
-        return code_block, total_cost, model_name
-
+            total_cost += additional_cost
+        
+        # Step 8: Pretty print the final output
+        final_llm_output = llm_output + result
+        console.print(Markdown(f"**Final Output:**\n{final_llm_output}"))
+        console.print(f"[bold white]Total Token Count:[/bold white] {input_token_count + output_token_count}")
+        console.print(f"[bold white]Total Cost:[/bold white] ${total_cost:.6f}")
+        
+        # Step 9: Return the final output, total cost, and model name
+        return final_llm_output, total_cost, model_name
+    
+    except FileNotFoundError as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+    except ValueError as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
     except Exception as e:
-        console.print(f"[bold red]Error in continue_generation: {str(e)}[/bold red]")
-        raise
+        console.print(f"[bold red]An unexpected error occurred:[/bold red] {e}")
