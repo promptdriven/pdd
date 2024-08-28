@@ -1,0 +1,1179 @@
+% You are an expert Python engineer. Your goal is to write a Python command line program, "pdd". All output to the console will be pretty printed using the Python rich library. The CLI will be handled using the Python Click library.
+
+% Here is a detailed description of the program functionality: ```# PDD (Prompt-Driven Development) Command Line Interface
+
+PDD is a versatile tool for generating code, examples, unit tests, and managing prompt files through various features like splitting large prompt files into smaller ones.
+
+## Prompt File Naming Convention
+
+Prompt files in PDD follow this specific naming format:
+```
+<basename>_<language>.prompt
+```
+Where:
+- `<basename>` is the base name of the file or project
+- `<language>` is the programming language or context of the prompt file
+
+Examples:
+- `pdd_cli_python.prompt` (basename: pdd_cli, language: python)
+- `Makefile_makefile.prompt` (basename: Makefile, language: makefile)
+- `setup_bash.prompt` (basename: setup, language: bash)
+
+## Basic Usage
+
+```
+python pdd/pdd.py [GLOBAL OPTIONS] COMMAND [OPTIONS] [ARGS]...
+```
+
+## Global Options
+
+These options can be used with any command:
+
+- `--force`: Overwrite existing files without asking for confirmation.
+- `--strength FLOAT`: Set the strength of the AI model (0.0 to 1.0, default is 0.5).
+- `--temperature`: Set the temperature of the AI model (default is 0.0).
+- `--verbose`: Increase output verbosity for more detailed information.
+- `--quiet`: Decrease output verbosity for minimal information.
+- `--output-cost PATH_TO_CSV_FILE`: Enable cost tracking and output a CSV file with usage details.
+
+## Output Cost Tracking
+
+PDD includes a global feature for tracking and reporting the cost of operations. When enabled, it generates a CSV file with usage details for each command execution.
+
+### Usage
+
+To enable cost tracking, use the `--output-cost` option with any command:
+
+```
+pdd --output-cost PATH_TO_CSV_FILE [COMMAND] [OPTIONS] [ARGS]...
+```
+
+The `PATH_TO_CSV_FILE` should be the desired location and filename for the CSV output.
+
+### CSV Output
+
+The generated CSV file includes the following columns:
+- timestamp: The date and time of the command execution
+- model: The AI model used for the operation
+- command: The PDD command that was executed
+- cost: The estimated cost of the operation
+- input_files: A list of input files involved in the operation
+- output_files: A list of output files generated or modified by the operation
+
+This comprehensive output allows for detailed tracking of not only the cost and type of operations but also the specific files involved in each PDD command execution.
+
+### Environment Variable
+
+You can set a default location for the cost output CSV file using the environment variable:
+
+- **`PDD_OUTPUT_COST_PATH`**: Default path for the cost tracking CSV file.
+
+If this environment variable is set, the CSV file will be saved to the specified path by default, unless overridden by the `--output-cost` option. For example, if `PDD_OUTPUT_COST_PATH=/path/to/cost/reports/`, the CSV file will be saved in that directory with a default filename.
+
+## Commands
+
+Here are the main commands:
+
+### 1. Generate
+
+Create runnable code from a prompt file.
+
+```
+pdd generate [GLOBAL OPTIONS] [OPTIONS] PROMPT_FILE
+```
+
+Options:
+- `--output LOCATION`: Specify where to save the generated code. The default file name is `<basename>.<language_file_extension>`. If an environment variable `PDD_GENERATE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+
+### 2. Example
+
+Create an example file from an existing code file and the prompt that generated the code file.
+
+```
+pdd example [GLOBAL OPTIONS] [OPTIONS] CODE_FILE PROMPT_FILE
+```
+
+Options:
+- `--output LOCATION`: Specify where to save the generated example code. The default file name is `<basename>_example.<language_file_extension>`. If an environment variable `PDD_EXAMPLE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+
+### 3. Test
+
+Generate a unit test file for a given code file and its corresponding prompt file.
+
+```
+pdd test [GLOBAL OPTIONS] [OPTIONS] CODE_FILE PROMPT_FILE
+```
+
+Options:
+- `--output LOCATION`: Specify where to save the generated test file. The default file name is `test_<basename>.<language_file_extension>`. If an environment variable `PDD_TEST_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--language`: Specify the programming language. Defaults to the language specified by the prompt file name.
+
+### 4. Preprocess
+
+Preprocess prompt files and save the results.
+
+```
+pdd preprocess [GLOBAL OPTIONS] [OPTIONS] PROMPT_FILE
+```
+
+Options:
+- `--output LOCATION`: Specify where to save the preprocessed prompt file. The default file name is `<basename>_<language>_preprocessed.prompt`. If an environment variable `PDD_PREPROCESS_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--xml`: Automatically insert XML delimiters for long and complex prompt files to structure the content better.
+
+### 5. Fix
+
+Fix errors in code and unit tests based on error messages.
+
+```
+pdd fix [GLOBAL OPTIONS] [OPTIONS] UNIT_TEST_FILE CODE_FILE ERROR_FILE
+```
+
+Options:
+- `--output-test LOCATION`: Specify where to save the fixed unit test file. The default file name is `test_<basename>_fixed.<language_file_extension>`. If an environment variable `PDD_FIX_TEST_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output-code LOCATION`: Specify where to save the fixed code file. The default file name is `<basename>_fixed.<language_file_extension>`. If an environment variable `PDD_FIX_CODE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--loop`: Enable iterative fixing process.
+  - `--verification-program PATH`: Specify the path to a Python program that verifies if the code still runs correctly.
+  - `--max-attempts INT`: Set the maximum number of fix attempts before giving up (default is 3).
+  - `--budget FLOAT`: Set the maximum cost allowed for the fixing process (default is $5.0).
+
+When the `--loop` option is used, the fix command will attempt to fix errors through multiple iterations. It will use the specified verification program to check if the code runs correctly after each fix attempt. The process will continue until either the errors are fixed, the maximum number of attempts is reached, or the budget is exhausted.
+
+Outputs when using `--loop`:
+- Success status (boolean)
+- Final unit test file contents
+- Final code file contents
+- Total number of fix attempts made
+- Total cost of all fix attempts
+
+### 6. Split
+
+Split large complex prompt files into smaller, more manageable prompt files.
+
+```
+pdd split [GLOBAL OPTIONS] [OPTIONS] INPUT_PROMPT INPUT_CODE EXAMPLE_CODE
+```
+
+Options:
+- `--output-sub LOCATION`: Specify where to save the generated sub-prompt file. The default file name is `sub_<basename>.prompt`. If an environment variable `PDD_SPLIT_SUB_PROMPT_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output-modified LOCATION`: Specify where to save the modified prompt file. The default file name is `modified_<basename>.prompt`. If an environment variable `PDD_SPLIT_MODIFIED_PROMPT_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+
+The `EXAMPLE_CODE` input serves as the interface to the sub-module prompt file that will be generated.
+
+### 7. Change
+
+Modify an input prompt file based on a change prompt and the corresponding input code.
+
+```
+pdd change [GLOBAL OPTIONS] [OPTIONS] INPUT_PROMPT INPUT_CODE CHANGE_PROMPT
+```
+
+Options:
+- `--output LOCATION`: Specify where to save the modified prompt file. The default file name is `modified_<basename>.prompt`. If an environment variable `PDD_CHANGE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+
+This command takes three inputs:
+- `INPUT_PROMPT`: A string containing the prompt file that will be modified.
+- `INPUT_CODE`: A string containing the code that was generated from the input prompt file.
+- `CHANGE_PROMPT`: A string containing the instructions on how to modify the input prompt file.
+
+The command produces one output:
+- `MODIFIED_PROMPT`: A string containing the modified prompt file that was changed based on the change prompt.
+
+### 8. Update
+
+Update the original prompt file based on the original code and the modified code.
+
+```
+pdd update [GLOBAL OPTIONS] [OPTIONS] INPUT_PROMPT INPUT_CODE MODIFIED_CODE
+```
+
+Options:
+- `--output LOCATION`: Specify where to save the modified prompt file. The default file name is `modified_<basename>.prompt`. If an environment variable `PDD_UPDATE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+
+This command takes three inputs:
+- `INPUT_PROMPT`: A string containing the prompt file that generated the original code.
+- `INPUT_CODE`: A string containing the original code that was generated from the input prompt file.
+- `MODIFIED_CODE`: A string containing the code that was modified by the user.
+
+The command produces one output:
+- `MODIFIED_PROMPT`: A string containing the modified prompt file that will generate the modified code.
+
+## Output Location Specification
+
+For all commands that generate or modify files, the `--output` option (or its variant, such as `--output-sub` or `--output-modified` for the `split` command) allows flexible specification of the output location:
+
+1. **Filename only**: If you provide just a filename (e.g., `--output result.py`), the file will be created in the current working directory.
+2. **Full path**: If you provide a full path (e.g., `--output /home/user/projects/result.py`), the file will be created at that exact location.
+3. **Directory**: If you provide a directory name (e.g., `--output ./generated/`), a file with an automatically generated name will be created in that directory.
+4. **Environment Variable**: If the `--output` option is not provided, and an environment variable specific to the command is set, PDD will use the path specified by this variable. Otherwise, it will use default naming conventions and save the file in the current working directory.
+5. **No Output Location**: If no output location is specified and no environment variable is set, the file will be saved in the current working directory with a default name given the command.
+
+## Multi-Command Chaining
+
+PDD supports multi-command chaining, allowing you to execute multiple commands in a single line. Commands will be executed in the order they are specified. This feature enables you to perform complex workflows efficiently, combining various PDD operations into a single, streamlined process.
+
+Basic syntax for multi-command chaining:
+```
+pdd [GLOBAL OPTIONS] COMMAND1 [OPTIONS] [ARGS]... [COMMAND2 [OPTIONS] [ARGS]...]...
+```
+
+Here are some examples of multi-command chaining to illustrate its power and flexibility:
+
+1. Generate code, create an example, and run tests in one go:
+```
+pdd generate app_python.prompt --output src/app.py example src/app.py app_python.prompt --output examples/usage.py test src/app.py app_python.prompt --output tests/test_app.py
+```
+This chain will:
+- Generate code from `app_python.prompt` and save it to `src/app.py`
+- Create an example based on `src/app.py` using `app_python.prompt` and save it to `examples/usage.py`
+- Generate a test file for `src/app.py` using `app_python.prompt` and save it to `tests/test_app.py`
+
+2. Preprocess a prompt, generate code, and create an example with cost tracking:
+```
+pdd --output-cost usage.csv preprocess app_python.prompt --output preprocessed/app_python_preprocessed.prompt generate preprocessed/app_python_preprocessed.prompt --output src/app.py example src/app.py app_python.prompt --output examples/usage.py
+```
+This chain will:
+- Enable cost tracking and save the results to `usage.csv`
+- Preprocess `app_python.prompt` and save the result to `preprocessed/app_python_preprocessed.prompt`
+- Generate code from the preprocessed prompt and save it to `src/app.py`
+- Create an example based on `src/app.py` and using `app_python.prompt` and save it to `examples/usage.py`
+
+3. Split a large prompt, generate code from the sub-prompt, and create a test:
+```
+pdd split large_app_python.prompt --output-sub sub_prompts/module_python.prompt --output-modified modified_prompts/main_app_python.prompt generate sub_prompts/module_python.prompt --output src/module.py test src/module.py sub_prompts/module_python.prompt --output tests/test_module.py
+```
+This chain will:
+- Split `large_app_python.prompt` into a sub-prompt and a modified main prompt
+- Generate code from the sub-prompt and save it to `src/module.py`
+- Create a test file for `src/module.py` using the sub-prompt and save it to `tests/test_module.py`
+
+4. Update a prompt based on code changes, then generate new code and tests:
+```
+pdd update app_python.prompt src/original_app.py src/modified_app.py --output updated_prompts/updated_app_python.prompt generate updated_prompts/updated_app_python.prompt --output src/new_app.py test src/new_app.py updated_prompts/updated_app_python.prompt --output tests/test_new_app.py
+```
+This chain will:
+- Update `app_python.prompt` based on changes between `original_app.py` and `modified_app.py`
+- Generate new code from the updated prompt and save it to `src/new_app.py`
+- Create a test file for the new code and save it to `tests/test_new_app.py`
+
+These examples demonstrate how you can combine multiple PDD commands to create sophisticated workflows, automating complex development tasks in a single command line invocation.
+
+## Getting Help
+
+PDD provides comprehensive help features:
+
+1. **General Help**:
+   ```
+   pdd --help
+   ```
+   Displays a list of available commands and options.
+
+2. **Command-Specific Help**:
+   ```
+   pdd COMMAND --help
+   ```
+   Provides detailed help for a specific command, including available options and usage examples.
+
+## Additional Features
+
+- **Tab Completion**: PDD supports tab completion for commands and options in compatible shells. You can install tab completion by running:
+  ```
+  pdd --install-completion
+  ```
+- **Colorized Output**: PDD provides colorized output for better readability in compatible terminals.
+- **Progress Indicators**: For long-running operations, PDD includes progress indicators to keep you informed of the task's status.
+
+## Environment Variables for Output Paths
+
+You can set environment variables to define default output paths for each command, reducing the need to specify output locations in the command line. The following environment variables are supported:
+
+- **`PDD_GENERATE_OUTPUT_PATH`**: Default path for the `generate` command.
+- **`PDD_EXAMPLE_OUTPUT_PATH`**: Default path for the `example` command.
+- **`PDD_TEST_OUTPUT_PATH`**: Default path for the `test` command.
+- **`PDD_PREPROCESS_OUTPUT_PATH`**: Default path for the `preprocess` command.
+- **`PDD_FIX_TEST_OUTPUT_PATH`**: Default path for the fixed unit test files in the `fix` command.
+- **`PDD_FIX_CODE_OUTPUT_PATH`**: Default path for the fixed code files in the `fix` command.
+- **`PDD_SPLIT_SUB_PROMPT_OUTPUT_PATH`**: Default path for the sub-prompts generated by the `split` command.
+- **`PDD_SPLIT_MODIFIED_PROMPT_OUTPUT_PATH`**: Default path for the modified prompts generated by the `split` command.
+- **`PDD_CHANGE_OUTPUT_PATH`**: Default path for the modified prompts generated by the `change` command.
+- **`PDD_UPDATE_OUTPUT_PATH`**: Default path for the updated prompts generated by the `update` command.
+- **`PDD_OUTPUT_COST_PATH`**: Default path for the cost tracking CSV file.
+
+## Examples of Common Workflows
+
+1. Preprocess a prompt file, generate code, create an example, and generate tests (using multi-command chaining):
+```
+pdd preprocess --output preprocessed/ --temperature 0.0 app_python.prompt generate --output src/app.py --temperature 0.0 preprocessed/app_python_preprocessed.prompt example --output examples/ --temperature 0.0 src/app.py app_python.prompt test --output tests/ --language python --temperature 0.0 src/app.py app_python.prompt
+```
+
+2. Generate code and create examples for multiple prompt files (using multi-command chaining):
+```
+pdd generate --output src/api.py --temperature 0.0 api_python.prompt generate --output src/db.py --temperature 0.0 database_sql.prompt example --output examples/api_usage.py api_usage_python.prompt --temperature 0.0 src/api.py example --output examples/db_usage.py app_python.prompt --temperature 0.0 src/db.py
+```
+
+3. Preprocess a prompt file and view the diff:
+```
+pdd preprocess --output preprocessed/app_python_preprocessed.prompt --diff --temperature 0.0 app_python.prompt
+```
+
+4. Preprocess a prompt file with XML delimiters inserted:
+```
+pdd preprocess --output preprocessed/app_python_preprocessed.xml --xml app_python.prompt
+```
+
+5. Preprocess multiple prompt files and generate code for each (using multi-command chaining):
+```
+pdd preprocess --output preprocessed/ --temperature 0.0 api_python.prompt preprocess --output preprocessed/ --temperature 0.0 db_sql.prompt generate --output src/ --temperature 0.0 preprocessed/api_python_preprocessed.prompt generate --output src/ --temperature 0.0 preprocessed/db_sql_preprocessed.prompt
+```
+
+6. Fix errors in code and unit tests:
+```
+pdd fix --output-test fixed/test_app_fixed.py --output-code fixed/app_fixed.py --temperature 0.0 tests/test_app.py src/app.py error_log.txt
+```
+
+Note: The error messages in the `error_log.txt` file come from pytest and the output of the LLMs, all piped into this error file.
+
+7. Split a large prompt file into smaller prompt files:
+```
+pdd split --output-sub sub_prompts/sub_app_python.prompt --output-modified modified_prompts/modified_app_python.prompt --temperature 0.0 large_app_python.prompt related_code.py example_code.py
+```
+
+8. Change a prompt file based on new requirements:
+```
+pdd change --output modified_prompts/modified_app_python.prompt --temperature 0.0 app_python.prompt src/app.py "Add error handling for network connections"
+```
+
+9. Update a prompt file based on modified code:
+```
+pdd update --output modified_prompts/modified_app_python.prompt --temperature 0.0 app_python.prompt src/original_app.py src/modified_app.py
+```
+
+10. Generate code with cost tracking:
+```
+pdd --output-cost cost_reports/usage.csv generate --output src/app.py --temperature 0.0 app_python.prompt
+```
+
+11. Run multiple commands with cost tracking:
+```
+pdd --output-cost cost_reports/usage.csv generate --output src/app.py app_python.prompt test --output tests/ --language python src/app.py app_python.prompt
+```
+
+12. Fix errors in code and unit tests with iterative process:
+```
+pdd fix --loop --verification-program verify_code.py --max-attempts 3 --budget 5.0 --output-test tests/test_app_fixed.py --output-code src/app_fixed.py --temperature 0.0 tests/test_app.py src/app.py error_log.txt
+```
+
+This example attempts to fix errors in `test_app.py` and `app.py` through multiple iterations. It uses `verify_code.py` to check if the code runs correctly after each fix attempt, with a maximum of 3 attempts and a budget of $5.0. The fixed files are saved as `test_app_fixed.py` and `app_fixed.py` respectively.
+
+13. Force overwrite of existing files:
+```
+pdd --force generate --output src/existing_app.py app_python.prompt
+```
+
+This example generates code from `app_python.prompt` and saves it to `src/existing_app.py`, overwriting the file if it already exists without asking for confirmation.
+
+## Conclusion
+
+PDD (Prompt-Driven Development) CLI provides a comprehensive set of tools for managing prompt files, generating code, creating examples, and running tests. By leveraging the power of AI models and iterative processes, PDD aims to streamline the development workflow and improve code quality.
+
+The various commands and options allow for flexible usage, from simple code generation to complex workflows involving multiple steps. The ability to track costs and manage output locations through environment variables further enhances the tool's utility in different development environments.
+
+Remember to use the help command (`pdd --help` or `pdd COMMAND --help`) for more detailed information on each command and its options. As you become more familiar with PDD, you can create more complex workflows by chaining multiple commands and utilizing the full range of options available.
+
+Happy coding with PDD!```
+
+% Here is the directory structure of the program:
+    - pdd/pdd/*.py (including this program pdd.py)
+    - pdd/prompts
+    - pdd/context
+    - pdd/data
+
+% Some of the pdd commands will have the same name as some of the below functions. Be sure to import the functions with a different name to avoid conflicts. Use relative imports for modules within the same package.
+
+% Here is how to use the Python Click library to create a command line program: ```from functools import update_wrapper
+
+from PIL import Image
+from PIL import ImageEnhance
+from PIL import ImageFilter
+
+import click
+
+
+@click.group(chain=True)
+def cli():
+    """This script processes a bunch of images through pillow in a unix
+    pipe.  One commands feeds into the next.
+
+    Example:
+
+    \b
+        imagepipe open -i example01.jpg resize -w 128 display
+        imagepipe open -i example02.jpg blur save
+    """
+
+
+@cli.result_callback()
+def process_commands(processors):
+    """This result callback is invoked with an iterable of all the chained
+    subcommands.  As in this example each subcommand returns a function
+    we can chain them together to feed one into the other, similar to how
+    a pipe on unix works.
+    """
+    # Start with an empty iterable.
+    stream = ()
+
+    # Pipe it through all stream processors.
+    for processor in processors:
+        stream = processor(stream)
+
+    # Evaluate the stream and throw away the items.
+    for _ in stream:
+        pass
+
+
+def processor(f):
+    """Helper decorator to rewrite a function so that it returns another
+    function from it.
+    """
+
+    def new_func(*args, **kwargs):
+        def processor(stream):
+            return f(stream, *args, **kwargs)
+
+        return processor
+
+    return update_wrapper(new_func, f)
+
+
+def generator(f):
+    """Similar to the :func:`processor` but passes through old values
+    unchanged and does not pass through the values as parameter.
+    """
+
+    @processor
+    def new_func(stream, *args, **kwargs):
+        yield from stream
+        yield from f(*args, **kwargs)
+
+    return update_wrapper(new_func, f)
+
+
+def copy_filename(new, old):
+    new.filename = old.filename
+    return new
+
+
+@cli.command("open")
+@click.option(
+    "-i",
+    "--image",
+    "images",
+    type=click.Path(),
+    multiple=True,
+    help="The image file to open.",
+)
+@generator
+def open_cmd(images):
+    """Loads one or multiple images for processing.  The input parameter
+    can be specified multiple times to load more than one image.
+    """
+    for image in images:
+        try:
+            click.echo(f"Opening '{{image}}'")
+            if image == "-":
+                img = Image.open(click.get_binary_stdin())
+                img.filename = "-"
+            else:
+                img = Image.open(image)
+            yield img
+        except Exception as e:
+            click.echo(f"Could not open image '{{image}}': {{e}}", err=True)
+
+
+@cli.command("save")
+@click.option(
+    "--filename",
+    default="processed-{{:04}}.png",
+    type=click.Path(),
+    help="The format for the filename.",
+    show_default=True,
+)
+@processor
+def save_cmd(images, filename):
+    """Saves all processed images to a series of files."""
+    for idx, image in enumerate(images):
+        try:
+            fn = filename.format(idx + 1)
+            click.echo(f"Saving '{{image.filename}}' as '{{fn}}'")
+            yield image.save(fn)
+        except Exception as e:
+            click.echo(f"Could not save image '{{image.filename}}': {{e}}", err=True)
+
+
+@cli.command("display")
+@processor
+def display_cmd(images):
+    """Opens all images in an image viewer."""
+    for image in images:
+        click.echo(f"Displaying '{{image.filename}}'")
+        image.show()
+        yield image
+
+
+@cli.command("resize")
+@click.option("-w", "--width", type=int, help="The new width of the image.")
+@click.option("-h", "--height", type=int, help="The new height of the image.")
+@processor
+def resize_cmd(images, width, height):
+    """Resizes an image by fitting it into the box without changing
+    the aspect ratio.
+    """
+    for image in images:
+        w, h = (width or image.size[0], height or image.size[1])
+        click.echo(f"Resizing '{{image.filename}}' to {{w}}x{{h}}")
+        image.thumbnail((w, h))
+        yield image
+
+
+@cli.command("crop")
+@click.option(
+    "-b", "--border", type=int, help="Crop the image from all sides by this amount."
+)
+@processor
+def crop_cmd(images, border):
+    """Crops an image from all edges."""
+    for image in images:
+        box = [0, 0, image.size[0], image.size[1]]
+
+        if border is not None:
+            for idx, val in enumerate(box):
+                box[idx] = max(0, val - border)
+            click.echo(f"Cropping '{{image.filename}}' by {{border}}px")
+            yield copy_filename(image.crop(box), image)
+        else:
+            yield image
+
+
+def convert_rotation(ctx, param, value):
+    if value is None:
+        return
+    value = value.lower()
+    if value in ("90", "r", "right"):
+        return (Image.ROTATE_90, 90)
+    if value in ("180", "-180"):
+        return (Image.ROTATE_180, 180)
+    if value in ("-90", "270", "l", "left"):
+        return (Image.ROTATE_270, 270)
+    raise click.BadParameter(f"invalid rotation '{{value}}'")
+
+
+def convert_flip(ctx, param, value):
+    if value is None:
+        return
+    value = value.lower()
+    if value in ("lr", "leftright"):
+        return (Image.FLIP_LEFT_RIGHT, "left to right")
+    if value in ("tb", "topbottom", "upsidedown", "ud"):
+        return (Image.FLIP_LEFT_RIGHT, "top to bottom")
+    raise click.BadParameter(f"invalid flip '{{value}}'")
+
+
+@cli.command("transpose")
+@click.option(
+    "-r", "--rotate", callback=convert_rotation, help="Rotates the image (in degrees)"
+)
+@click.option("-f", "--flip", callback=convert_flip, help="Flips the image  [LR / TB]")
+@processor
+def transpose_cmd(images, rotate, flip):
+    """Transposes an image by either rotating or flipping it."""
+    for image in images:
+        if rotate is not None:
+            mode, degrees = rotate
+            click.echo(f"Rotate '{{image.filename}}' by {{degrees}}deg")
+            image = copy_filename(image.transpose(mode), image)
+        if flip is not None:
+            mode, direction = flip
+            click.echo(f"Flip '{{image.filename}}' {{direction}}")
+            image = copy_filename(image.transpose(mode), image)
+        yield image
+
+
+@cli.command("blur")
+@click.option("-r", "--radius", default=2, show_default=True, help="The blur radius.")
+@processor
+def blur_cmd(images, radius):
+    """Applies gaussian blur."""
+    blur = ImageFilter.GaussianBlur(radius)
+    for image in images:
+        click.echo(f"Blurring '{{image.filename}}' by {{radius}}px")
+        yield copy_filename(image.filter(blur), image)
+
+
+@cli.command("smoothen")
+@click.option(
+    "-i",
+    "--iterations",
+    default=1,
+    show_default=True,
+    help="How many iterations of the smoothen filter to run.",
+)
+@processor
+def smoothen_cmd(images, iterations):
+    """Applies a smoothening filter."""
+    for image in images:
+        click.echo(
+            f"Smoothening {{image.filename!r}} {{iterations}}"
+            f" time{{'s' if iterations != 1 else ''}}"
+        )
+        for _ in range(iterations):
+            image = copy_filename(image.filter(ImageFilter.BLUR), image)
+        yield image
+
+
+@cli.command("emboss")
+@processor
+def emboss_cmd(images):
+    """Embosses an image."""
+    for image in images:
+        click.echo(f"Embossing '{{image.filename}}'")
+        yield copy_filename(image.filter(ImageFilter.EMBOSS), image)
+
+
+@cli.command("sharpen")
+@click.option(
+    "-f", "--factor", default=2.0, help="Sharpens the image.", show_default=True
+)
+@processor
+def sharpen_cmd(images, factor):
+    """Sharpens an image."""
+    for image in images:
+        click.echo(f"Sharpen '{{image.filename}}' by {{factor}}")
+        enhancer = ImageEnhance.Sharpness(image)
+        yield copy_filename(enhancer.enhance(max(1.0, factor)), image)
+
+
+@cli.command("paste")
+@click.option("-l", "--left", default=0, help="Offset from left.")
+@click.option("-r", "--right", default=0, help="Offset from right.")
+@processor
+def paste_cmd(images, left, right):
+    """Pastes the second image on the first image and leaves the rest
+    unchanged.
+    """
+    imageiter = iter(images)
+    image = next(imageiter, None)
+    to_paste = next(imageiter, None)
+
+    if to_paste is None:
+        if image is not None:
+            yield image
+        return
+
+    click.echo(f"Paste '{{to_paste.filename}}' on '{{image.filename}}'")
+    mask = None
+    if to_paste.mode == "RGBA" or "transparency" in to_paste.info:
+        mask = to_paste
+    image.paste(to_paste, (left, right), mask)
+    image.filename += f"+{{to_paste.filename}}"
+    yield image
+
+    yield from imageiter```
+
+% Here is an example of how to load the input files and generate the output paths using construct_paths: ```from pdd.construct_paths import construct_paths
+
+def main() -> None:
+    """
+    Main function to demonstrate the usage of the construct_paths function.
+    It sets up input parameters, calls the function, and handles its output.
+    """
+    # Define input file paths
+    input_file_paths = {{ # Keys are the lower case version of the command inputs (e.g. "test" command would have the keys "code_file" and "prompt_file")
+        "code_file": "../pdd/unfinished_prompt.py",
+        "prompt_file": "../prompts/unfinished_prompt_python.prompt"
+    }}
+
+    # Define command options
+    command_options = {{ # This dictionary contains the command options that are passed to the construct_paths function. For instance the "test" command would have the keys "output" and "language".
+        "output": None
+    }}
+
+    # Call the construct_paths function
+    try:
+        input_strings, output_file_paths, language = construct_paths(
+            input_file_paths=input_file_paths,
+            force=False,  # Set to True to overwrite existing files
+            quiet=False,  # Set to True to suppress output messages
+            command="example",  # Command can be 'generate', 'test', etc.
+            command_options=command_options
+        )
+
+        # Output the results
+        print(f"Input Strings: {{input_strings}}") # This dictionary contains the contents of the input files with the same keys as input_file_paths
+        print(f"Output File Paths: {{output_file_paths}}")
+        print(f"Language: {{language}}")
+
+    except Exception as e:
+        print(f"An error occurred: {{e}}")
+
+if __name__ == "__main__":
+    main()```
+
+% 'generate' command: To generate runnable code from a prompt file, use code_generator. Here is an example how to generate code from the prompt from a file: ```from code_generator import code_generator
+
+
+def main() -> None:
+    """
+    Main function to demonstrate the usage of the code_generator function.
+    It defines the input parameters, calls the code_generator, and prints the results.
+    """
+    # Define the input parameters
+    prompt: str = "Create a function that calculates the factorial of a number."
+    language: str = "python"
+    strength: float = 0.8
+    temperature: float = 0.5
+
+    try:
+        # Call the code_generator function
+        runnable_code, total_cost = code_generator(prompt, language, strength, temperature)
+
+        # Print the results
+        print("Generated Code:")
+        print(runnable_code)
+        print(f"Total Cost: ${{total_cost:.6f}}")
+    except Exception as e:
+        print(f"An error occurred: {{e}}")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+% 'example' command: To generate example code from a code file, use context_generator. Here is an example how to generate an example from a code file: ```from context_generator import context_generator
+
+# Define the parameters for the code generation
+code_module: str = "def add(a,b): return a+b"  # The code module to generate examples for
+prompt: str = "Create a function that adds two numbers."  # The prompt to guide the example generation
+language: str = "python"  # The programming language for the example
+strength: float = .9  # The strength parameter for model selection
+temperature: float = 0  # The temperature parameter for model selection
+
+try:
+    # Call the context_generator function
+    example_code, total_cost = context_generator(code_module, prompt, language, strength, temperature)
+
+    # Print the generated example code and total cost
+    print("Generated Example Code:")
+    print(example_code)
+    print(f"Total Cost: ${{total_cost:.6f}}")
+except Exception as e:
+    print(f"An error occurred: {{e}}")```
+
+% 'test' command: To generate a unit test from code and its prompt file, use generate_test. Here is an example how to generate a unit test from a code file: ```from generate_test import generate_test
+
+# Define the input parameters
+prompt: str = "Create an addition function that takes two arguments and returns their sum."
+code: str = """
+def add(a, b):
+    return a + b
+"""
+strength: float = .5  # Model strength parameter
+temperature: float = 0.5  # Temperature parameter for randomness
+language: str = "python"  # Programming language of the code
+
+# Call the generate_test function
+unit_test_code, total_cost = generate_test(prompt, code, strength, temperature, language)
+
+# Print the results
+print("Generated Unit Test Code:")
+print(unit_test_code)
+print(f"Total Cost of Operation: ${{total_cost:.6f}}")```
+
+% 'preprocess' command: To preprocess a prompt from a prompt file, use preprocess. Here is an example of how to preprocess the prompt from a file: ```from pdd.preprocess import preprocess
+from rich.console import Console   
+console = Console()     
+prompt = """
+<prompt>
+    # Directories
+PROD_DIR := pdd
+STAGING_DIR := .
+PDD_DIR := $(STAGING_DIR)/pdd
+DATA_DIR := $(STAGING_DIR)/data
+CONTEXT_DIR := $(STAGING_DIR)/context
+TESTS_DIR := $(STAGING_DIR)/tests
+PROMPTS_DIR := prompts
+
+# Python files
+PY_PROMPTS := $(wildcard $(PROMPTS_DIR)/*_python.prompt)
+PY_OUTPUTS := $(patsubst $(PROMPTS_DIR)/%_python.prompt,$(PDD_DIR)/%.py,$(PY_PROMPTS))
+
+# Makefile
+MAKEFILE_PROMPT := $(PROMPTS_DIR)/Makefile_makefile.prompt
+MAKEFILE_OUTPUT := $(STAGING_DIR)/Makefile
+
+# CSV files
+CSV_PROMPTS := $(wildcard $(PROMPTS_DIR)/*_csv.prompt)
+CSV_OUTPUTS := $(patsubst $(PROMPTS_DIR)/%_csv.prompt,$(DATA_DIR)/%.csv,$(CSV_PROMPTS))
+
+# Example files
+EXAMPLE_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(CONTEXT_DIR)/%_example.py,$(PY_OUTPUTS))
+
+# Test files
+TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
+
+.PHONY: all clean test requirements production coverage
+
+all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
+
+# Generate Python files
+$(PDD_DIR)/%.py: $(PROMPTS_DIR)/%_python.prompt
+	@echo "Generating $@"
+	@mkdir -p $(PDD_DIR)
+	@PYTHONPATH=$(PROD_DIR) python pdd/pdd.py --strength 1 generate --output $@ $<
+
+# Generate Makefile
+$(MAKEFILE_OUTPUT): $(MAKEFILE_PROMPT)
+	@echo "Generating $@"
+	@mkdir -p $(STAGING_DIR)
+	@PYTHONPATH=$(PROD_DIR) python pdd/pdd.py generate --output $@ $<
+
+# Generate CSV files
+$(DATA_DIR)/%.csv: $(PROMPTS_DIR)/%_csv.prompt
+	@echo "Generating $@"
+	@mkdir -p $(DATA_DIR)
+	@PYTHONPATH=$(PROD_DIR) python pdd/pdd.py generate --output $@ $<
+
+# Generate example files
+$(CONTEXT_DIR)/%_example.py: $(PDD_DIR)/%.py
+	@echo "Generating example for $<"
+	@mkdir -p $(CONTEXT_DIR)
+	@PYTHONPATH=$(PROD_DIR) python pdd/pdd.py example --output $@ $<
+
+# Generate test files
+$(TESTS_DIR)/test_%.py: $(PDD_DIR)/%.py $(PROMPTS_DIR)/%_python.prompt
+	@echo "Generating test for $<"
+	@mkdir -p $(TESTS_DIR)
+	@PYTHONPATH=$(PROD_DIR) python pdd/pdd.py --strength 1 test --output $@ $^
+
+# Run tests
+test:
+	@echo "Running staging tests"
+	@cd $(STAGING_DIR)
+	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python -m pytest -vv $(TESTS_DIR)
+
+# Run tests with coverage
+coverage:
+	@echo "Running tests with coverage"
+	@cd $(STAGING_DIR)
+	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH pytest --cov=$(PDD_DIR) --cov-report=term-missing --cov-report=html $(TESTS_DIR)
+
+# Generate requirements.txt
+requirements:
+	@echo "Generating requirements.txt"
+	@PYTHONPATH=$(PROD_DIR) pipreqs ./pdd --force --savepath ./requirements.txt
+
+# Clean generated files
+clean:
+	@echo "Cleaning generated files"
+	@rm -rf $(STAGING_DIR)
+
+.PHONY: staging
+staging:
+	@echo "Copying files to staging"
+	@mkdir -p staging
+	@touch staging/__init__.py
+	@cp -r pdd/* $(PDD_DIR)
+	@touch staging/pdd/* staging/pdd/__init__.py
+	@cp -r data/* $(DATA_DIR)
+	@touch staging/data/*
+	@cp -r context/* $(CONTEXT_DIR)
+	@touch staging/context/*
+	@cp -r tests/* $(TESTS_DIR)
+	@touch staging/tests/* staging/tests/__init__.py
+	@cp Makefile $(MAKEFILE_OUTPUT)
+	@touch Makefile
+
+# Production: copy files from staging to pdd
+production:
+	@echo "Copying files to production"
+	@mkdir -p pdd
+	@cp -r $(PDD_DIR)/* pdd/
+	@cp -r $(DATA_DIR) .
+	@cp -r $(CONTEXT_DIR) .
+	@cp -r $(TESTS_DIR) .
+	@cp $(MAKEFILE_OUTPUT) .
+
+regression:
+	@echo "Running regression tests"
+	@mkdir -p staging/regression
+	@@find staging/regression -type f ! -name ".*" -delete
+	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/regression.sh
+
+install:
+	@echo "Installing pdd"
+	@pip install -e .
+    Hello World
+
+    
+    ```<TODO.md>```
+</prompt>
+"""
+
+recursive = False
+double_curly_brackets = True
+
+processed = preprocess(prompt, recursive, double_curly_brackets)
+console.print("[bold white]Processed Prompt:[/bold white]")
+console.print(processed)
+
+# load prompts/change_LLM.prompt
+with open('prompts/xml/change_LLM.prompt', 'r') as file:
+    change_LLM_prompt = file.read()
+    
+# call preprocess on change_LLM_prompt
+processed = preprocess(change_LLM_prompt, recursive, False)
+console.print("[bold white]Processed change_LLM Prompt:[/bold white]")
+console.print(processed)
+
+# write the processed prompt to a file
+with open('prompts/xml/change_example_full.prompt', 'w') as file:
+    file.write(processed)
+    
+# load prompts/change_LLM.prompt
+with open('prompts/example_generator_LLM.prompt', 'r') as file:
+    example_generator_LLM_prompt = file.read()
+    
+# call preprocess on change_LLM_prompt
+processed = preprocess(example_generator_LLM_prompt, recursive, False)
+console.print("[bold white]Processed change_LLM Prompt:[/bold white]")
+console.print(processed)
+```
+
+% 'preprocess --xml' sub-command: To preprocess a prompt from a prompt file and output the result in XML format, use xml_tagger. Here is an example of how to preprocess the prompt from a file and output the result in XML format: ```import os
+from xml_tagger import xml_tagger  # Import the xml_tagger function
+
+def main() -> None:
+    """
+    Main function to demonstrate the usage of the xml_tagger function.
+    It sets up the input parameters, calls the function, and prints the results.
+    """
+    # Define the raw prompt, strength, and temperature
+    raw_prompt: str = "Write a story about a magical forest"
+    strength: float = .9  # Strength parameter for LLM selection
+    temperature: float = 0  # Temperature parameter for LLM selection
+
+    # load prompts/change_LLM.prompt into raw_prompt
+    prompt_path = os.path.join(os.getenv("PDD_PATH"), "prompts", "change_LLM.prompt")
+    with open(prompt_path, "r") as file:
+        raw_prompt = file.read()
+
+    try:
+        # Call the xml_tagger function
+        xml_tagged, total_cost = xml_tagger(raw_prompt, strength, temperature)
+
+        # Print the results
+        print("XML Tagged Output:")
+        print(xml_tagged)
+        print(f"Total Processing Cost: ${{total_cost:.6f}}")
+    except Exception as e:
+        print(f"An error occurred: {{e}}")
+
+if __name__ == "__main__":
+    main()```
+
+% 'fix' command: To fix errors in code and unit test based on error messages use fix_errors_from_unit_tests. Be sure to load the required files for this function and only save the output files if there is an update. Note that the 'error_file' argument does not need to exist beforehand. Here is an example how to fix errors in code and unit test based on error messages: ```from fix_errors_from_unit_tests import fix_errors_from_unit_tests
+
+# Define the inputs for the function
+unit_test: str = """
+def test_addition():
+    assert add(1, 1) == 3  # Intentional error
+"""
+
+code: str = """
+def add(a, b):
+    return a + b
+"""
+
+error: str = "AssertionError: assert 2 == 3"
+error_file: str = "error_log.txt"
+strength: float = 0.7  # Strength parameter for LLM selection
+temperature: float = 0 # Temperature parameter for LLM selection
+
+try:
+    # Call the function to fix errors in the unit tests
+    update_unit_test, update_code, fixed_unit_test, fixed_code, total_cost = fix_errors_from_unit_tests(
+        unit_test=unit_test,
+        code=code,
+        error=error,
+        error_file=error_file,
+        strength=strength,
+        temperature=temperature
+    )
+
+    # Print the results
+    print(f"Update Unit Test: {{update_unit_test}}")
+    print(f"Update Code: {{update_code}}")
+    print(f"Fixed Unit Test:\n{{fixed_unit_test}}")
+    print(f"Fixed Code:\n{{fixed_code}}")
+    print(f"Total Cost: ${{total_cost:.6f}}")
+except Exception as e:
+    print(f"An error occurred: {{e}}")```
+
+% 'fix --loop' sub-command: To loop on the above fix errors in code and unit tests use fix_error_loop. Here is an example how to loop on the above fix errors in code and unit tests: ```from fix_error_loop import fix_error_loop
+
+base = 'change'
+# Define the parameters for the function
+unit_test_file: str = f'staging/tests/test_{{base}}.py'  # Path to your unit test file
+code_file: str = f'staging/pdd/{{base}}.py'          # Path to your code file
+verification_program: str = f'staging/context/{{base}}_example.py'          # Path to your verification program
+strength: float = 1                            # Strength parameter for error fixing
+temperature: float = 0                         # Temperature parameter for error fixing
+max_attempts: int = 5                           # Maximum number of attempts to fix errors
+budget: float = 100.0                            # Maximum budget for fixing errors
+error_log_file = "error_log.txt"  # Path to the error log file
+
+# Call the function
+success: bool
+final_unit_test_content: str
+final_code_content: str
+attempts: int
+total_cost: float
+
+try:
+    success, final_unit_test_content, final_code_content, attempts, total_cost = fix_error_loop(
+        unit_test_file,
+        code_file,
+        verification_program,
+        strength,
+        temperature,
+        max_attempts,
+        budget,
+        error_log_file=error_log_file
+    )
+
+    # Output the results
+    if success:
+        print("All tests passed successfully!")
+    else:
+        print("Some tests still failed after attempts.")
+    print(f"Final Unit Test Content:\n{{final_unit_test_content}}")
+    print(f"Final Code Content:\n{{final_code_content}}")
+    print(f"Number of Attempts: {{attempts}}")
+    print(f"Total Cost: ${{total_cost:.2f}}")
+
+except Exception as e:
+    print(f"An error occurred: {{e}}")```
+
+% 'split' command: To split a prompt file into multiple prompt files, use the 'split' function. Here is an example of how to split a prompt file into multiple prompt files: ```from rich.console import Console
+from rich.markdown import Markdown
+from split import split  
+
+console = Console()
+
+# Example usage of the split function
+def main() -> None:
+    """
+    Main function to demonstrate the usage of the split function.
+    """
+    # Define input parameters
+    input_prompt: str = "Explain the concept of recursion in programming."
+    input_code: str = """
+    def hello_world():
+        print("Hello, World!")
+    
+    def factorial(n):
+        hello_world()
+        return 1 if n == 0 else n * factorial(n - 1)"""
+    example_code: str = "hello_world()"
+    strength: float = 0.7  # Strength parameter for the LLM
+    temperature: float = 0  # Temperature parameter for the LLM
+
+    try:
+        # Call the split function
+        sub_prompt, modified_prompt, total_cost = split(
+            input_prompt=input_prompt,
+            input_code=input_code,
+            example_code=example_code,
+            strength=strength,
+            temperature=temperature
+        )
+
+        # Output the results
+        if sub_prompt and modified_prompt:
+            console.print(Markdown(f"**Sub Prompt:**\n{{sub_prompt}}"))
+            console.print(Markdown(f"**Modified Prompt:**\n{{modified_prompt}}"))
+            console.print(f"Total Cost: ${{total_cost:.6f}}")
+        else:
+            console.print("[bold red]Failed to generate prompts.[/bold red]")
+    except Exception as e:
+        console.print(f"[bold red]An error occurred: {{e}}[/bold red]")
+
+
+if __name__ == "__main__":
+    main()```
+
+% 'change' command: To change the prompt file, use the 'change' function. Keep in mind that the change prompt is also an input file that needs to be loaded by construct_paths. Here is an example of how to change the prompt file: ```from change import change 
+
+def main() -> None:
+    """
+    Main function to demonstrate the usage of the `change` function.
+    """
+    # Define input parameters
+    input_prompt: str = "Please add two numbers and return the sum."
+    input_code: str = "def add(a, b): return a + b"
+    change_prompt: str = "Multiple the numbers instead"
+    strength: float = .5  # Adjust the strength of the model
+    temperature: float = 0  # Adjust the randomness of the output
+
+    try:
+        # Call the change function
+        modified_prompt, total_cost, model_name = change(
+            input_prompt, input_code, change_prompt, strength, temperature
+        )
+
+        # Print the results
+        print(f"Modified Prompt: {{modified_prompt}}")
+        print(f"Total Cost: ${{total_cost:.6f}}")
+        print(f"Model Name: {{model_name}}")
+    except Exception as e:
+        print(f"An error occurred: {{e}}")
+
+if __name__ == "__main__":
+    main()```
+
+% 'update' command: To update the prompt file, use the 'update_prompt' function. Here is an example of how to update the prompt file: ```import os
+from update_prompt import update_prompt
+
+def main() -> None:
+    """
+    Main function to demonstrate the usage of the update_prompt function.
+    """
+    # Define the input parameters
+    input_prompt = "Please add two numbers and return the sum."
+    input_code = "def add(a, b): return a + b"
+    modified_code = "def mul_numbers(x, y): return x * y"
+    strength = 0.9  # Example strength parameter for the LLM
+    temperature = 0  # Example temperature parameter for the LLM
+
+    try:
+        # Call the update_prompt function
+        modified_prompt, total_cost, model_name = update_prompt(
+            input_prompt=input_prompt,
+            input_code=input_code,
+            modified_code=modified_code,
+            strength=strength,
+            temperature=temperature
+        )
+
+        # Check the results
+        if modified_prompt is not None:
+            print(f"Modified Prompt: {{modified_prompt}}")
+            print(f"Total Cost: ${{total_cost:.6f}}")
+            print(f"Model Name: {{model_name}}")
+        else:
+            print("Failed to update the prompt.")
+    except Exception as e:
+        print(f"An error occurred: {{e}}")
+
+if __name__ == "__main__":
+    main()```
+
+% 'install_completion' command: Enhance the shell completion installation process by determining the correct paths for different shells and ensuring the source command is added to the shell's RC file only if it's not already present. Use a helper function to manage these paths.

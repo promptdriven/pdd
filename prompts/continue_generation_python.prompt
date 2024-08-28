@@ -1,0 +1,35 @@
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "continue_generation", that will complete the generation of a prompt using a language model. The function should be part of a Python package, using relative imports for internal modules. All output to the console will be pretty printed using the Python Rich library.
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        - 'formatted_input_prompt': A string containing the input prompt with all variables substituted in.
+        - 'llm_output': A string containing the current output from the LLM that needs to be checked for completeness.
+        - 'strength': A float value representing the strength parameter for the LLM model, used to influence the model's behavior.
+        - 'temperature': A float value representing the temperature parameter for the LLM model, used to control the randomness of the model's output.
+Outputs:
+        - 'final_llm_output': A string containing the complete output from the LLM after all necessary continuations.
+        - 'total_cost': A float value representing the total cost of running the function.
+        - 'model_name': A string containing the name of the selected LLM model.
+        
+% Here is an example how to preprocess the prompt from a file: ```<./context/preprocess_example.py>```
+
+% Example usage of the Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
+
+% Example of selecting a Langchain LLM and counting tokens using llm_selector: ```<./context/llm_selector_example.py>```
+
+% Example usage of the unfinished_prompt function: ```<./context/unfinished_prompt_example.py>```
+
+% Steps to be followed by the function:
+    1. Load the '$PDD_PATH/prompts/continue_generation_LLM.prompt' file.
+    2. Preprocess the continue_generation prompt using the preprocess function from the preprocess module.
+    3. Create a Langchain LCEL template from the processed continue_generation prompt to return a string output.
+    4. Use the llm_selector function for the LLM model and token counting.
+    5. Run the input through the model using Langchain LCEL:
+        - a. Pass the following string parameters to the prompt during invocation: 'FORMATTED_INPUT_PROMPT', 'LLM_OUTPUT'.
+        - b. Calculate the input and output token count using token_counter from llm_selector and pretty print the output of 5a, including the token count and estimated cost. The cost from llm_selector is in dollars per million tokens.
+    6. Detect if the generation is incomplete using the unfinished_prompt function.
+    7. If incomplete, loop using the continue_generation prompt to append prior results to llm_output until complete.
+    8. Pretty print the final_llm_output using Rich Markdown function. Include token counts and costs.
+    9. Return the 'final_llm_output' string, the total_cost of all invokes and model_name.
+
+% Ensure the function handles edge cases, such as missing inputs or model errors, and provide clear error messages.
