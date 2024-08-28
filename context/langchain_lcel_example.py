@@ -28,7 +28,7 @@ set_llm_cache(SQLiteCache(database_path=".langchain.db"))
 # Create the LCEL template. Make note of the variable {topic} which will be filled in later.
 prompt_template = PromptTemplate.from_template("Tell me a joke about {topic}")
 
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0) 
+llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0)
 # Combine with a model and parser to output a string
 chain = prompt_template |llm| StrOutputParser()
 
@@ -43,7 +43,6 @@ class Joke(BaseModel):
     punchline: str = Field(description="answer to resolve the joke")
 
 
-llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0)
 # Set up a parser
 parser = JsonOutputParser(pydantic_object=Joke)
 
@@ -54,12 +53,14 @@ prompt = PromptTemplate(
     partial_variables={"format_instructions": parser.get_format_instructions()},
 )
 
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, response_format={"type": "json_object"}) 
+
 # Chain the components
 chain = prompt | llm | parser
 
 # Invoke the chain with a query
 result = chain.invoke({"query": "Tell me a joke."})
-print(result)
+print("4o mini JSON: ",result)
 
 
 # Get DEEKSEEK_API_KEY environmental variable
@@ -140,3 +141,17 @@ llm = Together(
 )
 chain = prompt | llm | StrOutputParser()
 print(chain.invoke({"text": "Explain the importance of together.ai."}))
+
+
+from langchain.prompts import PromptTemplate
+
+# Define a prompt template with placeholders for variables
+prompt_template = PromptTemplate.from_template("Tell me a {adjective} joke about {content}.")
+
+# Format the prompt with the variables
+formatted_prompt = prompt_template.format(adjective="funny", content="data scientists")
+
+# Print the formatted prompt
+print(formatted_prompt)
+
+
