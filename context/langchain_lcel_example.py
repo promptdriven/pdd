@@ -4,24 +4,27 @@ from langchain_community.cache import SQLiteCache
 from langchain.globals import set_llm_cache
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.pydantic_v1 import BaseModel, Field
-from langchain.output_parsers import RetryOutputParser
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough, ConfigurableField
 
 from langchain_fireworks import Fireworks 
 from langchain_anthropic import ChatAnthropic
-from langchain_openai import ChatOpenAI
-from langchain_openai import OpenAI
+from langchain_openai import ChatOpenAI # Chatbot and conversational tasks
+from langchain_openai import OpenAI # General language tasks
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_groq import ChatGroq
 from langchain_together import Together
+
+from langchain.callbacks.base import BaseCallbackHandler
+from langchain.schema import LLMResult
+
 
 # Define a base output parser (e.g., PydanticOutputParser)
 from pydantic import BaseModel, Field
 
 
-# Setup cache to save money and increase speeds
+# Always setup cache to save money and increase speeds
 set_llm_cache(SQLiteCache(database_path=".langchain.db"))
 
 
@@ -138,6 +141,7 @@ print(chain.invoke({"text": "Explain the importance of low latency LLMs."}))
 
 llm = Together(
     model="meta-llama/Llama-3-70b-chat-hf",
+    max_tokens=500,
 )
 chain = prompt | llm | StrOutputParser()
 print(chain.invoke({"text": "Explain the importance of together.ai."}))
@@ -155,3 +159,29 @@ formatted_prompt = prompt_template.format(adjective="funny", content="data scien
 print(formatted_prompt)
 
 
+
+class CompletionStatusHandler(BaseCallbackHandler):
+    def __init__(self):
+        self.is_complete = False
+        self.finish_reason = None
+
+    def on_llm_end(self, response: LLMResult, **kwargs) -> None:
+        self.is_complete = True
+        if response.generations:
+            self.finish_reason = response.generations[0][0].generation_info.get('finish_reason')
+
+# Set up the LLM with the custom handler
+handler = CompletionStatusHandler()
+llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0.9, callbacks=[handler])
+
+prompt = PromptTemplate.from_template("What is a good name for a company that makes {product}?")
+
+chain = prompt | llm
+
+# Run the chain
+response = chain.invoke({"product":"colorful socks"})
+
+# Check completion status
+print(f"Is complete: {handler.is_complete}")
+print(f"Finish reason: {handler.finish_reason}")
+print(f"Response: {response}")
