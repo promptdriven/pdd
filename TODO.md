@@ -25,6 +25,7 @@
 - [ ] use context caching during fixing errors
 - [ ] debugger that matches prompt lines to code lines
 - [ ] auto make new unit tests based on failures
+- [ ] auto update the utility
 
 ## Bugs
 
