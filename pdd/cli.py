@@ -21,6 +21,12 @@ from .update_prompt import update_prompt
 from langchain.globals import set_debug
 import subprocess
 
+# Setup cache to save money and increase speeds
+from langchain_community.cache import SQLiteCache
+set_llm_cache(SQLiteCache(database_path=".langchain.db"))
+from langchain.globals import set_llm_cache
+
+
 set_debug(False)
 console = Console()
 
