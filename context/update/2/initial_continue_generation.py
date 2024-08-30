@@ -40,7 +40,7 @@ def continue_generation(formatted_input_prompt: str, llm_output: str, strength: 
 
     # Step 4: Use llm_selector for models
     llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
-    llm_trim, token_counter_trim, input_cost_trim, output_cost_trim, _ = llm_selector(0.5, 0)
+    llm_trim, _, _, _, _ = llm_selector(0.5, 0)
 
     continue_generation_chain = continue_generation_template | llm | StrOutputParser()
     trim_results_start_chain = trim_results_start_template | llm_trim | JsonOutputParser(pydantic_object=TrimResultsOutput)
@@ -52,9 +52,9 @@ def continue_generation(formatted_input_prompt: str, llm_output: str, strength: 
     trim_start_result = trim_results_start_chain.invoke({"LLM_OUTPUT": llm_output})
     code_block = trim_start_result.get('code_block', '')
 
-    input_tokens = token_counter_trim(llm_output)
-    output_tokens = token_counter_trim(code_block)
-    trim_start_cost = (input_tokens * input_cost_trim + output_tokens * output_cost_trim) / 1_000_000
+    input_tokens = token_counter(llm_output)
+    output_tokens = token_counter(code_block)
+    trim_start_cost = (input_tokens * input_cost + output_tokens * output_cost) / 1_000_000
     total_cost += trim_start_cost
     console.print(f"Trim start cost: ${trim_start_cost:.6f}")
 
@@ -66,7 +66,7 @@ def continue_generation(formatted_input_prompt: str, llm_output: str, strength: 
             "FORMATTED_INPUT_PROMPT": formatted_input_prompt,
             "LLM_OUTPUT": code_block
         })
-        console.print(Markdown(f"```python\n{continue_result}\n```"))
+
         input_tokens = token_counter(formatted_input_prompt + code_block)
         output_tokens = token_counter(continue_result)
         continue_cost = (input_tokens * input_cost + output_tokens * output_cost) / 1_000_000
@@ -83,21 +83,21 @@ def continue_generation(formatted_input_prompt: str, llm_output: str, strength: 
             # Step 7b: Trim results
             trim_result = trim_results_chain.invoke({
                 "CONTINUED_GENERATION": continue_result,
-                "GENERATED_RESULTS": code_block[-200:]
+                "GENERATED_RESULTS": code_block
             })
             trimmed_continued_generation = trim_result.get('trimmed_continued_generation', '')
             code_block += trimmed_continued_generation
 
-            input_tokens = token_counter_trim(continue_result + code_block)
-            output_tokens = token_counter_trim(trimmed_continued_generation)
-            trim_cost = (input_tokens * input_cost_trim + output_tokens * output_cost_trim) / 1_000_000
+            input_tokens = token_counter(continue_result + code_block)
+            output_tokens = token_counter(trimmed_continued_generation)
+            trim_cost = (input_tokens * input_cost + output_tokens * output_cost) / 1_000_000
             total_cost += trim_cost
             console.print(f"Trim results cost: ${trim_cost:.6f}")
 
             break
         else:
             # Step 7a: Continue generation
-            code_block += continue_result
+            code_block = continue_result
             console.print(f"Generation incomplete. Continuing... (Loop count: {loop_count})")
 
     # Step 8: Pretty print the final output

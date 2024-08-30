@@ -28,7 +28,7 @@ def main() -> None:
         )
 
         # Output the results
-        print(f"Final LLM Output: {final_llm_output}")
+        # print(f"Final LLM Output: {final_llm_output}")
         print(f"Total Cost: ${total_cost:.6f}")
         print(f"Model Name: {model_name}")
         # write final_llm_output to context/final_llm_output.txt
