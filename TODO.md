@@ -10,12 +10,10 @@
 - [ ] auto split modules into another sub module
 - [ ] auto check inconsistencies between modules
 - [ ] implement changes across modules
-- [ ] auto run diff to show difference in prompt modifications
 - [ ] routlellm
-- [ ] larger prompt to smaller prompts split
 - [ ] online database of examples to reference
 - [ ] auto record which model works for each prompt
-- [ ] fix the prompt based on diffs to the code file
+- [ ] benchmark fix the prompt based on diffs to the code file
 - [ ] Use perplexica to automatically find context
 - [ ] fix error messages when example runs
 - [ ] infinite code generation
@@ -26,6 +24,8 @@
 - [ ] debugger that matches prompt lines to code lines
 - [ ] auto make new unit tests based on failures
 - [ ] auto update the utility
+- [ ] github login 
+- [ ] Run on server based keys
 
 ## Bugs
 
