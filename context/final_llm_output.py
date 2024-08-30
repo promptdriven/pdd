@@ -416,4 +416,45 @@ def get_shell_rc_file() -> Tuple[str, str]:
     Determine the correct RC file and shell for the user's environment.
     
     Returns:
-    Tuple[str,
+    Tuple[str,A tuple containing the path to the RC file and the shell name.
+    """
+    shell = os.environ.get('SHELL', '')
+    home = os.path.expanduser('~')
+
+    if 'zsh' in shell:
+        return os.path.join(home, '.zshrc'), 'zsh'
+    elif 'bash' in shell:
+        return os.path.join(home, '.bashrc'), 'bash'
+    elif 'fish' in shell:
+        return os.path.join(home, '.config', 'fish', 'config.fish'), 'fish'
+    else:
+        return os.path.join(home, '.profile'), 'sh'
+
+@cli.command()
+def install_completion():
+    """Install shell completion for PDD CLI."""
+    rc_file, shell = get_shell_rc_file()
+
+    if shell == 'fish':
+        completion_command = 'eval (pdd --completion-script-fish | source)'
+    else:
+        completion_command = 'eval "$(_PDD_COMPLETE=source_bash pdd)"'
+
+    try:
+        with open(rc_file, 'r+') as f:
+            content = f.read()
+            if completion_command not in content:
+                f.seek(0, 2)  # Move to the end of the file
+                f.write(f'\n# PDD CLI completion\n{completion_command}\n')
+                console.print(f"[green]PDD CLI completion installed in {rc_file}[/green]")
+            else:
+                console.print(f"[yellow]PDD CLI completion already installed in {rc_file}[/yellow]")
+
+        console.print(f"[bold]Please restart your shell or run 'source {rc_file}' to enable completion.[/bold]")
+    except IOError as e:
+        console.print(f"[bold red]Error writing to {rc_file}: {e}[/bold red]")
+        console.print(f"[yellow]Please add the following line to your shell's RC file manually:[/yellow]")
+        console.print(f"[cyan]{completion_command}[/cyan]")
+
+if __name__ == '__main__':
+    cli()
