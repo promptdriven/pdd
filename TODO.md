@@ -41,6 +41,7 @@
 - [ ] Analyze errors first before trying to fix
 - [ ] Check to see if unit test are aligned to the prompt
 - [ ] Use existing good prompt code example to generate code for the prompt
+- [ ] get the last github version of a file when trying to update instead of trying to find an old version
 
 ## Documentation
 
