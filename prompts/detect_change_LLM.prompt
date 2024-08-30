@@ -1,0 +1,15 @@
+
+take in a list of  prompts and detect whether it needs to be changed and if so what the change should be
+
+
+input example
+original prompt: ["Tell me a joke","tell me a story"]
+change: I want the joke to be serious
+
+output:
+[{"is_change_needed": True,
+ "how_prompt_should_be_changed" : Insert in "funny"}...{}]
+ #zero-shot prompt
+ processed_prompt="Based on original prompt and further change requirement, please indicate whether the change is needed or not. And also indicate how the prompt should be further changed based on the requirement ".
+ # one-jshot prompt
+ process_prompt="Tell me a joke which is 
