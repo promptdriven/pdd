@@ -7,6 +7,11 @@ from langchain_fireworks import Fireworks
 from langchain_groq import ChatGroq
 from langchain_together import Together
 from .llm_token_counter import llm_token_counter
+# Always setup cache to save money and increase speeds
+from langchain_community.cache import SQLiteCache
+from langchain.globals import set_llm_cache
+set_llm_cache(SQLiteCache(database_path=".langchain.db"))
+
 
 def llm_selector(strength: float, temperature: float):
     """
