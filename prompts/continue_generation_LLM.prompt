@@ -1,3 +1,2 @@
-<prompt>{FORMATTED_INPUT_PROMPT}</prompt>
-<llm_output>{LLM_OUTPUT}</llm_output>
-<instructions>% continue generation</instructions>
+{FORMATTED_INPUT_PROMPT}
+{LLM_OUTPUT}

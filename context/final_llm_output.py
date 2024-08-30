@@ -1,15 +1,10 @@
-Certainly! I'll continue with the implementation of the `pdd` command-line interface using Python Click and the Rich library for pretty printing. I'll also include the `install_completion` command as requested. Here's the implementation:
-
-```python
 import os
+from functools import update_wrapper
+from typing import List, Tuple, Dict, Any, Optional
+
 import click
 from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
-from rich.markdown import Markdown
-from typing import Dict, List, Tuple
 
-# Import the necessary functions from other modules
 from pdd.construct_paths import construct_paths
 from pdd.code_generator import code_generator
 from pdd.context_generator import context_generator
@@ -24,33 +19,15 @@ from pdd.update_prompt import update_prompt
 
 console = Console()
 
-def get_shell_rc_file() -> Tuple[str, str]:
+def processor(f):
+    """Helper decorator to rewrite a function so that it returns another
+    function from it.
     """
-    Determine the correct shell and its RC file path.
-    """
-    shell = os.environ.get('SHELL', '')
-    home = os.path.expanduser('~')
-
-    if 'zsh' in shell:
-        return 'zsh', os.path.join(home, '.zshrc')
-    elif 'bash' in shell:
-        return 'bash', os.path.join(home, '.bashrc')
-    elif 'fish' in shell:
-        return 'fish', os.path.join(home, '.config', 'fish', 'config.fish')
-    else:
-        return '', ''
-
-def add_completion_to_rc(shell: str, rc_file: str) -> None:
-    """
-    Add the completion source command to the shell's RC file if not already present.
-    """
-    source_command = f"eval \"$(_PDD_COMPLETE={shell}_source pdd)\""
-    
-    with open(rc_file, 'r+') as f:
-        content = f.read()
-        if source_command not in content:
-            f.seek(0, 2)  # Move to the end of the file
-            f.write(f"\n# PDD completion\n{source_command}\n")
+    def new_func(*args, **kwargs):
+        def processor(stream):
+            return f(stream, *args, **kwargs)
+        return processor
+    return update_wrapper(new_func, f)
 
 @click.group(chain=True)
 @click.option('--force', is_flag=True, help='Overwrite existing files without asking for confirmation.')
@@ -61,7 +38,7 @@ def add_completion_to_rc(shell: str, rc_file: str) -> None:
 @click.option('--output-cost', type=click.Path(), help='Enable cost tracking and output a CSV file with usage details.')
 @click.pass_context
 def cli(ctx, force, strength, temperature, verbose, quiet, output_cost):
-    """PDD (Prompt-Driven Development) Command Line Interface"""
+    """PDD (Prompt-Driven Development) CLI"""
     ctx.ensure_object(dict)
     ctx.obj['FORCE'] = force
     ctx.obj['STRENGTH'] = strength
@@ -70,19 +47,34 @@ def cli(ctx, force, strength, temperature, verbose, quiet, output_cost):
     ctx.obj['QUIET'] = quiet
     ctx.obj['OUTPUT_COST'] = output_cost
 
+@cli.result_callback()
+def process_commands(processors):
+    """This result callback is invoked with an iterable of all the chained
+    subcommands.  As in this example each subcommand returns a function
+    we can chain them together to feed one into the other, similar to how
+    a pipe on unix works.
+    """
+    # Start with an empty iterable.
+    stream = ()
+
+    # Pipe it through all stream processors.
+    for processor in processors:
+        stream = processor(stream)
+
+    # Evaluate the stream and throw away the items.
+    for _ in stream:
+        pass
+
 @cli.command()
 @click.argument('prompt_file', type=click.Path(exists=True))
 @click.option('--output', type=click.Path(), help='Specify where to save the generated code.')
 @click.pass_context
 def generate(ctx, prompt_file, output):
     """Create runnable code from a prompt file."""
+    input_file_paths = {"prompt_file": prompt_file}
+    command_options = {"output": output}
+    
     try:
-        input_file_paths = {'prompt_file': prompt_file}
-        command_options = {'output': output}
-        input_strings, output_file_paths, language = construct_paths(
-            inputCertainly! I'll continue with the implementation of the `generate` command and add the remaining commands:
-
-```python
         input_strings, output_file_paths, language = construct_paths(
             input_file_paths=input_file_paths,
             force=ctx.obj['FORCE'],
@@ -90,23 +82,23 @@ def generate(ctx, prompt_file, output):
             command="generate",
             command_options=command_options
         )
-
+        
         runnable_code, total_cost = code_generator(
             input_strings['prompt_file'],
             language,
             ctx.obj['STRENGTH'],
             ctx.obj['TEMPERATURE']
         )
-
+        
         with open(output_file_paths['output'], 'w') as f:
             f.write(runnable_code)
-
+        
         if not ctx.obj['QUIET']:
-            console.print(f"[green]Generated code saved to: {output_file_paths['output']}[/green]")
-            console.print(f"[blue]Total Cost: ${total_cost:.6f}[/blue]")
-
+            console.print(f"Code generated and saved to {output_file_paths['output']}")
+            console.print(f"Total Cost: ${total_cost:.6f}")
+    
     except Exception as e:
-        console.print(f"[red]An error occurred: {e}[/red]")
+        console.print(f"[bold red]An error occurred: {e}[/bold red]")
 
 @cli.command()
 @click.argument('code_file', type=click.Path(exists=True))
@@ -115,9 +107,10 @@ def generate(ctx, prompt_file, output):
 @click.pass_context
 def example(ctx, code_file, prompt_file, output):
     """Create an example file from an existing code file and the prompt that generated the code file."""
+    input_file_paths = {"code_file": code_file, "prompt_file": prompt_file}
+    command_options = {"output": output}
+    
     try:
-        input_file_paths = {'code_file': code_file, 'prompt_file': prompt_file}
-        command_options = {'output': output}
         input_strings, output_file_paths, language = construct_paths(
             input_file_paths=input_file_paths,
             force=ctx.obj['FORCE'],
@@ -125,7 +118,7 @@ def example(ctx, code_file, prompt_file, output):
             command="example",
             command_options=command_options
         )
-
+        
         example_code, total_cost = context_generator(
             input_strings['code_file'],
             input_strings['prompt_file'],
@@ -133,16 +126,16 @@ def example(ctx, code_file, prompt_file, output):
             ctx.obj['STRENGTH'],
             ctx.obj['TEMPERATURE']
         )
-
+        
         with open(output_file_paths['output'], 'w') as f:
             f.write(example_code)
-
+        
         if not ctx.obj['QUIET']:
-            console.print(f"[green]Generated example code saved to: {output_file_paths['output']}[/green]")
-            console.print(f"[blue]Total Cost: ${total_cost:.6f}[/blue]")
-
+            console.print(f"Example code generated and saved to {output_file_paths['output']}")
+            console.print(f"Total Cost: ${total_cost:.6f}")
+    
     except Exception as e:
-        console.print(f"[red]An error occurred: {e}[/red]")
+        console.print(f"[bold red]An error occurred: {e}[/bold red]")
 
 @cli.command()
 @click.argument('code_file', type=click.Path(exists=True))
@@ -152,9 +145,10 @@ def example(ctx, code_file, prompt_file, output):
 @click.pass_context
 def test(ctx, code_file, prompt_file, output, language):
     """Generate a unit test file for a given code file and its corresponding prompt file."""
+    input_file_paths = {"code_file": code_file, "prompt_file": prompt_file}
+    command_options = {"output": output, "language": language}
+    
     try:
-        input_file_paths = {'code_file': code_file, 'prompt_file': prompt_file}
-        command_options = {'output': output, 'language': language}
         input_strings, output_file_paths, detected_language = construct_paths(
             input_file_paths=input_file_paths,
             force=ctx.obj['FORCE'],
@@ -162,9 +156,9 @@ def test(ctx, code_file, prompt_file, output, language):
             command="test",
             command_options=command_options
         )
-
+        
         language = language or detected_language
-
+        
         unit_test_code, total_cost = generate_test(
             input_strings['prompt_file'],
             input_strings['code_file'],
@@ -172,19 +166,16 @@ def test(ctx, code_file, prompt_file, output, language):
             ctx.obj['TEMPERATURE'],
             language
         )
-
-        withCertainly! I'll continue with the implementation of the remaining commands:
-
-```python
+        
         with open(output_file_paths['output'], 'w') as f:
             f.write(unit_test_code)
-
+        
         if not ctx.obj['QUIET']:
-            console.print(f"[green]Generated unit test saved to: {output_file_paths['output']}[/green]")
-            console.print(f"[blue]Total Cost: ${total_cost:.6f}[/blue]")
-
+            console.print(f"Unit test generated and saved to {output_file_paths['output']}")
+            console.print(f"Total Cost: ${total_cost:.6f}")
+    
     except Exception as e:
-        console.print(f"[red]An error occurred: {e}[/red]")
+        console.print(f"[bold red]An error occurred: {e}[/bold red]")
 
 @cli.command()
 @click.argument('prompt_file', type=click.Path(exists=True))
@@ -193,9 +184,10 @@ def test(ctx, code_file, prompt_file, output, language):
 @click.pass_context
 def preprocess(ctx, prompt_file, output, xml):
     """Preprocess prompt files and save the results."""
+    input_file_paths = {"prompt_file": prompt_file}
+    command_options = {"output": output}
+    
     try:
-        input_file_paths = {'prompt_file': prompt_file}
-        command_options = {'output': output}
         input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
             force=ctx.obj['FORCE'],
@@ -203,7 +195,7 @@ def preprocess(ctx, prompt_file, output, xml):
             command="preprocess",
             command_options=command_options
         )
-
+        
         if xml:
             processed_prompt, total_cost = xml_tagger(
                 input_strings['prompt_file'],
@@ -216,18 +208,18 @@ def preprocess(ctx, prompt_file, output, xml):
                 recursive=False,
                 double_curly_brackets=True
             )
-            total_cost = 0  # No cost for basic preprocessing
-
+            total_cost = 0  # No cost for non-XML preprocessing
+        
         with open(output_file_paths['output'], 'w') as f:
             f.write(processed_prompt)
-
+        
         if not ctx.obj['QUIET']:
-            console.print(f"[green]Preprocessed prompt saved to: {output_file_paths['output']}[/green]")
+            console.print(f"Preprocessed prompt saved to {output_file_paths['output']}")
             if xml:
-                console.print(f"[blue]Total Cost: ${total_cost:.6f}[/blue]")
-
+                console.print(f"Total Cost: ${total_cost:.6f}")
+    
     except Exception as e:
-        console.print(f"[red]An error occurred: {e}[/red]")
+        console.print(f"[bold red]An error occurred: {e}[/bold red]")
 
 @cli.command()
 @click.argument('unit_test_file', type=click.Path(exists=True))
@@ -242,67 +234,62 @@ def preprocess(ctx, prompt_file, output, xml):
 @click.pass_context
 def fix(ctx, unit_test_file, code_file, error_file, output_test, output_code, loop, verification_program, max_attempts, budget):
     """Fix errors in code and unit tests based on error messages."""
+    input_file_paths = {"unit_test_file": unit_test_file, "code_file": code_file, "error_file": error_file}
+    command_options = {"output_test": output_test, "output_code": output_code}
+    
     try:
-        input_file_paths = {'unit_test_file': unit_test_file, 'code_file': code_file, 'error_file': error_file}
-        command_options = {'output_test': output_test, 'output_code': output_code}
         input_strings, output_file_paths, _ = construct_paths(
-            input_file_Certainly! I'll continue with the implementation of the `fix` command and add the remaining commands:
-
-```python
             input_file_paths=input_file_paths,
             force=ctx.obj['FORCE'],
             quiet=ctx.obj['QUIET'],
             command="fix",
             command_options=command_options
         )
-
+        
         if loop:
             success, final_unit_test_content, final_code_content, attempts, total_cost = fix_error_loop(
-                input_strings['unit_test_file'],
-                input_strings['code_file'],
+                unit_test_file,
+                code_file,
                 verification_program,
                 ctx.obj['STRENGTH'],
                 ctx.obj['TEMPERATURE'],
                 max_attempts,
                 budget,
-                error_log_file=input_strings['error_file']
+                error_log_file=error_file
             )
-
+            
             with open(output_file_paths['output_test'], 'w') as f:
                 f.write(final_unit_test_content)
             with open(output_file_paths['output_code'], 'w') as f:
                 f.write(final_code_content)
-
+            
             if not ctx.obj['QUIET']:
-                console.print(f"[green]{'Success' if success else 'Failed to fix all errors'}[/green]")
-                console.print(f"[blue]Number of attempts: {attempts}[/blue]")
-                console.print(f"[blue]Total Cost: ${total_cost:.6f}[/blue]")
+                console.print(f"{'All tests passed successfully!' if success else 'Some tests still failed after attempts.'}")
+                console.print(f"Number of Attempts: {attempts}")
+                console.print(f"Total Cost: ${total_cost:.2f}")
         else:
-            with open(input_strings['error_file'], 'r') as f:
-                error = f.read()
-
             update_unit_test, update_code, fixed_unit_test, fixed_code, total_cost = fix_errors_from_unit_tests(
                 input_strings['unit_test_file'],
                 input_strings['code_file'],
-                error,
                 input_strings['error_file'],
+                error_file,
                 ctx.obj['STRENGTH'],
                 ctx.obj['TEMPERATURE']
             )
-
+            
             if update_unit_test:
                 with open(output_file_paths['output_test'], 'w') as f:
                     f.write(fixed_unit_test)
             if update_code:
                 with open(output_file_paths['output_code'], 'w') as f:
                     f.write(fixed_code)
-
+            
             if not ctx.obj['QUIET']:
-                console.print(f"[green]Fixed files saved to: {output_file_paths['output_test']} and {output_file_paths['output_code']}[/green]")
-                console.print(f"[blue]Total Cost: ${total_cost:.6f}[/blue]")
-
+                console.print(f"Fixed files saved to {output_file_paths['output_test']} and {output_file_paths['output_code']}")
+                console.print(f"Total Cost: ${total_cost:.6f}")
+    
     except Exception as e:
-        console.print(f"[red]An error occurred: {e}[/red]")
+        console.print(f"[bold red]An error occurred: {e}[/bold red]")
 
 @cli.command()
 @click.argument('input_prompt', type=click.Path(exists=True))
@@ -313,9 +300,10 @@ def fix(ctx, unit_test_file, code_file, error_file, output_test, output_code, lo
 @click.pass_context
 def split(ctx, input_prompt, input_code, example_code, output_sub, output_modified):
     """Split large complex prompt files into smaller, more manageable prompt files."""
+    input_file_paths = {"input_prompt": input_prompt, "input_code": input_code, "example_code": example_code}
+    command_options = {"output_sub": output_sub, "output_modified": output_modified}
+    
     try:
-        input_file_paths = {'input_prompt': input_prompt, 'input_code': input_code, 'example_code': example_code}
-        command_options = {'output_sub': output_sub, 'output_modified': output_modified}
         input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
             force=ctx.obj['FORCE'],
@@ -323,30 +311,27 @@ def split(ctx, input_prompt, input_code, example_code, output_sub, output_modifi
             command="split",
             command_options=command_options
         )
-
+        
         sub_prompt, modified_prompt, total_cost = split(
             input_strings['input_prompt'],
             input_strings['input_code'],
-            Certainly! I'll continue with the implementation of the `split` command and add the remaining commands:
-
-```python
             input_strings['example_code'],
             ctx.obj['STRENGTH'],
             ctx.obj['TEMPERATURE']
         )
-
+        
         with open(output_file_paths['output_sub'], 'w') as f:
             f.write(sub_prompt)
         with open(output_file_paths['output_modified'], 'w') as f:
             f.write(modified_prompt)
-
+        
         if not ctx.obj['QUIET']:
-            console.print(f"[green]Sub-prompt saved to: {output_file_paths['output_sub']}[/green]")
-            console.print(f"[green]Modified prompt saved to: {output_file_paths['output_modified']}[/green]")
-            console.print(f"[blue]Total Cost: ${total_cost:.6f}[/blue]")
-
+            console.print(f"Sub-prompt saved to {output_file_paths['output_sub']}")
+            console.print(f"Modified prompt saved to {output_file_paths['output_modified']}")
+            console.print(f"Total Cost: ${total_cost:.6f}")
+    
     except Exception as e:
-        console.print(f"[red]An error occurred: {e}[/red]")
+        console.print(f"[bold red]An error occurred: {e}[/bold red]")
 
 @cli.command()
 @click.argument('input_prompt', type=click.Path(exists=True))
@@ -356,9 +341,10 @@ def split(ctx, input_prompt, input_code, example_code, output_sub, output_modifi
 @click.pass_context
 def change(ctx, input_prompt, input_code, change_prompt, output):
     """Modify an input prompt file based on a change prompt and the corresponding input code."""
+    input_file_paths = {"input_prompt": input_prompt, "input_code": input_code, "change_prompt": change_prompt}
+    command_options = {"output": output}
+    
     try:
-        input_file_paths = {'input_prompt': input_prompt, 'input_code': input_code, 'change_prompt': change_prompt}
-        command_options = {'output': output}
         input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
             force=ctx.obj['FORCE'],
@@ -366,7 +352,7 @@ def change(ctx, input_prompt, input_code, change_prompt, output):
             command="change",
             command_options=command_options
         )
-
+        
         modified_prompt, total_cost, model_name = change(
             input_strings['input_prompt'],
             input_strings['input_code'],
@@ -374,17 +360,17 @@ def change(ctx, input_prompt, input_code, change_prompt, output):
             ctx.obj['STRENGTH'],
             ctx.obj['TEMPERATURE']
         )
-
+        
         with open(output_file_paths['output'], 'w') as f:
             f.write(modified_prompt)
-
+        
         if not ctx.obj['QUIET']:
-            console.print(f"[green]Modified prompt saved to: {output_file_paths['output']}[/green]")
-            console.print(f"[blue]Total Cost: ${total_cost:.6f}[/blue]")
-            console.print(f"[blue]Model used: {model_name}[/blue]")
-
+            console.print(f"Modified prompt saved to {output_file_paths['output']}")
+            console.print(f"Total Cost: ${total_cost:.6f}")
+            console.print(f"Model Used: {model_name}")
+    
     except Exception as e:
-        console.print(f"[red]An error occurred: {e}[/red]")
+        console.print(f"[bold red]An error occurred: {e}[/bold red]")
 
 @cli.command()
 @click.argument('input_prompt', type=click.Path(exists=True))
@@ -394,9 +380,10 @@ def change(ctx, input_prompt, input_code, change_prompt, output):
 @click.pass_context
 def update(ctx, input_prompt, input_code, modified_code, output):
     """Update the original prompt file based on the original code and the modified code."""
+    input_file_paths = {"input_prompt": input_prompt, "input_code": input_code, "modified_code": modified_code}
+    command_options = {"output": output}
+    
     try:
-        input_file_paths = {'input_prompt': input_prompt, 'input_code': input_code, 'modified_code': modified_code}
-        command_options = {'output': output}
         input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
             force=ctx.obj['FORCE'],
@@ -404,11 +391,7 @@ def update(ctx, input_prompt, input_code, modified_code, output):
             command="update",
             command_options=command_options
         )
-
-        modified_prompt, total_cost, model_name = update_prompt(
-            input_strings['Certainly! I'll continue with the implementation of the `update` command and add the `install_completion` command:
-
-```python
+        
         modified_prompt, total_cost, model_name = update_prompt(
             input_strings['input_prompt'],
             input_strings['input_code'],
@@ -416,63 +399,21 @@ def update(ctx, input_prompt, input_code, modified_code, output):
             ctx.obj['STRENGTH'],
             ctx.obj['TEMPERATURE']
         )
-
+        
         with open(output_file_paths['output'], 'w') as f:
             f.write(modified_prompt)
-
+        
         if not ctx.obj['QUIET']:
-            console.print(f"[green]Updated prompt saved to: {output_file_paths['output']}[/green]")
-            console.print(f"[blue]Total Cost: ${total_cost:.6f}[/blue]")
-            console.print(f"[blue]Model used: {model_name}[/blue]")
-
-    except Exception as e:
-        console.print(f"[red]An error occurred: {e}[/red]")
-
-@cli.command()
-def install_completion():
-    """Install shell completion for PDD."""
-    shell, rc_file = get_shell_rc_file()
+            console.print(f"Updated prompt saved to {output_file_paths['output']}")
+            console.print(f"Total Cost: ${total_cost:.6f}")
+            console.print(f"Model Used: {model_name}")
     
-    if not shell or not rc_file:
-        console.print("[red]Unable to determine your shell or its configuration file.[/red]")
-        return
-
-    try:
-        add_completion_to_rc(shell, rc_file)
-        console.print(f"[green]PDD completion has been added to your {shell} configuration file ({rc_file}).[/green]")
-        console.print("[yellow]Please restart your shell or run 'source {rc_file}' to enable completion.[/yellow]")
     except Exception as e:
-        console.print(f"[red]An error occurred while installing completion: {e}[/red]")
+        console.print(f"[bold red]An error occurred: {e}[/bold red]")
 
-@cli.result_callback()
-def process_commands(processors):
-    """This result callback is invoked with an iterable of all the chained
-    subcommands. It handles the execution of multiple commands in a chain.
+def get_shell_rc_file() -> Tuple[str, str]:
     """
-    for processor in processors:
-        processor()
-
-if __name__ == '__main__':
-    cli()
-```
-
-This implementation includes all the requested commands for the PDD (Prompt-Driven Development) Command Line Interface. Here's a summary of what has been implemented:
-
-1. The main `cli` group with global options.
-2. The `generate` command to create runnable code from a prompt file.
-3. The `example` command to create an example file from existing code and its prompt.
-4. The `test` command to generate a unit test file.
-5. The `preprocess` command to preprocess prompt files.
-6. The `fix` command to fix errors in code and unit tests.
-7. The `split` command to split large prompt files into smaller ones.
-8. The `change` command to modify an input prompt file based on a change prompt.
-9. The `update` command to update the original prompt file based on modified code.
-10. The `install_completion` command to install shell completion for PDD.
-
-Each command uses the appropriate functions from the imported modules to perform its task. The implementation includes error handling, and it uses the Rich library to provide colorful and formatted output.
-
-The `install_completion` command uses the `get_shell_rc_file` and `add_completion_to_rc` helper functions to determine the user's shell and add the completion command to the appropriate configuration file.
-
-The `process_commands` function at the end allows for chaining multiple commands together, as requested in the original prompt.
-
-To use this CLI, you would save this code in a file named `pdd.py` in the `pdd` directory, and then you could run it using `python -m pdd.pdd [COMMAND] [OPTIONS]`.
+    Determine the correct RC file and shell for the user's environment.
+    
+    Returns:
+    Tuple[str,

@@ -1,0 +1,337 @@
+Certainly! I'll create a Python command-line program called "pdd" using the Click library, incorporating all the specified commands and functionality. I'll use the rich library for pretty printing and ensure proper organization of the code. Let's start with the main `pdd.py` file:
+
+
+
+```python
+import os
+from functools import update_wrapper
+from typing import List, Tuple, Dict, Any, Optional
+
+import click
+from rich.console import Console
+
+from pdd.construct_paths import construct_paths
+from pdd.code_generator import code_generator
+from pdd.context_generator import context_generator
+from pdd.generate_test import generate_test
+from pdd.preprocess import preprocess
+from pdd.xml_tagger import xml_tagger
+from pdd.fix_errors_from_unit_tests import fix_errors_from_unit_tests
+from pdd.fix_error_loop import fix_error_loop
+from pdd.split import split
+from pdd.change import change
+from pdd.update_prompt import update_prompt
+
+console = Console()
+
+def processor(f):
+    """Helper decorator to rewrite a function so that it returns another
+    function from it.
+    """
+    def new_func(*args, **kwargs):
+        def processor(stream):
+            return f(stream, *args, **kwargs)
+        return processor
+    return update_wrapper(new_func, f)
+
+@click.group(chain=True)
+@click.option('--force', is_flag=True, help='Overwrite existing files without asking for confirmation.')
+@click.option('--strength', type=float, default=0.5, help='Set the strength of the AI model (0.0 to 1.0).')
+@click.option('--temperature', type=float, default=0.0, help='Set the temperature of the AI model.')
+@click.option('--verbose', is_flag=True, help='Increase output verbosity for more detailed information.')
+@click.option('--quiet', is_flag=True, help='Decrease output verbosity for minimal information.')
+@click.option('--output-cost', type=click.Path(), help='Enable cost tracking and output a CSV file with usage details.')
+@click.pass_context
+def cli(ctx, force, strength, temperature, verbose, quiet, output_cost):
+    """PDD (Prompt-Driven Development) CLI"""
+    ctx.ensure_object(dict)
+    ctx.obj['FORCE'] = force
+    ctx.obj['STRENGTH'] = strength
+    ctx.obj['TEMPERATURE'] = temperature
+    ctx.obj['VERBOSE'] = verbose
+    ctx.obj['QUIET'] = quiet
+    ctx.obj['OUTPUT_COST'] = output_cost
+
+@cli.result_callback()
+def process_commands(processors):
+    """This result callback is invoked with an iterable of all the chained
+    subcommands.  As in this example each subcommand returns a function
+    we can chain them together to feed one into the other, similar to how
+    a pipe on unix works.
+    """
+    # Start with an empty iterable.
+    stream = ()
+
+    # Pipe it through all stream processors.
+    for processor in processors:
+        stream = processor(stream)
+
+    # Evaluate the stream and throw away the items.
+    for _ in stream:
+        pass
+
+@cli.command()
+@click.argument('prompt_file', type=click.Path(exists=True))
+@click.option('--output', type=click.Path(), help='Specify where to save the generated code.')
+@click.pass_context
+def generate(ctx, prompt_file, output):
+    """Create runnable code from a prompt file."""
+    input_file_paths = {"prompt_file": prompt_file}
+    command_options = {"output": output}
+    
+    try:
+        input_strings, output_file_paths, language = construct_paths(
+            input_file_paths=input_file_paths,
+            force=ctx.obj['FORCE'],
+            quiet=ctx.obj['QUIET'],
+            command="generate",
+            command_options=command_options
+        )
+        
+        runnable_code, total_cost = code_generator(
+            input_strings['prompt_file'],
+            language,
+            ctx.obj['STRENGTH'],
+            ctx.obj['TEMPERATURE']
+        )
+        
+        with open(output_file_paths['output'], 'w') as f:
+            f.write(runnable_code)
+        
+        if not ctx.obj['QUIET']:
+            console.print(f"Code generated and saved to {output_file_paths['output']}")
+            console.print(f"Total Cost: ${total_cost:.6f}")
+    
+    except Exception as e:
+        console.print(f"[bold red]An error occurred: {e}[/bold red]")
+
+@cli.command()
+@click.argument('code_file', type=click.Path(exists=True))
+@click.argument('prompt_file', type=click.Path(exists=True))
+@click.option('--output', type=click.Path(), help='Specify where to save the generated example code.')
+@click.pass_context
+def example(ctx, code_file, prompt_file, output):
+    """Create an example file from an existing code file and the prompt that generated the code file."""
+    input_file_paths = {"code_file": code_file, "prompt_file": prompt_file}
+    command_options = {"output": output}
+    
+    try:
+        input_strings, output_file_paths, language = construct_paths(
+            input_file_paths=input_file_paths,
+            force=ctx.obj['FORCE'],
+            quiet=ctx.obj['QUIET'],
+            command="example",
+            command_options=command_options
+        )
+        
+        example_code, total_cost = context_generator(
+            input_strings['code_file'],
+            input_strings['prompt_file'],
+            language,
+            ctx.obj['STRENGTH'],
+            ctx.obj['TEMPERATURE']
+        )
+        
+        with open(output_file_paths['output'], 'w') as f:
+            f.write(example_code)
+        
+        if not ctx.obj['QUIET']:
+            console.print(f"Example code generated and saved to {output_file_paths['output']}")
+            console.print(f"Total Cost: ${total_cost:.6f}")
+    
+    except Exception as e:
+        console.print(f"[bold red]An error occurred: {e}[/bold red]")
+
+@cli.command()
+@click.argument('code_file', type=click.Path(exists=True))
+@click.argument('prompt_file', type=click.Path(exists=True))
+@click.option('--output', type=click.Path(), help='Specify where to save the generated test file.')
+@click.option('--language', help='Specify the programming language.')
+@click.pass_context
+def test(ctx, code_file, prompt_file, output, language):
+    """Generate a unit test file for a given code file and its corresponding prompt file."""
+    input_file_paths = {"code_file": code_file, "prompt_file": prompt_file}
+    command_options = {"output": output, "language": language}
+    
+    try:
+        input_strings, output_file_paths, detected_language = construct_paths(
+            input_file_paths=input_file_paths,
+            force=ctx.obj['FORCE'],
+            quiet=ctx.obj['QUIET'],
+            command="test",
+            command_options=command_options
+        )
+        
+        language = language or detected_language
+        
+        unit_test_code, total_cost = generate_test(
+            input_strings['prompt_file'],
+            input_strings['code_file'],
+            ctx.obj['STRENGTH'],
+            ctx.obj['TEMPERATURE'],
+            language
+        )
+        
+        with open(output_file_paths['output'], 'w') as f:
+            f.write(unit_test_code)
+        
+        if not ctx.obj['QUIET']:
+            console.print(f"Unit test generated and saved to {output_file_paths['output']}")
+            console.print(f"Total Cost: ${total_cost:.6f}")
+    
+    except Exception as e:
+        console.print(f"[bold red]An error occurred: {e}[/bold red]")
+
+@cli.command()
+@click.argument('prompt_file', type=click.Path(exists=True))
+@click.option('--output', type=click.Path(), help='Specify where to save the preprocessed prompt file.')
+@click.option('--xml', is_flag=True, help='Automatically insert XML delimiters for long and complex prompt files.')
+@click.pass_context
+def preprocess(ctx, prompt_file, output, xml):
+    """Preprocess prompt files and save the results."""
+    input_file_paths = {"prompt_file": prompt_file}
+    command_options = {"output": output}
+    
+    try:
+        input_strings, output_file_paths, _ = construct_paths(
+            input_file_paths=input_file_paths,
+            force=ctx.obj['FORCE'],
+            quiet=ctx.obj['QUIET'],
+            command="preprocess",
+            command_options=command_options
+        )
+        
+        if xml:
+            processed_prompt, total_cost = xml_tagger(
+                input_strings['prompt_file'],
+                ctx.obj['STRENGTH'],
+                ctx.obj['TEMPERATURE']
+            )
+        else:
+            processed_prompt = preprocess(
+                input_strings['prompt_file'],
+                recursive=False,
+                double_curly_brackets=True
+            )
+            total_cost = 0  # No cost for non-XML preprocessing
+        
+        with open(output_file_paths['output'], 'w') as f:
+            f.write(processed_prompt)
+        
+        if not ctx.obj['QUIET']:
+            console.print(f"Preprocessed prompt saved to {output_file_paths['output']}")
+            if xml:
+                console.print(f"Total Cost: ${total_cost:.6f}")
+    
+    except Exception as e:
+        console.print(f"[bold red]An error occurred: {e}[/bold red]")
+
+@cli.command()
+@click.argument('unit_test_file', type=click.Path(exists=True))
+@click.argument('code_file', type=click.Path(exists=True))
+@click.argument('error_file', type=click.Path())
+@click.option('--output-test', type=click.Path(), help='Specify where to save the fixed unit test file.')
+@click.option('--output-code', type=click.Path(), help='Specify where to save the fixed code file.')
+@click.option('--loop', is_flag=True, help='Enable iterative fixing process.')
+@click.option('--verification-program', type=click.Path(exists=True), help='Specify the path to a Python program that verifies if the code still runs correctly.')
+@click.option('--max-attempts', type=int, default=3, help='Set the maximum number of fix attempts before giving up.')
+@click.option('--budget', type=float, default=5.0, help='Set the maximum cost allowed for the fixing process.')
+@click.pass_context
+def fix(ctx, unit_test_file, code_file, error_file, output_test, output_code, loop, verification_program, max_attempts, budget):
+    """Fix errors in code and unit tests based on error messages."""
+    input_file_paths = {"unit_test_file": unit_test_file, "code_file": code_file, "error_file": error_file}
+    command_options = {"output_test": output_test, "output_code": output_code}
+    
+    try:
+        input_strings, output_file_paths, _ = construct_paths(
+            input_file_paths=input_file_paths,
+            force=ctx.obj['FORCE'],
+            quiet=ctx.obj['QUIET'],
+            command="fix",
+            command_options=command_options
+        )
+        
+        if loop:
+            success, final_unit_test_content, final_code_content, attempts, total_cost = fix_error_loop(
+                unit_test_file,
+                code_file,
+                verification_program,
+                ctx.obj['STRENGTH'],
+                ctx.obj['TEMPERATURE'],
+                max_attempts,
+                budget,
+                error_log_file=error_file
+            )
+            
+            with open(output_file_paths['output_test'], 'w') as f:
+                f.write(final_unit_test_content)
+            with open(output_file_paths['output_code'], 'w') as f:
+                f.write(final_code_content)
+            
+            if not ctx.obj['QUIET']:
+                console.print(f"{'All tests passed successfully!' if success else 'Some tests still failed after attempts.'}")
+                console.print(f"Number of Attempts: {attempts}")
+                console.print(f"Total Cost: ${total_cost:.2f}")
+        else:
+            update_unit_test, update_code, fixed_unit_test, fixed_code, total_cost = fix_errors_from_unit_tests(
+                input_strings['unit_test_file'],
+                input_strings['code_file'],
+                input_strings['error_file'],
+                error_file,
+                ctx.obj['STRENGTH'],
+                ctx.obj['TEMPERATURE']
+            )
+            
+            if update_unit_test:
+                with open(output_file_paths['output_test'], 'w') as f:
+                    f.write(fixed_unit_test)
+            if update_code:
+                with open(output_file_paths['output_code'], 'w') as f:
+                    f.write(fixed_code)
+            
+            if not ctx.obj['QUIET']:
+                console.print(f"Fixed files saved to {output_file_paths['output_test']} and {output_file_paths['output_code']}")
+                console.print(f"Total Cost: ${total_cost:.6f}")
+    
+    except Exception as e:
+        console.print(f"[bold red]An error occurred: {e}[/bold red]")
+
+@cli.command()
+@click.argument('input_prompt', type=click.Path(exists=True))
+@click.argument('input_code', type=click.Path(exists=True))
+@click.argument('example_code', type=click.Path(exists=True))
+@click.option('--output-sub', type=click.Path(), help='Specify where to save the generated sub-prompt file.')
+@click.option('--output-modified', type=click.Path(), help='Specify where to save the modified prompt file.')
+@click.pass_context
+def split(ctx, input_prompt, input_code, example_code, output_sub, output_modified):
+    """Split large complex prompt files into smaller, more manageable prompt files."""
+    input_file_paths = {"input_prompt": input_prompt, "input_code": input_code, "example_code": example_code}
+    command_options = {"output_sub": output_sub, "output_modified": output_modified}
+    
+    try:
+        input_strings, output_file_paths, _ = construct_paths(
+            input_file_paths=input_file_paths,
+            force=ctx.obj['FORCE'],
+            quiet=ctx.obj['QUIET'],
+            command="split",
+            command_options=command_options
+        )
+        
+        sub_prompt, modified_prompt, total_cost = split(
+            input_strings['input_prompt'],
+            input_strings['input_code'],
+            input_strings['example_code'],
+            ctx.obj['STRENGTH'],
+            ctx.obj['TEMPERATURE']
+        )
+        
+        with open(output_file_paths['output_sub'], 'w') as f:
+            f.write(sub_prompt)
+        with open(output_file_paths['output_modified'], 'w') as f:
+            f.write(modified_prompt)
+        
+        if not ctx.obj['QUIET']:
+            console.print(f"Sub-prompt saved to {output_file_paths['output_sub']}")
+            console.print(f"Modified prompt saved to {output_file_paths['output_modified']}")
+            console.print(f"Total Cost: ${total_cost:.6
+```
