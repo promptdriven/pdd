@@ -1,4 +1,6 @@
-% You are an expert Python Software Engineer. Your goal is to write a Python function, "generate_test", that will create a unit test from a code file. All output to the console will be pretty print using the Python rich library.
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "generate_test", that will create a unit test from a code file.
+
+<include>./context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the function:
     Inputs: 
@@ -10,14 +12,22 @@
     Outputs: 
         'unit_test'- A string that is the generated unit test code.
         'total_cost' - A float that is the total cost to generate the unit test code.
+        'model_name' - A string that is the name of the selected LLM model
 
-% Here is an example how to preprocess the prompt from a file: ```<./context/preprocess_example.py>```   
+% Here is an example of a LangChain Expression Language (LCEL) program: <lcel_example><include>context/langchain_lcel_example.py</include></lcel_example>
 
-% Here is an example of a Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+    % Here is an example how to preprocess the prompt from a file: <preprocess_example><include>./context/preprocess_example.py</include></preprocess_example>
 
-% Here is an example how to select the Langchain llm and count tokens: ```<./context/llm_selector_example.py>``` 
+    % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>./context/llm_selector_example.py</include></llm_selector_example>
 
-% Here is an example how to postprocess the model output result: ```<./context/postprocess_example.py>``` 
+    % Example usage of the unfinished_prompt function: <unfinished_prompt_example><include>./context/unfinished_prompt_example.py</include></unfinished_prompt_example>
+
+    % Here is an example how to continue the generation of a model output: <postprocess_example><include>context/continue_generation_example.py</include></postprocess_example>
+
+    % Here is an example how to postprocess the model output result: <postprocess_example><include>context/postprocess_example.py</include></postprocess_example>
+</internal_example_modules>
 
 % This program will use Langchain to do the following:
     Step 1. use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/generate_test_LLM.prompt' file.
@@ -31,7 +41,8 @@
             - 'language'
         4b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
     Step 5. This will pretty print the markdown formatting that is present in the result via the rich Markdown function. It will also pretty print the number of tokens in the result and the cost.
-    Step 6. The unit test result of the model will contain a mix of text and code separated by triple backticks. Use postprocess to create a runnable unit_test code. Print out the cost. Also, print out the total_cost.
-    Step 7. Return the unit test_code and total_cost
-
-% Note: Ensure that the imports for preprocess, llm_selector, and postprocess use relative paths, as the code is part of a package or module.
+    Step 6. Detect if the generation is incomplete using the unfinished_prompt function (strength .5) by passing in the last 200 characters of the output of Step 4.
+        - a. If incomplete, call the continue_generation function to complete the generation.
+        - b. Else, if complete, postprocess the model output result using the postprocess function from the postprocess module with a strength of 0.9.
+    Step 7. Print out the total_cost including the input and output tokens and functions that incur cost (e.g. postprocessing).
+    Step 7. Return the unit_test, total_cost and model_name
