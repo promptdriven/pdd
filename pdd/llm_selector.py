@@ -80,11 +80,11 @@ def llm_selector(strength: float, temperature: float):
 
     # Instantiate the LLM model
     if provider == 'OpenAI':
-        llm = ChatOpenAI(model=model_name, temperature=temperature)
+        llm = ChatOpenAI(model=model_name, temperature=temperature, max_tokens=16384)
     elif provider == 'Anthropic':
-        llm = ChatAnthropic(model=model_name, temperature=temperature)
+        llm = ChatAnthropic(model=model_name, temperature=temperature, max_tokens=8192)
     elif provider == 'Google':
-        llm = ChatGoogleGenerativeAI(model=model_name, temperature=temperature)
+        llm = ChatGoogleGenerativeAI(model=model_name, temperature=temperature, max_tokens=8192)
     elif provider == 'Fireworks':
         llm = Fireworks(model=model_name, temperature=temperature)
     elif provider == 'Groq':
