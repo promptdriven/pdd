@@ -38,4 +38,4 @@
         - a. If incomplete, call the continue_generation function to complete the generation.
         - b. Else, if complete, postprocess the model output result using the postprocess function from the postprocess module with a strength of 0.9.
     Step 7. Print out the total_cost including the input and output tokens and functions that incur cost (e.g. postprocessing).
-    Step 8. Return the runnable_code and total_cost.
+    Step 8. Return the runnable_code, total_cost and model_name.
