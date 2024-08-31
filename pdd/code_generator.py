@@ -53,7 +53,7 @@ def code_generator(prompt: str, language: str, strength: float, temperature: flo
         console.print(f"Estimated output cost: ${output_token_cost:.6f}")
 
         # Step 6: Detect if the generation is incomplete
-        last_200_chars = result[-200:]
+        last_200_chars = result[-600:]
         _, is_finished, unfinished_cost, _ = unfinished_prompt.unfinished_prompt(last_200_chars, 0.5, temperature)
 
         if not is_finished:
