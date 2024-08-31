@@ -1,94 +1,192 @@
 import pytest
-from unittest.mock import patch, mock_open, MagicMock
+import os
+from unittest.mock import patch, mock_open
 from pdd.generate_test import generate_test
 from rich.console import Console
+from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 @pytest.fixture
 def mock_environment():
-    """Mock the environment variable PDD_PATH."""
-    with patch.dict('os.environ', {'PDD_PATH': '/mock/path'}):
+    with patch.dict(os.environ, {'PDD_PATH': '/mock/path'}):
         yield
 
 @pytest.fixture
-def mock_file_content() -> str:
-    """Provide mock content for the file."""
+def mock_file_content():
     return "Mock prompt content"
 
 @pytest.fixture
 def mock_llm_selector():
-    """Mock the LLM selector function."""
-    mock_llm = MagicMock()
-    mock_llm.return_value = "Mock LLM result"
-    return lambda x, y: (
-        mock_llm,
-        lambda w: 100,
-        0.01,
-        0.02,
-        "mock_model_name"
+    return (
+        lambda *args: (
+            lambda x: "Generated test content",
+            lambda x: 100,
+            0.001,
+            0.002,
+            "mock_model"
+        )
     )
 
 @pytest.fixture
 def mock_preprocess():
-    """Mock the preprocess function."""
-    return lambda x, recursive, double_curly_brackets: "Preprocessed prompt"
+    return lambda *args, **kwargs: "Preprocessed prompt"
+
+@pytest.fixture
+def mock_unfinished_prompt():
+    return lambda *args: (None, True, 0.001, None)
 
 @pytest.fixture
 def mock_postprocess():
-    """Mock the postprocess function."""
-    return lambda x, y, z, w: ("Postprocessed unit test", 0.05)
+    return lambda *args: ("Postprocessed result", 0.001)
 
-def test_successful_test_generation(mock_environment, mock_file_content, mock_llm_selector, mock_preprocess, mock_postprocess):
-    """Test successful generation of a unit test."""
+def test_generate_test_success(mock_environment, mock_file_content, mock_llm_selector, mock_preprocess, mock_unfinished_prompt, mock_postprocess):
     with patch('builtins.open', mock_open(read_data=mock_file_content)):
         with patch('pdd.generate_test.llm_selector', mock_llm_selector):
             with patch('pdd.generate_test.preprocess', mock_preprocess):
-                with patch('pdd.generate_test.postprocess', mock_postprocess):
-                    with patch('rich.console.Console.print') as mock_print:
-                        with patch('langchain_core.prompts.PromptTemplate.from_template') as mock_template:
-                            mock_chain = mock_template.return_value | mock_llm_selector(0.5, 0.7)[0] | StrOutputParser()
-                            mock_chain.invoke.return_value = "Mock LLM result"
+                with patch('pdd.generate_test.unfinished_prompt', mock_unfinished_prompt):
+                    with patch('pdd.generate_test.postprocess', mock_postprocess):
+                        with patch('pdd.generate_test.PromptTemplate.from_template') as mock_prompt_template:
+                            mock_prompt_template.return_value = "Mock template"
                             
-                            result, cost = generate_test("Test prompt", "Test code", 0.5, 0.7, "python")
-                        
-                        assert result == "Postprocessed unit test"
-                        assert cost == pytest.approx(0.05, 0.001)
-                        
-                        mock_print.assert_any_call("[bold]Running test generator...[/bold]")
-                        mock_print.assert_any_call("Input tokens: 100")
-                        mock_print.assert_any_call("Estimated input cost: $0.000001")
+                            result, cost, model = generate_test("Test prompt", "Test code", 0.5, 0.7, "python")
+                            
+                            assert isinstance(result, str)
+                            assert result == "Postprocessed result"
+                            assert isinstance(cost, float)
+                            assert model == "mock_model"
 
-def test_file_not_found_error(mock_environment):
-    """Test handling of file not found error."""
+def test_generate_test_file_not_found(mock_environment):
     with patch('builtins.open', side_effect=FileNotFoundError):
-        with patch('rich.console.Console.print') as mock_print:
-            result, cost = generate_test("Test prompt", "Test code", 0.5, 0.7, "python")
-            
-            assert result == ""
-            assert cost == 0.0
-            mock_print.assert_called_with("[bold red]Prompt file not found.[/bold red]")
+        with pytest.raises(FileNotFoundError):
+            generate_test("Test prompt", "Test code", 0.5, 0.7, "python")
 
-def test_general_file_error(mock_environment):
-    """Test handling of general file errors."""
-    with patch('builtins.open', side_effect=Exception("Mock error")):
-        with patch('rich.console.Console.print') as mock_print:
-            result, cost = generate_test("Test prompt", "Test code", 0.5, 0.7, "python")
-            
-            assert result == ""
-            assert cost == 0.0
-            mock_print.assert_called_with("[bold red]Error loading prompt file: Mock error[/bold red]")
+def test_generate_test_value_error():
+    with patch.dict(os.environ, clear=True):
+        with pytest.raises(ValueError, match="PDD_PATH environment variable is not set"):
+            generate_test("Test prompt", "Test code", 0.5, 0.7, "python")
 
-def test_model_invocation_error(mock_environment, mock_file_content, mock_llm_selector, mock_preprocess):
-    """Test handling of model invocation errors."""
+def test_generate_test_unexpected_error(mock_environment, mock_file_content):
+    with patch('builtins.open', mock_open(read_data=mock_file_content)):
+        with patch('pdd.generate_test.llm_selector', side_effect=Exception("Unexpected error")):
+            with pytest.raises(Exception, match="Unexpected error"):
+                generate_test("Test prompt", "Test code", 0.5, 0.7, "python")
+
+def test_generate_test_incomplete_generation(mock_environment, mock_file_content, mock_llm_selector, mock_preprocess):
     with patch('builtins.open', mock_open(read_data=mock_file_content)):
         with patch('pdd.generate_test.llm_selector', mock_llm_selector):
             with patch('pdd.generate_test.preprocess', mock_preprocess):
-                with patch('langchain_core.prompts.PromptTemplate.from_template') as mock_template:
-                    mock_chain = mock_template.return_value | mock_llm_selector(0.5, 0.7)[0] | StrOutputParser()
-                    mock_chain.invoke.side_effect = Exception("Mock invocation error")
-                    with patch('rich.console.Console.print') as mock_print:
-                        result, cost = generate_test("Test prompt", "Test code", 0.5, 0.7, "python")
-                        
-                        assert result == ""
-                        assert cost == 0.0
-                        mock_print.assert_called_with("[bold red]Error invoking model: Mock invocation error[/bold red]")
+                with patch('pdd.generate_test.unfinished_prompt', return_value=(None, False, 0.001, None)):
+                    with patch('pdd.generate_test.continue_generation', return_value=("Continued result", 0.002, None)):
+                        with patch('pdd.generate_test.PromptTemplate.from_template') as mock_prompt_template:
+                            mock_prompt_template.return_value = "Mock template"
+                            
+                            result, cost, model = generate_test("Test prompt", "Test code", 0.5, 0.7, "python")
+                            
+                            assert isinstance(result, str)
+                            assert result == "Continued result"
+                            assert isinstance(cost, float)
+                            assert model == "mock_model"
+
+def test_generate_test_input_validation():
+    with pytest.raises(ValueError):
+        generate_test("", "", 1.5, 0.7, "python")  # Invalid strength
+    with pytest.raises(ValueError):
+        generate_test("", "", 0.5, 1.5, "python")  # Invalid temperature
+    with pytest.raises(ValueError):
+        generate_test("", "", 0.5, 0.7, "")  # Empty language
+import pytest
+import os
+from unittest.mock import patch, mock_open
+from pdd.generate_test import generate_test
+from rich.console import Console
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+@pytest.fixture
+def mock_environment():
+    with patch.dict(os.environ, {'PDD_PATH': '/mock/path'}):
+        yield
+
+@pytest.fixture
+def mock_file_content():
+    return "Mock prompt content"
+
+@pytest.fixture
+def mock_llm_selector():
+    return (
+        lambda *args: (
+            lambda x: "Generated test content",
+            lambda x: 100,
+            0.001,
+            0.002,
+            "mock_model"
+        )
+    )
+
+@pytest.fixture
+def mock_preprocess():
+    return lambda *args, **kwargs: "Preprocessed prompt"
+
+@pytest.fixture
+def mock_unfinished_prompt():
+    return lambda *args: (None, True, 0.001, None)
+
+@pytest.fixture
+def mock_postprocess():
+    return lambda *args: ("Postprocessed result", 0.001)
+
+def test_generate_test_success(mock_environment, mock_file_content, mock_llm_selector, mock_preprocess, mock_unfinished_prompt, mock_postprocess):
+    with patch('builtins.open', mock_open(read_data=mock_file_content)):
+        with patch('pdd.generate_test.llm_selector', mock_llm_selector):
+            with patch('pdd.generate_test.preprocess', mock_preprocess):
+                with patch('pdd.generate_test.unfinished_prompt', mock_unfinished_prompt):
+                    with patch('pdd.generate_test.postprocess', mock_postprocess):
+                        with patch('pdd.generate_test.PromptTemplate.from_template') as mock_prompt_template:
+                            mock_prompt_template.return_value = "Mock template"
+                            
+                            result, cost, model = generate_test("Test prompt", "Test code", 0.5, 0.7, "python")
+                            
+                            assert isinstance(result, str)
+                            assert result == "Postprocessed result"
+                            assert isinstance(cost, float)
+                            assert model == "mock_model"
+
+def test_generate_test_file_not_found(mock_environment):
+    with patch('builtins.open', side_effect=FileNotFoundError):
+        with pytest.raises(FileNotFoundError):
+            generate_test("Test prompt", "Test code", 0.5, 0.7, "python")
+
+def test_generate_test_value_error():
+    with patch.dict(os.environ, clear=True):
+        with pytest.raises(ValueError, match="PDD_PATH environment variable is not set"):
+            generate_test("Test prompt", "Test code", 0.5, 0.7, "python")
+
+def test_generate_test_unexpected_error(mock_environment, mock_file_content):
+    with patch('builtins.open', mock_open(read_data=mock_file_content)):
+        with patch('pdd.generate_test.llm_selector', side_effect=Exception("Unexpected error")):
+            with pytest.raises(Exception, match="Unexpected error"):
+                generate_test("Test prompt", "Test code", 0.5, 0.7, "python")
+
+def test_generate_test_incomplete_generation(mock_environment, mock_file_content, mock_llm_selector, mock_preprocess):
+    with patch('builtins.open', mock_open(read_data=mock_file_content)):
+        with patch('pdd.generate_test.llm_selector', mock_llm_selector):
+            with patch('pdd.generate_test.preprocess', mock_preprocess):
+                with patch('pdd.generate_test.unfinished_prompt', return_value=(None, False, 0.001, None)):
+                    with patch('pdd.generate_test.continue_generation', return_value=("Continued result", 0.002, None)):
+                        with patch('pdd.generate_test.PromptTemplate.from_template') as mock_prompt_template:
+                            mock_prompt_template.return_value = "Mock template"
+                            
+                            result, cost, model = generate_test("Test prompt", "Test code", 0.5, 0.7, "python")
+                            
+                            assert isinstance(result, str)
+                            assert result == "Continued result"
+                            assert isinstance(cost, float)
+                            assert model == "mock_model"
+
+def test_generate_test_input_validation():
+    with pytest.raises(ValueError):
+        generate_test("", "", 1.5, 0.7, "python")  # Invalid strength
+    with pytest.raises(ValueError):
+        generate_test("", "", 0.5, 1.5, "python")  # Invalid temperature
+    with pytest.raises(ValueError):
+        generate_test("", "", 0.5, 0.7, "")  # Empty language
