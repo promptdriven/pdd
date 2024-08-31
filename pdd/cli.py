@@ -168,7 +168,7 @@ def test(ctx, code_file: str, prompt_file: str, output: str, language: str):
         with Progress() as progress:
             task = progress.add_task("[green]Generating unit test...", total=100)
             
-            unit_test_code, total_cost = generate_test(
+            unit_test_code, total_cost, model_name = generate_test(
                 input_strings['prompt_file'],
                 input_strings['code_file'],
                 ctx.obj['STRENGTH'],
