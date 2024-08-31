@@ -1,0 +1,27 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "PDD CLI: Generate",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pdd.cli",
+            "console": "integratedTerminal",
+            "args": [
+
+            ]
+        },
+        {
+            "name": "Python Debugger: Current File for submodules",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "args": [ ],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/pdd:${env:PYTHONPATH}",
+                "PATH": "${env:PATH}"
+            }
+        }
+    ]
+}
