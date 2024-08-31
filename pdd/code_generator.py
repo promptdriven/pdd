@@ -1,82 +1,75 @@
-import os
+from typing import Tuple
 from rich.console import Console
 from rich.markdown import Markdown
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from .preprocess import preprocess
-from .llm_selector import llm_selector
-from .postprocess import postprocess
+from . import preprocess
+from . import llm_selector
+from . import unfinished_prompt
+from . import continue_generation
+from . import postprocess
 
 console = Console()
 
-def code_generator(prompt: str, language: str, strength: float, temperature: float = 0) -> tuple[str, float]:
+def code_generator(prompt: str, language: str, strength: float, temperature: float = 0.0) -> Tuple[str, float, str]:
     """
-    Generate code from a prompt using Langchain and various processing steps.
+    Generates code based on the given prompt using a language model.
 
     Args:
     prompt (str): The raw prompt to be processed.
-    language (str): The target programming language.
-    strength (float): The strength of the LLM model (0 to 1).
-    temperature (float): The temperature of the LLM model. Default is 0.
+    language (str): The programming language of the output file.
+    strength (float): The strength of the LLM model to use (between 0 and 1).
+    temperature (float): The temperature of the LLM model to use. Default is 0.
 
     Returns:
-    tuple[str, float]: A tuple containing the runnable code and the total cost.
+    Tuple[str, float, str]: A tuple containing the runnable code, total cost, and model name.
     """
-    # Step 1: Preprocess the raw prompt
-    processed_prompt = preprocess(prompt, recursive=False, double_curly_brackets=True)
-    console.print("[bold green]Preprocessed Prompt:[/bold green]")
-    console.print(processed_prompt)
+    try:
+        # Step 1: Preprocess the raw prompt
+        processed_prompt = preprocess.preprocess(prompt, recursive=True, double_curly_brackets=True)
 
-    # Step 2: Create Langchain LCEL template
-    prompt_template = PromptTemplate.from_template(processed_prompt)
+        # Step 2: Create a Langchain LCEL template
+        prompt_template = PromptTemplate.from_template(processed_prompt)
 
-    # Step 3: Use llm_selector for the model
-    llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
+        # Step 3: Use llm_selector for the model
+        llm, token_counter, input_cost, output_cost, model_name = llm_selector.llm_selector(strength, temperature)
 
-    # Step 4: Run the prompt through the model
-    chain = prompt_template | llm | StrOutputParser()
-    
-    input_tokens = token_counter(processed_prompt)
-    input_cost_actual = (input_tokens / 1_000_000) * input_cost
-    
-    console.print(f"[bold yellow]Running prompt through model...[/bold yellow]")
-    console.print(f"Input tokens: {input_tokens}")
-    console.print(f"Estimated input cost: ${input_cost_actual:.6f}")
+        # Step 4: Run the prompt through the model
+        chain = prompt_template | llm | StrOutputParser()
+        token_count = token_counter(processed_prompt)
+        input_token_cost = (token_count / 1_000_000) * input_cost
 
-    result = chain.invoke({})
+        console.print(f"[bold]Running prompt through {model_name}[/bold]")
+        console.print(f"Input tokens: {token_count}")
+        console.print(f"Estimated input cost: ${input_token_cost:.6f}")
 
-    # Step 5: Pretty print the result and calculate output cost
-    console.print("[bold green]Model Output:[/bold green]")
-    console.print(Markdown(result))
+        result = chain.invoke({})
 
-    output_tokens = token_counter(result)
-    output_cost_actual = (output_tokens / 1_000_000) * output_cost
-    
-    console.print(f"Output tokens: {output_tokens}")
-    console.print(f"Estimated output cost: ${output_cost_actual:.6f}")
+        # Step 5: Pretty print the result and calculate output cost
+        console.print(Markdown(result))
+        output_token_count = token_counter(result)
+        output_token_cost = (output_token_count / 1_000_000) * output_cost
+        console.print(f"Output tokens: {output_token_count}")
+        console.print(f"Estimated output cost: ${output_token_cost:.6f}")
 
-    # Step 6: Postprocess the result
-    runnable_code, postprocess_cost = postprocess(result, language, strength, temperature)
-    
-    total_cost = input_cost_actual + output_cost_actual + postprocess_cost
-    
-    console.print("[bold green]Postprocessed Code:[/bold green]")
-    console.print(runnable_code)
-    console.print(f"[bold cyan]Total cost: ${total_cost:.6f}[/bold cyan]")
+        # Step 6: Detect if the generation is incomplete
+        last_200_chars = result[-200:]
+        _, is_finished, unfinished_cost, _ = unfinished_prompt.unfinished_prompt(last_200_chars, 0.5, temperature)
 
-    # Step 7: Return the runnable code and total cost
-    return runnable_code, total_cost
+        if not is_finished:
+            # Step 6a: Continue the generation if incomplete
+            final_result, continue_cost, _ = continue_generation.continue_generation(processed_prompt, result, strength, temperature)
+        else:
+            # Step 6b: Postprocess if complete
+            final_result, postprocess_cost = postprocess.postprocess(result, language, 0.9, temperature)
 
-# Example usage
-if __name__ == "__main__":
-    sample_prompt = """
-    <prompt>
-        Write a Python function that calculates the factorial of a number.
-        <pdd>example.txt</pdd>
-    </prompt>
-    """
-    
-    runnable_code, total_cost = code_generator(sample_prompt, "python", 0.7, 0.2)
-    console.print("[bold magenta]Final Runnable Code:[/bold magenta]")
-    console.print(runnable_code)
-    console.print(f"[bold magenta]Final Total Cost: ${total_cost:.6f}[/bold magenta]")
+        # Step 7: Calculate and print total cost
+        total_cost = input_token_cost + output_token_cost + (continue_cost if not is_finished else postprocess_cost) + unfinished_cost
+        console.print(f"[bold]Total cost: ${total_cost:.6f}[/bold]")
+
+        # Step 8: Return the runnable code and total cost
+        return final_result, total_cost, model_name
+
+    except Exception as e:
+        console.print(f"[bold red]Error: {str(e)}[/bold red]")
+        return "", 0.0, ""

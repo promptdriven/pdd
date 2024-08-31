@@ -77,7 +77,7 @@ def generate(ctx, prompt_file: str, output: str):
         with Progress() as progress:
             task = progress.add_task("[green]Generating code...", total=100)
             
-            runnable_code, total_cost = code_generator(
+            runnable_code, total_cost, model_name = code_generator(
                 input_strings['prompt_file'],
                 language,
                 ctx.obj['STRENGTH'],
