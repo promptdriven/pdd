@@ -32,12 +32,12 @@ Outputs:
     Step 1. Load $PDD_PATH from the environmental variable. From the '$PDD_PATH/prompts/' directory, load these prompts 'continue_generation_LLM.prompt', 'trim_results_start_LLM.prompt' and 'trim_results_LLM.prompt' files.
     Step 2. Preprocess the prompts from Step 1 using the preprocess function (with recursive but no doubling of curly brackets) using the preprocess module.
     Step 3. Create a Langchain LCEL template from the processed continue_generation prompt to return a string output. Create two additional LCELs with JSON output for the other two prompts from Step 2.
-    Step 4. Use the llm_selector function for the LLM model and token counting using the strength and temperature input parameters. For the other two LCELs, use a strength of .5 and a temperature of 0. Use separate token counters and cost variables for trim operations.
+    Step 4. Use the llm_selector function for the LLM model and token counting using the strength and temperature input parameters. For the other two LCELs, use a strength of .9 and a temperature of 0. Use separate token counters and cost variables for trim operations.
     Step 5. Run the trim_results_start Langchain LCEL model on the llm_output to the prompt during invocation, as 'LLM_OUTPUT' string parameter, to extract the code_block. Use 'get' to extract the 'code_block' key from the JSON output.
     Step 6. Run the formatted_input_prompt and the code_block through the model using the continue_generation Langchain LCEL:
         - a. Pass the following string parameters to the prompt during invocation: 'FORMATTED_INPUT_PROMPT', 'LLM_OUTPUT'.
         - b. Pretty print the output
-    Step 7. Detect if the generation is incomplete using the unfinished_prompt function by passing in the last 200 characters of the output of Step 6.
+    Step 7. Detect if the generation is incomplete using the unfinished_prompt function by passing in the last 600 characters of the output of Step 6.
         - a. If incomplete, append the continue_result to the code_block and loop using the continue_generation prompt until complete. Print out the loop count for the user.
         - b. If complete, run the trim_results Langchain LCEL model on the output of Step 6, as 'CONTINUED_GENERATION' and the last 200 characters of code_block as 'GENERATED_RESULTS' string parameters, to extract the trimmed_continued_generation. Use 'get' to extract the 'trimmed_continued_generation' key from the JSON output. Append the trimmed_continued_generation to the code_block.
     Step 8. Pretty print the accumulated code_block string as the 'final_llm_output' using Rich Markdown function. Include token counts and costs.
