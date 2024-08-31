@@ -17,11 +17,11 @@
 
 % Here are examples of how to use internal modules:
 <internal_example_modules>
-    % Here is an example how to preprocess the prompt from a file: <preprocess_example><include>./context/preprocess_example.py</include></preprocess_example>
+    % Here is an example how to preprocess the prompt from a file: <preprocess_example><include>context/preprocess_example.py</include></preprocess_example>
 
     % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>./context/llm_selector_example.py</include></llm_selector_example>
 
-    % Example usage of the unfinished_prompt function: <unfinished_prompt_example><include>./context/unfinished_prompt_example.py</include></unfinished_prompt_example>
+    % Example usage of the unfinished_prompt function: <unfinished_prompt_example><include>context/unfinished_prompt_example.py</include></unfinished_prompt_example>
 
     % Here is an example how to continue the generation of a model output: <postprocess_example><include>context/continue_generation_example.py</include></postprocess_example>
 
@@ -34,7 +34,7 @@
     Step 3. This will use llm_selector for the model.
     Step 4. This will run the prompt through the model using Langchain LCEL. It will pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
     Step 5. This will pretty print the markdown formatting that is present in the result via the rich Markdown function. It will also pretty print the number of tokens in the result and the cost.
-    Step 6. Detect if the generation is incomplete using the unfinished_prompt function (strength .5) by passing in the last 200 characters of the output of Step 4.
+    Step 6. Detect if the generation is incomplete using the unfinished_prompt function (strength .5) by passing in the last 600 characters of the output of Step 4.
         - a. If incomplete, call the continue_generation function to complete the generation.
         - b. Else, if complete, postprocess the model output result using the postprocess function from the postprocess module with a strength of 0.9.
     Step 7. Print out the total_cost including the input and output tokens and functions that incur cost (e.g. postprocessing).
