@@ -40,7 +40,7 @@ def continue_generation(formatted_input_prompt: str, llm_output: str, strength: 
 
     # Step 4: Use llm_selector for models
     llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
-    llm_trim, token_counter_trim, input_cost_trim, output_cost_trim, _ = llm_selector(0.5, 0)
+    llm_trim, token_counter_trim, input_cost_trim, output_cost_trim, _ = llm_selector(0.9, 0)
 
     continue_generation_chain = continue_generation_template | llm | StrOutputParser()
     trim_results_start_chain = trim_results_start_template | llm_trim | JsonOutputParser(pydantic_object=TrimResultsOutput)
@@ -74,7 +74,7 @@ def continue_generation(formatted_input_prompt: str, llm_output: str, strength: 
         console.print(f"Continue generation cost (loop {loop_count}): ${continue_cost:.6f}")
 
         # Step 7: Check if generation is complete
-        last_200_chars = continue_result[-200:]
+        last_200_chars = continue_result[-600:]
         reasoning, is_finished, unfinished_cost, _ = unfinished_prompt(last_200_chars, 0.5, 0)
         total_cost += unfinished_cost
         console.print(f"Unfinished prompt cost: ${unfinished_cost:.6f}")
