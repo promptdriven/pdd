@@ -73,7 +73,7 @@ def context_generator(code_module: str, prompt: str, language: str = "python", s
     result = chain.invoke(params)
 
     # Step 6: Postprocess the output
-    example_code, postprocess_cost = postprocess(result, language, strength, temperature)
+    example_code, postprocess_cost = postprocess(result, language, 0.9, temperature)
 
     # Calculate total cost
     output_tokens = token_counter(result)

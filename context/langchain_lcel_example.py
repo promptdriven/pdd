@@ -37,7 +37,7 @@ chain = prompt_template |llm| StrOutputParser()
 
 # Run the template. Notice that the input is a dictionary with a single key "topic" which feeds it into the above prompt template. This is needed because the prompt template has a variable {topic} which needs to be filled in when invoked.
 result = chain.invoke({"topic": "cats"})
-print(result)
+print("********Google:", result)
 
 
 # Define your desired data structure.
