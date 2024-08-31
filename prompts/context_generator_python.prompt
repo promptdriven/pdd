@@ -31,5 +31,5 @@
             - 'processed_prompt'
             - 'language'
         6b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens. 
-    Step 7. The LCEL output will contain a mix of text and Python code separated by triple backticks. Use postprocess to create a runnable example_code. Also, print out the total_cost including the input and output tokens and postprocessing.
+    Step 7. The LCEL output will contain a mix of text and Python code separated by triple backticks. Use postprocess with strength .9 to create a runnable example_code. Also, print out the total_cost including the input and output tokens and postprocessing.
     Step 8. Return the example_code and total_cost.
