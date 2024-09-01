@@ -178,7 +178,7 @@ prompt = PromptTemplate.from_template("What is a good name for a company that ma
 
 chain = prompt | llm
 
-# Run the chain
+# Invoke the chain
 response = chain.invoke({"product":"colorful socks"})
 
 # Check completion status
