@@ -26,6 +26,7 @@
 - [ ] auto update the utility
 - [ ] github login 
 - [ ] Run on server based keys
+- [ ] create a marketplace where people can earn LLM credits for their examples or people can put up bounties for examples
 
 ## Bugs
 
