@@ -1,0 +1,37 @@
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "detect_change", that will analyze a list of prompt files and a change description to determine which prompts need to be changed. All output to the console will be pretty printed using the Python Rich library. Ensure that the module imports are done using relative imports.
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        - 'prompt_files' - A list of strings, each containing the filename of a prompt that may need to be changed.
+        - 'change_description' - A string that describes the changes that need to be analyzed and potentially applied to the prompts.
+        - 'strength': A float value representing the strength parameter for the LLM model, used to influence the model's behavior.
+        - 'temperature': A float value representing the temperature parameter for the LLM model, used to control the randomness of the model's output.
+    Outputs:
+        - 'changes_list' - A list of JSON objects, each containing the name of a prompt that needs to be changed and detailed instructions on how to change it.
+        - 'total_cost': A float value representing the total cost of running the function.
+        - 'model_name': A string representing the name of the selected LLM model.
+
+% Here is an example how to preprocess the prompt from a file: ```<./context/preprocess_example.py>```
+
+% Example usage of the Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
+
+% Example of selecting a Langchain LLM and counting tokens using llm_selector: ```<./context/llm_selector_example.py>```
+
+% Steps to be followed by the function:
+    Step 1. Load the '$PDD_PATH/prompts/detect_change_LLM.prompt' and '$PDD_PATH/prompts/extract_detect_change_LLM.prompt' files.
+    Step 2. Preprocess the detect_change_LLM prompt using the preprocess function from the preprocess module and set double_curly_brackets to false.
+    Step 3. Create a Langchain LCEL template from the processed detect_change_LLM prompt to return a string output.    
+    Step 4. Use the llm_selector function for the LLM model and token counting.
+    Step 5. Run the prompt_files and change_description through the model using Langchain LCEL:
+        - a. Pass the following string parameters to the prompt during invocation:             
+            * 'PROMPT_LIST'
+            * 'CHANGE_DESCRIPTION' (preprocess this with double_curly_brackets set to false)
+        - b. Calculate the input and output token count using token_counter from llm_selector and pretty print the output of 5a, including the token count and estimated cost. The cost from llm_selector is in dollars per million tokens.
+    Step 6. Create a Langchain LCEL template from the extract_detect_change_LLM prompt that outputs JSON:
+        - a. Pass the following string parameters to the prompt during invocation: 'llm_output' (this string is from Step 5).
+        - b. Calculate input and output token count using token_counter from llm_selector and pretty print the running message with the token count and cost.
+        - c. Use 'get' function to extract 'changes_list' key values using from the dictionary output.
+    Step 7. Pretty print the extracted changes_list using Rich Markdown function. Include token counts and costs.
+    Step 8. Return the 'changes_list', the total_cost (e.g. both invokes), and model_name used for the detect_change_LLM prompt.
+
+% Ensure the function handles edge cases, such as missing inputs or model errors, and provide clear error messages.
