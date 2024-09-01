@@ -122,7 +122,7 @@ def example(ctx, code_file: str, prompt_file: str, output: str):
         with Progress() as progress:
             task = progress.add_task("[green]Generating example...", total=100)
             
-            example_code, total_cost = context_generator(
+            example_code, total_cost, model= context_generator(
                 input_strings['code_file'],
                 input_strings['prompt_file'],
                 language,

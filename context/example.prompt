@@ -1,2 +1,3 @@
-    - No need to set environment variables or install packages, just show how to use the module.
+    - The environment variables are already set and packages are already installed so just show how to use the module.
     - Know that the generated example will be in a different directory ('pdd') than the module it is calling and will need an absolute reference. The module file name will be same as the function name.
+    - Be sure the units if any are described for the inputs and outputs (e.g. in dollars per million tokens)
