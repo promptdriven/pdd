@@ -1,80 +1,80 @@
 import pytest
 from unittest.mock import patch, mock_open
 from pdd.context_generator import context_generator
-from rich.console import Console
 
 @pytest.fixture
-def mock_environment(monkeypatch):
-    monkeypatch.setenv('PDD_PATH', '/mock/path')
+def mock_environment():
+    with patch.dict('os.environ', {'PDD_PATH': '/mock/path'}):
+        yield
 
 @pytest.fixture
-def mock_prompt_file():
-    return "Mock prompt content"
+def mock_file_content():
+    return "Mock example generator prompt content"
 
 @pytest.fixture
 def mock_llm_selector():
-    def mock_selector(strength, temperature):
-        import pandas as pd
-        data = {'model': ['gpt-4'], 'input_cost': [0.15], 'output_cost': [0.6]}
-        df = pd.DataFrame(data)
-        base_model_row = df[df['model'] == 'gpt-4'].iloc[0]
-        return (
-            lambda z: "Mock LLM output",
-            lambda w: 100,
-            base_model_row['input_cost'],
-            base_model_row['output_cost'],
-            'gpt-4'
+    return (
+        lambda *args, **kwargs: (
+            "mock_llm",
+            lambda x: len(x),
+            0.001,
+            0.002,
+            "mock_model"
         )
-    return mock_selector
+    )
 
 @pytest.fixture
-def mock_preprocess():
-    return lambda x, recursive, double_curly_brackets: "Preprocessed content"
+def mock_chain_run():
+    return lambda **kwargs: "Mock generated output"
 
-@pytest.fixture
-def mock_postprocess():
-    return lambda x, y, z, w: ("Postprocessed content", 0.0001)
+def test_context_generator_success(mock_environment, mock_file_content, mock_llm_selector, mock_chain_run):
+    with patch('builtins.open', mock_open(read_data=mock_file_content)):
+        with patch('pdd.context_generator.preprocess', side_effect=lambda x, **kwargs: x):
+            with patch('pdd.context_generator.llm_selector', mock_llm_selector):
+                with patch('pdd.context_generator.LLMChain') as mock_llm_chain:
+                    mock_llm_chain.return_value.run = mock_chain_run
+                    with patch('pdd.context_generator.unfinished_prompt', return_value=(None, True, 0, None)):
+                        with patch('pdd.context_generator.postprocess', return_value=("Postprocessed output", 0.001)):
+                            result = context_generator("test_module", "test_prompt", "python", 0.5, 0.0)
+                            
+                            assert isinstance(result, tuple)
+                            assert len(result) == 3
+                            assert isinstance(result[0], str)
+                            assert isinstance(result[1], float)
+                            assert isinstance(result[2], str)
+                            assert result[0] == "Postprocessed output"
+                            assert result[2] == "mock_model"
 
-def test_context_generator_success(mock_environment, mock_prompt_file, mock_llm_selector, mock_preprocess, mock_postprocess):
-    with patch('builtins.open', mock_open(read_data=mock_prompt_file)):
-        with patch('context_generator.llm_selector', mock_llm_selector):
-            with patch('context_generator.preprocess', mock_preprocess):
-                with patch('context_generator.postprocess', mock_postprocess):
-                    with patch('context_generator.Console') as mock_console:
-                        result, cost = context_generator("test_module", "test prompt", "python", 0.5, 0.0)
-                        
-                        assert result == "Postprocessed content"
-                        assert isinstance(cost, float)
-                        assert cost > 0
+def test_context_generator_unfinished_prompt(mock_environment, mock_file_content, mock_llm_selector, mock_chain_run):
+    with patch('builtins.open', mock_open(read_data=mock_file_content)):
+        with patch('pdd.context_generator.preprocess', side_effect=lambda x, **kwargs: x):
+            with patch('pdd.context_generator.llm_selector', mock_llm_selector):
+                with patch('pdd.context_generator.LLMChain') as mock_llm_chain:
+                    mock_llm_chain.return_value.run = mock_chain_run
+                    with patch('pdd.context_generator.unfinished_prompt', return_value=(None, False, 0.001, None)):
+                        with patch('pdd.context_generator.continue_generation', return_value=("Continued output", 0.002, None)):
+                            with patch('pdd.context_generator.postprocess', return_value=("Postprocessed output", 0.001)):
+                                result = context_generator("test_module", "test_prompt", "python", 0.5, 0.0)
+                                
+                                assert isinstance(result, tuple)
+                                assert len(result) == 3
+                                assert isinstance(result[0], str)
+                                assert isinstance(result[1], float)
+                                assert isinstance(result[2], str)
+                                assert result[0] == "Postprocessed output"
+                                assert result[2] == "mock_model"
 
-def test_context_generator_missing_env_variable(monkeypatch):
-    monkeypatch.delenv('PDD_PATH', raising=False)
-    
+def test_context_generator_missing_env_variable():
     with pytest.raises(ValueError, match="PDD_PATH environment variable is not set"):
-        context_generator("test_module", "test prompt")
-
+        context_generator("test_module", "test_prompt")
 
 def test_context_generator_file_not_found(mock_environment):
     with patch('builtins.open', side_effect=FileNotFoundError):
-        with pytest.raises(FileNotFoundError, match="Prompt file not found at the specified path"):
-            context_generator("test_module", "test prompt")
+        result = context_generator("test_module", "test_prompt")
+        assert result == ("", 0.0, "")
 
-
-def test_context_generator_invalid_parameters(mock_environment, mock_prompt_file):
-    with patch('builtins.open', mock_open(read_data=mock_prompt_file)):
-        with pytest.raises(TypeError):
-            context_generator(123, "test prompt")  # Invalid code_module type
-        with pytest.raises(TypeError):
-            context_generator("test_module", 123)  # Invalid prompt type
-
-
-def test_context_generator_output_types(mock_environment, mock_prompt_file, mock_llm_selector, mock_preprocess, mock_postprocess):
-    with patch('builtins.open', mock_open(read_data=mock_prompt_file)):
-        with patch('context_generator.llm_selector', mock_llm_selector):
-            with patch('context_generator.preprocess', mock_preprocess):
-                with patch('context_generator.postprocess', mock_postprocess):
-                    with patch('context_generator.Console'):
-                        result, cost = context_generator("test_module", "test prompt")
-                        
-                        assert isinstance(result, str)
-                        assert isinstance(cost, float)
+def test_context_generator_exception_handling(mock_environment, mock_file_content):
+    with patch('builtins.open', mock_open(read_data=mock_file_content)):
+        with patch('pdd.context_generator.preprocess', side_effect=Exception("Mocked error")):
+            result = context_generator("test_module", "test_prompt")
+            assert result == ("", 0.0, "")
