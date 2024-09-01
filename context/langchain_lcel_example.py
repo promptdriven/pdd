@@ -58,10 +58,12 @@ prompt = PromptTemplate(
 
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, response_format={"type": "json_object"}) 
 
-# Chain the components
+# Chain the components. 
+#  The class `LLMChain` was deprecated in LangChain 0.1.17 and will be removed in 1.0. Use RunnableSequence, e.g., `prompt | llm` instead.
 chain = prompt | llm | parser
 
-# Invoke the chain with a query
+# Invoke the chain with a query. 
+# IMPORTANT: chain.run is now obsolete. Use chain.invoke instead.
 result = chain.invoke({"query": "Tell me a joke."})
 print("4o mini JSON: ",result)
 
