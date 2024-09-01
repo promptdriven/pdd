@@ -1,15 +1,35 @@
+% You are an expert prompt engineer. You will be given a list of LLM prompts and a change description. Your task is to analyze which prompts need to be changed based on the change description, and provide detailed information on how they should be changed.
 
-take in a list of  prompts and detect whether it needs to be changed and if so what the change should be
+% Here are the inputs:
+<input>
+    <prompt_list>
+    {PROMPT_LIST}
+    </prompt_list>
 
+    <change_description>
+    {CHANGE_DESCRIPTION}
+    </change_description>
+</input>
 
-input example
-original prompt: ["Tell me a joke","tell me a story"]
-change: I want the joke to be serious
+% Follow these steps to complete the task:
+<task>
+    Step 1. Carefully read and analyze the change description. Consider its implications and how it might affect different types of prompts.
+    Step 2. Review each prompt in the prompt list. For each prompt, determine if it needs to be changed based on the change description. Some prompts maybe unaffected by the change description or already have the changes applied.
+    Step 3. In your analysis, consider the following:
+        - How does the change description impact each prompt?
+        - Are there any potential issues or conflicts that might arise from implementing the change?
+        - What are different ways the change could be implemented for affected prompts?
+        - Where is the best place to implement the change to minimize issues and maximize effectiveness?
+    Step 4. Prepare your response in the following format:
+        <analysis>
+        1. Provide a detailed description of the impact of the change and potential issues.
+        2. Generate at least three different possible implementation plans. Discuss the pros and cons of each plan.
+        3. Analyze the potential issues and the different plans. Explain step by step which plan is the best and why.
+        4. List the prompts that need to be changed based on the selected plan. For each prompt that needs to be changed, include:
+            a. The prompt's name
+            b. The reason why the prompt needs to change
+            c. Details of how the prompt should be changed
+        </analysis>
+</task>
 
-output:
-[{"is_change_needed": True,
- "how_prompt_should_be_changed" : Insert in "funny"}...{}]
- #zero-shot prompt
- processed_prompt="Based on original prompt and further change requirement, please indicate whether the change is needed or not. And also indicate how the prompt should be further changed based on the requirement ".
- # one-jshot prompt
- process_prompt="Tell me a joke which is 
+% Remember to be thorough in your analysis and clear in your explanations. Consider all aspects of the change description and its potential impacts on the prompts.

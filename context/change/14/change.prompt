@@ -1,0 +1,3 @@
+% This prompt will generate Python code for a function called 'detect_change'. The goal of the prompt is create a list of prompt changes. The inputs will be a list of prompt_files in this format: ["prompt1_filename", "prompt2_filename", ...] and a change_description.  This function will use the detect_change_LLM prompt: <detect_change_LLM><include>prompts/detect_change_LLM.prompt</include></detect_change_LLM>
+
+% Finally, this will extract out the list of prompts that need to be changed and the details of how they should be changed using the extract_detect_change_LLM prompt: <extract_detect_change_LLM><include>prompts/extract_detect_change_LLM.prompt</include></extract_detect_change_LLM>
