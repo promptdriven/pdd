@@ -23,7 +23,7 @@
 
     % Example usage of the unfinished_prompt function: <unfinished_prompt_example><include>context/unfinished_prompt_example.py</include></unfinished_prompt_example>
 
-    % Here is an example how to continue the generation of a model output: <postprocess_example><include>context/continue_generation_example.py</include></postprocess_example>
+    % Here is an example how to continue the generation of a model output: <continue_generation_example_example><include>context/continue_generation_example.py</include></continue_generation_example>
 
     % Here is an example how to postprocess the model output result: <postprocess_example><include>context/postprocess_example.py</include></postprocess_example>
 </internal_example_modules>
