@@ -41,7 +41,7 @@
             - 'language'
         4b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
     Step 5. This will pretty print the markdown formatting that is present in the result via the rich Markdown function. It will also pretty print the number of tokens in the result and the cost.
-    Step 6. Detect if the generation is incomplete using the unfinished_prompt function (strength .5) by passing in the last 200 characters of the output of Step 4.
+    Step 6. Detect if the generation is incomplete using the unfinished_prompt function (strength .9) by passing in the last 600 characters of the output of Step 4.
         - a. If incomplete, call the continue_generation function to complete the generation.
         - b. Else, if complete, postprocess the model output result using the postprocess function from the postprocess module with a strength of 0.9.
     Step 7. Print out the total_cost including the input and output tokens and functions that incur cost (e.g. postprocessing).
