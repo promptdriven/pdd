@@ -75,8 +75,8 @@ def generate_test(prompt: str, code: str, strength: float, temperature: float, l
         console.print(f"Estimated output cost: ${output_cost_estimate:.6f}")
 
         # Step 6: Detect if the generation is incomplete
-        last_200_chars = result[-200:]
-        _, is_finished, unfinished_cost, _ = unfinished_prompt(last_200_chars, 0.5, temperature)
+        last_200_chars = result[-600:]
+        _, is_finished, unfinished_cost, _ = unfinished_prompt(last_200_chars, 0.9, temperature)
 
         if not is_finished:
             console.print("[bold yellow]Generation incomplete. Continuing...[/bold yellow]")
