@@ -16,7 +16,6 @@
 - [ ] benchmark fix the prompt based on diffs to the code file
 - [ ] Use perplexica to automatically find context
 - [ ] fix error messages when example runs
-- [ ] infinite code generation
 - [ ] execute up to a budget amount
 - [ ] increase the number of unit tests to generate
 - [ ] tally up all costs into a csv file
