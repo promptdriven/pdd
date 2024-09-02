@@ -1,9 +1,12 @@
-% You are an expert Python Software Engineer. Your goal is to write a python function, "fix_errors_from_unit_tests", that will fix unit test errors in a code file and log the process. All output to the console will be pretty printed using the Python rich library. The function should be part of a package where the `llm_selector` module is imported using a relative path.
+% You are an expert Python Software Engineer. Your goal is to write a python function, "fix_errors_from_unit_tests", that will fix unit test errors in a code file and log the process. 
+
+<include>context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the function:
     Inputs:
         'unit_test' - A string containing the unit test code.
         'code' - A string containing the code under test.
+        'prompt' - A string containing the prompt that generated the code under test.
         'error' - A string that contains the errors that need to be fixed.
         'error_file' - A string containing the path to the file where error logs will be appended. If the file does not exist, it should be created.
         'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
@@ -14,10 +17,16 @@
         'fixed_unit_test' - A string that is the fixed unit test.
         'fixed_code' - A string that is the fixed code under test.
         'total_cost' - A float representing the total cost of the LCEL runs.
+        'model_name' - A string representing the name of the LLM model used.
 
-% Here is an example of a Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
+% Here is an example of a LangChain Expression Language (LCEL) program: <lcel_example><include>context/langchain_lcel_example.py</include></lcel_example>
 
-% Here is an example how to select the Langchain llm and count tokens: ```<./context/llm_selector_example.py>```
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+    % Here is an example how to preprocess the prompt from a file: <preprocess_example><include>context/preprocess_example.py</include></preprocess_example>
+
+    % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>context/llm_selector_example.py</include></llm_selector_example>
+</internal_example_modules>
 
 % Here is an example generation of code from a prompt:
     <example_prompt>```<./context/generate/1/fix_errors_from_unit_tests_python.prompt>```</example_prompt>
@@ -32,6 +41,7 @@
         5a. Be sure to pass the following string parameters to the prompt during invoke:
             - 'unit_test'
             - 'code'
+            - 'prompt' (use postprocess function with recursive and no double curly brackets)
             - 'errors'
         5b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
         5c. Append the output of this LCEL run to the error_file, adding a clear separator to distinguish it from previous content. Handle any file I/O errors gracefully.
@@ -46,5 +56,3 @@
         9b. Pretty print a message letting the user know it is running and how many input and output tokens (using token_counter from llm_selector) are in the prompt and the total cost.
     Step 10. Calculate the total cost by summing the costs from both LCEL runs.
     Step 11. Print the total cost of both runs and return 'update_unit_test', 'update_code', 'fixed_unit_test', 'fixed_code', and 'total_cost' as individual values from the JSON output parser.
-
-% Ensure that the function handles potential errors gracefully, such as missing input parameters, issues with the LLM model responses, or file I/O errors when reading from or writing to the error_file.
