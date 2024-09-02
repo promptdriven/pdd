@@ -1,45 +1,38 @@
-# Here's a concise example of how to use the `fix_code_module_errors` function from the `fix_code_module_errors.py` module. This example includes documentation for the input and output parameters.
+import os
+from rich.console import Console
+from pdd.fix_code_module_errors import fix_code_module_errors
 
-# ### Example Usage
+console = Console()
 
-# ```python
-# Import the function from the module
-from fix_code_module_errors import fix_code_module_errors
 
-# Define the input parameters
-program = "Example Program"
-prompt = "Fix the following code errors."
-code = """
-def add(a, b):
-    return a + b
+def main() -> None:
+    """
+    Main function to demonstrate the usage of fix_code_module_errors.
+    Sets up example inputs, calls the function, and displays the results.
+    """
+    # Set up example inputs
+    program: str = """from calculate_mean import calculate_mean
+    calculate_mean([1, 2, 3, 4, 5])"""
+    prompt: str = "Create a function to calculate the mean of a list of numbers"
+    code: str = """
+    def calculate_mean(numbers):
+        returnsum(numbers) / len(numbers)
+    """
+    errors: str = "SyntaxError: invalid syntax"
+    strength: float = 0.7  # Strength parameter for LLM selection (0.0 to 1.0)
+    temperature: float = 0.0  # Temperature parameter for LLM selection (0.0 to 1.0), DEFAULT: 0.0
+    
+    # Call the function
+    fixed_code, total_cost, model_name = fix_code_module_errors(
+        program, prompt, code, errors, strength, temperature
+    )
 
-print(add(5, '10'))  # This will cause a TypeError
-"""
-errors = "TypeError: unsupported operand type(s) for +: 'int' and 'str'"
-strength = 1  # Adjust the strength as needed
+    # Display results
+    console.print("\n[bold]Results:[/bold]")
+    console.print(f"Fixed Code:\n{fixed_code}")
+    console.print(f"Total Cost: ${total_cost:.6f}")
+    console.print(f"Model Used: {model_name}")
 
-# Call the function to fix code errors
-fixed_code, total_cost = fix_code_module_errors(program, prompt, code, errors, strength)
 
-# Print the results
-if fixed_code is not None:
-    print("Fixed Code:")
-    print(fixed_code)
-    print(f"Total Cost: ${total_cost:.6f}")
-else:
-    print("Failed to fix the code.")
-# ```
-
-# ### Input Parameters
-# - `program` (str): A description or name of the program being analyzed.
-# - `prompt` (str): A prompt that instructs the model on what to do with the code.
-# - `code` (str): The code snippet that contains errors.
-# - `errors` (str): A description of the errors present in the code.
-# - `strength` (int): A parameter that influences the model's behavior (e.g., creativity or strictness).
-
-# ### Output Parameters
-# - `fixed_code` (str): The corrected version of the input code.
-# - `total_cost` (float): The total cost incurred during the execution of the function, based on token usage.
-
-# ### Note
-# Make sure to set the `PDD_PATH` environment variable to the directory containing the prompt file before running the example.
+if __name__ == "__main__":
+    main()
