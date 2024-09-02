@@ -33,31 +33,31 @@ all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_O
 $(PDD_DIR)/%.py: $(PROMPTS_DIR)/%_python.prompt
 	@echo "Generating $@"
 	@mkdir -p $(PDD_DIR)
-	@PYTHONPATH=$(PROD_DIR) python pdd/pdd.py --strength 1 generate --output $@ $<
+	@PYTHONPATH=$(PROD_DIR) pdd --strength 1 generate --output $@ $<
 
 # Generate Makefile
 $(MAKEFILE_OUTPUT): $(MAKEFILE_PROMPT)
 	@echo "Generating $@"
 	@mkdir -p $(STAGING_DIR)
-	@PYTHONPATH=$(PROD_DIR) python pdd/pdd.py generate --output $@ $<
+	@PYTHONPATH=$(PROD_DIR) pdd generate --output $@ $<
 
 # Generate CSV files
 $(DATA_DIR)/%.csv: $(PROMPTS_DIR)/%_csv.prompt
 	@echo "Generating $@"
 	@mkdir -p $(DATA_DIR)
-	@PYTHONPATH=$(PROD_DIR) python pdd/pdd.py generate --output $@ $<
+	@PYTHONPATH=$(PROD_DIR) pdd generate --output $@ $<
 
 # Generate example files
 $(CONTEXT_DIR)/%_example.py: $(PDD_DIR)/%.py
 	@echo "Generating example for $<"
 	@mkdir -p $(CONTEXT_DIR)
-	@PYTHONPATH=$(PROD_DIR) python pdd/pdd.py example --output $@ $<
+	@PYTHONPATH=$(PROD_DIR) pdd example --output $@ $<
 
 # Generate test files
 $(TESTS_DIR)/test_%.py: $(PDD_DIR)/%.py $(PROMPTS_DIR)/%_python.prompt
 	@echo "Generating test for $<"
 	@mkdir -p $(TESTS_DIR)
-	@PYTHONPATH=$(PROD_DIR) python pdd/pdd.py --strength 1 test --output $@ $^
+	@PYTHONPATH=$(PROD_DIR) pdd --strength 1 test --output $@ $^
 
 # Run tests
 test:
