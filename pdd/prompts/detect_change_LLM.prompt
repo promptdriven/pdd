@@ -11,6 +11,16 @@
     </change_description>
 </input>
 
+% Here is an example of output given an input:
+<example>
+    <input_example>
+        <include>context/detect_change/1/prompt_list.txt</include>
+    </input_example>
+    <output_example>
+        <include>context/detect_change/1/detect_change_output.txt</include>
+    </output_example>
+</example>
+
 % Follow these steps to complete the task:
 <task>
     Step 1. Carefully read and analyze the change description. Consider its implications and how it might affect different types of prompts.
@@ -28,7 +38,7 @@
         4. List the prompts that need to be changed based on the selected plan. For each prompt that needs to be changed, include:
             a. The prompt's name
             b. The reason why the prompt needs to change
-            c. Details of how the prompt should be changed
+            c. Detail instructions for a LLM of how the prompt should be changed. Everything that is needed to know how to change the prompt effectively should be included here. If a file should be loaded in for reference, be sure to use the include xml tag so that the file is loaded. Also, be aware that everything, including the include tag will be replaces by what's in the file, so be sure to include the file name separately in the instructions.
         </analysis>
 </task>
 
