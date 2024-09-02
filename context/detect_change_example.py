@@ -6,12 +6,13 @@ console = Console()
 
 # List of prompt files to analyze
 prompt_files = [
-    "/path/to/prompt1.txt",
-    "/path/to/prompt2.txt",
-    "/path/to/prompt3.txt"
+    "context/python_preamble.prompt",
+    "prompts/change_python.prompt",
+    "prompts/fix_error_loop_python.prompt",
+    "prompts/code_generator_python.prompt"
 ]
 # create a list of all prompt files in the prompts and context directory
-prompt_files = [str(prompt_file) for prompt_file in Path("prompts").glob("*.prompt")] + [str(prompt_file) for prompt_file in Path("context").glob("*.prompt")]
+# prompt_files = [str(prompt_file) for prompt_file in Path("prompts").glob("*.prompt")] + [str(prompt_file) for prompt_file in Path("context").glob("*.prompt")]
 print("prompt files", prompt_files)
 # Description of the change to be analyzed
 change_description = "Use context/python_preamble.prompt to make prompts more compact. Some prompts might already have this."

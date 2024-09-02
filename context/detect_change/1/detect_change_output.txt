@@ -1,0 +1,52 @@
+<analysis>
+1. The change description suggests using the context/python_preamble.prompt to make prompts more compact. This change aims to reduce redundancy and improve consistency across prompts. The main impact would be the standardization of common Python-related instructions and requirements across multiple prompts. Potential issues include:
+   - Some prompts may already include this preamble, leading to unnecessary duplication.
+   - The preamble might not be relevant or applicable to all prompts in the list.
+   - Integrating the preamble might disrupt the existing structure or flow of some prompts.
+
+2. Possible implementation plans:
+
+   Plan A: Direct Inclusion
+   - Pros: Simple to implement, ensures consistency
+   - Cons: May lead to redundancy, might not be relevant for all prompts
+
+   Plan B: Conditional Inclusion
+   - Pros: Avoids redundancy, allows for flexibility
+   - Cons: Requires more complex implementation, might lead to inconsistencies
+
+   Plan C: Reference-based Inclusion
+   - Pros: Maintains consistency, reduces redundancy, allows for easy updates
+   - Cons: Requires changes to the prompt processing system
+
+3. After analyzing the potential issues and different plans, Plan C (Reference-based Inclusion) appears to be the best option. Here's why:
+
+   Step 1: It addresses the redundancy issue by using a reference instead of directly including the preamble content.
+   Step 2: It maintains consistency across prompts by ensuring all refer to the same preamble file.
+   Step 3: It allows for easy updates to the preamble without needing to modify individual prompts.
+   Step 4: It provides flexibility, as prompts that don't need the preamble can simply omit the reference.
+   Step 5: It aligns with the existing use of the <include> tag in some prompts, suggesting the prompt processing system already supports this approach.
+
+4. Prompts that need to be changed:
+
+   a. Prompt Name: prompts/change_python.prompt
+      Reason: This prompt contains Python-specific instructions that could be standardized using the preamble.
+      Instructions: 
+      - Add the the include xml tag for "./context/python_preamble.prompt" after the role and goal:
+      - The above include contains this information: <python_preamble><include>context/python_preamble.prompt</include></python_preamble>
+      - Here is an example of how this python_preamble was used: <python_preamble><include>prompts/code_generator_python.prompt</include></python_preamble>
+      - Remove any redundant instructions that are now covered by the preamble, such as:
+        "The function should be part of a Python package, using relative imports (single dot) for internal modules. All output to the console will be pretty printed using the Python Rich library. Ensure the function handles edge cases, such as missing inputs or model errors, and provide clear error messages."
+      - Ensure that any specific instructions not covered by the preamble are retained.
+
+   b. Prompt Name: prompts/fix_error_loop_python.prompt
+      Reason: This prompt contains Python-specific instructions that could be standardized using the preamble.
+      Instructions:
+      - Add the the include xml tag for "./context/python_preamble.prompt" after the role and goal:
+      - The above include contains this information: <python_preamble><include>context/python_preamble.prompt</include></python_preamble>
+      - Here is an example of how this python_preamble was used: <python_preamble><include>prompts/code_generator_python.prompt</include></python_preamble>
+      - Remove any redundant instructions that are now covered by the preamble, such as:
+        "All output to the console will be pretty printed using the Python rich library."
+      - Ensure that any specific instructions not covered by the preamble are retained, especially those related to the specific function being described.
+
+   Note: The prompts "context/python_preamble.prompt" and "prompts/code_generator_python.prompt" do not need changes as they already include or reference the python_preamble.prompt file.
+</analysis>
