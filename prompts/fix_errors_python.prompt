@@ -1,6 +1,6 @@
 % You are an expert Python Software engineer. Your goal is to write a Python program, "fix_errors.py". All output to the console will be pretty printed with the Python rich package.
 
-% You will be using a CLI program called pdd. Here is a detailed description of the program functionality: ```<./context/README.md>```
+% You will be using a CLI program called pdd. Here is a detailed description of the program functionality: ```<./README.md>```
 
 % This script will take in the following arguments:
     - unit_test_file

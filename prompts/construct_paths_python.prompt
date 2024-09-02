@@ -14,7 +14,7 @@
     - 'output_file_paths' (dict)- A dictionary with the keys being the loaded input files and output files paths.
     - 'language' (string) - The language of the output file.
 
-% Here is a detailed description of the program functionality: ```<./context/README.md>```
+% Here is a detailed description of the program functionality: ```<./README.md>```
 
 % Here is an example of how to lookup a file extension given a language: ```<./context/get_extension_example.py>```
 
