@@ -1,6 +1,29 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-PDD is a versatile tool for generating code, examples, unit tests, and managing prompt files through various features like splitting large prompt files into smaller ones.
+## Introduction
+
+PDD (Prompt-Driven Development) is a versatile tool for generating code, creating examples, running unit tests, and managing prompt files. It leverages AI models to streamline the development process, allowing developers to work more efficiently with prompt-driven code generation.
+
+## Version
+
+Current version: 0.1.0
+
+To check your installed version, run:
+```
+pdd --version
+```
+
+## Supported Programming Languages
+
+PDD supports a wide range of programming languages, including but not limited to:
+- Python
+- JavaScript
+- Java
+- C++
+- Ruby
+- Go
+
+The specific language is often determined by the prompt file's naming convention or specified in the command options.
 
 ## Prompt File Naming Convention
 
@@ -20,7 +43,7 @@ Examples:
 ## Basic Usage
 
 ```
-python pdd/pdd.py [GLOBAL OPTIONS] COMMAND [OPTIONS] [ARGS]...
+pdd [GLOBAL OPTIONS] COMMAND [OPTIONS] [ARGS]...
 ```
 
 ## Global Options
@@ -29,14 +52,21 @@ These options can be used with any command:
 
 - `--force`: Overwrite existing files without asking for confirmation.
 - `--strength FLOAT`: Set the strength of the AI model (0.0 to 1.0, default is 0.5).
-- `--temperature`: Set the temperature of the AI model (default is 0.0).
+- `--temperature FLOAT`: Set the temperature of the AI model (default is 0.0).
 - `--verbose`: Increase output verbosity for more detailed information.
 - `--quiet`: Decrease output verbosity for minimal information.
 - `--output-cost PATH_TO_CSV_FILE`: Enable cost tracking and output a CSV file with usage details.
 
+## AI Model Information
+
+PDD uses a large language model to generate and manipulate code. The `--strength` and `--temperature` options allow you to control the model's output:
+
+- Strength: Determines how powerful/expensive a model should be used. Higher values (closer to 1.0) result in high performance, while lower values are cheaper.
+- Temperature: Controls the randomness of the output. Higher values increase diversity but may lead to less coherent results, while lower values produce more focused and deterministic outputs.
+
 ## Output Cost Tracking
 
-PDD includes a global feature for tracking and reporting the cost of operations. When enabled, it generates a CSV file with usage details for each command execution.
+PDD includes a feature for tracking and reporting the cost of operations. When enabled, it generates a CSV file with usage details for each command execution.
 
 ### Usage
 
@@ -70,9 +100,9 @@ If this environment variable is set, the CSV file will be saved to the specified
 
 ## Commands
 
-Here are the main commands:
+Here are the main commands provided by PDD:
 
-### 1. Generate
+### 1. generate
 
 Create runnable code from a prompt file.
 
@@ -80,10 +110,18 @@ Create runnable code from a prompt file.
 pdd generate [GLOBAL OPTIONS] [OPTIONS] PROMPT_FILE
 ```
 
+Arguments:
+- `PROMPT_FILE`: The filename of the prompt file used to generate the code.
+
 Options:
 - `--output LOCATION`: Specify where to save the generated code. The default file name is `<basename>.<language_file_extension>`. If an environment variable `PDD_GENERATE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 
-### 2. Example
+Example:
+```
+pdd generate --output src/app.py my_app_python.prompt 
+```
+
+### 2. example
 
 Create an example file from an existing code file and the prompt that generated the code file.
 
@@ -91,10 +129,19 @@ Create an example file from an existing code file and the prompt that generated 
 pdd example [GLOBAL OPTIONS] [OPTIONS] CODE_FILE PROMPT_FILE
 ```
 
+Arguments:
+- `CODE_FILE`: The filename of the existing code file.
+- `PROMPT_FILE`: The filename of the prompt file that generated the code.
+
 Options:
 - `--output LOCATION`: Specify where to save the generated example code. The default file name is `<basename>_example.<language_file_extension>`. If an environment variable `PDD_EXAMPLE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 
-### 3. Test
+Example:
+```
+pdd example --output examples/app_example.py src/app.py my_app_python.prompt 
+```
+
+### 3. test
 
 Generate a unit test file for a given code file and its corresponding prompt file.
 
@@ -102,11 +149,20 @@ Generate a unit test file for a given code file and its corresponding prompt fil
 pdd test [GLOBAL OPTIONS] [OPTIONS] CODE_FILE PROMPT_FILE
 ```
 
+Arguments:
+- `CODE_FILE`: The filename of the code file to be tested.
+- `PROMPT_FILE`: The filename of the prompt file that generated the code.
+
 Options:
-- `--output LOCATION`: Specify where to save the generated test file. The default file name is `test_<basename>.<language_file_extension>`. If an environment variable `PDD_TEST_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output LOCATION`: Specify where to save the generated test file. The default file name is `test_<basename>.<language_file_extension>`.
 - `--language`: Specify the programming language. Defaults to the language specified by the prompt file name.
 
-### 4. Preprocess
+Example:
+```
+pdd test --output tests/test_app.py src/app.py my_app_python.prompt 
+```
+
+### 4. preprocess
 
 Preprocess prompt files and save the results.
 
@@ -114,17 +170,30 @@ Preprocess prompt files and save the results.
 pdd preprocess [GLOBAL OPTIONS] [OPTIONS] PROMPT_FILE
 ```
 
+Arguments:
+- `PROMPT_FILE`: The filename of the prompt file to preprocess.
+
 Options:
-- `--output LOCATION`: Specify where to save the preprocessed prompt file. The default file name is `<basename>_<language>_preprocessed.prompt`. If an environment variable `PDD_PREPROCESS_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output LOCATION`: Specify where to save the preprocessed prompt file. The default file name is `<basename>_<language>_preprocessed.prompt`.
 - `--xml`: Automatically insert XML delimiters for long and complex prompt files to structure the content better.
 
-### 5. Fix
+Example:
+```
+pdd preprocess --output preprocessed/my_app_python_preprocessed.prompt --xml my_app_python.prompt 
+```
+
+### 5. fix
 
 Fix errors in code and unit tests based on error messages.
 
 ```
 pdd fix [GLOBAL OPTIONS] [OPTIONS] UNIT_TEST_FILE CODE_FILE ERROR_FILE
 ```
+
+Arguments:
+- `UNIT_TEST_FILE`: The filename of the unit test file.
+- `CODE_FILE`: The filename of the code file to be fixed.
+- `ERROR_FILE`: The filename containing the error messages.
 
 Options:
 - `--output-test LOCATION`: Specify where to save the fixed unit test file. The default file name is `test_<basename>_fixed.<language_file_extension>`. If an environment variable `PDD_FIX_TEST_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
@@ -143,7 +212,12 @@ Outputs when using `--loop`:
 - Total number of fix attempts made
 - Total cost of all fix attempts
 
-### 6. Split
+Example:
+```
+pdd fix --output-test tests/test_app_fixed.py --output-code src/app_fixed.py tests/test_app.py src/app.py errors.log
+```
+
+### 6. split
 
 Split large complex prompt files into smaller, more manageable prompt files.
 
@@ -151,49 +225,123 @@ Split large complex prompt files into smaller, more manageable prompt files.
 pdd split [GLOBAL OPTIONS] [OPTIONS] INPUT_PROMPT INPUT_CODE EXAMPLE_CODE
 ```
 
+Arguments:
+- `INPUT_PROMPT`: The filename of the large prompt file to be split.
+- `INPUT_CODE`: The filename of the code generated from the input prompt.
+- `EXAMPLE_CODE`: The filename of the example code that serves as the interface to the sub-module prompt file.
+
 Options:
 - `--output-sub LOCATION`: Specify where to save the generated sub-prompt file. The default file name is `sub_<basename>.prompt`. If an environment variable `PDD_SPLIT_SUB_PROMPT_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--output-modified LOCATION`: Specify where to save the modified prompt file. The default file name is `modified_<basename>.prompt`. If an environment variable `PDD_SPLIT_MODIFIED_PROMPT_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 
-The `EXAMPLE_CODE` input serves as the interface to the sub-module prompt file that will be generated.
+Example:
+```
+pdd split --output-sub prompts/sub_module.prompt --output-modified prompts/modified_main.prompt large_app.prompt src/app.py examples/interface.py 
+```
 
-### 7. Change
+### 7. change
 
 Modify an input prompt file based on a change prompt and the corresponding input code.
 
 ```
-pdd change [GLOBAL OPTIONS] [OPTIONS] INPUT_PROMPT INPUT_CODE CHANGE_PROMPT
+pdd change [GLOBAL OPTIONS] [OPTIONS] INPUT_PROMPT_FILE INPUT_CODE_FILE CHANGE_PROMPT_FILE
 ```
+
+Arguments:
+- `INPUT_PROMPT_FILE`: The filename of the prompt file that will be modified.
+- `INPUT_CODE_FILE`: The filename of the code that was generated from the input prompt file.
+- `CHANGE_PROMPT_FILE`: The filename containing the instructions on how to modify the input prompt file.
 
 Options:
 - `--output LOCATION`: Specify where to save the modified prompt file. The default file name is `modified_<basename>.prompt`. If an environment variable `PDD_CHANGE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 
-This command takes three inputs:
-- `INPUT_PROMPT`: A string containing the prompt file that will be modified.
-- `INPUT_CODE`: A string containing the code that was generated from the input prompt file.
-- `CHANGE_PROMPT`: A string containing the instructions on how to modify the input prompt file.
+Example:
+```
+pdd change my_app_python.prompt src/app.py changes.prompt --output modified_my_app_python.prompt
+```
 
-The command produces one output:
-- `MODIFIED_PROMPT`: A string containing the modified prompt file that was changed based on the change prompt.
-
-### 8. Update
+### 8. update
 
 Update the original prompt file based on the original code and the modified code.
 
 ```
-pdd update [GLOBAL OPTIONS] [OPTIONS] INPUT_PROMPT INPUT_CODE MODIFIED_CODE
+pdd update [GLOBAL OPTIONS] [OPTIONS] INPUT_PROMPT_FILE INPUT_CODE_FILE MODIFIED_CODE_FILE
 ```
 
+Arguments:
+- `INPUT_PROMPT_FILE`: The filename of the prompt file that generated the original code.
+- `INPUT_CODE_FILE`: The filename of the original code that was generated from the input prompt file.
+- `MODIFIED_CODE_FILE`: The filename of the code that was modified by the user.
+
 Options:
-- `--output LOCATION`: Specify where to save the modified prompt file. The default file name is `modified_<basename>.prompt`. If an environment variable `PDD_UPDATE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output LOCATION`: Specify where to save the modified prompt file. The default file name is `modified_<basename>.prompt`.  If an environment variable `PDD_UPDATE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 
-This command takes three inputs:
-- `INPUT_PROMPT`: A string containing the prompt file that generated the original code.
-- `INPUT_CODE`: A string containing the original code that was generated from the input prompt file.
-- `MODIFIED_CODE`: A string containing the code that was modified by the user.
+Example:
+```
+pdd update --output updated_my_app_python.prompt my_app_python.prompt src/original_app.py src/modified_app.py
+```
 
-The command produces one output:
-- `MODIFIED_PROMPT`: A string containing the modified prompt file that will generate the modified code.
+### 9. detect
+
+Analyze a list of prompt files and a change description to determine which prompts need to be changed.
+
+```
+pdd detect [GLOBAL OPTIONS] [OPTIONS] PROMPT_FILES... CHANGE_FILE
+```
+
+Arguments:
+- `PROMPT_FILES`: A list of filenames of prompts that may need to be changed.
+- `CHANGE_FILE`: Filename whose content describes the changes that need to be analyzed and potentially applied to the prompts.
+
+Options:
+- `--output LOCATION`: Specify where to save the CSV file containing the analysis results. The default file name is `<change_file_basename>_detect.csv`.  If an environment variable `PDD_DETECT_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+
+Example:
+```
+pdd detect --output detect_results.csv prompt1.prompt prompt2.prompt prompt3.prompt changes.prompt
+```
+
+### 10. conflicts
+
+Analyze two prompt files to find conflicts between them and suggest how to resolve those conflicts.
+
+```
+pdd conflicts [GLOBAL OPTIONS] [OPTIONS] PROMPT1 PROMPT2
+```
+
+Arguments:
+- `PROMPT1`: First prompt in the pair of prompts we are comparing.
+- `PROMPT2`: Second prompt in the pair of prompts we are comparing.
+
+Options:
+- `--output LOCATION`: Specify where to save the CSV file containing the conflict analysis results. The default file name is `<prompt1_basename>_<prompt2_basename>_conflict.csv`.  If an environment variable `PDD_CONFLICTS_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+
+Example:
+```
+pdd conflicts --output conflicts_analysis.csv module1_python.prompt module2_python.prompt 
+```
+
+### 11. crash
+
+Fix errors in a code module that caused a program to crash.
+
+```
+pdd crash [GLOBAL OPTIONS] [OPTIONS] PROGRAM_FILE PROMPT_FILE CODE_FILE ERROR_FILE
+```
+
+Arguments:
+- `PROGRAM_FILE`: Filename of the program that was running the code module.
+- `PROMPT_FILE`: Filename of the prompt file that generated the code module.
+- `CODE_FILE`: Filename of the code module that caused the crash and will be modified so it runs properly.
+- `ERROR_FILE`: Filename of the file containing the errors from the program run.
+
+Options:
+- `--output LOCATION`: Specify where to save the fixed code file. The default file name is `<basename>_fixed.<language_extension>`.  If an environment variable `PDD_CRASH_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+
+Example:
+```
+pdd crash --output fixed_module.py main.py module_prompt.prompt crashed_module.py crash_errors.log 
+```
 
 ## Output Location Specification
 
@@ -218,42 +366,40 @@ Here are some examples of multi-command chaining to illustrate its power and fle
 
 1. Generate code, create an example, and run tests in one go:
 ```
-pdd generate app_python.prompt --output src/app.py example src/app.py app_python.prompt --output examples/usage.py test src/app.py app_python.prompt --output tests/test_app.py
+pdd generate --output src/app.py app_python.prompt example --output examples/usage.py src/app.py app_python.prompt test --output tests/test_app.py src/app.py app_python.prompt
 ```
-This chain will:
-- Generate code from `app_python.prompt` and save it to `src/app.py`
-- Create an example based on `src/app.py` using `app_python.prompt` and save it to `examples/usage.py`
-- Generate a test file for `src/app.py` using `app_python.prompt` and save it to `tests/test_app.py`
 
 2. Preprocess a prompt, generate code, and create an example with cost tracking:
 ```
-pdd --output-cost usage.csv preprocess app_python.prompt --output preprocessed/app_python_preprocessed.prompt generate preprocessed/app_python_preprocessed.prompt --output src/app.py example src/app.py app_python.prompt --output examples/usage.py
+pdd --output-cost usage.csv preprocess --output preprocessed/app_python_preprocessed.prompt app_python.prompt generate --output src/app.py preprocessed/app_python_preprocessed.prompt example --output examples/usage.py src/app.py app_python.prompt
 ```
-This chain will:
-- Enable cost tracking and save the results to `usage.csv`
-- Preprocess `app_python.prompt` and save the result to `preprocessed/app_python_preprocessed.prompt`
-- Generate code from the preprocessed prompt and save it to `src/app.py`
-- Create an example based on `src/app.py` and using `app_python.prompt` and save it to `examples/usage.py`
 
 3. Split a large prompt, generate code from the sub-prompt, and create a test:
 ```
-pdd split large_app_python.prompt --output-sub sub_prompts/module_python.prompt --output-modified modified_prompts/main_app_python.prompt generate sub_prompts/module_python.prompt --output src/module.py test src/module.py sub_prompts/module_python.prompt --output tests/test_module.py
+pdd split --output-sub sub_prompts/module_python.prompt --output-modified modified_prompts/main_app_python.prompt large_app_python.prompt input_code.py example_code.py generate --output src/module.py sub_prompts/module_python.prompt test --output tests/test_module.py src/module.py sub_prompts/module_python.prompt
 ```
-This chain will:
-- Split `large_app_python.prompt` into a sub-prompt and a modified main prompt
-- Generate code from the sub-prompt and save it to `src/module.py`
-- Create a test file for `src/module.py` using the sub-prompt and save it to `tests/test_module.py`
 
 4. Update a prompt based on code changes, then generate new code and tests:
 ```
-pdd update app_python.prompt src/original_app.py src/modified_app.py --output updated_prompts/updated_app_python.prompt generate updated_prompts/updated_app_python.prompt --output src/new_app.py test src/new_app.py updated_prompts/updated_app_python.prompt --output tests/test_new_app.py
+pdd update --output updated_prompts/updated_app_python.prompt app_python.prompt src/original_app.py src/modified_app.py generate --output src/new_app.py updated_prompts/updated_app_python.prompt test --output tests/test_new_app.py src/new_app.py updated_prompts/updated_app_python.prompt
 ```
-This chain will:
-- Update `app_python.prompt` based on changes between `original_app.py` and `modified_app.py`
-- Generate new code from the updated prompt and save it to `src/new_app.py`
-- Create a test file for the new code and save it to `tests/test_new_app.py`
 
-These examples demonstrate how you can combine multiple PDD commands to create sophisticated workflows, automating complex development tasks in a single command line invocation.
+5. Detect prompts that need changes, then apply changes to those prompts:
+```
+pdd detect --output to_change.csv prompt1.prompt prompt2.prompt prompt3.prompt changes.prompt change --output modified_prompts/ $(cat to_change.csv | cut -d',' -f1 | tail -n +2) changes.prompt
+```
+
+6. Analyze conflicts between two prompts and then update one of them:
+```
+pdd conflicts --output conflicts.csv prompt1.prompt prompt2.prompt update --output updated_prompt1.prompt prompt1.prompt $(head -n 1 conflicts.csv | cut -d',' -f4)
+```
+
+7. Fix a crashed module and then run tests on the fixed code:
+```
+pdd crash --output fixed_module.py main_program.py module_prompt.prompt crashed_module.py crash_errors.log test --output tests/test_fixed_module.py fixed_module.py module_prompt.prompt
+```
+
+These examples demonstrate how you can combine multiple PDD commands to create sophisticated workflows, automating complex development tasks in a single command line invocation. Remember that options always come before arguments for each command in the chain.
 
 ## Getting Help
 
@@ -278,7 +424,6 @@ PDD provides comprehensive help features:
   pdd --install-completion
   ```
 - **Colorized Output**: PDD provides colorized output for better readability in compatible terminals.
-- **Progress Indicators**: For long-running operations, PDD includes progress indicators to keep you informed of the task's status.
 
 ## Environment Variables for Output Paths
 
@@ -295,86 +440,73 @@ You can set environment variables to define default output paths for each comman
 - **`PDD_CHANGE_OUTPUT_PATH`**: Default path for the modified prompts generated by the `change` command.
 - **`PDD_UPDATE_OUTPUT_PATH`**: Default path for the updated prompts generated by the `update` command.
 - **`PDD_OUTPUT_COST_PATH`**: Default path for the cost tracking CSV file.
+- **`PDD_DETECT_OUTPUT_PATH`**: Default path for the CSV file generated by the `detect` command.
+- **`PDD_CONFLICTS_OUTPUT_PATH`**: Default path for the CSV file generated by the `conflicts` command.
+- **`PDD_CRASH_OUTPUT_PATH`**: Default path for the fixed code file generated by the `crash` command.
 
-## Examples of Common Workflows
+## Error Handling
 
-1. Preprocess a prompt file, generate code, create an example, and generate tests (using multi-command chaining):
-```
-pdd preprocess --output preprocessed/ --temperature 0.0 app_python.prompt generate --output src/app.py --temperature 0.0 preprocessed/app_python_preprocessed.prompt example --output examples/ --temperature 0.0 src/app.py app_python.prompt test --output tests/ --language python --temperature 0.0 src/app.py app_python.prompt
-```
+PDD provides informative error messages when issues occur during command execution. Common error scenarios include:
 
-2. Generate code and create examples for multiple prompt files (using multi-command chaining):
-```
-pdd generate --output src/api.py --temperature 0.0 api_python.prompt generate --output src/db.py --temperature 0.0 database_sql.prompt example --output examples/api_usage.py api_usage_python.prompt --temperature 0.0 src/api.py example --output examples/db_usage.py app_python.prompt --temperature 0.0 src/db.py
-```
+- Invalid input files or formats
+- Insufficient permissions to read/write files
+- AI model-related errors (e.g., API failures)
+- Syntax errors in generated code
 
-3. Preprocess a prompt file and view the diff:
-```
-pdd preprocess --output preprocessed/app_python_preprocessed.prompt --diff --temperature 0.0 app_python.prompt
-```
+When an error occurs, PDD will display a message describing the issue and, when possible, suggest steps to resolve it.
 
-4. Preprocess a prompt file with XML delimiters inserted:
-```
-pdd preprocess --output preprocessed/app_python_preprocessed.xml --xml app_python.prompt
-```
+## Troubleshooting
 
-5. Preprocess multiple prompt files and generate code for each (using multi-command chaining):
-```
-pdd preprocess --output preprocessed/ --temperature 0.0 api_python.prompt preprocess --output preprocessed/ --temperature 0.0 db_sql.prompt generate --output src/ --temperature 0.0 preprocessed/api_python_preprocessed.prompt generate --output src/ --temperature 0.0 preprocessed/db_sql_preprocessed.prompt
-```
+Here are some common issues and their solutions:
 
-6. Fix errors in code and unit tests:
-```
-pdd fix --output-test fixed/test_app_fixed.py --output-code fixed/app_fixed.py --temperature 0.0 tests/test_app.py src/app.py error_log.txt
-```
+1. **Command not found**: Ensure PDD is properly installed and added to your system's PATH.
 
-Note: The error messages in the `error_log.txt` file come from pytest and the output of the LLMs, all piped into this error file.
+2. **Permission denied errors**: Check that you have the necessary permissions to read input files and write to output locations.
 
-7. Split a large prompt file into smaller prompt files:
-```
-pdd split --output-sub sub_prompts/sub_app_python.prompt --output-modified modified_prompts/modified_app_python.prompt --temperature 0.0 large_app_python.prompt related_code.py example_code.py
-```
+3. **AI model not responding**: Verify your internet connection and check the status of the AI service.
 
-8. Change a prompt file based on new requirements:
-```
-pdd change --output modified_prompts/modified_app_python.prompt --temperature 0.0 app_python.prompt src/app.py "Add error handling for network connections"
-```
+4. **Unexpected output**: Try adjusting the `--strength` and `--temperature` parameters to fine-tune the AI model's behavior.
 
-9. Update a prompt file based on modified code:
-```
-pdd update --output modified_prompts/modified_app_python.prompt --temperature 0.0 app_python.prompt src/original_app.py src/modified_app.py
-```
+5. **High costs**: Use the `--output-cost` option to track usage and set appropriate budgets for the `fix` command's `--budget` option.
 
-10. Generate code with cost tracking:
-```
-pdd --output-cost cost_reports/usage.csv generate --output src/app.py --temperature 0.0 app_python.prompt
-```
+If you encounter persistent issues, consult the PDD documentation or reach out to the support team for assistance.
 
-11. Run multiple commands with cost tracking:
-```
-pdd --output-cost cost_reports/usage.csv generate --output src/app.py app_python.prompt test --output tests/ --language python src/app.py app_python.prompt
-```
+## Security Considerations
 
-12. Fix errors in code and unit tests with iterative process:
-```
-pdd fix --loop --verification-program verify_code.py --max-attempts 3 --budget 5.0 --output-test tests/test_app_fixed.py --output-code src/app_fixed.py --temperature 0.0 tests/test_app.py src/app.py error_log.txt
-```
+When using PDD, keep the following security considerations in mind:
 
-This example attempts to fix errors in `test_app.py` and `app.py` through multiple iterations. It uses `verify_code.py` to check if the code runs correctly after each fix attempt, with a maximum of 3 attempts and a budget of $5.0. The fixed files are saved as `test_app_fixed.py` and `app_fixed.py` respectively.
+1. **Code Execution**: PDD generates and modifies code. Always review generated code before execution, especially in production environments.
 
-13. Force overwrite of existing files:
-```
-pdd --force generate --output src/existing_app.py app_python.prompt
-```
+2. **Data Privacy**: Avoid using sensitive data in prompts or code files, as this information may be processed by the AI model.
 
-This example generates code from `app_python.prompt` and saves it to `src/existing_app.py`, overwriting the file if it already exists without asking for confirmation.
+3. **API Keys**: If PDD requires API keys for AI model access, store these securely and never include them in version control systems.
+
+4. **Input Validation**: PDD assumes input files are trustworthy. Implement proper input validation if using PDD in a multi-user or networked environment.
+
+5. **Output Handling**: Treat output files with the same security considerations as you would any other code or configuration files in your project.
+
+## Workflow Integration
+
+PDD can be integrated into various development workflows. Here are some typical use cases:
+
+1. **Initial Development**: Use `generate` to create initial code from prompts, then `example` and `test` to build out the project structure.
+
+2. **Maintenance**: Use `update` to keep prompts in sync with code changes, and `fix` to address issues that arise during development.
+
+3. **Refactoring**: Use `split` to break down large prompts, and `conflicts` to manage potential issues when working with multiple prompts.
+
+4. **Continuous Integration**: Incorporate PDD commands into CI/CD pipelines to automate code generation, testing, and maintenance tasks.
+
+5. **Debugging**: Use `crash` to quickly address runtime errors and generate fixes for failing modules.
 
 ## Conclusion
 
-PDD (Prompt-Driven Development) CLI provides a comprehensive set of tools for managing prompt files, generating code, creating examples, and running tests. By leveraging the power of AI models and iterative processes, PDD aims to streamline the development workflow and improve code quality.
+PDD (Prompt-Driven Development) CLI provides a comprehensive set of tools for managing prompt files, generating code, creating examples, running tests, and handling various aspects of prompt-driven development. By leveraging the power of AI models and iterative processes, PDD aims to streamline the development workflow and improve code quality.
 
-The various commands and options allow for flexible usage, from simple code generation to complex workflows involving multiple steps. The ability to track costs and manage output locations through environment variables further enhances the tool's utility in different development environments.
+The various commands and options allow for flexible usage, from simple code generation to complex workflows involving multiple steps. The ability to track costs, manage output locations through environment variables, and chain multiple commands further enhances the tool's utility in different development environments.
 
-Remember to use the help command (`pdd --help` or `pdd COMMAND --help`) for more detailed information on each command and its options. As you become more familiar with PDD, you can create more complex workflows by chaining multiple commands and utilizing the full range of options available.
+As you become more familiar with PDD, you can create more complex workflows by chaining multiple commands and utilizing the full range of options available. Always refer to the latest documentation and use the built-in help features to make the most of PDD in your development process.
+
+Remember to stay mindful of security considerations, especially when working with generated code or sensitive data. Regularly update PDD to access the latest features and improvements.
 
 Happy coding with PDD!
