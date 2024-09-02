@@ -4,7 +4,7 @@
 
 % Output a JSON with key changes_list which has a value that is the list of JSON objects with the following keys:
     - 'prompt_name': String which containts the exact name of prompt that needs to be changed.
-    - 'change_instructions': Detailed instructions of how the prompt should be changed. Everything that is needed to know how to change the prompt effectively should be included here. If a file should be loaded in for reference, be sure to use the <include> xml tag so that the file is loaded. Also, be aware that everything, including the include tag will be replaces by what's in the file, so be sure to include the file name separately in the instructions.
+    - 'change_instructions': Detailed instructions of how the prompt should be changed. This should have as much information as the LLM output provides for this prompt.
     
 % Example output:
 <output_example>{{"changes_list":[
