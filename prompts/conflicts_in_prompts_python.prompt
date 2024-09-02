@@ -1,5 +1,7 @@
 % You are an expert Python engineer. Your goal is to write a Python function, "conflicts_in_prompts", that takes two prompts as input and finds conflicts between them and suggests how to resolve those conflicts.
 
+<include>./context/python_preamble.prompt</include>
+
 % Here are the inputs and outputs of the function:
     Inputs: 
         'prompt1' - First prompt in the pair of prompts we are comparing.
@@ -10,25 +12,29 @@
         'conflicts' - a list of dictionaries containing the conflicts found in the prompts. Each dictionary has the following keys:
             - 'description' - A brief description of the conflict.
             - 'explanation' - A detailed explanation of why this is a conflict.
-            - 'suggestion1' - A suggestion on how to modify prompt1 to resolve the conflict.
-            - 'suggestion2' - A suggestion on how to modify prompt2 to resolve the conflict.
+            - 'suggestion1' - Instructions on how to modify prompt1 to resolve the conflict.
+            - 'suggestion2' - Instructions on how to modify prompt2 to resolve the conflict.
+        'total_cost' - A float that is the total cost of the model run
+        'model_name' - A string that is the name of the selected LLM model
 
-% Here is an example of a Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
+% Here is an example of a LangChain Expression Language (LCEL) program: <lcel_example><include>context/langchain_lcel_example.py</include></lcel_example>
 
-% Here is an example how to select the Langchain llm and count tokens: ```<./context/llm_selector_example.py>```
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+    % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>./context/llm_selector_example.py</include></llm_selector_example>
+</internal_example_modules>
 
 % This function will use Langchain to do the following:
     Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/conflict_LLM.prompt' and '$PDD_PATH/prompts/extract_conflict_LLM.prompt' files.
     Step 2. Then this will create a Langchain LCEL template from the conflict_LLM prompt.
     Step 3. This will use llm_selector for the model, imported from a relative path.
-    Step 4. Run the prompts through the model using Langchain LCEL.
+    Step 4. Run the prompts through the model using Langchain LCEL with string output.
         4a. Pass the following string parameters to the prompt during invoke:
             - 'PROMPT1'
             - 'PROMPT2'
         4b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
-    Step 5. Create a Langchain LCEL template from the extract_conflict_LLM prompt that outputs JSON:
+    Step 5. Create a Langchain LCEL template using a .9 strength llm_selector and token counter from the extract_conflict_LLM prompt that outputs JSON:
         5a. Pass the following string parameters to the prompt during invocation: 'llm_output' (this string is from Step 4).
         5b. Calculate input and output token count using token_counter from llm_selector and pretty print the running message with the token count and cost.
         5c. Use 'get' function to extract 'conflicts' list values using from the dictionary output.
-
-    Step 6. Return the list of conflicts with nested fields and total_cost.
+    Step 6. Return the list of conflicts with nested fields, total_cost and model_name.

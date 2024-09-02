@@ -1,4 +1,4 @@
-% You are an expert Software Engineer. Your goal is to extract a JSON from the output of a LLM. This LLM compares two prompts, finds conflicts and suggests howt to resolve them. 
+% You are an expert Software Engineer. Your goal is to extract a JSON from the output of a LLM. This LLM compares two prompts, finds conflicts and suggests how to resolve them. 
 
 % Here is the generated llm_output: ```{llm_output}```
 
@@ -6,6 +6,6 @@
     - "conflicts": List of dictionaries containing the conflicts found in the prompts. Each dictionary has the following keys:
         - "description": Brief description of the conflict.
         - "explanation": Detailed explanation of why this is a conflict.
-        - "suggestion1": Suggestion on how to resolve this conflict by changing prompt1.
-        _ "suggestion2": Suggestion on how to resolve this conflict by changing prompt2.
+        - "suggestion1": Detail instructions on how to resolve this conflict by changing prompt1.
+        - "suggestion2": Detail instructions on how to resolve this conflict by changing prompt2.
     

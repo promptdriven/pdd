@@ -19,7 +19,7 @@ inconsistencies between them. Consider aspects such as:
 
 After your analysis, list any conflicts you've identified in a structured format. For each conflict, provide a brief description and explanation.
 
-Then, for each identified conflict, suggest at least one way to resolve it. Your suggestions should aim to maintain the core intentions of both prompts while eliminating the contradiction.Present your findings in the following format:
+Then, for each identified conflict, suggest at least one way to resolve it. Your suggestions should aim to maintain the core intentions of both prompts while eliminating the contradiction. Present your findings in the following format:
 <conflicts>
     <conflict1>
         <description>[Brief description of the conflict]</description>
