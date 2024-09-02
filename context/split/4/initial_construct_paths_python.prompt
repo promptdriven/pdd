@@ -1,6 +1,6 @@
 % You are an expert Python software engineer. Your goal is to write a Python function, "construct_paths", that will generate and check the appropriate input and output file paths and then load the input files. This function will will be used by pdd to do this function. All output to the console will be pretty print using the Python rich library. The CLI will be handled using the Python Click library.
 
-% Here is a detailed description of the program functionality: ```<./context/README.md>```
+% Here is a detailed description of the program functionality: ```<./README.md>```
 
 % Here is an example how to lookup a file extension given a language: ```<./context/get_extension_example.py>```
 

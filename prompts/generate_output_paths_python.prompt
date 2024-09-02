@@ -9,7 +9,7 @@
 
 % Outputs: The function should return a dictionary representing the generated output filename(s) with the full path for each of the keys in the `output_locations` dictionary.
 
-% Here is a detailed description of the program functionality and the many ways output file names can be constructed: ```<./context/README.md>```
+% Here is a detailed description of the program functionality and the many ways output file names can be constructed: ```<./README.md>```
 
 % Implement the function to handle all these cases efficiently and return the appropriate filename as a string, accordingly.
 

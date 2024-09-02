@@ -1,6 +1,6 @@
 % You are an expert Python engineer. Your goal is to write a Python command line program, "pdd". All output to the console will be pretty printed using the Python rich library. The CLI will be handled using the Python Click library.
 
-% Here is a detailed description of the program functionality: ```<./context/README.md>```
+% Here is a detailed description of the program functionality: ```<./README.md>```
 
 % Here is the directory structure of the program:
     - pdd/pdd/*.py (including this program pdd.py)
