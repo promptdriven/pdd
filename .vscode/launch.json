@@ -1,0 +1,41 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "PDD CLI: Generate",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pdd.cli",
+            "console": "integratedTerminal",
+            "args": [
+                "--strength",
+                "1",
+                "generate",
+                "prompts/context_generator_python.prompt"
+            ]
+        },
+        {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "args": [ ],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/pdd:${env:PYTHONPATH}",
+                "PATH": "${env:PATH}"
+            }
+        },
+        {
+            "name": "Python: Run Script after Code Generation",
+            "type": "python",
+            "request": "launch",
+            "program": "utils/done.py",  // Or specify a particular script if needed
+            "preLaunchTask": "Generate Code",  // This matches the label in tasks.json
+            "args": [
+                // Add any additional arguments for the script execution here
+            ],
+            "console": "integratedTerminal"
+        }
+    ]
+}
