@@ -21,6 +21,7 @@ def main() -> None:
         sample_text: str = "This is a sample text to count tokens."
         token_count: int = token_counter(sample_text)
         print(f"Token Count for Sample Text: {token_count}")
+        print(f"model_name: {model_name}")
 
     except FileNotFoundError as e:
         print(f"Error: {e}")
