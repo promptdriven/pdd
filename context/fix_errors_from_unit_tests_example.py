@@ -1,37 +1,44 @@
-from fix_errors_from_unit_tests import fix_errors_from_unit_tests
+import os
+from pdd.fix_errors_from_unit_tests import fix_errors_from_unit_tests
+from rich import print as rprint
 
-# Define the inputs for the function
-unit_test: str = """
-def test_addition():
-    assert add(1, 1) == 3  # Intentional error
+def main() -> None:
+    """
+    Main function to demonstrate the usage of fix_errors_from_unit_tests.
+    Sets up example inputs, calls the function, and prints the results.
+    """
+    # Example inputs
+    unit_test = """
+def test_add():
+    assert add(2, 3) == 5
+    assert add(-1, 1) == 0
+    assert add(0, 0) == 1  # This test case is incorrect
 """
-
-code: str = """
+    
+    code = """
 def add(a, b):
     return a + b
 """
+    
+    prompt = "Write a function that adds two numbers"
+    error = "AssertionError: assert 0 == 1"
+    error_file = "error_logs.txt"
+    strength = 0.7  # LLM strength (0 to 1)
+    temperature = 0.5  # LLM temperature
 
-error: str = "AssertionError: assert 2 == 3"
-error_file: str = "error_log.txt"
-strength: float = 0.7  # Strength parameter for LLM selection
-temperature: float = 0 # Temperature parameter for LLM selection
-
-try:
-    # Call the function to fix errors in the unit tests
-    update_unit_test, update_code, fixed_unit_test, fixed_code, total_cost = fix_errors_from_unit_tests(
-        unit_test=unit_test,
-        code=code,
-        error=error,
-        error_file=error_file,
-        strength=strength,
-        temperature=temperature
+    # Call the function
+    update_unit_test, update_code, fixed_unit_test, fixed_code, total_cost, model_name = fix_errors_from_unit_tests(
+        unit_test, code, prompt, error, error_file, strength, temperature
     )
 
-    # Print the results
-    print(f"Update Unit Test: {update_unit_test}")
-    print(f"Update Code: {update_code}")
-    print(f"Fixed Unit Test:\n{fixed_unit_test}")
-    print(f"Fixed Code:\n{fixed_code}")
-    print(f"Total Cost: ${total_cost:.6f}")
-except Exception as e:
-    print(f"An error occurred: {e}")
+    # Print results
+    rprint(f"[bold]Results:[/bold]")
+    rprint(f"Update unit test: {update_unit_test}")
+    rprint(f"Update code: {update_code}")
+    rprint(f"Fixed unit test:\n{fixed_unit_test}")
+    rprint(f"Fixed code:\n{fixed_code}")
+    rprint(f"Total cost: ${total_cost:.6f}")
+    rprint(f"Model used: {model_name}")
+
+if __name__ == "__main__":
+    main()

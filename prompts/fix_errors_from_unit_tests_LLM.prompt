@@ -4,9 +4,13 @@
 
 % Here is the code under test: ```{code}```
 
+% Here is the prompt that generated the code under test: ```{prompt}```
+
 % Here are the errors from the unit test run: ```{errors}```
 
 % Follow these steps to solve these errors:
-    Step 1. Explain in detail step by step why there might be an an error and why prior attempted fixes, if any, may not have worked.
-    Step 2. Explain in detail step by step how to solve the error.
-    Step 3. For the code that need changes, write the corrected code and/or corrected unit test in its/their entirety.
+    Step 1. Compare the prompt to the code and explain differences, if any.
+    Step 2. Compare the prompt to the unit test and explain differences, if any.
+    Step 3. Explain in detail step by step why there might be an an error and why prior attempted fixes, if any, may not have worked.
+    Step 4. Explain in detail step by step how to solve the error.
+    Step 5. For the code that need changes, write the corrected code and/or corrected unit test in its/their entirety.
