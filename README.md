@@ -126,19 +126,19 @@ pdd generate --output src/factorial_calculator.py factorial_calculator_python.pr
 Create an example file from an existing code file and the prompt that generated the code file.
 
 ```
-pdd example [GLOBAL OPTIONS] [OPTIONS] CODE_FILE PROMPT_FILE
+pdd example [GLOBAL OPTIONS] [OPTIONS] PROMPT_FILE CODE_FILE
 ```
 
 Arguments:
-- `CODE_FILE`: The filename of the existing code file.
 - `PROMPT_FILE`: The filename of the prompt file that generated the code.
+- `CODE_FILE`: The filename of the existing code file.
 
 Options:
 - `--output LOCATION`: Specify where to save the generated example code. The default file name is `<basename>_example.<language_file_extension>`. If an environment variable `PDD_EXAMPLE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 
 Example:
 ```
-pdd example --output examples/factorial_calculator_example.py src/factorial_calculator.py factorial_calculator_python.prompt 
+pdd example --output examples/factorial_calculator_example.py factorial_calculator_python.prompt src/factorial_calculator.py
 ```
 
 ### 3. test
@@ -146,12 +146,12 @@ pdd example --output examples/factorial_calculator_example.py src/factorial_calc
 Generate a unit test file for a given code file and its corresponding prompt file.
 
 ```
-pdd test [GLOBAL OPTIONS] [OPTIONS] CODE_FILE PROMPT_FILE
+pdd test [GLOBAL OPTIONS] [OPTIONS] PROMPT_FILE CODE_FILE
 ```
 
 Arguments:
-- `CODE_FILE`: The filename of the code file to be tested.
 - `PROMPT_FILE`: The filename of the prompt file that generated the code.
+- `CODE_FILE`: The filename of the code file to be tested.
 
 Options:
 - `--output LOCATION`: Specify where to save the generated test file. The default file name is `test_<basename>.<language_file_extension>`.
@@ -159,7 +159,7 @@ Options:
 
 Example:
 ```
-pdd test --output tests/test_factorial_calculator.py src/factorial_calculator.py factorial_calculator_python.prompt 
+pdd test --output tests/test_factorial_calculator.py factorial_calculator_python.prompt src/factorial_calculator.py
 ```
 
 ### 4. preprocess
@@ -187,14 +187,14 @@ pdd preprocess --output preprocessed/factorial_calculator_python_preprocessed.pr
 Fix errors in code and unit tests based on error messages and the original prompt file.
 
 ```
-pdd fix [GLOBAL OPTIONS] [OPTIONS] UNIT_TEST_FILE CODE_FILE ERROR_FILE PROMPT_FILE
+pdd fix [GLOBAL OPTIONS] [OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE ERROR_FILE
 ```
 
 Arguments:
-- `UNIT_TEST_FILE`: The filename of the unit test file.
-- `CODE_FILE`: The filename of the code file to be fixed.
-- `ERROR_FILE`: The filename containing the error messages.
 - `PROMPT_FILE`: The filename of the prompt file that generated the code under test.
+- `CODE_FILE`: The filename of the code file to be fixed.
+- `UNIT_TEST_FILE`: The filename of the unit test file.
+- `ERROR_FILE`: The filename containing the error messages.
 
 Options:
 - `--output-test LOCATION`: Specify where to save the fixed unit test file. The default file name is `test_<basename>_fixed.<language_file_extension>`. If an environment variable `PDD_FIX_TEST_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
@@ -215,7 +215,7 @@ Outputs when using `--loop`:
 
 Example:
 ```
-pdd fix --output-test tests/test_factorial_calculator_fixed.py --output-code src/factorial_calculator_fixed.py tests/test_factorial_calculator.py src/factorial_calculator.py errors.log factorial_calculator_python.prompt
+pdd fix --output-test tests/test_factorial_calculator_fixed.py --output-code src/factorial_calculator_fixed.py factorial_calculator_python.prompt src/factorial_calculator.py tests/test_factorial_calculator.py errors.log
 ```
 In this example, `factorial_calculator_python.prompt` is the prompt file that originally generated the code under test.
 
@@ -328,13 +328,13 @@ pdd conflicts --output conflicts_analysis.csv data_processing_module_python.prom
 Fix errors in a code module that caused a program to crash.
 
 ```
-pdd crash [GLOBAL OPTIONS] [OPTIONS] PROGRAM_FILE PROMPT_FILE CODE_FILE ERROR_FILE
+pdd crash [GLOBAL OPTIONS] [OPTIONS] PROMPT_FILE CODE_FILE PROGRAM_FILE ERROR_FILE
 ```
 
 Arguments:
-- `PROGRAM_FILE`: Filename of the program that was running the code module.
 - `PROMPT_FILE`: Filename of the prompt file that generated the code module.
 - `CODE_FILE`: Filename of the code module that caused the crash and will be modified so it runs properly.
+- `PROGRAM_FILE`: Filename of the program that was running the code module.
 - `ERROR_FILE`: Filename of the file containing the errors from the program run.
 
 Options:
@@ -342,7 +342,7 @@ Options:
 
 Example:
 ```
-pdd crash --output fixed_data_processor.py main_pipeline.py data_processing_module_python.prompt crashed_data_processor.py crash_errors.log 
+pdd crash --output fixed_data_processor.py data_processing_module_python.prompt crashed_data_processor.py main_pipeline.py crash_errors.log 
 ```
 
 ## Output Location Specification
@@ -368,37 +368,37 @@ Here are some examples of multi-command chaining to illustrate its power and fle
 
 1. Generate code, create an example, and run tests in one go:
 ```
-pdd generate --output src/factorial_calculator.py factorial_calculator_python.prompt example --output examples/factorial_usage.py src/factorial_calculator.py factorial_calculator_python.prompt test --output tests/test_factorial_calculator.py src/factorial_calculator.py factorial_calculator_python.prompt
+pdd generate --output src/factorial_calculator.py factorial_calculator_python.prompt example --output examples/factorial_usage.py factorial_calculator_python.prompt src/factorial_calculator.py test --output tests/test_factorial_calculator.py factorial_calculator_python.prompt src/factorial_calculator.py
 ```
 
 2. Preprocess a prompt, generate code, and create an example with cost tracking:
 ```
-pdd --output-cost usage.csv preprocess --output preprocessed/data_pipeline_preprocessed.prompt data_processing_pipeline_python.prompt generate --output src/data_pipeline.py preprocessed/data_pipeline_preprocessed.prompt example --output examples/pipeline_usage.py src/data_pipeline.py data_processing_pipeline_python.prompt
+pdd --output-cost usage.csv preprocess --output preprocessed/data_pipeline_preprocessed.prompt data_processing_pipeline_python.prompt generate --output src/data_pipeline.py preprocessed/data_pipeline_preprocessed.prompt example --output examples/pipeline_usage.py preprocessed/data_pipeline_preprocessed.prompt src/data_pipeline.py
 ```
 
 3. Split a large prompt, generate code from the sub-prompt, and create a test:
 ```
-pdd split --output-sub sub_prompts/data_processing_module.prompt --output-modified modified_prompts/main_pipeline.prompt large_data_pipeline_python.prompt src/data_pipeline.py examples/pipeline_interface.py generate --output src/data_processing_module.py sub_prompts/data_processing_module.prompt test --output tests/test_data_processing_module.py src/data_processing_module.py sub_prompts/data_processing_module.prompt
+pdd split --output-sub sub_prompts/data_processing_module.prompt --output-modified modified_prompts/main_pipeline.prompt large_data_pipeline_python.prompt src/data_pipeline.py examples/pipeline_interface.py generate --output src/data_processing_module.py sub_prompts/data_processing_module.prompt test --output tests/test_data_processing_module.py sub_prompts/data_processing_module.prompt src/data_processing_module.py
 ```
 
 4. Update a prompt based on code changes, then generate new code and tests:
 ```
-pdd update --output updated_prompts/updated_web_scraper.prompt web_scraper_python.prompt src/original_scraper.py src/modified_scraper.py generate --output src/new_scraper.py updated_prompts/updated_web_scraper.prompt test --output tests/test_new_scraper.py src/new_scraper.py updated_prompts/updated_web_scraper.prompt
+pdd update --output updated_prompts/updated_web_scraper.prompt web_scraper_python.prompt src/original_scraper.py src/modified_scraper.py generate --output src/new_scraper.py updated_prompts/updated_web_scraper.prompt test --output tests/test_new_scraper.py updated_prompts/updated_web_scraper.prompt src/new_scraper.py
 ```
 
 5. Detect prompts that need changes, then apply changes to those prompts:
 ```
-pdd detect --output to_change.csv data_processing_python.prompt web_scraper_python.prompt api_interface_python.prompt changes.prompt change --output modified_prompts/ $(cat to_change.csv | cut -d',' -f1 | tail -n +2) changes.prompt
+pdd detect --output to_change.csv data_processing_python.prompt web_scraper_python.prompt api_interface_python.prompt changes.prompt change --output modified_prompts/modified_$(cat to_change.csv | cut -d',' -f1 | tail -n +2) $(cat to_change.csv | cut -d',' -f1 | tail -n +2) $(cat to_change.csv | cut -d',' -f1 | tail -n +2 | sed 's/\.prompt/_code.py/') changes.prompt
 ```
 
 6. Analyze conflicts between two prompts and then update one of them:
 ```
-pdd conflicts --output conflicts.csv data_processing_module_python.prompt data_visualization_module_python.prompt update --output updated_data_processing_module.prompt data_processing_module_python.prompt $(head -n 1 conflicts.csv | cut -d',' -f4)
+pdd conflicts --output conflicts.csv data_processing_module_python.prompt data_visualization_module_python.prompt update --output updated_data_processing_module.prompt data_processing_module_python.prompt $(head -n 1 conflicts.csv | cut -d',' -f4) $(head -n 1 conflicts.csv | cut -d',' -f5)
 ```
 
 7. Generate code, fix errors, and run tests:
 ```
-pdd generate --output src/factorial_calculator.py factorial_calculator_python.prompt fix --output-test tests/test_factorial_calculator_fixed.py --output-code src/factorial_calculator_fixed.py tests/test_factorial_calculator.py src/factorial_calculator.py errors.log factorial_calculator_python.prompt test --output tests/test_factorial_calculator.py src/factorial_calculator_fixed.py factorial_calculator_python.prompt
+pdd generate --output src/factorial_calculator.py factorial_calculator_python.prompt fix --output-test tests/test_factorial_calculator_fixed.py --output-code src/factorial_calculator_fixed.py factorial_calculator_python.prompt src/factorial_calculator.py tests/test_factorial_calculator.py errors.log test --output tests/test_factorial_calculator.py factorial_calculator_python.prompt src/factorial_calculator_fixed.py
 ```
 
 These examples demonstrate how you can combine multiple PDD commands to create sophisticated workflows, automating complex development tasks in a single command line invocation. Remember that options always come before arguments for each command in the chain.
@@ -506,6 +506,8 @@ PDD can be integrated into various development workflows. Here are some typical 
 PDD (Prompt-Driven Development) CLI provides a comprehensive set of tools for managing prompt files, generating code, creating examples, running tests, and handling various aspects of prompt-driven development. By leveraging the power of AI models and iterative processes, PDD aims to streamline the development workflow and improve code quality.
 
 The various commands and options allow for flexible usage, from simple code generation to complex workflows involving multiple steps. The ability to track costs, manage output locations through environment variables, and chain multiple commands further enhances the tool's utility in different development environments.
+
+With the consistent argument order placing prompt files first, PDD emphasizes its prompt-driven nature and provides a more intuitive interface for users. This consistency across commands should make the tool easier to learn and use effectively.
 
 As you become more familiar with PDD, you can create more complex workflows by chaining multiple commands and utilizing the full range of options available. Always refer to the latest documentation and use the built-in help features to make the most of PDD in your development process.
 
