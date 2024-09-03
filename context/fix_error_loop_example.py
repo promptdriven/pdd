@@ -1,44 +1,44 @@
-from fix_error_loop import fix_error_loop
+from pdd.fix_error_loop import fix_error_loop
+from rich import print as rprint
+from rich.panel import Panel
 
-base = 'change'
-# Define the parameters for the function
-unit_test_file: str = f'staging/tests/test_{base}.py'  # Path to your unit test file
-code_file: str = f'staging/pdd/{base}.py'          # Path to your code file
-verification_program: str = f'staging/context/{base}_example.py'          # Path to your verification program
-strength: float = 1                            # Strength parameter for error fixing
-temperature: float = 0                         # Temperature parameter for error fixing
-max_attempts: int = 5                           # Maximum number of attempts to fix errors
-budget: float = 100.0                            # Maximum budget for fixing errors
-error_log_file = "error_log.txt"  # Path to the error log file
+def main() -> None:
+    """
+    Main function to demonstrate the usage of the fix_error_loop function.
+    It sets up the parameters, calls the function, and prints the results.
+    """
+    # Define input parameters
+    base = 'xml_tagger'
+    # Define the parameters for the function
+    unit_test_file: str = f'tests/test_{base}.py'  # Path to your unit test file
+    code_file: str = f'pdd/{base}.py'          # Path to your code file
+    # load the prompt from the prompt file
+    with open(f'prompts/{base}_python.prompt', 'r') as file:
+        prompt = file.read()
+    verification_program: str = f'context/{base}_example.py'          # Path to your verification program
+    strength: float = 1                            # Strength parameter for error fixing
+    temperature: float = 0                         # Temperature parameter for error fixing
+    max_attempts: int = 5                           # Maximum number of attempts to fix errors
+    budget: float = 100.0                            # Maximum budget for fixing errors
+    error_log_file = "error_log.txt"  # Path to the error log file
 
-# Call the function
-success: bool
-final_unit_test_content: str
-final_code_content: str
-attempts: int
-total_cost: float
+    try:
+        # Call the fix_error_loop function
+        success, final_unit_test, final_code, total_attempts, total_cost, model_name = fix_error_loop(
+            unit_test_file, code_file, prompt, verification_program,
+            strength, temperature, max_attempts, budget, error_log_file
+        )
 
-try:
-    success, final_unit_test_content, final_code_content, attempts, total_cost = fix_error_loop(
-        unit_test_file,
-        code_file,
-        verification_program,
-        strength,
-        temperature,
-        max_attempts,
-        budget,
-        error_log_file=error_log_file
-    )
+        # Print the results
+        rprint(Panel.fit(f"Success: {success}"))
+        rprint(Panel.fit(f"Total attempts: {total_attempts}"))
+        rprint(Panel.fit(f"Total cost: ${total_cost:.6f}"))
+        rprint(Panel.fit(f"Model used: {model_name}"))
 
-    # Output the results
-    if success:
-        print("All tests passed successfully!")
-    else:
-        print("Some tests still failed after attempts.")
-    print(f"Final Unit Test Content:\n{final_unit_test_content}")
-    print(f"Final Code Content:\n{final_code_content}")
-    print(f"Number of Attempts: {attempts}")
-    print(f"Total Cost: ${total_cost:.2f}")
+        rprint(Panel.fit(f"Final Unit Test: {final_unit_test}"))
+        rprint(Panel.fit(f"Final Code: {final_code}"))
+    except Exception as e:
+        rprint(Panel.fit(f"An error occurred: {e}"))
 
-except Exception as e:
-    print(f"An error occurred: {e}")
+if __name__ == "__main__":
+    main()
