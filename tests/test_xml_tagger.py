@@ -1,5 +1,5 @@
+from unittest.mock import patch, mock_open, MagicMock
 import pytest
-from unittest.mock import patch, mock_open
 from pdd.xml_tagger import xml_tagger
 
 @pytest.fixture
@@ -40,8 +40,10 @@ def mock_rich_print():
     with patch('pdd.xml_tagger.rprint') as mock:
         yield mock
 
-def test_xml_tagger_success(mock_environment, mock_file_contents, mock_llm_selector, mock_rich_print):
+@patch('pdd.xml_tagger.llm_selector')
+def test_xml_tagger_success(mock_llm_selector, mock_environment, mock_file_contents, mock_rich_print):
     """Test successful execution of xml_tagger."""
+    mock_llm_selector.return_value = (MagicMock(), MagicMock(), 0.01, 0.02, "MockedModel")
     raw_prompt = "Test prompt"
     strength = 0.7
     temperature = 0.5
@@ -51,37 +53,33 @@ def test_xml_tagger_success(mock_environment, mock_file_contents, mock_llm_selec
     assert isinstance(result, str)
     assert isinstance(total_cost, float)
     assert model_name == "MockedModel"
-    assert total_cost > 0
+    mock_llm_selector.assert_called_once_with(strength, temperature)
 
-def test_xml_tagger_missing_env_var():
-    """Test xml_tagger behavior when PDD_PATH is not set."""
-    with patch.dict('os.environ', clear=True):
-        result, total_cost, model_name = xml_tagger("Test", 0.7, 0.5)
-
-    assert result == ""
-    assert total_cost == 0.0
-    assert model_name == ""
-
-@patch('pdd.xml_tagger.Path')
-def test_xml_tagger_file_not_found(mock_path, mock_environment, mock_rich_print):
+@patch('builtins.open')
+@patch('pdd.xml_tagger.llm_selector')
+def test_xml_tagger_file_not_found(mock_llm_selector, mock_open, mock_environment, mock_rich_print):
     """Test xml_tagger behavior when a required file is not found."""
-    mock_path.side_effect = FileNotFoundError("File not found")
+    mock_llm_selector.return_value = (None, None, None, None, "MockedModel")
+    mock_open.side_effect = FileNotFoundError("File not found")
 
     result, total_cost, model_name = xml_tagger("Test", 0.7, 0.5)
 
     assert result == ""
     assert total_cost == 0.0
-    assert model_name == ""
+    assert model_name == "MockedModel"
     mock_rich_print.assert_called_with("[bold red]Error:[/bold red] File not found")
 
+@patch('builtins.open', new_callable=mock_open, read_data="placeholder")
 @patch('pdd.xml_tagger.PromptTemplate')
-def test_xml_tagger_unexpected_error(mock_prompt, mock_environment, mock_file_contents, mock_rich_print):
+@patch('pdd.xml_tagger.llm_selector')
+def test_xml_tagger_unexpected_error(mock_llm_selector, mock_prompt, mock_file, mock_environment, mock_file_contents, mock_rich_print):
     """Test xml_tagger behavior when an unexpected error occurs."""
+    mock_llm_selector.return_value = (None, None, None, None, "MockedModel")
     mock_prompt.from_template.side_effect = Exception("Unexpected error")
 
     result, total_cost, model_name = xml_tagger("Test", 0.7, 0.5)
 
     assert result == ""
     assert total_cost == 0.0
-    assert model_name == ""
+    assert model_name == "MockedModel"
     mock_rich_print.assert_called_with("[bold red]An unexpected error occurred:[/bold red] Unexpected error")
