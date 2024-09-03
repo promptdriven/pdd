@@ -1,29 +1,31 @@
 import os
-from generate_output_paths import generate_output_paths
+from pathlib import Path
+from pdd.generate_output_paths import generate_output_paths
 
+# Set up example inputs
+command = "generate"
+output_locations = {}#{"output": "/path/to/output/"}
+basename = "my_project"
+language = "python"
+file_extension = ".py"
 
-def main() -> None:
-    """
-    Main function to demonstrate the usage of generate_output_paths function.
-    """
-    # Define the command and parameters
-    command: str = "generate"
-    output_locations: dict = {
-        "output": "/path/to/output/directory/",
-    }
-    basename: str = "my_file"
-    language: str = "python"  # Not used for 'generate' command, but required for consistency
-    file_extension: str = ".py"
+# Generate output paths
+result = generate_output_paths(command, output_locations, basename, language, file_extension)
 
-    try:
-        # Generate output paths
-        output_paths: dict = generate_output_paths(command, output_locations, basename, language, file_extension)
+# Print the result
+print(f"Generated output path: {result['output']}")
 
-        # Print the generated output paths
-        print(output_paths)
-    except Exception as e:
-        print(f"An error occurred: {e}")
+# Example with environment variable
+os.environ["PDD_GENERATE_OUTPUT_PATH"] = "/env/path/"
+result_with_env = generate_output_paths(command, {}, basename, language, file_extension)
+print(f"Generated output path with env variable: {result_with_env['output']}")
 
-
-if __name__ == "__main__":
-    main()
+# Example for 'fix' command with multiple outputs
+fix_command = "fix"
+fix_output_locations = {
+    "output_test": "/path/to/test/output/test.py",
+    "output_code": "/path/to/code/output/code.py"
+}
+fix_result = generate_output_paths(fix_command, fix_output_locations, basename, language, file_extension)
+print(f"Generated test output path: {fix_result['output_test']}")
+print(f"Generated code output path: {fix_result['output_code']}")
