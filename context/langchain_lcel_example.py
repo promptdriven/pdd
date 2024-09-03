@@ -2,7 +2,7 @@ import os
 from langchain_core.prompts import PromptTemplate
 from langchain_community.cache import SQLiteCache
 from langchain.globals import set_llm_cache
-from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.output_parsers import JsonOutputParser # Parsers are only avaiable in langchain_core.output_parsers not langchain.output_parsers
 from langchain_core.pydantic_v1 import BaseModel, Field
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
