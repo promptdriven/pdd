@@ -27,6 +27,7 @@
 - [ ] Run on server based keys
 - [ ] create a marketplace where people can earn LLM credits for their examples or people can put up bounties for examples
 - [ ] ability to check in known good examples
+- [ ] take a chat conversation and collapse down into a single prompt
 
 ## Bugs
 
