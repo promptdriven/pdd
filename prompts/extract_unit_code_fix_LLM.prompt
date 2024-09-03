@@ -6,6 +6,8 @@
 
 % Here is the unit test bug fix report: ```{unit_test_fix}```
 
+% Sometimes the fix may only contain partial code. In these cases, you need to incorporate the fix into the original unit test and/or original code under test.
+
 % Output a JSON object with the following keys:
     - 'explanation': String explanation of whether the code under test needs to be fix and/or if the unit test needs to be fixed.
     - 'update_unit_test': Boolean indicating whether the unit test needs to be updated.
