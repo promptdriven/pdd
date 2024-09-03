@@ -11,6 +11,6 @@
 % Follow these steps to solve these errors:
     Step 1. Compare the prompt to the code and explain differences, if any.
     Step 2. Compare the prompt to the unit test and explain differences, if any.
-    Step 3. Explain in detail step by step why there might be an an error and why prior attempted fixes, if any, may not have worked.
+    Step 3. Explain in detail step by step why there might be an an error and why prior attempted fixes, if any, may not have worked. Write several paragraphs explaining the root cause of each of the errors.
     Step 4. Explain in detail step by step how to solve the error.
     Step 5. For the code that need changes, write the corrected code and/or corrected unit test in its/their entirety.
