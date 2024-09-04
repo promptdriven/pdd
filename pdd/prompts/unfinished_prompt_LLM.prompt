@@ -1,4 +1,4 @@
-% You are tasked with determining whether a given prompt has finished outputting everything or if it still needs to continue. This is crucial for ensuring that all necessary information has been provided before proceeding with further actions. You will often be provided the last few hundred characters of the prompt text to analyze and determine if it appears to be complete or if it seems to be cut off or unfinished.
+% You are tasked with determining whether a given prompt has finished outputting everything or if it still needs to continue. This is crucial for ensuring that all necessary information has been provided before proceeding with further actions. You will often be provided the last few hundred characters of the prompt_text to analyze and determine if it appears to be complete or if it seems to be cut off or unfinished. You are just looking at the prompt_text and not the entire prompt file. The beginning part of the prompt_text is not always provided, so you will need to make a judgment based on the text you are given.
 
 % Here is the prompt text to analyze:
 <prompt_text>
