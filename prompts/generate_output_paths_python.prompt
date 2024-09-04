@@ -9,15 +9,17 @@
 
 % Outputs: The function should return a dictionary representing the generated output filename(s) with the full path for each of the keys in the `output_locations` dictionary.
 
-% Here is a detailed description of the program functionality and the many ways output file names can be constructed: ```<./README.md>```
+% Here is a detailed description of the program functionality and the many ways output file names can be constructed: <program_description><include>README.md</include></program_description>
 
 % Implement the function to handle all these cases efficiently and return the appropriate filename as a string, accordingly.
 
 % Ensure the function handles all cases correctly and returns the appropriate filename string, language, and file extension. The function should be robust and able to handle various edge cases, such as missing file extensions or languages.
 
 % Follow these steps:
-    Step 1. List out all the different ways output locations can be constructed.
+    Step 1. List out all the different ways output locations can be constructed. For each way describe a few paragraphs in detail on how the output location can constructed from the inputs to this function and potential corner cases that need to be dealt with.
     Step 2. List out the default naming conventions for each command.
-    Step 3. Write the code that implements the function to implement all these cases efficiently from Step 1 and 2.
+    Step 3. List out all the environment variables that can be used to override the default naming conventions.
+    Step 4. Identify potential error cases that need to be handled.
+    Step 5. Write the code that implements the function to implement all these cases efficiently from the above steps.
 
-% Note: For the 'fix' and 'split' commands, use underscores in the keys of the `output_locations` dictionary (e.g., 'output_test', 'output_code', 'output_sub', 'output_modified') instead of hyphens.
+% Note: For commands like 'fix' and 'split' that have multiple output, use underscores in the keys of the `output_locations` dictionary (e.g., 'output_test', 'output_code', 'output_sub', 'output_modified') instead of hyphens.

@@ -1,80 +1,92 @@
 import os
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Union
 
 
 def generate_output_paths(command: str, output_locations: Dict[str, str], basename: str, language: str, file_extension: str) -> Dict[str, str]:
     """
-    Generate output paths based on the command and provided parameters.
+    Generate output paths based on the command, output locations, basename, language, and file extension.
 
-    :param command: The command for which the output path is generated.
-    :param output_locations: A dictionary of output locations.
+    :param command: The command for which the output path is being generated.
+    :param output_locations: A dictionary of output locations provided by the user.
     :param basename: The base name for the output file.
-    :param language: The programming language for the output file.
+    :param language: The programming language of the output file.
     :param file_extension: The file extension for the output file.
-    :return: A dictionary with the generated output paths.
+    :return: A dictionary with the appropriate output paths for each command.
     """
     result = {}
 
-    def process_output(key: str, default_name: str) -> str:
+    # Define default naming conventions
+    default_names = {
+        'generate': f"{basename}{file_extension}",
+        'example': f"{basename}_example{file_extension}",
+        'test': f"test_{basename}{file_extension}",
+        'preprocess': f"{basename}_{language}_preprocessed.prompt",
+        'fix': {
+            'output_test': f"test_{basename}_fixed{file_extension}",
+            'output_code': f"{basename}_fixed{file_extension}"
+        },
+        'split': {
+            'output_sub': f"sub_{basename}.prompt",
+            'output_modified': f"modified_{basename}.prompt"
+        },
+        'change': f"modified_{basename}.prompt",
+        'update': f"modified_{basename}.prompt",
+        'detect': f"{basename}_detect.csv",
+        'conflicts': f"{basename}_conflict.csv",
+        'crash': f"{basename}_fixed{file_extension}"
+    }
+
+    # Define environment variables for each command
+    env_vars = {
+        'generate': 'PDD_GENERATE_OUTPUT_PATH',
+        'example': 'PDD_EXAMPLE_OUTPUT_PATH',
+        'test': 'PDD_TEST_OUTPUT_PATH',
+        'preprocess': 'PDD_PREPROCESS_OUTPUT_PATH',
+        'fix': {
+            'output_test': 'PDD_FIX_TEST_OUTPUT_PATH',
+            'output_code': 'PDD_FIX_CODE_OUTPUT_PATH'
+        },
+        'split': {
+            'output_sub': 'PDD_SPLIT_SUB_PROMPT_OUTPUT_PATH',
+            'output_modified': 'PDD_SPLIT_MODIFIED_PROMPT_OUTPUT_PATH'
+        },
+        'change': 'PDD_CHANGE_OUTPUT_PATH',
+        'update': 'PDD_UPDATE_OUTPUT_PATH',
+        'detect': 'PDD_DETECT_OUTPUT_PATH',
+        'conflicts': 'PDD_CONFLICTS_OUTPUT_PATH',
+        'crash': 'PDD_CRASH_OUTPUT_PATH'
+    }
+
+    def get_output_path(key: str) -> str:
         """
-        Process the output path based on the key and default name.
+        Determine the output path for a given key based on output locations, environment variables, and default names.
 
-        :param key: The key to look up in output_locations.
-        :param default_name: The default name to use if no path is found.
-        :return: The resolved output path.
+        :param key: The key for which the output path is being determined.
+        :return: The determined output path as a string.
         """
-        try:
-            if key in output_locations:
-                path = output_locations[key]
-                if path:
-                    if os.path.isdir(path):
-                        return os.path.join(path, default_name)
-                    return path
+        if key in output_locations and output_locations[key]:
+            path = Path(output_locations[key])
+            if path.is_dir():
+                return str(path / default_names[command])
+            return str(path)
 
-            env_var = f"PDD_{command.upper()}_OUTPUT_PATH"
-            if key != 'output':
-                env_var += f"_{key.split('_')[-1].upper()}"
+        env_var = env_vars[command]
+        if isinstance(env_var, dict):
+            env_var = env_var[key]
 
-            env_path = os.getenv(env_var)
-            if env_path:
-                return os.path.join(env_path, default_name)
+        if env_var in os.environ:
+            path = Path(os.environ[env_var])
+            if path.is_dir():
+                return str(path / default_names[command])
+            return str(path)
 
-            return default_name
-        except Exception as e:
-            print(f"Error processing output for {key}: {e}")
-            return default_name
+        return default_names[command]
 
-    if command == 'generate':
-        result['output'] = process_output('output', f"{basename}{file_extension}")
-
-    elif command == 'example':
-        result['output'] = process_output('output', f"{basename}_example{file_extension}")
-
-    elif command == 'test':
-        result['output'] = process_output('output', f"test_{basename}{file_extension}")
-
-    elif command == 'preprocess':
-        result['output'] = process_output('output', f"{basename}_{language}_preprocessed.prompt")
-
-    elif command == 'fix':
-        result['output_test'] = process_output('output_test', f"test_{basename}_fixed{file_extension}")
-        result['output_code'] = process_output('output_code', f"{basename}_fixed{file_extension}")
-
-    elif command == 'split':
-        result['output_sub'] = process_output('output_sub', f"sub_{basename}.prompt")
-        result['output_modified'] = process_output('output_modified', f"modified_{basename}.prompt")
-
-    elif command in ['change', 'update']:
-        result['output'] = process_output('output', f"modified_{basename}.prompt")
-
-    elif command == 'detect':
-        result['output'] = process_output('output', f"{basename}_detect.csv")
-
-    elif command == 'conflicts':
-        result['output'] = process_output('output', f"{basename}_conflict.csv")
-
-    elif command == 'crash':
-        result['output'] = process_output('output', f"{basename}_fixed{file_extension}")
+    if command in ['fix', 'split']:
+        for key in default_names[command].keys():
+            result[key] = get_output_path(key)
+    else:
+        result['output'] = get_output_path('output')
 
     return result
