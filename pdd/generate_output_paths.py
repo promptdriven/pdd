@@ -2,7 +2,6 @@ import os
 from pathlib import Path
 from typing import Dict, Union
 
-
 def generate_output_paths(command: str, output_locations: Dict[str, str], basename: str, language: str, file_extension: str) -> Dict[str, str]:
     """
     Generate output paths based on the command, output locations, basename, language, and file extension.
@@ -65,23 +64,21 @@ def generate_output_paths(command: str, output_locations: Dict[str, str], basena
         :param key: The key for which the output path is being determined.
         :return: The determined output path as a string.
         """
+        default_name = default_names[command][key] if isinstance(default_names[command], dict) else default_names[command]
+
         if key in output_locations and output_locations[key]:
             path = Path(output_locations[key])
-            if path.is_dir():
-                return str(path / default_names[command])
+            if path.as_posix().endswith('/') or '.' not in path.name or (path.exists() and path.is_dir()):
+                return str(path / default_name)
             return str(path)
 
-        env_var = env_vars[command]
-        if isinstance(env_var, dict):
-            env_var = env_var[key]
+        env_var = env_vars[command][key] if isinstance(env_vars[command], dict) else env_vars[command]
 
         if env_var in os.environ:
             path = Path(os.environ[env_var])
-            if path.is_dir():
-                return str(path / default_names[command])
-            return str(path)
+            return str(path / default_name)
 
-        return default_names[command]
+        return default_name
 
     if command in ['fix', 'split']:
         for key in default_names[command].keys():
