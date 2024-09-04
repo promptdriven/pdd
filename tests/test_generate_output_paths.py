@@ -1,88 +1,104 @@
-import os
 import pytest
+import os
+from pathlib import Path
 from pdd.generate_output_paths import generate_output_paths
 
-def test_generate_default_naming():
-    output_locations = {'output': None}
-    result = generate_output_paths('generate', output_locations, 'app', 'python', '.py')
-    assert result == {'output': 'app.py'}
-
-def test_generate_custom_directory():
-    output_locations = {'output': '/Users'}
-    result = generate_output_paths('generate', output_locations, 'app', 'python', '.py')
-    assert result == {'output': '/Users/app.py'}
-
-def test_generate_custom_full_path():
-    output_locations = {'output': 'pdd/custom_name.py'}
-    result = generate_output_paths('generate', output_locations, 'app', 'python', '.py')
-    assert result == {'output': 'pdd/custom_name.py'}
-
-def test_generate_environment_variable():
-    os.environ['PDD_GENERATE_OUTPUT_PATH'] = 'pdd'
-    output_locations = {'output': None}
-    result = generate_output_paths('generate', output_locations, 'app', 'python', '.py')
-    assert result == {'output': 'pdd/app.py'}
+@pytest.fixture
+def setup_environment():
+    # Set up environment variables for testing
+    os.environ['PDD_GENERATE_OUTPUT_PATH'] = '/env/path/generate'
+    os.environ['PDD_FIX_TEST_OUTPUT_PATH'] = '/env/path/fix_test'
+    os.environ['PDD_FIX_CODE_OUTPUT_PATH'] = '/env/path/fix_code'
+    yield
+    # Clean up environment variables after testing
     del os.environ['PDD_GENERATE_OUTPUT_PATH']
+    del os.environ['PDD_FIX_TEST_OUTPUT_PATH']
+    del os.environ['PDD_FIX_CODE_OUTPUT_PATH']
 
-def test_example_default_naming():
-    output_locations = {'output': None}
-    result = generate_output_paths('example', output_locations, 'app', 'python', '.py')
-    assert result == {'output': 'app_example.py'}
+def test_generate_command_default():
+    result = generate_output_paths('generate', {}, 'myfile', 'python', '.py')
+    assert result == {'output': 'myfile.py'}
 
-def test_test_default_naming():
-    output_locations = {'output': None}
-    result = generate_output_paths('test', output_locations, 'app', 'python', '.py')
-    assert result == {'output': 'test_app.py'}
+def test_generate_command_with_output_location():
+    result = generate_output_paths('generate', {'output': '/custom/path/output.py'}, 'myfile', 'python', '.py')
+    assert result == {'output': '/custom/path/output.py'}
 
-def test_test_custom_path():
-    output_locations = {'output': 'pdd/'}
-    result = generate_output_paths('generate', output_locations, 'app', 'python', '.py')
-    assert result == {'output': 'pdd/app.py'}
+def test_generate_command_with_output_directory():
+    result = generate_output_paths('generate', {'output': '/custom/directory'}, 'myfile', 'python', '.py')
+    assert result == {'output': '/custom/directory/myfile.py'}
 
-def test_preprocess_default_naming():
-    output_locations = {'output': None}
-    result = generate_output_paths('preprocess', output_locations, 'app', 'python', 'prompt')
-    assert result == {'output': 'app_python_preprocessed.prompt'}
+def test_example_command():
+    result = generate_output_paths('example', {}, 'myfile', 'python', '.py')
+    assert result == {'output': 'myfile_example.py'}
 
-def test_fix_default_naming():
-    output_locations = {'output-test': None, 'output-code': None}
-    result = generate_output_paths('fix', output_locations, 'app', 'python', '.py')
-    assert result == {'output-test': 'test_app_fixed.py', 'output-code': 'app_fixed.py'}
+def test_test_command():
+    result = generate_output_paths('test', {}, 'myfile', 'python', '.py')
+    assert result == {'output': 'test_myfile.py'}
 
-def test_fix_custom_paths():
-    output_locations = {'output-test': 'tests', 'output-code': 'pdd'}
-    result = generate_output_paths('fix', output_locations, 'app', 'python', '.py')
-    assert result == {'output-test': 'tests/test_app_fixed.py', 'output-code': 'pdd/app_fixed.py'}
+def test_preprocess_command():
+    result = generate_output_paths('preprocess', {}, 'myfile', 'python', '.py')
+    assert result == {'output': 'myfile_python_preprocessed.prompt'}
 
-def test_split_default_naming():
-    output_locations = {'output-sub': None, 'output-modified': None, 'output-cost': None}
-    result = generate_output_paths('split', output_locations, 'app', 'python', 'prompt')
+def test_fix_command():
+    result = generate_output_paths('fix', {}, 'myfile', 'python', '.py')
     assert result == {
-        'output-sub': 'sub_app.prompt',
-        'output-modified': 'modified_app.prompt'
+        'output_test': 'test_myfile_fixed.py',
+        'output_code': 'myfile_fixed.py'
     }
 
-def test_split_custom_paths():
-    output_locations = {'output-sub': 'prompts', 'output-modified': 'prompts', 'output-cost': './'}
-    result = generate_output_paths('split', output_locations, 'app', 'python', 'prompt')
+def test_split_command():
+    result = generate_output_paths('split', {}, 'myfile', 'python', '.py')
     assert result == {
-        'output-sub': 'prompts/sub_app.prompt',
-        'output-modified': 'prompts/modified_app.prompt'
+        'output_sub': 'sub_myfile.prompt',
+        'output_modified': 'modified_myfile.prompt'
     }
 
-def test_split_environment_variables():
-    os.environ['PDD_SPLIT_SUB_PROMPT_OUTPUT_PATH'] = 'prompts'
-    os.environ['PDD_SPLIT_MODIFIED_PROMPT_OUTPUT_PATH'] = 'prompts'
-    os.environ['PDD_SPLIT_COST_OUTPUT_PATH'] = './'
-    output_locations = {'output-sub': None, 'output-modified': None, 'output-cost': None}
-    result = generate_output_paths('split', output_locations, 'app', 'python', 'prompt')
-    assert result == {
-        'output-sub': 'prompts/sub_app.prompt',
-        'output-modified': 'prompts/modified_app.prompt'
-    }
-    del os.environ['PDD_SPLIT_SUB_PROMPT_OUTPUT_PATH']
-    del os.environ['PDD_SPLIT_MODIFIED_PROMPT_OUTPUT_PATH']
-    del os.environ['PDD_SPLIT_COST_OUTPUT_PATH']
+def test_change_command():
+    result = generate_output_paths('change', {}, 'myfile', 'python', '.py')
+    assert result == {'output': 'modified_myfile.prompt'}
 
-if __name__ == "__main__":
-    pytest.main(["-vv", __file__])
+def test_update_command():
+    result = generate_output_paths('update', {}, 'myfile', 'python', '.py')
+    assert result == {'output': 'modified_myfile.prompt'}
+
+def test_detect_command():
+    result = generate_output_paths('detect', {}, 'myfile', 'python', '.py')
+    assert result == {'output': 'myfile_detect.csv'}
+
+def test_conflicts_command():
+    result = generate_output_paths('conflicts', {}, 'myfile', 'python', '.py')
+    assert result == {'output': 'myfile_conflict.csv'}
+
+def test_crash_command():
+    result = generate_output_paths('crash', {}, 'myfile', 'python', '.py')
+    assert result == {'output': 'myfile_fixed.py'}
+
+def test_fix_command_with_custom_output():
+    result = generate_output_paths('fix', {'output_test': '/custom/test.py', 'output_code': '/custom/code.py'}, 'myfile', 'python', '.py')
+    assert result == {
+        'output_test': '/custom/test.py',
+        'output_code': '/custom/code.py'
+    }
+
+def test_generate_command_with_environment_variable(setup_environment):
+    result = generate_output_paths('generate', {}, 'myfile', 'python', '.py')
+    assert result == {'output': '/env/path/generate/myfile.py'}
+
+def test_fix_command_with_environment_variables(setup_environment):
+    result = generate_output_paths('fix', {}, 'myfile', 'python', '.py')
+    assert result == {
+        'output_test': '/env/path/fix_test/test_myfile_fixed.py',
+        'output_code': '/env/path/fix_code/myfile_fixed.py'
+    }
+
+def test_invalid_command():
+    with pytest.raises(KeyError):
+        generate_output_paths('invalid_command', {}, 'myfile', 'python', '.py')
+
+def test_missing_file_extension():
+    result = generate_output_paths('generate', {}, 'myfile', 'python', '')
+    assert result == {'output': 'myfile'}
+
+def test_missing_language():
+    result = generate_output_paths('preprocess', {}, 'myfile', '', '.py')
+    assert result == {'output': 'myfile__preprocessed.prompt'}
