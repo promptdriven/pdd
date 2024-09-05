@@ -19,16 +19,16 @@ def extract_basename(file_path: str, command: str) -> str:
 def extract_language(file_path: str, command_options: Dict[str, str]) -> str:
     """Extract language from file path or command options."""
     if 'language' in command_options and command_options['language']:
-        return command_options['language']
+        return command_options['language'].lower()
     
     filename = Path(file_path).name
     parts = filename.split('_')
     if len(parts) > 1 and parts[-1].endswith('.prompt'):
-        return parts[-1].split('.')[0]
+        return parts[-1].split('.')[0].lower()
     
     extension = Path(file_path).suffix
     lang = get_language(extension)
-    return lang if lang else 'txt'
+    return lang.lower() if lang else 'txt'
 
 def construct_paths(
     input_file_paths: Dict[str, str],
