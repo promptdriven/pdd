@@ -1,122 +1,86 @@
 import os
-import click
-from rich import print
+from pathlib import Path
 from typing import Dict, Tuple
+import click
 from .get_extension import get_extension
 from .get_language import get_language
 from .generate_output_paths import generate_output_paths
 
-def construct_paths(input_file_paths: Dict[str, str], force: bool, quiet: bool, command: str, command_options: Dict[str, str]) -> Tuple[Dict[str, str], Dict[str, str], str]:
-    """
-    Constructs input and output file paths, reads input files, and manages file overwriting.
+def extract_basename(file_path: str, command: str) -> str:
+    """Extract basename from file path based on the command."""
+    filename = Path(file_path).name
+    if command == 'detect':
+        return Path(filename).stem
+    parts = filename.split('_')
+    if len(parts) > 1 and parts[-1].endswith('.prompt'):
+        return '_'.join(parts[:-1])
+    return Path(filename).stem
 
-    :param input_file_paths: Dictionary of input file paths.
-    :param force: Boolean indicating whether to force overwrite existing files.
-    :param quiet: Boolean indicating whether to suppress output messages.
-    :param command: Command name for generating output paths.
-    :param command_options: Dictionary of command options.
-    :return: Tuple containing input strings, output file paths, and detected language.
-    """
-    # Step A: Extracting basename
-    def extract_basename(file_path: str) -> str:
-        filename = os.path.basename(file_path)
-        basename = os.path.splitext(filename)[0]
-        if '_' in basename:
-            return basename.rsplit('_', 1)[0]
-        return basename
+def extract_language(file_path: str, command_options: Dict[str, str]) -> str:
+    """Extract language from file path or command options."""
+    if 'language' in command_options and command_options['language']:
+        return command_options['language']
+    
+    filename = Path(file_path).name
+    parts = filename.split('_')
+    if len(parts) > 1 and parts[-1].endswith('.prompt'):
+        return parts[-1].split('.')[0]
+    
+    extension = Path(file_path).suffix
+    lang = get_language(extension)
+    return lang if lang else 'txt'
 
-    # Step B: Extracting language
-
-    def extract_language(file_path: str, command_options: Dict[str, str]) -> str:
-        if 'language' in command_options:
-            # if language is not None, return it
-            if command_options['language']:
-                return command_options['language']
-        
-        filename = os.path.basename(file_path)
-        if '_' in filename:
-            return filename.rsplit('_', 1)[1].split('.')[0]
-        
-        file_extension = os.path.splitext(filename)[1]
-        print(f"Debug: file_extension = {file_extension}")  # Debug print
-        
-        # Check PDD_PATH
-        pdd_path = os.environ.get('PDD_PATH')
-        print(f"Debug: PDD_PATH = {pdd_path}")  # Debug print
-        
-        language = get_language(file_extension)
-        print(f"Debug: get_language returned: {language}")  # Debug print
-        
-        return language
-
-    # Step C: Implement construct_paths function
-    def construct_paths_impl() -> Tuple[Dict[str, str], Dict[str, str], str]:
-        # Step 1: Construct input file paths
-        for key, path in input_file_paths.items():
-            if not os.path.splitext(path)[1]:
-                if key == 'prompt_file':
-                    input_file_paths[key] = f"{path}.prompt"
-                elif key == 'code_file':
-                    input_file_paths[key] = f"{path}.{get_extension(extract_language(path, command_options))}"
-
-        # Step 2: Load input files
-        input_strings = {}
-        for key, path in input_file_paths.items():
-            try:
-                if key == 'error_file':
-                    if not os.path.exists(path):
-                        with open(path, 'w') as file:
-                            file.write("")
-                else:
-                    with open(path, 'r') as file:
-                        input_strings[key] = file.read()
-            except IOError as e:
-                print(f"[bold red]Error loading input file {path}: {str(e)}[/bold red]")
-                raise
-
-        # Extract basename and language
-        primary_input = list(input_file_paths.values())[0]
-        if command == 'fix' or command == 'example' or command == 'test':
-            if command == 'fix':
-                basename = os.path.splitext(os.path.basename(primary_input).replace('test_', ''))[0]
+def construct_paths(
+    input_file_paths: Dict[str, str],
+    force: bool,
+    quiet: bool,
+    command: str,
+    command_options: Dict[str, str]
+) -> Tuple[Dict[str, str], Dict[str, str], str]:
+    """Construct and validate input and output file paths."""
+    
+    # Step 1: Load input files
+    input_strings = {}
+    for key, path in input_file_paths.items():
+        try:
+            with open(path, 'r') as f:
+                input_strings[key] = f.read()
+        except FileNotFoundError:
+            if key == 'error_file':
+                # Create error file if it doesn't exist
+                open(path, 'w').close()
+                input_strings[key] = ''
             else:
-                basename = os.path.splitext(os.path.basename(primary_input))[0]
-        else:
-            basename = extract_basename(primary_input)
+                raise click.ClickException(f"Input file not found: {path}")
+        except Exception as e:
+            raise click.ClickException(f"Error reading input file {path}: {str(e)}")
 
-        if command == 'fix' or command == 'test' or command == 'example':
-            language = get_language(os.path.splitext(primary_input)[1][1:])
-        else:
-            language = extract_language(primary_input, command_options)
+    # Step 2: Extract basename
+    primary_input = next(iter(input_file_paths.values()))
+    basename = extract_basename(primary_input, command)
 
-        # Step 3: Construct output file paths
-        output_options = {k: v for k, v in command_options.items() if k.startswith('output')}
-        output_file_paths = generate_output_paths(command, output_options, basename, language, get_extension(language))
+    # Step 3: Extract language and get file extension
+    language = extract_language(primary_input, command_options)
+    file_extension = get_extension(language)
 
-        # Step 4: Check if output files exist
-        if not force:
-            for path in output_file_paths.values():
-                if os.path.exists(path):
-                    # Styled message using click.style()
-                    message = click.style(f"File {path} already exists. Overwrite?", fg="yellow")
-                    if not click.confirm(message, default=True):
-                        click.secho("Operation cancelled.", fg="red")
-                        raise click.Abort()
+    # Step 4: Construct output file paths
+    output_locations = {k: v for k, v in command_options.items() if k.startswith('output')}
+    output_file_paths = generate_output_paths(command, output_locations, basename, language, file_extension)
 
-        # Step 5: Return outputs
-        return input_strings, output_file_paths, language
+    # Step 5: Check if output files exist and confirm overwrite
+    for output_key, output_path in output_file_paths.items():
+        if os.path.exists(output_path) and not force:
+            if not click.confirm(click.style(f"Output file {output_path} already exists. Overwrite?", fg='yellow'), default=True):
+                click.secho("Operation cancelled.", fg='red')
+                raise click.Abort()
 
-    # Execute the implementation
-    result = construct_paths_impl()
-
-    # Print paths unless quiet is True
+    # Print paths if not quiet
     if not quiet:
-        print("[bold green]Input file paths:[/bold green]")
+        click.echo("Input files:")
         for key, path in input_file_paths.items():
-            print(f"  {key}: {path}")
-        print("[bold green]Output file paths:[/bold green]")
-        for key, path in result[1].items():
-            print(f"  {key}: {path}")
-        print(f"[bold green]Language:[/bold green] {result[2]}")
+            click.echo(f"  {key}: {path}")
+        click.echo("Output files:")
+        for key, path in output_file_paths.items():
+            click.echo(f"  {key}: {path}")
 
-    return result
+    return input_strings, output_file_paths, language
