@@ -1,86 +1,176 @@
 import pytest
-from unittest.mock import patch, mock_open
-from pdd.construct_paths import construct_paths
-from click import Abort
+from pathlib import Path
+import os
+import click
+from pdd.construct_paths import construct_paths, extract_basename, extract_language
+
+# Mock the generate_output_paths function
+@pytest.fixture
+def mock_generate_output_paths(monkeypatch):
+    def mock_func(command, output_locations, basename, language, file_extension):
+        return {
+            'output': f'/path/to/{basename}.{file_extension}',
+            'test_output': f'/path/to/{basename}_test.{file_extension}'
+        }
+    monkeypatch.setattr('pdd.construct_paths.generate_output_paths', mock_func)
+
+# Mock the get_extension function
+@pytest.fixture
+def mock_get_extension(monkeypatch):
+    def mock_func(language):
+        return 'py' if language == 'python' else 'txt'
+    monkeypatch.setattr('pdd.construct_paths.get_extension', mock_func)
+
+# Mock the get_language function
+@pytest.fixture
+def mock_get_language(monkeypatch):
+    def mock_func(extension):
+        return 'python' if extension == '.py' else 'txt'
+    monkeypatch.setattr('pdd.construct_paths.get_language', mock_func)
 
 @pytest.fixture
-def mock_file_content():
-    return "Mock file content"
+def temp_directory(tmp_path):
+    return tmp_path
 
-@pytest.fixture
-def mock_get_extension():
-    with patch('pdd.construct_paths.get_extension') as mock:
-        mock.return_value = '.py'
-        yield mock
+def test_extract_basename():
+    assert extract_basename('/path/to/file_python.prompt', 'generate') == 'file'
+    assert extract_basename('/path/to/file.py', 'detect') == 'file'
+    assert extract_basename('/path/to/complex_file_name.txt', 'example') == 'complex_file_name'
 
-@pytest.fixture
-def mock_get_language():
-    with patch('pdd.construct_paths.get_language') as mock:
-        mock.return_value = 'python'
-        yield mock
+def test_extract_language():
+    assert extract_language('/path/to/file_python.prompt', {}) == 'python'
+    assert extract_language('/path/to/file.py', {}) == 'python'
+    assert extract_language('/path/to/file.txt', {'language': 'java'}) == 'java'
 
-@pytest.fixture
-def mock_generate_output_paths():
-    with patch('pdd.construct_paths.generate_output_paths') as mock:
-        mock.return_value = {'output': '/path/to/output.py'}
-        yield mock
-
-
-def test_construct_paths_generate_command(mock_file_content, mock_get_extension, mock_generate_output_paths):
-    with patch('builtins.open', mock_open(read_data=mock_file_content)):
-        input_file_paths = {'prompt_file': '/path/to/prompt_python'}
-        result = construct_paths(input_file_paths, True, True, 'generate', {})
-        
-        assert result[0] == {'prompt_file': mock_file_content}
-        assert result[1] == {'output': '/path/to/output.py'}
-        assert result[2] == 'python'
-
-
-def test_construct_paths_other_command(mock_file_content, mock_get_language, mock_get_extension, mock_generate_output_paths):
-    with patch('builtins.open', mock_open(read_data=mock_file_content)):
-        input_file_paths = {'code_file': '/path/to/code.py'}
-        result = construct_paths(input_file_paths, True, True, 'test', {})
-        
-        assert result[0] == {'code_file': mock_file_content}
-        assert result[1] == {'output': '/path/to/output.py'}
-        assert result[2] == 'python'
-
-
-def test_construct_paths_missing_extension():
-    input_file_paths = {'prompt_file': '/path/to/prompt'}
-    with patch('builtins.open', mock_open(read_data="content")):
-        result = construct_paths(input_file_paths, True, True, 'generate', {})
-        assert 'prompt_file' in result[0]
-        assert result[0]['prompt_file'] == "content"
-
-
-def test_construct_paths_file_not_found():
-    input_file_paths = {'prompt_file': '/path/to/nonexistent_file'}
-    with pytest.raises(IOError):
-        construct_paths(input_file_paths, True, True, 'generate', {})
-
-
-@patch('click.confirm')
-def test_construct_paths_existing_output_file_force_false(mock_confirm, mock_generate_output_paths):
-    mock_confirm.return_value = False
-    input_file_paths = {'prompt_file': '/path/to/prompt.txt'}
+def test_construct_paths_basic(temp_directory, mock_generate_output_paths, mock_get_extension, mock_get_language):
+    input_file = temp_directory / 'input_python.prompt'
+    input_file.write_text('Sample input')
     
-    with patch('os.path.exists', return_value=True), \
-         patch('builtins.open', mock_open(read_data="content")), \
-         pytest.raises(Abort):
-        construct_paths(input_file_paths, False, False, 'generate', {})
+    input_file_paths = {'prompt_file': str(input_file)}
+    force = False
+    quiet = True
+    command = 'generate'
+    command_options = {'output': str(temp_directory / 'output.py')}
 
+    input_strings, output_file_paths, language = construct_paths(
+        input_file_paths, force, quiet, command, command_options
+    )
 
-@patch('click.confirm')
-def test_construct_paths_existing_output_file_force_true(mock_confirm, mock_generate_output_paths):
-    input_file_paths = {'prompt_file': '/path/to/prompt.txt'}
+    assert input_strings == {'prompt_file': 'Sample input'}
+    assert output_file_paths == {
+        'output': '/path/to/input.py',
+        'test_output': '/path/to/input_test.py'
+    }
+    assert language == 'python'
+
+def test_construct_paths_error_file(temp_directory, mock_generate_output_paths, mock_get_extension, mock_get_language):
+    input_file = temp_directory / 'input.py'
+    input_file.write_text('Sample input')
+    error_file = temp_directory / 'error.txt'
     
-    with patch('os.path.exists', return_value=True), \
-         patch('builtins.open', mock_open(read_data="content")):
-        result = construct_paths(input_file_paths, True, False, 'generate', {})
-        assert result is not None
-        mock_confirm.assert_not_called()
+    input_file_paths = {'code_file': str(input_file), 'error_file': str(error_file)}
+    force = False
+    quiet = True
+    command = 'example'
+    command_options = {}
 
-# Run the tests
-if __name__ == "__main__":
-    pytest.main(["-v", __file__])
+    input_strings, output_file_paths, language = construct_paths(
+        input_file_paths, force, quiet, command, command_options
+    )
+
+    assert 'code_file' in input_strings
+    assert 'error_file' in input_strings
+    assert input_strings['error_file'] == ''
+    assert os.path.exists(error_file)
+
+def test_construct_paths_force_overwrite(temp_directory, mock_generate_output_paths, mock_get_extension, mock_get_language, monkeypatch):
+    input_file = temp_directory / 'input.py'
+    input_file.write_text('Sample input')
+    output_file = temp_directory / 'output.py'
+    output_file.write_text('Existing output')
+    
+    input_file_paths = {'code_file': str(input_file)}
+    force = True
+    quiet = True
+    command = 'example'
+    command_options = {'output': str(output_file)}
+
+    input_strings, output_file_paths, language = construct_paths(
+        input_file_paths, force, quiet, command, command_options
+    )
+
+    assert 'code_file' in input_strings
+    assert output_file_paths['output'] == '/path/to/input.py'
+    assert language == 'python'
+
+def test_construct_paths_user_confirmation(temp_directory, mock_generate_output_paths, mock_get_extension, mock_get_language, monkeypatch):
+    input_file = temp_directory / 'input.py'
+    input_file.write_text('Sample input')
+    output_file = temp_directory / 'output.py'
+    output_file.write_text('Existing output')
+    
+    input_file_paths = {'code_file': str(input_file)}
+    force = False
+    quiet = False
+    command = 'example'
+    command_options = {'output': str(output_file)}
+
+    # Mock user input to confirm overwrite
+    monkeypatch.setattr('click.confirm', lambda message, default: True)
+
+    input_strings, output_file_paths, language = construct_paths(
+        input_file_paths, force, quiet, command, command_options
+    )
+
+    assert 'code_file' in input_strings
+    assert output_file_paths['output'] == '/path/to/input.py'
+    assert language == 'python'
+
+def test_construct_paths_user_cancellation(temp_directory, mock_generate_output_paths, mock_get_extension, mock_get_language, monkeypatch):
+    input_file = temp_directory / 'input.py'
+    input_file.write_text('Sample input')
+    output_file = temp_directory / 'output.py'
+    output_file.write_text('Existing output')
+    
+    input_file_paths = {'code_file': str(input_file)}
+    force = False
+    quiet = False
+    command = 'example'
+    command_options = {'output': str(output_file)}
+
+    # Mock user input to cancel overwrite
+    monkeypatch.setattr('click.confirm', lambda message, default: False)
+
+    with pytest.raises(click.Abort):
+        construct_paths(input_file_paths, force, quiet, command, command_options)
+
+def test_construct_paths_input_file_not_found(temp_directory):
+    input_file_paths = {'prompt_file': str(temp_directory / 'non_existent_file.txt')}
+    force = False
+    quiet = True
+    command = 'generate'
+    command_options = {}
+
+    with pytest.raises(click.ClickException, match="Input file not found"):
+        construct_paths(input_file_paths, force, quiet, command, command_options)
+
+def test_construct_paths_detect_command(temp_directory, mock_generate_output_paths, mock_get_extension, mock_get_language):
+    change_file = temp_directory / 'changes.txt'
+    change_file.write_text('Sample changes')
+    
+    input_file_paths = {'change_file': str(change_file)}
+    force = False
+    quiet = True
+    command = 'detect'
+    command_options = {}
+
+    input_strings, output_file_paths, language = construct_paths(
+        input_file_paths, force, quiet, command, command_options
+    )
+
+    assert input_strings == {'change_file': 'Sample changes'}
+    assert output_file_paths == {
+        'output': '/path/to/changes.txt',
+        'test_output': '/path/to/changes_test.txt'
+    }
+    assert language == 'txt'
