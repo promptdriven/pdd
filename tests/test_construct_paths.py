@@ -6,11 +6,11 @@ from pdd.construct_paths import construct_paths, extract_basename, extract_langu
 
 # Mock the generate_output_paths function
 @pytest.fixture
-def mock_generate_output_paths(monkeypatch):
+def mock_generate_output_paths(monkeypatch, temp_directory):
     def mock_func(command, output_locations, basename, language, file_extension):
         return {
-            'output': f'/path/to/{basename}.{file_extension}',
-            'test_output': f'/path/to/{basename}_test.{file_extension}'
+            'output': str(temp_directory / f'{basename}.{file_extension}'),
+            'test_output': str(temp_directory / f'{basename}_test.{file_extension}')
         }
     monkeypatch.setattr('pdd.construct_paths.generate_output_paths', mock_func)
 
@@ -58,8 +58,8 @@ def test_construct_paths_basic(temp_directory, mock_generate_output_paths, mock_
 
     assert input_strings == {'prompt_file': 'Sample input'}
     assert output_file_paths == {
-        'output': '/path/to/input.py',
-        'test_output': '/path/to/input_test.py'
+        'output': str(temp_directory / 'input.py'),
+        'test_output': str(temp_directory / 'input_test.py')
     }
     assert language == 'python'
 
@@ -100,7 +100,7 @@ def test_construct_paths_force_overwrite(temp_directory, mock_generate_output_pa
     )
 
     assert 'code_file' in input_strings
-    assert output_file_paths['output'] == '/path/to/input.py'
+    assert output_file_paths['output'] == str(temp_directory / 'input.py')
     assert language == 'python'
 
 def test_construct_paths_user_confirmation(temp_directory, mock_generate_output_paths, mock_get_extension, mock_get_language, monkeypatch):
@@ -123,13 +123,13 @@ def test_construct_paths_user_confirmation(temp_directory, mock_generate_output_
     )
 
     assert 'code_file' in input_strings
-    assert output_file_paths['output'] == '/path/to/input.py'
+    assert output_file_paths['output'] == str(temp_directory / 'input.py')
     assert language == 'python'
 
 def test_construct_paths_user_cancellation(temp_directory, mock_generate_output_paths, mock_get_extension, mock_get_language, monkeypatch):
     input_file = temp_directory / 'input.py'
     input_file.write_text('Sample input')
-    output_file = temp_directory / 'output.py'
+    output_file = temp_directory / 'input.py'  # Match the basename from input_file
     output_file.write_text('Existing output')
     
     input_file_paths = {'code_file': str(input_file)}
@@ -170,7 +170,7 @@ def test_construct_paths_detect_command(temp_directory, mock_generate_output_pat
 
     assert input_strings == {'change_file': 'Sample changes'}
     assert output_file_paths == {
-        'output': '/path/to/changes.txt',
-        'test_output': '/path/to/changes_test.txt'
+        'output': str(temp_directory / 'changes.txt'),
+        'test_output': str(temp_directory / 'changes_test.txt')
     }
     assert language == 'txt'

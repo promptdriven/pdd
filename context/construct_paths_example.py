@@ -7,8 +7,8 @@ def main() -> None:
     """
     # Define input file paths
     input_file_paths = { # Keys are the lower case version of the command inputs (e.g. "test" command would have the keys "code_file" and "prompt_file")
-        "code_file": "../pdd/unfinished_prompt.py",
-        "prompt_file": "../prompts/unfinished_prompt_python.prompt"
+        "code_file": "pdd/unfinished_prompt.py",
+        "prompt_file": "prompts/unfinished_prompt_python.prompt"
     }
 
     # Define command options
