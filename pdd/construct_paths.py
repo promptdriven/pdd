@@ -69,7 +69,7 @@ def construct_paths(
 
     # Step 5: Check if output files exist and confirm overwrite
     for output_key, output_path in output_file_paths.items():
-        if os.path.exists(output_path) and not force:
+        if os.path.exists(output_path) and not force and not quiet:
             if not click.confirm(click.style(f"Output file {output_path} already exists. Overwrite?", fg='yellow'), default=True):
                 click.secho("Operation cancelled.", fg='red')
                 raise click.Abort()
