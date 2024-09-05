@@ -214,7 +214,7 @@ def preprocess(ctx, prompt_file: str, output: str, xml: bool):
             task = progress.add_task("[green]Preprocessing prompt...", total=100)
             
             if xml:
-                processed_prompt, total_cost = xml_tagger(
+                processed_prompt, total_cost, model_name = xml_tagger(
                     input_strings['prompt_file'],
                     ctx.obj['STRENGTH'],
                     ctx.obj['TEMPERATURE']
