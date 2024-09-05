@@ -9,7 +9,7 @@
     - 'quiet' (boolean) - A flag that indicates whether to suppress the output.
     - 'command' (string) - pdd command that was run.
     - 'command_options' (dict) - A dictionary of the command options for the given command. For example, it could have the 'language' key for the 'test' command or output locations for other commands.
-    Outputs:
+    Outputs: A tuple containing:
     - 'input_strings' (dict) - A dictionary with the keys being the pdd description examples and the values being the input file strings.
     - 'output_file_paths' (dict)- A dictionary with the keys being the loaded input files and output files paths.
     - 'language' (string) - The language of the output file.
@@ -25,22 +25,18 @@
     % Here is how to generate the output paths: <generate_output_paths_example><include>context/generate_output_paths_example.py</include></generate_output_paths_example>    
 </internal_example_modules>
 
-% If the file name has no extension, add the appropriate file extension (e.g '.prompt' to input file for the 'generate' command) to the file name.
-
-% If the command is 'generate' extract the basename and language from the input_file_path. Use get_extension to get the file extension for the language. The file extension and language is used for the subsequent functionality below. Be able to handle files missing a '_' in the file name.
-
-% For 'fix', 'example', and 'test' commands, adjust the basename extraction to use os.path.splitext and os.path.basename to strip the 'test_' prefix and file extension. Determine the language directly from the file extension using os.path.splitext to get the extension without the leading dot.
+% Use get_extension to get the file extension for the language. The file extension and language is used for the subsequent functionality below.
 
 % Unless quiet is True, print out the input and output file paths that are being used and the steps being done below.
 
 % This function will do the following:
-    Step 1. Construct the input file paths using above rules according to the different commands.
-    Step 2. Load the input files into the input_strings dictionary with the pdd description examples as the keys. Alert the user of any errors in loading the input files. Ensure 'error_file' exists by creating it if necessary.
+    Step 1. Load the input files into the input_strings dictionary using the 'input_file_paths' dictionary with the pdd description examples as the keys. Alert the user of any errors in loading the input files. Ensure 'error_file' exists by creating it if necessary.
+    Step 2. Extract out the basename from the input file path and be sure to handle all corner cases.
     Step 3. Construct the output file paths using the above rules using the "generate_output_paths" function. Be sure to remove non-output keys from the command_options dictionary before passing it to the "generate_output_paths" function output_location dictionary parameters.
     Step 4. If the output files already exist, and force isn't true, check with the user if the program should overwrite. Use click.style to style the confirmation message and click.secho for the cancellation message. If the user presses 'n' or 'N' then exit the program. If the user presses enter, 'y' or 'Y' then overwrite the output files.
     Step 5. Return the 'input_strings', 'output_file_paths' and 'language'
 
-Follow these steps:
-    Step A. List out all the ways the basename can be extracted from the input file path for each of the commands. For example, the basename is usually the first input prompt file without the directory, language, or file extension. However, keep in mind for the 'detect' command, the change file determines the basename. In a paragraph, explain how the basename is extracted for each command.
+Follow these steps in this order:
+    Step A. List out all the ways the basename can be extracted from the input file path for each of the commands. For example, the basename is usually the first input prompt file without the directory, language, or file extension. However, keep in mind for the 'detect' command, the change file determines the basename. For each way, in a paragraph, explain how the basename is extracted for each command, what are potential corner cases, and how to deal with the corner cases.
     Step B. List out all the ways language can be extracted from the input file path or command_options. Ensure that if the 'language' key is present in command_options, it is not None before using it.
     Step C. Write out the construct_paths function.
