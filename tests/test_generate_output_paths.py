@@ -43,7 +43,8 @@ def test_fix_command():
     result = generate_output_paths('fix', {}, 'myfile', 'python', '.py')
     assert result == {
         'output_test': 'test_myfile_fixed.py',
-        'output_code': 'myfile_fixed.py'
+        'output_code': 'myfile_fixed.py',
+        'output_results': 'myfile_fix_results.log'
     }
 
 def test_split_command():
@@ -77,7 +78,8 @@ def test_fix_command_with_custom_output():
     result = generate_output_paths('fix', {'output_test': '/custom/test.py', 'output_code': '/custom/code.py'}, 'myfile', 'python', '.py')
     assert result == {
         'output_test': '/custom/test.py',
-        'output_code': '/custom/code.py'
+        'output_code': '/custom/code.py',
+        'output_results': 'myfile_fix_results.log'
     }
 
 def test_generate_command_with_environment_variable(setup_environment):
@@ -88,7 +90,8 @@ def test_fix_command_with_environment_variables(setup_environment):
     result = generate_output_paths('fix', {}, 'myfile', 'python', '.py')
     assert result == {
         'output_test': '/env/path/fix_test/test_myfile_fixed.py',
-        'output_code': '/env/path/fix_code/myfile_fixed.py'
+        'output_code': '/env/path/fix_code/myfile_fixed.py',
+        'output_results': 'myfile_fix_results.log'
     }
 
 def test_invalid_command():
