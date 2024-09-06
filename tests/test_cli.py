@@ -1,170 +1,290 @@
-import sys
-import types
+import os
 import pytest
-from unittest.mock import MagicMock, patch
-import importlib
-
-# We need to mock the dependencies BEFORE importing pdd.cli to ensure isolation
-# and to capture the side effects of the module-level code.
+from unittest.mock import patch, mock_open
+import csv
+from io import StringIO
+from datetime import datetime
+from click.testing import CliRunner
+from pdd.cli import cli
 
 @pytest.fixture
-def mock_pdd_dependencies():
-    """
-    Sets up mocks for all modules that pdd.cli imports.
-    This prevents actual imports and allows us to verify interactions.
-    """
-    # Create a dictionary of modules to mock
-    modules_to_mock = [
-        'pdd.core',
-        'pdd.core.cli',
-        'pdd.commands',
-        'pdd.commands.templates',
-        'pdd.auto_update',
-        'pdd.code_generator_main',
-        'pdd.context_generator_main',
-        'pdd.cmd_test_main',
-        'pdd.fix_main',
-        'pdd.split_main',
-        'pdd.change_main',
-        'pdd.update_main',
-        'pdd.sync_main',
-        'pdd.auto_deps_main',
-        'pdd.detect_change_main',
-        'pdd.conflicts_main',
-        'pdd.bug_main',
-        'pdd.crash_main',
-        'pdd.trace_main',
-        'pdd.agentic_test',
-        'pdd.preprocess_main',
-        'pdd.construct_paths',
-        'pdd.fix_verification_main',
-        'pdd.core.errors',
-        'pdd.install_completion',
-        'pdd.core.utils',
-    ]
+def runner() -> CliRunner:
+    """Fixture to provide a Click CLI runner for testing."""
+    return CliRunner()
 
-    mock_modules = {}
-    original_modules = {}
+def test_cli_version(runner: CliRunner) -> None:
+    """Test the CLI version command."""
+    result = runner.invoke(cli, ['--version'])
+    assert result.exit_code == 0
+    assert '0.1.0' in result.output
 
-    # Setup mocks
-    for mod_name in modules_to_mock:
-        if mod_name in sys.modules:
-            original_modules[mod_name] = sys.modules[mod_name]
+def test_cli_help(runner: CliRunner) -> None:
+    """Test the CLI help command."""
+    result = runner.invoke(cli, ['--help'])
+    assert result.exit_code == 0
+    assert 'PDD (Prompt-Driven Development) Command Line Interface' in result.output
+    
+
+def test_generate_command(runner: CliRunner, tmp_path) -> None:
+    """Test the generate command of the CLI."""
+    prompt_file = tmp_path / "test_prompt.txt"
+    prompt_file.write_text("Generate a Python function to add two numbers")
+    output_file = tmp_path / "output.py"
+    
+    result = runner.invoke(cli, ['generate', str(prompt_file), '--output', str(output_file)])
+    assert result.exit_code == 0
+    assert "Generated code saved to:" in result.output
+    assert output_file.exists()
+
+def test_example_command(runner: CliRunner, tmp_path) -> None:
+    """Test the example command of the CLI."""
+    prompt_file = tmp_path / "test_prompt.txt"
+    prompt_file.write_text("Generate a Python function to add two numbers")
+    code_file = tmp_path / "code.py"
+    code_file.write_text("def add(a, b): return a + b")
+    output_file = tmp_path / "example.py"
+    
+    result = runner.invoke(cli, ['example', str(prompt_file), str(code_file), '--output', str(output_file)])
+    assert result.exit_code == 0
+    assert "Generated example code saved to:" in result.output
+    assert output_file.exists()
+
+def test_test_command(runner: CliRunner, tmp_path) -> None:
+    """Test the test command of the CLI."""
+    prompt_file = tmp_path / "test_prompt.txt"
+    prompt_file.write_text("Generate a Python function to add two numbers")
+    code_file = tmp_path / "code.py"
+    code_file.write_text("def add(a, b): return a + b")
+    output_file = tmp_path / "test_output.py"
+    
+    result = runner.invoke(cli, ['test', str(prompt_file), str(code_file), '--output', str(output_file)])
+    assert result.exit_code == 0
+    assert "Generated unit test saved to:" in result.output
+    assert output_file.exists()
+
+def test_preprocess_command(runner: CliRunner, tmp_path) -> None:
+    """Test the preprocess command of the CLI."""
+    prompt_file = tmp_path / "test_prompt.txt"
+    prompt_file.write_text("<include>test.txt</include>")
+    output_file = tmp_path / "preprocessed.txt"
+    
+    result = runner.invoke(cli, ['preprocess', str(prompt_file), '--output', str(output_file)])
+    assert result.exit_code == 0
+    assert "Preprocessed prompt saved to:" in result.output
+    assert output_file.exists()
+
+def test_fix_command(runner: CliRunner, tmp_path) -> None:
+    """Test the fix command of the CLI."""
+    prompt_file = tmp_path / "test_prompt.txt"
+    prompt_file.write_text("Generate a Python function to add two numbers")
+    code_file = tmp_path / "code.py"
+    code_file.write_text("def add(a, b): return a + b")
+    unit_test_file = tmp_path / "test_code.py"
+    unit_test_file.write_text("def test_add(): assert add(1, 2) == 3")
+    error_file = tmp_path / "error.txt"
+    error_file.write_text("AssertionError: assert 3 == 4")
+    output_test = tmp_path / "fixed_test.py"
+    output_code = tmp_path / "fixed_code.py"
+    
+    result = runner.invoke(cli, ['fix', str(prompt_file), str(code_file), str(unit_test_file), str(error_file),
+                                 '--output-test', str(output_test), '--output-code', str(output_code)])
+    assert result.exit_code == 0
+    assert "Fixed unit test saved to:" in result.output
+    assert "Fixed code saved to:" in result.output
+    assert output_test.exists()
+    assert output_code.exists()
+
+def test_split_command(runner: CliRunner, tmp_path) -> None:
+    """Test the split command of the CLI."""
+    input_prompt = tmp_path / "input_prompt.txt"
+    input_prompt.write_text("Generate a complex Python program")
+    input_code = tmp_path / "input_code.py"
+    input_code.write_text("def complex_function(): pass")
+    example_code = tmp_path / "example_code.py"
+    example_code.write_text("complex_function()")
+    output_sub = tmp_path / "sub_prompt.txt"
+    output_modified = tmp_path / "modified_prompt.txt"
+    
+    result = runner.invoke(cli, ['split', str(input_prompt), str(input_code), str(example_code),
+                                 '--output-sub', str(output_sub), '--output-modified', str(output_modified)])
+    assert result.exit_code == 0
+    assert "Sub-prompt saved to:" in result.output
+    assert "Modified prompt saved to:" in result.output
+    assert output_sub.exists()
+    assert output_modified.exists()
+
+def test_change_command(runner: CliRunner, tmp_path) -> None:
+    """Test the change command of the CLI."""
+    input_prompt_file = tmp_path / "input_prompt.txt"
+    input_prompt_file.write_text("Generate a Python function to add two numbers")
+    input_code_file = tmp_path / "input_code.py"
+    input_code_file.write_text("def add(a, b): return a + b")
+    change_prompt_file = tmp_path / "change_prompt.txt"
+    change_prompt_file.write_text("Modify the function to multiply instead of add")
+    output_file = tmp_path / "modified_prompt.txt"
+    
+    result = runner.invoke(cli, ['change', str(input_prompt_file), str(input_code_file), str(change_prompt_file),
+                                 '--output', str(output_file)])
+    assert result.exit_code == 0
+    assert "Modified prompt saved to:" in result.output
+    assert output_file.exists()
+
+def test_update_command(runner: CliRunner, tmp_path) -> None:
+    """Test the update command of the CLI."""
+    input_prompt_file = tmp_path / "input_prompt.txt"
+    input_prompt_file.write_text("Generate a Python function to add two numbers")
+    input_code_file = tmp_path / "input_code.py"
+    input_code_file.write_text("def add(a, b): return a + b")
+    modified_code_file = tmp_path / "modified_code.py"
+    modified_code_file.write_text("def add(a, b): return a * b")
+    output_file = tmp_path / "updated_prompt.txt"
+    
+    result = runner.invoke(cli, ['update', str(input_prompt_file), str(input_code_file), str(modified_code_file),
+                                 '--output', str(output_file)])
+    assert result.exit_code == 0
+    assert "Updated prompt saved to:" in result.output
+    assert output_file.exists()
+
+def test_detect_command(runner: CliRunner, tmp_path) -> None:
+    """Test the detect command of the CLI."""
+    prompt_file1 = tmp_path / "prompt1.txt"
+    prompt_file1.write_text("Generate a Python function to add two numbers")
+    prompt_file2 = tmp_path / "prompt2.txt"
+    prompt_file2.write_text("Generate a Python function to multiply two numbers")
+    change_file = tmp_path / "change.txt"
+    change_file.write_text("Update all arithmetic operations to use floating-point numbers")
+    output_file = tmp_path / "detect_results.csv"
+    
+    result = runner.invoke(cli, ['detect', str(prompt_file1), str(prompt_file2), str(change_file),
+                                 '--output', str(output_file)])
+    assert result.exit_code == 0
+    assert "Analysis results saved to:" in result.output
+    assert output_file.exists()
+
+def test_conflicts_command(runner: CliRunner, tmp_path) -> None:
+    """Test the conflicts command of the CLI."""
+    prompt1 = tmp_path / "prompt1.txt"
+    prompt1.write_text("Generate a Python function to add two numbers")
+    prompt2 = tmp_path / "prompt2.txt"
+    prompt2.write_text("Generate a Python function to subtract two numbers")
+    output_file = tmp_path / "conflicts_results.csv"
+    
+    result = runner.invoke(cli, ['conflicts', str(prompt1), str(prompt2), '--output', str(output_file)])
+    assert result.exit_code == 0
+    assert "Conflict analysis results saved to:" in result.output
+    assert output_file.exists()
+
+def test_crash_command(runner: CliRunner, tmp_path) -> None:
+    """Test the crash command of the CLI."""
+    prompt_file = tmp_path / "prompt.txt"
+    prompt_file.write_text("Generate a Python function to divide two numbers")
+    code_file = tmp_path / "code.py"
+    code_file.write_text("def divide(a, b): return a / b")
+    program_file = tmp_path / "program.py"
+    program_file.write_text("from code import divide\nresult = divide(10, 0)")
+    error_file = tmp_path / "error.txt"
+    error_file.write_text("ZeroDivisionError: division by zero")
+    output_file = tmp_path / "fixed_code.py"
+    
+    result = runner.invoke(cli, ['crash', str(prompt_file), str(code_file), str(program_file), str(error_file),
+                                 '--output', str(output_file)])
+    assert result.exit_code == 0
+    assert "Fixed code saved to:" in result.output
+    assert output_file.exists()
+
+def test_install_completion_command(runner: CliRunner, monkeypatch) -> None:
+    """Test the install-completion command of the CLI."""
+    monkeypatch.setattr(os, 'environ', {'SHELL': '/bin/bash'})
+    monkeypatch.setattr(os.path, 'expanduser', lambda x: '/home/user')
+    
+    with runner.isolated_filesystem():
+        with open('/home/user/.bashrc', 'w') as f:
+            f.write("# Existing content")
         
-        mock_mod = MagicMock()
-        sys.modules[mod_name] = mock_mod
-        mock_modules[mod_name] = mock_mod
+        result = runner.invoke(cli, ['install-completion'])
+        
+        assert result.exit_code == 0
+        assert "Shell completion installed for bash" in result.output
+        
+        with open('/home/user/.bashrc', 'r') as f:
+            content = f.read()
+            assert "# PDD CLI completion" in content
+            assert "eval \"$(_PDD_COMPLETE=bash_source pdd)\"" in content
 
-    # Specific setup for attributes accessed in pdd.cli
-    # pdd.core.cli.cli
-    mock_modules['pdd.core.cli'].cli = MagicMock(name='cli_group')
-    mock_modules['pdd.core.cli'].process_commands = MagicMock(name='process_commands')
+def test_output_cost_tracking(runner: CliRunner, tmp_path) -> None:
+    """Test the output cost tracking feature of the CLI."""
+    prompt_file = tmp_path / "test_prompt.txt"
+    prompt_file.write_text("Generate a Python function to add two numbers")
+    output_file = tmp_path / "output.py"
+    cost_file = tmp_path / "cost.csv"
     
-    # pdd.commands.register_commands
-    mock_modules['pdd.commands'].register_commands = MagicMock(name='register_commands')
-
-    # Setup dummy attributes for re-exports to verify they are passed through
-    mock_modules['pdd.commands.templates'].templates_group = "mock_templates_group"
-    mock_modules['pdd.auto_update'].auto_update = "mock_auto_update"
-    mock_modules['pdd.code_generator_main'].code_generator_main = "mock_code_generator_main"
-    # ... (we can check existence for others, explicit values help debugging)
-
-    yield mock_modules
-
-    # Teardown: Restore original modules
-    for mod_name in modules_to_mock:
-        if mod_name in original_modules:
-            sys.modules[mod_name] = original_modules[mod_name]
-        else:
-            del sys.modules[mod_name]
-            
-    # Also remove pdd.cli from sys.modules so it gets re-imported cleanly next time
-    if 'pdd.cli' in sys.modules:
-        del sys.modules['pdd.cli']
-
-
-def test_cli_registers_commands_on_import(mock_pdd_dependencies):
-    """
-    Test that importing pdd.cli calls register_commands(cli).
-    """
-    # Arrange
-    mock_cli_group = mock_pdd_dependencies['pdd.core.cli'].cli
-    mock_register = mock_pdd_dependencies['pdd.commands'].register_commands
-
-    # Act
-    # Ensure pdd.cli is not in sys.modules so import triggers execution
-    if 'pdd.cli' in sys.modules:
-        del sys.modules['pdd.cli']
-    import pdd.cli
-
-    # Assert
-    mock_register.assert_called_once_with(mock_cli_group)
-
-
-def test_cli_re_exports_symbols(mock_pdd_dependencies):
-    """
-    Test that pdd.cli re-exports the expected symbols from submodules.
-    """
-    # Arrange
-    # Define the list of expected exports based on the code under test
-    expected_exports = [
-        'templates_group',
-        'auto_update',
-        'code_generator_main',
-        'context_generator_main',
-        'cmd_test_main',
-        'fix_main',
-        'split_main',
-        'change_main',
-        'update_main',
-        'sync_main',
-        'auto_deps_main',
-        'detect_change_main',
-        'conflicts_main',
-        'bug_main',
-        'crash_main',
-        'trace_main',
-        'agentic_test_main',
-        'preprocess_main',
-        'construct_paths',
-        'fix_verification_main',
-        'console',
-        'install_completion',
-        '_should_show_onboarding_reminder',
-        'process_commands'
-    ]
-
-    # Act
-    if 'pdd.cli' in sys.modules:
-        del sys.modules['pdd.cli']
-    import pdd.cli
-
-    # Assert
-    for symbol in expected_exports:
-        assert hasattr(pdd.cli, symbol), f"pdd.cli is missing re-export: {symbol}"
-
-
-def test_cli_main_execution_logic(mock_pdd_dependencies):
-    """
-    Test the logic that would run under if __name__ == \"__main__\":
-    Since we cannot easily invoke __main__ directly without subprocesses,
-    we verify the components that would be called are present and correct.
-    """
-    # Arrange
-    mock_cli_group = mock_pdd_dependencies['pdd.core.cli'].cli
+    result = runner.invoke(cli, ['--output-cost', str(cost_file), 'generate', str(prompt_file), '--output', str(output_file)])
+    assert result.exit_code == 0
+    assert cost_file.exists()
     
-    # Act
-    if 'pdd.cli' in sys.modules:
-        del sys.modules['pdd.cli']
-    import pdd.cli
+    with open(cost_file, 'r') as f:
+        content = f.read()
+        assert 'timestamp,model,command,cost,input_files,output_files' in content
+        assert 'generate' in content
+        assert str(prompt_file) in content
+        assert str(output_file) in content
 
-    # Assert
-    # We verify that the 'cli' object imported into pdd.cli is indeed the one we mocked.
-    # This confirms that if `cli()` were called in main, it would be our mock.
-    assert pdd.cli.cli is mock_cli_group
+def test_output_cost_tracking(runner: CliRunner, tmp_path) -> None:
+    """Test the output cost tracking feature of the CLI."""
+    prompt_file = tmp_path / "test_prompt.txt"
+    prompt_file.write_text("Generate a Python function to add two numbers")
+    output_file = tmp_path / "output.py"
+    cost_file = tmp_path / "cost.csv"
     
-    # If we were to simulate main:
-    with patch.object(pdd.cli, 'cli') as mocked_main_cli:
-        # We can't easily trigger the if block without executing the file as a script.
-        # But we can verify the object is callable.
-        assert callable(pdd.cli.cli)
+    result = runner.invoke(cli, ['--output-cost', str(cost_file), 'generate', str(prompt_file), '--output', str(output_file)])
+    assert result.exit_code == 0
+    assert cost_file.exists()
+    
+    with open(cost_file, 'r') as f:
+        content = f.read()
+        assert 'timestamp,model,command,cost,input_files,output_files' in content
+        assert 'generate' in content
+        assert str(prompt_file) in content
+        assert str(output_file) in content
+
+@pytest.fixture
+def csv_output():
+    return StringIO()
+
+@patch('os.path.isfile', return_value=True)
+@patch('os.path.getsize', return_value=0)
+def test_track_cost_decorator(mock_getsize, mock_isfile, runner: CliRunner, csv_output, tmp_path):
+    prompt_file = tmp_path / "test_prompt.txt"
+    prompt_file.write_text("Generate a Python function to add two numbers")
+    output_file = tmp_path / "output.py"
+    cost_file = tmp_path / "cost.csv"
+
+    with patch('builtins.open', mock_open()) as mock_file:
+        mock_file.return_value.__enter__.return_value = csv_output
+
+        result = runner.invoke(cli, ['--output-cost', str(cost_file), 'generate', str(prompt_file), '--output', str(output_file)])
+
+    assert result.exit_code == 0
+
+    # Reset the StringIO cursor
+    csv_output.seek(0)
+
+    # Read the CSV content
+    csv_reader = csv.reader(csv_output)
+    header = next(csv_reader)
+    data = next(csv_reader)
+
+    # Check the CSV header
+    assert header == ['timestamp', 'model', 'command', 'cost', 'input_files', 'output_files']
+
+    # Check the data
+    assert data[2] == 'generate'  # command
+    assert float(data[3]) >= 0  # cost
+    assert str(prompt_file) in data[4]  # input_files
+    assert str(output_file) in data[5]  # output_files
+
+    # Check if timestamp is in the correct format
+    datetime.fromisoformat(data[0])  # This will raise an exception if the format is incorrect
+
+    # Check if model is not empty
+    assert data[1]  # model should not be empty
