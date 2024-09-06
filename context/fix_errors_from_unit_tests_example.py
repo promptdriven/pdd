@@ -21,8 +21,8 @@ def add(a, b):
 """
     
     prompt = "Write a function that adds two numbers"
-    error = "AssertionError: assert 0 == 1"
-    error_file = "error_logs.txt"
+    error = "AssertionError: assert 0 == 1" # String of the Error message from the unit test
+    error_file = "error_logs.txt"       # This is the fix results file
     strength = 0.7  # LLM strength (0 to 1)
     temperature = 0.5  # LLM temperature
 
