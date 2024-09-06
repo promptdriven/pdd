@@ -279,9 +279,9 @@ def fix(ctx, prompt_file: str, code_file: str, unit_test_file: str, error_file: 
         
         if loop:
             success, final_unit_test, final_code, total_attempts, total_cost, model_name = fix_error_loop(
-                input_strings['unit_test_file'],
-                input_strings['code_file'],
-                input_strings['prompt_file'],
+                unit_test_file,
+                code_file,
+                prompt_file,
                 verification_program,
                 ctx.obj['strength'],
                 ctx.obj['temperature'],
