@@ -29,3 +29,4 @@ fix_output_locations = {
 fix_result = generate_output_paths(fix_command, fix_output_locations, basename, language, file_extension)
 print(f"Generated test output path: {fix_result['output_test']}")
 print(f"Generated code output path: {fix_result['output_code']}")
+print(f"Generated code output path: {fix_result['output_results']}")
