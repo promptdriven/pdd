@@ -86,6 +86,7 @@ python -m pytest $EXTENSION_TEST > pytest_output.log
 run_pdd_command fix --output-test "fixed_$EXTENSION_TEST" --output-code "fixed_$EXTENSION_SCRIPT" \
                     "$PROMPTS_PATH/$EXTENSION_PROMPT" "$EXTENSION_SCRIPT" "$EXTENSION_TEST" pytest_output.log
 run_pdd_command fix --loop --output-test "fixed_loop_$EXTENSION_TEST" --output-code "fixed_loop_$EXTENSION_SCRIPT" \
+                    --output-results "fixed_loop_results.log" \
                     --verification-program "$EXTENSION_VERIFICATION_PROGRAM" --max-attempts 2 --budget 5.0 \
                     "$PROMPTS_PATH/$EXTENSION_PROMPT" "$EXTENSION_SCRIPT" "$EXTENSION_TEST" "$EXTENSION_ERROR_LOOP_LOG"
 
