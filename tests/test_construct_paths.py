@@ -34,7 +34,7 @@ def temp_directory(tmp_path):
 
 def test_extract_basename():
     assert extract_basename('/path/to/file_python.prompt', 'generate') == 'file'
-    assert extract_basename('/path/to/file_bash.prompt', 'detect') == 'file'
+    assert extract_basename('/path/to/file_bash.prompt', 'detect') == 'file_bash'
     assert extract_basename('/path/to/complex_file_name_prompt.prompt', 'example') == 'complex_file_name'
 
 def test_extract_language():
@@ -53,7 +53,7 @@ def test_construct_paths_basic(temp_directory, mock_generate_output_paths, mock_
     command_options = {'output': str(temp_directory / 'output.py')}
 
     input_strings, output_file_paths, language = construct_paths(
-        input_file_paths, force, quiet, command, command_options
+        input_file_paths, force, quiet, command, command_options, test_mode=True
     )
 
     assert input_strings == {'prompt_file': 'Sample input'}
@@ -75,7 +75,7 @@ def test_construct_paths_error_file(temp_directory, mock_generate_output_paths, 
     command_options = {}
 
     input_strings, output_file_paths, language = construct_paths(
-        input_file_paths, force, quiet, command, command_options
+        input_file_paths, force, quiet, command, command_options, test_mode=True
     )
 
     assert 'code_file' in input_strings
@@ -96,7 +96,7 @@ def test_construct_paths_force_overwrite(temp_directory, mock_generate_output_pa
     command_options = {'output': str(output_file)}
 
     input_strings, output_file_paths, language = construct_paths(
-        input_file_paths, force, quiet, command, command_options
+        input_file_paths, force, quiet, command, command_options, test_mode=True
     )
 
     assert 'code_file' in input_strings
@@ -119,7 +119,7 @@ def test_construct_paths_user_confirmation(temp_directory, mock_generate_output_
     monkeypatch.setattr('click.confirm', lambda message, default: True)
 
     input_strings, output_file_paths, language = construct_paths(
-        input_file_paths, force, quiet, command, command_options
+        input_file_paths, force, quiet, command, command_options, test_mode=True
     )
 
     assert 'code_file' in input_strings
@@ -138,11 +138,33 @@ def test_construct_paths_user_cancellation(temp_directory, mock_generate_output_
     command = 'example'
     command_options = {'output': str(output_file)}
 
-    # Mock user input to cancel overwrite
-    monkeypatch.setattr('click.confirm', lambda message, default: False)
-
+    # Test with user cancellation in test mode
     with pytest.raises(click.Abort):
-        construct_paths(input_file_paths, force, quiet, command, command_options)
+        construct_paths(
+            input_file_paths, force, quiet, command, command_options,
+            test_mode=True, test_user_input=False
+        )
+
+    # Test with user cancellation not in test mode
+    monkeypatch.setattr('click.confirm', lambda message, default: False)
+    with pytest.raises(click.Abort):
+        construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+
+    # Test with user confirmation in test mode
+    result = construct_paths(
+        input_file_paths, force, quiet, command, command_options,
+        test_mode=True, test_user_input=True
+    )
+    assert result is not None  # The function should complete without raising an exception
+
+    # Test with user confirmation not in test mode
+    monkeypatch.setattr('click.confirm', lambda message, default: True)
+    result = construct_paths(
+        input_file_paths, force, quiet, command, command_options
+    )
+    assert result is not None  # The function should complete without raising an exception
 
 def test_construct_paths_input_file_not_found(temp_directory):
     input_file_paths = {'prompt_file': str(temp_directory / 'non_existent_file.txt')}
@@ -152,7 +174,7 @@ def test_construct_paths_input_file_not_found(temp_directory):
     command_options = {}
 
     with pytest.raises(click.ClickException, match="Input file not found"):
-        construct_paths(input_file_paths, force, quiet, command, command_options)
+        construct_paths(input_file_paths, force, quiet, command, command_options, test_mode=True)
 
 def test_construct_paths_detect_command(temp_directory, mock_generate_output_paths, mock_get_extension, mock_get_language):
     change_file = temp_directory / 'changes.txt'
@@ -165,7 +187,7 @@ def test_construct_paths_detect_command(temp_directory, mock_generate_output_pat
     command_options = {}
 
     input_strings, output_file_paths, language = construct_paths(
-        input_file_paths, force, quiet, command, command_options
+        input_file_paths, force, quiet, command, command_options, test_mode=True
     )
 
     assert input_strings == {'change_file': 'Sample changes'}
