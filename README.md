@@ -78,13 +78,23 @@ pdd --output-cost PATH_TO_CSV_FILE [COMMAND] [OPTIONS] [ARGS]...
 
 The `PATH_TO_CSV_FILE` should be the desired location and filename for the CSV output.
 
+### Cost Calculation and Presentation
+
+PDD calculates costs based on the AI model usage for each operation. Costs are presented in USD (United States Dollars) and are calculated using the following factors:
+
+1. Model strength: Higher strength settings generally result in higher costs.
+2. Input size: Larger inputs (e.g., longer prompts or code files) typically incur higher costs.
+3. Operation complexity: Some operations (like `fix` with multiple iterations) may be more costly than simpler operations.
+
+The exact cost per operation is determined by the AI service provider's current pricing model. PDD uses an internal pricing table that is regularly updated to reflect the most current rates.
+
 ### CSV Output
 
 The generated CSV file includes the following columns:
 - timestamp: The date and time of the command execution
 - model: The AI model used for the operation
 - command: The PDD command that was executed
-- cost: The estimated cost of the operation in USD
+- cost: The estimated cost of the operation in USD (e.g., 0.05 for 5 cents)
 - input_files: A list of input files involved in the operation
 - output_files: A list of output files generated or modified by the operation
 
@@ -97,6 +107,16 @@ You can set a default location for the cost output CSV file using the environmen
 - **`PDD_OUTPUT_COST_PATH`**: Default path for the cost tracking CSV file.
 
 If this environment variable is set, the CSV file will be saved to the specified path by default, unless overridden by the `--output-cost` option. For example, if `PDD_OUTPUT_COST_PATH=/path/to/cost/reports/`, the CSV file will be saved in that directory with a default filename.
+
+### Cost Budgeting
+
+For commands that support it (like the `fix` command), you can set a maximum budget using the `--budget` option. This helps prevent unexpected high costs, especially for operations that might involve multiple AI model calls.
+
+Example:
+```
+pdd fix --budget 5.0 [OTHER OPTIONS] [ARGS]...
+```
+This sets a maximum budget of $5.00 for the fix operation.
 
 ## Commands
 
@@ -194,11 +214,12 @@ Arguments:
 - `PROMPT_FILE`: The filename of the prompt file that generated the code under test.
 - `CODE_FILE`: The filename of the code file to be fixed.
 - `UNIT_TEST_FILE`: The filename of the unit test file.
-- `ERROR_FILE`: The filename containing the error messages.
+- `ERROR_FILE`: The filename containing the unit test runtime error messages.
 
 Options:
 - `--output-test LOCATION`: Specify where to save the fixed unit test file. The default file name is `test_<basename>_fixed.<language_file_extension>`. If an environment variable `PDD_FIX_TEST_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--output-code LOCATION`: Specify where to save the fixed code file. The default file name is `<basename>_fixed.<language_file_extension>`. If an environment variable `PDD_FIX_CODE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output-results LOCATION`: Specify where to save the results of the error fixing process. The default file name is `<basename>_fix_results.json`. If an environment variable `PDD_FIX_RESULTS_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--loop`: Enable iterative fixing process.
   - `--verification-program PATH`: Specify the path to a Python program that verifies if the code still runs correctly.
   - `--max-attempts INT`: Set the maximum number of fix attempts before giving up (default is 3).
@@ -206,16 +227,18 @@ Options:
 
 When the `--loop` option is used, the fix command will attempt to fix errors through multiple iterations. It will use the specified verification program to check if the code runs correctly after each fix attempt. The process will continue until either the errors are fixed, the maximum number of attempts is reached, or the budget is exhausted.
 
-Outputs when using `--loop`:
-- Success status (boolean)
-- Final unit test file contents
-- Final code file contents
-- Total number of fix attempts made
-- Total cost of all fix attempts
+Outputs:
+- Fixed unit test file
+- Fixed code file
+- Results file containing the LLM model's output with unit test results.
+- Print out of results when using '--loop' containing:
+  - Success status (boolean)
+  - Total number of fix attempts made
+  - Total cost of all fix attempts
 
 Example:
 ```
-pdd fix --output-test tests/test_factorial_calculator_fixed.py --output-code src/factorial_calculator_fixed.py factorial_calculator_python.prompt src/factorial_calculator.py tests/test_factorial_calculator.py errors.log
+pdd fix --output-test tests/test_factorial_calculator_fixed.py --output-code src/factorial_calculator_fixed.py --output-results results/factorial_fix_results.log factorial_calculator_python.prompt src/factorial_calculator.py tests/test_factorial_calculator.py errors.log
 ```
 In this example, `factorial_calculator_python.prompt` is the prompt file that originally generated the code under test.
 
@@ -398,7 +421,7 @@ pdd conflicts --output conflicts.csv data_processing_module_python.prompt data_v
 
 7. Generate code, fix errors, and run tests:
 ```
-pdd generate --output src/factorial_calculator.py factorial_calculator_python.prompt fix --output-test tests/test_factorial_calculator_fixed.py --output-code src/factorial_calculator_fixed.py factorial_calculator_python.prompt src/factorial_calculator.py tests/test_factorial_calculator.py errors.log test --output tests/test_factorial_calculator.py factorial_calculator_python.prompt src/factorial_calculator_fixed.py
+pdd generate --output src/factorial_calculator.py factorial_calculator_python.prompt fix --output-test tests/test_factorial_calculator_fixed.py --output-code src/factorial_calculator_fixed.py --output-results results/factorial_fix_results.log factorial_calculator_python.prompt src/factorial_calculator.py tests/test_factorial_calculator.py errors.log test --output tests/test_factorial_calculator.py factorial_calculator_python.prompt src/factorial_calculator_fixed.py
 ```
 
 These examples demonstrate how you can combine multiple PDD commands to create sophisticated workflows, automating complex development tasks in a single command line invocation. Remember that options always come before arguments for each command in the chain.
@@ -437,6 +460,7 @@ You can set environment variables to define default output paths for each comman
 - **`PDD_PREPROCESS_OUTPUT_PATH`**: Default path for the `preprocess` command.
 - **`PDD_FIX_TEST_OUTPUT_PATH`**: Default path for the fixed unit test files in the `fix` command.
 - **`PDD_FIX_CODE_OUTPUT_PATH`**: Default path for the fixed code files in the `fix` command.
+- **`PDD_FIX_RESULTS_OUTPUT_PATH`**: Default path for the results file generated by the `fix` command.
 - **`PDD_SPLIT_SUB_PROMPT_OUTPUT_PATH`**: Default path for the sub-prompts generated by the `split` command.
 - **`PDD_SPLIT_MODIFIED_PROMPT_OUTPUT_PATH`**: Default path for the modified prompts generated by the `split` command.
 - **`PDD_CHANGE_OUTPUT_PATH`**: Default path for the modified prompts generated by the `change` command.
