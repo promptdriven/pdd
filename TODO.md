@@ -28,6 +28,7 @@
 - [ ] create a marketplace where people can earn LLM credits for their examples or people can put up bounties for examples
 - [ ] ability to check in known good examples
 - [ ] take a chat conversation and collapse down into a single prompt
+- [ ] report a bug and generate the associated unit tests and then have it fix the code via a loop 
 
 ## Bugs
 
