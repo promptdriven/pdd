@@ -61,7 +61,7 @@ def generate_test(prompt: str, code: str, strength: float, temperature: float, l
 
         # Invoke the chain
         result = chain.invoke({
-            "prompt_that_generated_code": prompt,
+            "prompt_that_generated_code": preprocess(prompt, recursive=False, double_curly_brackets=False),
             "code": code,
             "language": language
         })

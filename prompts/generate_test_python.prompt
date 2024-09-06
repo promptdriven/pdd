@@ -36,7 +36,7 @@
     Step 3. This will use llm_selector for the model.
     Step 4. This will run the inputs through the model using Langchain LCEL. 
         4a. Be sure to pass the following string parameters to the prompt during invoke:
-            - 'prompt_that_generated_code'
+            - 'prompt_that_generated_code': preprocess the prompt using the preprocess function without recursion or doubling of the curly brackets.
             - 'code'
             - 'language'
         4b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
