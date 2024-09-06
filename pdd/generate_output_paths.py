@@ -19,6 +19,8 @@ def generate_output_paths(command: str, output_locations: Dict[str, Optional[str
                 return f"test_{basename}_fixed{file_extension}"
             elif key == 'output_code':
                 return f"{basename}_fixed{file_extension}"
+            elif key == 'output_results':
+                return f"{basename}_fix_results.log"
         elif command == 'split':
             if key == 'output_sub':
                 return f"sub_{basename}.prompt"
@@ -44,6 +46,7 @@ def generate_output_paths(command: str, output_locations: Dict[str, Optional[str
             'fix': {
                 'output_test': 'PDD_FIX_TEST_OUTPUT_PATH',
                 'output_code': 'PDD_FIX_CODE_OUTPUT_PATH',
+                'output_results': 'PDD_FIX_RESULTS_OUTPUT_PATH',
             },
             'split': {
                 'output_sub': 'PDD_SPLIT_SUB_PROMPT_OUTPUT_PATH',
@@ -63,7 +66,7 @@ def generate_output_paths(command: str, output_locations: Dict[str, Optional[str
 
     keys = output_locations.keys() if output_locations else ['output']
     if command == 'fix':
-        keys = ['output_test', 'output_code']
+        keys = ['output_test', 'output_code', 'output_results']
     elif command == 'split':
         keys = ['output_sub', 'output_modified']
 
