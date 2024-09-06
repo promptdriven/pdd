@@ -67,7 +67,7 @@ log "----------------------------------------"
 # Run regression tests
 log "Running regression tests"
 run_pdd_command generate --output "$EXTENSION_SCRIPT" "$PROMPTS_PATH/$EXTENSION_PROMPT"
-run_pdd_command example --output "example_$EXTENSION_SCRIPT" "$PROMPTS_PATH/$EXTENSION_PROMPT" "$EXTENSION_SCRIPT"
+run_pdd_command example --output  "$EXTENSION_VERIFICATION_PROGRAM"  "$PROMPTS_PATH/$EXTENSION_PROMPT" "$EXTENSION_SCRIPT"
 run_pdd_command test --output "$EXTENSION_TEST" "$PROMPTS_PATH/$EXTENSION_PROMPT" "$EXTENSION_SCRIPT"
 run_pdd_command preprocess --output "preprocessed_$EXTENSION_PROMPT" "$PROMPTS_PATH/$EXTENSION_PROMPT"
 run_pdd_command preprocess --xml --output "$XML_OUTPUT_PROMPT" "$PROMPTS_PATH/$EXTENSION_PROMPT"
@@ -84,7 +84,7 @@ run_pdd_command change --output "changed_$CHANGE_PROMPT" \
 log "Running fix commands"
 python -m pytest $EXTENSION_TEST > pytest_output.log
 run_pdd_command fix --output-test "fixed_$EXTENSION_TEST" --output-code "fixed_$EXTENSION_SCRIPT" \
-                    "$PROMPTS_PATH/$EXTENSION_PROMPT" "$EXTENSION_SCRIPT" "$EXTENSION_TEST" pytest_output.log "$EXTENSION_ERROR_LOG"
+                    "$PROMPTS_PATH/$EXTENSION_PROMPT" "$EXTENSION_SCRIPT" "$EXTENSION_TEST" pytest_output.log
 run_pdd_command fix --loop --output-test "fixed_loop_$EXTENSION_TEST" --output-code "fixed_loop_$EXTENSION_SCRIPT" \
                     --verification-program "$EXTENSION_VERIFICATION_PROGRAM" --max-attempts 2 --budget 5.0 \
                     "$PROMPTS_PATH/$EXTENSION_PROMPT" "$EXTENSION_SCRIPT" "$EXTENSION_TEST" "$EXTENSION_ERROR_LOOP_LOG"
