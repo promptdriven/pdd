@@ -7,28 +7,27 @@ from .get_language import get_language
 from .generate_output_paths import generate_output_paths
 
 def extract_basename(file_path: str, command: str) -> str:
-    """Extract basename from file path based on the command."""
-    filename = Path(file_path).name
-    if command == 'detect':
-        return Path(filename).stem
-    parts = filename.split('_')
-    if len(parts) > 1 and parts[-1].endswith('.prompt'):
-        return '_'.join(parts[:-1])
-    return Path(filename).stem
+    """Extract basename from file path based on command."""
+    basename = Path(file_path).stem
+    if command != 'detect':
+        # Remove language suffix if present
+        basename = basename.rsplit('_', 1)[0]
+    return basename
 
 def extract_language(file_path: str, command_options: Dict[str, str]) -> str:
     """Extract language from file path or command options."""
     if 'language' in command_options and command_options['language']:
-        return command_options['language'].lower()
+        return command_options['language']
     
-    filename = Path(file_path).name
-    parts = filename.split('_')
-    if len(parts) > 1 and parts[-1].endswith('.prompt'):
-        return parts[-1].split('.')[0].lower()
+    file_extension = Path(file_path).suffix
+    if file_extension == '.prompt':
+        # Extract language from prompt file name
+        language = file_path.rsplit('_', 1)[-1].split('.')[0]
+    else:
+        # Get language from file extension
+        language = get_language(file_extension)
     
-    extension = Path(file_path).suffix
-    lang = get_language(extension)
-    return lang.lower() if lang else 'txt'
+    return language or 'python'  # Default to Python if language can't be determined
 
 def construct_paths(
     input_file_paths: Dict[str, str],
@@ -37,44 +36,44 @@ def construct_paths(
     command: str,
     command_options: Dict[str, str]
 ) -> Tuple[Dict[str, str], Dict[str, str], str]:
-    """Construct and validate input and output file paths."""
+    """Construct input and output file paths."""
     
     # Step 1: Load input files
     input_strings = {}
-    for key, path in input_file_paths.items():
+    for key, file_path in input_file_paths.items():
         try:
-            with open(path, 'r') as f:
+            with open(file_path, 'r') as f:
                 input_strings[key] = f.read()
         except FileNotFoundError:
             if key == 'error_file':
                 # Create error file if it doesn't exist
-                open(path, 'w').close()
+                open(file_path, 'w').close()
                 input_strings[key] = ''
             else:
-                raise click.ClickException(f"Input file not found: {path}")
-        except Exception as e:
-            raise click.ClickException(f"Error reading input file {path}: {str(e)}")
-
+                raise click.ClickException(f"Input file not found: {file_path}")
+    
     # Step 2: Extract basename
-    primary_input = next(iter(input_file_paths.values()))
-    basename = extract_basename(primary_input, command)
-
+    basename = extract_basename(next(iter(input_file_paths.values())), command)
+    
     # Step 3: Extract language and get file extension
-    language = extract_language(primary_input, command_options)
+    language = extract_language(next(iter(input_file_paths.values())), command_options)
     file_extension = get_extension(language)
-
-    # Step 4: Construct output file paths
+    
+    # Remove non-output keys from command_options
     output_locations = {k: v for k, v in command_options.items() if k.startswith('output')}
+    
+    # Generate output paths
     output_file_paths = generate_output_paths(command, output_locations, basename, language, file_extension)
-
-    # Step 5: Check if output files exist and confirm overwrite
-    for output_key, output_path in output_file_paths.items():
-        if os.path.exists(output_path) and not force and not quiet:
-            if not click.confirm(click.style(f"Output file {output_path} already exists. Overwrite?", fg='yellow'), default=True):
-                click.secho("Operation cancelled.", fg='red')
-                raise click.Abort()
-
-    # Print paths if not quiet
+    
+    # Step 4: Check if output files exist and confirm overwrite if necessary
+    if not force:
+        for output_path in output_file_paths.values():
+            if os.path.exists(output_path):
+                if not click.confirm(click.style(f"Output file {output_path} already exists. Overwrite?", fg='yellow'), default=True):
+                    click.secho("Operation cancelled.", fg='red')
+                    raise click.Abort()
+    
+    # Print input and output file paths if not quiet
     if not quiet:
         click.echo("Input files:")
         for key, path in input_file_paths.items():
@@ -82,5 +81,6 @@ def construct_paths(
         click.echo("Output files:")
         for key, path in output_file_paths.items():
             click.echo(f"  {key}: {path}")
-
+    
+    # Step 5: Return results
     return input_strings, output_file_paths, language

@@ -34,8 +34,8 @@ def temp_directory(tmp_path):
 
 def test_extract_basename():
     assert extract_basename('/path/to/file_python.prompt', 'generate') == 'file'
-    assert extract_basename('/path/to/file.py', 'detect') == 'file'
-    assert extract_basename('/path/to/complex_file_name.txt', 'example') == 'complex_file_name'
+    assert extract_basename('/path/to/file_bash.prompt', 'detect') == 'file'
+    assert extract_basename('/path/to/complex_file_name_prompt.prompt', 'example') == 'complex_file_name'
 
 def test_extract_language():
     assert extract_language('/path/to/file_python.prompt', {}) == 'python'
