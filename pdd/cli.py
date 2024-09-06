@@ -41,7 +41,7 @@ def track_cost(func: Callable) -> Callable:
             model = result[-1] if isinstance(result, tuple) and len(result) > 2 else "Unknown"
             cost = result[-2] if isinstance(result, tuple) and len(result) > 1 else 0
             
-            input_files = [arg for arg in args if isinstance(arg, str) and os.path.isfile(arg)]
+            input_files = [v for k, v in kwargs.items() if not k.startswith('output') and isinstance(v, str) and os.path.isfile(v)]
             output_files = [v for k, v in kwargs.items() if k.startswith('output') and v]
             
             with open(output_cost_file, 'a', newline='') as csvfile:
@@ -53,8 +53,8 @@ def track_cost(func: Callable) -> Callable:
                     model,
                     command,
                     f"{cost:.6f}",
-                    ','.join(input_files),
-                    ','.join(output_files)
+                    '|'.join(input_files),  # Use '|' as separator to avoid conflicts with CSV commas
+                    '|'.join(output_files)
                 ])
         
         return result
