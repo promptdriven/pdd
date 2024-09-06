@@ -9,15 +9,15 @@ from .generate_output_paths import generate_output_paths
 def extract_basename(file_path: str, command: str) -> str:
     """Extract basename from file path based on command."""
     basename = Path(file_path).stem
-    if command != 'detect':
-        # Remove language suffix if present
-        basename = basename.rsplit('_', 1)[0]
-    return basename
+    if command == 'detect':
+        return basename
+    # Remove language suffix if present
+    return basename.rsplit('_', 1)[0]
 
 def extract_language(file_path: str, command_options: Dict[str, str]) -> str:
     """Extract language from file path or command options."""
     if 'language' in command_options and command_options['language']:
-        return command_options['language']
+        return command_options['language'].lower()
     
     file_extension = Path(file_path).suffix
     if file_extension == '.prompt':
@@ -27,14 +27,16 @@ def extract_language(file_path: str, command_options: Dict[str, str]) -> str:
         # Get language from file extension
         language = get_language(file_extension)
     
-    return language or 'python'  # Default to Python if language can't be determined
+    return language.lower() or 'python'  # Default to Python if language can't be determined
 
 def construct_paths(
     input_file_paths: Dict[str, str],
     force: bool,
     quiet: bool,
     command: str,
-    command_options: Dict[str, str]
+    command_options: Dict[str, str],
+    test_mode: bool = False,
+    test_user_input: bool = True  # Add this parameter for testing user input
 ) -> Tuple[Dict[str, str], Dict[str, str], str]:
     """Construct input and output file paths."""
     
@@ -69,7 +71,12 @@ def construct_paths(
     if not force:
         for output_path in output_file_paths.values():
             if os.path.exists(output_path):
-                if not click.confirm(click.style(f"Output file {output_path} already exists. Overwrite?", fg='yellow'), default=True):
+                if test_mode:
+                    user_confirmed = test_user_input
+                else:
+                    user_confirmed = click.confirm(click.style(f"Output file {output_path} already exists. Overwrite?", fg='yellow'), default=True)
+                
+                if not user_confirmed:
                     click.secho("Operation cancelled.", fg='red')
                     raise click.Abort()
     
