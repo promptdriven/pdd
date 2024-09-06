@@ -23,7 +23,7 @@ CHANGE_CONTEXT_PROMPT="change.prompt"
 
 SPLIT_PROMPT="initial_construct_paths_python.prompt"
 SPLIT_SCRIPT="construct_paths.py"
-SPLIT_EXAMPLE_SCRIPT="construct_paths_example.py"
+SPLIT_EXAMPLE_SCRIPT="split_construct_paths_generate_output_filename.py"
 
 # Enable verbose output (1 for true, 0 for false)
 VERBOSE=1
@@ -100,16 +100,17 @@ run_pdd_command split --output-sub "sub_$SPLIT_PROMPT" --output-modified "modifi
 # Run detect command
 log "Running detect command"
 run_pdd_command detect --output "detect_results.csv" \
-                       "$PROMPTS_PATH/$EXTENSION_PROMPT" "$PROMPTS_PATH/$CHANGE_PROMPT" "$PROMPTS_PATH/$SPLIT_PROMPT" \
+                       "$PROMPTS_PATH/$EXTENSION_PROMPT" "$CONTEXT_PATH/change/11/$CHANGE_PROMPT" "$CONTEXT_PATH/split/4/$SPLIT_PROMPT" \
                        "$CONTEXT_PATH/change/11/$CHANGE_CONTEXT_PROMPT"
 
 # Run conflicts command
 log "Running conflicts command"
 run_pdd_command conflicts --output "conflicts_analysis.csv" \
-                          "$PROMPTS_PATH/$EXTENSION_PROMPT" "$PROMPTS_PATH/$CHANGE_PROMPT"
+                          "$PROMPTS_PATH/$EXTENSION_PROMPT" "$CONTEXT_PATH/change/11/$CHANGE_PROMPT"
 
 # Run crash command
 log "Running crash command"
+python get_extension_example.py >& "$EXTENSION_ERROR_LOG"
 run_pdd_command crash --output "fixed_crash_$EXTENSION_SCRIPT" \
                       "$PROMPTS_PATH/$EXTENSION_PROMPT" "$EXTENSION_SCRIPT" \
                       "$EXTENSION_VERIFICATION_PROGRAM" "$EXTENSION_ERROR_LOG"
