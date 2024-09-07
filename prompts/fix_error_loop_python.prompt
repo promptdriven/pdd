@@ -36,7 +36,7 @@
         a. Run the unit_test_file with 'python -m pytest -vv' and pipe all output appended to the specified error log file.
         b. If the test passes, break the loop.
         c. If the test fails:
-           - Read and print the error message from the error log file.
+           - Read and print the error message from the error log file, but be sure to escape square brackets first so rprint doesn't misinterpret them as a command.
            - Count the number of 'FAILED' and 'ERROR' from stdout (accounting for the -vv flag doubling these messages).
            - Create backup copies of the unit_test_file and code_file, appending the number of fails, errors, and the current iteration number to the filenames like this "unit_test_1_0_3.py" and "code_1_0_3.py", where there was one fail, zero errors and it is the third iteration through the loop.
            - Read the contents of the unit_test_file and code_file.
