@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch, mock_open
+from unittest.mock import patch, mock_open, Mock, call
 from pdd.conflicts_in_prompts import conflicts_in_prompts
 from langchain_core.output_parsers import JsonOutputParser
 
@@ -71,8 +71,9 @@ def test_conflicts_in_prompts_success(mock_environment, mock_prompt_files, mock_
 
 def test_conflicts_in_prompts_missing_env_var():
     """Test error handling when PDD_PATH environment variable is not set."""
-    with pytest.raises(ValueError, match="PDD_PATH environment variable is not set"):
-        conflicts_in_prompts("prompt1", "prompt2")
+    with patch.dict('os.environ', clear=True):
+        with pytest.raises(ValueError, match="PDD_PATH environment variable is not set"):
+            conflicts_in_prompts("prompt1", "prompt2")
 
 @patch('os.getenv', return_value='/nonexistent/path')
 def test_conflicts_in_prompts_file_not_found(mock_getenv):
@@ -97,7 +98,10 @@ def test_conflicts_in_prompts_custom_params(mock_environment, mock_prompt_files,
     
     conflicts, total_cost, model_name = conflicts_in_prompts(prompt1, prompt2, strength, temperature)
     
-    mock_llm_selector.assert_called_with(strength, temperature)
+    mock_llm_selector.assert_has_calls([
+        call(strength, temperature),
+        call(0.9, 0)
+    ])
     assert isinstance(conflicts, list)
     assert isinstance(total_cost, float)
     assert model_name == "mock_model"
