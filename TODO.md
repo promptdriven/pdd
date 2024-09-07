@@ -25,6 +25,7 @@
 - [ ] ability to check in known good examples
 - [ ] take a chat conversation and collapse down into a single prompt
 - [ ] report a bug and generate the associated unit tests and then have it fix the code via a loop 
+- [ ] warming option for temperature increase
 
 ## Bugs
 
