@@ -29,6 +29,8 @@
 
 ## Bugs
 
+- [ ] Use the response to get the token counting to speed up app and make it more accurate
+- [ ] Fix change command fixing
 
 ## Improvements
 
@@ -38,6 +40,8 @@
 - [ ] Analyze errors first before trying to fix
 - [ ] Use existing good prompt code example to generate code for the prompt
 - [ ] get the last github version of a file when trying to update instead of trying to find an old version
+- [ ] prompt to generate setup.py
+- [ ] update prompt for makefile
 
 ## Documentation
 
