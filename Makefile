@@ -75,6 +75,10 @@ coverage:
 requirements:
 	@echo "Generating requirements.txt"
 	@PYTHONPATH=$(PROD_DIR) pipreqs ./pdd --force --savepath ./requirements.txt
+	@PYTHONPATH=$(PROD_DIR) pipreqs ./tests --force --savepath ./tmp_requirements.txt
+	@cat ./tmp_requirements.txt ./requirements.txt | sort | uniq > ./final_requirements.txt
+	@mv ./final_requirements.txt ./requirements.txt
+	@rm ./tmp_requirements.txt
 
 # Clean generated files
 clean:
