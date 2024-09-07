@@ -29,12 +29,13 @@ def context_generator(
     Returns:
         Tuple[str, float, str]: The generated example code, total cost, and model name.
     """
+    # Check for PDD_PATH environment variable
+    pdd_path = os.getenv('PDD_PATH')
+    if not pdd_path:
+        raise ValueError("PDD_PATH environment variable is not set")
+
     try:
         # Step 1: Load the example_generator prompt
-        pdd_path = os.getenv('PDD_PATH')
-        if not pdd_path:
-            raise ValueError("PDD_PATH environment variable is not set")
-        
         with open(f"{pdd_path}/prompts/example_generator_LLM.prompt", 'r') as file:
             example_generator_prompt = file.read()
 
