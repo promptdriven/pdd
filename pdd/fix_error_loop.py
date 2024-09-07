@@ -51,7 +51,7 @@ def fix_error_loop(
         # Step 2: Initialize variables
         attempts = 0
         total_cost = 0.0
-        best_iteration = {"fails": float('inf'), "errors": float('inf'), "attempt": 0}
+        best_iteration = {"errors": float('inf'), "fails": float('inf'), "attempt": 0}
         model_name = ""
 
         # Step 3: Main loop
@@ -86,6 +86,11 @@ def fix_error_loop(
             # Adjust for -vv flag doubling the messages
             fails //= 2
             errors //= 2
+
+            # Update best iteration based on new criteria
+            if errors < best_iteration["errors"] or (errors == best_iteration["errors"] and fails < best_iteration["fails"]):
+                best_iteration = {"errors": errors, "fails": fails, "attempt": attempts}
+                rprint(Panel(f"[green]New best iteration: Attempt {attempts} with {errors} errors and {fails} fails[/green]"))
 
             # Create backup copies
             backup_unit_test = f"{unit_test_file[:-3]}_{fails}_{errors}_{attempts}.py"
@@ -130,8 +135,6 @@ def fix_error_loop(
                     shutil.copy2(backup_code, code_file)
                 else:
                     rprint(Panel("[green]Verification successful.[/green]"))
-                    if fails + errors < best_iteration["fails"] + best_iteration["errors"]:
-                        best_iteration = {"fails": fails, "errors": errors, "attempt": attempts}
 
         # Step 4: Final pytest run
         with open(error_log_file, "a") as log_file:
@@ -147,12 +150,12 @@ def fix_error_loop(
         rprint(Panel(f"[bold]Final test results:[/bold]\n{escaped_error_output}"))
 
         # Step 5: Restore best iteration if necessary
-        if final_result.returncode != 0 and best_iteration["attempt"] != attempts:
+        if final_result.returncode != 0:
             best_unit_test = f"{unit_test_file[:-3]}_{best_iteration['fails']}_{best_iteration['errors']}_{best_iteration['attempt']}.py"
             best_code = f"{code_file[:-3]}_{best_iteration['fails']}_{best_iteration['errors']}_{best_iteration['attempt']}.py"
             shutil.copy2(best_unit_test, unit_test_file)
             shutil.copy2(best_code, code_file)
-            rprint(Panel(f"[yellow]Restored best iteration (attempt {best_iteration['attempt']}).[/yellow]"))
+            rprint(Panel(f"[yellow]Restored best iteration (attempt {best_iteration['attempt']}) with {best_iteration['errors']} errors and {best_iteration['fails']} fails.[/yellow]"))
 
         # Step 6: Prepare return values
         success = final_result.returncode == 0

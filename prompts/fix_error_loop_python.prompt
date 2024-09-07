@@ -31,7 +31,7 @@
     Step 2. Initialize variables:
         - Counter for the number of attempts
         - Total cost accumulator
-        - Best iteration tracker (lowest errors, then lowest fails)
+        - Best iteration tracker (This is so that in case not all issues are solved, the iteration with the lowest errors get restored. In case there are iterations with the same number errors, then the iteration with the lowest fails will get restored.)
     Step 3. Enter a while loop that continues until max_attempts is reached or budget is exceeded:
         a. Run the unit_test_file with 'python -m pytest -vv' and pipe all output appended to the specified error log file.
         b. If the test passes, break the loop.
