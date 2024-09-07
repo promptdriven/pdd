@@ -65,8 +65,9 @@ def test_context_generator_unfinished_prompt(mock_environment, mock_file_content
                                 assert result[2] == "mock_model"
 
 def test_context_generator_missing_env_variable():
-    with pytest.raises(ValueError, match="PDD_PATH environment variable is not set"):
-        context_generator("test_module", "test_prompt")
+    with patch.dict('os.environ', clear=True):  # Clear all environment variables
+        with pytest.raises(ValueError, match="PDD_PATH environment variable is not set"):
+            context_generator("test_module", "test_prompt")
 
 def test_context_generator_file_not_found(mock_environment):
     with patch('builtins.open', side_effect=FileNotFoundError):
