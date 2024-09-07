@@ -24,9 +24,12 @@ def code_generator(prompt: str, language: str, strength: float, temperature: flo
     Returns:
     Tuple[str, float, str]: A tuple containing the runnable code, total cost, and model name.
     """
+    model_name = ""  # Initialize model_name with a default value
+    total_cost = 0.0  # Initialize total_cost
     try:
         # Step 1: Preprocess the raw prompt
         processed_prompt = preprocess.preprocess(prompt, recursive=True, double_curly_brackets=True)
+        console.print(f"[bold]Processed prompt: {processed_prompt}[/bold]")
 
         # Step 2: Create a Langchain LCEL template
         prompt_template = PromptTemplate.from_template(processed_prompt)
@@ -35,7 +38,7 @@ def code_generator(prompt: str, language: str, strength: float, temperature: flo
         llm, token_counter, input_cost, output_cost, model_name = llm_selector.llm_selector(strength, temperature)
 
         # Step 4: Run the prompt through the model
-        chain = prompt_template | llm | StrOutputParser()
+        chain = prompt_template | llm | (lambda x: x.content if hasattr(x, 'content') else str(x))
         token_count = token_counter(processed_prompt)
         input_token_cost = (token_count / 1_000_000) * input_cost
 
@@ -44,6 +47,7 @@ def code_generator(prompt: str, language: str, strength: float, temperature: flo
         console.print(f"Estimated input cost: ${input_token_cost:.6f}")
 
         result = chain.invoke({})
+        console.print(f"[bold]LLM result: {result}[/bold]")
 
         # Step 5: Pretty print the result and calculate output cost
         console.print(Markdown(result))
@@ -65,11 +69,14 @@ def code_generator(prompt: str, language: str, strength: float, temperature: flo
 
         # Step 7: Calculate and print total cost
         total_cost = input_token_cost + output_token_cost + (continue_cost if not is_finished else postprocess_cost) + unfinished_cost
-        console.print(f"[bold]Total cost: ${total_cost:.6f}[/bold]")
+        console.print(f"[bold]Total cost: ${total_cost:.6f}")
 
         # Step 8: Return the runnable code and total cost
         return final_result, total_cost, model_name
 
+    except ValueError as e:
+        console.print(f"[bold red]Value Error: {str(e)}[/bold red]")
+        return "", total_cost, model_name
     except Exception as e:
-        console.print(f"[bold red]Error: {str(e)}[/bold red]")
-        return "", 0.0, ""
+        console.print(f"[bold red]Unexpected Error: {str(e)}[/bold red]")
+        return "", total_cost, model_name
