@@ -77,7 +77,8 @@ def fix_error_loop(
             with open(error_log_file, "r") as log_file:
                 error_output = log_file.read()
 
-            rprint(Panel(f"[red]Test failures detected in attempt {attempts}:[/red]\n{error_output}"))
+            escaped_error_output = error_output.replace('[', r'\[').replace(']', r'\]')
+            rprint(Panel(f"[red]Test failures detected in attempt {attempts}:[/red]\n{escaped_error_output}"))
 
             fails = result.stdout.count("FAILED")
             errors = result.stdout.count("ERROR")
