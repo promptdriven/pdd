@@ -142,8 +142,9 @@ def fix_error_loop(
             )
             log_file.write(final_result.stdout)
             log_file.write(final_result.stderr)
-
-        rprint(Panel(f"[bold]Final test results:[/bold]\n{final_result.stdout}"))
+            
+        escaped_error_output = final_result.stdout.replace('[', r'\[').replace(']', r'\]')
+        rprint(Panel(f"[bold]Final test results:[/bold]\n{escaped_error_output}"))
 
         # Step 5: Restore best iteration if necessary
         if final_result.returncode != 0 and best_iteration["attempt"] != attempts:

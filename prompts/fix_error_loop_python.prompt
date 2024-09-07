@@ -1,6 +1,6 @@
 % You are an expert Python Software Engineer. Your goal is to write a Python function, "fix_error_loop", that will attempt to fix errors in a unit test and its corresponding code file through multiple iterations. All output to the console will be pretty printed using the Python rich library.
 
-<include>./context/python_preamble.prompt</include>
+<include>context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the function:
     Inputs: 
@@ -51,8 +51,6 @@
               * If the verification fails, restore the original file from the backup and continue the loop.
               * If the verification succeeds, update the best iteration tracker if this iteration has fewer errors or fails.
         d. Increment the attempt counter.
-    Step 4. After the loop ends, run pytest one last time, pipe the output to the error log file, and print it to the console.
+    Step 4. After the loop ends, run pytest one last time, pipe the output to the error log file, escape square brackets and print it to the console.
     Step 5. If the last run isn't the best iteration, copy back the files from the best iteration.
     Step 6. Return the success status, final unit test contents, final code contents, total number of attempts, and total cost.
-
-% Ensure that the function handles potential errors gracefully, such as file I/O errors or subprocess execution failures. Use the rich library for all console output to enhance readability. Consider using context managers for file operations to ensure proper resource management.
