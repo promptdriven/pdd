@@ -89,14 +89,9 @@ def conflicts_in_prompts(prompt1: str, prompt2: str, strength: float = 0.5, temp
         total_cost = input_cost_estimate + output_cost_estimate + extract_input_cost_estimate
 
         # Step 6: Return the results
-        return result.get('conflicts',''), total_cost, model_name
-
-    except FileNotFoundError as e:
-        rprint(f"[bold red]Error:[/bold red] {e}")
-        return [], 0, ""
-    except ValueError as e:
-        rprint(f"[bold red]Error:[/bold red] {e}")
-        return [], 0, ""
+        return result.get('conflicts', []), total_cost, model_name
+    except (ValueError, FileNotFoundError):
+        raise
     except Exception as e:
-        rprint(f"[bold red]An unexpected error occurred:[/bold red] {e}")
+        rprint(f"[bold red]Unexpected error: {str(e)}[/bold red]")
         return [], 0, ""
