@@ -8,10 +8,17 @@
             "module": "pdd.cli",
             "console": "integratedTerminal",
             "args": [
-                "--strength",
-                "1",
-                "generate",
-                "prompts/context_generator_python.prompt"
+                "--output-cost", 
+                "staging/regression/regression_cost.csv", 
+                "fix", 
+                "--output-test", 
+                "staging/regression/fixed_test_get_extension.py", 
+                "--output-code", 
+                "staging/regression/fixed_get_extension.py", 
+                "/Users/gregtanaka/Documents/PDD/prompts/get_extension_python.prompt", 
+                "staging/regression/get_extension.py", 
+                "staging/regression/test_get_extension.py", 
+                "staging/regression/error.log"
             ]
         },
         {
@@ -22,8 +29,7 @@
             "console": "integratedTerminal",
             "args": [ ],
             "env": {
-                "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/pdd:${env:PYTHONPATH}",
-                "PATH": "${env:PATH}"
+                "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/pdd:${env:PYTHONPATH}"
             }
         },
         {
