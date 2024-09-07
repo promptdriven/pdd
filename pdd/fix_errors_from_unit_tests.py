@@ -98,8 +98,8 @@ def fix_errors_from_unit_tests(
         # Append markdown output to error_file
         try:
             with open(error_file, 'a') as file:
-                file.write("\n\nMarkdown Output:\n")
-                file.write(str(markdown_output))
+                # file.write("\n\nMarkdown Output:\n")
+                # file.write(result_1)
                 file.write(f"\nResult tokens: {result_tokens}, Cost: ${cost_result_1:.6f}\n")
         except IOError as e:
             rprint(f"[bold red]Error writing markdown output to error file: {e}[/bold red]")
