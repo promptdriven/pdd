@@ -8,8 +8,8 @@ if not pdd_path:
     raise ValueError("PDD_PATH environment variable is not set")
 
 # Define input parameters
-code_module = "requests.get"
-prompt = "How to make a GET request to a URL and handle the response"
+code_module = "def add(a, b):\n    return a + b"
+prompt = "Write a function 'add' that adds two numbers."
 language = "python"
 strength = 0.7
 temperature = 0.2
