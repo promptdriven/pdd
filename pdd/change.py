@@ -1,5 +1,5 @@
 import os
-from typing import Tuple
+from typing import Tuple, Callable, Any
 from rich.console import Console
 from rich.markdown import Markdown
 from .preprocess import preprocess
@@ -9,7 +9,15 @@ from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
 
 console = Console()
 
-def change(input_prompt: str, input_code: str, change_prompt: str, strength: float, temperature: float) -> Tuple[str, float, str]:
+def create_change_chain(llm: Any, change_template: str) -> Callable:
+    return PromptTemplate.from_template(change_template) | llm | StrOutputParser()
+
+def create_extract_chain(llm: Any, extract_template: str) -> Callable:
+    return PromptTemplate.from_template(extract_template) | llm | JsonOutputParser()
+
+def change(input_prompt: str, input_code: str, change_prompt: str, strength: float, temperature: float,
+           change_chain_creator: Callable = create_change_chain,
+           extract_chain_creator: Callable = create_extract_chain) -> Tuple[str, float, str]:
     """
     Processes input prompts using a language model to generate and extract modified prompts.
 
@@ -19,6 +27,7 @@ def change(input_prompt: str, input_code: str, change_prompt: str, strength: flo
         change_prompt (str): The prompt describing the changes to be made.
         strength (float): The strength parameter for the language model.
         temperature (float): The temperature parameter for the language model.
+        Other args in for testing purposes
 
     Returns:
         Tuple[str, float, str]: A tuple containing the modified prompt, total cost, and model name.
@@ -38,8 +47,7 @@ def change(input_prompt: str, input_code: str, change_prompt: str, strength: flo
         llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
 
         # Step 4: Create and run LCEL template for change_LLM
-        change_template = PromptTemplate.from_template(processed_change_llm)
-        change_chain = change_template | llm | StrOutputParser()
+        change_chain = change_chain_creator(llm, processed_change_llm)
         processed_change_prompt = preprocess(change_prompt, recursive=False, double_curly_brackets=False)
 
         change_result = change_chain.invoke({
@@ -58,8 +66,7 @@ def change(input_prompt: str, input_code: str, change_prompt: str, strength: flo
         console.print(f"Estimated cost: ${change_cost:.6f}")
 
         # Step 5: Create and run LCEL template for extract_prompt
-        extract_template = PromptTemplate.from_template(extract_prompt)
-        extract_chain = extract_template | llm | JsonOutputParser()
+        extract_chain = extract_chain_creator(llm, extract_prompt)
 
         extract_result = extract_chain.invoke({"llm_output": change_result})
 
@@ -73,8 +80,9 @@ def change(input_prompt: str, input_code: str, change_prompt: str, strength: flo
         console.print(f"Estimated cost: ${extract_cost:.6f}")
 
         # Step 6: Extract and print modified_prompt
-        if 'modified_prompt' not in extract_result:
-            raise KeyError("'modified_prompt' key is missing from the extracted result")
+        if not isinstance(extract_result, dict) or 'modified_prompt' not in extract_result:
+            raise KeyError(f"'modified_prompt' key is missing from the extracted result. Full result: {extract_result}")
+        
         modified_prompt = extract_result['modified_prompt']
         console.print(Markdown(f"[bold]Modified Prompt:[/bold]\n\n{modified_prompt}"))
 
