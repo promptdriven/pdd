@@ -8,7 +8,7 @@ def main() -> None:
     It sets up the parameters, calls the function, and prints the results.
     """
     # Define input parameters
-    base = 'xml_tagger'
+    base = 'change'
     # Define the parameters for the function
     unit_test_file: str = f'tests/test_{base}.py'  # Path to your unit test file
     code_file: str = f'pdd/{base}.py'          # Path to your code file
