@@ -53,13 +53,48 @@ def mock_dependencies():
         yield
 
 def test_change_successful(mock_file_reads, mock_dependencies):
-    result = change(mock_input_prompt, mock_input_code, mock_change_prompt, mock_strength, mock_temperature)
+    with patch("pdd.change.llm_selector") as mock_llm_selector, \
+         patch("pdd.change.PromptTemplate") as mock_prompt_template, \
+         patch("pdd.change.StrOutputParser") as mock_str_output_parser, \
+         patch("pdd.change.JsonOutputParser") as mock_json_output_parser:
+
+        # Mock llm_selector
+        mock_llm = MagicMock()
+        mock_llm_selector.return_value = (
+            mock_llm,
+            lambda x: len(x),  # mock token counter
+            0.00001,  # mock input cost
+            0.00002,  # mock output cost
+            "gpt-3.5-turbo"  # mock model name
+        )
+
+        # Mock PromptTemplate and chain invocations
+        mock_change_chain = MagicMock()
+        mock_change_chain.invoke.return_value = "Mocked change result"
+        mock_extract_chain = MagicMock()
+        mock_extract_chain.invoke.return_value = {"modified_prompt": "Modified prompt content"}
+
+        mock_prompt_template.from_template.side_effect = [mock_change_chain, mock_extract_chain]
+
+        # Mock StrOutputParser
+        mock_str_output_parser.return_value = lambda x: x
+
+        # Mock JsonOutputParser
+        mock_json_parser = MagicMock()
+        mock_json_parser.invoke.return_value = {"modified_prompt": "Modified prompt content"}
+        mock_json_output_parser.return_value = mock_json_parser
+
+        result = change(mock_input_prompt, mock_input_code, mock_change_prompt, mock_strength, mock_temperature)
     
-    assert isinstance(result, tuple)
-    assert len(result) == 3
-    assert result[0] == "Modified prompt content"
-    assert isinstance(result[1], float)
-    assert result[2] == "gpt-3.5-turbo"
+        assert isinstance(result, tuple)
+        assert len(result) == 3
+        assert result[0] == "Modified prompt content"
+        assert isinstance(result[1], float)
+        assert result[2] == "gpt-3.5-turbo"
+
+        # Verify that the mocks were called correctly
+        mock_change_chain.invoke.assert_called_once()
+        mock_extract_chain.invoke.assert_called_once_with({"llm_output": "Mocked change result"})
 
 @pytest.mark.parametrize("missing_file", ['/prompts/xml/change_LLM.prompt', '/prompts/extract_prompt_change_LLM.prompt'])
 def test_change_file_not_found(mock_environment, missing_file):
@@ -74,7 +109,9 @@ def test_change_file_not_found(mock_environment, missing_file):
 
 def test_change_missing_json_key(mock_file_reads, mock_dependencies):
     with patch("pdd.change.JsonOutputParser") as mock_json_output_parser:
-        mock_json_output_parser.return_value.invoke.return_value = {}  # Return empty dict to simulate missing key
+        mock_json_parser = MagicMock()
+        mock_json_parser.invoke.return_value = {}  # Return empty dict to simulate missing key
+        mock_json_output_parser.return_value = mock_json_parser
         
         with pytest.raises(KeyError) as exc_info:
             change(mock_input_prompt, mock_input_code, mock_change_prompt, mock_strength, mock_temperature)

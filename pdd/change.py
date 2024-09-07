@@ -73,7 +73,9 @@ def change(input_prompt: str, input_code: str, change_prompt: str, strength: flo
         console.print(f"Estimated cost: ${extract_cost:.6f}")
 
         # Step 6: Extract and print modified_prompt
-        modified_prompt = extract_result.get('modified_prompt', '')
+        if 'modified_prompt' not in extract_result:
+            raise KeyError("'modified_prompt' key is missing from the extracted result")
+        modified_prompt = extract_result['modified_prompt']
         console.print(Markdown(f"[bold]Modified Prompt:[/bold]\n\n{modified_prompt}"))
 
         # Step 7: Calculate total cost and return
