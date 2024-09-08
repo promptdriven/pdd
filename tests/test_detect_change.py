@@ -1,8 +1,29 @@
 import pytest
-from unittest.mock import patch, mock_open
-from pdd.detect_change import detect_change
+from unittest.mock import patch, mock_open, MagicMock
+from pdd.detect_change import detect_change, custom_chain_executor
 import json
 from rich.console import Console
+
+class MockPromptTemplate:
+    def __init__(self, template):
+        self.template = template
+
+    def invoke(self, kwargs):
+        return self.template.format(**kwargs)
+
+class MockLLM:
+    def __init__(self, output):
+        self.output = output
+
+    def invoke(self, prompt):
+        return self.output
+
+class MockOutputParser:
+    def __init__(self, output):
+        self.output = output
+
+    def invoke(self, text):
+        return self.output
 
 @pytest.fixture
 def mock_environment():
@@ -23,7 +44,7 @@ def mock_llm_selector():
     """Mock the LLM selector function."""
     return (
         lambda x, y: (
-            lambda **kwargs: "Mock LLM output",
+            MockLLM("Mock LLM output"),
             lambda x: 100,
             0.00002,
             0.00002,
@@ -44,17 +65,21 @@ def test_detect_change_success(mock_environment, mock_file_contents, mock_llm_se
         with patch('pdd.detect_change.llm_selector', mock_llm_selector):
             with patch('pdd.detect_change.preprocess', mock_preprocess):
                 with patch('pdd.detect_change.PromptTemplate.from_template') as mock_prompt_template:
-                    mock_prompt_template.return_value = lambda **kwargs: "Mock template output"
+                    mock_prompt_template.return_value = MockPromptTemplate("Mock template output")
                     
                     with patch('pdd.detect_change.JsonOutputParser') as mock_json_parser:
-                        mock_json_parser.return_value = lambda x: {"changes_list": [{"prompt_name": "test.prompt", "change_instructions": "Test instructions"}]}
+                        mock_json_parser.return_value = MockOutputParser({"changes_list": [{"prompt_name": "test.prompt", "change_instructions": "Test instructions"}]})
                         
-                        result, total_cost, model_name = detect_change(
-                            prompt_files=["test.prompt"],
-                            change_description="Test change",
-                            strength=0.5,
-                            temperature=0.7
-                        )
+                        with patch('pdd.detect_change.custom_chain_executor', side_effect=[
+                            "Mock LLM output",
+                            {"changes_list": [{"prompt_name": "test.prompt", "change_instructions": "Test instructions"}]}
+                        ]):
+                            result, total_cost, model_name = detect_change(
+                                prompt_files=["test.prompt"],
+                                change_description="Test change",
+                                strength=0.5,
+                                temperature=0.7
+                            )
     
     assert isinstance(result, list)
     assert len(result) == 1
@@ -85,17 +110,21 @@ def test_detect_change_json_decode_error(mock_environment, mock_file_contents, m
         with patch('pdd.detect_change.llm_selector', mock_llm_selector):
             with patch('pdd.detect_change.preprocess', mock_preprocess):
                 with patch('pdd.detect_change.PromptTemplate.from_template') as mock_prompt_template:
-                    mock_prompt_template.return_value = lambda **kwargs: "Mock template output"
+                    mock_prompt_template.return_value = MockPromptTemplate("Mock template output")
                     
                     with patch('pdd.detect_change.JsonOutputParser') as mock_json_parser:
-                        mock_json_parser.return_value = lambda x: json.JSONDecodeError("Test error", "", 0)
+                        mock_json_parser.return_value = MockOutputParser(json.JSONDecodeError("Test error", "", 0))
                         
-                        result, total_cost, model_name = detect_change(
-                            prompt_files=["test.prompt"],
-                            change_description="Test change",
-                            strength=0.5,
-                            temperature=0.7
-                        )
+                        with patch('pdd.detect_change.custom_chain_executor', side_effect=[
+                            "Mock LLM output",
+                            json.JSONDecodeError("Test error", "", 0)
+                        ]):
+                            result, total_cost, model_name = detect_change(
+                                prompt_files=["test.prompt"],
+                                change_description="Test change",
+                                strength=0.5,
+                                temperature=0.7
+                            )
     
     assert result == []
     assert total_cost == 0.0
