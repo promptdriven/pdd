@@ -1,4 +1,4 @@
-% You are an expert Software Engineer. Your goal is to fix the errors from a unit_test run on the code_under_test. The error might be in the code_under_test or the unit_test or both.
+% You are an expert Software Engineer. Your goal is to diagnose and fix the errors from a unit_test run on the code_under_test. The error might be in the code_under_test or the unit_test or both.
 
 % Here is the unit_test for the code_under_test: <unit_test><include>{unit_test}</include></unit_test>
 
@@ -8,10 +8,38 @@
 
 % Here are the errors and past potential fixes, if any, from the unit test run(s): <errors><include>{errors}</include></errors>
 
+<examples>
+    <example_1>
+    % Here is an example_unit_test for the example_code_under_test: <example_unit_test><include>context/fix_errors_from_unit_tests/1/test_conflicts_in_prompts.py</include></example_unit_test>
+    
+    % Here is an example_code_under_test that fully passes the example_unit_test: <example_code_under_test><include>context/fix_errors_from_unit_tests/1/conflicts_in_prompts.py</include></example_code_under_test>
+
+    % Here is the prompt that generated the example_code_under_test: <example_prompt><include>context/fix_errors_from_unit_tests/1/conflicts_in_prompts_python.prompt</include></example_prompt>
+    </example_1>
+
+    <example_2>
+    % Here is an example_unit_test for the example_code_under_test: <example_unit_test><include>context/fix_errors_from_unit_tests/2/test_code_generator.py</include></example_unit_test>
+
+    % Here is an example_code_under_test that fully passes the example_unit_test: <example_code_under_test><include>context/fix_errors_from_unit_tests/2/code_generator.py</include></example_code_under_test>
+
+    % Here is the prompt that generated the example_code_under_test: <example_prompt><include>context/fix_errors_from_unit_tests/2/code_generator_python.prompt</include></example_prompt>
+    </example_2>
+
+    <example_3>
+    % Here is an example_unit_test for the example_code_under_test: <example_unit_test><include>context/fix_errors_from_unit_tests/3/test_context_generator.py</include></example_unit_test>
+
+    % Here is an example_code_under_test that fully passes the example_unit_test: <example_code_under_test><include>context/fix_errors_from_unit_tests/3/context_generator.py</include></example_code_under_test>
+
+    % Here is the prompt that generated the example_code_under_test: <example_prompt><include>context/fix_errors_from_unit_tests/3/context_generator_python.prompt</include></example_prompt>
+    </example_3>
+</examples>
+
+<instructions>
 % Follow these steps to solve these errors:
     Step 1. Compare the prompt to the code_under_test and explain differences, if any.
     Step 2. Compare the prompt to the unit_test and explain differences, if any.
     Step 3. Explain in detail step by step why there might be an an error and why prior attempted fixes, if any, may not have worked. Write several paragraphs explaining the root cause of each of the errors.
-    Step 4. Explain in detail step by step how to solve the error. Sometimes logging or print statements can help debug the code. Write several paragraphs explaining how to fix each of the errors.
+    Step 4. Explain in detail step by step how to solve each of the errors. For each error, there should be several paragraphs description of the steps. Sometimes logging or print statements can help debug the code.
     Step 5. Review the above steps and correct for any errors in the logic.
     Step 6. For the code that need changes, write the corrected code_under_test and/or corrected unit_test in its/their entirety.
+</instructions>
