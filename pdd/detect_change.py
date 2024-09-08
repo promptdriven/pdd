@@ -10,6 +10,12 @@ import json
 
 console = Console()
 
+def custom_chain_executor(components, input_data):
+    result = input_data
+    for component in components:
+        result = component.invoke(result)
+    return result
+
 def detect_change(prompt_files: List[str], change_description: str, strength: float, temperature: float) -> Tuple[List[Dict[str, str]], float, str]:
     """
     Analyze a list of prompt files and a change description to determine which prompts need to be changed.
@@ -52,14 +58,12 @@ def detect_change(prompt_files: List[str], change_description: str, strength: fl
                 'PROMPT_NAME': file,
                 'PROMPT_DESCRIPTION': prompt_content
             })
-        # write prompt_list to a file
-        # with open(f'{pdd_path}/context/detect_change/1/prompt_list.txt', 'w') as f:
-        #     f.write(json.dumps(prompt_list))
-            
+        
         preprocessed_change_description = preprocess(change_description, recursive=False, double_curly_brackets=False)
 
-        chain = prompt_template | llm | StrOutputParser()
-        llm_output = chain.invoke({
+        # Construct and run the custom chain
+        chain_components = [prompt_template, llm, StrOutputParser()]
+        llm_output = custom_chain_executor(chain_components, {
             'PROMPT_LIST': json.dumps(prompt_list),
             'CHANGE_DESCRIPTION': preprocessed_change_description
         })
@@ -70,19 +74,15 @@ def detect_change(prompt_files: List[str], change_description: str, strength: fl
 
         console.print(f"[bold]Step 5 Output:[/bold]")
         console.print(llm_output)
-        #save the output to a file
-        # with open(f'{pdd_path}/context/detect_change/1/detect_change_output.txt', 'w') as f:
-        #     f.write(llm_output)
         console.print(f"Input tokens: {input_tokens}, Output tokens: {output_tokens}")
         console.print(f"Estimated cost: ${step5_cost:.6f}")
 
-        # Step 6: Create Langchain LCEL template for extraction
+        # Step 6: Extract changes using the extract_detect_change_LLM prompt
         extract_llm, extract_token_counter, extract_input_cost, extract_output_cost, extract_model_name = llm_selector(0.9, temperature)
         
         extract_prompt_template = PromptTemplate.from_template(extract_detect_change_prompt)
-        extract_chain = extract_prompt_template | extract_llm | JsonOutputParser()
-        
-        extract_output = extract_chain.invoke({'llm_output': llm_output})
+        extract_chain_components = [extract_prompt_template, extract_llm, JsonOutputParser()]
+        extract_output = custom_chain_executor(extract_chain_components, {'llm_output': llm_output})
 
         extract_input_tokens = extract_token_counter(llm_output)
         extract_output_tokens = extract_token_counter(json.dumps(extract_output))
