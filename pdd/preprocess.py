@@ -31,7 +31,7 @@ def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool
         prompt = double_curly(prompt, exclude_keys)
 
     console.print(Panel("Preprocessing complete", style="bold green"))
-    return prompt.rstrip()  # Remove trailing whitespace only
+    return prompt
 
 def process_backtick_includes(text: str, recursive: bool) -> str:
     """
@@ -67,9 +67,10 @@ def process_specific_tags(text: str, recursive: bool) -> str:
     :return: The text with specific tags processed.
     """
     def process_tag(match: re.Match) -> str:
-        full_match = match.group(0)
-        tag = match.group(1)
-        content = match.group(2) if match.group(2) else ""
+        pre_whitespace = match.group(1)
+        tag = match.group(2)
+        content = match.group(3) if match.group(3) else ""
+        post_whitespace = match.group(4)
         
         if tag == 'include':
             file_path = get_file_path(content.strip())
@@ -79,26 +80,26 @@ def process_specific_tags(text: str, recursive: bool) -> str:
                     included_content = file.read()
                     if recursive:
                         included_content = preprocess(included_content, recursive, False)
-                    return included_content
+                    return pre_whitespace + included_content + post_whitespace
             except FileNotFoundError:
                 console.print(f"[bold red]Warning:[/bold red] File not found: {file_path}")
-                return ''
+                return pre_whitespace + post_whitespace
         elif tag == 'pdd':
-            return ''  # Remove comment tags, preserving surrounding whitespace
+            return pre_whitespace + post_whitespace
         elif tag == 'shell':
             command = content.strip()
             console.print(f"Executing shell command: [cyan]{command}[/cyan]")
             try:
                 result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
-                return result.stdout  # Return the output as-is, preserving newlines
+                return pre_whitespace + result.stdout + post_whitespace
             except subprocess.CalledProcessError as e:
                 console.print(f"[bold red]Error:[/bold red] Shell command failed: {e}")
-                return f"Error: {e}"
+                return pre_whitespace + f"Error: {e}" + post_whitespace
         else:
-            return full_match  # Return the original match for any other tags
+            return match.group(0)  # Return the original match for any other tags
 
-    # Process only specific tags, without assuming or adding closing tags
-    pattern = r'<(include|pdd|shell)(?:\s+[^>]*)?(?:>(.*?)</\1>|/>|>)'
+    # Process only specific tags, capturing whitespace around them
+    pattern = r'(\s*)<(include|pdd|shell)(?:\s+[^>]*)?(?:>(.*?)</\2>|/>|>)(\s*)'
     return re.sub(pattern, process_tag, text, flags=re.DOTALL)
 
 def get_file_path(file_name: str) -> str:
