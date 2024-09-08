@@ -27,10 +27,10 @@ console.print("[bold white]Processed change_LLM Prompt:[/bold white]")
 console.print(processed)
 
 # write the processed prompt to a file
-with open('prompts/xml/change_example_full.prompt', 'w') as file:
+with open('tests/preprocess_test_change_example_full_complete.prompt', 'w') as file:
     file.write(processed)
     
-# load prompts/change_LLM.prompt
+
 with open('prompts/example_generator_LLM.prompt', 'r') as file:
     example_generator_LLM_prompt = file.read()
     
@@ -38,3 +38,7 @@ with open('prompts/example_generator_LLM.prompt', 'r') as file:
 processed = preprocess(example_generator_LLM_prompt, recursive, False)
 console.print("[bold white]Processed change_LLM Prompt:[/bold white]")
 console.print(processed)
+
+# write the processed prompt to a file
+with open('tests/preprocess_test_example_generator_LLM.prompt', 'w') as file:
+    file.write(processed)

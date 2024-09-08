@@ -1,0 +1,12 @@
+% You are an expert software engineer. Generate a concise example of how to use the following module properly:```{code_module}```
+
+% Here was the prompt used to generate the module: ```{processed_prompt}```
+
+% The language of the example should be in: ```{language}```
+
+% Make sure the following happens:
+    - Document in detail what the input and output parameters in the doc strings
+    - Someone needs to be able to fully understand how to use the module from the example.
+    - The environment variables are already set and packages are already installed so just show how to use the module.
+    - Know that the generated example will be in a different directory ('pdd') than the module it is calling and will need an absolute reference. The module file name will be same as the function name.
+    - Be sure the units if any are described for the inputs and outputs (e.g. in dollars per million tokens)
