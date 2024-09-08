@@ -8,13 +8,14 @@ from rich.panel import Panel
 
 console = Console()
 
-def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool = True) -> str:
+def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool = True, exclude_keys: List[str] = None) -> str:
     """
     Preprocess the given prompt by handling includes, specific tags, and doubling curly brackets.
 
     :param prompt: The input text to preprocess.
     :param recursive: Whether to recursively preprocess included content.
     :param double_curly_brackets: Whether to double curly brackets in the text.
+    :param exclude_keys: List of keys to exclude from curly bracket doubling.
     :return: The preprocessed text.
     """
     console.print(Panel("Starting preprocessing", style="bold green"))
@@ -27,10 +28,10 @@ def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool
 
     # Double curly brackets if needed
     if double_curly_brackets:
-        prompt = double_curly(prompt)
+        prompt = double_curly(prompt, exclude_keys)
 
     console.print(Panel("Preprocessing complete", style="bold green"))
-    return prompt.strip()  # Remove any leading/trailing whitespace
+    return prompt.rstrip()  # Remove trailing whitespace only
 
 def process_backtick_includes(text: str, recursive: bool) -> str:
     """
@@ -83,13 +84,13 @@ def process_specific_tags(text: str, recursive: bool) -> str:
                 console.print(f"[bold red]Warning:[/bold red] File not found: {file_path}")
                 return ''
         elif tag == 'pdd':
-            return ''  # Remove comment tags
+            return ''  # Remove comment tags, preserving surrounding whitespace
         elif tag == 'shell':
             command = content.strip()
             console.print(f"Executing shell command: [cyan]{command}[/cyan]")
             try:
                 result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
-                return result.stdout
+                return result.stdout  # Return the output as-is, preserving newlines
             except subprocess.CalledProcessError as e:
                 console.print(f"[bold red]Error:[/bold red] Shell command failed: {e}")
                 return f"Error: {e}"
@@ -110,12 +111,22 @@ def get_file_path(file_name: str) -> str:
     pdd_path = os.getenv('PDD_PATH', '')
     return os.path.join(pdd_path, file_name)
 
-def double_curly(text: str) -> str:
+def double_curly(text: str, exclude_keys: List[str] = None) -> str:
     """
-    Double the curly brackets in the text.
+    Double the curly brackets in the text, excluding specified keys.
 
     :param text: The input text with single curly brackets.
+    :param exclude_keys: List of keys to exclude from doubling.
     :return: The text with doubled curly brackets.
     """
     console.print("Doubling curly brackets")
-    return re.sub(r'(?<!\{)\{(?!\{)', '{{', re.sub(r'(?<!\})\}(?!\})', '}}', text))
+    if exclude_keys is None:
+        exclude_keys = []
+    
+    def replace_curly(match):
+        key = match.group(1)
+        if key in exclude_keys:
+            return f"{{{key}}}"
+        return f"{{{{{key}}}}}"
+    
+    return re.sub(r'\{([^{}]+)\}', replace_curly, text)
