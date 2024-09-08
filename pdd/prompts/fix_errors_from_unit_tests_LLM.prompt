@@ -32,6 +32,22 @@
 
     % Here is the prompt that generated the example_code_under_test: <example_prompt><include>context/fix_errors_from_unit_tests/3/context_generator_python.prompt</include></example_prompt>
     </example_3>
+
+    <example_4>
+    % Here is an example_unit_test for the example_code_under_test: <example_unit_test><include>context/fix_errors_from_unit_tests/4/test_detect_change.py</include></example_unit_test>
+
+    % Here is an example_code_under_test that fully passes the example_unit_test: <example_code_under_test><include>context/fix_errors_from_unit_tests/4/detect_change.py</include></example_code_under_test>
+
+    % Here is the prompt that generated the example_code_under_test: <example_prompt><include>context/fix_errors_from_unit_tests/4/detect_change_python.prompt</include></example_prompt>
+    </example_4>
+
+    <example_5>
+    % Here is an example_unit_test for the example_code_under_test: <example_unit_test><include>context/fix_errors_from_unit_tests/4/test_detect_change_1_0_1.py</include></example_unit_test>
+
+    % Here is an example_code_under_test that didn't fully pass the example_unit_test: <example_code_under_test><include>context/fix_errors_from_unit_tests/4/detect_change_1_0_1.py</include></example_code_under_test>
+
+    % Here is an example error/fix log showing how the issues were resolved: <example_error_fix_log><include>context/fix_errors_from_unit_tests/4/error.log</include></example_error_fix_log>
+    </example_5>
 </examples>
 
 <instructions>
