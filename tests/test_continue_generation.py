@@ -18,13 +18,21 @@ def mock_prompts():
 
 @pytest.fixture
 def mock_llm_selector():
+    call_count = 0
     def mock_llm(prompt):
+        nonlocal call_count
+        call_count += 1
         if "trim_results_start" in prompt:
             return '{"code_block": "def example(): pass"}'
         elif "trim_results" in prompt:
             return '{"trimmed_continued_generation": "def example_continued(): pass"}'
         else:
-            return '{"generated_text": "This is a mock LLM response for continue generation"}'
+            responses = [
+                "This is the first mock LLM response",
+                "def example(): pass",
+                "This is the third mock LLM response"
+            ]
+            return responses[min(call_count - 1, len(responses) - 1)]
 
     return lambda *args: (
         mock_llm,  # mock LLM
@@ -36,7 +44,15 @@ def mock_llm_selector():
 
 @pytest.fixture
 def mock_unfinished_prompt():
-    return lambda *args: ('Mock reasoning', True, 0.0001, 'mock_model')
+    call_count = 0
+    def mock_unfinished(prompt, strength, temperature):
+        nonlocal call_count
+        call_count += 1
+        if call_count < 3:
+            return ('Not finished', False, 0.0001, 'mock_model')
+        else:
+            return ('Finished', True, 0.0001, 'mock_model')
+    return mock_unfinished
 
 def test_continue_generation_success(mock_environment, mock_prompts, mock_llm_selector, mock_unfinished_prompt):
     with patch('builtins.open', mock_open(read_data='Mock prompt content')):
@@ -52,7 +68,7 @@ def test_continue_generation_success(mock_environment, mock_prompts, mock_llm_se
                         )
 
                         assert isinstance(result, str)
-                        assert "def example(): pass" in result  # Check for the mock code block
+                        assert "def example(): pass" in result
                         assert isinstance(total_cost, float)
                         assert model_name == 'mock_model'
                         mock_print.assert_called()
@@ -68,13 +84,6 @@ def test_continue_generation_file_not_found(mock_environment):
             continue_generation('Test input', 'Test output', 0.5, 0.0)
 
 def test_continue_generation_multiple_iterations(mock_environment, mock_prompts, mock_llm_selector):
-    unfinished_responses = [
-        ('Not finished', False, 0.0001, 'mock_model'),
-        ('Not finished', False, 0.0001, 'mock_model'),
-        ('Finished', True, 0.0001, 'mock_model')
-    ]
-    mock_unfinished_prompt = lambda *args: unfinished_responses.pop(0)
-
     with patch('builtins.open', mock_open(read_data='Mock prompt content')):
         with patch('pdd.continue_generation.preprocess', lambda x, **kwargs: x):
             with patch('pdd.continue_generation.llm_selector', mock_llm_selector):
@@ -88,7 +97,9 @@ def test_continue_generation_multiple_iterations(mock_environment, mock_prompts,
                         )
 
                         assert isinstance(result, str)
-                        assert "def example(): pass" in result  # Check for the mock code block
+                        assert "def example(): pass" in result
+                        assert "This is the first mock LLM response" in result
+                        assert "This is the third mock LLM response" in result
                         assert isinstance(total_cost, float)
                         assert model_name == 'mock_model'
                         assert mock_print.call_count > 3  # Ensure multiple iterations
