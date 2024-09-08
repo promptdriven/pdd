@@ -8,7 +8,7 @@ def main() -> None:
     It sets up the parameters, calls the function, and prints the results.
     """
     # Define input parameters
-    base = 'change'
+    base = 'continue_generation'
     # Define the parameters for the function
     unit_test_file: str = f'tests/test_{base}.py'  # Path to your unit test file
     code_file: str = f'pdd/{base}.py'          # Path to your code file
@@ -20,7 +20,7 @@ def main() -> None:
     temperature: float = 0                         # Temperature parameter for error fixing
     max_attempts: int = 5                           # Maximum number of attempts to fix errors
     budget: float = 100.0                            # Maximum budget for fixing errors
-    error_log_file = "error_log.txt"  # Path to the error log file
+    error_log_file = "error.log"  # Path to the error log file
 
     try:
         # Call the fix_error_loop function
