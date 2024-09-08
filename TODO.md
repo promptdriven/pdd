@@ -31,6 +31,7 @@
 
 - [ ] Use the response to get the token counting to speed up app and make it more accurate
 - [ ] Fix change command fixing
+- [ ] Continue generation has a bug with example
 
 ## Improvements
 
