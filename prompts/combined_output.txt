@@ -1,0 +1,1900 @@
+===== Makefile_makefile.prompt =====
+% You are an expert software engineer. Your goal is to write a Makefile to handle the following:
+  - Generating these types in the staging directory:
+    a) Python modules (e.g. .py)
+    b) Makefile
+    c) CSV
+    d) Examples (e.g. *_example.py)
+    e) Tests (e.g. test_*.py)
+  - Testing- Be sure to incude the staging Python modules directory in the PYTHONPATH when running tests so it can find the modules. Also, use unittest to run the tests.
+  - Cleaning
+  - Generating requirements.txt from pipreqs
+  - Production (e.g. copy files from staging to pdd)
+  - Staging (e.g. copy files from pdd, context, tests and data  to staging to reduce the cost of regenerating everything)
+  - etc.
+
+
+% Here is the help of pdd: ```<./README.md>```
+  
+% Here is an example directory structure: ```├── README.md
+├── TODO.md
+├── Makefile
+├── context
+│   ├── code_generator_example.py
+│   ├── context_generator_example.py
+│   ├── get_extension_example.py
+│   ├── langchain_lcel_example.py
+│   ├── postprocess_example.py
+│   ├── preprocess_example.py
+│   └── split
+│       └── 1
+│           ├── final_pdd_python.prompt
+│           ├── initial_pdd_python.prompt
+│           ├── pdd.py
+│           ├── split_get_extension.prompt
+│           └── sub_pdd_python.prompt
+├── data
+│   ├── language_format.csv
+│   └── llm_model.csv
+├── pdd
+│   ├── __pycache__
+│   ├── code_generator.py (used to generate examples in context)
+│   ├── context_generator.py
+│   ├── get_extension.py
+│   ├── pdd.py
+│   ├── postprocess.py
+│   └── preprocess.py
+├── prompts
+│   ├── Makefile_makefile.prompt (generates Makefile in staging)
+│   ├── code_generator_python.prompt
+│   ├── context_generator_python.prompt
+│   ├── get_extension_python.prompt
+│   ├── language_format_csv.prompt (generates language_format.csv in staging/data)
+│   ├── llm_model_csv.prompt
+│   ├── pdd_python.prompt
+│   ├── postprocess_python.prompt
+│   └── preprocess_python.prompt
+├── requirements.txt
+├── staging
+│   ├── Makefile (will be initially tested here and then moved to the base directory of pdd)
+│   ├── data
+│   │   ├── language_format.csv
+│   │   ├── llm_model.csv
+│   ├── context
+│   │   ├── code_generator_example.py
+│   │   ├── context_generator_example.py
+│   │   ├── get_extension_example.py
+│   │   ├── langchain_lcel_example.py
+│   │   ├── postprocess_example.py
+│   │   └── preprocess_example.py
+│   ├── pdd
+│   │   ├── __pycache__
+│   │   ├── code_generator.py
+│   │   ├── context_generator.py
+│   │   ├── get_extension.py
+│   │   ├── get_extension_example.py
+│   │   ├── pdd.py
+│   │   ├── postprocess.py
+│   │   └── preprocess.py
+│   └── tests
+│   │   ├── test_code_generator.py
+│   │   ├── test_context_generator.py
+│   │   ├── test_get_extension.py
+│   │   ├── test_get_extension_example.py
+│   │   ├── test_pdd.py
+│   │   ├── test_postprocess.py
+│   │   └── test_preprocess.py
+│       └── testing.ipynb
+└── tests
+    └── testing.ipynb```
+
+% Rules to follow:
+  - The Makefile needs to use wildcards to ensure all files and found and generated
+  - Prompt file names have this format: '<basename>_<language>.prompt' (e.g. pdd_python.prompt, Makefile_makefile.prompt, setup_bash.prompt). Be sure to not include the '_<language>' as part of the output file.
+  - Prompts have different output file extensions depending on the language. For instance, '_makefile.prompt' has no file extensions, '_csv.prompt' end in '.csv', '_python.prompt' end in '.py', etc. As a result, there needs to be separate generate for each type of language.
+  - Print out the commands as they run.
+  - If the directory doesn't already exist, create it.
+  - To run 'pdd', use the command: ```python pdd/pdd.py```
+
+===== change_LLM.prompt =====
+% You are an expert LLM Prompt Engineer. Your goal is to change the input_prompt into a modified_prompt according to the change_prompt. 
+
+% Here are the inputs and outputs of this prompt:
+    Input: 
+        'input_prompt' - A string that contains the prompt that will be modified by the change_prompt.
+        'input_code' - A string that contains the code that was generated from the input_prompt.
+        'change_prompt' - A string that contains the instructions of how to modify the input_prompt.
+    Output: 
+        'modified_prompt' - A string that contains the modified prompt that was changed based on the change_prompt.
+
+% Here is example_1 of how to change the input_prompt to the modified_prompt:
+    example_1_input_prompt: ```<./context/change/1/initial_code_generator_python.prompt>```
+    example_1_input_code: ```<./context/change/1/initial_code_generator.py>```
+    example_1_change_prompt: ```<./context/change/1/change.prompt>```
+    example_1_modified_prompt: ```<./context/change/1/final_code_generator_python.prompt>```
+
+% Here is example_2 of how to change the input_prompt to the modified_prompt:
+    example_2_input_prompt: ```<./context/change/2/initial_context_generator_python.prompt>```
+    example_2_input_code: ```<./context/change/2/initial_context_generator.py>```
+    example_2_change_prompt: ```<./context/change/2/change.prompt>```
+    example_2_modified_prompt: ```<./context/change/2/final_context_generator_python.prompt>```
+
+% Here is example_3 of how to change the input_prompt to the modified_prompt:
+    example_3_input_prompt: ```<./context/change/3/initial_test_generator_python.prompt>```
+    example_3_input_code: ```<./context/change/3/intial_test_generator.py>```
+    example_3_change_prompt: ```<./context/change/3/change.prompt>```
+    example_3_modified_prompt: ```<./context/change/3/final_test_generator_python.prompt>```
+
+% Here is example_4 of how to change the input_prompt to the modified_prompt:
+    example_4_input_prompt: ```<./context/change/4/initial_postprocess_python.prompt>```
+    example_4_input_code: ```<./context/change/4/initial_postprocess.py>```
+    example_4_change_prompt: ```<./context/change/4/change.prompt>```
+    example_4_modified_prompt: ```<./context/change/4/final_postprocess_python.prompt>```
+
+% Here is example_5 of how to change the input_prompt to the modified_prompt:
+    example_5_input_prompt: ```<./context/change/5/initial_split_python.prompt>```
+    example_5_input_code: ```<./context/change/5/initial_split.py>```
+    example_5_change_prompt: ```<./context/change/5/change.prompt>```
+    example_5_modified_prompt: ```<./context/change/5/final_split_python.prompt>```
+
+% Here is example_6 of how to change the input_prompt to the modified_prompt:
+    example_6_input_prompt: ```<./context/change/6/initial_xml_tagger_python.prompt>```
+    example_6_input_code: ```<./context/change/6/initial_xml_tagger.py>```
+    example_6_change_prompt: ```<./context/change/6/change.prompt>```
+    example_6_modified_prompt: ```<./context/change/6/final_xml_tagger_python.prompt>```
+
+% Here is example_7 of how to change the input_prompt to the modified_prompt:
+    example_7_input_prompt: ```<./context/change/7/initial_fix_errors_python.prompt>```
+    example_7_input_code: ```<./context/change/7/initial_fix_errors.py>```
+    example_7_change_prompt: ```<./context/change/7/change.prompt>```
+    example_7_modified_prompt: ```<./context/change/7/final_fix_errors_python.prompt>```
+
+% Here is example_8 of how to change the input_prompt to the modified_prompt:
+    example_8_input_prompt: ```<./context/change/8/initial_fix_errors_from_unit_tests_python.prompt>```
+    example_8_input_code: ```<./context/change/8/initial_fix_errors_from_unit_tests.py>```
+    example_8_change_prompt: ```<./context/change/8/change.prompt>```
+    example_8_modified_prompt: ```<./context/change/8/final_fix_errors_from_unit_tests_python.prompt>```
+
+% Here is example_9 of how to change the input_prompt to the modified_prompt:
+    example_9_input_prompt: ```<./context/change/9/initial_fix_error_loop_python.prompt>```
+    example_9_input_code: ```<./context/change/9/initial_fix_error_loop.py>```
+    example_9_change_prompt: ```<./context/change/9/change.prompt>```
+    example_9_modified_prompt: ```<./context/change/9/final_fix_error_loop_python.prompt>```
+
+% Here is example_10 of how to change the input_prompt to the modified_prompt:
+    example_10_input_prompt: ```<./context/change/10/initial_fix_errors_from_unit_tests_python.prompt>```
+    example_10_input_code: ```<./context/change/10/initial_fix_errors_from_unit_tests.py>```
+    example_10_change_prompt: ```<./context/change/10/change.prompt>```
+    example_10_modified_prompt: ```<./context/change/10/final_fix_errors_from_unit_tests_python.prompt>```
+
+
+% Here is the input_prompt to change: ```{input_prompt}```
+% Here is the input_code: ```{input_code}```
+% Here is the change_prompt to implement: ```{change_prompt}```
+
+% Follow these instructions:
+    Step 1. Explain in detail step by step the ramifications of the change_prompt on the input_prompt.
+    Step 2. Explain in detail step by step what changes need to be made to the input_prompt to generate the modified_prompt based on Step 1.
+    Step 3. Generate the modified_prompt based on Step 2. Except for the change, the rest of the existing functionality of the input_prompt should remain. Structure the prompt similar to the example prompts more esp. including the descriptions of the inputs and outputs.
+
+===== change_python.prompt =====
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "change", that will split an input_prompt into a modified_prompt per the change_prompt. All output to the console will be pretty printed using the Python Rich library. Ensure that the module imports are done using relative imports.
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        - 'input_prompt' - A string that contains the prompt that will be modified by the change_prompt.
+        - 'input_code' - A string that contains the code that was generated from the input_prompt.
+        - 'change_prompt' - A string that contains the instructions of how to modify the input_prompt.
+        - 'strength': A float value representing the strength parameter for the LLM model, used to influence the model's behavior.
+        - 'temperature': A float value representing the temperature parameter for the LLM model, used to control the randomness of the model's output.
+    Outputs:
+        - 'modified_prompt' - A string that contains the modified prompt that was changed based on the change_prompt.
+        - 'total_cost': A float value representing the total cost of running the function.
+        - 'model_name': A string representing the name of the selected LLM model.
+
+% Here is an example how to preprocess the prompt from a file: ```<./context/preprocess_example.py>```
+
+% Example usage of the Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
+
+% Example of selecting a Langchain LLM and counting tokens using llm_selector: ```<./context/llm_selector_example.py>```
+
+% Steps to be followed by the function:
+    1. Load the '$PDD_PATH/prompts/xml/change_LLM.prompt' and '$PDD_PATH/prompts/extract_prompt_change_LLM.prompt' files.
+    2. Preprocess the change_LLM prompt using the preprocess function from the preprocess module and set double_curly_brackets to false.
+    3. Create a Langchain LCEL template from the processed change_LLM prompt to return a string output.    
+    4. Use the llm_selector function for the LLM model and token counting.
+    5. Run the input_prompt through the model using Langchain LCEL:
+        - a. Pass the following string parameters to the prompt during invocation:             
+            * 'input_prompt'
+            * 'input_code'
+            * 'change_prompt' (preprocess this with double_curly_brackets set to false)
+        - b. Calculate the input and output token count using token_counter from llm_selector and pretty print the output of 4a, including the token count and estimated cost. The cost from llm_selector is in dollars per million tokens.
+    6. Create a Langchain LCEL template with strength .9 from the extract_prompt_change_LLM prompt that outputs JSON:
+        - a. Pass the following string parameters to the prompt during invocation: 'llm_output' (this string is from Step 4).
+        - b. Calculate input and output token count using token_counter from llm_selector and pretty print the running message with the token count and cost.
+        - c. Use 'get' function to extract 'modified_prompt' key values using from the dictionary output.
+    7. Pretty print the extracted modified_prompt using Rich Markdown function. Include token counts and costs.
+    8. Return the 'modified_prompt' string, the total_cost of both invokes and model_name use for the change_LLM prompt.
+
+% Ensure the function handles edge cases, such as missing inputs or model errors, and provide clear error messages.
+
+===== cli_python.prompt =====
+<context>
+% You are an expert Python engineer. Your goal is to write a Python command line program, "pdd". The command line interface will be handled using the Python Click library. It will contain the 'cli' function.
+
+<include>context/python_preamble.prompt</include>
+
+% Here is a detailed description of the program functionality: <program_description><include>./README.md</include></program_description>
+
+% Here is the directory structure of the program:
+    - pdd/pdd/*.py (including this file cli.py)
+    - pdd/prompts
+    - pdd/context
+    - pdd/data
+
+% Some of the pdd commands will have the same name as some of the below functions. Be sure to import the functions with a different name to avoid conflicts (e.g. 'preprocess' needs to be imported as 'preprocess_func' to prevent conflict with Click commands) Make sure this happens for the others like 'split', 'change', etc.
+</context>
+
+<examples>
+% Here is how to use the Python Click library to create a command line program: <click_example><include>context/click_example.py</include></click_example>
+</examples>
+
+<instructions>
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+    - Here is how to use the 'construct_paths' function to load the input files and create the output file paths: <construct_paths_example><include>context/construct_paths_example.py</include></construct_paths_example>
+
+    - 'generate' command: To generate runnable code from a prompt file, use code_generator. Here is an example how to generate code from the prompt from a file: <code_generator_example><include>context/code_generator_example.py</include></code_generator_example>
+
+    - 'example' command: To generate example code from a code file, use context_generator. Here is an example how to generate an example from a code file: <context_generator_example><include>context/context_generator_example.py</include></context_generator_example>
+
+    - 'test' command: To generate a unit test from code and its prompt file, use generate_test. Here is an example how to generate a unit test from a code file: <generate_test_example><include>context/generate_test_example.py</include></generate_test_example>
+
+    - 'preprocess' command: To preprocess a prompt from a prompt file, use preprocess. Here is an example of how to preprocess the prompt from a file: <preprocess_example><include>context/preprocess_example.py</include></preprocess_example>
+
+    - 'preprocess --xml' sub-command: To preprocess a prompt from a prompt file and output the result in XML format, use xml_tagger. Here is an example of how to preprocess the prompt from a file and output the result in XML format: <xml_tagger_example><include>context/xml_tagger_example.py</include></xml_tagger_example>
+
+    - 'fix' command: To fix errors in code and unit test based on error messages use fix_errors_from_unit_tests. Be sure to load the required files for this function and only save the output files if there is an update. Note that the 'error_file' argument does not need to exist beforehand. Here is an example how to fix errors in code and unit test based on error messages: <fix_errors_from_unit_tests_example><include>context/fix_errors_from_unit_tests_example.py</include></fix_errors_from_unit_tests_example>
+
+    - 'fix --loop' sub-command: To loop on the above fix errors in code and unit tests use fix_error_loop. Here is an example how to loop on the above fix errors in code and unit tests: <fix_error_loop_example><include>context/fix_error_loop_example.py</include></fix_error_loop_example>
+
+    - 'split' command: To split a prompt file into multiple prompt files, use the 'split' function. Here is an example of how to split a prompt file into multiple prompt files: <split_example><include>context/split_example.py</include></split_example>
+
+    - 'change' command: To change the prompt file, use the 'change' function. Keep in mind that the change prompt is also an input file that needs to be loaded by construct_paths. Here is an example of how to change the prompt file: <change_example><include>context/change_example.py</include></change_example>
+
+    - 'update' command: To update the prompt file, use the 'update_prompt' function. Here is an example of how to update the prompt file: <update_prompt_example><include>context/update_prompt_example.py</include></update_prompt_example>
+
+    - 'detect' command: To analyze a list of prompt files and a change description to determine which prompts need to be changed, use the 'detect_change' function. Here is an example of how to detect prompts that need changes: <detect_change_example><include>context/detect_change_example.py</include></detect_change_example>
+
+    - 'conflicts' command: To analyze two prompt files to find conflicts between them and suggest how to resolve those conflicts, use the 'conflicts_in_prompts' function. Here is an example of how to analyze conflicts between two prompts: <conflicts_in_prompts_example><include>context/conflicts_in_prompts_example.py</include></conflicts_in_prompts_example>
+
+    - 'crash' command: To fix errors in a code module that caused a program to crash, use the 'fix_code_module_errors' function. Here is an example of how to fix errors in a code module that caused a program to crash: <fix_code_module_errors_example><include>context/fix_code_module_errors_example.py</include></fix_code_module_errors_example>
+</internal_example_modules>
+
+% 'install_completion' command: Enhance the shell completion installation process by determining the correct paths for different shells and ensuring the source command is added to the shell's RC file only if it's not already present. Use a helper function to manage these paths.
+
+% If output cost option is selected directly and/or via the output cost environmental variable, the costs and other details should be appended to the specified output file. If the output file does not exist, it should be created. If the output file exists, the costs should be appended to the end of the file. Be sure to include all columns in the csv file.
+</instructions>
+
+===== code_generator_python.prompt =====
+% You are an expert Python engineer. Your goal is to write a python function, "code_generator", that will compile a prompt into a code file. 
+
+<include>./context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs: 
+        'prompt' - A string containing the raw prompt to be processed.
+        'language' - A string that is the language type (e.g. python, bash) of file that will be outputed by the LLM.
+        'strength' - A float between 0 and 1 that is the strength of the LLM model to use
+        'temperature' - A float that is the temperature of the LLM model to use. Default is 0.
+    Outputs:
+        'runnable_code' - A string that is runnable code
+        'total_cost' - A float that is the total cost of the model run
+        'model_name' - A string that is the name of the selected LLM model
+
+% Here is an example of a LangChain Expression Language (LCEL) program: <lcel_example><include>context/langchain_lcel_example.py</include></lcel_example>
+
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+    % Here is an example how to preprocess the prompt from a file: <preprocess_example><include>context/preprocess_example.py</include></preprocess_example>
+
+    % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>./context/llm_selector_example.py</include></llm_selector_example>
+
+    % Example usage of the unfinished_prompt function: <unfinished_prompt_example><include>context/unfinished_prompt_example.py</include></unfinished_prompt_example>
+
+    % Here is an example how to continue the generation of a model output: <continue_generation_example_example><include>context/continue_generation_example.py</include></continue_generation_example>
+
+    % Here is an example how to postprocess the model output result: <postprocess_example><include>context/postprocess_example.py</include></postprocess_example>
+</internal_example_modules>
+
+% This program will use Langchain to do the following:
+    Step 1. Preprocess the raw prompt using the preprocess function from the preprocess module.
+    Step 2. Then this will create a Langchain LCEL template from the processed prompt with recursive and double curly brackets.
+    Step 3. This will use llm_selector for the model.
+    Step 4. This will run the prompt through the model using Langchain LCEL. It will pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+    Step 5. This will pretty print the markdown formatting that is present in the result via the rich Markdown function. It will also pretty print the number of tokens in the result and the cost.
+    Step 6. Detect if the generation is incomplete using the unfinished_prompt function (strength .5) by passing in the last 600 characters of the output of Step 4.
+        - a. If incomplete, call the continue_generation function to complete the generation.
+        - b. Else, if complete, postprocess the model output result using the postprocess function from the postprocess module with a strength of 0.9.
+    Step 7. Print out the total_cost including the input and output tokens and functions that incur cost (e.g. postprocessing).
+    Step 8. Return the runnable_code, total_cost and model_name.
+
+===== comment_line_python.prompt =====
+% You are an expert Python engineer. Your goal is to write a python function, "comment_line", that will comment out a line of code.
+
+% Here are the inputs and outputs of the function:
+    Input:
+        - 'code_line' - A string containing the line of code to be commented out.
+        - 'comment_characters' - A string containing the comment character(s) for the langauge. 'del' means the language does not have a comment character and the line with the comment must be deleted. Also, If there is a space between the comment characters, this means that the language requires the initial comment character and the closing comment character to encapsulate the comment.
+    Output: returns a string that is the commented out line of code.
+
+% Most languages have a way to comment out lines of code. This is indicated by the comment line characters. For example, in Python the comment line character is "#". So if you have a line of code that says "print('Hello World!')", you can comment it out by adding a "#" in front of it. The commented out line would look like "#print('Hello World!')".
+
+% Some languages don't have a way to comment out lines and the lines to be commented out must be deleted completely. This is indicated by the comment line characters "del". This means an empty string will be returned.
+
+% Other languages require a sequence of characters before and after the lines that should be commented out. For example HTML is "<!-- -->". The space separates the beginning and end comment. So for example, the beginning comment characters are "<!--" and the end comment characters are "-->". For example, if you have a line of code that says "<h1>Hello World!</h1>", you can comment it out by adding "<!--" in front of it and "-->" after it. The commented out line would look like "<!--<h1>Hello World!</h1>-->".
+
+===== conflict_LLM.prompt =====
+You are an AI assistant tasked with analyzing two prompts for potential conflicts and suggesting resolutions. Your goal is to identify any inconsistencies or contradictions between the prompts and provide constructive suggestions on how to resolve these conflicts.
+
+Here are the two prompts you need to analyze:
+
+<prompt1>
+    {PROMPT1}
+</prompt1>
+
+<prompt2>
+    {PROMPT2}
+</prompt2>
+
+Carefully read and analyze both prompts. Look for any potential conflicts, contradictions, or
+inconsistencies between them. Consider aspects such as:
+
+1. Goals or objectives
+3. Specific instructions or requirements
+4. Assumptions or context
+
+After your analysis, list any conflicts you've identified in a structured format. For each conflict, provide a brief description and explanation.
+
+Then, for each identified conflict, suggest at least one way to resolve it. Your suggestions should aim to maintain the core intentions of both prompts while eliminating the contradiction. Present your findings in the following format:
+<conflicts>
+    <conflict1>
+        <description>[Brief description of the conflict]</description>
+        <explanation>[Detailed explanation of why this is a conflict]</explanation>
+        <suggestion>[Suggestion on how to resolve this conflict]</suggestion>
+    </conflict1>
+
+    <conflict2>
+        [Follow the same structure for additional conflicts]
+    </conflict2>
+</conflicts>
+
+If you find no conflicts between the prompts, state so explicitly in your response.
+
+Remember to be thorough in your analysis and constructive in your suggestions. Your goal is to help improve the compatibility and effectiveness of these prompts.
+
+===== conflicts_in_prompts_python.prompt =====
+% You are an expert Python engineer. Your goal is to write a Python function, "conflicts_in_prompts", that takes two prompts as input and finds conflicts between them and suggests how to resolve those conflicts.
+
+<include>./context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs: 
+        'prompt1' - First prompt in the pair of prompts we are comparing.
+        'prompt2' - Second prompt in the pair of prompts we are comparing.
+        'strength' - A float that is the strength of the LLM model to use. Default is 0.5.
+        'temperature' - A float that is the temperature of the LLM model to use. Default is 0.
+    Outputs:
+        'conflicts' - a list of dictionaries containing the conflicts found in the prompts. Each dictionary has the following keys:
+            - 'description' - A brief description of the conflict.
+            - 'explanation' - A detailed explanation of why this is a conflict.
+            - 'suggestion1' - Instructions on how to modify prompt1 to resolve the conflict.
+            - 'suggestion2' - Instructions on how to modify prompt2 to resolve the conflict.
+        'total_cost' - A float that is the total cost of the model run
+        'model_name' - A string that is the name of the selected LLM model
+
+% Here is an example of a LangChain Expression Language (LCEL) program: <lcel_example><include>context/langchain_lcel_example.py</include></lcel_example>
+
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+    % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>./context/llm_selector_example.py</include></llm_selector_example>
+</internal_example_modules>
+
+% This function will use Langchain to do the following:
+    Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/conflict_LLM.prompt' and '$PDD_PATH/prompts/extract_conflict_LLM.prompt' files.
+    Step 2. Then this will create a Langchain LCEL template from the conflict_LLM prompt.
+    Step 3. This will use llm_selector for the model, imported from a relative path.
+    Step 4. Run the prompts through the model using Langchain LCEL with string output.
+        4a. Pass the following string parameters to the prompt during invoke:
+            - 'PROMPT1'
+            - 'PROMPT2'
+        4b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+    Step 5. Create a Langchain LCEL template using a .9 strength llm_selector and token counter from the extract_conflict_LLM prompt that outputs JSON:
+        5a. Pass the following string parameters to the prompt during invocation: 'llm_output' (this string is from Step 4).
+        5b. Calculate input and output token count using token_counter from llm_selector and pretty print the running message with the token count and cost.
+        5c. Use 'get' function to extract 'conflicts' list values using from the dictionary output.
+    Step 6. Return the list of conflicts with nested fields, total_cost and model_name.
+
+===== construct_paths_python.prompt =====
+% You are an expert Python software engineer. Your goal is to write a Python function, "construct_paths", that will generate and check the appropriate input and output file paths, handle specific file requirements, and then load the input files.
+
+<include>context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+    - 'input_file_paths' (dict) - A dictionary to the paths of the input files with the keys being those specified in the examples from the pdd program description. For example, the 'generate' command has the 'prompt_file' key, 'example' has 'code_file' key, etc. Additionally, handle an 'error_file' key by ensuring the file exists, creating it if necessary.
+    - 'force' (boolean) - A flag that indicates whether to overwrite the output files if they already exist.
+    - 'quiet' (boolean) - A flag that indicates whether to suppress the output.
+    - 'command' (string) - pdd command that was run.
+    - 'command_options' (dict) - A dictionary of the command options for the given command. For example, it could have the 'language' key for the 'test' command or output locations for other commands.
+    Outputs: A tuple containing:
+    - 'input_strings' (dict) - A dictionary with the keys being the pdd description examples and the values being the input file strings.
+    - 'output_file_paths' (dict)- A dictionary with the keys being the loaded input files and output files paths.
+    - 'language' (string) - The language of the output file.
+
+% Here is a detailed description of the program functionality: <program_description><include>README.md</include></program_description>
+
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+    % Here is an example of how to lookup a file extension given a language: <get_extension_example><include>context/get_extension_example.py</include></get_extension_example>
+
+    % Here is an example of how to lookup a language given a file extension: <get_language_example><include>context/get_language_example.py</include></get_language_example>
+
+    % Here is how to generate the output paths: <generate_output_paths_example><include>context/generate_output_paths_example.py</include></generate_output_paths_example>    
+</internal_example_modules>
+
+% Use get_extension to get the file extension for the language. The file extension and language is used for the subsequent functionality below.
+
+% Unless quiet is True, print out the input and output file paths that are being used and the steps being done below.
+
+% This function will do the following:
+    Step 1. Load the input files into the input_strings dictionary using the 'input_file_paths' dictionary with the pdd description examples as the keys. Alert the user of any errors in loading the input files. Ensure 'error_file' exists by creating it if necessary.
+    Step 2. Extract out the basename from the input file path and be sure to handle all corner cases.
+    Step 3. Construct the output file paths using the above rules using the "generate_output_paths" function. Be sure to remove non-output keys from the command_options dictionary before passing it to the "generate_output_paths" function output_location dictionary parameters.
+    Step 4. If the output files already exist, and force isn't true, check with the user if the program should overwrite. Use click.style to style the confirmation message and click.secho for the cancellation message. If the user presses 'n' or 'N' then exit the program. If the user presses enter, 'y' or 'Y' then overwrite the output files.
+    Step 5. Return the 'input_strings', 'output_file_paths' and 'language'
+
+Follow these steps in this order:
+    Step A. List out all the ways the basename can be extracted from the input file path for each of the commands. For example, the basename is usually the first input prompt file without the directory, language, or file extension. However, keep in mind for the 'detect' command, the change file determines the basename. For each way, in a paragraph, explain how the basename is extracted for each command, what are potential corner cases, and how to deal with the corner cases.
+    Step B. List out all the ways language can be extracted from the input file path or command_options. Ensure that if the 'language' key is present in command_options, it is not None before using it.
+    Step C. Write out the construct_paths function.
+
+===== context_generator_python.prompt =====
+% You are an expert Python engineer. Your goal is to write a Python function, "context_generator", that will generate a concise example on how to use code_module properly.
+
+<include>context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs: 
+        'code_module' - A string that is the code module to generate a concise example for
+        'prompt' - A string that is the prompt that was used to generate the code_module
+        'language' - A string that is the language of the code module. Default is "python". 
+        'strength' - A float that is the strength of the LLM model to use. Default is 0.5.
+        'temperature' - A float that is the temperature of the LLM model to use. Default is 0.
+    Outputs:
+        'example_code' - A string that is the concise example code generated by the function.
+        'total_cost' - A float that is the total cost of the function.
+        'model_name' - A string that is the name of the selected LLM model
+
+% Here is an example of a LangChain Expression Language (LCEL) program: <lcel_example><include>context/langchain_lcel_example.py</include></lcel_example>
+
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+    % Here is an example how to preprocess the prompt from a file: <preprocess_example><include>context/preprocess_example.py</include></preprocess_example>
+
+    % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>context/llm_selector_example.py</include></llm_selector_example>
+
+    % Example usage of the unfinished_prompt function: <unfinished_prompt_example><include>context/unfinished_prompt_example.py</include></unfinished_prompt_example>
+
+    % Here is an example how to continue the generation of a model output: <continue_generation_example><include>context/continue_generation_example.py</include></continue_generation_example>
+
+    % Here is an example how to postprocess the model output result: <postprocess_example><include>context/postprocess_example.py</include></postprocess_example>
+</internal_example_modules> 
+
+% This function will use Langchain to do the following:
+    Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/example_generator_LLM.prompt' file.
+    Step 2. Preprocess the loaded example_generator prompt using the preprocess function with parameters recursive=False and double_curly_brackets=False.
+    Step 3. Create a Langchain LCEL template from the preprocessed example_generator prompt.
+    Step 4. Use llm_selector for the model.
+    Step 5. Preprocess the prompt using the preprocess function for the processed_prompt.
+    Step 6. Invoke the code through the model using Langchain LCEL. 
+        6a. Pass the following string parameters to the prompt during invoke:
+            - 'code_module'
+            - 'processed_prompt'
+            - 'language'
+        6b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens. 
+    Step 7. Detect if the generation is incomplete using the unfinished_prompt function (strength .5) by passing in the last 600 characters of the output of Step 6.
+        - a. If incomplete, call the continue_generation function to complete the generation.
+        - b. Else, if complete, postprocess the model output result using the postprocess function from the postprocess module with a strength of 0.9.
+    Step 8. Print out the total_cost including the input and output tokens and functions that incur cost (e.g. postprocessing).
+    Step 9. Return the example_code, total_cost, and model_name.
+
+===== continue_generation_LLM.prompt =====
+{FORMATTED_INPUT_PROMPT}
+{LLM_OUTPUT}
+
+===== continue_generation_python.prompt =====
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "continue_generation", that will complete the generation of a prompt using a large language model.
+
+<include>./context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        - 'formatted_input_prompt': A string containing the input prompt with all variables substituted in.
+        - 'llm_output': A string containing the current output from the LLM that needs to be checked for completeness and will be appended with additional generations to create final_llm_output.
+        - 'strength': A float value representing the strength parameter for the LLM model, used to influence the model's behavior.
+        - 'temperature': A float value representing the temperature parameter for the LLM model, used to control the randomness of the model's output.
+Outputs:
+        - 'final_llm_output': A string containing the complete output from the LLM after all necessary continuations.
+        - 'total_cost': A float value representing the total cost of running the function.
+        - 'model_name': A string containing the name of the selected LLM model.
+
+% Example usage of the Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
+
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+    % Here is an example how to preprocess the prompt from a file: <preprocess_example><include>./context/preprocess_example.py</include></preprocess_example>
+
+    % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>./context/llm_selector_example.py</include></llm_selector_example>
+
+    % Example usage of the unfinished_prompt function: <unfinished_prompt_example><include>./context/unfinished_prompt_example.py</include></unfinished_prompt_example>
+</internal_example_modules>
+
+% For all the Langchain LCEL chain invokes happening in the steps below, keep track of the total_cost of the input and output tokens using the associated token_counter functions and input and output token costs as the chain might use different models. The total_cost should also include runs from the unfinished_prompt function. The cost from llm_selector is in dollars per million tokens. For every run of the Langchain LCEL model, calculate and print out the input and output token cost for each LCEL invoke using token_counter and add it to the total_cost.
+
+% Use a strength of .5 and a temperature of 0 for the unfinished_prompt function.
+
+% Steps to be followed by the function:
+    Step 1. Load $PDD_PATH from the environmental variable. From the '$PDD_PATH/prompts/' directory, load these prompts 'continue_generation_LLM.prompt', 'trim_results_start_LLM.prompt' and 'trim_results_LLM.prompt' files.
+    Step 2. Preprocess the prompts from Step 1 using the preprocess function (with recursive but no doubling of curly brackets) using the preprocess module.
+    Step 3. Create a Langchain LCEL template from the processed continue_generation prompt to return a string output. Create two additional LCELs with JSON output for the other two prompts from Step 2.
+    Step 4. Use the llm_selector function for the LLM model and token counting using the strength and temperature input parameters. For the other two LCELs, use a strength of .9 and a temperature of 0. Use separate token counters and cost variables for trim operations.
+    Step 5. Run the trim_results_start Langchain LCEL model on the llm_output to the prompt during invocation, as 'LLM_OUTPUT' string parameter, to extract the code_block. Use 'get' to extract the 'code_block' key from the JSON output.
+    Step 6. Run the formatted_input_prompt and the code_block through the model using the continue_generation Langchain LCEL:
+        - a. Pass the following string parameters to the prompt during invocation: 'FORMATTED_INPUT_PROMPT', 'LLM_OUTPUT'.
+        - b. Pretty print the output
+    Step 7. Detect if the generation is incomplete using the unfinished_prompt function by passing in the last 600 characters of the output of Step 6.
+        - a. If incomplete, append the continue_result to the code_block and loop using the continue_generation prompt until complete. Print out the loop count for the user.
+        - b. If complete, run the trim_results Langchain LCEL model on the output of Step 6, as 'CONTINUED_GENERATION' and the last 200 characters of code_block as 'GENERATED_RESULTS' string parameters, to extract the trimmed_continued_generation. Use 'get' to extract the 'trimmed_continued_generation' key from the JSON output. Append the trimmed_continued_generation to the code_block.
+    Step 8. Pretty print the accumulated code_block string as the 'final_llm_output' using Rich Markdown function. Include token counts and costs.
+    Step 9. Return the 'final_llm_output', the total_cost of all invokes and model_name for the continue_generation LCEL.
+
+===== detect_change_LLM.prompt =====
+% You are an expert prompt engineer. You will be given a list of LLM prompts and a change description. Your task is to analyze which prompts need to be changed based on the change description, and provide detailed information on how they should be changed.
+
+% Here are the inputs:
+<input>
+    <prompt_list>
+    {PROMPT_LIST}
+    </prompt_list>
+
+    <change_description>
+    {CHANGE_DESCRIPTION}
+    </change_description>
+</input>
+
+% Here is an example of output given an input:
+<example>
+    <input_example>
+        <include>context/detect_change/1/prompt_list.txt</include>
+    </input_example>
+    <output_example>
+        <include>context/detect_change/1/detect_change_output.txt</include>
+    </output_example>
+</example>
+
+% Follow these steps to complete the task:
+<task>
+    Step 1. Carefully read and analyze the change description. Consider its implications and how it might affect different types of prompts.
+    Step 2. Review each prompt in the prompt list. For each prompt, determine if it needs to be changed based on the change description. Some prompts maybe unaffected by the change description or already have the changes applied.
+    Step 3. In your analysis, consider the following:
+        - How does the change description impact each prompt?
+        - Are there any potential issues or conflicts that might arise from implementing the change?
+        - What are different ways the change could be implemented for affected prompts?
+        - Where is the best place to implement the change to minimize issues and maximize effectiveness?
+    Step 4. Prepare your response in the following format:
+        <analysis>
+        1. Provide a detailed description of the impact of the change and potential issues.
+        2. Generate at least three different possible implementation plans. Discuss the pros and cons of each plan.
+        3. Analyze the potential issues and the different plans. Explain step by step which plan is the best and why.
+        4. List the prompts that need to be changed based on the selected plan. For each prompt that needs to be changed, include:
+            a. The prompt's name
+            b. The reason why the prompt needs to change
+            c. Detail instructions for a LLM of how the prompt should be changed. Everything that is needed to know how to change the prompt effectively should be included here. If a file should be loaded in for reference, be sure to use the include xml tag so that the file is loaded. Also, be aware that everything, including the include tag will be replaces by what's in the file, so be sure to include the file name separately in the instructions.
+        </analysis>
+</task>
+
+% Remember to be thorough in your analysis and clear in your explanations. Consider all aspects of the change description and its potential impacts on the prompts.
+
+===== detect_change_python.prompt =====
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "detect_change", that will analyze a list of prompt files and a change description to determine which prompts need to be changed.
+
+<include>context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        - 'prompt_files' - A list of strings, each containing the filename of a prompt that may need to be changed.
+        - 'change_description' - A string that describes the changes that need to be analyzed and potentially applied to the prompts.
+        - 'strength': A float value representing the strength parameter for the LLM model, used to influence the model's behavior.
+        - 'temperature': A float value representing the temperature parameter for the LLM model, used to control the randomness of the model's output.
+    Outputs:
+        - 'changes_list' - A list of JSON objects, each containing the name of a prompt that needs to be changed and detailed instructions on how to change it.
+        - 'total_cost': A float value representing the total cost of running the function.
+        - 'model_name': A string representing the name of the selected LLM model.
+
+% Here is an example of a LangChain Expression Language (LCEL) program: <lcel_example><include>context/langchain_lcel_example.py</include></lcel_example>
+
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+    % Here is an example how to preprocess the prompt from a file: <preprocess_example><include>context/preprocess_example.py</include></preprocess_example>
+
+    % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>context/llm_selector_example.py</include></llm_selector_example>
+
+    % Example usage of the unfinished_prompt function: <unfinished_prompt_example><include>context/unfinished_prompt_example.py</include></unfinished_prompt_example>
+
+    % Here is an example how to continue the generation of a model output: <continue_generation_example><include>context/continue_generation_example.py</include></continue_generation_example>
+
+    % Here is an example how to postprocess the model output result: <postprocess_example><include>context/postprocess_example.py</include></postprocess_example>
+</internal_example_modules> 
+
+% Steps to be followed by the function:
+    Step 1. Load the '$PDD_PATH/prompts/detect_change_LLM.prompt' and '$PDD_PATH/prompts/extract_detect_change_LLM.prompt' files.
+    Step 2. Preprocess the detect_change_LLM prompt using the preprocess function from the preprocess module and set double_curly_brackets to false.
+    Step 3. Create a Langchain LCEL template from the processed detect_change_LLM prompt to return a string output.    
+    Step 4. Use the llm_selector function for the LLM model and token counting.
+    Step 5. Run the prompt_files and change_description through the model using Langchain LCEL:
+        - a. Pass the following string parameters to the prompt during invocation:             
+            * 'PROMPT_LIST' (load the prompt files and create a list of JSON with these keys: 'PROMPT_NAME' and 'PROMPT_DESCRIPTION')
+            * 'CHANGE_DESCRIPTION' (preprocess this with double_curly_brackets set to false)
+        - b. Calculate the input and output token count using token_counter from llm_selector and pretty print the output of 5a, including the token count and estimated cost. The cost from llm_selector is in dollars per million tokens.
+    Step 6. Create a Langchain LCEL template with strength of .9 for another llm_selection and token counting functions from the extract_detect_change_LLM prompt that outputs JSON:
+        - a. Pass the following string parameters to the prompt during invocation: 'llm_output' (this string is from Step 5).
+        - b. Calculate input and output token count using token_counter from llm_selector and pretty print the running message with the token count and cost.
+        - c. Use 'get' function to extract 'changes_list' key values using from the dictionary output.
+    Step 7. Pretty print the extracted changes_list using Rich Markdown function. Include token counts and costs. The list will contain a dictionary with the following keys "prompt_name" and "change_instructions".
+    Step 8. Return the 'changes_list', the total_cost of both invokes, and model_name used for the detect_change_LLM prompt.
+
+===== example_generator_LLM.prompt =====
+% You are an expert software engineer. Generate a concise example of how to use the following module properly:```{code_module}```
+
+% Here was the prompt used to generate the module: ```{processed_prompt}```
+
+% The language of the example should be in: ```{language}```
+
+% Make sure the following happens:
+    - Document in detail what the input and output parameters in the doc strings
+    - Someone needs to be able to fully understand how to use the module from the example.
+<include>./context/example.prompt</include>
+
+===== extract_code_LLM.prompt =====
+% You are an expert Software Engineer. Your goal is to extract the newly generated code from llm_output to be outputed in JSON format.
+
+% Here is the llm_output to parse: <llm_output>{llm_output}</llm_output>
+
+% Here is the language of the code to extract: ```{language}```
+
+% When extracting the code from llm_output, consider and correct the following for the extracted code:
+    - Should be the block of code typically delimited by triple backticks followed by the name of the language of the block. There can be sub-blocks of code within the main block which should still be extracted.
+    - Should be the primary focus of the LLM prompt that generated llm_output.
+    - Should be runnable with non-runnable text commented or cut out without the initial triple backticks that start or end the code block. Sub code blocks that have triple backticks should still be included.
+    - Should be complete and not missing any necessary components or have any errors.
+    - Should handle any errors or exceptions that may occur.
+    - Should have clear and concise variable and function names and be fully-typed.
+    - Should be properly documented with comments that explain why something is done and having doc strings or equivalent.
+    - Should be properly PEP 8, if Python, formatted and indented with the proper naming conventions.
+    - Never add example calling unless it is already in the code block and if it is a submodule have the conditional main execution for the example.
+    - All the functionality of the code block should still be present.
+
+% Output a JSON object with the following keys:
+    - 'explanation': String explanation of why this block of code was the focus of the LLM prompt and explain any errors detected in the code.
+    - 'extracted_code': String containing the entire generated and corrected code of focus.
+
+===== extract_conflict_LLM.prompt =====
+% You are an expert Software Engineer. Your goal is to extract a JSON from the output of a LLM. This LLM compares two prompts, finds conflicts and suggests how to resolve them. 
+
+% Here is the generated llm_output: ```{llm_output}```
+
+% Output a JSON object with the following keys:
+    - "conflicts": List of dictionaries containing the conflicts found in the prompts. Each dictionary has the following keys:
+        - "description": Brief description of the conflict.
+        - "explanation": Detailed explanation of why this is a conflict.
+        - "suggestion1": Detail instructions on how to resolve this conflict by changing prompt1.
+        - "suggestion2": Detail instructions on how to resolve this conflict by changing prompt2.
+    
+
+===== extract_detect_change_LLM.prompt =====
+% You are an expert Software Engineer. Your goal is to extract a JSON which contains a list of JSON from the output of a LLM. This LLM generated list of prompts that need to be changed.
+
+% Here is the generated llm_output: <llm_output>{llm_output}</llm_output>
+
+% Output a JSON with key changes_list which has a value that is the list of JSON objects with the following keys:
+    - 'prompt_name': String which containts the exact name of prompt that needs to be changed.
+    - 'change_instructions': Detailed instructions of how the prompt should be changed. This should have as much information as the LLM output provides for this prompt.
+    
+% Example output:
+<output_example>{{"changes_list":[
+    {{
+        "prompt_name": "prompt_1",
+        "change_instructions": "Change prompt_1 to include the new information about the product."
+    }},
+    {{
+        "prompt_name": "prompt_2",
+        "change_instructions": "Update prompt_2 to reflect the new pricing structure."
+    }}
+]}}</output_example>
+
+===== extract_prompt_change_LLM.prompt =====
+% You are an expert Software Engineer. Your goal is to extract a JSON from the output of a LLM. This LLM changed a input_prompt into a modified_prompt. 
+
+% Here is the generated llm_output: ```{llm_output}```
+
+% Output a JSON object with the following keys:
+    - 'modified_prompt': String containing the modified prompt from input_prompt via the change_prompt.
+    
+
+===== extract_prompt_split_LLM.prompt =====
+% You are an expert Software Engineer. Your goal is to extract a JSON from the output of a LLM. This LLM split a prompt into a sub_prompt and modified_prompt. 
+
+% Here is the generated llm_output: ```{llm_output}```
+
+% Output a JSON object with the following keys:
+    - 'sub_prompt': String containing the sub_prompt that was split from the input_prompt.
+    - 'modified_prompt': String containing the modified prompt from input_prompt split from the sub_prompt.
+    
+
+===== extract_prompt_update_LLM.prompt =====
+% You are an expert Software Engineer. Your goal is to extract a JSON from the output of a LLM. This LLM changed a input_prompt into a modified_prompt. 
+
+% Here is the generated llm_output: ```{llm_output}```
+
+% Output a JSON object with the following keys:
+    - 'modified_prompt': String containing the modified prompt that will generate the modified code.
+    
+
+
+
+===== extract_unit_code_fix_LLM.prompt =====
+% You are an expert Software Engineer. Your goal is to extract a JSON from a analysis of a unit test bug fix report. If there is a choice of updating the unit test or the code under test, you should chose to update the code under test.
+
+% Here is the original unit test code: ```{unit_test}```
+
+% Here is the original code under test: ```{code}```
+
+% Here is the unit test bug fix report: ```{unit_test_fix}```
+
+% Sometimes the fix may only contain partial code. In these cases, you need to incorporate the fix into the original unit test and/or original code under test.
+
+% Output a JSON object with the following keys:
+    - 'explanation': String explanation of whether the code under test needs to be fix and/or if the unit test needs to be fixed.
+    - 'update_unit_test': Boolean indicating whether the unit test needs to be updated.
+    - 'update_code': Boolean indicating whether the code under test needs to be updated.
+    - 'fixed_unit_test': The entire updated unit test code or empty String if no update is needed.
+    - 'fixed_code': The entire updated code under test or empty String if no update is needed.
+
+===== extract_xml_LLM.prompt =====
+% You are an expert Software Engineer. Your goal is to extract a JSON from a analysis of a prompt that contains inserted XML tags.
+
+% Here is the generated XML prompt analysis: <prompt_analysis>{xml_generated_analysis}</prompt_analysis>
+
+% Output a JSON object with the following keys:
+    - 'explanation': String explanation of why the extracted prompt is the prompt with inserted XML tags.
+    - 'xml_tagged': String of just the entire prompt with inserted XML tags.
+
+===== find_section_python.prompt =====
+% You are an expert Python engineer. Your goal is to write a Python function called 'find_section' that will find top-level code sections in a string output from an LLM.
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        'lines' - A list of strings, where each string is a line from the LLM output.
+        'start_index' - An integer representing the starting index to begin searching (default is 0).
+        'sub_section' - A boolean flag indicating whether this is a recursive call for a sub-section (default is False).
+    Output: returns a list of tuples, where each tuple contains (code_language, start_line, end_line) for each top-level code section found.
+
+% Here is an example of the llm_output string would be: '''```<./context/unrunnable_raw_llm_output.py>```'''
+
+% Here is an example of how the function might be called:
+```python
+lines = llm_output.splitlines()
+sections = find_section(lines)
+```
+
+% Here is what 'sections' of the above example would look like: ```[('python', 2, 25),('python', 34, 36)]```
+
+% This function will do the following:
+    Step 1. Initialize an empty list to store the sections found.
+    Step 2. Iterate through the lines starting from start_index:
+        Step 2a. Find the start of a code block (line starting with triple backticks).
+        Step 2b. If another start of a code block is found, call 'find_section' recursively with sub_section flag set to True.
+        Step 2c. If the end of a code block is found (line with just triple backticks), do one of the following steps depending on the sub_section flag:
+            Step 2c_i: If it is a sub-section, return an empty list.
+            Step 2c_ii: If it is not a sub-section, record the program type and start/end lines into the output list.
+    Step 3. Return the list of sections found.
+
+===== fix_code_module_errors_LLM.prompt =====
+% You are an expert Software Engineer. Your goal is to fix the errors in a code module that is causing a program to crash.
+
+% Here is the program that is running the code module that crashed: ```{program}```
+
+% Here is the prompt that generated the code module that crashed: ```{prompt}```
+
+% Here is the code module that caused the crash: ```{code}```
+
+% Here are the errors from the program run: ```{errors}```
+
+% Follow these steps to solve these errors:
+    Step 1. Explain in detail step by step why there is an error.
+    Step 2. Explain in detail step by step how to solve the error.
+    Step 3. Write the corrected code in its entirety.
+
+===== fix_code_module_errors_python.prompt =====
+% You are an expert Python Software Engineer. Your goal is to write a python function, "fix_code_module_errors", that will fix errors in a code module that caused a program to crash.
+
+<include>./context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        'program' - A string containing the program code that was running the code module.
+        'prompt' - A string containing the prompt that generated the code module.
+        'code' - A string containing the code module that caused the crash.
+        'errors' - A string that contains the errors from the program run.
+        'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
+        'temperature' - A float that is the temperature of the LLM model to use. Default is 0.
+    Outputs:
+        'fixed_code' - A string that is the fixed code module.
+        'total_cost' - A float that is the total cost of the run.
+        'model_name' - A string that is the name of the selected LLM model
+
+% Here is an example of a LangChain Expression Language (LCEL) program: <lcel_example><include>context/langchain_lcel_example.py</include></lcel_example>
+
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+    % Here is an example how to preprocess the prompt from a file: <preprocess_example><include>context/preprocess_example.py</include></preprocess_example>
+
+    % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>./context/llm_selector_example.py</include></llm_selector_example>
+
+    % Here is an example how to postprocess the model output result: <postprocess_example><include>context/postprocess_example.py</include></postprocess_example>
+</internal_example_modules>
+
+% This program will use Langchain to do the following:
+    Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/fix_code_module_errors_LLM.prompt' file.
+    Step 2. Create a Langchain LCEL template from the fix_code_module_errors prompt.
+    Step 3. Use llm_selector for the llm model.
+    Step 4. Run the code through the model using Langchain LCEL. 
+        4a. Pass the following string parameters to the prompt during invoke:
+            - 'program'
+            - 'prompt'
+            - 'code'
+            - 'errors'
+        4b. Pretty print a message letting the user know it is running and how many tokens are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+    Step 5. Pretty print the markdown formatting that is present in the result via the rich Markdown function. Also print the number of tokens in the result and the cost.
+    Step 6. Extract the corrected code from the model's response using postprocess and strength of .9.
+    Step 7. Print the total cost of the run and return the 'total_cost', 'fixed_code', and 'model_name' strings.
+
+===== fix_error_loop_python.prompt =====
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "fix_error_loop", that will attempt to fix errors in a unit test and its corresponding code file through multiple iterations. All output to the console will be pretty printed using the Python rich library.
+
+<include>context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs: 
+        'unit_test_file' - A string containing the path to the unit test file.
+        'code_file' - A string containing the path to the code file being tested.
+        'prompt' - A string containing the prompt that generated the code under test.
+        'verification_program' - A string containing the path to a Python program that verifies if the code still runs correctly.
+        'strength' - A float between 0 and 1 that represents the strength of the LLM model to use.
+        'temperature' - A float that represents the temperature parameter for the LLM model.
+        'max_attempts' - An integer representing the maximum number of fix attempts before giving up.
+        'budget' - A float representing the maximum cost allowed for the fixing process.
+        'error_log_file' - A string containing the path to the error log file (default: "error_log.txt").
+    Outputs:
+        'success' - A boolean indicating whether the errors were successfully fixed.
+        'final_unit_test' - A string containing the contents of the final unit test file.
+        'final_code' - A string containing the contents of the final code file.
+        'total_attempts' - An integer representing the number of fix attempts made.
+        'total_cost' - A float representing the total cost of all fix attempts.
+        'model_name' - A string representing the name of the LLM model used.
+
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+    % Here is an example of the fix_errors_from_unit_tests function that will be used: <fix_errors_from_unit_tests_example><include>context/fix_errors_from_unit_tests_example.py</include></fix_errors_from_unit_tests_example>
+</internal_example_modules>
+
+% This function will do the following:
+    Step 1. Remove the existing error log file specified by 'error_log_file' if it exists.
+    Step 2. Initialize variables:
+        - Counter for the number of attempts
+        - Total cost accumulator
+        - Best iteration tracker (This is so that in case not all issues are solved, the iteration with the lowest errors get restored. In case there are iterations with the same number errors, then the iteration with the lowest fails will get restored.)
+    Step 3. Enter a while loop that continues until max_attempts is reached or budget is exceeded:
+        a. Run the unit_test_file with 'python -m pytest -vv' and pipe all output appended to the specified error log file.
+        b. If the test passes, break the loop.
+        c. If the test fails:
+           - Read and print the error message from the error log file, but be sure to escape square brackets first so rprint doesn't misinterpret them as a command.
+           - Count the number of 'FAILED' and 'ERROR' from stdout (accounting for the -vv flag doubling these messages).
+           - Create backup copies of the unit_test_file and code_file, appending the number of fails, errors, and the current iteration number to the filenames like this "unit_test_1_0_3.py" and "code_1_0_3.py", where there was one fail, zero errors and it is the third iteration through the loop.
+           - Read the contents of the unit_test_file and code_file.
+           - Call fix_errors_from_unit_tests with the file contents, error from the error log file, the error log file, and the provided strength and temperature.
+           - Add the returned total_cost to the total cost accumulator.
+           - If the total cost exceeds the budget, break the loop.
+           - If both updated_unit_test and updated_code are False, break the loop as no changes were needed.
+           - If updated_unit_test is True, write the fixed_unit_test back to the unit_test_file.           
+           - If updated_code is True:
+              * Write the fixed_code back to the code_file.
+              * Run the verification_program to check if the code still runs.
+              * If the verification fails, restore the original file from the backup and continue the loop.
+              * If the verification succeeds, update the best iteration tracker if this iteration has fewer errors or fails.
+        d. Increment the attempt counter.
+    Step 4. After the loop ends, run pytest one last time, pipe the output to the error log file, escape square brackets and print it to the console.
+    Step 5. If the last run isn't the best iteration, copy back the files from the best iteration.
+    Step 6. Return the success status, final unit test contents, final code contents, total number of attempts, and total cost.
+
+===== fix_errors_from_unit_tests_LLM.prompt =====
+% You are an expert Software Engineer. Your goal is to diagnose and fix the errors from a unit_test run on the code_under_test. The error might be in the code_under_test or the unit_test or both.
+
+% Here is the unit_test for the code_under_test: <unit_test><include>{unit_test}</include></unit_test>
+
+% Here is the code_under_test: <code_under_test><include>{code}</include></code_under_test>
+
+% Here is the prompt that generated the code_under_test: <prompt><include>{prompt}</include></prompt>
+
+% Here are the errors and past potential fixes, if any, from the unit test run(s): <errors><include>{errors}</include></errors>
+
+<examples>
+    <example_1>
+    % Here is an example_unit_test for the example_code_under_test: <example_unit_test><include>context/fix_errors_from_unit_tests/1/test_conflicts_in_prompts.py</include></example_unit_test>
+    
+    % Here is an example_code_under_test that fully passes the example_unit_test: <example_code_under_test><include>context/fix_errors_from_unit_tests/1/conflicts_in_prompts.py</include></example_code_under_test>
+
+    % Here is the prompt that generated the example_code_under_test: <example_prompt><include>context/fix_errors_from_unit_tests/1/conflicts_in_prompts_python.prompt</include></example_prompt>
+    </example_1>
+
+    <example_2>
+    % Here is an example_unit_test for the example_code_under_test: <example_unit_test><include>context/fix_errors_from_unit_tests/2/test_code_generator.py</include></example_unit_test>
+
+    % Here is an example_code_under_test that fully passes the example_unit_test: <example_code_under_test><include>context/fix_errors_from_unit_tests/2/code_generator.py</include></example_code_under_test>
+
+    % Here is the prompt that generated the example_code_under_test: <example_prompt><include>context/fix_errors_from_unit_tests/2/code_generator_python.prompt</include></example_prompt>
+    </example_2>
+
+    <example_3>
+    % Here is an example_unit_test for the example_code_under_test: <example_unit_test><include>context/fix_errors_from_unit_tests/3/test_context_generator.py</include></example_unit_test>
+
+    % Here is an example_code_under_test that fully passes the example_unit_test: <example_code_under_test><include>context/fix_errors_from_unit_tests/3/context_generator.py</include></example_code_under_test>
+
+    % Here is the prompt that generated the example_code_under_test: <example_prompt><include>context/fix_errors_from_unit_tests/3/context_generator_python.prompt</include></example_prompt>
+    </example_3>
+
+    <example_4>
+    % Here is an example_unit_test for the example_code_under_test: <example_unit_test><include>context/fix_errors_from_unit_tests/4/test_detect_change.py</include></example_unit_test>
+
+    % Here is an example_code_under_test that fully passes the example_unit_test: <example_code_under_test><include>context/fix_errors_from_unit_tests/4/detect_change.py</include></example_code_under_test>
+
+    % Here is the prompt that generated the example_code_under_test: <example_prompt><include>context/fix_errors_from_unit_tests/4/detect_change_python.prompt</include></example_prompt>
+    </example_4>
+
+    <example_5>
+    % Here is an example_unit_test for the example_code_under_test: <example_unit_test><include>context/fix_errors_from_unit_tests/4/test_detect_change_1_0_1.py</include></example_unit_test>
+
+    % Here is an example_code_under_test that didn't fully pass the example_unit_test: <example_code_under_test><include>context/fix_errors_from_unit_tests/4/detect_change_1_0_1.py</include></example_code_under_test>
+
+    % Here is an example error/fix log showing how the issues were resolved: <example_error_fix_log><include>context/fix_errors_from_unit_tests/4/error.log</include></example_error_fix_log>
+    </example_5>
+</examples>
+
+<instructions>
+% Follow these steps to solve these errors:
+    Step 1. Compare the prompt to the code_under_test and explain differences, if any.
+    Step 2. Compare the prompt to the unit_test and explain differences, if any.
+    Step 3. Explain in detail step by step why there might be an an error and why prior attempted fixes, if any, may not have worked. Write several paragraphs explaining the root cause of each of the errors.
+    Step 4. Explain in detail step by step how to solve each of the errors. For each error, there should be several paragraphs description of the steps. Sometimes logging or print statements can help debug the code.
+    Step 5. Review the above steps and correct for any errors in the logic.
+    Step 6. For the code that need changes, write the corrected code_under_test and/or corrected unit_test in its/their entirety.
+</instructions>
+
+===== fix_errors_from_unit_tests_python.prompt =====
+% You are an expert Python Software Engineer. Your goal is to write a python function, "fix_errors_from_unit_tests", that will fix unit test errors in a code file and log the process. 
+
+<include>context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        'unit_test' - A string containing the unit test code.
+        'code' - A string containing the code under test.
+        'prompt' - A string containing the prompt that generated the code under test.
+        'error' - A string that contains the errors that need to be fixed.
+        'error_file' - A string containing the path to the file where error logs will be appended. If the file does not exist, it should be created.
+        'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
+        'temperature' - A float that controls the randomness of the LLM's output.
+    Outputs:
+        'update_unit_test': Boolean indicating whether the unit test needs to be updated.
+        'update_code': Boolean indicating whether the code under test needs to be updated.
+        'fixed_unit_test' - A string that is the fixed unit test.
+        'fixed_code' - A string that is the fixed code under test.
+        'total_cost' - A float representing the total cost of the LCEL runs.
+        'model_name' - A string representing the name of the LLM model used.
+
+% Here is an example of a LangChain Expression Language (LCEL) program: <lcel_example><include>context/langchain_lcel_example.py</include></lcel_example>
+
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+    % Here is an example how to preprocess the prompt from a file: <preprocess_example><include>context/preprocess_example.py</include></preprocess_example>
+
+    % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>context/llm_selector_example.py</include></llm_selector_example>
+</internal_example_modules>
+
+% Here is an example generation of code from a prompt:
+    <example_prompt>```<./context/generate/1/fix_errors_from_unit_tests_python.prompt>```</example_prompt>
+    <example_generation>```<./context/generate/1/fix_errors_from_unit_tests.py>```</example_generation>
+
+% This program will use Langchain to do the following:
+    Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/fix_errors_from_unit_tests_LLM.prompt' file. Also load the 'extract_unit_code_fix_LLM.prompt' from the same directory.
+    Step 2. Read the contents of the error_file specified in the input. Handle any file I/O errors gracefully.
+    Step 3. Then this will create a Langchain LCEL template from the fix_errors_from_unit_tests prompt.
+    Step 4. This will use llm_selector with the provided strength and temperature for the llm model.
+    Step 5. This will run the code through the model using Langchain LCEL. 
+        5a. Be sure to pass the following string parameters to the prompt during invoke:
+            - 'unit_test'
+            - 'code'
+            - 'prompt' (use postprocess function with recursive and no double curly brackets)
+            - 'errors'
+        5b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+        5c. Append the output of this LCEL run to the error_file, adding a clear separator to distinguish it from previous content. Handle any file I/O errors gracefully.
+    Step 6. This will pretty print the markdown formatting that is present in the result via the rich Markdown function to both the console and the error_file. It will also pretty print the number of output tokens in the result and the cost. Also, print out the total cost of this run.
+    Step 7. Then this will create a second Langchain LCEL template from the extract_unit_code_fix prompt.
+    Step 8. This will use llm_selector with a strength setting of 0.9 and the provided temperature for the llm model. However, instead of using String output, it will use the JSON output parser to use the 'get' function to extract the value of these keys: 'update_unit_test', 'update_code', 'fixed_unit_test' and 'fixed_code'.
+    Step 9. This will run the code through the model using Langchain LCEL from Step 8. 
+        9a. Be sure to pass the following string parameters to the prompt during invoke:
+            - 'unit_test_fix': This is the result of the Langchain LCEL from Step 5.
+            - 'unit_test'
+            - 'code'
+        9b. Pretty print a message letting the user know it is running and how many input and output tokens (using token_counter from llm_selector) are in the prompt and the total cost.
+    Step 10. Calculate the total cost by summing the costs from both LCEL runs.
+    Step 11. Print the total cost of both runs and return 'update_unit_test', 'update_code', 'fixed_unit_test', 'fixed_code', and 'total_cost' as individual values from the JSON output parser.
+
+===== fix_errors_python.prompt =====
+% You are an expert Python Software engineer. Your goal is to write a Python program, "fix_errors.py". All output to the console will be pretty printed with the Python rich package.
+
+% You will be using a CLI program called pdd. Here is a detailed description of the program functionality: ```<./README.md>```
+
+% This script will take in the following arguments:
+    - unit_test_file
+    - code_file
+    - Python program to run to verify code still runs 
+    - Strength
+    - Number of times to run before giving up
+
+% Follow these steps:
+    Step 1. Remove the existing error.log file.
+    Step 2. Run the unit_test_file with 'python -m pytest -vv' and pipe all output to error.log. If the test fails, then proceed to step 3.
+    Step 3. 
+        a. Print out the error message from error.log.
+        b. Count the number of 'FAILED' and 'ERROR' from stdout. Keep in mind that given the '-vv' flag, the output will contain doubled the number of 'FAILED' and 'ERROR' messages.
+        c. Make a copy of the unit_test_file and code_file but append the number of failed and errors, and the loop iteration number to the file names like this "unit_test_1_0_3.py" and "code_1_0_3.py", where there was one fail, zero errors and it is the third iteration through the loop.
+    Step 4. Run 'python pdd/pdd.py' fix on the unit_test_file, code_file and error.log with the output being written to unit_test_file and code_file. Make sure global options come before the command when calling pdd. The pdd console output will get appended to the error.log with a separator between pytest and pdd program runs.
+    Step 5. Run the Python program to verify the code still runs.
+        a. If the program still runs then repeat the process from Step 2 with the updated unit test and code files unless the loop limit is reached.
+        b. Otherwise, if program fails, then restore the original files and repeat the process from Step 4.
+    Step 6. Run pytest one last time and pipe all output to error.log and print to console.
+
+===== generate_output_paths_python.prompt =====
+% You are an expert Python software engineer. Your task is to implement a function called `generate_output_paths` that creates appropriate output filenames for different commands in the 'pdd' Python program.
+
+% Inputs: The function should take the following parameters:
+    - `command` (string): The command being executed (e.g., 'generate', 'example', 'test', 'preprocess', 'fix').
+    - `output_locations` (dict): The output dictionary with keys (e.g., 'output', 'output_test') and the value of those options if specified by user.
+    - `basename` (string): The base name of the file.
+    - `language` (string): The programming language of the file.
+    - `file_extension` (string): The file extension to be used. It will already have the '.' in front of it.
+
+% Outputs: The function should return a dictionary representing the generated output filename(s) with the full path for each of the keys in the `output_locations` dictionary.
+
+% Here is a detailed description of the program functionality and the many ways output file names can be constructed: <program_description><include>README.md</include></program_description>
+
+% Implement the function to handle all these cases efficiently and return the appropriate filename as a string, accordingly.
+
+% Ensure the function handles all cases correctly and returns the appropriate filename string, language, and file extension. The function should be robust and able to handle various edge cases, such as missing file extensions or languages.
+
+% Follow these steps:
+    Step 1. List out all the different ways output locations can be constructed. For each way describe a few paragraphs in detail on how the output location can constructed from the inputs to this function and potential corner cases that need to be dealt with.
+    Step 2. List out the default naming conventions for each command.
+    Step 3. List out all the environment variables that can be used to override the default naming conventions.
+    Step 4. Identify potential error cases that need to be handled.
+    Step 5. Write the code that implements the function to implement all these situations efficiently from the above steps.
+
+% Note: For commands like 'fix' and 'split' that have multiple output, use underscores in the keys of the `output_locations` dictionary (e.g., 'output_test', 'output_code', 'output_sub', 'output_modified') instead of hyphens.
+
+===== generate_test_LLM.prompt =====
+% You are an expert Software Test Engineer. Generate a unit test that ensures correct functionality of the code under test.
+
+% Here a description of what the code is supposed to do and was the prompt that generated the code: ```{prompt_that_generated_code}```
+
+% Here is the code under test: ```{code}```
+
+% Follow these rules:
+    - The module name for the code under test will have the same name as the function name
+    - The unit test should be in {language}. If Python, use pytest.
+    - Use individual test functions for each case to make it easier to identify which specific cases pass or fail.
+    - Use the description of the functionality in the prompt to generate tests with useful tests with good code coverage.
+<include>./context/test.prompt</include>
+
+===== generate_test_python.prompt =====
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "generate_test", that will create a unit test from a code file.
+
+<include>./context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs: 
+        'prompt' - A string containing the prompt that generated the code file to be processed.
+        'code' - A string containing the code to generate a unit test from.
+        'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
+        'temperature' - A float that is the temperature of the LLM model to use.
+        'language' - A string that is the language of the unit test to be generated.
+    Outputs: 
+        'unit_test'- A string that is the generated unit test code.
+        'total_cost' - A float that is the total cost to generate the unit test code.
+        'model_name' - A string that is the name of the selected LLM model
+
+% Here is an example of a LangChain Expression Language (LCEL) program: <lcel_example><include>context/langchain_lcel_example.py</include></lcel_example>
+
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+    % Here is an example how to preprocess the prompt from a file: <preprocess_example><include>./context/preprocess_example.py</include></preprocess_example>
+
+    % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>./context/llm_selector_example.py</include></llm_selector_example>
+
+    % Example usage of the unfinished_prompt function: <unfinished_prompt_example><include>./context/unfinished_prompt_example.py</include></unfinished_prompt_example>
+
+    % Here is an example how to continue the generation of a model output: <continue_generation_example><include>context/continue_generation_example.py</include></continue_generation_example>
+
+    % Here is an example how to postprocess the model output result: <postprocess_example><include>context/postprocess_example.py</include></postprocess_example>
+</internal_example_modules>
+
+% This program will use Langchain to do the following:
+    Step 1. use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/generate_test_LLM.prompt' file.
+    Step 2. Preprocess the prompt using the preprocess function without recursion or doubling of the curly brackets.
+    Step 2. Then this will create a Langchain LCEL template from the test generator prompt.
+    Step 3. This will use llm_selector for the model.
+    Step 4. This will run the inputs through the model using Langchain LCEL. 
+        4a. Be sure to pass the following string parameters to the prompt during invoke:
+            - 'prompt_that_generated_code': preprocess the prompt using the preprocess function without recursion or doubling of the curly brackets.
+            - 'code'
+            - 'language'
+        4b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+    Step 5. This will pretty print the markdown formatting that is present in the result via the rich Markdown function. It will also pretty print the number of tokens in the result and the cost.
+    Step 6. Detect if the generation is incomplete using the unfinished_prompt function (strength .9) by passing in the last 600 characters of the output of Step 4.
+        - a. If incomplete, call the continue_generation function to complete the generation.
+        - b. Else, if complete, postprocess the model output result using the postprocess function from the postprocess module with a strength of 0.9.
+    Step 7. Print out the total_cost including the input and output tokens and functions that incur cost (e.g. postprocessing).
+    Step 7. Return the unit_test, total_cost and model_name
+
+===== get_comment_python.prompt =====
+% You are an expert Python engineer. Your goal is to write a python function, "get_comment", that will return the comment character(s) associated with a given language.
+
+% Here are the inputs and outputs of the function:
+    Input: 'language' - A string containing the language (e.g. Bash, Makefile, Python).
+    Output: returns a string that is the comment character(s) for the langauge. 'del' means the language does not have a comment character and the line with the comment most be deleted. Also, If there is a space between the comment characters, this means that the language requires the initial comment character and the closing comment character to encapsulate the comment.
+
+
+% Here is an example of the $PDD_PATH/data/language_format.csv:```language,comment,extension
+Python,#,.py
+Java,//,.java```
+
+% This program will do the following:
+    Step 1. Load environment variables PDD_PATH so the CSV can be loaded.
+    Step 2. Lower case the language string to make the comparison case insensitive.
+    Step 3. Look up the comment character(s) for the given language. 
+    Step 4. If the language is not found or comment character(s) is an invalid string, return an 'del' string otherwise return the comment character(s). 
+
+===== get_extension_python.prompt =====
+% You are an expert Python engineer. Your goal is to write a python function, "get_extension", that will return the file extension associated with a given language. 
+
+% Here are the inputs and outputs of the function:
+    Input: 'language' - A string containing the language (e.g. Bash, Makefile, Python).
+    Output: returns a string that is the extension for the langauge
+
+% Here is an example of the $PDD_PATH/data/language_format.csv:```language,comment,extension
+Python,#,.py
+Java,//,.java```
+
+% This program will do the following:
+    Step 1. Load environment variables PDD_PATH so the CSV can be loaded.
+    Step 2. Lower case the language string to make the comparison case insensitive.
+    Step 3. Look up the file extension for the given language. 
+    Step 4. If the language is not found or file extension is an invalid string, return an empty string otherwise return the file extension
+
+===== get_language_python.prompt =====
+% You are an expert Python engineer. Your goal is to write a Python function, "get_language", that will return the programming language associated with a given file extension.
+
+% Here are the inputs and outputs of the function:
+    Input: 'extension' - A string containing the file extension (e.g. .py, .java, .sh).
+    Output: returns a string that is the language name for the given extension
+
+% Here is an example of the $PDD_PATH/data/language_format.csv:
+```language,comment,extension
+Python,#,.py
+Java,//,.java```
+
+% This program will do the following:
+    Step 1. Load environment variables PDD_PATH so the CSV can be loaded from $PDD_PATH/data/language_format.csv.
+    Step 2. Ensure the extension starts with a dot (.) and convert it to lowercase for case-insensitive comparison.
+    Step 3. Look up the language name for the given file extension.
+    Step 4. If the extension is not found or the language name is an invalid string, return an empty string; otherwise, return the language name.
+
+===== language_format_csv.prompt =====
+% You are an expert software engineer. Your goal is to write a comprehensive csv file that will have three columns with the headers: 
+    - 'language': all the languages like Python, makefile, csv, Bash, Java, LLM, etc.
+    - 'comment': characters needed to comment out a line in that language. If that language (e.g. CSV, LLM) has no way to comment out a line, put in 'del' indicating that the line should be deleted. Some languages need comments characters before and after a line. Indicate that by having a space between the start of the comment indicator and the end comment indicator. For example, HTML would be '<!-- -->'.
+    - 'extension': this is the file extension represented by the language. For instance, Python is '.py', makefile is '', csv is '.csv', LLM is '.prompt', etc.
+
+% Check to make sure this is valid CSV format
+
+===== llm_model_csv.prompt =====
+% You are an expert AI engineer. Your goal is to write a comprehensive csv file that will have four columns with the headers: 
+    - 'provider': OpenAI, Anthropic, etc.
+    - 'model': the available model strings for that provider (e.g. "gpt-4o-mini")
+    - 'input': The input cost per million tokens (e.g. 0.15)
+    - 'output': The output cost per million tokens (e.g. 0.60)
+
+% Search the internet to get this data. Check to make sure this is valid CSV format
+
+===== llm_selector_python.prompt =====
+% You are an expert Python engineer. Your goal is to write a python function, "llm_selector", that will return the appropriate Langchain llm model. You will use the Langchain cache.
+
+% Here are the inputs and outputs of the function:
+    Input: 
+        'strength' - Floating point number with 0 being the cheapest model, 0.5 being the base model and 1 being the model with the highest ELO score.
+        'temperature' - Floating point number indicating the temperature of the LLM.
+    Output: 
+        'llm' - Instantiated LLM model with the appropriate parameters.
+        'token_counter' - Token counter function for the LLM model.
+        'input_cost' - Cost per million input tokens
+        'output_cost' - Cost per million output tokens
+        'model_name' - Name of the selected model
+
+% Here is an example of a Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
+
+% Here is an example of a token counter function: ```<./context/llm_token_counter_example.py>```
+
+% Here is an example (but not actual values) of the llm_model.csv:```provider,model,input,output,coding_arena_elo,base_url,api_key,counter,encoder,max_tokens
+OpenAI,gpt-4o-mini,0.15,0.60,1283,,,tiktoken,o200k_base,16384
+OpenAI,gpt-4o-2024-08-06,2.5,10,1333,,,tiktoken,o200k_base,16384
+OpenAI,deepseek-coder,0.14,0.28,1263,https://api.deepseek.com,DEEPSEEK_API_KEY,autotokenizer,deepseek-coder-7b-instruct-v1.5,4096
+Anthropic,claude-3-5-sonnet-20240620,3,15,1340,,,anthropic,claude-3-sonnet-20240229,8192
+Google,gemini-pro-experimental,3.5,7,1273,,,,,8192
+Fireworks,accounts/fireworks/models/llama-v3p1-405b-instruct,3,3,1280,,,,,2048```
+
+% Here are the rules to follow when selecting the appropriate model:
+    - If environmental variable $PDD_MODEL_DEFAULT is set, use that as the base model, otherwise it is "gpt-4o-mini". If $PDD_PATH is set load $PDD_PATH/data/llm_model.csv, otherwise, assume $PDD_PATH is current working directory.
+    - When strength < 0.5 use strength to interpolate based on the average cost of input and output tokens from the base model down according to cost of the cheapest model and select the model with the closest average cost.
+    - When strength > 0.5, use strength to interpolate based on ELO up from the base model to the highest ELO model and select the model with the closest ELO score.
+    - Use base model when strength is 0.5.
+    - If there is a model with the same or higher ELO ranking, use that model if it is at or below the same average cost of input and output token cost of a lower rank model.
+    - Make sure temperature is set for every llm model instantiation.
+
+% Note: The `llm_token_counter` function should be imported using a relative import, as it is part of the same package or module structure.
+
+===== llm_token_counter_python.prompt =====
+% You are an expert Python engineer. Your goal is to write a python function, "llm_token_counter", that will return the appropriate token counter for a specified encoder and counter. 
+
+
+% Here are the inputs and outputs of the function:
+    Input: 
+        'counter' - string with the name of the function that returns token count
+        'encoder' - encoder that encodes the input
+    Output: 
+        'token_counter_function' - function that returns token count
+
+% Here is an example how to use tiktoken: ```<./context/tiktoken_example.py>```
+
+% Here is an example how to use anthropic: ```<./context/anthropic_counter_example.py>```
+
+% Here is an example how to use autotokenizer: ```<./context/autotokenizer_example.py>```
+
+
+
+
+% Here are the rules to follow when selecting the appropriate model:
+    - If the counter is 'tiktoken', the token counter function should be 'tiktoken' with encoder.
+
+    - If the counter is 'anthropic', the token counter function should be 'anthropic'.
+
+    - If the counter is 'autotokenizer', the token counter function should be 'autotokenizer' with encoder.
+
+
+
+===== postprocess_0_python.prompt =====
+% You are an expert Python engineer. Your goal is to write a python function called 'postprocess_0' that will post-process the string output of a LLM so that the code can be run. 
+
+% Here are the inputs and outputs of the function:
+    Input: 
+        'llm_output' - A string contains a mix of text and sections of code separated by triple backticks. 
+        'language' - A string that is the type (e.g. python, bash) of file that will be outputed by the LLM
+    Output: returns a string that is the processed string that contains a properly commented out comments so that code can be run
+
+% Here is an example how to get the lookup the comment line characters given a language: ```<./context/get_comment_example.py>```
+
+% Here is an example how to comment out a line of code: ```<./context/comment_line_example.py>```
+
+% Here is an example how to find code sections in LLM output: ```<./context/find_section_example.py>```
+
+% Here is an example of llm_output: '''To implement the `context_generator` function as described, we will follow the steps outlined in your request. Below is the complete implementation of the function, which includes reading a Python file, preprocessing it, generating a prompt for the model, invoking the model, and writing the output to a specified file.
+
+```python
+import os
+
+def context_generator(python_filename: str, output_filename: str, force: bool = False) -> bool:
+    # Step 1: Read the Python file
+    try:
+        with open(python_filename, 'r') as file:
+            python_code = file.read()
+    except FileNotFoundError:
+        print(f"Error: The file {python_filename} does not exist.")
+        return False
+
+
+    # Step 3: Generate a prompt for GPT-4
+    prompt = f"""
+    You are an expert Python engineer. Based on the following Python code, generate a concise example of how to use the module properly.
+
+    Python Code:
+    ```python
+    {processed_content}
+    ```
+    """
+    return True
+```
+
+### Explanation of the Code:
+1. **File Reading**: The function attempts to read the specified Python file. If the file does not exist, it prints an error message and returns `False`.
+2. **Preprocessing**: It calls the `preprocess` function to process the content of the Python file.
+
+### Usage:
+You can call this function by providing the necessary arguments, like so:
+
+```python
+context_generator('your_python_file.py', 'output_example.py', force=False)
+```
+
+Make sure to replace `'your_python_file.py'` and `'output_example.py'` with the actual file names you want to use.
+To implement the context_generator function as described, we will follow the steps outlined in   
+your request. Below is the complete implementation of the function, which includes reading a     
+Python file, preprocessing it, generating a prompt for the model, invoking the model, and writing
+the output to a specified file.'''
+
+% Here is an example of the Output string that would be returned: '''#To implement the `context_generator` function as described, we will follow the steps outlined in your request. Below is the complete implementation of the function, which includes reading a Python file, preprocessing it, generating a prompt for the model, invoking the model, and writing the output to a specified file.
+#
+#```python
+import os
+
+def context_generator(python_filename: str, output_filename: str, force: bool = False) -> bool:
+    # Step 1: Read the Python file
+    try:
+        with open(python_filename, 'r') as file:
+            python_code = file.read()
+    except FileNotFoundError:
+        print(f"Error: The file {python_filename} does not exist.")
+        return False
+
+
+    # Step 3: Generate a prompt for GPT-4
+    prompt = f"""
+    You are an expert Python engineer. Based on the following Python code, generate a concise example of how to use the module properly.
+
+    Python Code:
+    ```python
+    {processed_content}
+    ```
+    """
+    return True
+#```
+#
+#### Explanation of the Code:
+#1. **File Reading**: The function attempts to read the specified Python file. If the file does not exist, it prints an error message and returns `False`.
+#2. **Preprocessing**: It calls the `preprocess` function to process the content of the Python file.
+#
+#### Usage:
+#You can call this function by providing the necessary arguments, like so:
+#
+#```python
+#context_generator('your_python_file.py', 'output_example.py', force=False)
+#```
+#
+#Make sure to replace `'your_python_file.py'` and `'output_example.py'` with the actual file names you want to use.
+#To implement the context_generator function as described, we will follow the steps outlined in   
+#your request. Below is the complete implementation of the function, which includes reading a     
+#Python file, preprocessing it, generating a prompt for the model, invoking the model, and writing
+#the output to a specified file.'''
+
+% This function will do the following:
+    Step 1. For the specified language, associate the right comment line character with the programming language using the get_comment function.
+    Step 2. Use the find_section function to find the top-level code sections in the llm_output.
+    Step 3. For the sections that are the same as language, determine which section is the largest.
+    Step 4. Now using the original llm_output string, comment out, using the comment_line function, all lines of text until the start line of the largest section of the language we want and then resume commenting out the lines after end line of the largest section. This will leave the executable part of largest section of code uncommented.
+    Step 5. The program will return the post processed string that contains a properly commented out program that can be run.
+
+===== postprocess_python.prompt =====
+% You are an expert Python engineer. Your goal is to write a python function called 'postprocess' that will post-process the string output of a LLM so that the code can be run.
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        'llm_output' - A string contains a mix of text and sections of code separated by triple backticks generated by a LLM.
+        'language' - A string that is the type (e.g. python, bash) of file that will be outputed by the LLM.
+        'strength' - A string that is the strength of the LLM model to use for the post-processing. Default is 0.9.
+        'temperature' - A string that is the temperature of the LLM model to use for the post-processing. Default is 0.
+    Outputs:
+        'extracted_code' - string that is the processed string that contains a properly commented out comments so that code can be run.
+        'total_cost' - float that is the total cost of the post-processing function. This is an optional output.
+
+% Here is an example of a Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
+
+% Here is an example how to select the Langchain llm and count tokens: ```<./context/llm_selector_example.py>```
+
+% Here is an example how to use postprocess_0 which is a zero cost postprocessing: ```<./context/postprocess_0_example.py>```
+
+% This function will do the following:
+    Step 1. If strength is 0, use postprocess_0 generate the extracted_code. Return extracted_code and total_cost of 0.
+    Step 2. Otherwise, use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/extract_code_LLM.prompt' file.
+    Step 3. Create a Langchain LCEL template from extract_code_LLM prompt so that it returns a JSON output.
+    Step 4. Use the llm_selector function for the LLM model.
+    Step 5. Run the code through the model using Langchain LCEL.
+        5a. Pass the following string parameters to the prompt during invoke:
+            - 'llm_output'
+            - 'language'
+        5b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+        5c. The dictionary output of the LCEL will have the key 'extracted_code' that contains the processed code string. Be sure to access this key using the get method with a default error message.
+        5d. If the first and last line have triple backticks delete the entire first and last line. There will be the name of the language after the first triple backticks and that should be removed as well.
+        5e. Pretty print the extracted_code using the rich Markdown function. Also, print the number of tokens in the result, the output token cost and the total_cost.
+    Step 6. Return the 'extracted_code' string from the JSON and the total_cost.
+
+% Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses.
+
+% Note: Use relative imports for 'postprocess_0' and 'llm_selector' to ensure compatibility within the package structure.
+
+===== preprocess_python.prompt =====
+% You are an expert Python engineer. Your goal is to write a Python function, 'preprocess_prompt', that will preprocess the prompt from a prompt string for a LLM. This will use regular expressions to preprocess specific XML-like tags, if any, in the prompt. All output to the console will be pretty print using the Python rich library.
+
+% Here are the inputs and outputs of the function:
+    Input: 
+        'prompt' - A string that is the prompt to preprocess
+        'recursive' - A boolean that is True if the program needs to recursively process the includes in the prompt and False if it does not need to recursively process the prompt. Default is True.
+        'double_curly_brackets' - A boolean that is True if the curly brackets need to be doubled and False if they do not need to be doubled. Default is True.
+        'exclude_keys' - An optional list of strings that are excluded from the curly bracket doubling.
+    Output: returns a string that is the preprocessed prompt, with any leading or trailing whitespace removed.
+
+% Here are the XML-like tags to preprocess, other tags will remain unmodified:
+    'include' - This tag will include the content of the file indicated in the include tag. The 'include tag' will be directly replaced with the content of the file in the prompt, without wrapping it in a new tag.
+    'pdd' - This tag indicates a comment and anything in this XML will be deleted from the string including the 'pdd' tags themselves.
+    'shell' - This tag indicates that there are shell commands to run. Capture all output of the shell commands and include it in the prompt but remove the shell tags.
+
+% Includes can be nested, that is there can be includes inside of the files of the includes and 'preprocess' should be called recursively on these include files if recursive is True. There are two ways of having includes in the prompt:
+    1. Will check to see if the file has any angle brackets in triple backticks. If so, it will read the included file indicated in the angle brackets and replace the angle brackets with the content of the included file. This will be done recursively until there are no more angle brackets in triple backticks. The program will then remove the angle brackets but leave the contents in the triple backticks.
+    2. The XML 'include' mentioned above.
+
+% If double_curly_brackets is True, the program will check to see if the file has any single curly brackets and if it does and the string in the curly brackets are not in the exclude_keys list, it will check to see if the curly brackets are already doubled before doubling the curly brackets.
+
+% The program should resolve file paths using the PDD_PATH environment variable. Implement a function 'get_file_path' that takes a file name and returns the full path using this environment variable.
+
+% Keep the user informed of the progress of the program by pretty printing messages.
+
+===== run_generated_python.prompt =====
+% You are an expert Python software engineer. Your task is to implement a program called `run_generated` that executes a Python script. It will take in one argument, the prompt file name path. The name of the file will have a '_python.prompt' at the end of it. The program will replace this with .py and attempt to execute the Python script. The prompt file is in the 'prompts' directory but the generated will be in the pdd directory, both share the same root directory it will need to change the file path directory from prompts to pdd. 
+
+===== split_LLM.prompt =====
+% You are an expert LLM Prompt Engineer. Your goal is to split the input_prompt into a sub_prompt and modified_prompt with no loss of functionality. 
+
+% Here are the inputs and outputs of this prompt:
+    Input: 
+        'input_prompt' - A string contains the prompt that will be split into a sub_prompt and modified_prompt.
+        'input_code' - A string that contains the code that was generated from the input_prompt.
+        'example_code' - A string that contains the code example of how the code generated from the sub_prompt would be used by the code generated from the modified_prompt.
+    Output: 
+        'sub_prompt' - A string that contains the sub_prompt that was split from the input_prompt.
+        'modified_prompt' - A string that contains the modified prompt from input_prompt split from the above sub_prompt.
+
+% Here is example_1 of how to split and generate the sub_prompt and modified_prompt:
+    example_1_input_prompt: ```<./context/split/1/initial_pdd_python.prompt>```
+    example_1_input_code: ```<./context/split/1/pdd.py>```
+    example_1_example_code: ```<./context/split/1/split_get_extension.py>```
+    example_1_sub_prompt: ```<./context/split/1/sub_pdd_python.prompt>```
+    example_1_modified_prompt: ```<./context/split/1/final_pdd_python.prompt>```
+
+% Here is example_2 of how to split and generate the sub_prompt and modified_prompt:
+    example_2_input_prompt: ```<./context/split/2/initial_pdd_python.prompt>```
+    example_2_input_code: ```<./context/split/2/pdd.py>```
+    example_2_example_code: ```<./context/split/2/split_pdd_construct_output_path.py>```
+    example_2_sub_prompt: ```<./context/split/2/sub_pdd_python.prompt>```
+    example_2_modified_prompt: ```<./context/split/2/final_pdd_python.prompt>```
+    
+% Here is example_3 of how to split and generate the sub_prompt and modified_prompt:
+    example_3_input_prompt: ```<./context/split/3/initial_postprocess_python.prompt>```
+    example_3_input_code: ```<./context/split/3/postprocess.py>```
+    example_3_example_code: ```<./context/split/3/split_postprocess_find_section.py>```
+    example_3_sub_prompt: ```<./context/split/3/sub_postprocess_python.prompt>```
+    example_3_modified_prompt: ```<./context/split/3/final_postprocess_python.prompt>```
+
+% Here is example_4 of how to split and generate the sub_prompt and modified_prompt:
+    example_4_input_prompt: ```<./context/split/4/initial_construct_paths_python.prompt>```
+    example_4_input_code: ```<./context/split/4/construct_paths.py>```
+    example_4_example_code: ```<./context/split/4/split_construct_paths_generate_output_filename.py>```
+    example_4_sub_prompt: ```<./context/split/4/sub_construct_paths_python.prompt>```
+    example_4_modified_prompt: ```<./context/split/4/final_construct_paths_python.prompt>```
+
+% Here is the input_prompt to split: ```{input_prompt}```
+% Here is the input_code: ```{input_code}```
+% Here is the example_code: ```{example_code}```
+
+% Follow these instructions:
+    1. Generate the sub_prompt.
+    2. Generate the modified_prompt.
+
+===== split_python.prompt =====
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "split", that will split a prompt into a sub_prompt and modified_prompt with no loss of functionality. The function should be part of a Python package, using relative imports for internal modules. All output to the console will be pretty printed using the Python Rich library.
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        - 'input_prompt': A string containing the prompt that will be split into a sub_prompt and modified_prompt.
+        - 'input_code': A string containing the code that was generated from the input_prompt.
+        - 'example_code': A string containing the code example of how the code generated from the sub_prompt would be used by the code generated from the modified_prompt.
+        - 'strength': A float value representing the strength parameter for the LLM model, used to influence the model's behavior.
+        - 'temperature': A float value representing the temperature parameter for the LLM model, used to control the randomness of the model's output.
+    Outputs:
+        - 'sub_prompt': A string containing the sub_prompt that was split from the input_prompt.
+        - 'modified_prompt': A string containing the modified prompt from input_prompt split from the sub_prompt.
+        - 'total_cost': A float value representing the total cost of running the function.
+
+% Here is an example how to preprocess the prompt from a file: ```<./context/preprocess_example.py>```
+
+% Example usage of the Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
+
+% Example of selecting a Langchain LLM and counting tokens using llm_selector: ```<./context/llm_selector_example.py>```
+
+% Steps to be followed by the function:
+    1. Load the '$PDD_PATH/prompts/split_LLM.prompt' and '$PDD_PATH/prompts/extract_prompt_split_LLM.prompt' files.
+    2. Preprocessing:
+        a. Preprocess the split_LLM prompt using the preprocess function from the preprocess module and double the curly brackets.
+        b. Preprocess the extract_prompt_split_LLM prompt using the preprocess function from the preprocess module without doubling the curly brackets.
+    3. Create a Langchain LCEL template from the processed split_LLM prompt to return a string output.
+    4. Use the llm_selector function for the LLM model and token counting.
+    5. Run the input through the model using Langchain LCEL:
+        - a. Pass the following string parameters to the prompt during invocation: 'input_prompt', 'input_code', 'example_code'.
+        - b. Calculate the input and output token count using token_counter from llm_selector and pretty print the output of 5a, including the token count and estimated cost. The cost from llm_selector is in dollars per million tokens.
+    6. Create a Langchain LCEL template from the preprocessed extract_prompt_split_LLM prompt that outputs JSON:
+        - a. Pass the following string parameters to the prompt during invocation: 'llm_output' (this string is from Step 5).
+        - b. Calculate input and output token count using token_counter from llm_selector and pretty print the running message with the token count and cost.
+        - c. Use 'get' function to extract 'sub_prompt' and 'modified_prompt' key values using from the dictionary output.
+    7. Pretty print the extracted sub_prompt and modified_prompt using Rich Markdown function. Include token counts and costs.
+    8. Return the 'sub_prompt' and 'modified_prompt' strings and the total_cost of both invokes.
+
+% Ensure the function handles edge cases, such as missing inputs or model errors, and provide clear error messages.
+
+===== trim_results_LLM.prompt =====
+% You are an expert JSON editor. You are tasked with trimming potential overlap between a partially generated text and its continuation. This is crucial for seamlessly combining text segments without duplication.
+
+% You will be given two pieces of text that will be appended together afterwards to form a coherent whole:
+<inputs>
+    1) This is the text that has been generated so far:
+    <generated_results>
+    {GENERATED_RESULTS}
+    </generated_results>
+
+    2) This is the continuation of the generation:
+    <continued_generation>
+    {CONTINUED_GENERATION}
+    </continued_generation>
+</inputs>
+
+% Your task is to:
+1. Compare the end of the generated_results with the beginning of the continued_generation.
+2. Identify any overlapping text.
+3. If overlap exists, trim it from the start of the continued_generation and be careful to keep or remove spaces so that the text makes sense.
+4. If no overlap exists, leave the continued_generation as is.
+5. Trim out the preamble text before the code block that starts with a triple backtick (```) including the triple backticks and language tag. Also, there might be a xml tag, 'llm_output', at the start or end of the continued_generation, which should be removed.
+
+% After completing these steps, provide your output in JSON format with the following keys:
+- explanation: A string explaining what was trimmed, if anything. If nothing was trimmed, explain why.
+- trimmed_continued_generation: The trimmed continued_generation string. If no trimming was necessary, this should be identical to the original continued_generation.
+
+% Ensure your JSON is properly formatted and contains only these two keys.
+
+% Here are example of how your outputs should look like for given inputs:
+<examples>
+    <example1>
+        <inputs>
+            <generated_results>
+            "The quick brown fox jumps over the lazy dog and the "
+            </generated_results>
+            <continued_generation>
+            """```text\n and the cat jumped over the lazy dog."""
+            </continued_generation>
+        </inputs>
+        <output>
+        {{
+        "explanation": "Trimmed '```text\n and the ' from the start of the continued_generation as it overlapped with the end of generated_results and the triple backticks indicate a start of a code block.",
+        "trimmed_continued_generation": "cat jumped over the lazy dog."
+        }}
+        </output>
+    </example1>
+
+    <example2>
+        <inputs>
+            <generated_results>
+            ""
+            </generated_results>
+            <continued_generation>
+            "Telling a short story. ```text\nThe quick brown fox jumps over the lazy dog."
+            </continued_generation>
+        </inputs>
+        <output>
+        {{
+        "explanation": "There was no overlap between the generated_results and the continued_generation. Trimmed preamble.","trimmed_continued_generation": "The quick brown fox jumps over the lazy dog."
+        }}
+        </output>
+    </example2>
+
+    <example3>
+        <inputs>
+            <generated_results>
+            '''\n        input_strings, output_file_paths, language = construct_paths(\n            input_file_paths=input_'''
+            </generated_results>
+            <continued_generation>
+            '''file_paths,\n            force=global_opts.force,\n            quiet=global_opts.quiet,\n            '''
+            </continued_generation>
+        </inputs>
+        <output>
+        {{
+        "explanation": "'file_paths' is a continuation of 'input_' so there is no overlap between the generated_results and the continued_generation.",
+        "trimmed_continued_generation": "file_paths,\n            force=global_opts.force,\n            quiet=global_opts.quiet,\n            "
+        }}
+        </output>
+    </example3>
+<examples>
+
+% Remember to carefully compare the texts to ensure accurate trimming and provide a clear explanation of your actions so that the trimmed_continued_generation can be properly appended to generated_results without needed further edits.
+
+
+
+===== trim_results_start_LLM.prompt =====
+% You are an expert JSON editor. You will be processing the output of a language model (LLM) to extract the unfinished main code block being generated and provide an explanation of how you determined what to cut out. Here is the llm_output to process:
+<llm_output>
+{LLM_OUTPUT}
+</llm_output>
+
+% Your task is to trim away everything before the code block that starts with a triple backtick (```). Follow these steps:
+    1. Analyze the LLM output and locate the main code block. This block will start with a triple backtick (```) followed by a language tag (e.g. 'python').
+    2. Everything before this triple backtick should be removed.
+    3. Extract the entire code block, excluding the opening triple backticks and language tag (e.g. 'python').
+    4. Prepare an explanation of how you determined what to cut out. This should be a brief description of your process.
+    5. Format your output as a JSON object with two keys:
+        - 'explanation': Your explanation of how you determined what to cut out
+        - 'code_block': The extracted code block text
+
+% Here are examples of how your outputs should be given various inputs:
+<examples>
+    <example1>
+        <input>
+            <llm_output>
+            "Here is how you run the code: ```bash\npython code.py```\n\nHere is the code: ```python\ndef hello_world():\n    print('Hello, World!')\n\nhello_world()\ndef```"
+            </llm_output>
+        </input>
+        <output>    
+        {{
+        "explanation": "I identified the main unfinished code block which starts with triple backticks (```) in the text and removed all content before it. The remaining text, excluding the backticks and language tag, was extracted as the code block.",
+        "code_block": "def hello_world():\n    print('Hello, World!')\n\nhello_world()\ndef"
+        }}
+        </output>
+    </example1>
+    <example2>
+        <input>
+            <llm_output>
+            ""
+            </llm_output>
+        </input>
+        <output>    
+        {{
+        "explanation": "There is nothing.",
+        "code_block": ""
+        }}
+        </output>
+    </example2>
+</examples>
+
+% Please provide your output in this JSON format.
+
+===== unfinished_prompt_LLM.prompt =====
+% You are tasked with determining whether a given prompt has finished outputting everything or if it still needs to continue. This is crucial for ensuring that all necessary information has been provided before proceeding with further actions. You will often be provided the last few hundred characters of the prompt_text to analyze and determine if it appears to be complete or if it seems to be cut off or unfinished. You are just looking at the prompt_text and not the entire prompt file. The beginning part of the prompt_text is not always provided, so you will need to make a judgment based on the text you are given.
+
+% Here is the prompt text to analyze:
+<prompt_text>
+    {PROMPT_TEXT}
+</prompt_text>
+
+% Carefully examine the provided prompt text and determine if it appears to be complete or if it seems to be cut off or unfinished. Consider the following factors:
+    1. Sentence structure: Are all sentences grammatically complete?
+    2. Content flow: Does the text end abruptly or does it have a natural conclusion?
+    3. Context: Based on the content, does it seem like all necessary information has been provided?
+    4. Formatting: Are there any unclosed parentheses, quotation marks, or other formatting issues that suggest incompleteness?
+
+% Provide your reasoning for why you believe the prompt is complete or incomplete.
+
+% Output a JSON object with two keys:
+    1. "reasoning": A string containing your structured reasoning
+    2. "is_finished": A boolean value (true if the prompt is complete, false if it's incomplete)
+
+===== unfinished_prompt_python.prompt =====
+% You are an expert Python engineer. Your goal is to write a python function called 'unfinished_prompt' that will determine if a given prompt is complete or needs to continue.
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        'prompt_text' - A string containing the prompt text to analyze.
+        'strength' - A float that is the strength of the LLM model to use for the analysis. Default is 0.5.
+        'temperature' - A float that is the temperature of the LLM model to use for the analysis. Default is 0.
+    Outputs:
+        'reasoning' - A string containing the structured reasoning for the completeness assessment.
+        'is_finished' - A boolean indicating whether the prompt is complete (True) or incomplete (False).
+        'total_cost' - A float that is the total cost of the analysis function. This is an optional output.
+        'model_name' - A string that is the name of the LLM model used for the analysis. This is an optional output.
+
+% Here is an example of a Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
+
+% Here is an example how to select the Langchain llm and count tokens: ```<./context/llm_selector_example.py>```
+
+% Note: Use relative import for 'llm_selector' to ensure compatibility within the package structure (i.e. 'from .llm_selector') instead of 'from pdd.llm_selector'.
+
+% This function will do the following:
+    Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/unfinished_prompt_LLM.prompt' file.
+    Step 2. Create a Langchain LCEL template from unfinished_prompt_LLM prompt so that it returns a JSON output.
+    Step 3. Use the llm_selector function for the LLM model.
+    Step 4. Run the prompt text through the model using Langchain LCEL.
+        4a. Pass the following string parameters to the prompt during invoke:
+            - 'PROMPT_TEXT'
+        4b. Pretty print a message letting the user know it is running and how many tokens (using token_counter function from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+        4c. The dictionary output of the LCEL will have the keys 'reasoning' and 'is_finished'. Be sure to access these keys using the get method with default error messages.
+        4d. Pretty print the reasoning and completion status using the rich library. Also, print the number of tokens in the result, the output token cost and the total_cost.
+    Step 5. Return the 'reasoning' string and 'is_finished' boolean from the JSON output using 'get', and the 'total_cost' float, and 'model_name' string.
+
+% Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses.
+
+
+
+===== update_prompt_LLM.prompt =====
+% You are an expert LLM Prompt Engineer. Your goal is to take the original code and modified code, and to update the prompt that generated the original code.
+
+% Here are the inputs and outputs of this prompt:
+    Input: 
+        'input_prompt' - A string that contains the prompt that generated the original code.
+        'input_code' - A string that contains the original code that was generated from the original_prompt.
+        'modified_code' - A string that contains the code that was modified by the user.
+    Output: 
+        'modified_prompt' - A string that contains the updated prompt that will generate the modified code.
+
+% Here is the input_prompt to change: ```{input_prompt}```
+% Here is the input_code: ```{input_code}```
+% Here is the modified_code: ```{modified_code}```
+
+% To generate the modified prompt, perform the following sequence of steps:
+    1. Using the provided input_code and input_prompt, identify what the code does and how it was generated.
+    2. Compare the input_code and modified_code to determine the changes made by the user.
+    3. Identify what the modified_code does differently from the input_code.
+    4. Generate a modified_prompt that will guide the generation of the modified_code based on the identified changes.
+
+===== update_prompt_python.prompt =====
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "update_prompt", that will take the original code and modified code, and update the prompt that generated the original code. The function should be part of a module or package, using relative imports for internal modules. All output to the console will be pretty printed using the Python Rich library.
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        - 'input_prompt' - A string that contains the prompt that generated the original code.
+        - 'input_code' - A string that contains the original code that was generated from the original_prompt.
+        - 'modified_code' - A string that contains the code that was modified by the user.
+        - 'strength': A float value representing the strength parameter for the LLM model, used to influence the model's behavior.
+        - 'temperature': A float value representing the temperature parameter for the LLM model, used to control the randomness of the model's output.
+    Outputs:
+        - 'modified_prompt' - A string that contains the updated prompt that will generate the modified code.
+        - 'total_cost': A float value representing the total cost of running the function.
+        - 'model_name': A string representing the name of the selected LLM model.
+
+% Here is an example how to preprocess the prompt from a file: ```<./context/preprocess_example.py>```
+
+% Example usage of the Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
+
+% Example of selecting a Langchain LLM and counting tokens using llm_selector: ```<./context/llm_selector_example.py>```
+
+% Steps to be followed by the function:
+    1. Load the '$PDD_PATH/prompts/update_prompt_LLM.prompt' and '$PDD_PATH/prompts/extract_prompt_update_LLM.prompt' files.
+    2. Preprocess the update_prompt_LLM prompt using the preprocess function from the preprocess module and curly brackets parameter should be False.
+    2. Create a Langchain LCEL template from the processed update_prompt_LLM prompt to return a string output.
+    3. Use the llm_selector function for the LLM model and token counting.
+    4. Run the input_prompt through the model using Langchain LCEL:
+        - a. Pass the following string parameters to the prompt during invocation:             
+            * 'input_prompt'
+            * 'input_code'
+            * 'modified_code'
+        - b. Calculate the input and output token count using token_counter from llm_selector and pretty print the output of 4a, including the token count and estimated cost. The cost from llm_selector is in dollars per million tokens.
+    5. Create a Langchain LCEL template from the extract_prompt_update_LLM prompt that outputs JSON:
+        - a. Pass the following string parameters to the prompt during invocation: 'llm_output' (this string is from Step 4).
+        - b. Calculate input and output token count using token_counter from llm_selector and pretty print the running message with the token count and cost.
+        - c. Use 'get' function to extract 'modified_prompt' key values using from the dictionary output.
+    6. Pretty print the extracted modified_prompt using Rich Markdown function. Include token counts and costs.
+    7. Return the 'modified_prompt' string, the total_cost of both invokes and model_name use for the update_prompt_LLM prompt.
+
+% Ensure the function handles edge cases, such as missing inputs or model errors, and provide clear error messages.
+
+===== xml_convertor_LLM.prompt =====
+% You are an expert Prompt Engineer. Your goal is to enhance a given prompt by only adding XML tags where necessary to improve its structure and readability. Do not add any additional content or XML tags unless it is clearly required by the structure of the input_raw_prompt.
+
+% Here is the input_raw_prompt that needs XML tagging to improve its organization: ```{raw_prompt}```
+
+% Here is an example_raw_prompt that needs XML tagging:
+```
+You’re a financial analyst at AcmeCorp. Generate a Q2 financial report for our investors. Include sections on Revenue Growth, Profit Margins, and Cash Flow, like with this example from last year: {{Q1_REPORT}}. Use data points from this spreadsheet: {{SPREADSHEET_DATA}}. The report should be extremely concise, to the point, professional, and in list format. It should and highlight both strengths and areas for improvement.	
+```
+
+% Here is an example_tagged_prompt from the example_raw_prompt above:
+```
+You’re a financial analyst at AcmeCorp. Generate a Q2 financial report for our investors.
+
+AcmeCorp is a B2B SaaS company. Our investors value transparency and actionable insights.
+
+Use this data for your report:<data>{{SPREADSHEET_DATA}}</data>
+
+<instructions>
+1. Include sections: Revenue Growth, Profit Margins, Cash Flow.
+2. Highlight strengths and areas for improvement.
+</instructions>
+
+Make your tone concise and professional. Follow this structure:
+<formatting_example>{{Q1_REPORT}}</formatting_example>
+```
+
+% Output a string with the `input_raw_prompt` properly tagged using XML as metadata and structural elements to enhance clarity and organization. The output may include, but is not limited to:
+    1. `<instructions>`: Guidelines or directives for the model's output.
+    2. `<context>`: Background information or relevant data for understanding the task.
+    3. `<examples>`: Specific instances that guide the model's response.
+    4. `<formatting>`: Special formatting instructions for the output.
+
+% Follow these steps to tag the prompt:
+    Step 1. Write out the analysis of the input_raw_prompt by identifying components like instructions, context, and examples.
+    Step 2. Assign appropriate XML tags to these components, ensuring consistency (e.g., `<instructions>`, `<context>`, `<examples>`, `<formatting>`).
+    Step 3. Insert the XML tags at the correct locations in the input_raw_prompt without introducing any new content. Only add tags to existing content.
+    Step 4. Return the updated prompt with XML tags as a string, enhancing its structure and readability without also including the initial and ending triple backticks for the xml code block.  
+
+
+===== xml_tagger_python.prompt =====
+% You are an expert Python engineer. Your goal is to write a Python function, "xml_tagger", that will enhance a given LLM prompt by adding XML tags to improve its structure and readability.
+
+<include>context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Input: 
+        'raw_prompt' - A string containing the prompt that needs XML tagging to improve its organization and clarity.
+        'strength' - A float value representing the strength parameter for the LLM model.
+        'temperature' - A float value representing the temperature parameter for the LLM model.
+    Output: 
+        'xml_tagged' - A string containing the prompt with properly added XML tags.
+        'total_cost' - A float representing the total cost of running the LCELs.
+        'model_name' - A string representing the name of the selected LLM model.
+
+% Here is an example of a LangChain Expression Language (LCEL) program: <lcel_example><include>context/langchain_lcel_example.py</include></lcel_example>
+
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+    % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>context/llm_selector_example.py</include></llm_selector_example>
+</internal_example_modules>
+
+% This program will use Langchain to do the following:
+    Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/xml_convertor_LLM.prompt' and '$PDD_PATH/prompts/extract_xml_LLM.prompt' files.
+    Step 2. Create a Langchain LCEL template from xml_convertor prompt so that it returns a string output.
+    Step 3. Use the llm_selector function for the LLM model and token counting.
+    Step 4. Run the code through the model using Langchain LCEL. 
+        4a. Pass the following string parameters to the prompt during invoke:
+            - 'raw_prompt'
+        4b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens. 
+        4c. The string output of the LCEL will be 'xml_generated_analysis' that contains the tagged prompt.
+    Step 5. The code result of the model will contain a mix of text and XML separated by triple backticks. Create a Langchain LCEL template but with a llm_selector with strength .9 from the extract_xml prompt that has a JSON output.
+        5a. Pass the following string parameters to the prompt during invoke:
+            - 'xml_generated_analysis'
+        5b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+        5c. The JSON output of the LCEL will have the key 'xml_tagged' that contains the extracted tagged prompt.
+    Step 6. Pretty print the extracted tagged prompt using the rich Markdown function. Also, print the number of tokens in the result and the cost.
+    Step 7. Calculate the total cost by summing the costs from both LCEL runs.
+    Step 8. Return the 'xml_tagged' string using 'get', the 'total_cost' and 'model_name'.
+
