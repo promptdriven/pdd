@@ -1,5 +1,6 @@
 import os
-from typing import Tuple
+import json
+from typing import Tuple, Dict, Any
 from rich.console import Console
 from rich.markdown import Markdown
 from langchain_core.prompts import PromptTemplate
@@ -17,6 +18,17 @@ class TrimResultsOutput(BaseModel):
 
 class TrimResultsContinuedOutput(BaseModel):
     trimmed_continued_generation: str = Field(description="The trimmed continued generation")
+
+def extract_text_from_response(response: str) -> Tuple[str, bool]:
+    try:
+        json_response = json.loads(response)
+        if isinstance(json_response, dict):
+            for key in ['generated_text', 'code_block', 'trimmed_continued_generation']:
+                if key in json_response:
+                    return json_response[key], True
+        return response, False
+    except json.JSONDecodeError:
+        return response, False
 
 def continue_generation(formatted_input_prompt: str, llm_output: str, strength: float, temperature: float) -> Tuple[str, float, str]:
     # Step 1: Load prompts
@@ -47,10 +59,13 @@ def continue_generation(formatted_input_prompt: str, llm_output: str, strength: 
     trim_results_chain = trim_results_template | llm_trim | JsonOutputParser(pydantic_object=TrimResultsContinuedOutput)
 
     total_cost = 0
-
     # Step 5: Extract code_block
-    trim_start_result = trim_results_start_chain.invoke({"LLM_OUTPUT": llm_output})
-    code_block = trim_start_result.get('code_block', '')
+    try:
+        trim_start_result = trim_results_start_chain.invoke({"LLM_OUTPUT": llm_output})
+        code_block, is_json = extract_text_from_response(json.dumps(trim_start_result))
+    except Exception as e:
+        console.print(f"Error in trim_results_start_chain: {e}")
+        code_block, is_json = extract_text_from_response(llm_output)
 
     input_tokens = token_counter_trim(llm_output)
     output_tokens = token_counter_trim(code_block)
@@ -66,6 +81,7 @@ def continue_generation(formatted_input_prompt: str, llm_output: str, strength: 
             "FORMATTED_INPUT_PROMPT": formatted_input_prompt,
             "LLM_OUTPUT": code_block
         })
+        continue_result, _ = extract_text_from_response(continue_result)
         console.print(Markdown(f"```python\n{continue_result}\n```"))
         input_tokens = token_counter(formatted_input_prompt + code_block)
         output_tokens = token_counter(continue_result)
@@ -81,11 +97,15 @@ def continue_generation(formatted_input_prompt: str, llm_output: str, strength: 
 
         if is_finished:
             # Step 7b: Trim results
-            trim_result = trim_results_chain.invoke({
-                "CONTINUED_GENERATION": continue_result,
-                "GENERATED_RESULTS": code_block[-200:]
-            })
-            trimmed_continued_generation = trim_result.get('trimmed_continued_generation', '')
+            try:
+                trim_result = trim_results_chain.invoke({
+                    "CONTINUED_GENERATION": continue_result,
+                    "GENERATED_RESULTS": code_block[-200:]
+                })
+                trimmed_continued_generation, _ = extract_text_from_response(json.dumps(trim_result))
+            except Exception as e:
+                console.print(f"Error in trim_results_chain: {e}")
+                trimmed_continued_generation = continue_result
             code_block += trimmed_continued_generation
 
             input_tokens = token_counter_trim(continue_result + code_block)
