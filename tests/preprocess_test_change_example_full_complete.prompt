@@ -1,0 +1,3117 @@
+<context>
+    You are an expert LLM Prompt Engineer. Your goal is to change the input_prompt into a modified_prompt according to the change_prompt.
+</context>
+
+<instructions>
+    Here are the inputs and outputs of this prompt:
+    <input>
+        'input_prompt' - A string that contains the prompt that will be modified by the change_prompt.
+        'input_code' - A string that contains the code that was generated from the input_prompt.
+        'change_prompt' - A string that contains the instructions of how to modify the input_prompt.
+    </input>
+    <output>
+        'modified_prompt' - A string that contains the modified prompt that was changed based on the change_prompt.
+    </output>
+</instructions>
+
+```<examples>
+    <example>
+        <example_number>5</example_number>
+        <example_input_prompt>```
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "split", that will split a prompt into a sub_prompt and modified_prompt with no loss of functionality. All output to the console will be pretty printed using the Python Rich library.
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        - 'input_prompt': A string containing the prompt that will be split into a sub_prompt and modified_prompt.
+        - 'input_code': A string containing the code that was generated from the input_prompt.
+        - 'example_code': A string containing the code example of how the code generated from the sub_prompt would be used by the code generated from the modified_prompt.
+        - 'strength': A float value representing the strength parameter for the LLM model, used to influence the model's behavior.
+        - 'temperature': A float value representing the temperature parameter for the LLM model, used to control the randomness of the model's output.
+    Outputs:
+        - 'sub_prompt': A string containing the sub_prompt that was split from the input_prompt.
+        - 'modified_prompt': A string containing the modified prompt from input_prompt split from the sub_prompt.
+        - 'total_cost': A float value representing the total cost of running the function.
+
+% Here is an example how to preprocess the prompt from a file: ```
+from preprocess import preprocess
+from rich.console import Console   
+console = Console()     
+prompt = """
+<prompt>
+    
+    Hello World
+
+    
+    ``` <file_to_include.txt>```
+</prompt>
+"""
+
+recursive = False
+double_curly_brackets = True
+
+processed = preprocess(prompt, recursive, double_curly_brackets)
+console.print("[bold white]Processed Prompt:[/bold white]")
+console.print(processed)
+
+# load prompts/change_LLM.prompt
+with open('prompts/xml/change_LLM.prompt', 'r') as file:
+    change_LLM_prompt = file.read()
+    
+# call preprocess on change_LLM_prompt
+processed = preprocess(change_LLM_prompt, recursive, False)
+console.print("[bold white]Processed change_LLM Prompt:[/bold white]")
+console.print(processed)
+
+# write the processed prompt to a file
+with open('prompts/xml/change_LLM_processed.prompt', 'w') as file:
+    file.write(processed)
+```
+
+% Example usage of the Langchain LCEL program: ```
+import os
+from langchain_core.prompts import PromptTemplate
+from langchain_community.cache import SQLiteCache
+from langchain.globals import set_llm_cache
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.pydantic_v1 import BaseModel, Field
+from langchain.output_parsers import RetryOutputParser
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough, ConfigurableField
+
+from langchain_fireworks import Fireworks 
+from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
+from langchain_openai import OpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
+from langchain_together import Together
+
+# Define a base output parser (e.g., PydanticOutputParser)
+from pydantic import BaseModel, Field
+
+
+# Setup cache to save money and increase speeds
+set_llm_cache(SQLiteCache(database_path=".langchain.db"))
+
+
+# Create the LCEL template. Make note of the variable {{topic}} which will be filled in later.
+prompt_template = PromptTemplate.from_template("Tell me a joke about {{topic}}")
+
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0) 
+# Combine with a model and parser to output a string
+chain = prompt_template |llm| StrOutputParser()
+
+# Run the template. Notice that the input is a dictionary with a single key "topic" which feeds it into the above prompt template. This is needed because the prompt template has a variable {{topic}} which needs to be filled in when invoked.
+result = chain.invoke({{"topic": "cats"}})
+print(result)
+
+
+# Define your desired data structure.
+class Joke(BaseModel):
+    setup: str = Field(description="question to set up a joke")
+    punchline: str = Field(description="answer to resolve the joke")
+
+
+llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0)
+# Set up a parser
+parser = JsonOutputParser(pydantic_object=Joke)
+
+# Create a prompt template
+prompt = PromptTemplate(
+    template="Answer the user query.\n{{format_instructions}}\n{{query}}\n",
+    input_variables=["query"],
+    partial_variables={{"format_instructions": parser.get_format_instructions()}},
+)
+
+# Chain the components
+chain = prompt | llm | parser
+
+# Invoke the chain with a query
+result = chain.invoke({{"query": "Tell me a joke."}})
+print(result)
+
+
+# Get DEEKSEEK_API_KEY environmental variable
+deepseek_api_key = os.getenv('DEEKSEEK_API_KEY')
+
+# Ensure the API key is retrieved successfully
+if deepseek_api_key is None:
+    raise ValueError("DEEKSEEK_API_KEY environment variable is not set")
+
+llm = ChatOpenAI(
+    model='deepseek-chat', 
+    openai_api_key=deepseek_api_key, 
+    openai_api_base='https://api.deepseek.com',
+    temperature=0
+)
+
+# Chain the components
+chain = prompt | llm | parser
+
+# Invoke the chain with a query
+result = chain.invoke({{"query": "Write joke about the sky"}})
+print("deepseek",result)
+
+
+llm = Fireworks(
+    model="accounts/fireworks/models/mixtral-8x7b-instruct",
+    temperature=0)
+# Chain the components
+chain = prompt | llm | parser
+
+# Invoke the chain with a query
+result = chain.invoke({{"query": "Tell me a joke about the president"}})
+print("fireworks",result)
+
+
+
+
+
+prompt = ChatPromptTemplate.from_template(
+    "Tell me a short joke about {{topic}}"
+)
+chat_openai = ChatOpenAI(model="gpt-3.5-turbo")
+openai = OpenAI(model="gpt-3.5-turbo-instruct")
+anthropic = ChatAnthropic(model="claude-2")
+model = (
+    chat_openai
+    .with_fallbacks([anthropic])
+    .configurable_alternatives(
+        ConfigurableField(id="model"),
+        default_key="chat_openai",
+        openai=openai,
+        anthropic=anthropic,
+    )
+)
+
+chain = (
+    {{"topic": RunnablePassthrough()}} 
+    | prompt 
+    | model 
+    | StrOutputParser()
+)
+result = chain.invoke({{"topic": "Tell me a joke about the president"}})
+print("config alt:",result)
+
+
+
+llm = ChatGroq(temperature=0, model_name="mixtral-8x7b-32768")
+system = "You are a helpful assistant."
+human = "{{text}}"
+prompt = ChatPromptTemplate.from_messages([("system", system), ("human", human)])
+
+chain = prompt | llm | StrOutputParser()
+print(chain.invoke({{"text": "Explain the importance of low latency LLMs."}}))
+
+
+llm = Together(
+    model="meta-llama/Llama-3-70b-chat-hf",
+)
+chain = prompt | llm | StrOutputParser()
+print(chain.invoke({{"text": "Explain the importance of together.ai."}}))
+
+```
+
+% Example of selecting a Langchain LLM using llm_selector: ```
+import os
+from llm_selector import llm_selector
+
+def main() -> None:
+    """
+    Main function to demonstrate the usage of the llm_selector function.
+    Sets environment variables, defines parameters, and calls the function.
+    """
+    # Set environment variables (for demonstration purposes)
+    os.environ['PDD_MODEL_DEFAULT'] = 'gpt-4o-mini'  # Default model
+
+
+    # Define desired strength and temperature
+    strength: float = .3  # Desired strength of the model (0.0 to 1.0)
+    temperature: float = 0  # Temperature for the model (0.0 to 1.0)
+
+    try:
+        # Call the llm_selector function
+        llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
+
+        # Output the selected model details
+        print(f"Selected LLM: {{model_name}}")
+        print(f"Input Cost: {{input_cost}}")
+        print(f"Output Cost: {{output_cost}}")
+    except Exception as e:
+        print(f"An error occurred: {{e}}")
+
+if __name__ == "__main__":
+    main()
+```
+
+% Example of using tiktoken: ```
+import tiktoken
+encoding = tiktoken.get_encoding("cl100k_base")  # or another encoding name
+token_count = len(encoding.encode(preprocessed_prompt))
+```
+
+% Steps to be followed by the function:
+    1. Load the '$PDD_PATH/prompts/split_LLM.prompt' and '$PDD_PATH/prompts/extract_prompt_split_LLM.prompt' files.
+    2. Preprocess the split_LLM prompt using the preprocess function from the preprocess module.
+    2. Create a Langchain LCEL template from the processed split_LLM prompt to return a string output.
+    3. Use the llm_selector function for the LLM model.
+    4. Run the input through the model using Langchain LCEL:
+        - a. Pass the following string parameters to the prompt during invocation: 'input_prompt', 'input_code', 'example_code'.
+        - b. Calculate the input and output token count using tiktoken and pretty print the running message, including the token count and estimated cost. The cost from llm_selector is in dollars per million tokens.
+    5. Create a Langchain LCEL template from the extract_prompt_split_LLM prompt that outputs JSON:
+        - a. Pass the following string parameters to the prompt during invocation: 'llm_output' (this string is from Step 4).
+        - b. Calculate input and ouput token count using tiktoken and pretty print the running message with the token count and cost.
+        - c. get 'sub_prompt' and 'modified_prompt' from the JSON output.
+    6. Pretty print the extracted sub_prompt and modified_prompt using Rich Markdown function. Include token counts and costs.
+    7. Return the 'sub_prompt' and 'modified_prompt' strings and the total_cost.
+
+% Ensure the function handles edge cases, such as missing inputs or model errors, and provide clear error messages.
+```</example_input_prompt>
+        <example_input_code>```
+#To implement the `split` function as described, we need to follow a structured approach using the Langchain library, the `llm_selector` function, and the `tiktoken` library for token counting. Additionally, we'll use the `rich` library for pretty printing. Below is a step-by-step implementation of the function:
+#
+#```python
+import os
+import json
+from rich import print as rprint
+from rich.markdown import Markdown
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
+from langchain_openai import ChatOpenAI
+from llm_selector import llm_selector
+import tiktoken
+
+# Define the function
+def split(input_prompt, input_code, example_code, strength, temperature):
+    # Step 1: Load the prompt files
+    pdd_path = os.getenv('PDD_PATH')
+    if not pdd_path:
+        raise ValueError("PDD_PATH environment variable is not set")
+
+    split_llm_prompt_path = os.path.join(pdd_path, 'prompts/xml', 'split_xml_LLM.prompt')
+    extract_prompt_split_llm_prompt_path = os.path.join(pdd_path, 'prompts', 'extract_prompt_split_LLM.prompt')
+
+    with open(split_llm_prompt_path, 'r') as file:
+        split_llm_prompt = file.read()
+
+    with open(extract_prompt_split_llm_prompt_path, 'r') as file:
+        extract_prompt_split_llm_prompt = file.read()
+
+    # Step 2: Create Langchain LCEL template for split_LLM
+    split_prompt_template = PromptTemplate.from_template(split_llm_prompt)
+
+    # Step 3: Use llm_selector to get the LLM model
+    llm, input_cost, output_cost = llm_selector(strength, temperature)
+
+    # Step 4: Run the input through the model using Langchain LCEL
+    chain = split_prompt_template | llm | StrOutputParser()
+    input_data = {{
+        "input_prompt": input_prompt,
+        "input_code": input_code,
+        "example_code": example_code
+    }}
+    llm_output = chain.invoke(input_data)
+
+    # Calculate token count and cost
+    encoding = tiktoken.get_encoding("cl100k_base")
+    input_tokens = len(encoding.encode(json.dumps(input_data)))
+    output_tokens = len(encoding.encode(llm_output))
+    total_cost = (input_tokens * input_cost + output_tokens * output_cost) / 1_000_000
+
+    rprint(f"[bold green]Running model...[/bold green]")
+    rprint(f"Input Tokens: {{input_tokens}}, Output Tokens: {{output_tokens}}, Estimated Cost: ${{total_cost:.6f}}")
+
+    # Step 5: Create Langchain LCEL template for extract_prompt_split_LLM
+    extract_prompt_template = PromptTemplate.from_template(extract_prompt_split_llm_prompt)
+    parser = JsonOutputParser()
+
+    chain = extract_prompt_template | llm | parser
+    result = chain.invoke({{"llm_output": llm_output}})
+
+    # Calculate token count and cost for extraction
+    extract_input_tokens = len(encoding.encode(llm_output))
+    extract_output_tokens = len(encoding.encode(json.dumps(result)))
+    extract_cost = (extract_input_tokens * input_cost + extract_output_tokens * output_cost) / 1_000_000
+
+    rprint(f"[bold green]Extracting prompts...[/bold green]")
+    rprint(f"Input Tokens: {{extract_input_tokens}}, Output Tokens: {{extract_output_tokens}}, Estimated Cost: ${{extract_cost:.6f}}")
+
+    # Step 6: Pretty print the extracted sub_prompt and modified_prompt
+    sub_prompt = result.get('sub_prompt', '')
+    modified_prompt = result.get('modified_prompt', '')
+
+    rprint(Markdown(f"**Sub Prompt:**\n{{sub_prompt}}"))
+    rprint(Markdown(f"**Modified Prompt:**\n{{modified_prompt}}"))
+
+    # Step 7: Return the sub_prompt, modified_prompt, and total_cost
+    return sub_prompt, modified_prompt, total_cost + extract_cost
+
+# Example usage
+# sub_prompt, modified_prompt, total_cost = split("input_prompt", "input_code", "example_code", 0.5, 0.7)
+# rprint(f"Sub Prompt: {{sub_prompt}}, Modified Prompt: {{modified_prompt}}, Total Cost: {{total_cost}}")
+#```
+#
+#### Explanation:
+#1. **Environment Variables**: The function checks for the `PDD_PATH` environment variable to locate the prompt files.
+#2. **Prompt Loading**: It reads the prompt templates from the specified files.
+#3. **Langchain Setup**: It sets up the Langchain LCEL templates and chains them with the selected LLM model.
+#4. **Token Counting**: It uses `tiktoken` to count tokens and calculate costs based on the input and output token counts.
+#5. **Rich Printing**: It uses the `rich` library to pretty print the process and results.
+#6. **Error Handling**: The function raises an error if the necessary environment variables are not set.
+#
+#This implementation assumes that the `llm_selector` function and the `tiktoken` library are correctly set up and available in your environment. Adjust paths and configurations as necessary for your specific setup.
+```</example_input_code>
+        <example_change_prompt>```
+Use token_counter from llm_selector instead of tiktoken to count tokens in the prompt.
+```</example_change_prompt>
+        <example_modified_prompt>```
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "split", that will split a prompt into a sub_prompt and modified_prompt with no loss of functionality. All output to the console will be pretty printed using the Python Rich library.
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        - 'input_prompt': A string containing the prompt that will be split into a sub_prompt and modified_prompt.
+        - 'input_code': A string containing the code that was generated from the input_prompt.
+        - 'example_code': A string containing the code example of how the code generated from the sub_prompt would be used by the code generated from the modified_prompt.
+        - 'strength': A float value representing the strength parameter for the LLM model, used to influence the model's behavior.
+        - 'temperature': A float value representing the temperature parameter for the LLM model, used to control the randomness of the model's output.
+    Outputs:
+        - 'sub_prompt': A string containing the sub_prompt that was split from the input_prompt.
+        - 'modified_prompt': A string containing the modified prompt from input_prompt split from the sub_prompt.
+        - 'total_cost': A float value representing the total cost of running the function.
+
+% Here is an example how to preprocess the prompt from a file: ```
+from preprocess import preprocess
+from rich.console import Console   
+console = Console()     
+prompt = """
+<prompt>
+    
+    Hello World
+
+    
+    ``` <file_to_include.txt>```
+</prompt>
+"""
+
+recursive = False
+double_curly_brackets = True
+
+processed = preprocess(prompt, recursive, double_curly_brackets)
+console.print("[bold white]Processed Prompt:[/bold white]")
+console.print(processed)
+
+# load prompts/change_LLM.prompt
+with open('prompts/xml/change_LLM.prompt', 'r') as file:
+    change_LLM_prompt = file.read()
+    
+# call preprocess on change_LLM_prompt
+processed = preprocess(change_LLM_prompt, recursive, False)
+console.print("[bold white]Processed change_LLM Prompt:[/bold white]")
+console.print(processed)
+
+# write the processed prompt to a file
+with open('prompts/xml/change_LLM_processed.prompt', 'w') as file:
+    file.write(processed)
+```
+
+% Example usage of the Langchain LCEL program: ```
+import os
+from langchain_core.prompts import PromptTemplate
+from langchain_community.cache import SQLiteCache
+from langchain.globals import set_llm_cache
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.pydantic_v1 import BaseModel, Field
+from langchain.output_parsers import RetryOutputParser
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough, ConfigurableField
+
+from langchain_fireworks import Fireworks 
+from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
+from langchain_openai import OpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
+from langchain_together import Together
+
+# Define a base output parser (e.g., PydanticOutputParser)
+from pydantic import BaseModel, Field
+
+
+# Setup cache to save money and increase speeds
+set_llm_cache(SQLiteCache(database_path=".langchain.db"))
+
+
+# Create the LCEL template. Make note of the variable {{topic}} which will be filled in later.
+prompt_template = PromptTemplate.from_template("Tell me a joke about {{topic}}")
+
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0) 
+# Combine with a model and parser to output a string
+chain = prompt_template |llm| StrOutputParser()
+
+# Run the template. Notice that the input is a dictionary with a single key "topic" which feeds it into the above prompt template. This is needed because the prompt template has a variable {{topic}} which needs to be filled in when invoked.
+result = chain.invoke({{"topic": "cats"}})
+print(result)
+
+
+# Define your desired data structure.
+class Joke(BaseModel):
+    setup: str = Field(description="question to set up a joke")
+    punchline: str = Field(description="answer to resolve the joke")
+
+
+llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0)
+# Set up a parser
+parser = JsonOutputParser(pydantic_object=Joke)
+
+# Create a prompt template
+prompt = PromptTemplate(
+    template="Answer the user query.\n{{format_instructions}}\n{{query}}\n",
+    input_variables=["query"],
+    partial_variables={{"format_instructions": parser.get_format_instructions()}},
+)
+
+# Chain the components
+chain = prompt | llm | parser
+
+# Invoke the chain with a query
+result = chain.invoke({{"query": "Tell me a joke."}})
+print(result)
+
+
+# Get DEEKSEEK_API_KEY environmental variable
+deepseek_api_key = os.getenv('DEEKSEEK_API_KEY')
+
+# Ensure the API key is retrieved successfully
+if deepseek_api_key is None:
+    raise ValueError("DEEKSEEK_API_KEY environment variable is not set")
+
+llm = ChatOpenAI(
+    model='deepseek-chat', 
+    openai_api_key=deepseek_api_key, 
+    openai_api_base='https://api.deepseek.com',
+    temperature=0
+)
+
+# Chain the components
+chain = prompt | llm | parser
+
+# Invoke the chain with a query
+result = chain.invoke({{"query": "Write joke about the sky"}})
+print("deepseek",result)
+
+
+llm = Fireworks(
+    model="accounts/fireworks/models/mixtral-8x7b-instruct",
+    temperature=0)
+# Chain the components
+chain = prompt | llm | parser
+
+# Invoke the chain with a query
+result = chain.invoke({{"query": "Tell me a joke about the president"}})
+print("fireworks",result)
+
+
+
+
+
+prompt = ChatPromptTemplate.from_template(
+    "Tell me a short joke about {{topic}}"
+)
+chat_openai = ChatOpenAI(model="gpt-3.5-turbo")
+openai = OpenAI(model="gpt-3.5-turbo-instruct")
+anthropic = ChatAnthropic(model="claude-2")
+model = (
+    chat_openai
+    .with_fallbacks([anthropic])
+    .configurable_alternatives(
+        ConfigurableField(id="model"),
+        default_key="chat_openai",
+        openai=openai,
+        anthropic=anthropic,
+    )
+)
+
+chain = (
+    {{"topic": RunnablePassthrough()}} 
+    | prompt 
+    | model 
+    | StrOutputParser()
+)
+result = chain.invoke({{"topic": "Tell me a joke about the president"}})
+print("config alt:",result)
+
+
+
+llm = ChatGroq(temperature=0, model_name="mixtral-8x7b-32768")
+system = "You are a helpful assistant."
+human = "{{text}}"
+prompt = ChatPromptTemplate.from_messages([("system", system), ("human", human)])
+
+chain = prompt | llm | StrOutputParser()
+print(chain.invoke({{"text": "Explain the importance of low latency LLMs."}}))
+
+
+llm = Together(
+    model="meta-llama/Llama-3-70b-chat-hf",
+)
+chain = prompt | llm | StrOutputParser()
+print(chain.invoke({{"text": "Explain the importance of together.ai."}}))
+
+```
+
+% Example of selecting a Langchain LLM and counting tokens using llm_selector: ```
+import os
+from llm_selector import llm_selector
+
+def main() -> None:
+    """
+    Main function to demonstrate the usage of the llm_selector function.
+    Sets environment variables, defines parameters, and calls the function.
+    """
+    # Set environment variables (for demonstration purposes)
+    os.environ['PDD_MODEL_DEFAULT'] = 'gpt-4o-mini'  # Default model
+
+
+    # Define desired strength and temperature
+    strength: float = .3  # Desired strength of the model (0.0 to 1.0)
+    temperature: float = 0  # Temperature for the model (0.0 to 1.0)
+
+    try:
+        # Call the llm_selector function
+        llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
+
+        # Output the selected model details
+        print(f"Selected LLM: {{model_name}}")
+        print(f"Input Cost: {{input_cost}}")
+        print(f"Output Cost: {{output_cost}}")
+    except Exception as e:
+        print(f"An error occurred: {{e}}")
+
+if __name__ == "__main__":
+    main()
+```
+
+% Steps to be followed by the function:
+    1. Load the '$PDD_PATH/prompts/split_LLM.prompt' and '$PDD_PATH/prompts/extract_prompt_split_LLM.prompt' files.
+    2. Preprocess the split_LLM prompt using the preprocess function from the preprocess module.
+    2. Create a Langchain LCEL template from the processed split_LLM prompt to return a string output.
+    3. Use the llm_selector function for the LLM model and token counting.
+    4. Run the input through the model using Langchain LCEL:
+        - a. Pass the following string parameters to the prompt during invocation: 'input_prompt', 'input_code', 'example_code'.
+        - b. Calculate the input and output token count using token_counter from llm_selector and pretty print the running message, including the token count and estimated cost. The cost from llm_selector is in dollars per million tokens.
+    5. Create a Langchain LCEL template from the extract_prompt_split_LLM prompt that outputs JSON:
+        - a. Pass the following string parameters to the prompt during invocation: 'llm_output' (this string is from Step 4).
+        - b. Calculate input and output token count using token_counter from llm_selector and pretty print the running message with the token count and cost.
+        - c. get 'sub_prompt' and 'modified_prompt' from the JSON output.
+    6. Pretty print the extracted sub_prompt and modified_prompt using Rich Markdown function. Include token counts and costs.
+    7. Return the 'sub_prompt' and 'modified_prompt' strings and the total_cost.
+
+% Ensure the function handles edge cases, such as missing inputs or model errors, and provide clear error messages.
+```</example_modified_prompt>
+    </example>
+    <example>
+        <example_number>6</example_number>
+        <example_input_prompt>```
+% You are an expert Python engineer. Your goal is to write a Python function, "xml_tagger", that will enhance a given LLM prompt by adding XML tags to improve its structure and readability. All output to the console will be pretty printed using the Python rich library.
+
+% Here are the inputs and outputs of the function:
+    Input: 
+        'raw_prompt' - A string containing the prompt that needs XML tagging to improve its organization and clarity.
+        'strength' - A float value representing the strength parameter for the LLM model.
+        'temperature' - A float value representing the temperature parameter for the LLM model.
+    Output: 
+        'xml_tagged' - A string containing the prompt with properly added XML tags.
+
+% Here is an example of a Langchain LCEL program: ```
+import os
+from langchain_core.prompts import PromptTemplate
+from langchain_community.cache import SQLiteCache
+from langchain.globals import set_llm_cache
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.pydantic_v1 import BaseModel, Field
+from langchain.output_parsers import RetryOutputParser
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough, ConfigurableField
+
+from langchain_fireworks import Fireworks 
+from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
+from langchain_openai import OpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
+from langchain_together import Together
+
+# Define a base output parser (e.g., PydanticOutputParser)
+from pydantic import BaseModel, Field
+
+
+# Setup cache to save money and increase speeds
+set_llm_cache(SQLiteCache(database_path=".langchain.db"))
+
+
+# Create the LCEL template. Make note of the variable {{topic}} which will be filled in later.
+prompt_template = PromptTemplate.from_template("Tell me a joke about {{topic}}")
+
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0) 
+# Combine with a model and parser to output a string
+chain = prompt_template |llm| StrOutputParser()
+
+# Run the template. Notice that the input is a dictionary with a single key "topic" which feeds it into the above prompt template. This is needed because the prompt template has a variable {{topic}} which needs to be filled in when invoked.
+result = chain.invoke({{"topic": "cats"}})
+print(result)
+
+
+# Define your desired data structure.
+class Joke(BaseModel):
+    setup: str = Field(description="question to set up a joke")
+    punchline: str = Field(description="answer to resolve the joke")
+
+
+llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0)
+# Set up a parser
+parser = JsonOutputParser(pydantic_object=Joke)
+
+# Create a prompt template
+prompt = PromptTemplate(
+    template="Answer the user query.\n{{format_instructions}}\n{{query}}\n",
+    input_variables=["query"],
+    partial_variables={{"format_instructions": parser.get_format_instructions()}},
+)
+
+# Chain the components
+chain = prompt | llm | parser
+
+# Invoke the chain with a query
+result = chain.invoke({{"query": "Tell me a joke."}})
+print(result)
+
+
+# Get DEEKSEEK_API_KEY environmental variable
+deepseek_api_key = os.getenv('DEEKSEEK_API_KEY')
+
+# Ensure the API key is retrieved successfully
+if deepseek_api_key is None:
+    raise ValueError("DEEKSEEK_API_KEY environment variable is not set")
+
+llm = ChatOpenAI(
+    model='deepseek-chat', 
+    openai_api_key=deepseek_api_key, 
+    openai_api_base='https://api.deepseek.com',
+    temperature=0
+)
+
+# Chain the components
+chain = prompt | llm | parser
+
+# Invoke the chain with a query
+result = chain.invoke({{"query": "Write joke about the sky"}})
+print("deepseek",result)
+
+
+llm = Fireworks(
+    model="accounts/fireworks/models/mixtral-8x7b-instruct",
+    temperature=0)
+# Chain the components
+chain = prompt | llm | parser
+
+# Invoke the chain with a query
+result = chain.invoke({{"query": "Tell me a joke about the president"}})
+print("fireworks",result)
+
+
+
+
+
+prompt = ChatPromptTemplate.from_template(
+    "Tell me a short joke about {{topic}}"
+)
+chat_openai = ChatOpenAI(model="gpt-3.5-turbo")
+openai = OpenAI(model="gpt-3.5-turbo-instruct")
+anthropic = ChatAnthropic(model="claude-2")
+model = (
+    chat_openai
+    .with_fallbacks([anthropic])
+    .configurable_alternatives(
+        ConfigurableField(id="model"),
+        default_key="chat_openai",
+        openai=openai,
+        anthropic=anthropic,
+    )
+)
+
+chain = (
+    {{"topic": RunnablePassthrough()}} 
+    | prompt 
+    | model 
+    | StrOutputParser()
+)
+result = chain.invoke({{"topic": "Tell me a joke about the president"}})
+print("config alt:",result)
+
+
+
+llm = ChatGroq(temperature=0, model_name="mixtral-8x7b-32768")
+system = "You are a helpful assistant."
+human = "{{text}}"
+prompt = ChatPromptTemplate.from_messages([("system", system), ("human", human)])
+
+chain = prompt | llm | StrOutputParser()
+print(chain.invoke({{"text": "Explain the importance of low latency LLMs."}}))
+
+
+llm = Together(
+    model="meta-llama/Llama-3-70b-chat-hf",
+)
+chain = prompt | llm | StrOutputParser()
+print(chain.invoke({{"text": "Explain the importance of together.ai."}}))
+
+```
+
+% Here is an example how to select the Langchain llm: ```
+import os
+from llm_selector import llm_selector
+
+def main() -> None:
+    """
+    Main function to demonstrate the usage of the llm_selector function.
+    Sets environment variables, defines parameters, and calls the function.
+    """
+    # Set environment variables (for demonstration purposes)
+    os.environ['PDD_MODEL_DEFAULT'] = 'gpt-4o-mini'  # Default model
+
+
+    # Define desired strength and temperature
+    strength: float = .3  # Desired strength of the model (0.0 to 1.0)
+    temperature: float = 0  # Temperature for the model (0.0 to 1.0)
+
+    try:
+        # Call the llm_selector function
+        llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
+
+        # Output the selected model details
+        print(f"Selected LLM: {{model_name}}")
+        print(f"Input Cost: {{input_cost}}")
+        print(f"Output Cost: {{output_cost}}")
+    except Exception as e:
+        print(f"An error occurred: {{e}}")
+
+if __name__ == "__main__":
+    main()
+``` 
+
+% Here is an example how to use tiktoken: ```
+import tiktoken
+encoding = tiktoken.get_encoding("cl100k_base")  # or another encoding name
+token_count = len(encoding.encode(preprocessed_prompt))
+``` 
+
+% This program will use Langchain to do the following:
+    Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/xml_convertor_LLM.prompt' and '$PDD_PATH/prompts/extract_xml_LLM.prompt' files.
+    Step 2. Create a Langchain LCEL template from xml_convertor prompt so that it returns a string output.
+    Step 3. Use the llm_selector function for the LLM model.
+    Step 4. Run the code through the model using Langchain LCEL. 
+        4a. Pass the following string parameters to the prompt during invoke:
+            - 'raw_prompt'
+        4b. Pretty print a message letting the user know it is running and how many tokens (using tiktoken) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens. 
+        4c. The string output of the LCEL will be 'xml_generated_analysis' that contains the tagged prompt.
+    Step 5. The code result of the model will contain a mix of text and XML separated by triple backticks. Create a Langchain LCEL template from the extract_xml prompt that has a JSON output.
+        5a. Pass the following string parameters to the prompt during invoke:
+            - 'xml_generated_analysis'
+        5b. Pretty print a message letting the user know it is running and how many tokens (using tiktoken) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+        5c. The JSON output of the LCEL will have the key 'xml_tagged' that contains the extracted tagged prompt.
+    Step 6. Pretty print the extracted tagged prompt using the rich Markdown function. Also, print the number of tokens in the result and the cost.
+    Step 7. Return the 'xml_tagged' string.
+    
+
+% Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses.
+
+```</example_input_prompt>
+        <example_input_code>```
+import os
+import tiktoken
+from rich import print as rprint
+from rich.markdown import Markdown
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
+from langchain_core.pydantic_v1 import BaseModel, Field
+from langchain_community.cache import SQLiteCache
+from langchain.globals import set_llm_cache
+from llm_selector import llm_selector
+
+# Ensure cache is set up
+set_llm_cache(SQLiteCache(database_path=".langchain.db"))
+
+# Define a Pydantic model for JSON output
+class XMLTaggedOutput(BaseModel):
+    xml_tagged: str = Field(description="The XML tagged prompt")
+
+def xml_tagger(raw_prompt: str, strength: float, temperature: float) -> str:
+    """
+    Process a raw prompt to apply XML tagging using Langchain.
+
+    :param raw_prompt: The input prompt to be processed.
+    :param strength: The strength parameter for LLM selection.
+    :param temperature: The temperature parameter for LLM selection.
+    :return: The XML tagged prompt as a string.
+    """
+    try:
+        # Step 1: Load the prompt files
+        pdd_path = os.getenv('PDD_PATH')
+        if not pdd_path:
+            raise ValueError("PDD_PATH environment variable is not set")
+
+        with open(os.path.join(pdd_path, 'prompts/xml_convertor_LLM.prompt'), 'r') as file:
+            xml_convertor_prompt = file.read()
+
+        with open(os.path.join(pdd_path, 'prompts/extract_xml_LLM.prompt'), 'r') as file:
+            extract_xml_prompt = file.read()
+
+        # Step 2: Create LCEL template from xml_convertor prompt
+        xml_convertor_template = PromptTemplate.from_template(xml_convertor_prompt)
+
+        # Step 3: Use the llm_selector function
+        llm, input_cost, output_cost = llm_selector(strength, temperature)
+
+        # Step 4: Run the code through the model using Langchain LCEL
+        chain = xml_convertor_template | llm | StrOutputParser()
+
+        # Token count and cost calculation
+        encoding = tiktoken.get_encoding("cl100k_base")
+        token_count = len(encoding.encode(raw_prompt))
+        cost = (token_count / 1_000_000) * input_cost
+
+        rprint(f"[bold green]Running XML conversion...[/bold green]")
+        rprint(f"Token count: {{token_count}}, Cost: ${{cost:.6f}}")
+
+        # Invoke the chain
+        xml_generated_analysis = chain.invoke({{"raw_prompt": raw_prompt}})
+
+        # Step 5: Create LCEL template from extract_xml prompt
+        extract_xml_template = PromptTemplate.from_template(extract_xml_prompt)
+        parser = JsonOutputParser(pydantic_object=XMLTaggedOutput)
+
+        chain = extract_xml_template | llm | parser
+
+        # Token count and cost calculation for the second step
+        token_count = len(encoding.encode(xml_generated_analysis))
+        cost = (token_count / 1_000_000) * output_cost
+
+        rprint(f"[bold green]Extracting XML...[/bold green]")
+        rprint(f"Token count: {{token_count}}, Cost: ${{cost:.6f}}")
+
+        # Invoke the chain
+        result = chain.invoke({{"xml_generated_analysis": xml_generated_analysis}})
+
+        # Step 6: Pretty print the extracted tagged prompt
+        xml_tagged = result['xml_tagged']
+        rprint(Markdown(xml_tagged))
+        rprint(f"Token count in result: {{len(encoding.encode(xml_tagged))}}, Cost: ${{(len(encoding.encode(xml_tagged)) / 1_000_000) * output_cost:.6f}}")
+
+        # Step 7: Return the 'xml_tagged' string
+        return xml_tagged
+
+    except Exception as e:
+        rprint(f"[bold red]Error:[/bold red] {{e}}")
+        return ""
+
+# Example usage
+# xml_tagger("Tell me a joke about cats", 0.5, 0.7)
+```</example_input_code>
+        <example_change_prompt>```
+Use token_counter from llm_selector instead of tiktoken to count tokens in the prompt. Also, xml tagger should also return the total cost of running the LCELs.
+```</example_change_prompt>
+        <example_modified_prompt>```
+% You are an expert Python engineer. Your goal is to write a Python function, "xml_tagger", that will enhance a given LLM prompt by adding XML tags to improve its structure and readability. All output to the console will be pretty printed using the Python rich library.
+
+% Here are the inputs and outputs of the function:
+    Input: 
+        'raw_prompt' - A string containing the prompt that needs XML tagging to improve its organization and clarity.
+        'strength' - A float value representing the strength parameter for the LLM model.
+        'temperature' - A float value representing the temperature parameter for the LLM model.
+    Output: 
+        'xml_tagged' - A string containing the prompt with properly added XML tags.
+        'total_cost' - A float representing the total cost of running the LCELs.
+
+% Here is an example of a Langchain LCEL program: ```
+import os
+from langchain_core.prompts import PromptTemplate
+from langchain_community.cache import SQLiteCache
+from langchain.globals import set_llm_cache
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.pydantic_v1 import BaseModel, Field
+from langchain.output_parsers import RetryOutputParser
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough, ConfigurableField
+
+from langchain_fireworks import Fireworks 
+from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
+from langchain_openai import OpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
+from langchain_together import Together
+
+# Define a base output parser (e.g., PydanticOutputParser)
+from pydantic import BaseModel, Field
+
+
+# Setup cache to save money and increase speeds
+set_llm_cache(SQLiteCache(database_path=".langchain.db"))
+
+
+# Create the LCEL template. Make note of the variable {{topic}} which will be filled in later.
+prompt_template = PromptTemplate.from_template("Tell me a joke about {{topic}}")
+
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0) 
+# Combine with a model and parser to output a string
+chain = prompt_template |llm| StrOutputParser()
+
+# Run the template. Notice that the input is a dictionary with a single key "topic" which feeds it into the above prompt template. This is needed because the prompt template has a variable {{topic}} which needs to be filled in when invoked.
+result = chain.invoke({{"topic": "cats"}})
+print(result)
+
+
+# Define your desired data structure.
+class Joke(BaseModel):
+    setup: str = Field(description="question to set up a joke")
+    punchline: str = Field(description="answer to resolve the joke")
+
+
+llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0)
+# Set up a parser
+parser = JsonOutputParser(pydantic_object=Joke)
+
+# Create a prompt template
+prompt = PromptTemplate(
+    template="Answer the user query.\n{{format_instructions}}\n{{query}}\n",
+    input_variables=["query"],
+    partial_variables={{"format_instructions": parser.get_format_instructions()}},
+)
+
+# Chain the components
+chain = prompt | llm | parser
+
+# Invoke the chain with a query
+result = chain.invoke({{"query": "Tell me a joke."}})
+print(result)
+
+
+# Get DEEKSEEK_API_KEY environmental variable
+deepseek_api_key = os.getenv('DEEKSEEK_API_KEY')
+
+# Ensure the API key is retrieved successfully
+if deepseek_api_key is None:
+    raise ValueError("DEEKSEEK_API_KEY environment variable is not set")
+
+llm = ChatOpenAI(
+    model='deepseek-chat', 
+    openai_api_key=deepseek_api_key, 
+    openai_api_base='https://api.deepseek.com',
+    temperature=0
+)
+
+# Chain the components
+chain = prompt | llm | parser
+
+# Invoke the chain with a query
+result = chain.invoke({{"query": "Write joke about the sky"}})
+print("deepseek",result)
+
+
+llm = Fireworks(
+    model="accounts/fireworks/models/mixtral-8x7b-instruct",
+    temperature=0)
+# Chain the components
+chain = prompt | llm | parser
+
+# Invoke the chain with a query
+result = chain.invoke({{"query": "Tell me a joke about the president"}})
+print("fireworks",result)
+
+
+
+
+
+prompt = ChatPromptTemplate.from_template(
+    "Tell me a short joke about {{topic}}"
+)
+chat_openai = ChatOpenAI(model="gpt-3.5-turbo")
+openai = OpenAI(model="gpt-3.5-turbo-instruct")
+anthropic = ChatAnthropic(model="claude-2")
+model = (
+    chat_openai
+    .with_fallbacks([anthropic])
+    .configurable_alternatives(
+        ConfigurableField(id="model"),
+        default_key="chat_openai",
+        openai=openai,
+        anthropic=anthropic,
+    )
+)
+
+chain = (
+    {{"topic": RunnablePassthrough()}} 
+    | prompt 
+    | model 
+    | StrOutputParser()
+)
+result = chain.invoke({{"topic": "Tell me a joke about the president"}})
+print("config alt:",result)
+
+
+
+llm = ChatGroq(temperature=0, model_name="mixtral-8x7b-32768")
+system = "You are a helpful assistant."
+human = "{{text}}"
+prompt = ChatPromptTemplate.from_messages([("system", system), ("human", human)])
+
+chain = prompt | llm | StrOutputParser()
+print(chain.invoke({{"text": "Explain the importance of low latency LLMs."}}))
+
+
+llm = Together(
+    model="meta-llama/Llama-3-70b-chat-hf",
+)
+chain = prompt | llm | StrOutputParser()
+print(chain.invoke({{"text": "Explain the importance of together.ai."}}))
+
+```
+
+% Here is an example how to select the Langchain llm and count tokens: ```
+import os
+from llm_selector import llm_selector
+
+def main() -> None:
+    """
+    Main function to demonstrate the usage of the llm_selector function.
+    Sets environment variables, defines parameters, and calls the function.
+    """
+    # Set environment variables (for demonstration purposes)
+    os.environ['PDD_MODEL_DEFAULT'] = 'gpt-4o-mini'  # Default model
+
+
+    # Define desired strength and temperature
+    strength: float = .3  # Desired strength of the model (0.0 to 1.0)
+    temperature: float = 0  # Temperature for the model (0.0 to 1.0)
+
+    try:
+        # Call the llm_selector function
+        llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
+
+        # Output the selected model details
+        print(f"Selected LLM: {{model_name}}")
+        print(f"Input Cost: {{input_cost}}")
+        print(f"Output Cost: {{output_cost}}")
+    except Exception as e:
+        print(f"An error occurred: {{e}}")
+
+if __name__ == "__main__":
+    main()
+``` 
+
+% This program will use Langchain to do the following:
+    Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/xml_convertor_LLM.prompt' and '$PDD_PATH/prompts/extract_xml_LLM.prompt' files.
+    Step 2. Create a Langchain LCEL template from xml_convertor prompt so that it returns a string output.
+    Step 3. Use the llm_selector function for the LLM model and token counting.
+    Step 4. Run the code through the model using Langchain LCEL. 
+        4a. Pass the following string parameters to the prompt during invoke:
+            - 'raw_prompt'
+        4b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens. 
+        4c. The string output of the LCEL will be 'xml_generated_analysis' that contains the tagged prompt.
+    Step 5. The code result of the model will contain a mix of text and XML separated by triple backticks. Create a Langchain LCEL template from the extract_xml prompt that has a JSON output.
+        5a. Pass the following string parameters to the prompt during invoke:
+            - 'xml_generated_analysis'
+        5b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+        5c. The JSON output of the LCEL will have the key 'xml_tagged' that contains the extracted tagged prompt.
+    Step 6. Pretty print the extracted tagged prompt using the rich Markdown function. Also, print the number of tokens in the result and the cost.
+    Step 7. Calculate the total cost by summing the costs from both LCEL runs.
+    Step 8. Return the 'xml_tagged' string and the 'total_cost'.
+
+% Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses.
+```</example_modified_prompt>
+    </example>
+    <example>
+        <example_number>7</example_number>
+        <example_input_prompt>```
+% You are an expert Python Software engineer. Your goal is to write a Python program, "fix_errors.py". All output to the console will be pretty printed with the Python rich package.
+
+% You will be using a CLI program called pdd. Here is a detailed description of the program functionality: ```
+# PDD (Prompt-Driven Development) Command Line Interface
+
+PDD is a versatile tool for generating code, examples, unit tests, and managing prompts through various features like splitting large prompts into smaller ones.
+
+## Prompt File Naming Convention
+
+Prompt files in PDD follow this specific naming format:
+```
+<basename>_<language>.prompt
+```
+Where:
+- `<basename>` is the base name of the file or project
+- `<language>` is the programming language or context of the prompt
+
+Examples:
+- `pdd_cli_python.prompt` (basename: pdd_cli, language: python)
+- `Makefile_makefile.prompt` (basename: Makefile, language: makefile)
+- `setup_bash.prompt` (basename: setup, language: bash)
+
+## Basic Usage
+
+```
+python pdd/pdd.py [GLOBAL OPTIONS] COMMAND [OPTIONS] [ARGS]...
+```
+
+## Global Options
+
+These options can be used with any command:
+
+- `--force`: Overwrite existing files without asking for confirmation.
+- `--strength`: Set the strength of the AI model (default is 0.5).
+- `--temperature`: Set the temperature of the AI model (default is 0.0).
+- `--verbose`: Increase output verbosity for more detailed information.
+- `--quiet`: Decrease output verbosity for minimal information.
+
+## Commands
+
+Here are the main commands:
+
+### 1. Generate
+
+Create runnable code from a prompt file.
+
+```
+pdd generate [GLOBAL OPTIONS] [OPTIONS] PROMPT_FILE
+```
+
+Options:
+- `--output LOCATION`: Specify where to save the generated code. The default file name is `<basename>.<language_file_extension>`. If an environment variable `PDD_GENERATE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+
+### 2. Example
+
+Create an example file from an existing code file.
+
+```
+pdd example [GLOBAL OPTIONS] [OPTIONS] CODE_FILE
+```
+
+Options:
+- `--output LOCATION`: Specify where to save the generated example code. The default file name is `<basename>_example.<language_file_extension>`. If an environment variable `PDD_EXAMPLE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+
+### 3. Test
+
+Generate a unit test file for a given code file and its corresponding prompt.
+
+```
+pdd test [GLOBAL OPTIONS] [OPTIONS] CODE_FILE PROMPT_FILE
+```
+
+Options:
+- `--output LOCATION`: Specify where to save the generated test file. The default file name is `test_<basename>.<language_file_extension>`. If an environment variable `PDD_TEST_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--language`: Specify the programming language. Defaults to the language specified by the prompt file name.
+
+### 4. Preprocess
+
+Preprocess prompts and save the results.
+
+```
+pdd preprocess [GLOBAL OPTIONS] [OPTIONS] PROMPT_FILE
+```
+
+Options:
+- `--output LOCATION`: Specify where to save the preprocessed prompt. The default file name is `<basename>_<language>_preprocessed.prompt`. If an environment variable `PDD_PREPROCESS_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--xml`: Automatically insert XML delimiters for long and complex prompts to structure the content better.
+
+### 5. Fix
+
+Fix errors in code and unit tests based on error messages.
+
+```
+pdd fix [GLOBAL OPTIONS] [OPTIONS] UNIT_TEST_FILE CODE_FILE ERROR_FILE
+```
+
+Options:
+- `--output-test LOCATION`: Specify where to save the fixed unit test file. The default file name is `test_<basename>_fixed.<language_file_extension>`. If an environment variable `PDD_FIX_TEST_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output-code LOCATION`: Specify where to save the fixed code file. The default file name is `<basename>_fixed.<language_file_extension>`. If an environment variable `PDD_FIX_CODE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+
+### 6. Split
+
+Split large complex prompts into smaller, more manageable prompts.
+
+```
+pdd split [GLOBAL OPTIONS] [OPTIONS] INPUT_PROMPT INPUT_CODE EXAMPLE_CODE
+```
+
+Options:
+- `--output-sub LOCATION`: Specify where to save the generated sub-prompt. The default file name is `sub_<basename>.prompt`. If an environment variable `PDD_SPLIT_SUB_PROMPT_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output-modified LOCATION`: Specify where to save the modified prompt. The default file name is `modified_<basename>.prompt`. If an environment variable `PDD_SPLIT_MODIFIED_PROMPT_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output-cost LOCATION`: Specify where to save the cost estimation report. The default file name is `cost_<basename>.txt`. If an environment variable `PDD_SPLIT_COST_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+
+## Output Location Specification
+
+For all commands that generate or modify files, the `--output` option (or its variant, such as `--output-sub`, `--output-modified`, or `--output-cost` for the `split` command) allows flexible specification of the output location:
+
+1. **Filename only**: If you provide just a filename (e.g., `--output result.py`), the file will be created in the current working directory.
+2. **Full path**: If you provide a full path (e.g., `--output /home/user/projects/result.py`), the file will be created at that exact location.
+3. **Directory**: If you provide a directory name (e.g., `--output ./generated/`), a file with an automatically generated name will be created in that directory.
+4. **Environment Variable**: If the `--output` option is not provided, and an environment variable specific to the command (`PDD_GENERATE_OUTPUT_PATH`, `PDD_EXAMPLE_OUTPUT_PATH`, `PDD_TEST_OUTPUT_PATH`, `PDD_PREPROCESS_OUTPUT_PATH`, `PDD_FIX_TEST_OUTPUT_PATH`, `PDD_FIX_CODE_OUTPUT_PATH`, `PDD_SPLIT_SUB_PROMPT_OUTPUT_PATH`, `PDD_SPLIT_MODIFIED_PROMPT_OUTPUT_PATH`, `PDD_SPLIT_COST_OUTPUT_PATH`) is set, PDD will use the path specified by this variable. Otherwise, it will use default naming conventions and save the file in the current working directory.
+5. **No Output Location**: If no output location is specified and no environment variable is set, the file will be saved in the current working directory with a default name given the command.
+
+## Multi-Command Chaining
+
+PDD supports multi-command chaining, allowing you to execute multiple commands in a single line. Commands will be executed in the order they are specified.
+
+Basic syntax for multi-command chaining:
+```
+pdd [GLOBAL OPTIONS] COMMAND1 [OPTIONS] [ARGS]... [COMMAND2 [OPTIONS] [ARGS]...]...
+```
+
+This feature enables you to perform complex workflows efficiently.
+
+## Getting Help
+
+PDD provides comprehensive help features:
+
+1. **General Help**:
+   ```
+   pdd --help
+   ```
+   Displays a list of available commands and options.
+
+2. **Command-Specific Help**:
+   ```
+   pdd COMMAND --help
+   ```
+   Provides detailed help for a specific command, including available options and usage examples.
+
+## Additional Features
+
+- **Tab Completion**: PDD supports tab completion for commands and options in compatible shells. You can install tab completion by running:
+  ```
+  pdd --install-completion
+  ```
+- **Colorized Output**: PDD provides colorized output for better readability in compatible terminals.
+- **Progress Indicators**: For long-running operations, PDD includes progress indicators to keep you informed of the task's status.
+
+## Examples of Common Workflows
+
+1. Preprocess a prompt, generate code, create an example, and generate tests (using multi-command chaining):
+```
+pdd preprocess --output preprocessed/ --temperature 0.0 app_python.prompt generate --output src/app.py --temperature 0.0 preprocessed/app_python_preprocessed.prompt example --output examples/ --temperature 0.0 src/app.py test --output tests/ --language python --temperature 0.0 src/app.py app_python.prompt
+```
+
+2. Generate code and create examples for multiple prompts (using multi-command chaining):
+```
+pdd generate --output src/api.py --temperature 0.0 api_python.prompt generate --output src/db.py --temperature 0.0 database_sql.prompt example --output examples/api_usage.py --temperature 0.0 src/api.py example --output examples/db_usage.py --temperature 0.0 src/db.py
+```
+
+3. Preprocess a prompt and view the diff:
+```
+pdd preprocess --output preprocessed/app_python_preprocessed.prompt --diff --temperature 0.0 app_python.prompt
+```
+
+4. Preprocess a prompt with XML delimiters inserted:
+```
+pdd preprocess --output preprocessed/app_python_preprocessed.xml --xml app_python.prompt
+```
+
+5. Preprocess multiple prompts and generate code for each (using multi-command chaining):
+```
+pdd preprocess --output preprocessed/ --temperature 0.0 api_python.prompt preprocess --output preprocessed/ --temperature 0.0 db_sql.prompt generate --output src/ --temperature 0.0 preprocessed/api_python_preprocessed.prompt generate --output src/ --temperature 0.0 preprocessed/db_sql_preprocessed.prompt
+```
+
+6. Fix errors in code and unit tests:
+```
+pdd fix --output-test fixed/test_app_fixed.py --output-code fixed/app_fixed.py --strength 0.7 --temperature 0.0 tests/test_app.py src/app.py error_log.txt
+```
+
+7. Split a large prompt into smaller prompts:
+```
+pdd split --output-sub sub_prompts/sub_app_python.prompt --output-modified modified_prompts/modified_app_python.prompt --output-cost cost_reports/cost_app_python.txt --strength 0.8 --temperature 0.0 large_app_python.prompt related_code.py example_code.py
+```
+
+This example splits a large prompt (`large_app_python.prompt`) into smaller sub-prompts and modifies the original prompt accordingly. The sub-prompt is saved in the `sub_prompts/` directory, the modified prompt is saved in the `modified_prompts/` directory, and a cost estimation report is saved in the `cost_reports/` directory.
+
+## Environment Variables for Output Paths
+
+You can set environment variables to define default output paths for each command, reducing the need to specify output locations in the command line. The following environment variables are supported:
+
+- **`PDD_GENERATE_OUTPUT_PATH`**: Default path for the `generate` command.
+- **`PDD_EXAMPLE_OUTPUT_PATH`**: Default path for the `example` command.
+- **`PDD_TEST_OUTPUT_PATH`**: Default path for the `test` command.
+- **`PDD_PREPROCESS_OUTPUT_PATH`**: Default path for the `preprocess` command.
+- **`PDD_FIX_TEST_OUTPUT_PATH`**: Default path for the fixed unit test files in the `fix` command.
+- **`PDD_FIX_CODE_OUTPUT_PATH`**: Default path for the fixed code files in the `fix` command.
+- **`PDD_SPLIT_SUB_PROMPT_OUTPUT_PATH`**: Default path for the sub-prompts generated by the `split` command.
+- **`PDD_SPLIT_MODIFIED_PROMPT_OUTPUT_PATH`**: Default path for the modified prompts generated by the `split` command.
+- **`PDD_SPLIT_COST_OUTPUT_PATH`**: Default path for the cost estimation reports generated by the `split` command.
+
+If these environment variables are set, the corresponding files will be saved to the specified paths by default unless overridden by the `--output`, `--output-sub`, `--output-modified`, or `--output-cost` options.
+```
+
+% This script will take in the following arguments:
+    - unit_test_file
+    - code_file
+    - Python program to run to verify code still runs 
+    - Strength
+    - Number of times to run before giving up
+
+% Follow these steps:
+    Step 1. Remove the existing error.log file.
+    Step 2. Run the unit_test_file with 'python -m pytest -vv' and pipe all output to error.log. If the test fails, then proceed to step 3.
+    Step 3. 
+        a. Print out the error message from error.log.
+        b. Count the number of 'FAILED' and 'ERROR' from stdout. Keep in mind that given the '-vv' flag, the output will contain doubled the number of 'FAILED' and 'ERROR' messages.
+        c. Make a copy of the unit_test_file and code_file but append the number of failed and errors, and the loop iteration number to the file names like this "unit_test_1_0_3.py" and "code_1_0_3.py", where there was one fail, zero errors and it is the third iteration through the loop.
+    Step 4. Run 'python pdd/pdd.py' fix on the unit_test_file, code_file and error.log with the output being written to unit_test_file and code_file. Make sure global options come before the command when calling pdd. The pdd console output will get appended to the error.log with a separator between pytest and pdd program runs.
+    Step 5. Run the Python program to verify the code still runs.
+        a. If the program still runs then repeat the process from Step 2 with the updated unit test and code files unless the loop limit is reached.
+        b. Otherwise, if program fails, then restore the original files and repeat the process from Step 4.
+    Step 6. Run pytest one last time and pipe all output to error.log and print to console.
+```</example_input_prompt>
+        <example_input_code>```
+# To create the `fix_errors.py` script, we'll follow the steps outlined in your instructions. The script will automate the process of running unit tests, capturing errors, and using the PDD tool to attempt to fix those errors. Here's how the script can be structured:
+
+# ```python
+import subprocess
+import shutil
+import os
+import sys
+
+def run_pytest(unit_test_file):
+    """Run pytest on the given unit test file and capture output."""
+    result = subprocess.run(
+        ['python', '-m', 'pytest', '-vv',
+        unit_test_file],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+    with open('error.log', 'a') as log_file:
+        log_file.write(result.stdout)
+        log_file.write(result.stderr)
+    print(result.stdout)
+    print(result.stderr)
+    return result.returncode, result.stdout
+
+def extract_errors(log_content):
+    """Extract the number of failed tests and errors from the pytest output."""
+    failed = int(log_content.count('FAILED') / 2)
+    errors = int(log_content.count('ERROR') / 2)
+
+    return failed, errors
+
+def copy_files_with_suffix(unit_test_file, code_file, failed, errors, iteration):
+    """Copy the unit test and code files with a suffix indicating the current state."""
+    unit_test_copy = f"{{os.path.splitext(unit_test_file)[0]}}_{{failed}}_{{errors}}_{{iteration}}.py"
+    code_copy = f"{{os.path.splitext(code_file)[0]}}_{{failed}}_{{errors}}_{{iteration}}.py"
+    shutil.copy(unit_test_file, unit_test_copy)
+    shutil.copy(code_file, code_copy)
+    return unit_test_copy, code_copy
+
+def run_pdd_fix(unit_test_file, code_file, error_file, strength):
+    """Run the PDD fix command."""
+    result = subprocess.run(
+        [
+            'python', 'pdd/pdd.py', '--strength', str(strength), 'fix',
+            '--output-test', unit_test_file, '--output-code', code_file,
+            unit_test_file, code_file, error_file
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+    with open('error.log', 'a') as log_file:
+        log_file.write("\n--- Attempted Fix of Above Pytest Failures and Errors ---\n")
+        log_file.write(result.stdout)
+        log_file.write(result.stderr)
+    print(result.stdout)
+    print(result.stderr)
+    return result.returncode
+
+def run_verification_program(verification_program):
+    """Run the verification program to ensure the code still runs."""
+    result = subprocess.run(
+        ['python', verification_program],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+    return result.returncode == 0
+
+def main(unit_test_file, code_file, verification_program, strength, max_iterations):
+    iteration = 0
+    previous_failed = previous_errors = 0
+
+    while iteration < max_iterations:
+        return_code, log_content = run_pytest(unit_test_file)
+        if return_code == 0:
+            print("All tests passed.")
+            break
+
+        failed, errors = extract_errors(log_content)
+
+        print(f"Iteration {{iteration}}: {{failed}} failed, {{errors}} errors")
+
+        if failed == 0 and errors == 0:
+            print("No new errors detected. Exiting.")
+            break
+
+        unit_test_copy, code_copy = copy_files_with_suffix(unit_test_file, code_file, failed, errors, iteration)
+
+        run_pdd_fix(unit_test_file, code_file, 'error.log', strength)
+
+        if run_verification_program(verification_program):
+            print("Verification program ran successfully.")
+        else:
+            print("Verification program failed. Restoring original files.")
+            shutil.copy(unit_test_copy, unit_test_file)
+            shutil.copy(code_copy, code_file)
+
+        iteration += 1
+        
+    run_pytest(unit_test_file)
+
+if __name__ == "__main__":
+    if len(sys.argv) != 6:
+        print("Usage: python fix_errors.py <unit_test_file> <code_file> <verification_program> <strength> <max_iterations>")
+        sys.exit(1)
+
+    unit_test_file = sys.argv[1]
+    code_file = sys.argv[2]
+    verification_program = sys.argv[3]
+    strength = float(sys.argv[4])
+    max_iterations = int(sys.argv[5])
+
+    main(unit_test_file, code_file, verification_program, strength, max_iterations)
+# ```
+
+# ### Explanation:
+
+# 1. **Run Pytest**: The script runs the unit tests using `pytest` and captures the output in `error.log`.
+
+# 2. **Extract Errors**: It extracts the number of failed tests and errors from the pytest output.
+
+# 3. **Copy Files**: It makes copies of the unit test and code files with a suffix indicating the number of failures, errors, and the current iteration.
+
+# 4. **Run PDD Fix**: It uses the PDD tool to attempt to fix the errors, appending the output to `error.log`.
+
+# 5. **Verification**: It runs a verification program to ensure the code still runs correctly.
+
+# 6. **Loop Control**: The process repeats until all tests pass or the maximum number of iterations is reached.
+
+# This script should be run with the appropriate arguments as specified in the usage message.
+```</example_input_code>
+        <example_change_prompt>```
+% Instead of using the CLI program 'pdd', you will be using this code module instead: ```from fix_errors_from_unit_tests import fix_errors_from_unit_tests
+
+if __name__ == "__main__":
+    # Define the inputs
+    unit_test = "def test_add():\n    assert add(1, 2) == 3"  # A unit test that is expected to fail
+    code = "def add(a, b):\n    return a + b"  # The code that the unit test is testing
+    error = "NameError: name 'add' is not defined"  # The error message indicating the issue
+    strength = 0.8  # A strength parameter for the LLM selection
+
+    # Call the function to fix errors
+    updated_unit_test, updated_code, fixed_unit_test, fixed_code = fix_errors_from_unit_tests(unit_test, code, error, strength)
+
+    # Print the results
+    print("Updated Unit Test:", updated_unit_test)
+    print("Updated Code:", updated_code)
+    print("Fixed Unit Test:", fixed_unit_test)
+    print("Fixed Code:", fixed_code)
+# ```
+
+# ### Input Parameters
+
+# - `unit_test` (str): The unit test code that is expected to fail due to an error.
+# - `code` (str): The implementation code that the unit test is testing.
+# - `error` (str): The error message that indicates what went wrong during the unit test execution.
+# - `strength` (float): A parameter that influences the selection of the language model (LLM) used for fixing the errors. It typically ranges from 0 to 1.
+
+# ### Output Parameters
+
+# The function returns four values:
+# - `updated_unit_test` (bool): Indicates whether the unit test needs to be updated.
+# - `updated_code` (bool): Indicates whether the code needs to be updated.
+# - `fixed_unit_test` (str): The corrected version of the unit test code.
+# - `fixed_code` (str): The corrected version of the implementation code.```
+
+% Also, instead of being a CLI program, this code module will be a Python function "fix_error_loop" that will also take in temperature.
+```</example_change_prompt>
+        <example_modified_prompt>```
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "fix_error_loop", that will attempt to fix errors in a unit test and its corresponding code file through multiple iterations. All output to the console will be pretty printed using the Python rich library.
+
+% Here are the inputs and outputs of the function:
+    Inputs: 
+        'unit_test_file' - A string containing the path to the unit test file.
+        'code_file' - A string containing the path to the code file being tested.
+        'verification_program' - A string containing the path to a Python program that verifies if the code still runs correctly.
+        'strength' - A float between 0 and 1 that represents the strength of the LLM model to use.
+        'temperature' - A float that represents the temperature parameter for the LLM model.
+        'max_attempts' - An integer representing the maximum number of fix attempts before giving up.
+    Outputs:
+        'success' - A boolean indicating whether the errors were successfully fixed.
+        'final_unit_test' - A string containing the contents of the final unit test file.
+        'final_code' - A string containing the contents of the final code file.
+        'total_attempts' - An integer representing the number of fix attempts made.
+
+% Here is an example of the fix_errors_from_unit_tests function that will be used: ```
+from fix_errors_from_unit_tests import fix_errors_from_unit_tests
+
+# Define the inputs for the function
+unit_test: str = """
+def test_addition():
+    assert add(1, 1) == 3  # Intentional error
+"""
+
+code: str = """
+def add(a, b):
+    return a + b
+"""
+
+error: str = "AssertionError: assert 2 == 3"
+error_file: str = "error_log.txt"
+strength: float = 0.7  # Strength parameter for LLM selection
+temperature: float = 0 # Temperature parameter for LLM selection
+
+try:
+    # Call the function to fix errors in the unit tests
+    update_unit_test, update_code, fixed_unit_test, fixed_code, total_cost = fix_errors_from_unit_tests(
+        unit_test=unit_test,
+        code=code,
+        error=error,
+        error_file=error_file,
+        strength=strength,
+        temperature=temperature
+    )
+
+    # Print the results
+    print(f"Update Unit Test: {{update_unit_test}}")
+    print(f"Update Code: {{update_code}}")
+    print(f"Fixed Unit Test:\n{{fixed_unit_test}}")
+    print(f"Fixed Code:\n{{fixed_code}}")
+    print(f"Total Cost: ${{total_cost:.6f}}")
+except Exception as e:
+    print(f"An error occurred: {{e}}")
+```
+
+% This function will do the following:
+    Step 1. Remove the existing error.log file if it exists.
+    Step 2. Initialize a counter for the number of attempts.
+    Step 3. Enter a while loop that continues until max_attempts is reached:
+        a. Run the unit_test_file with 'python -m pytest -vv' and pipe all output to error.log.
+        b. If the test passes, break the loop.
+        c. If the test fails:
+           - Read and print the error message from error.log.
+           - Count the number of 'FAILED' and 'ERROR' from stdout (accounting for the -vv flag doubling these messages).
+           - Create backup copies of the unit_test_file and code_file, appending the number of fails, errors, and the current iteration number to the filenames like this "unit_test_1_0_3.py" and "code_1_0_3.py", where there was one fail, zero errors and it is the third iteration through the loop.
+           - Read the contents of the unit_test_file and code_file.
+           - Call fix_errors_from_unit_tests with the file contents, error from error.log, and the provided strength.
+           - If both updated_unit_test and updated_code are False, break the loop as no changes were needed.
+           - If either updated_unit_test or updated_code is True:
+              * Write the fixed_unit_test and fixed_code back to their respective files.
+              * Run the verification_program to check if the code still runs.
+              * If the verification fails, restore the original files from the backups and continue the loop.
+              * If the verification succeeds, continue to the next iteration.
+        d. Increment the attempt counter.
+    Step 4. After the loop ends, run pytest one last time, pipe the output to error.log, and print it to the console.
+    Step 5. Return the success status, final unit test contents, final code contents, and total number of attempts.
+
+% Ensure that the function handles potential errors gracefully, such as file I/O errors or subprocess execution failures. Use the rich library for all console output to enhance readability. Consider using context managers for file operations to ensure proper resource management.
+
+% Note: The temperature parameter should be incorporated into the LLM selection process. You may need to modify the fix_errors_from_unit_tests function or use it in conjunction with the llm_selector to properly utilize this parameter.
+```</example_modified_prompt>
+    </example>
+    <example>
+        <example_number>8</example_number>
+        <example_input_prompt>```
+% You are an expert Python Software Engineer. Your goal is to write a python function, "fix_errors_from_unit_tests", that will fix unit test errors in a code file. All output to the console will be pretty print using the Python rich library.
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        'unit_test' - A string containing the unit test code.
+        'code' - A string containing the code under test.
+        'error' - A string that contains the errors that need to be fixed.
+        'strength' - A float between 0 and 1 that is the strength of the LLM model to use.       
+    Outputs:
+        'update_unit_test': Boolean indicating whether the unit test needs to be updated.
+        'update_code': Boolean indicating whether the code under test needs to be updated.
+        'fixed_unit_test' - a string that is the fixed unit test.
+        'fixed_code' - a string that is the fixed code under test.
+
+% Here is an example of a Langchain LCEL program: ```
+import os
+from langchain_core.prompts import PromptTemplate
+from langchain_community.cache import SQLiteCache
+from langchain.globals import set_llm_cache
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.pydantic_v1 import BaseModel, Field
+from langchain.output_parsers import RetryOutputParser
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough, ConfigurableField
+
+from langchain_fireworks import Fireworks 
+from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
+from langchain_openai import OpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
+from langchain_together import Together
+
+# Define a base output parser (e.g., PydanticOutputParser)
+from pydantic import BaseModel, Field
+
+
+# Setup cache to save money and increase speeds
+set_llm_cache(SQLiteCache(database_path=".langchain.db"))
+
+
+# Create the LCEL template. Make note of the variable {{topic}} which will be filled in later.
+prompt_template = PromptTemplate.from_template("Tell me a joke about {{topic}}")
+
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0) 
+# Combine with a model and parser to output a string
+chain = prompt_template |llm| StrOutputParser()
+
+# Run the template. Notice that the input is a dictionary with a single key "topic" which feeds it into the above prompt template. This is needed because the prompt template has a variable {{topic}} which needs to be filled in when invoked.
+result = chain.invoke({{"topic": "cats"}})
+print(result)
+
+
+# Define your desired data structure.
+class Joke(BaseModel):
+    setup: str = Field(description="question to set up a joke")
+    punchline: str = Field(description="answer to resolve the joke")
+
+
+llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0)
+# Set up a parser
+parser = JsonOutputParser(pydantic_object=Joke)
+
+# Create a prompt template
+prompt = PromptTemplate(
+    template="Answer the user query.\n{{format_instructions}}\n{{query}}\n",
+    input_variables=["query"],
+    partial_variables={{"format_instructions": parser.get_format_instructions()}},
+)
+
+# Chain the components
+chain = prompt | llm | parser
+
+# Invoke the chain with a query
+result = chain.invoke({{"query": "Tell me a joke."}})
+print(result)
+
+
+# Get DEEKSEEK_API_KEY environmental variable
+deepseek_api_key = os.getenv('DEEKSEEK_API_KEY')
+
+# Ensure the API key is retrieved successfully
+if deepseek_api_key is None:
+    raise ValueError("DEEKSEEK_API_KEY environment variable is not set")
+
+llm = ChatOpenAI(
+    model='deepseek-chat', 
+    openai_api_key=deepseek_api_key, 
+    openai_api_base='https://api.deepseek.com',
+    temperature=0
+)
+
+# Chain the components
+chain = prompt | llm | parser
+
+# Invoke the chain with a query
+result = chain.invoke({{"query": "Write joke about the sky"}})
+print("deepseek",result)
+
+
+llm = Fireworks(
+    model="accounts/fireworks/models/mixtral-8x7b-instruct",
+    temperature=0)
+# Chain the components
+chain = prompt | llm | parser
+
+# Invoke the chain with a query
+result = chain.invoke({{"query": "Tell me a joke about the president"}})
+print("fireworks",result)
+
+
+
+
+
+prompt = ChatPromptTemplate.from_template(
+    "Tell me a short joke about {{topic}}"
+)
+chat_openai = ChatOpenAI(model="gpt-3.5-turbo")
+openai = OpenAI(model="gpt-3.5-turbo-instruct")
+anthropic = ChatAnthropic(model="claude-2")
+model = (
+    chat_openai
+    .with_fallbacks([anthropic])
+    .configurable_alternatives(
+        ConfigurableField(id="model"),
+        default_key="chat_openai",
+        openai=openai,
+        anthropic=anthropic,
+    )
+)
+
+chain = (
+    {{"topic": RunnablePassthrough()}} 
+    | prompt 
+    | model 
+    | StrOutputParser()
+)
+result = chain.invoke({{"topic": "Tell me a joke about the president"}})
+print("config alt:",result)
+
+
+
+llm = ChatGroq(temperature=0, model_name="mixtral-8x7b-32768")
+system = "You are a helpful assistant."
+human = "{{text}}"
+prompt = ChatPromptTemplate.from_messages([("system", system), ("human", human)])
+
+chain = prompt | llm | StrOutputParser()
+print(chain.invoke({{"text": "Explain the importance of low latency LLMs."}}))
+
+
+llm = Together(
+    model="meta-llama/Llama-3-70b-chat-hf",
+)
+chain = prompt | llm | StrOutputParser()
+print(chain.invoke({{"text": "Explain the importance of together.ai."}}))
+
+```
+
+% Here is an example how to select the Langchain llm: ```
+import os
+from llm_selector import llm_selector
+
+def main() -> None:
+    """
+    Main function to demonstrate the usage of the llm_selector function.
+    Sets environment variables, defines parameters, and calls the function.
+    """
+    # Set environment variables (for demonstration purposes)
+    os.environ['PDD_MODEL_DEFAULT'] = 'gpt-4o-mini'  # Default model
+
+
+    # Define desired strength and temperature
+    strength: float = .3  # Desired strength of the model (0.0 to 1.0)
+    temperature: float = 0  # Temperature for the model (0.0 to 1.0)
+
+    try:
+        # Call the llm_selector function
+        llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
+
+        # Output the selected model details
+        print(f"Selected LLM: {{model_name}}")
+        print(f"Input Cost: {{input_cost}}")
+        print(f"Output Cost: {{output_cost}}")
+    except Exception as e:
+        print(f"An error occurred: {{e}}")
+
+if __name__ == "__main__":
+    main()
+``` 
+
+% Here is an example how to use tiktoken: ```
+import tiktoken
+encoding = tiktoken.get_encoding("cl100k_base")  # or another encoding name
+token_count = len(encoding.encode(preprocessed_prompt))
+```
+
+% This program will use Langchain to do the following:
+    Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/fix_errors_from_unit_tests_LLM.prompt' file. Also load the 'extract_unit_code_fix_LLM.prompt' from the same directory.
+    Step 2. Then this will create a Langchain LCEL template from the fix_errors_from_unit_tests prompt.
+    Step 3. This will use llm_selector and a temperature of 0 for the llm model.
+    Step 4. This will run the code through the model using Langchain LCEL. 
+        4a. Be sure to pass the following string parameters to the prompt during invoke:
+            - 'unit_test'
+            - 'code'
+            - 'errors'
+        4b. Pretty print a message letting the user know it is running and how many tokens (using tiktoken) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+    Step 5. This will pretty print the markdown formatting that is present in the result via the rich Markdown function. It will also pretty print the number of tokens in the result and the cost. Also, print out the total cost.
+    Step 7. Then this will create a second Langchain LCEL template from the extract_unit_code_fix prompt.
+    Step 8. This will use llm_selector with a strength setting of 0.5 instead of the strength function input above and a temperature of 0 for the llm model. However, instead of using String output, it will use the JSON output parser to get these keys: 'update_unit_test', 'update_code', 'fixed_unit_test' and 'fixed_code'.
+    Step 9. This will run the code through the model using Langchain LCEL from Step 8. 
+        9a. Be sure to pass the following string parameters to the prompt during invoke:
+            - 'unit_test_fix': This is the result of the Langchain LCEL from Step 4.
+            - 'unit_test'
+            - 'code'
+        9b. Pretty print a message letting the user know it is running and how many tokens (using tiktoken) are in the prompt and the cost.
+    Step 10. Print the total cost of both runs and return 'update_unit_test', 'update_code', 'fixed_unit_test' and 'fixed_code' as individual values from the JSON output parser.
+```</example_input_prompt>
+        <example_input_code>```
+import os
+from rich import print as rprint
+from rich.markdown import Markdown
+import tiktoken
+from langchain_core.prompts import PromptTemplate
+from langchain_openai import ChatOpenAI
+from langchain_core.output_parsers import StrOutputParser
+from langchain_community.cache import SQLiteCache
+from langchain.globals import set_llm_cache
+from llm_selector import llm_selector
+from pydantic import BaseModel, Field
+from langchain_core.pydantic_v1 import BaseModel as LangchainBaseModel
+
+# Setup cache to save money and increase speeds
+set_llm_cache(SQLiteCache(database_path=".langchain.db"))
+
+class FixResult(LangchainBaseModel):
+    update_unit_test: bool = Field(description="Whether the unit test needs to be updated")
+    update_code: bool = Field(description="Whether the code needs to be updated")
+    fixed_unit_test: str = Field(description="The fixed unit test code")
+    fixed_code: str = Field(description="The fixed code")
+
+def fix_errors_from_unit_tests(unit_test, code, error, strength):
+    # Step 1: Load the prompt files
+    pdd_path = os.getenv('PDD_PATH')
+    if not pdd_path:
+        raise EnvironmentError("PDD_PATH environment variable is not set.")
+    
+    with open(os.path.join(pdd_path, 'prompts', 'fix_errors_from_unit_tests_LLM.prompt'), 'r') as file:
+        fix_errors_prompt = file.read()
+    
+    with open(os.path.join(pdd_path, 'prompts', 'extract_unit_code_fix_LLM.prompt'), 'r') as file:
+        extract_fix_prompt = file.read()
+    
+    # Step 2: Create Langchain LCEL template from the fix_errors_from_unit_tests prompt
+    fix_errors_template = PromptTemplate.from_template(fix_errors_prompt)
+    
+    # Step 3: Use llm_selector and a temperature of 0 for the llm model
+    llm, token_counter, input_cost, output_cost = llm_selector(strength, 0)
+    
+    # Step 4: Run the code through the model using Langchain LCEL
+    chain = fix_errors_template | llm | StrOutputParser()
+    
+    # Prepare the input for the prompt
+    prompt_input = {{
+        "unit_test": unit_test,
+        "code": code,
+        "errors": error
+    }}
+    
+    # Calculate token count and cost
+    encoding = tiktoken.get_encoding("cl100k_base")
+    token_count = len(encoding.encode(str(prompt_input)))
+    cost = (token_count / 1_000_000) * input_cost
+    
+    rprint(f"[bold green]Running the model with {{token_count}} tokens. Estimated cost: ${{cost:.6f}}[/bold green]")
+    
+    # Invoke the chain
+    result = chain.invoke(prompt_input)
+    
+    # Pretty print the result
+    rprint(Markdown(result))
+    
+    # Calculate result token count and cost
+    result_token_count = len(encoding.encode(result))
+    result_cost = (result_token_count / 1_000_000) * output_cost
+    
+    rprint(f"[bold green]Result contains {{result_token_count}} tokens. Estimated cost: ${{result_cost:.6f}}[/bold green]")
+    rprint(f"[bold green]Total cost: ${{cost + result_cost:.6f}}[/bold green]")
+    
+    # Step 7: Create a second Langchain LCEL template from the extract_unit_code_fix prompt
+    extract_fix_template = PromptTemplate.from_template(extract_fix_prompt)
+    
+    # Step 8: Use llm_selector with a strength setting of 0.5 and a temperature of 0
+    llm, token_counter, input_cost, output_cost = llm_selector(0.5, 0)
+    
+    from langchain.output_parsers import PydanticOutputParser
+    parser = PydanticOutputParser(pydantic_object=FixResult)
+    
+    chain = extract_fix_template | llm | parser
+    
+    # Prepare the input for the second prompt
+    prompt_input = {{
+        "unit_test_fix": result,
+        "unit_test": unit_test,
+        "code": code
+    }}
+    
+    # Calculate token count and cost for the second run
+    token_count = len(encoding.encode(str(prompt_input)))
+    cost = (token_count / 1_000_000) * input_cost
+    
+    rprint(f"[bold green]Running the second model with {{token_count}} tokens. Estimated cost: ${{cost:.6f}}[/bold green]")
+    
+    # Invoke the chain
+    result = chain.invoke(prompt_input)
+    
+    # Calculate result token count and cost for the second run
+    result_token_count = len(encoding.encode(str(result.dict())))
+    result_cost = (result_token_count / 1_000_000) * output_cost
+    
+    rprint(f"[bold green]Result contains {{result_token_count}} tokens. Estimated cost: ${{result_cost:.6f}}[/bold green]")
+    rprint(f"[bold green]Total cost of both runs: ${{cost + result_cost:.6f}}[/bold green]")
+    
+    # Return the parsed result as separate values
+    return result.update_unit_test, result.update_code, result.fixed_unit_test, result.fixed_code
+
+# Example usage
+if __name__ == "__main__":
+    unit_test = "def test_add():\n    assert add(1, 2) == 3"
+    code = "def add(a, b):\n    return a + b"
+    error = "NameError: name 'add' is not defined"
+    strength = 0.8
+    
+    updated_unit_test, updated_code, fixed_unit_test, fixed_code = fix_errors_from_unit_tests(unit_test, code, error, strength)
+    print("Updated Unit Test:", updated_unit_test)
+    print("Updated Code:", updated_code)
+    print("Fixed Unit Test:", fixed_unit_test)
+    print("Fixed Code:", fixed_code)
+```</example_input_code>
+        <example_change_prompt>```
+Use token_counter from llm_selector instead of tiktoken to count tokens in the prompt. Also, fix_errors_from_unit_tests should take in and use temperature. This should also output the total cost of the LCEL runs.
+```</example_change_prompt>
+        <example_modified_prompt>```
+% You are an expert Python Software Engineer. Your goal is to write a python function, "fix_errors_from_unit_tests", that will fix unit test errors in a code file. All output to the console will be pretty print using the Python rich library.
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        'unit_test' - A string containing the unit test code.
+        'code' - A string containing the code under test.
+        'error' - A string that contains the errors that need to be fixed.
+        'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
+        'temperature' - A float that controls the randomness of the LLM's output.
+    Outputs:
+        'update_unit_test': Boolean indicating whether the unit test needs to be updated.
+        'update_code': Boolean indicating whether the code under test needs to be updated.
+        'fixed_unit_test' - A string that is the fixed unit test.
+        'fixed_code' - A string that is the fixed code under test.
+        'total_cost' - A float representing the total cost of the LCEL runs.
+
+% Here is an example of a Langchain LCEL program: ```
+import os
+from langchain_core.prompts import PromptTemplate
+from langchain_community.cache import SQLiteCache
+from langchain.globals import set_llm_cache
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.pydantic_v1 import BaseModel, Field
+from langchain.output_parsers import RetryOutputParser
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough, ConfigurableField
+
+from langchain_fireworks import Fireworks 
+from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
+from langchain_openai import OpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
+from langchain_together import Together
+
+# Define a base output parser (e.g., PydanticOutputParser)
+from pydantic import BaseModel, Field
+
+
+# Setup cache to save money and increase speeds
+set_llm_cache(SQLiteCache(database_path=".langchain.db"))
+
+
+# Create the LCEL template. Make note of the variable {{topic}} which will be filled in later.
+prompt_template = PromptTemplate.from_template("Tell me a joke about {{topic}}")
+
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0) 
+# Combine with a model and parser to output a string
+chain = prompt_template |llm| StrOutputParser()
+
+# Run the template. Notice that the input is a dictionary with a single key "topic" which feeds it into the above prompt template. This is needed because the prompt template has a variable {{topic}} which needs to be filled in when invoked.
+result = chain.invoke({{"topic": "cats"}})
+print(result)
+
+
+# Define your desired data structure.
+class Joke(BaseModel):
+    setup: str = Field(description="question to set up a joke")
+    punchline: str = Field(description="answer to resolve the joke")
+
+
+llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0)
+# Set up a parser
+parser = JsonOutputParser(pydantic_object=Joke)
+
+# Create a prompt template
+prompt = PromptTemplate(
+    template="Answer the user query.\n{{format_instructions}}\n{{query}}\n",
+    input_variables=["query"],
+    partial_variables={{"format_instructions": parser.get_format_instructions()}},
+)
+
+# Chain the components
+chain = prompt | llm | parser
+
+# Invoke the chain with a query
+result = chain.invoke({{"query": "Tell me a joke."}})
+print(result)
+
+
+# Get DEEKSEEK_API_KEY environmental variable
+deepseek_api_key = os.getenv('DEEKSEEK_API_KEY')
+
+# Ensure the API key is retrieved successfully
+if deepseek_api_key is None:
+    raise ValueError("DEEKSEEK_API_KEY environment variable is not set")
+
+llm = ChatOpenAI(
+    model='deepseek-chat', 
+    openai_api_key=deepseek_api_key, 
+    openai_api_base='https://api.deepseek.com',
+    temperature=0
+)
+
+# Chain the components
+chain = prompt | llm | parser
+
+# Invoke the chain with a query
+result = chain.invoke({{"query": "Write joke about the sky"}})
+print("deepseek",result)
+
+
+llm = Fireworks(
+    model="accounts/fireworks/models/mixtral-8x7b-instruct",
+    temperature=0)
+# Chain the components
+chain = prompt | llm | parser
+
+# Invoke the chain with a query
+result = chain.invoke({{"query": "Tell me a joke about the president"}})
+print("fireworks",result)
+
+
+
+
+
+prompt = ChatPromptTemplate.from_template(
+    "Tell me a short joke about {{topic}}"
+)
+chat_openai = ChatOpenAI(model="gpt-3.5-turbo")
+openai = OpenAI(model="gpt-3.5-turbo-instruct")
+anthropic = ChatAnthropic(model="claude-2")
+model = (
+    chat_openai
+    .with_fallbacks([anthropic])
+    .configurable_alternatives(
+        ConfigurableField(id="model"),
+        default_key="chat_openai",
+        openai=openai,
+        anthropic=anthropic,
+    )
+)
+
+chain = (
+    {{"topic": RunnablePassthrough()}} 
+    | prompt 
+    | model 
+    | StrOutputParser()
+)
+result = chain.invoke({{"topic": "Tell me a joke about the president"}})
+print("config alt:",result)
+
+
+
+llm = ChatGroq(temperature=0, model_name="mixtral-8x7b-32768")
+system = "You are a helpful assistant."
+human = "{{text}}"
+prompt = ChatPromptTemplate.from_messages([("system", system), ("human", human)])
+
+chain = prompt | llm | StrOutputParser()
+print(chain.invoke({{"text": "Explain the importance of low latency LLMs."}}))
+
+
+llm = Together(
+    model="meta-llama/Llama-3-70b-chat-hf",
+)
+chain = prompt | llm | StrOutputParser()
+print(chain.invoke({{"text": "Explain the importance of together.ai."}}))
+
+```
+
+% Here is an example how to select the Langchain llm and count tokens: ```
+import os
+from llm_selector import llm_selector
+
+def main() -> None:
+    """
+    Main function to demonstrate the usage of the llm_selector function.
+    Sets environment variables, defines parameters, and calls the function.
+    """
+    # Set environment variables (for demonstration purposes)
+    os.environ['PDD_MODEL_DEFAULT'] = 'gpt-4o-mini'  # Default model
+
+
+    # Define desired strength and temperature
+    strength: float = .3  # Desired strength of the model (0.0 to 1.0)
+    temperature: float = 0  # Temperature for the model (0.0 to 1.0)
+
+    try:
+        # Call the llm_selector function
+        llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
+
+        # Output the selected model details
+        print(f"Selected LLM: {{model_name}}")
+        print(f"Input Cost: {{input_cost}}")
+        print(f"Output Cost: {{output_cost}}")
+    except Exception as e:
+        print(f"An error occurred: {{e}}")
+
+if __name__ == "__main__":
+    main()
+``` 
+
+% This program will use Langchain to do the following:
+    Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/fix_errors_from_unit_tests_LLM.prompt' file. Also load the 'extract_unit_code_fix_LLM.prompt' from the same directory.
+    Step 2. Then this will create a Langchain LCEL template from the fix_errors_from_unit_tests prompt.
+    Step 3. This will use llm_selector with the provided strength and temperature for the llm model.
+    Step 4. This will run the code through the model using Langchain LCEL. 
+        4a. Be sure to pass the following string parameters to the prompt during invoke:
+            - 'unit_test'
+            - 'code'
+            - 'errors'
+        4b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+    Step 5. This will pretty print the markdown formatting that is present in the result via the rich Markdown function. It will also pretty print the number of tokens in the result and the cost. Also, print out the cost of this run.
+    Step 6. Then this will create a second Langchain LCEL template from the extract_unit_code_fix prompt.
+    Step 7. This will use llm_selector with a strength setting of 0.5 and the provided temperature for the llm model. However, instead of using String output, it will use the JSON output parser to get these keys: 'update_unit_test', 'update_code', 'fixed_unit_test' and 'fixed_code'.
+    Step 8. This will run the code through the model using Langchain LCEL from Step 7. 
+        8a. Be sure to pass the following string parameters to the prompt during invoke:
+            - 'unit_test_fix': This is the result of the Langchain LCEL from Step 4.
+            - 'unit_test'
+            - 'code'
+        8b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost.
+    Step 9. Calculate the total cost by summing the costs from both LCEL runs.
+    Step 10. Print the total cost of both runs and return 'update_unit_test', 'update_code', 'fixed_unit_test', 'fixed_code', and 'total_cost' as individual values from the JSON output parser.
+
+% Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses.
+```</example_modified_prompt>
+    </example>
+    <example>
+        <example_number>9</example_number>
+        <example_input_prompt>```
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "fix_error_loop", that will attempt to fix errors in a unit test and its corresponding code file through multiple iterations. All output to the console will be pretty printed using the Python rich library.
+
+% Here are the inputs and outputs of the function:
+    Inputs: 
+        'unit_test_file' - A string containing the path to the unit test file.
+        'code_file' - A string containing the path to the code file being tested.
+        'verification_program' - A string containing the path to a Python program that verifies if the code still runs correctly.
+        'strength' - A float between 0 and 1 that represents the strength of the LLM model to use.
+        'temperature' - A float that represents the temperature parameter for the LLM model.
+        'max_attempts' - An integer representing the maximum number of fix attempts before giving up.
+    Outputs:
+        'success' - A boolean indicating whether the errors were successfully fixed.
+        'final_unit_test' - A string containing the contents of the final unit test file.
+        'final_code' - A string containing the contents of the final code file.
+        'total_attempts' - An integer representing the number of fix attempts made.
+
+% Here is an example of the fix_errors_from_unit_tests function that will be used: ```
+from fix_errors_from_unit_tests import fix_errors_from_unit_tests
+
+# Define the inputs for the function
+unit_test: str = """
+def test_addition():
+    assert add(1, 1) == 3  # Intentional error
+"""
+
+code: str = """
+def add(a, b):
+    return a + b
+"""
+
+error: str = "AssertionError: assert 2 == 3"
+error_file: str = "error_log.txt"
+strength: float = 0.7  # Strength parameter for LLM selection
+temperature: float = 0 # Temperature parameter for LLM selection
+
+try:
+    # Call the function to fix errors in the unit tests
+    update_unit_test, update_code, fixed_unit_test, fixed_code, total_cost = fix_errors_from_unit_tests(
+        unit_test=unit_test,
+        code=code,
+        error=error,
+        error_file=error_file,
+        strength=strength,
+        temperature=temperature
+    )
+
+    # Print the results
+    print(f"Update Unit Test: {{update_unit_test}}")
+    print(f"Update Code: {{update_code}}")
+    print(f"Fixed Unit Test:\n{{fixed_unit_test}}")
+    print(f"Fixed Code:\n{{fixed_code}}")
+    print(f"Total Cost: ${{total_cost:.6f}}")
+except Exception as e:
+    print(f"An error occurred: {{e}}")
+```
+
+% This function will do the following:
+    Step 1. Remove the existing error.log file if it exists.
+    Step 2. Initialize a counter for the number of attempts.
+    Step 3. Enter a while loop that continues until max_attempts is reached:
+        a. Run the unit_test_file with 'python -m pytest -vv' and pipe all output to error.log.
+        b. If the test passes, break the loop.
+        c. If the test fails:
+           - Read and print the error message from error.log.
+           - Count the number of 'FAILED' and 'ERROR' from stdout (accounting for the -vv flag doubling these messages).
+           - Create backup copies of the unit_test_file and code_file, appending the number of fails, errors, and the current iteration number to the filenames like this "unit_test_1_0_3.py" and "code_1_0_3.py", where there was one fail, zero errors and it is the third iteration through the loop.
+           - Read the contents of the unit_test_file and code_file.
+           - Call fix_errors_from_unit_tests with the file contents, error from error.log, and the provided strength.
+           - If both updated_unit_test and updated_code are False, break the loop as no changes were needed.
+           - If either updated_unit_test or updated_code is True:
+              * Write the fixed_unit_test and fixed_code back to their respective files.
+              * Run the verification_program to check if the code still runs.
+              * If the verification fails, restore the original files from the backups and continue the loop.
+              * If the verification succeeds, continue to the next iteration.
+        d. Increment the attempt counter.
+    Step 4. After the loop ends, run pytest one last time, pipe the output to error.log, and print it to the console.
+    Step 5. Return the success status, final unit test contents, final code contents, and total number of attempts.
+
+% Ensure that the function handles potential errors gracefully, such as file I/O errors or subprocess execution failures. Use the rich library for all console output to enhance readability. Consider using context managers for file operations to ensure proper resource management.
+
+% Note: The temperature parameter should be incorporated into the LLM selection process. You may need to modify the fix_errors_from_unit_tests function or use it in conjunction with the llm_selector to properly utilize this parameter.
+```</example_input_prompt>
+        <example_input_code>```
+import os
+import shutil
+import subprocess
+from rich import print
+from rich.console import Console
+from fix_errors_from_unit_tests import fix_errors_from_unit_tests
+
+console = Console()
+
+def fix_error_loop(unit_test_file: str, code_file: str, verification_program: str, strength: float, temperature: float, max_attempts: int) -> tuple:
+    """
+    Iteratively attempts to fix errors in unit tests and code files.
+
+    Args:
+        unit_test_file (str): Path to the unit test file.
+        code_file (str): Path to the code file.
+        verification_program (str): Path to the verification program.
+        strength (float): Strength parameter for error fixing.
+        temperature (float): Temperature parameter for error fixing.
+        max_attempts (int): Maximum number of attempts to fix errors.
+
+    Returns:
+        tuple: A tuple containing success status, final unit test contents,
+               final code contents, and total number of attempts.
+    """
+    # Step 1: Remove the existing error.log file if it exists
+    error_log_path = "error.log"
+    if os.path.exists(error_log_path):
+        os.remove(error_log_path)
+
+    # Step 2: Initialize a counter for the number of attempts
+    attempts = 0
+    success = False
+
+    # Step 3: Enter a while loop that continues until max_attempts is reached
+    while attempts < max_attempts:
+        attempts += 1
+
+        # a. Run the unit_test_file with 'python -m pytest -vv' and pipe all output to error.log
+        console.print(f"[bold blue]Running pytest for attempt {{attempts}}...[/bold blue]")
+        with open(error_log_path, "w") as error_log:
+            result = subprocess.run(
+                ["python", "-m", "pytest", unit_test_file, "-vv"],
+                stdout=error_log,
+                stderr=subprocess.STDOUT
+            )
+
+        # b. If the test passes, break the loop
+        if result.returncode == 0:
+            console.print("[bold green]Tests passed![/bold green]")
+            success = True
+            break
+
+        # c. If the test fails:
+        console.print("[bold red]Tests failed. Reading error log...[/bold red]")
+        with open(error_log_path, "r") as error_log:
+            error_message = error_log.read()
+            console.print(error_message)
+
+        # Count the number of 'FAILED' and 'ERROR' from the error log
+        fail_count = error_message.count("FAILED")
+        error_count = error_message.count("ERROR")
+
+        # Create backup copies of the unit_test_file and code_file
+        backup_unit_test = f"unit_test_{{fail_count}}_{{error_count}}_{{attempts}}.py"
+        backup_code = f"code_{{fail_count}}_{{error_count}}_{{attempts}}.py"
+        shutil.copy(unit_test_file, backup_unit_test)
+        shutil.copy(code_file, backup_code)
+
+        # Read the contents of the unit_test_file and code_file
+        with open(unit_test_file, "r") as f:
+            unit_test_code = f.read()
+        with open(code_file, "r") as f:
+            code_under_test = f.read()
+
+        # Call fix_errors_from_unit_tests
+        try:
+            update_unit_test, update_code, fixed_unit_test, fixed_code, _ = fix_errors_from_unit_tests(
+                unit_test=unit_test_code,
+                code=code_under_test,
+                error=error_message,
+                strength=strength,
+                temperature=temperature
+            )
+        except Exception as e:
+            console.print(f"[bold red]Error during fix attempt: {{e}}[/bold red]")
+            break
+
+        # If both updated_unit_test and updated_code are False, break the loop
+        if not update_unit_test and not update_code:
+            console.print("[bold yellow]No changes were needed. Exiting loop.[/bold yellow]")
+            break
+
+        # If either updated_unit_test or updated_code is True, write the changes
+        if update_unit_test:
+            with open(unit_test_file, "w") as f:
+                f.write(fixed_unit_test)
+        if update_code:
+            with open(code_file, "w") as f:
+                f.write(fixed_code)
+
+        # Run the verification_program
+        console.print("[bold blue]Running verification program...[/bold blue]")
+        verification_result = subprocess.run(
+            ["python", verification_program],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+
+        if verification_result.returncode != 0:
+            console.print("[bold red]Verification failed. Restoring backups...[/bold red]")
+            shutil.copy(backup_unit_test, unit_test_file)
+            shutil.copy(backup_code, code_file)
+        else:
+            console.print("[bold green]Verification succeeded.[/bold green]")
+
+    # Step 4: After the loop ends, run pytest one last time
+    console.print("[bold blue]Final pytest run...[/bold blue]")
+    with open(error_log_path, "w") as error_log:
+        subprocess.run(
+            ["python", "-m", "pytest", unit_test_file, "-vv"],
+            stdout=error_log,
+            stderr=subprocess.STDOUT
+        )
+    with open(error_log_path, "r") as error_log:
+        console.print(error_log.read())
+
+    # Step 5: Return the success status, final unit test contents, final code contents, and total number of attempts
+    with open(unit_test_file, "r") as f:
+        final_unit_test = f.read()
+    with open(code_file, "r") as f:
+        final_code = f.read()
+
+    return success, final_unit_test, final_code, attempts
+
+```</example_input_code>
+        <example_change_prompt>```
+% Update the prompt use the latest definition of fix_errors_from_unit_tests as shown in this example: ```from fix_errors_from_unit_tests import fix_errors_from_unit_tests
+
+# Define the inputs
+unit_test_code = """
+def test_addition():
+    assert add(1, 2) == 4  # Intentional error
+"""
+
+code_under_test = """
+def add(a, b):
+    return a + b
+"""
+
+error_message = "AssertionError: assert 3 == 4"
+strength = 0.7  # Adjust the strength for LLM selection
+temperature = 0  # Adjust the temperature for LLM selection
+
+try:
+    # Call the function to fix errors
+    update_unit_test, update_code, fixed_unit_test, fixed_code, total_cost = fix_errors_from_unit_tests(
+        unit_test=unit_test_code,
+        code=code_under_test,
+        error=error_message,
+        strength=strength,
+        temperature=temperature
+    )
+
+    # Output the results
+    print(f"Update Unit Test: {{update_unit_test}}")
+    print(f"Update Code: {{update_code}}")
+    print(f"Fixed Unit Test:\n{{fixed_unit_test}}")
+    print(f"Fixed Code:\n{{fixed_code}}")
+    print(f"Total Cost: ${{total_cost:.6f}}")
+except Exception as e:
+    print(f"An error occurred: {{e}}")```
+
+% Also, output the total cost of all the runs and take in an 'budget' input to stop the iterations if the total cost exceeds the budget.
+
+% Before finishing the function, copy back the iteration of fixed_unit_test and fixed_code that meets these criteria in priority order:
+    1) Had the lowest number of 'ERROR's
+    2) Had the lowest number of 'FAILED's
+This is so that the function saves the most successful iteration of the fixed code and unit test where error's are prioritized over fail's. Be sure to also consider the last run when decided which iteration to copy back. If the last run is the best, no need to copy back.
+```</example_change_prompt>
+        <example_modified_prompt>```
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "fix_error_loop", that will attempt to fix errors in a unit test and its corresponding code file through multiple iterations. All output to the console will be pretty printed using the Python rich library.
+
+% Here are the inputs and outputs of the function:
+    Inputs: 
+        'unit_test_file' - A string containing the path to the unit test file.
+        'code_file' - A string containing the path to the code file being tested.
+        'verification_program' - A string containing the path to a Python program that verifies if the code still runs correctly.
+        'strength' - A float between 0 and 1 that represents the strength of the LLM model to use.
+        'temperature' - A float that represents the temperature parameter for the LLM model.
+        'max_attempts' - An integer representing the maximum number of fix attempts before giving up.
+        'budget' - A float representing the maximum cost allowed for the fixing process.
+    Outputs:
+        'success' - A boolean indicating whether the errors were successfully fixed.
+        'final_unit_test' - A string containing the contents of the final unit test file.
+        'final_code' - A string containing the contents of the final code file.
+        'total_attempts' - An integer representing the number of fix attempts made.
+        'total_cost' - A float representing the total cost of all fix attempts.
+
+% Here is an example of the fix_errors_from_unit_tests function that will be used: ```
+from fix_errors_from_unit_tests import fix_errors_from_unit_tests
+
+# Define the inputs for the function
+unit_test: str = """
+def test_addition():
+    assert add(1, 1) == 3  # Intentional error
+"""
+
+code: str = """
+def add(a, b):
+    return a + b
+"""
+
+error: str = "AssertionError: assert 2 == 3"
+error_file: str = "error_log.txt"
+strength: float = 0.7  # Strength parameter for LLM selection
+temperature: float = 0 # Temperature parameter for LLM selection
+
+try:
+    # Call the function to fix errors in the unit tests
+    update_unit_test, update_code, fixed_unit_test, fixed_code, total_cost = fix_errors_from_unit_tests(
+        unit_test=unit_test,
+        code=code,
+        error=error,
+        error_file=error_file,
+        strength=strength,
+        temperature=temperature
+    )
+
+    # Print the results
+    print(f"Update Unit Test: {{update_unit_test}}")
+    print(f"Update Code: {{update_code}}")
+    print(f"Fixed Unit Test:\n{{fixed_unit_test}}")
+    print(f"Fixed Code:\n{{fixed_code}}")
+    print(f"Total Cost: ${{total_cost:.6f}}")
+except Exception as e:
+    print(f"An error occurred: {{e}}")
+```
+
+% This function will do the following:
+    Step 1. Remove the existing error.log file if it exists.
+    Step 2. Initialize variables:
+        - Counter for the number of attempts
+        - Total cost accumulator
+        - Best iteration tracker (lowest errors, then lowest fails)
+    Step 3. Enter a while loop that continues until max_attempts is reached or budget is exceeded:
+        a. Run the unit_test_file with 'python -m pytest -vv' and pipe all output to error.log.
+        b. If the test passes, break the loop.
+        c. If the test fails:
+           - Read and print the error message from error.log.
+           - Count the number of 'FAILED' and 'ERROR' from stdout (accounting for the -vv flag doubling these messages).
+           - Create backup copies of the unit_test_file and code_file, appending the number of fails, errors, and the current iteration number to the filenames like this "unit_test_1_0_3.py" and "code_1_0_3.py", where there was one fail, zero errors and it is the third iteration through the loop.
+           - Read the contents of the unit_test_file and code_file.
+           - Call fix_errors_from_unit_tests with the file contents, error from error.log, and the provided strength and temperature.
+           - Add the returned total_cost to the total cost accumulator.
+           - If the total cost exceeds the budget, break the loop.
+           - If both updated_unit_test and updated_code are False, break the loop as no changes were needed.
+           - If either updated_unit_test or updated_code is True:
+              * Write the fixed_unit_test and fixed_code back to their respective files.
+              * Run the verification_program to check if the code still runs.
+              * If the verification fails, restore the original files from the backups and continue the loop.
+              * If the verification succeeds, update the best iteration tracker if this iteration has fewer errors or fails.
+        d. Increment the attempt counter.
+    Step 4. After the loop ends, run pytest one last time, pipe the output to error.log, and print it to the console.
+    Step 5. If the last run isn't the best iteration, copy back the files from the best iteration.
+    Step 6. Return the success status, final unit test contents, final code contents, total number of attempts, and total cost.
+
+% Ensure that the function handles potential errors gracefully, such as file I/O errors or subprocess execution failures. Use the rich library for all console output to enhance readability. Consider using context managers for file operations to ensure proper resource management.
+```</example_modified_prompt>
+    </example>
+    <example>
+        <example_number>10</example_number>
+        <example_input_prompt>```
+% You are an expert Python Software Engineer. Your goal is to write a python function, "fix_errors_from_unit_tests", that will fix unit test errors in a code file. All output to the console will be pretty print using the Python rich library.
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        'unit_test' - A string containing the unit test code.
+        'code' - A string containing the code under test.
+        'error' - A string that contains the errors that need to be fixed.
+        'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
+        'temperature' - A float that controls the randomness of the LLM's output.
+    Outputs:
+        'update_unit_test': Boolean indicating whether the unit test needs to be updated.
+        'update_code': Boolean indicating whether the code under test needs to be updated.
+        'fixed_unit_test' - A string that is the fixed unit test.
+        'fixed_code' - A string that is the fixed code under test.
+        'total_cost' - A float representing the total cost of the LCEL runs.
+
+% Here is an example of a Langchain LCEL program: ```
+import os
+from langchain_core.prompts import PromptTemplate
+from langchain_community.cache import SQLiteCache
+from langchain.globals import set_llm_cache
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.pydantic_v1 import BaseModel, Field
+from langchain.output_parsers import RetryOutputParser
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough, ConfigurableField
+
+from langchain_fireworks import Fireworks 
+from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
+from langchain_openai import OpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
+from langchain_together import Together
+
+# Define a base output parser (e.g., PydanticOutputParser)
+from pydantic import BaseModel, Field
+
+
+# Setup cache to save money and increase speeds
+set_llm_cache(SQLiteCache(database_path=".langchain.db"))
+
+
+# Create the LCEL template. Make note of the variable {{topic}} which will be filled in later.
+prompt_template = PromptTemplate.from_template("Tell me a joke about {{topic}}")
+
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0) 
+# Combine with a model and parser to output a string
+chain = prompt_template |llm| StrOutputParser()
+
+# Run the template. Notice that the input is a dictionary with a single key "topic" which feeds it into the above prompt template. This is needed because the prompt template has a variable {{topic}} which needs to be filled in when invoked.
+result = chain.invoke({{"topic": "cats"}})
+print(result)
+
+
+# Define your desired data structure.
+class Joke(BaseModel):
+    setup: str = Field(description="question to set up a joke")
+    punchline: str = Field(description="answer to resolve the joke")
+
+
+llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0)
+# Set up a parser
+parser = JsonOutputParser(pydantic_object=Joke)
+
+# Create a prompt template
+prompt = PromptTemplate(
+    template="Answer the user query.\n{{format_instructions}}\n{{query}}\n",
+    input_variables=["query"],
+    partial_variables={{"format_instructions": parser.get_format_instructions()}},
+)
+
+# Chain the components
+chain = prompt | llm | parser
+
+# Invoke the chain with a query
+result = chain.invoke({{"query": "Tell me a joke."}})
+print(result)
+
+
+# Get DEEKSEEK_API_KEY environmental variable
+deepseek_api_key = os.getenv('DEEKSEEK_API_KEY')
+
+# Ensure the API key is retrieved successfully
+if deepseek_api_key is None:
+    raise ValueError("DEEKSEEK_API_KEY environment variable is not set")
+
+llm = ChatOpenAI(
+    model='deepseek-chat', 
+    openai_api_key=deepseek_api_key, 
+    openai_api_base='https://api.deepseek.com',
+    temperature=0
+)
+
+# Chain the components
+chain = prompt | llm | parser
+
+# Invoke the chain with a query
+result = chain.invoke({{"query": "Write joke about the sky"}})
+print("deepseek",result)
+
+
+llm = Fireworks(
+    model="accounts/fireworks/models/mixtral-8x7b-instruct",
+    temperature=0)
+# Chain the components
+chain = prompt | llm | parser
+
+# Invoke the chain with a query
+result = chain.invoke({{"query": "Tell me a joke about the president"}})
+print("fireworks",result)
+
+
+
+
+
+prompt = ChatPromptTemplate.from_template(
+    "Tell me a short joke about {{topic}}"
+)
+chat_openai = ChatOpenAI(model="gpt-3.5-turbo")
+openai = OpenAI(model="gpt-3.5-turbo-instruct")
+anthropic = ChatAnthropic(model="claude-2")
+model = (
+    chat_openai
+    .with_fallbacks([anthropic])
+    .configurable_alternatives(
+        ConfigurableField(id="model"),
+        default_key="chat_openai",
+        openai=openai,
+        anthropic=anthropic,
+    )
+)
+
+chain = (
+    {{"topic": RunnablePassthrough()}} 
+    | prompt 
+    | model 
+    | StrOutputParser()
+)
+result = chain.invoke({{"topic": "Tell me a joke about the president"}})
+print("config alt:",result)
+
+
+
+llm = ChatGroq(temperature=0, model_name="mixtral-8x7b-32768")
+system = "You are a helpful assistant."
+human = "{{text}}"
+prompt = ChatPromptTemplate.from_messages([("system", system), ("human", human)])
+
+chain = prompt | llm | StrOutputParser()
+print(chain.invoke({{"text": "Explain the importance of low latency LLMs."}}))
+
+
+llm = Together(
+    model="meta-llama/Llama-3-70b-chat-hf",
+)
+chain = prompt | llm | StrOutputParser()
+print(chain.invoke({{"text": "Explain the importance of together.ai."}}))
+
+```
+
+% Here is an example how to select the Langchain llm and count tokens: ```
+import os
+from llm_selector import llm_selector
+
+def main() -> None:
+    """
+    Main function to demonstrate the usage of the llm_selector function.
+    Sets environment variables, defines parameters, and calls the function.
+    """
+    # Set environment variables (for demonstration purposes)
+    os.environ['PDD_MODEL_DEFAULT'] = 'gpt-4o-mini'  # Default model
+
+
+    # Define desired strength and temperature
+    strength: float = .3  # Desired strength of the model (0.0 to 1.0)
+    temperature: float = 0  # Temperature for the model (0.0 to 1.0)
+
+    try:
+        # Call the llm_selector function
+        llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
+
+        # Output the selected model details
+        print(f"Selected LLM: {{model_name}}")
+        print(f"Input Cost: {{input_cost}}")
+        print(f"Output Cost: {{output_cost}}")
+    except Exception as e:
+        print(f"An error occurred: {{e}}")
+
+if __name__ == "__main__":
+    main()
+``` 
+
+% This program will use Langchain to do the following:
+    Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/fix_errors_from_unit_tests_LLM.prompt' file. Also load the 'extract_unit_code_fix_LLM.prompt' from the same directory.
+    Step 2. Then this will create a Langchain LCEL template from the fix_errors_from_unit_tests prompt.
+    Step 3. This will use llm_selector with the provided strength and temperature for the llm model.
+    Step 4. This will run the code through the model using Langchain LCEL. 
+        4a. Be sure to pass the following string parameters to the prompt during invoke:
+            - 'unit_test'
+            - 'code'
+            - 'errors'
+        4b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+    Step 5. This will pretty print the markdown formatting that is present in the result via the rich Markdown function. It will also pretty print the number of tokens in the result and the cost. Also, print out the cost of this run.
+    Step 6. Then this will create a second Langchain LCEL template from the extract_unit_code_fix prompt.
+    Step 7. This will use llm_selector with a strength setting of 0.5 and the provided temperature for the llm model. However, instead of using String output, it will use the JSON output parser to use the 'get' function to extract the value of these keys: 'update_unit_test', 'update_code', 'fixed_unit_test' and 'fixed_code'.
+    Step 8. This will run the code through the model using Langchain LCEL from Step 7. 
+        8a. Be sure to pass the following string parameters to the prompt during invoke:
+            - 'unit_test_fix': This is the result of the Langchain LCEL from Step 4.
+            - 'unit_test'
+            - 'code'
+        8b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost.
+    Step 9. Calculate the total cost by summing the costs from both LCEL runs.
+    Step 10. Print the total cost of both runs and return 'update_unit_test', 'update_code', 'fixed_unit_test', 'fixed_code', and 'total_cost' as individual values from the JSON output parser.
+
+% Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses.
+```</example_input_prompt>
+        <example_input_code>```
+import os
+from rich import print as rprint
+from rich.markdown import Markdown
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
+from langchain_community.cache import SQLiteCache
+from langchain.globals import set_llm_cache
+from llm_selector import llm_selector
+
+# Setup cache to save money and increase speeds
+set_llm_cache(SQLiteCache(database_path=".langchain.db"))
+
+def fix_errors_from_unit_tests(unit_test: str, code: str, error: str, strength: float, temperature: float):
+    """
+    Fix errors in unit tests using LLM models.
+
+    :param unit_test: The unit test code as a string.
+    :param code: The code to be tested as a string.
+    :param error: The error message from the unit test.
+    :param strength: The strength parameter for LLM selection.
+    :param temperature: The temperature parameter for LLM selection.
+    :return: A tuple containing flags for updates and the fixed code and unit test.
+    """
+    try:
+        # Step 1: Load prompt files
+        pdd_path = os.getenv('PDD_PATH')
+        if not pdd_path:
+            raise ValueError("PDD_PATH environment variable is not set")
+
+        with open(os.path.join(pdd_path, 'prompts', 'fix_errors_from_unit_tests_LLM.prompt'), 'r') as file:
+            fix_errors_prompt = file.read()
+
+        with open(os.path.join(pdd_path, 'prompts', 'extract_unit_code_fix_LLM.prompt'), 'r') as file:
+            extract_fix_prompt = file.read()
+
+        # Step 2: Create Langchain LCEL template for fix_errors_from_unit_tests
+        fix_errors_template = PromptTemplate.from_template(fix_errors_prompt)
+
+        # Step 3: Use llm_selector with provided strength and temperature
+        llm, token_counter, input_cost, output_cost = llm_selector(strength, temperature)
+
+        # Step 4: Run the code through the model using Langchain LCEL
+        chain = fix_errors_template | llm | StrOutputParser()
+        input_data = {{"unit_test": unit_test, "code": code, "errors": error}}
+        prompt_tokens = token_counter(str(input_data))
+        cost_run_1 = (prompt_tokens / 1_000_000) * input_cost
+
+        # 4a: Pretty print running message
+        rprint(f"[bold green]Running fix_errors_from_unit_tests...[/bold green]")
+        rprint(f"Prompt tokens: {{prompt_tokens}}, Cost: ${{cost_run_1:.6f}}")
+
+        # Invoke the chain
+        result_1 = chain.invoke(input_data)
+
+        # Step 5: Pretty print the markdown formatting and cost
+        rprint(Markdown(result_1))
+        result_tokens = token_counter(result_1)
+        cost_result_1 = (result_tokens / 1_000_000) * output_cost
+        rprint(f"Result tokens: {{result_tokens}}, Cost: ${{cost_result_1:.6f}}")
+
+        # Step 6: Create a second Langchain LCEL template for extract_unit_code_fix
+        extract_fix_template = PromptTemplate.from_template(extract_fix_prompt)
+
+        # Step 7: Use llm_selector with strength 0.5 and provided temperature
+        llm, token_counter, input_cost, output_cost = llm_selector(0.5, temperature)
+        parser = JsonOutputParser()
+
+        # Step 8: Run the code through the model using Langchain LCEL
+        chain = extract_fix_template | llm | parser
+        input_data_2 = {{
+            "unit_test_fix": result_1,
+            "unit_test": unit_test,
+            "code": code
+        }}
+        prompt_tokens_2 = token_counter(str(input_data_2))
+        cost_run_2 = (prompt_tokens_2 / 1_000_000) * input_cost
+
+        # 8a: Pretty print running message
+        rprint(f"[bold green]Running extract_unit_code_fix...[/bold green]")
+        rprint(f"Prompt tokens: {{prompt_tokens_2}}, Cost: ${{cost_run_2:.6f}}")
+
+        # Invoke the chain
+        result_2 = chain.invoke(input_data_2)
+
+        # Step 9: Calculate the total cost
+        total_cost = cost_run_1 + cost_result_1 + cost_run_2
+
+        # Step 10: Print the total cost and return results
+        rprint(f"Total cost of both runs: ${{total_cost:.6f}}")
+
+        return (
+            result_2.get('update_unit_test', False),
+            result_2.get('update_code', False),
+            result_2.get('fixed_unit_test', ''),
+            result_2.get('fixed_code', ''),
+            total_cost
+        )
+
+    except Exception as e:
+        rprint(f"[bold red]An error occurred: {{e}}[/bold red]")
+        return False, False, '', '', 0.0
+
+```</example_input_code>
+        <example_change_prompt>```
+Add error_file to the inputs of the fix_errors_from_unit_tests function. This file will be used appended with the output of the first LCEL run that is also printed out. Have a separator for the output of the LCEL from what is in the error file already so it is easy to know what part of the log came from what function.
+```</example_change_prompt>
+        <example_modified_prompt>```
+% You are an expert Python Software Engineer. Your goal is to write a python function, "fix_errors_from_unit_tests", that will fix unit test errors in a code file and log the process. All output to the console will be pretty printed using the Python rich library.
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        'unit_test' - A string containing the unit test code.
+        'code' - A string containing the code under test.
+        'error' - A string that contains the errors that need to be fixed.
+        'error_file' - A string containing the path to the file where error logs will be appended.
+        'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
+        'temperature' - A float that controls the randomness of the LLM's output.
+    Outputs:
+        'update_unit_test': Boolean indicating whether the unit test needs to be updated.
+        'update_code': Boolean indicating whether the code under test needs to be updated.
+        'fixed_unit_test' - A string that is the fixed unit test.
+        'fixed_code' - A string that is the fixed code under test.
+        'total_cost' - A float representing the total cost of the LCEL runs.
+
+% Here is an example of a Langchain LCEL program: ```
+import os
+from langchain_core.prompts import PromptTemplate
+from langchain_community.cache import SQLiteCache
+from langchain.globals import set_llm_cache
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.pydantic_v1 import BaseModel, Field
+from langchain.output_parsers import RetryOutputParser
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough, ConfigurableField
+
+from langchain_fireworks import Fireworks 
+from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
+from langchain_openai import OpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
+from langchain_together import Together
+
+# Define a base output parser (e.g., PydanticOutputParser)
+from pydantic import BaseModel, Field
+
+
+# Setup cache to save money and increase speeds
+set_llm_cache(SQLiteCache(database_path=".langchain.db"))
+
+
+# Create the LCEL template. Make note of the variable {{topic}} which will be filled in later.
+prompt_template = PromptTemplate.from_template("Tell me a joke about {{topic}}")
+
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0) 
+# Combine with a model and parser to output a string
+chain = prompt_template |llm| StrOutputParser()
+
+# Run the template. Notice that the input is a dictionary with a single key "topic" which feeds it into the above prompt template. This is needed because the prompt template has a variable {{topic}} which needs to be filled in when invoked.
+result = chain.invoke({{"topic": "cats"}})
+print(result)
+
+
+# Define your desired data structure.
+class Joke(BaseModel):
+    setup: str = Field(description="question to set up a joke")
+    punchline: str = Field(description="answer to resolve the joke")
+
+
+llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0)
+# Set up a parser
+parser = JsonOutputParser(pydantic_object=Joke)
+
+# Create a prompt template
+prompt = PromptTemplate(
+    template="Answer the user query.\n{{format_instructions}}\n{{query}}\n",
+    input_variables=["query"],
+    partial_variables={{"format_instructions": parser.get_format_instructions()}},
+)
+
+# Chain the components
+chain = prompt | llm | parser
+
+# Invoke the chain with a query
+result = chain.invoke({{"query": "Tell me a joke."}})
+print(result)
+
+
+# Get DEEKSEEK_API_KEY environmental variable
+deepseek_api_key = os.getenv('DEEKSEEK_API_KEY')
+
+# Ensure the API key is retrieved successfully
+if deepseek_api_key is None:
+    raise ValueError("DEEKSEEK_API_KEY environment variable is not set")
+
+llm = ChatOpenAI(
+    model='deepseek-chat', 
+    openai_api_key=deepseek_api_key, 
+    openai_api_base='https://api.deepseek.com',
+    temperature=0
+)
+
+# Chain the components
+chain = prompt | llm | parser
+
+# Invoke the chain with a query
+result = chain.invoke({{"query": "Write joke about the sky"}})
+print("deepseek",result)
+
+
+llm = Fireworks(
+    model="accounts/fireworks/models/mixtral-8x7b-instruct",
+    temperature=0)
+# Chain the components
+chain = prompt | llm | parser
+
+# Invoke the chain with a query
+result = chain.invoke({{"query": "Tell me a joke about the president"}})
+print("fireworks",result)
+
+
+
+
+
+prompt = ChatPromptTemplate.from_template(
+    "Tell me a short joke about {{topic}}"
+)
+chat_openai = ChatOpenAI(model="gpt-3.5-turbo")
+openai = OpenAI(model="gpt-3.5-turbo-instruct")
+anthropic = ChatAnthropic(model="claude-2")
+model = (
+    chat_openai
+    .with_fallbacks([anthropic])
+    .configurable_alternatives(
+        ConfigurableField(id="model"),
+        default_key="chat_openai",
+        openai=openai,
+        anthropic=anthropic,
+    )
+)
+
+chain = (
+    {{"topic": RunnablePassthrough()}} 
+    | prompt 
+    | model 
+    | StrOutputParser()
+)
+result = chain.invoke({{"topic": "Tell me a joke about the president"}})
+print("config alt:",result)
+
+
+
+llm = ChatGroq(temperature=0, model_name="mixtral-8x7b-32768")
+system = "You are a helpful assistant."
+human = "{{text}}"
+prompt = ChatPromptTemplate.from_messages([("system", system), ("human", human)])
+
+chain = prompt | llm | StrOutputParser()
+print(chain.invoke({{"text": "Explain the importance of low latency LLMs."}}))
+
+
+llm = Together(
+    model="meta-llama/Llama-3-70b-chat-hf",
+)
+chain = prompt | llm | StrOutputParser()
+print(chain.invoke({{"text": "Explain the importance of together.ai."}}))
+
+```
+
+% Here is an example how to select the Langchain llm and count tokens: ```
+import os
+from llm_selector import llm_selector
+
+def main() -> None:
+    """
+    Main function to demonstrate the usage of the llm_selector function.
+    Sets environment variables, defines parameters, and calls the function.
+    """
+    # Set environment variables (for demonstration purposes)
+    os.environ['PDD_MODEL_DEFAULT'] = 'gpt-4o-mini'  # Default model
+
+
+    # Define desired strength and temperature
+    strength: float = .3  # Desired strength of the model (0.0 to 1.0)
+    temperature: float = 0  # Temperature for the model (0.0 to 1.0)
+
+    try:
+        # Call the llm_selector function
+        llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
+
+        # Output the selected model details
+        print(f"Selected LLM: {{model_name}}")
+        print(f"Input Cost: {{input_cost}}")
+        print(f"Output Cost: {{output_cost}}")
+    except Exception as e:
+        print(f"An error occurred: {{e}}")
+
+if __name__ == "__main__":
+    main()
+``` 
+
+% This program will use Langchain to do the following:
+    Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/fix_errors_from_unit_tests_LLM.prompt' file. Also load the 'extract_unit_code_fix_LLM.prompt' from the same directory.
+    Step 2. Read the contents of the error_file specified in the input. Handle any file I/O errors gracefully.
+    Step 3. Then this will create a Langchain LCEL template from the fix_errors_from_unit_tests prompt.
+    Step 4. This will use llm_selector with the provided strength and temperature for the llm model.
+    Step 5. This will run the code through the model using Langchain LCEL. 
+        5a. Be sure to pass the following string parameters to the prompt during invoke:
+            - 'unit_test'
+            - 'code'
+            - 'errors'
+        5b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+        5c. Append the output of this LCEL run to the error_file, adding a clear separator to distinguish it from previous content. Handle any file I/O errors gracefully.
+    Step 6. This will pretty print the markdown formatting that is present in the result via the rich Markdown function to both the console and the error_file. It will also pretty print the number of tokens in the result and the cost. Also, print out the cost of this run.
+    Step 7. Then this will create a second Langchain LCEL template from the extract_unit_code_fix prompt.
+    Step 8. This will use llm_selector with a strength setting of 0.5 and the provided temperature for the llm model. However, instead of using String output, it will use the JSON output parser to use the 'get' function to extract the value of these keys: 'update_unit_test', 'update_code', 'fixed_unit_test' and 'fixed_code'.
+    Step 9. This will run the code through the model using Langchain LCEL from Step 8. 
+        9a. Be sure to pass the following string parameters to the prompt during invoke:
+            - 'unit_test_fix': This is the result of the Langchain LCEL from Step 5.
+            - 'unit_test'
+            - 'code'
+        9b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost.
+    Step 10. Calculate the total cost by summing the costs from both LCEL runs.
+    Step 11. Print the total cost of both runs and return 'update_unit_test', 'update_code', 'fixed_unit_test', 'fixed_code', and 'total_cost' as individual values from the JSON output parser.
+
+% Ensure that the function handles potential errors gracefully, such as missing input parameters, issues with the LLM model responses, or file I/O errors when reading from or writing to the error_file.
+
+```</example_modified_prompt>
+    </example>
+</examples>
+```
+
+<context>
+    Here is the input_prompt to change: ```{input_prompt}```
+    Here is the input_code: ```{input_code}```
+    Here is the change_prompt to implement: ```{change_prompt}```
+</context>
+
+<instructions>
+    Follow these instructions:
+    Step 1. Explain in detail step by step the ramifications of the change_prompt on the input_prompt.
+    Step 2. Explain in detail step by step what changes need to be made to the input_prompt to generate the modified_prompt based on Step 1.
+    Step 3. Generate the modified_prompt based on Step 2. Except for the change, the rest of the existing functionality of the input_prompt should remain. Structure the prompt similar to the example prompts more esp. including the descriptions of the inputs and outputs.
+</instructions>
