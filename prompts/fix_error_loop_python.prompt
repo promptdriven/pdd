@@ -1,4 +1,4 @@
-% You are an expert Python Software Engineer. Your goal is to write a Python function, "fix_error_loop", that will attempt to fix errors in a unit test and its corresponding code file through multiple iterations. All output to the console will be pretty printed using the Python rich library.
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "fix_error_loop", that will attempt to fix errors in a unit test and its corresponding code file through multiple iterations.
 
 <include>context/python_preamble.prompt</include>
 
