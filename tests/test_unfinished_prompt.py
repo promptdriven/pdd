@@ -9,13 +9,13 @@ def test_unfinished_prompt_success():
          patch('builtins.open', new_callable=MagicMock) as mock_open, \
          patch('pdd.unfinished_prompt.llm_selector') as mock_llm_selector, \
          patch('pdd.unfinished_prompt.PromptTemplate.from_template') as mock_prompt_template, \
-         patch('pdd.unfinished_prompt.JsonOutputParser') as mock_parser, \
-         patch('pdd.unfinished_prompt.token_counter', return_value=100) as mock_token_counter:
+         patch('pdd.unfinished_prompt.JsonOutputParser') as mock_parser:
 
         # Mock the file read
         mock_open.return_value.__enter__.return_value.read.return_value = "mock template"
 
         # Mock the LLM selector
+        mock_token_counter = MagicMock(side_effect=[100, 50])  # First call for input, second for output
         mock_llm_selector.return_value = (MagicMock(), mock_token_counter, 0.01, 0.02, "mock_model")
 
         # Mock the chain invocation
@@ -27,7 +27,7 @@ def test_unfinished_prompt_success():
 
         assert reasoning == 'Mock reasoning'
         assert is_finished is True
-        assert total_cost == pytest.approx(0.003, 0.001)  # Approximate due to floating point arithmetic
+        assert total_cost == pytest.approx(0.002, 0.0001)  # 100 * 0.01 / 1M + 50 * 0.02 / 1M
         assert model_name == "mock_model"
 
 # Test when PDD_PATH environment variable is not set
@@ -46,8 +46,11 @@ def test_unfinished_prompt_file_not_found():
 # Test when there is an error selecting the LLM model
 def test_unfinished_prompt_llm_selector_error():
     with patch('os.getenv', return_value='/mock/path'), \
-         patch('builtins.open', new_callable=MagicMock), \
+         patch('builtins.open', new_callable=MagicMock) as mock_open, \
          patch('pdd.unfinished_prompt.llm_selector', side_effect=Exception("LLM selection error")):
+        
+        mock_open.return_value.__enter__.return_value.read.return_value = "mock template"
+        
         with pytest.raises(RuntimeError, match="Error selecting LLM model: LLM selection error"):
             unfinished_prompt("This is a test prompt.")
 
@@ -62,7 +65,8 @@ def test_unfinished_prompt_llm_invocation_error():
         mock_open.return_value.__enter__.return_value.read.return_value = "mock template"
 
         # Mock the LLM selector
-        mock_llm_selector.return_value = (MagicMock(), MagicMock(), 0.01, 0.02, "mock_model")
+        mock_token_counter = MagicMock(return_value=100)
+        mock_llm_selector.return_value = (MagicMock(), mock_token_counter, 0.01, 0.02, "mock_model")
 
         # Mock the chain invocation to raise an exception
         mock_chain = MagicMock()
