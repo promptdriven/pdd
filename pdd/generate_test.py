@@ -30,11 +30,19 @@ def generate_test(prompt: str, code: str, strength: float, temperature: float, l
                                 the total cost, and the name of the selected LLM model.
     """
     try:
+        # Input validation
+        if not 0 <= strength <= 1:
+            raise ValueError("Strength must be between 0 and 1")
+        if not 0 <= temperature <= 1:
+            raise ValueError("Temperature must be between 0 and 1")
+        if not language:
+            raise ValueError("Language cannot be empty")
+
         # Step 1: Load the prompt file
         pdd_path = os.getenv('PDD_PATH')
         if not pdd_path:
             raise ValueError("PDD_PATH environment variable is not set")
-        
+
         prompt_file_path = os.path.join(pdd_path, 'prompts', 'generate_test_LLM.prompt')
         with open(prompt_file_path, 'r') as file:
             test_generator_prompt = file.read()
