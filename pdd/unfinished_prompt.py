@@ -30,6 +30,8 @@ def unfinished_prompt(prompt_text: str, strength: float = 0.5, temperature: floa
         raise FileNotFoundError(f"Prompt file not found at {prompt_file_path}")
 
     # Step 2: Create a Langchain LCEL template from unfinished_prompt_LLM prompt
+    if not isinstance(unfinished_prompt_template, str):
+        raise ValueError("Prompt template must be a string")
     prompt_template = PromptTemplate.from_template(unfinished_prompt_template)
     parser = JsonOutputParser()
 
@@ -46,8 +48,12 @@ def unfinished_prompt(prompt_text: str, strength: float = 0.5, temperature: floa
     input_data = {"PROMPT_TEXT": prompt_text}
 
     # 4b: Pretty print a message letting the user know it is running
-    token_count = token_counter(prompt_text)
-    print(f"Running analysis on the prompt. Token count: {token_count}, Estimated cost: ${(token_count / 1_000_000) * input_cost:.6f}")
+    try:
+        token_count = token_counter(prompt_text)
+        print(f"Running analysis on the prompt. Token count: {token_count}, Estimated cost: ${(token_count / 1_000) * input_cost:.6f}")
+    except Exception as e:
+        print(f"Error calculating token count: {e}")
+        token_count = 0
 
     # Invoke the chain
     try:
@@ -60,12 +66,19 @@ def unfinished_prompt(prompt_text: str, strength: float = 0.5, temperature: floa
     is_finished = result.get('is_finished', False)
 
     # 4d: Pretty print the reasoning and completion status
-    output_token_count = token_counter(json.dumps(result))
-    total_cost = (token_count / 1_000_000) * input_cost + (output_token_count / 1_000_000) * output_cost
+    try:
+        output_token_count = token_counter(json.dumps(result))
+    except Exception as e:
+        print(f"Error calculating output token count: {e}")
+        output_token_count = 0
+
+    total_cost = (token_count / 1_000) * input_cost + (output_token_count / 1_000) * output_cost
+    print(f"Input tokens: {token_count}, Input cost: ${input_cost}")
+    print(f"Output tokens: {output_token_count}, Output cost: ${output_cost}")
     print(f"Reasoning: {reasoning}")
     print(f"Is Finished: {is_finished}")
-    print(f"Output Token Count: {output_token_count}, Output Token Cost: ${(output_token_count / 1_000_000) * output_cost:.6f}")
-    print(f"Total Cost: ${total_cost:.6f}")
+    print(f"Output Token Count: {output_token_count}, Output Token Cost: ${(output_token_count / 1_000) * output_cost:.6f}")
+    print(f"Calculated total cost: ${total_cost:.8f}")
 
     # Step 5: Return the 'reasoning', 'is_finished', 'total_cost', and 'model_name'
     return reasoning, is_finished, total_cost, model_name
