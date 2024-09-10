@@ -6,7 +6,6 @@
 - [ ] run lint for context for better reflection
 - [ ] smart includes
 - [ ] auto-includes
-- [ ] execute shell tools in ```<>``` <shell> </shell>
 - [ ] auto split modules into another sub module
 - [ ] auto check inconsistencies between modules
 - [ ] routlellm
@@ -26,6 +25,8 @@
 - [ ] take a chat conversation and collapse down into a single prompt
 - [ ] report a bug and generate the associated unit tests and then have it fix the code via a loop 
 - [ ] warming option for temperature increase
+- [ ] VS code for prompt editing/display
+- [ ] during fix rather than just have the fix loop check to see if the example crashed, have it use a llm to check if the results are largely correct still
 
 ## Bugs
 
