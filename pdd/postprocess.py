@@ -14,6 +14,31 @@ console = Console()
 class ExtractedCode(BaseModel):
     extracted_code: str = Field(description="The extracted and processed code")
 
+# Create chain as a module-level variable
+prompt = None
+parser = None
+chain = None
+
+def initialize_chain():
+    global prompt, parser, chain
+    pdd_path = os.getenv('PDD_PATH')
+    if not pdd_path:
+        raise ValueError("PDD_PATH environment variable is not set")
+    
+    prompt_path = os.path.join(pdd_path, 'prompts', 'extract_code_LLM.prompt')
+    with open(prompt_path, 'r') as file:
+        prompt_template = file.read()
+
+    prompt = PromptTemplate(
+        template=prompt_template,
+        input_variables=["llm_output", "language"]
+    )
+    parser = JsonOutputParser(pydantic_object=ExtractedCode)
+    llm, _, _, _, _ = llm_selector(0.9, 0)  # Default values
+    chain = prompt | llm | parser
+
+initialize_chain()
+
 def postprocess(llm_output: str, language: str, strength: float = 0.9, temperature: float = 0) -> Tuple[str, float]:
     """
     Post-process the string output of an LLM to extract and format code.
@@ -32,29 +57,18 @@ def postprocess(llm_output: str, language: str, strength: float = 0.9, temperatu
         if strength == 0:
             return postprocess_0(llm_output, language), 0.0
 
-        # Step 2: Load the prompt template
-        pdd_path = os.getenv('PDD_PATH')
-        if not pdd_path:
+        # Step 2: Check for PDD_PATH
+        if not os.getenv('PDD_PATH'):
             raise ValueError("PDD_PATH environment variable is not set")
-        
-        prompt_path = os.path.join(pdd_path, 'prompts', 'extract_code_LLM.prompt')
-        with open(prompt_path, 'r') as file:
-            prompt_template = file.read()
 
-        # Step 3: Create Langchain LCEL template
-        prompt = PromptTemplate(
-            template=prompt_template,
-            input_variables=["llm_output", "language"]
-        )
-        parser = JsonOutputParser(pydantic_object=ExtractedCode)
-
-        # Step 4: Use llm_selector for the LLM model
+        # Step 3 and 4: Use llm_selector for the LLM model
         llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
 
-        # Step 5: Run the code through the model
+        # Update chain with new LLM
+        global chain
         chain = prompt | llm | parser
 
-        # Step 5a and 5b: Prepare input and print token info
+        # Step 5: Run the code through the model
         input_text = prompt.format(llm_output=llm_output, language=language)
         input_tokens = token_counter(input_text)
         input_cost_estimate = (input_tokens / 1_000_000) * input_cost
@@ -84,6 +98,9 @@ def postprocess(llm_output: str, language: str, strength: float = 0.9, temperatu
         console.print(f"Estimated output cost: ${output_cost_estimate:.6f}")
 
         return extracted_code, total_cost
+    except ValueError as ve:
+        console.print(f"[red]ValueError: {ve}[/red]")
+        raise
     except Exception as e:
         console.print(f"[red]Error during post-processing: {e}[/red]")
         return "", 0.0
