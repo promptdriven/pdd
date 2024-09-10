@@ -126,8 +126,13 @@ def double_curly(text: str, exclude_keys: List[str] = None) -> str:
     
     def replace_curly(match):
         key = match.group(1)
+        if not key:  # Handle empty curly brackets
+            return "{{}}"
         if key in exclude_keys:
             return f"{{{key}}}"
         return f"{{{{{key}}}}}"
     
-    return re.sub(r'\{([^{}]+)\}', replace_curly, text)
+    console.print(f"Before doubling: {text}")
+    result = re.sub(r'\{([^{}]*)\}', replace_curly, text)
+    console.print(f"After doubling: {result}")
+    return result
