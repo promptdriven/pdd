@@ -28,6 +28,10 @@ def split(input_prompt: str, input_code: str, example_code: str, strength: float
     :param temperature: The temperature parameter for LLM selection.
     :return: A tuple containing the sub-prompt, modified prompt, and total cost.
     """
+    total_cost = 0.0
+    sub_prompt = ""
+    modified_prompt = ""
+    
     try:
         # Step 1: Load the prompt files
         pdd_path = os.getenv('PDD_PATH', '.')
@@ -43,7 +47,17 @@ def split(input_prompt: str, input_code: str, example_code: str, strength: float
         prompt_template = PromptTemplate.from_template(processed_split_llm_prompt)
 
         # Step 4: Use the llm_selector function
-        llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
+        try:
+            llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
+        except ValueError as e:
+            console.print(f"[bold red]Error in llm_selector:[/bold red] {e}")
+            # Use default values if llm_selector fails
+            from langchain_openai import ChatOpenAI
+            llm = ChatOpenAI()
+            token_counter = lambda x: len(x.split())  # Simple word count as fallback
+            input_cost = 0.00001
+            output_cost = 0.00002
+            model_name = "fallback_model"
 
         # Step 4a: Run the input through the model
         chain = prompt_template | llm | StrOutputParser()
@@ -69,22 +83,31 @@ def split(input_prompt: str, input_code: str, example_code: str, strength: float
 
         # Step 5a: Run the JSON extraction
         json_chain = json_prompt_template | llm | json_parser
-        json_output = json_chain.invoke({"llm_output": llm_output})
-
-        # Extract sub_prompt and modified_prompt
-        sub_prompt = json_output.get('sub_prompt', '')
-        modified_prompt = json_output.get('modified_prompt', '')
+        try:
+            json_output = json_chain.invoke({"llm_output": llm_output})
+            
+            # Extract sub_prompt and modified_prompt
+            if isinstance(json_output, dict):
+                sub_prompt = json_output.get('sub_prompt', '')
+                modified_prompt = json_output.get('modified_prompt', '')
+            else:
+                console.print("[bold yellow]Warning:[/bold yellow] JSON output is not a dictionary. Using empty strings.")
+                sub_prompt = ""
+                modified_prompt = ""
+        except ValueError as e:
+            console.print(f"[bold red]Error in JSON parsing:[/bold red] {e}")
+            sub_prompt = ""
+            modified_prompt = ""
 
         # Pretty print the extracted prompts
         console.print(Markdown(f"**Sub Prompt:**\n{sub_prompt}"))
         console.print(Markdown(f"**Modified Prompt:**\n{modified_prompt}"))
 
-        # Return the results
-        return sub_prompt, modified_prompt, total_cost
-
     except Exception as e:
         console.print(f"[bold red]An error occurred:[/bold red] {e}")
-        return "", "", 0.0
+
+    # Return the results
+    return sub_prompt, modified_prompt, total_cost
 
 # Example usage
 if __name__ == "__main__":
