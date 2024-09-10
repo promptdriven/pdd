@@ -37,7 +37,7 @@ def split(input_prompt: str, input_code: str, example_code: str, strength: float
             extract_prompt_split_llm = file.read()
 
         # Step 2: Preprocess the split_LLM prompt
-        processed_split_llm_prompt = preprocess(split_llm_prompt, recursive=False, double_curly_brackets=True)
+        processed_split_llm_prompt = preprocess(split_llm_prompt, recursive=False, double_curly_brackets=True, exclude_keys=['input_prompt', 'input_code', 'example_code'])
 
         # Step 3: Create a Langchain LCEL template
         prompt_template = PromptTemplate.from_template(processed_split_llm_prompt)
