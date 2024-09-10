@@ -60,8 +60,8 @@ def test_double_curly_brackets() -> None:
 # Test for excluding keys from doubling curly brackets
 def test_exclude_keys_from_doubling() -> None:
     """Test excluding specific keys from doubling curly brackets."""
-    prompt = "This is a test {key} and {exclude}"
-    expected_output = "This is a test {{key}} and {exclude}"
+    prompt = "This is a test {key} and {exclude} {}"
+    expected_output = "This is a test {{key}} and {exclude} {{}}"
 
     assert preprocess(prompt, recursive=False, double_curly_brackets=True, exclude_keys=['exclude']) == expected_output
 
