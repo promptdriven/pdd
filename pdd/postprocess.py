@@ -8,8 +8,11 @@ from rich.console import Console
 from rich.markdown import Markdown
 from .postprocess_0 import postprocess_0
 from .llm_selector import llm_selector
+import logging
 
 console = Console()
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class ExtractedCode(BaseModel):
     extracted_code: str = Field(description="The extracted and processed code")
@@ -36,8 +39,6 @@ def initialize_chain():
     parser = JsonOutputParser(pydantic_object=ExtractedCode)
     llm, _, _, _, _ = llm_selector(0.9, 0)  # Default values
     chain = prompt | llm | parser
-
-initialize_chain()
 
 def postprocess(llm_output: str, language: str, strength: float = 0.9, temperature: float = 0) -> Tuple[str, float]:
     """
@@ -66,27 +67,34 @@ def postprocess(llm_output: str, language: str, strength: float = 0.9, temperatu
 
         # Update chain with new LLM
         global chain
-        chain = prompt | llm | parser
+        if chain is None:
+            logger.info("Initializing chain in postprocess function")
+            initialize_chain()
 
-        # Step 5: Run the code through the model
+        if chain is None:
+            raise ValueError("Failed to initialize chain")
+
         input_text = prompt.format(llm_output=llm_output, language=language)
         input_tokens = token_counter(input_text)
         input_cost_estimate = (input_tokens / 1_000_000) * input_cost
 
-        console.print(f"[bold]Running post-processing on {input_tokens} tokens[/bold]")
-        console.print(f"Estimated input cost: ${input_cost_estimate:.6f}")
+        logger.info(f"Running post-processing on {input_tokens} tokens")
+        logger.info(f"Estimated input cost: ${input_cost_estimate:.6f}")
 
         # Run the chain
         result = chain.invoke({"llm_output": llm_output, "language": language})
-
+        logger.info(f"Chain invocation result: {result}")
         # Step 5c: Extract the code from the result
-        extracted_code = result.get('extracted_code', "Error: No extracted code found in the output")
+        extracted_code = result.get('extracted_code', "")
 
-        # Step 5d: Remove triple backticks if present
+        # Remove backticks first
         lines = extracted_code.split('\n')
         if lines and lines[0].startswith('```'):
             lines = lines[1:-1]
         extracted_code = '\n'.join(lines)
+
+        if not extracted_code:
+            extracted_code = "Error: No extracted code found in the output"
 
         # Step 5e: Print the result and cost information
         console.print(Markdown(f"```{language}\n{extracted_code}\n```"))
@@ -94,13 +102,16 @@ def postprocess(llm_output: str, language: str, strength: float = 0.9, temperatu
         output_cost_estimate = (output_tokens / 1_000_000) * output_cost
         total_cost = input_cost_estimate + output_cost_estimate
 
-        console.print(f"Output tokens: {output_tokens}")
-        console.print(f"Estimated output cost: ${output_cost_estimate:.6f}")
+        logger.info(f"Output tokens: {output_tokens}")
+        logger.info(f"Estimated output cost: ${output_cost_estimate:.6f}")
 
         return extracted_code, total_cost
     except ValueError as ve:
-        console.print(f"[red]ValueError: {ve}[/red]")
+        logger.error(f"ValueError: {ve}")
         raise
     except Exception as e:
-        console.print(f"[red]Error during post-processing: {e}[/red]")
+        logger.error(f"Error during post-processing: {e}")
         return "", 0.0
+
+# Initialize the chain when the module is loaded
+initialize_chain()
