@@ -1,26 +1,45 @@
-from postprocess import postprocess
+from pdd.postprocess import postprocess
+from rich.console import Console
 
+console = Console()
 
+def main() -> None:
+    """
+    Main function to demonstrate the use of the postprocess function.
+    Extracts code from a mixed text and code LLM output and prints the result.
+    """
+    # Example LLM output containing mixed text and code
+    llm_output = """
+    Here's a Python function to calculate the factorial:
 
-# Example LLM output containing code
-llm_output = """
-Here is a simple Python function:
-```python
-def hello_world():
-    print("Hello, world!")
-```
-You can use this function in your application.
-"""
+    ```python
+    def factorial(n):
+        if n == 0 or n == 1:
+            return 1
+        else:
+            return n * factorial(n-1)
+    ```
 
-# Specify the programming language and model parameters
-language = "python"
-strength = 0.9  # Model strength
-temperature = 0.5  # Model temperature
+    You can use this function like this:
 
-# Call the postprocess function
-extracted_code, total_cost = postprocess(llm_output, language, strength, temperature)
+    ```python
+    result = factorial(5)
+    print(f"The factorial of 5 is: {result}")
+    ```
+    """
 
-# Print the results
-print("Extracted Code:")
-print(extracted_code)
-print(f"Total Cost: ${total_cost:.6f}")
+    # Specify the programming language and model parameters
+    language = "python"
+    strength = 0.7  # Strength of the LLM model (0 to 1)
+    temperature = 0.2  # Temperature for the LLM model (0 to 1)
+
+    # Call the postprocess function
+    extracted_code, total_cost = postprocess(llm_output, language, strength, temperature)
+
+    # Print the extracted code and total cost
+    console.print("[bold green]Extracted Code:[/bold green]")
+    console.print(extracted_code)
+    console.print(f"[bold blue]Total Cost: ${total_cost:.6f}[/bold blue]")
+
+if __name__ == "__main__":
+    main()
