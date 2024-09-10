@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch, mock_open
+from unittest.mock import patch, mock_open, MagicMock
 from pdd.split import split, Console
 
 # Mock data
@@ -34,7 +34,8 @@ def mock_llm_selector():
             lambda x: "LLM output content",  # mock LLM
             lambda x: 100,  # mock token counter
             0.00001,  # mock input cost
-            0.00002   # mock output cost
+            0.00002,  # mock output cost
+            "mock_model_name"  # mock model name
         )
         yield mock_selector
 
@@ -46,9 +47,12 @@ def mock_preprocess():
 
 @pytest.fixture
 def mock_json_parser():
-    with patch("pdd.split.JsonOutputParser") as mock_parser:
-        mock_parser.return_value.parse.return_value = mock_json_output
-        yield mock_parser
+    with patch("pdd.split.PromptTemplate") as mock_prompt_template, \
+         patch("pdd.split.JsonOutputParser") as mock_json_parser:
+        mock_chain = MagicMock()
+        mock_chain.invoke.return_value = mock_json_output
+        mock_prompt_template.from_template.return_value.__or__.return_value.__or__.return_value = mock_chain
+        yield mock_json_parser
 
 def test_split_successful_execution(mock_file_reads, mock_llm_selector, mock_preprocess, mock_json_parser):
     sub_prompt, modified_prompt, total_cost = split(
@@ -61,33 +65,15 @@ def test_split_successful_execution(mock_file_reads, mock_llm_selector, mock_pre
     assert total_cost > 0
 
 def test_split_file_read_error(mock_environment):
-    with patch("builtins.open", side_effect=FileNotFoundError):
-        sub_prompt, modified_prompt, total_cost = split(
-            mock_input_prompt, mock_input_code, mock_example_code, mock_strength, mock_temperature
-        )
-
-    assert sub_prompt == ""
-    assert modified_prompt == ""
-    assert total_cost == 0.0
+    with patch("builtins.open", side_effect=FileNotFoundError), pytest.raises(FileNotFoundError):
+        split(mock_input_prompt, mock_input_code, mock_example_code, mock_strength, mock_temperature)
 
 def test_split_llm_selector_error(mock_file_reads, mock_preprocess):
-    with patch("pdd.split.llm_selector", side_effect=Exception("LLM selector error")):
-        sub_prompt, modified_prompt, total_cost = split(
-            mock_input_prompt, mock_input_code, mock_example_code, mock_strength, mock_temperature
-        )
-
-    assert sub_prompt == ""
-    assert modified_prompt == ""
-    assert total_cost == 0.0
+    with patch("pdd.split.llm_selector", side_effect=Exception("LLM selector error")), pytest.raises(Exception):
+        split(mock_input_prompt, mock_input_code, mock_example_code, mock_strength, mock_temperature)
 
 def test_split_json_parsing_error(mock_file_reads, mock_llm_selector, mock_preprocess):
     with patch("pdd.split.JsonOutputParser") as mock_parser:
         mock_parser.return_value.parse.side_effect = ValueError("JSON parsing error")
-        sub_prompt, modified_prompt, total_cost = split(
-            mock_input_prompt, mock_input_code, mock_example_code, mock_strength, mock_temperature
-        )
-
-    assert sub_prompt == ""
-    assert modified_prompt == ""
-    assert isinstance(total_cost, float)
-    assert total_cost > 0
+        with pytest.raises(ValueError):
+            split(mock_input_prompt, mock_input_code, mock_example_code, mock_strength, mock_temperature)

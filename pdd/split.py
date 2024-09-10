@@ -9,6 +9,8 @@ from langchain_community.cache import SQLiteCache
 from langchain.globals import set_llm_cache
 from .llm_selector import llm_selector
 from langchain.globals import set_debug
+import json
+
 set_debug(False)
 
 # Set up the Rich console for pretty printing
@@ -51,13 +53,7 @@ def split(input_prompt: str, input_code: str, example_code: str, strength: float
             llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
         except ValueError as e:
             console.print(f"[bold red]Error in llm_selector:[/bold red] {e}")
-            # Use default values if llm_selector fails
-            from langchain_openai import ChatOpenAI
-            llm = ChatOpenAI()
-            token_counter = lambda x: len(x.split())  # Simple word count as fallback
-            input_cost = 0.00001
-            output_cost = 0.00002
-            model_name = "fallback_model"
+            raise
 
         # Step 4a: Run the input through the model
         chain = prompt_template | llm | StrOutputParser()
@@ -86,18 +82,20 @@ def split(input_prompt: str, input_code: str, example_code: str, strength: float
         try:
             json_output = json_chain.invoke({"llm_output": llm_output})
             
+            # Print raw JSON output for debugging
+            console.print(f"Raw JSON output: {json_output}")
+            
             # Extract sub_prompt and modified_prompt
             if isinstance(json_output, dict):
                 sub_prompt = json_output.get('sub_prompt', '')
                 modified_prompt = json_output.get('modified_prompt', '')
+                if not sub_prompt or not modified_prompt:
+                    console.print("[bold yellow]Warning:[/bold yellow] sub_prompt or modified_prompt is empty in JSON output.")
             else:
-                console.print("[bold yellow]Warning:[/bold yellow] JSON output is not a dictionary. Using empty strings.")
-                sub_prompt = ""
-                modified_prompt = ""
-        except ValueError as e:
+                raise ValueError(f"JSON output is not a dictionary. Type: {type(json_output)}, Value: {json_output}")
+        except Exception as e:
             console.print(f"[bold red]Error in JSON parsing:[/bold red] {e}")
-            sub_prompt = ""
-            modified_prompt = ""
+            raise
 
         # Pretty print the extracted prompts
         console.print(Markdown(f"**Sub Prompt:**\n{sub_prompt}"))
@@ -105,6 +103,7 @@ def split(input_prompt: str, input_code: str, example_code: str, strength: float
 
     except Exception as e:
         console.print(f"[bold red]An error occurred:[/bold red] {e}")
+        raise
 
     # Return the results
     return sub_prompt, modified_prompt, total_cost
