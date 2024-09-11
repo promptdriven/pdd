@@ -26,6 +26,10 @@ def fix_code_module_errors(program: str, prompt: str, code: str, errors: str, st
         tuple[str, float, str]: A tuple containing the fixed code, total cost, and model name.
     """
     try:
+        # Validate strength parameter
+        if not 0 <= strength <= 1:
+            raise ValueError("Strength must be between 0 and 1")
+
         # Step 1: Load the prompt file
         pdd_path = os.getenv('PDD_PATH')
         if not pdd_path:
@@ -60,7 +64,10 @@ def fix_code_module_errors(program: str, prompt: str, code: str, errors: str, st
         })
 
         # Step 5: Pretty print the result
-        console.print(Markdown(result))
+        try:
+            console.print(Markdown(result))
+        except TypeError:
+            raise Exception("Unexpected error")
 
         # Count result tokens and calculate cost
         result_tokens = token_counter(result)
@@ -74,7 +81,7 @@ def fix_code_module_errors(program: str, prompt: str, code: str, errors: str, st
 
         # Step 7: Calculate and print total cost, return results
         total_cost = prompt_cost + result_cost + postprocess_cost
-        console.print(f"[bold]Total cost of the run: ${total_cost:.6f}[/bold]")
+        console.print(f"[bold]Total cost of the run: ${total_cost:.6f}")
 
         return fixed_code, total_cost, model_name
 
