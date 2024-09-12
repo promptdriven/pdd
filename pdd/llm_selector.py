@@ -80,7 +80,7 @@ def llm_selector(strength: float, temperature: float):
 
     # Instantiate the LLM model
     if provider == 'OpenAI':
-        llm = ChatOpenAI(model=model_name, temperature=temperature)#, max_completion_tokens=16384)
+        llm = ChatOpenAI(model=model_name)#, temperature=temperature, max_completion_tokens=16384)
     elif provider == 'Anthropic':
         llm = ChatAnthropic(model=model_name, temperature=temperature, max_tokens=8192)
     elif provider == 'Google':
