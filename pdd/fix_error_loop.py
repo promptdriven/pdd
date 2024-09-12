@@ -130,13 +130,7 @@ def fix_error_loop(
             escaped_error_output = error_output.replace('[', r'\[').replace(']', r'\]')
             rprint(Panel(f"[red]Test failures detected in attempt {attempts}:[/red]\n{escaped_error_output}"))
 
-            # fails = error_output.count("FAILED")
-            # errors = error_output.count("ERROR")
-            
-            # # Adjust for -vv flag doubling the messages
-            # fails //= 2
-            # errors //= 2
-            fails, errors = parse_pytest_results(error_output)
+            fails, errors = parse_pytest_results(stdout)
             
             # Update best iteration based on new criteria
             if errors < best_iteration["errors"] or (errors == best_iteration["errors"] and fails < best_iteration["fails"]):
