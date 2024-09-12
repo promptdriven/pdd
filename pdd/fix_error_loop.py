@@ -7,8 +7,35 @@ from rich.console import Console
 from rich.panel import Panel
 from unittest.mock import MagicMock
 from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
+import re
 
 console = Console()
+
+def parse_pytest_results(error_output):
+    # Pattern to match the summary line
+    pattern = r"=+ (\d+) (failed|error)(?:, (\d+) (failed|error))?, (\d+) passed,? .* in \d+\.\d+s =+"
+    
+    # Find all matches in the error_output
+    matches = re.findall(pattern, error_output, re.MULTILINE)
+    
+    total_fails = 0
+    total_errors = 0
+    
+    for match in matches:
+        # Count fails and errors
+        if match[1] == 'failed':
+            total_fails += int(match[0])
+        elif match[1] == 'error':
+            total_errors += int(match[0])
+        
+        # Check if there's a second count (for cases with both fails and errors)
+        if match[2]:
+            if match[3] == 'failed':
+                total_fails += int(match[2])
+            elif match[3] == 'error':
+                total_errors += int(match[2])
+    
+    return total_fails, total_errors
 
 def fix_error_loop(
     unit_test_file: str,
@@ -103,13 +130,14 @@ def fix_error_loop(
             escaped_error_output = error_output.replace('[', r'\[').replace(']', r'\]')
             rprint(Panel(f"[red]Test failures detected in attempt {attempts}:[/red]\n{escaped_error_output}"))
 
-            fails = error_output.count("FAILED")
-            errors = error_output.count("ERROR")
+            # fails = error_output.count("FAILED")
+            # errors = error_output.count("ERROR")
             
-            # Adjust for -vv flag doubling the messages
-            fails //= 2
-            errors //= 2
-
+            # # Adjust for -vv flag doubling the messages
+            # fails //= 2
+            # errors //= 2
+            fails, errors = parse_pytest_results(error_output)
+            
             # Update best iteration based on new criteria
             if errors < best_iteration["errors"] or (errors == best_iteration["errors"] and fails < best_iteration["fails"]):
                 best_iteration = {"errors": errors, "fails": fails, "attempt": attempts}
