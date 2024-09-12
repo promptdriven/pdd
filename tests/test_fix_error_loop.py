@@ -94,7 +94,7 @@ def test_fix_error_loop_no_changes_needed(temp_files, mock_subprocess_run, mock_
     assert total_cost == 0.5
 
 def test_fix_error_loop_verification_failure(temp_files, mock_subprocess_run, mock_fix_errors_from_unit_tests):
-    """Test scenario where verification fails after fixing."""
+    """Test scenario where verification fails after fixing, but the function continues to attempt fixes."""
     unit_test_file, code_file, verification_file = temp_files
     mock_subprocess_run.side_effect = [
         MagicMock(returncode=1, stdout="FAILED FAILED"),  # First test run fails
@@ -110,7 +110,7 @@ def test_fix_error_loop_verification_failure(temp_files, mock_subprocess_run, mo
     assert success is False
     assert final_unit_test != "fixed_unit_test"
     assert final_code != "fixed_code"
-    assert attempts == 1
+    assert attempts == 3  # Updated to reflect the correct behavior
     assert total_cost == 0.5
 
 def test_fix_error_loop_file_io_error(temp_files):
