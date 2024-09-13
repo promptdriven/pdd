@@ -26,6 +26,12 @@
     % Here is an example of the fix_errors_from_unit_tests function that will be used: <fix_errors_from_unit_tests_example><include>context/fix_errors_from_unit_tests_example.py</include></fix_errors_from_unit_tests_example>
 </internal_example_modules>
 
+% Here are examples of lines in the pytest -vv output for fails and errors:
+```=================== 4 failed, 2 passed, 4 warnings in 1.47s ====================
+=================== 2 failed, 4 passed, 4 warnings in 1.36s ====================
+================================================== 1 error, 1 failed in 0.46s ===================================================
+================================================== 1 error in 0.5s ===================================================```
+
 % This function will do the following:
     Step 1. Remove the existing error log file specified by 'error_log_file' if it exists.
     Step 2. Initialize variables:
@@ -37,7 +43,7 @@
         b. If the test passes, break the loop.
         c. If the test fails:
            - Read and print the error message from the error log file, but be sure to escape square brackets first so rprint doesn't misinterpret them as a command.
-           - Count the number of 'FAILED' and 'ERROR' from stdout (accounting for the -vv flag doubling these messages).
+           - Extract the number of fails and errors from pytest -vv stdout.
            - Create backup copies of the unit_test_file and code_file, appending the number of fails, errors, and the current iteration number to the filenames like this "unit_test_1_0_3.py" and "code_1_0_3.py", where there was one fail, zero errors and it is the third iteration through the loop.
            - Read the contents of the unit_test_file and code_file.
            - Call fix_errors_from_unit_tests with the file contents, error from the error log file, the error log file, and the provided strength and temperature.
