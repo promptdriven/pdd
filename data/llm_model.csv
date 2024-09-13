@@ -1,9 +1,9 @@
 provider,model,input,output,coding_arena_elo,base_url,api_key,counter,encoder,max_tokens,max_completion_tokens
-OpenAI,o1-mini-2024-09-12,3,12,1350,,,tiktoken,o200k_base,,65536, 
-OpenAI,deepseek-coder,0.14,0.28,1263,https://api.deepseek.com/beta,DEEPSEEK_API_KEY,autotokenizer,deepseek-coder-7b-instruct-v1.5,8192,
-Anthropic,claude-3-5-sonnet-20240620,3,15,1340,,,anthropic,claude-3-sonnet-20240229,8192,
-Google,gemini-pro-experimental,3.5,7,1273,,,,,8192,
-Fireworks,accounts/fireworks/models/llama-v3p1-405b-instruct,3,3,1280,,,,,2048,
-OpenAI,gpt-4o-mini,0.15,0.60,1283,,,tiktoken,o200k_base,16384,
-OpenAI,gpt-4o-2024-08-06,2.5,10,1333,,,tiktoken,o200k_base,16384,
-OpenAI,o1-preview-2024-09-12,15,60,1345,,,tiktoken,o200k_base,,32768,
+OpenAI,"o1-mini-2024-09-12",3,12,1350,,,tiktoken,o200k_base,,65536
+OpenAI,"deepseek-coder",0.14,0.28,1263,https://api.deepseek.com/beta,DEEPSEEK_API_KEY,autotokenizer,deepseek-coder-7b-instruct-v1.5,8192,
+Anthropic,"claude-3-5-sonnet-20240620",3,15,1340,,,anthropic,claude-3-sonnet-20240229,8192,
+Google,"gemini-pro-experimental",3.5,7,1273,,,,,8192,
+Fireworks,"accounts/fireworks/models/llama-v3p1-405b-instruct",3,3,1280,,,,,2048,
+OpenAI,"gpt-4o-mini",0.15,0.60,1283,,,tiktoken,o200k_base,16384,
+OpenAI,"gpt-4o-2024-08-06",2.5,10,1333,,,tiktoken,o200k_base,16384,
+OpenAI,"o1-preview-2024-09-12",15,60,1345,,,tiktoken,o200k_base,,32768
