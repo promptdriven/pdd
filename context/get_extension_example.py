@@ -1,4 +1,4 @@
-from get_extension import get_extension
+from pdd.get_extension import get_extension
 
 # Example calls to the function
 print(get_extension("Python"))        # Output: .py
