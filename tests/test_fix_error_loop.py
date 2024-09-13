@@ -3,6 +3,7 @@ import os
 import tempfile
 from unittest.mock import patch, MagicMock
 from pdd.fix_error_loop import fix_error_loop
+import subprocess
 
 @pytest.fixture
 def temp_files():
@@ -33,10 +34,11 @@ def mock_fix_errors_from_unit_tests():
 def test_fix_error_loop_success(temp_files, mock_subprocess_run, mock_fix_errors_from_unit_tests):
     """Test successful error fixing scenario."""
     unit_test_file, code_file, verification_file = temp_files
+    # Use subprocess.CompletedProcess instead of MagicMock for accurate simulation
     mock_subprocess_run.side_effect = [
-        MagicMock(returncode=1, stdout="FAILED FAILED"),  # First test run fails
-        MagicMock(returncode=0),  # Verification succeeds
-        MagicMock(returncode=0, stdout="All tests passed")  # Final test run passes
+        subprocess.CompletedProcess(args=["python", "-m", "pytest", "-vv", unit_test_file], returncode=1, stdout="FAILED FAILED"),
+        subprocess.CompletedProcess(args=["python", verification_file], returncode=0, stdout="Verification successful"),
+        subprocess.CompletedProcess(args=["python", "-m", "pytest", "-vv", unit_test_file], returncode=0, stdout="All tests passed")
     ]
     mock_fix_errors_from_unit_tests.return_value = (True, True, "fixed_unit_test", "fixed_code", 0.5, "gpt-3.5-turbo")
 
@@ -54,7 +56,15 @@ def test_fix_error_loop_success(temp_files, mock_subprocess_run, mock_fix_errors
 def test_fix_error_loop_max_attempts(temp_files, mock_subprocess_run, mock_fix_errors_from_unit_tests):
     """Test scenario where maximum attempts are reached without success."""
     unit_test_file, code_file, verification_file = temp_files
-    mock_subprocess_run.return_value = MagicMock(returncode=1, stdout="FAILED FAILED")
+    # All pytest runs fail, no verification runs succeed
+    mock_subprocess_run.side_effect = [
+        subprocess.CompletedProcess(args=["python", "-m", "pytest", "-vv", unit_test_file], returncode=1, stdout="FAILED FAILED"),
+        subprocess.CompletedProcess(args=["python", verification_file], returncode=1, stdout="Verification failed"),
+        subprocess.CompletedProcess(args=["python", "-m", "pytest", "-vv", unit_test_file], returncode=1, stdout="FAILED FAILED"),
+        subprocess.CompletedProcess(args=["python", verification_file], returncode=1, stdout="Verification failed"),
+        subprocess.CompletedProcess(args=["python", "-m", "pytest", "-vv", unit_test_file], returncode=1, stdout="FAILED FAILED"),
+        subprocess.CompletedProcess(args=["python", verification_file], returncode=1, stdout="Verification failed")
+    ]
     mock_fix_errors_from_unit_tests.return_value = (True, True, "fixed_unit_test", "fixed_code", 0.5, "gpt-3.5-turbo")
 
     success, _, _, attempts, total_cost, _ = fix_error_loop(
@@ -68,7 +78,14 @@ def test_fix_error_loop_max_attempts(temp_files, mock_subprocess_run, mock_fix_e
 def test_fix_error_loop_budget_exceeded(temp_files, mock_subprocess_run, mock_fix_errors_from_unit_tests):
     """Test scenario where the budget is exceeded."""
     unit_test_file, code_file, verification_file = temp_files
-    mock_subprocess_run.return_value = MagicMock(returncode=1, stdout="FAILED FAILED")
+    # Each fix attempt costs 2.0, budget is 5.0, max_attempts=10
+    mock_subprocess_run.side_effect = [
+        subprocess.CompletedProcess(args=["python", "-m", "pytest", "-vv", unit_test_file], returncode=1, stdout="FAILED FAILED"),
+        subprocess.CompletedProcess(args=["python", verification_file], returncode=1, stdout="Verification failed"),
+        subprocess.CompletedProcess(args=["python", "-m", "pytest", "-vv", unit_test_file], returncode=1, stdout="FAILED FAILED"),
+        subprocess.CompletedProcess(args=["python", verification_file], returncode=1, stdout="Verification failed"),
+        subprocess.CompletedProcess(args=["python", "-m", "pytest", "-vv", unit_test_file], returncode=1, stdout="FAILED FAILED")
+    ]
     mock_fix_errors_from_unit_tests.return_value = (True, True, "fixed_unit_test", "fixed_code", 2.0, "gpt-3.5-turbo")
 
     success, _, _, attempts, total_cost, _ = fix_error_loop(
@@ -76,13 +93,17 @@ def test_fix_error_loop_budget_exceeded(temp_files, mock_subprocess_run, mock_fi
     )
 
     assert success is False
-    assert attempts == 3
+    assert attempts == 3  # 3 attempts before exceeding budget (2.0 * 3 = 6.0 > 5.0)
     assert total_cost == 6.0
 
 def test_fix_error_loop_no_changes_needed(temp_files, mock_subprocess_run, mock_fix_errors_from_unit_tests):
     """Test scenario where no changes are needed in the fix attempt."""
     unit_test_file, code_file, verification_file = temp_files
-    mock_subprocess_run.return_value = MagicMock(returncode=1, stdout="FAILED FAILED")
+    # Initial test run fails, fix_errors_from_unit_tests indicates no updates needed
+    mock_subprocess_run.side_effect = [
+        subprocess.CompletedProcess(args=["python", "-m", "pytest", "-vv", unit_test_file], returncode=1, stdout="FAILED FAILED"),
+        subprocess.CompletedProcess(args=["python", verification_file], returncode=1, stdout="Verification failed")
+    ]
     mock_fix_errors_from_unit_tests.return_value = (False, False, "", "", 0.5, "gpt-3.5-turbo")
 
     success, _, _, attempts, total_cost, _ = fix_error_loop(
@@ -96,22 +117,37 @@ def test_fix_error_loop_no_changes_needed(temp_files, mock_subprocess_run, mock_
 def test_fix_error_loop_verification_failure(temp_files, mock_subprocess_run, mock_fix_errors_from_unit_tests):
     """Test scenario where verification fails after fixing, but the function continues to attempt fixes."""
     unit_test_file, code_file, verification_file = temp_files
+    # First fix attempt: test fails, fix applied
+    # Verification fails
+    # Second fix attempt: test fails, fix applied
+    # Verification fails
+    # Third fix attempt: test runs but let's say verification succeeds
     mock_subprocess_run.side_effect = [
-        MagicMock(returncode=1, stdout="FAILED FAILED"),  # First test run fails
-        MagicMock(returncode=1),  # Verification fails
-        MagicMock(returncode=1, stdout="FAILED FAILED")  # Final test run fails
+        subprocess.CompletedProcess(args=["python", "-m", "pytest", "-vv", unit_test_file], returncode=1, stdout="FAILED FAILED"),
+        subprocess.CompletedProcess(args=["python", verification_file], returncode=1, stdout="Verification failed"),
+        subprocess.CompletedProcess(args=["python", "-m", "pytest", "-vv", unit_test_file], returncode=1, stdout="FAILED FAILED"),
+        subprocess.CompletedProcess(args=["python", verification_file], returncode=1, stdout="Verification failed"),
+        subprocess.CompletedProcess(args=["python", "-m", "pytest", "-vv", unit_test_file], returncode=1, stdout="FAILED FAILED"),
+        subprocess.CompletedProcess(args=["python", verification_file], returncode=1, stdout="Verification failed")
     ]
     mock_fix_errors_from_unit_tests.return_value = (True, True, "fixed_unit_test", "fixed_code", 0.5, "gpt-3.5-turbo")
 
     success, final_unit_test, final_code, attempts, total_cost, _ = fix_error_loop(
-        unit_test_file, code_file, "test prompt", verification_file, 0.7, 0.5, 3, 10.0
+        unit_test_file,
+        code_file,
+        "test prompt",
+        verification_file,
+        0.7,
+        0.5,
+        3,
+        10.0
     )
 
     assert success is False
     assert final_unit_test != "fixed_unit_test"
     assert final_code != "fixed_code"
-    assert attempts == 3  # Updated to reflect the correct behavior
-    assert total_cost == 0.5
+    assert attempts == 3
+    assert total_cost == 1.5
 
 def test_fix_error_loop_file_io_error(temp_files):
     """Test scenario where a file I/O error occurs."""
