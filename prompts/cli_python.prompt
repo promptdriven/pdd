@@ -35,7 +35,7 @@
 
     - 'fix' command: To fix errors in code and unit test based on error messages use fix_errors_from_unit_tests. Be sure to load the required files for this function and only save the output files if there is an update. Note that the 'error_file' argument does not need to exist beforehand. Here is an example how to fix errors in code and unit test based on error messages: <fix_errors_from_unit_tests_example><include>context/fix_errors_from_unit_tests_example.py</include></fix_errors_from_unit_tests_example>
 
-    - 'fix --loop' sub-command: To loop on the above fix errors in code and unit tests use fix_error_loop. Here is an example how to loop on the above fix errors in code and unit tests: <fix_error_loop_example><include>context/fix_error_loop_example.py</include></fix_error_loop_example>
+    - 'fix --loop' sub-command: To loop on the above fix errors in code and unit tests use 'fix_error_loop' function. Be sure to load the prompt_file as the function expects the prompt string and not the prompt filepath. Here is an example how to loop on the above fix errors in code and unit tests: <fix_error_loop_example><include>context/fix_error_loop_example.py</include></fix_error_loop_example>
 
     - 'split' command: To split a prompt file into multiple prompt files, use the 'split' function. Here is an example of how to split a prompt file into multiple prompt files: <split_example><include>context/split_example.py</include></split_example>
 
