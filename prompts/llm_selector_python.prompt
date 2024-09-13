@@ -1,5 +1,7 @@
 % You are an expert Python engineer. Your goal is to write a python function, "llm_selector", that will return the appropriate Langchain llm model. You will use the Langchain cache.
 
+<include>context/python_preamble.prompt</include>
+
 % Here are the inputs and outputs of the function:
     Input: 
         'strength' - Floating point number with 0 being the cheapest model, 0.5 being the base model and 1 being the model with the highest ELO score.
@@ -11,17 +13,11 @@
         'output_cost' - Cost per million output tokens
         'model_name' - Name of the selected model
 
-% Here is an example of a Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
+% Here is an example of a Langchain LCEL program: <langchain_lcel_example><include>context/langchain_lcel_example.py</include></langchain_lcel_example>
 
-% Here is an example of a token counter function: ```<./context/llm_token_counter_example.py>```
+% Here is an example of a token counter function: <llm_token_counter_example><include>context/llm_token_counter_example.py</include></llm_token_counter_example>
 
-% Here is an example (but not actual values) of the llm_model.csv:```provider,model,input,output,coding_arena_elo,base_url,api_key,counter,encoder,max_tokens
-OpenAI,gpt-4o-mini,0.15,0.60,1283,,,tiktoken,o200k_base,16384
-OpenAI,gpt-4o-2024-08-06,2.5,10,1333,,,tiktoken,o200k_base,16384
-OpenAI,deepseek-coder,0.14,0.28,1263,https://api.deepseek.com,DEEPSEEK_API_KEY,autotokenizer,deepseek-coder-7b-instruct-v1.5,4096
-Anthropic,claude-3-5-sonnet-20240620,3,15,1340,,,anthropic,claude-3-sonnet-20240229,8192
-Google,gemini-pro-experimental,3.5,7,1273,,,,,8192
-Fireworks,accounts/fireworks/models/llama-v3p1-405b-instruct,3,3,1280,,,,,2048```
+% Here is an example (but not actual values) of the llm_model.csv: <llm_model_example><shell>head -6 data/llm_model.csv</shell></llm_model_example>
 
 % Here are the rules to follow when selecting the appropriate model:
     - If environmental variable $PDD_MODEL_DEFAULT is set, use that as the base model, otherwise it is "gpt-4o-mini". If $PDD_PATH is set load $PDD_PATH/data/llm_model.csv, otherwise, assume $PDD_PATH is current working directory.
@@ -29,6 +25,4 @@ Fireworks,accounts/fireworks/models/llama-v3p1-405b-instruct,3,3,1280,,,,,2048``
     - When strength > 0.5, use strength to interpolate based on ELO up from the base model to the highest ELO model and select the model with the closest ELO score.
     - Use base model when strength is 0.5.
     - If there is a model with the same or higher ELO ranking, use that model if it is at or below the same average cost of input and output token cost of a lower rank model.
-    - Make sure temperature is set for every llm model instantiation.
-
-% Note: The `llm_token_counter` function should be imported using a relative import, as it is part of the same package or module structure.
+    - Make sure temperature is set for every llm model instantiation but only set the max tokens/completions if value is available.
