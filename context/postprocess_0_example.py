@@ -16,7 +16,6 @@ def main():
     ```
     Some text
     ```python
-    Here is some text.
     
     def hello_world():
         print("Hello, World!")
