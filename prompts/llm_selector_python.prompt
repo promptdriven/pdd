@@ -24,5 +24,4 @@
     - When strength < 0.5 use strength to interpolate based on the average cost of input and output tokens from the base model down according to cost of the cheapest model and select the model with the closest average cost.
     - When strength > 0.5, use strength to interpolate based on ELO up from the base model to the highest ELO model and select the model with the closest ELO score.
     - Use base model when strength is 0.5.
-    - If there is a model with the same or higher ELO ranking, use that model if it is at or below the same average cost of input and output token cost of a lower rank model.
     - Make sure temperature is set for every llm model instantiation but only set the max tokens/completions if value is available.
