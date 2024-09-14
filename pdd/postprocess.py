@@ -37,7 +37,7 @@ def initialize_chain():
         input_variables=["llm_output", "language"]
     )
     parser = JsonOutputParser(pydantic_object=ExtractedCode)
-    llm, _, _, _, _ = llm_selector(0.9, 0)  # Default values
+    llm, _, _, _, _ = llm_selector(0.7, 0)  # Default values
     chain = prompt | llm | parser
 
 def postprocess(llm_output: str, language: str, strength: float = 0.9, temperature: float = 0) -> Tuple[str, float]:
