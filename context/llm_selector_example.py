@@ -9,7 +9,7 @@ def main() -> None:
     temperature: float = 1.0  # Example temperature value for the LLM model
 
     try:       
-        while strength <= 1.0: 
+        while strength <= 1.1: 
             # Call the llm_selector function with the specified strength and temperature
             llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
             print(f"Strength: {strength}")
@@ -24,7 +24,7 @@ def main() -> None:
             token_count: int = token_counter(sample_text)
             print(f"Token Count for Sample Text: {token_count}")
             print(f"model_name: {model_name}")
-            strength += 0.01
+            strength += 0.05
     except FileNotFoundError as e:
         print(f"Error: {e}")
     except ValueError as e:
