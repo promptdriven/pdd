@@ -63,11 +63,11 @@ def llm_selector(strength: float, temperature: float):
     selected_row_average_cost = (selected_row['input'] + selected_row['output']) / 2
 
     # Check for models with higher ELO but lower or equal cost
-    higher_elo_models = df[(df['coding_arena_elo'] >= selected_row['coding_arena_elo']) & 
-                           (df['average_cost'] <= selected_row_average_cost)]
+    # higher_elo_models = df[(df['coding_arena_elo'] >= selected_row['coding_arena_elo']) & 
+    #                        (df['average_cost'] <= selected_row_average_cost)]
     
-    if not higher_elo_models.empty:
-        selected_row = higher_elo_models.iloc[0]
+    # if not higher_elo_models.empty:
+    #     selected_row = higher_elo_models.iloc[0]
 
 
     # Extract model details
