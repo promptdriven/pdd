@@ -65,7 +65,7 @@ def code_generator(prompt: str, language: str, strength: float, temperature: flo
             final_result, continue_cost, _ = continue_generation.continue_generation(processed_prompt, result, strength, temperature)
         else:
             # Step 6b: Postprocess if complete
-            final_result, postprocess_cost = postprocess.postprocess(result, language, 0.9, temperature)
+            final_result, postprocess_cost = postprocess.postprocess(result, language, 0.7, temperature)
 
         # Step 7: Calculate and print total cost
         total_cost = input_token_cost + output_token_cost + (continue_cost if not is_finished else postprocess_cost) + unfinished_cost
