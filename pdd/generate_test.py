@@ -84,14 +84,14 @@ def generate_test(prompt: str, code: str, strength: float, temperature: float, l
 
         # Step 6: Detect if the generation is incomplete
         last_200_chars = result[-600:]
-        _, is_finished, unfinished_cost, _ = unfinished_prompt(last_200_chars, 0.9, temperature)
+        _, is_finished, unfinished_cost, _ = unfinished_prompt(last_200_chars, 0.7, temperature)
 
         if not is_finished:
             console.print("[bold yellow]Generation incomplete. Continuing...[/bold yellow]")
             final_result, continue_cost, _ = continue_generation(processed_prompt, result, strength, temperature)
         else:
             console.print("[bold green]Generation complete. Postprocessing...[/bold green]")
-            final_result, postprocess_cost = postprocess(result, language, 0.9, temperature)
+            final_result, postprocess_cost = postprocess(result, language, 0.7, temperature)
 
         # Step 7: Calculate and print total cost
         total_cost = input_cost_estimate + output_cost_estimate
