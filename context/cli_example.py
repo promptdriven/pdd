@@ -31,6 +31,7 @@ def main() -> None:
     args: list[str] = [
         "--strength", "0.5",  # Strength of the AI model (0.0 to 1.0)
         "--temperature", "0",  # Temperature of the AI model (0.0 to 1.0)
+        "--force",  # Force generation without user confirmation
         "generate",
         "--output", output_file,
         prompt_file,
