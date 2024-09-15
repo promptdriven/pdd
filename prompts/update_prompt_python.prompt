@@ -1,4 +1,6 @@
-% You are an expert Python Software Engineer. Your goal is to write a Python function, "update_prompt", that will take the original code and modified code, and update the prompt that generated the original code. The function should be part of a module or package, using relative imports for internal modules. All output to the console will be pretty printed using the Python Rich library.
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "update_prompt", that will take the original code and modified code, and update the prompt that generated the original code. 
+
+<include>./context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the function:
     Inputs:
@@ -12,11 +14,14 @@
         - 'total_cost': A float value representing the total cost of running the function.
         - 'model_name': A string representing the name of the selected LLM model.
 
-% Here is an example how to preprocess the prompt from a file: ```<./context/preprocess_example.py>```
+% Here is an example of a LangChain Expression Language (LCEL) program: <lcel_example><include>context/langchain_lcel_example.py</include></lcel_example>
 
-% Example usage of the Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+    % Here is an example how to preprocess the prompt from a file: <preprocess_example><include>context/preprocess_example.py</include></preprocess_example>
 
-% Example of selecting a Langchain LLM and counting tokens using llm_selector: ```<./context/llm_selector_example.py>```
+    % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>./context/llm_selector_example.py</include></llm_selector_example>
+</internal_example_modules>
 
 % Steps to be followed by the function:
     1. Load the '$PDD_PATH/prompts/update_prompt_LLM.prompt' and '$PDD_PATH/prompts/extract_prompt_update_LLM.prompt' files.
@@ -35,5 +40,3 @@
         - c. Use 'get' function to extract 'modified_prompt' key values using from the dictionary output.
     6. Pretty print the extracted modified_prompt using Rich Markdown function. Include token counts and costs.
     7. Return the 'modified_prompt' string, the total_cost of both invokes and model_name use for the update_prompt_LLM prompt.
-
-% Ensure the function handles edge cases, such as missing inputs or model errors, and provide clear error messages.
