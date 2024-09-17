@@ -66,9 +66,6 @@ def git_update(
         with open(modified_code_file, 'w') as file:
             file.write(modified_code)
 
-        # Commit the changes
-        repo.git.add(relative_path)
-        repo.git.commit('-m', 'Updated code via git_update function')
 
         # Pretty print the results
         console.print(Panel.fit(
