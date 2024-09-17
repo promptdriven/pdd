@@ -1,11 +1,13 @@
 auto make new unit tests based on failures
 
+<pdd>to generate a unit test string.  </pdd>
+
 inputs: 
-    -current output
+    - current output
     - desired output
-    - prompt used to generate the code
-    - code under tests
-    - program used to run code under tests
+    - prompt used to generate the code "generate a function called add 2 numbers in python"
+    - code under tests "e.g. context/bug_to_unit_test_failure_example.py"
+    - program used to run code under tests  "e.g. context/execute_bug_to_unit_test_failure.py"
 
 output: 
     - generated unit test that covers the problem
@@ -16,11 +18,14 @@ Generate a unit test that ensures correct functionality of the code under test.
 
 
 
-%Here a description of what the code is supposed to do and was the prompt that generated the code: ```{current ouput}```
+%Here a description of what the code is supposed to do and was the prompt that generated the code: ```{current_ouput}```
 
-% Here is the code under test: ``` {code under tests}
+% Here is the code under test: ```{code_under_tests}```
 
 % Follow the rules:
 
--   Generate the code using the ```{}```
+- the meaning of the code is ```{prompt_used_to_generate_the_code}```
+- actual code at ```{code_under_tests}```
+- Please generate a unit test code that tests with the ```{desired_output}```
+
 
