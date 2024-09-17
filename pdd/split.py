@@ -77,8 +77,14 @@ def split(input_prompt: str, input_code: str, example_code: str, strength: float
         json_parser = JsonOutputParser()
         json_prompt_template = PromptTemplate.from_template(processed_extract_prompt)
 
+        try:
+            llm_extract, token_counter_extract, input_cost_extract, output_cost_extract, model_name = llm_selector(.8, temperature)
+        except ValueError as e:
+            console.print(f"[bold red]Error in llm_selector:[/bold red] {e}")
+            raise
+
         # Step 5a: Run the JSON extraction
-        json_chain = json_prompt_template | llm | json_parser
+        json_chain = json_prompt_template | llm_extract | json_parser
         try:
             json_output = json_chain.invoke({"llm_output": llm_output})
             
