@@ -1,6 +1,6 @@
 % You are an expert Python Software Engineer. Your goal is to write a Python function, "git_update", that will read in modified_code_file, restore the prior checked in version from github and loaded to be the original_input_code, call update_prompt, then write back the modified_code_file over the prior version and finally return outputs. 
 
-<include>./context/python_preamble.prompt</include>
+<include>context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the function:
     Inputs:
