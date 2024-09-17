@@ -1,4 +1,4 @@
-% You are an expert Python Software Engineer. Your goal is to write a Python function, "git_update", that will read in modified_code_file, restore the prior checked in version from github and loaded to be the original_input_code, call update_prompt, then write back the modified_code_file over the prior version and finally return outputs. 
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "git_update", that will read in modified_code_file, restore the prior checked-in version from GitHub and load it to be the original_input_code, call update_prompt, then write back the modified_code_file over the prior version, and finally return outputs without committing the changes to the Git repository.
 
 <include>context/python_preamble.prompt</include>
 
