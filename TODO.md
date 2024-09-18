@@ -41,7 +41,6 @@
 - [ ] have fix remember what was the closest code passing and start from that to hill climb
 - [ ] Analyze errors first before trying to fix
 - [ ] Use existing good prompt code example to generate code for the prompt
-- [ ] get the last github version of a file when trying to update instead of trying to find an old version
 - [ ] prompt to generate setup.py
 - [ ] update prompt for makefile
 
