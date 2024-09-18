@@ -8,9 +8,10 @@ def main() -> None:
     # Define input parameters
     # input_prompt: str = "Create a function to calculate the area of a circle."
     # load input prompt from file
-    with open("prompts/split_python.prompt", "r") as file:
+    name = 'git_update'
+    with open(f"prompts/{name}_python.prompt", "r") as file:
         input_prompt = file.read()
-    modified_code_file: str = "pdd/split.py"
+    modified_code_file: str = f"pdd/{name}.py"
     strength: float = 0.8  # Strength parameter for the LLM (0.0 to 1.0)
     temperature: float = 0  # Temperature parameter for the LLM
 
@@ -32,7 +33,7 @@ def main() -> None:
             print("Failed to update the prompt and code.")
             
         # Save the modified prompt to a file
-        with open("prompts/split_python.prompt", "w") as file:
+        with open(f"prompts/{name}_python.prompt", "w") as file:
             file.write(modified_prompt)
     except ValueError as e:
         print(f"Input error: {e}")
