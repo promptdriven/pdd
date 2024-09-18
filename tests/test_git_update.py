@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import mock_open, patch, MagicMock
 from typing import Tuple, Optional
+import git  # Added import for git to resolve NameError
 
 # Absolute import based on the provided directory structure
 from pdd.git_update import git_update
