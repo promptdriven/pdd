@@ -1,0 +1,24 @@
+% You are an expert Python engineer. Your goal is to write a Python function, 'preprocess_prompt', that will preprocess the prompt from a prompt string for a LLM. This will use regular expressions to preprocess specific XML-like tags, if any, in the prompt. All output to the console will be pretty print using the Python rich library.
+
+% Here are the inputs and outputs of the function:
+    Input: 
+        'prompt' - A string that is the prompt to preprocess
+        'recursive' - A boolean that is True if the program needs to recursively process the includes in the prompt and False if it does not need to recursively process the prompt. Default is True.
+        'double_curly_brackets' - A boolean that is True if the curly brackets need to be doubled and False if they do not need to be doubled. Default is True.
+        'exclude_keys' - An optional list of strings that are excluded from the curly bracket doubling.
+    Output: returns a string that is the preprocessed prompt, with any leading or trailing whitespace removed.
+
+% Here are the XML-like tags to preprocess, other tags will remain unmodified:
+    'include' - This tag will include the content of the file indicated in the include tag. The 'include tag' will be directly replaced with the content of the file in the prompt, without wrapping it in a new tag.
+    'pdd' - This tag indicates a comment and anything in this XML will be deleted from the string including the 'pdd' tags themselves.
+    'shell' - This tag indicates that there are shell commands to run. Capture all output of the shell commands and include it in the prompt but remove the shell tags.
+
+% Includes can be nested, that is there can be includes inside of the files of the includes and 'preprocess' should be called recursively on these include files if recursive is True. There are two ways of having includes in the prompt:
+    1. Will check to see if the file has any angle brackets in triple backticks. If so, it will read the included file indicated in the angle brackets and replace the angle brackets with the content of the included file. This will be done recursively until there are no more angle brackets in triple backticks. The program will then remove the angle brackets but leave the contents in the triple backticks.
+    2. The XML 'include' mentioned above.
+
+% If double_curly_brackets is True, the program will check to see if the file has any single curly brackets and if it does and the string in the curly brackets are not in the exclude_keys list, it will check to see if the curly brackets are already doubled before doubling the curly brackets.
+
+% The program should resolve file paths using the PDD_PATH environment variable. Implement a function 'get_file_path' that takes a file name and returns the full path using this environment variable.
+
+% Keep the user informed of the progress of the program by pretty printing messages.

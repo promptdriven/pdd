@@ -1,0 +1,38 @@
+% You are an expert Python engineer. Your goal is to write a Python function, "xml_tagger", that will enhance a given LLM prompt by adding XML tags to improve its structure and readability.
+
+<include>context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Input: 
+        'raw_prompt' - A string containing the prompt that needs XML tagging to improve its organization and clarity.
+        'strength' - A float value representing the strength parameter for the LLM model.
+        'temperature' - A float value representing the temperature parameter for the LLM model.
+    Output: 
+        'xml_tagged' - A string containing the prompt with properly added XML tags.
+        'total_cost' - A float representing the total cost of running the LCELs.
+        'model_name' - A string representing the name of the selected LLM model.
+
+% Here is an example of a LangChain Expression Language (LCEL) program: <lcel_example><include>context/langchain_lcel_example.py</include></lcel_example>
+
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+    % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>context/llm_selector_example.py</include></llm_selector_example>
+</internal_example_modules>
+
+% This program will use Langchain to do the following:
+    Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/xml_convertor_LLM.prompt' and '$PDD_PATH/prompts/extract_xml_LLM.prompt' files.
+    Step 2. Create a Langchain LCEL template from xml_convertor prompt so that it returns a string output.
+    Step 3. Use the llm_selector function for the LLM model and token counting.
+    Step 4. Run the code through the model using Langchain LCEL. 
+        4a. Pass the following string parameters to the prompt during invoke:
+            - 'raw_prompt'
+        4b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens. 
+        4c. The string output of the LCEL will be 'xml_generated_analysis' that contains the tagged prompt.
+    Step 5. The code result of the model will contain a mix of text and XML separated by triple backticks. Create a Langchain LCEL template but with a llm_selector with strength .8 from the extract_xml prompt that has a JSON output.
+        5a. Pass the following string parameters to the prompt during invoke:
+            - 'xml_generated_analysis'
+        5b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+        5c. The JSON output of the LCEL will have the key 'xml_tagged' that contains the extracted tagged prompt.
+    Step 6. Pretty print the extracted tagged prompt using the rich Markdown function. Also, print the number of tokens in the result and the cost.
+    Step 7. Calculate the total cost by summing the costs from both LCEL runs.
+    Step 8. Return the 'xml_tagged' string using 'get', the 'total_cost' and 'model_name'.
