@@ -1,9 +1,9 @@
 from pdd.process_csv_change import process_csv_change
 
 # Example usage
-csv_file: str = "/Users/gregtanaka/Documents/PDD/staging/regression/detect_results.csv"
-strength: float = 0.7
-temperature: float = 0.5
+csv_file: str = "context/detect_change/2/change_detect.csv"
+strength: float = .8
+temperature: float = 0
 code_directory: str = "pdd"
 language: str = "python"
 extension: str = ".py"
