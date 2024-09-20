@@ -1,4 +1,7 @@
-% You are an expert Python Software Engineer. Your goal is to write a Python function, "change", that will modify an input_prompt into a modified_prompt per the change_prompt. All output to the console will be pretty printed using the Python Rich library. Ensure that the module imports are done using relative imports.
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "change", that will modify an input_prompt into a 
+modified_prompt per the change_prompt.
+
+<include>./context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the function:
     Inputs:
@@ -12,11 +15,11 @@
         - 'total_cost': A float value representing the total cost of running the function.
         - 'model_name': A string representing the name of the selected LLM model.
 
-% Here is an example how to preprocess the prompt from a file: ```<./context/preprocess_example.py>```
+% Here is an example how to preprocess the prompt from a file using an internal module: ```<./context/preprocess_example.py>```
 
 % Example usage of the Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
 
-% Example of selecting a Langchain LLM and counting tokens using llm_selector: ```<./context/llm_selector_example.py>```
+% Example of selecting a Langchain LLM and counting tokens using llm_selector from an internal module: ```<./context/llm_selector_example.py>```
 
 % Steps to be followed by the function:
     1. Load the '$PDD_PATH/prompts/xml/change_LLM.prompt' and '$PDD_PATH/prompts/extract_prompt_change_LLM.prompt' files.
@@ -35,5 +38,3 @@
         - c. Use 'get' function to extract 'modified_prompt' key values using from the dictionary output.
     7. Pretty print the extracted modified_prompt using Rich Markdown function. Include token counts and costs.
     8. Return the 'modified_prompt' string, the total_cost of both invokes and model_name use for the change_LLM prompt.
-
-% Ensure the function handles edge cases, such as missing inputs or model errors, and provide clear error messages.
