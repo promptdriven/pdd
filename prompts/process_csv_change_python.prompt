@@ -9,7 +9,7 @@
         'temperature' - A float that represents the temperature parameter for the LLM model.
         'code_directory' - A string containing the path to the directory where the code files are stored.
         'language' - A string representing the programming language of the code files. 
-        'extension' - A string representing the file extension of the code files.
+        'extension' - A string representing the file extension of the code files. Includes the '.' in front of the extension.
         'budget' - A float representing the maximum cost allowed for the change process.
     Outputs:
         'success' - A boolean indicating whether the changes were successfully made.
@@ -29,7 +29,7 @@
             - Initialize a list_of_jsons to store the modified prompts.
             - Read the prompt from the prompt_name column (text file).
             - Parse the prompt_name into a input_code name:
-                - remove the suffix _language.prompt from the prompt_name
+                - remove the path and suffix _language.prompt from the prompt_name
                 - add the suffix extension to the prompt_name
                 - change the directory to code_directory
             - Read the input_code from the input_code_name as a string
