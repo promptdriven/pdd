@@ -1,0 +1,51 @@
+1. **Impact of the Change and Potential Issues:**
+
+   The change description suggests using the contents of `context/python_preamble.prompt` to make prompts more compact. This preamble includes instructions for using relative imports, pretty printing with the Python Rich library, and handling edge cases. The main impact is to ensure consistency across prompts by centralizing common instructions, which can reduce redundancy and improve maintainability. Potential issues include ensuring that the preamble does not conflict with existing instructions in the prompts and that it is inserted in a way that maintains the logical flow of the prompt.
+
+2. **Possible Implementation Plans:**
+
+   - **Plan A: Direct Inclusion of Preamble**
+     - **Pros:** Simplifies prompts by removing redundant instructions and directly including the preamble.
+     - **Cons:** May require significant restructuring of prompts to ensure logical flow and avoid redundancy.
+   
+   - **Plan B: Conditional Inclusion Based on Existing Content**
+     - **Pros:** Only includes the preamble if similar instructions are not already present, minimizing disruption.
+     - **Cons:** Requires careful analysis of each prompt to determine if the preamble is needed, which can be time-consuming.
+   
+   - **Plan C: Hybrid Approach**
+     - **Pros:** Combines the benefits of both plans by including the preamble where it adds value and retaining existing instructions where they are more specific or detailed.
+     - **Cons:** Complexity in deciding which parts of the preamble to include or exclude for each prompt.
+
+3. **Analysis and Selection of the Best Plan:**
+
+   Plan C is the best approach as it allows for flexibility and ensures that the preamble is only included where it enhances the prompt. This minimizes redundancy and maintains the integrity of prompts that already have specific instructions. It also allows for a more tailored approach, ensuring that the preamble complements rather than conflicts with existing content.
+
+4. **Prompt Analysis Based on Selected Plan:**
+
+   - **change_python.prompt:** This prompt already contains detailed instructions similar to those in the preamble. However, it can benefit from the preamble for consistency in handling edge cases and pretty printing.
+   - **preprocess_python.prompt:** This prompt can include the preamble to ensure consistent handling of edge cases and pretty printing.
+   - **unfinished_prompt_python.prompt:** This prompt can include the preamble to ensure consistent handling of edge cases and pretty printing.
+   - **xml_tagger_python.prompt:** This prompt already includes the preamble, so no changes are needed.
+
+5. **Prompts That Need to Be Changed:**
+
+   - **change_python.prompt**
+     - **Instructions:**
+       - Insert the contents of the file `./context/python_preamble.prompt` immediately after the role and goal statement using 'include' XML tags.
+       - Remove any redundant instructions that are covered by the preamble, such as those related to pretty printing and handling edge cases.
+       - Ensure that the logical flow of the prompt is maintained and that any unique instructions specific to this prompt are retained.
+       - Here is what is inside context/python_preamble.prompt:<preamble><include>context/python_preamble.prompt</include></preamble>
+
+   - **preprocess_python.prompt**
+     - **Instructions:**
+       - Insert the contents of the file `./context/python_preamble.prompt` immediately after the role and goal statement using 'include' XML tags.
+       - Remove any redundant instructions that are covered by the preamble, such as those related to pretty printing and handling edge cases.
+       - Ensure that the logical flow of the prompt is maintained and that any unique instructions specific to this prompt are retained.
+       - Here is what is inside context/python_preamble.prompt:<preamble><include>context/python_preamble.prompt</include></preamble>
+
+   - **unfinished_prompt_python.prompt**
+     - **Instructions:**
+       - Insert the contents of the file `./context/python_preamble.prompt` immediately after the role and goal statement using 'include' XML tags.
+       - Remove any redundant instructions that are covered by the preamble, such as those related to pretty printing and handling edge cases.
+       - Ensure that the logical flow of the prompt is maintained and that any unique instructions specific to this prompt are retained.
+       - Here is what is inside context/python_preamble.prompt:<preamble><include>context/python_preamble.prompt</include></preamble>

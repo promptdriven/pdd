@@ -36,10 +36,10 @@
         1. Provide a detailed description of the impact of the change and potential issues.
         2. Generate at least three different possible implementation plans. Discuss the pros and cons of each plan.
         3. Analyze the potential issues and the different plans. Explain step by step which plan is the best and why.
-        4. List the prompts that need to be changed based on the selected plan. For each prompt that needs to be changed, include:
+        4. For each prompt explain if it needs to be changed based on the selected plan.
+        5. List the prompts that need to be changed based on the selected plan. For each prompt that needs to be changed, include:
             a. The prompt's name
-            b. The reason why the prompt needs to change
-            c. Detail instructions for a LLM of how the prompt should be changed. Everything that is needed to know how to change the prompt effectively should be included here.
+            b. Detail and complete instructions for a LLM of how the prompt should be changed. Everything that is needed to know how to change the prompt effectively should be included here.
                 - When instructing to include content from another file vs. actually intending to include file contents:
                     1. Mention the filename that should be included.
                     2. Describe where in the prompt the file's contents should be inserted.
