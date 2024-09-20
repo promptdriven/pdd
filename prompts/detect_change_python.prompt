@@ -38,7 +38,7 @@
             * 'PROMPT_LIST' (load the prompt files and create a list of JSON with these keys: 'PROMPT_NAME' and 'PROMPT_DESCRIPTION')
             * 'CHANGE_DESCRIPTION' (preprocess this with double_curly_brackets set to false)
         - b. Calculate the input and output token count using token_counter from llm_selector and pretty print the output of 5a, including the token count and estimated cost. The cost from llm_selector is in dollars per million tokens.
-    Step 6. Create a Langchain LCEL template with strength of .9 for another llm_selection and token counting functions from the extract_detect_change_LLM prompt that outputs JSON:
+    Step 6. Create a Langchain LCEL template with strength of .8 and temperature of 0 for another llm_selection and token counting functions from the extract_detect_change_LLM prompt that outputs JSON:
         - a. Pass the following string parameters to the prompt during invocation: 'llm_output' (this string is from Step 5).
         - b. Calculate input and output token count using token_counter from llm_selector and pretty print the running message with the token count and cost.
         - c. Use 'get' function to extract 'changes_list' key values using from the dictionary output.

@@ -78,7 +78,7 @@ def detect_change(prompt_files: List[str], change_description: str, strength: fl
         console.print(f"Estimated cost: ${step5_cost:.6f}")
 
         # Step 6: Extract changes using the extract_detect_change_LLM prompt
-        extract_llm, extract_token_counter, extract_input_cost, extract_output_cost, extract_model_name = llm_selector(0.9, temperature)
+        extract_llm, extract_token_counter, extract_input_cost, extract_output_cost, extract_model_name = llm_selector(0.8, 0)
         
         extract_prompt_template = PromptTemplate.from_template(extract_detect_change_prompt)
         extract_chain_components = [extract_prompt_template, extract_llm, JsonOutputParser()]
