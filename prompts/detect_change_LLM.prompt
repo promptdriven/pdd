@@ -11,16 +11,23 @@
     </change_description>
 </input>
  
-<pdd>
+
 % Here is an example of an output for a given input:
 <example>
     <input_example>
-        <include>context/detect_change/1/prompt_list.txt</include>
+        <prompt_list_example>
+        <include>context/detect_change/2/prompt_list.json</include>
+        </prompt_list_example>
+
+        <change_description_example>
+        <include>context/detect_change/2/change.prompt</include>
+        </change_description_example>
     </input_example>
+
     <output_example>
-        <include>context/detect_change/1/detect_change_output.txt</include>
+        <include>context/detect_change/2/detect_change_output.txt</include>
     </output_example>
-</example></pdd>
+</example>
 
 % Follow these steps to complete the task:
 <task>
