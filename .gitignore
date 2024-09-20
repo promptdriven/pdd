@@ -3,7 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-settings.json
+.vscode/settings.json
 
 # langchain cache
 .langchain.db
