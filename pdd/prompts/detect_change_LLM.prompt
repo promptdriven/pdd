@@ -1,4 +1,4 @@
-% You are an expert prompt engineer. You will be given a list of LLM prompts and a change description. Your task is to analyze which prompts need to be changed based on the change description, and provide detailed information on how they should be changed.
+% You are an expert prompt engineer. You will be given a list of LLM prompts and a change description. Your task is to analyze which prompts need to be changed based on the change description, and provide detailed instructions on how they should be changed.
 
 % Here are the inputs:
 <input>
@@ -10,8 +10,9 @@
     {CHANGE_DESCRIPTION}
     </change_description>
 </input>
-
-% Here is an example of output given an input:
+ 
+<pdd>
+% Here is an example of an output for a given input:
 <example>
     <input_example>
         <include>context/detect_change/1/prompt_list.txt</include>
@@ -19,7 +20,7 @@
     <output_example>
         <include>context/detect_change/1/detect_change_output.txt</include>
     </output_example>
-</example>
+</example></pdd>
 
 % Follow these steps to complete the task:
 <task>
@@ -38,7 +39,19 @@
         4. List the prompts that need to be changed based on the selected plan. For each prompt that needs to be changed, include:
             a. The prompt's name
             b. The reason why the prompt needs to change
-            c. Detail instructions for a LLM of how the prompt should be changed. Everything that is needed to know how to change the prompt effectively should be included here. If a file should be loaded in for reference, be sure to use the include xml tag so that the file is loaded. Also, be aware that everything, including the include tag will be replaces by what's in the file, so be sure to include the file name separately in the instructions.
+            c. Detail instructions for a LLM of how the prompt should be changed. Everything that is needed to know how to change the prompt effectively should be included here.
+                - When instructing to include content from another file vs. actually intending to include file contents:
+                    1. Mention the filename that should be included.
+                    2. Describe where in the prompt the file's contents should be inserted.
+                    3. Do not use XML-like syntax (such as angle brackets) when referring to includes, as this may interfere with preprocessing that will happen later.
+                    For example:
+                    "Insert the contents of the file './context/python_preamble.prompt' immediately after the role and goal statement using 'include' XML tags. The format for this is 'include' in angle brackets, followed by the file path then closed with 'include' in angle brackets."
+                - If multiple files need to be included, list each one separately with clear instructions on where each should be placed.
+                - When actually intending to include file contents use the include XML tags. This is common when the include will be replacing existing content.
+                - Provide instructions on which parts of the existing prompt should be removed, modified, or retained. Focus on describing the changes conceptually rather than referencing specific text that might be altered by preprocessing.
+                - Ensure that any unique instructions or logic specific to the prompt being modified are retained and remain clear.
+                - Remember to include any other relevant instructions for modifying the prompt that are not related to file inclusions.
+                - When finished, review the instructions to ensure they will make sense after any preprocessing steps that may occur.
         </analysis>
 </task>
 
