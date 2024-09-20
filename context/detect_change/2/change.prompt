@@ -1,0 +1,5 @@
+% Use context/python_preamble.prompt to make prompts more compact. Some prompts might already have this.
+
+% Here is what is inside context/python_preamble.prompt:<preamble><include>context/python_preamble.prompt</include></preamble>
+
+% Here is an example of this being done: <example><include>prompts/code_generator_python.prompt</include></example>
