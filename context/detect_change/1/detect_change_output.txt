@@ -1,4 +1,3 @@
-<analysis>
 1. The change description suggests using the context/python_preamble.prompt to make prompts more compact. This change aims to reduce redundancy and improve consistency across prompts. The main impact would be the standardization of common Python-related instructions and requirements across multiple prompts. Potential issues include:
    - Some prompts may already include this preamble, leading to unnecessary duplication.
    - The preamble might not be relevant or applicable to all prompts in the list.
@@ -49,4 +48,3 @@
       - Ensure that any specific instructions not covered by the preamble are retained, especially those related to the specific function being described.
 
    Note: The prompts "context/python_preamble.prompt" and "prompts/code_generator_python.prompt" do not need changes as they already include or reference the python_preamble.prompt file.
-</analysis>
