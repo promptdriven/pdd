@@ -41,7 +41,7 @@ def detect_change(prompt_files: List[str], change_description: str, strength: fl
             extract_detect_change_prompt = f.read()
 
         # Step 2: Preprocess the detect_change_LLM prompt
-        processed_detect_change_prompt = preprocess(detect_change_prompt, recursive=False, double_curly_brackets=False)
+        processed_detect_change_prompt = preprocess(detect_change_prompt, recursive=False, double_curly_brackets=True, exclude_keys=['PROMPT_LIST', 'CHANGE_DESCRIPTION'])
 
         # Step 3: Create Langchain LCEL template
         prompt_template = PromptTemplate.from_template(processed_detect_change_prompt)
