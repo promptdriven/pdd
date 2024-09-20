@@ -30,7 +30,7 @@
 
 % Steps to be followed by the function:
     Step 1. Load the '$PDD_PATH/prompts/detect_change_LLM.prompt' and '$PDD_PATH/prompts/extract_detect_change_LLM.prompt' files.
-    Step 2. Preprocess the detect_change_LLM prompt using the preprocess function from the preprocess module and set double_curly_brackets to false.
+    Step 2. Preprocess the detect_change_LLM prompt using the preprocess function from the preprocess module and set double_curly_brackets to true, excluding keys 'PROMPT_LIST' and 'CHANGE_DESCRIPTION'.
     Step 3. Create a Langchain LCEL template from the processed detect_change_LLM prompt to return a string output.    
     Step 4. Use the llm_selector function for the LLM model and token counting.
     Step 5. Run the prompt_files and change_description through the model using Langchain LCEL:
