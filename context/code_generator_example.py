@@ -7,9 +7,12 @@ def main() -> None:
     It generates code based on a given prompt using a language model.
     """
     # Define the input parameters for the code_generator function
-    prompt: str = "Create a Python function that calculates the factorial of a number."
+    # prompt: str = "Create a Python function that calculates the factorial of a number."
+    # load the prompt from a file prompts/generate_test_python.prompt
+    with open("prompts/generate_test_python.prompt", "r") as file:
+        prompt = file.read()
     language: str = "python"
-    strength: float = 0.8  # Strength of the LLM model (0.0 to 1.0)
+    strength: float = 1  # Strength of the LLM model (0.0 to 1.0)
     temperature: float = 0.5  # Temperature for the LLM model (0.0 to 1.0)
 
     try:
