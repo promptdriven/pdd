@@ -58,7 +58,9 @@ def detect_change(prompt_files: List[str], change_description: str, strength: fl
                 'PROMPT_NAME': file,
                 'PROMPT_DESCRIPTION': prompt_content
             })
-        
+        # # write prompt_list to a file
+        # with open(f'prompt_list.json', 'w') as f:
+        #     json.dump(prompt_list, f)
         preprocessed_change_description = preprocess(change_description, recursive=False, double_curly_brackets=False)
 
         # Construct and run the custom chain
