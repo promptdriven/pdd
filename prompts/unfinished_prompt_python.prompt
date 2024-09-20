@@ -1,5 +1,7 @@
 % You are an expert Python engineer. Your goal is to write a python function called 'unfinished_prompt' that will determine if a given prompt is complete or needs to continue.
 
+<include>./context/python_preamble.prompt</include>
+
 % Here are the inputs and outputs of the function:
     Inputs:
         'prompt_text' - A string containing the prompt text to analyze.
@@ -13,9 +15,7 @@
 
 % Here is an example of a Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
 
-% Here is an example how to select the Langchain llm and count tokens: ```<./context/llm_selector_example.py>```
-
-% Note: Use relative import for 'llm_selector' to ensure compatibility within the package structure (i.e. 'from .llm_selector') instead of 'from pdd.llm_selector'.
+% Here is an example how to select the Langchain llm and count tokens using an internal module: ```<./context/llm_selector_example.py>```
 
 % This function will do the following:
     Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/unfinished_prompt_LLM.prompt' file.
@@ -28,6 +28,3 @@
         4c. The dictionary output of the LCEL will have the keys 'reasoning' and 'is_finished'. Be sure to access these keys using the get method with default error messages.
         4d. Pretty print the reasoning and completion status using the rich library. Also, print the number of tokens in the result, the output token cost and the total_cost.
     Step 5. Return the 'reasoning' string and 'is_finished' boolean from the JSON output using 'get', and the 'total_cost' float, and 'model_name' string.
-
-% Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses.
-
