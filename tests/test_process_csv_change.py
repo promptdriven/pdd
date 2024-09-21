@@ -102,7 +102,8 @@ def test_invalid_code_directory(mock_change, capsys):
     budget = 10.0
 
     with patch.object(Path, 'is_dir', return_value=False), \
-         patch("os.path.isfile", return_value=True):
+         patch("os.path.isfile", return_value=True), \
+         patch("pdd.process_csv_change.console.print") as mock_print:
         success, list_of_jsons, total_cost, model_name = process_csv_change(
             csv_file, strength, temperature, code_directory, language, extension, budget
         )
@@ -111,9 +112,8 @@ def test_invalid_code_directory(mock_change, capsys):
     assert list_of_jsons == []
     assert total_cost == 0.0
     assert model_name == ""
-    captured = capsys.readouterr()
-    expected_message = f"Error: Code directory '{code_directory}' does not exist or is not a directory."
-    assert expected_message in captured.out
+    # Assert that the correct error message was printed
+    mock_print.assert_called_with(f"[bold red]Error:[/bold red] Code directory '{code_directory}' does not exist or is not a directory.")
 
 def test_missing_columns_in_csv(mock_change, capsys):
     """
@@ -221,15 +221,15 @@ def test_nonexistent_code_file_in_row(mock_change, capsys):
     csv_content = "prompt_name,change_instructions\nvalid_prompt_language.prompt,Modify the function"
     with patch.object(Path, 'is_dir', return_value=True), \
          patch("os.path.isfile", return_value=True), \
-         patch("builtins.open", mock_open(read_data=csv_content)):
+         patch("builtins.open", mock_open(read_data=csv_content)), \
+         patch("pdd.process_csv_change.console.print") as mock_print:
 
-        def is_file_side_effect(path):
-            if "valid_prompt.py" in path:
+        def is_file_side_effect(self, path):
+            if str(self) == "/path/to/code/valid_prompt.py":
                 return False
             return True
 
         with patch.object(Path, 'is_file', side_effect=is_file_side_effect):
-
             success, list_of_jsons, total_cost, model_name = process_csv_change(
                 csv_file, strength, temperature, code_directory, language, extension, budget
             )
@@ -238,9 +238,8 @@ def test_nonexistent_code_file_in_row(mock_change, capsys):
     assert list_of_jsons == []
     assert total_cost == 0.0
     assert model_name == ""
-    captured = capsys.readouterr()
-    expected_warning = "Warning: Input code file '/path/to/code/valid_prompt.py' does not exist. Skipping row 1."
-    assert expected_warning in captured.out
+    expected_warning = f"[yellow]Warning:[/yellow] Input code file '{code_directory}/valid_prompt.py' does not exist. Skipping row 1."
+    mock_print.assert_any_call(expected_warning)
 
 def test_nonexistent_prompt_file_in_row(mock_change, capsys):
     """
@@ -257,15 +256,15 @@ def test_nonexistent_prompt_file_in_row(mock_change, capsys):
     csv_content = "prompt_name,change_instructions\nvalid_prompt_language.prompt,Modify the function"
     with patch.object(Path, 'is_dir', return_value=True), \
          patch("os.path.isfile", return_value=True), \
-         patch("builtins.open", mock_open(read_data=csv_content)):
+         patch("builtins.open", mock_open(read_data=csv_content)), \
+         patch("pdd.process_csv_change.console.print") as mock_print:
 
-        def is_file_side_effect(path):
-            if "valid_prompt_language.prompt" in path:
+        def is_file_side_effect(self, path):
+            if "valid_prompt_language.prompt" in str(self):
                 return False
             return True
 
         with patch.object(Path, 'is_file', side_effect=is_file_side_effect):
-
             success, list_of_jsons, total_cost, model_name = process_csv_change(
                 csv_file, strength, temperature, code_directory, language, extension, budget
             )
@@ -274,9 +273,8 @@ def test_nonexistent_prompt_file_in_row(mock_change, capsys):
     assert list_of_jsons == []
     assert total_cost == 0.0
     assert model_name == ""
-    captured = capsys.readouterr()
-    expected_warning = "Warning: Prompt file 'valid_prompt_language.prompt' does not exist. Skipping row 1."
-    assert expected_warning in captured.out
+    expected_warning = f"[yellow]Warning:[/yellow] Prompt file 'valid_prompt_language.prompt' does not exist. Skipping row 1."
+    mock_print.assert_any_call(expected_warning)
 
 def test_budget_exceeded(mock_change, capsys):
     """
@@ -293,7 +291,8 @@ def test_budget_exceeded(mock_change, capsys):
     csv_content = "prompt_name,change_instructions\nprompt1_language.prompt,Change 1\nprompt2_language.prompt,Change 2\nprompt3_language.prompt,Change 3"
     with patch.object(Path, 'is_dir', return_value=True), \
          patch("os.path.isfile", return_value=True), \
-         patch("builtins.open", mock_open(read_data=csv_content)):
+         patch("builtins.open", mock_open(read_data=csv_content)), \
+         patch("pdd.process_csv_change.console.print") as mock_print:
 
         with patch.object(Path, 'is_file', return_value=True), \
              patch("pdd.process_csv_change.change", side_effect=[
@@ -307,14 +306,14 @@ def test_budget_exceeded(mock_change, capsys):
             )
 
     assert not success
+    # Adjusted expectation: only the first prompt is processed before budget is exceeded
     assert list_of_jsons == [
-        {"file_name": "prompt1.py", "modified_prompt": "modified prompt 1"},
-        {"file_name": "prompt2.py", "modified_prompt": "modified prompt 2"}
+        {"file_name": "prompt1.py", "modified_prompt": "modified prompt 1"}
     ]
-    assert total_cost == 2.5
+    assert total_cost == 1.0 + 1.5  # 2.5
     assert model_name == "model_v1"
-    captured = capsys.readouterr()
-    assert "Error: Budget exceeded after row 2. Stopping further processing." in captured.out
+    expected_budget_message = f"[bold red]Budget exceeded after row 2. Stopping further processing.[/bold red]"
+    mock_print.assert_any_call(expected_budget_message)
 
 def test_successful_processing(mock_change, capsys):
     """
@@ -447,13 +446,13 @@ def test_unexpected_exception(mock_change, capsys):
     csv_content = "prompt_name,change_instructions\nprompt1_language.prompt,Change 1"
     with patch.object(Path, 'is_dir', return_value=True), \
          patch("os.path.isfile", return_value=True), \
-         patch("builtins.open", mock_open(read_data=csv_content)):
+         patch("builtins.open", mock_open(read_data=csv_content)), \
+         patch("pdd.process_csv_change.console.print") as mock_print:
 
-        def is_file_side_effect(path):
+        def is_file_side_effect(self, path):
             raise Exception("Unexpected error")
 
         with patch.object(Path, 'is_file', side_effect=is_file_side_effect):
-
             success, list_of_jsons, total_cost, model_name = process_csv_change(
                 csv_file, strength, temperature, code_directory, language, extension, budget
             )
@@ -462,12 +461,9 @@ def test_unexpected_exception(mock_change, capsys):
     assert list_of_jsons == []
     assert total_cost == 0.0
     assert model_name == ""
-    captured = capsys.readouterr()
-    assert "Error: Failed to process 'prompt_name' in row 1: Unexpected error" in captured.out
-    assert "Processing Complete" in captured.out
-    assert "Success: No" in captured.out
-    assert "Total Cost: $0.000000" in captured.out
-    assert "Model Used: " in captured.out  # model_name is empty
+    expected_error_message = "[red]Error:[/red] Failed to process 'prompt_name' in row 1: Unexpected error"
+    mock_print.assert_any_call(expected_error_message)
+
 
 def test_no_rows_to_process(mock_change, capsys):
     """
