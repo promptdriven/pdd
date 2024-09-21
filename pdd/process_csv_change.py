@@ -13,6 +13,7 @@ from .change import change  # Relative import for the internal change function
 
 console = Console()
 
+
 def process_csv_change(
     csv_file: str,
     strength: float,
@@ -36,7 +37,7 @@ def process_csv_change(
 
     Returns:
         Tuple[bool, List[Dict[str, str]], float, str]:
-            - success (bool): Indicates if changes were successfully made within the budget.
+            - success (bool): Indicates if changes were successfully made within the budget and without errors.
             - list_of_jsons (List[Dict[str, str]]): List of dictionaries with 'file_name' and 'modified_prompt'.
             - total_cost (float): Total accumulated cost of all change attempts.
             - model_name (str): Name of the LLM model used.
@@ -45,6 +46,7 @@ def process_csv_change(
     total_cost: float = 0.0
     model_name: str = ""
     success: bool = False
+    any_failures: bool = False  # Track if any failures occur
 
     # Validate inputs
     if not os.path.isfile(csv_file):
@@ -77,10 +79,12 @@ def process_csv_change(
 
                 if not prompt_name:
                     console.print(f"[yellow]Warning:[/yellow] Missing 'prompt_name' in row {row_number}. Skipping.")
+                    any_failures = True
                     continue
 
                 if not change_instructions:
                     console.print(f"[yellow]Warning:[/yellow] Missing 'change_instructions' in row {row_number}. Skipping.")
+                    any_failures = True
                     continue
 
                 # Parse the prompt_name to get the input_code filename
@@ -95,6 +99,7 @@ def process_csv_change(
 
                     if not input_code_path.is_file():
                         console.print(f"[yellow]Warning:[/yellow] Input code file '{input_code_path}' does not exist. Skipping row {row_number}.")
+                        any_failures = True
                         continue
 
                     # Read the input_code from the file
@@ -103,6 +108,7 @@ def process_csv_change(
 
                 except Exception as e:
                     console.print(f"[red]Error:[/red] Failed to process 'prompt_name' in row {row_number}: {e}")
+                    any_failures = True
                     continue
 
                 # Read the input_prompt from the prompt file
@@ -110,6 +116,7 @@ def process_csv_change(
                     prompt_file_path = Path(prompt_name)
                     if not prompt_file_path.is_file():
                         console.print(f"[yellow]Warning:[/yellow] Prompt file '{prompt_name}' does not exist. Skipping row {row_number}.")
+                        any_failures = True
                         continue
 
                     with open(prompt_file_path, 'r', encoding='utf-8') as prompt_file:
@@ -117,6 +124,7 @@ def process_csv_change(
 
                 except Exception as e:
                     console.print(f"[red]Error:[/red] Failed to read prompt file '{prompt_name}' in row {row_number}: {e}")
+                    any_failures = True
                     continue
 
                 # Call the change function
@@ -135,6 +143,7 @@ def process_csv_change(
                     # Check if budget is exceeded
                     if total_cost > budget:
                         console.print(f"[bold red]Budget exceeded after row {row_number}. Stopping further processing.[/bold red]")
+                        any_failures = True
                         break
 
                     # Set the model_name (assumes all calls use the same model)
@@ -153,16 +162,17 @@ def process_csv_change(
 
                 except Exception as e:
                     console.print(f"[red]Error:[/red] Failed to apply change in row {row_number}: {e}")
+                    any_failures = True
                     continue
 
-        # Determine success based on whether total_cost is within budget
-        success = total_cost <= budget
+        # Determine success based on whether total_cost is within budget and no failures occurred
+        success = (total_cost <= budget) and not any_failures
 
         # Pretty print the results
         console.print(Panel(f"[bold]Processing Complete[/bold]\n"
                            f"Success: {'Yes' if success else 'No'}\n"
                            f"Total Cost: ${total_cost:.6f}\n"
-                           f"Model Used: {model_name}"))
+                           f"Model Used: {model_name if model_name else 'N/A'}"))
 
         # Optionally, pretty print the list of modified prompts
         if list_of_jsons:
