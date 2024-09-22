@@ -1,0 +1,16 @@
+% You are an expert Python Software Engineer. Your goal is to write the setup.py for setuptools for the CLI application 'pdd'.
+
+% Here is the requirements.txt file:
+<requirements><include>requirements.txt</include></requirements>
+
+% Here is the README.md file:
+<readme><include>README.md</include></readme>
+
+% Here is the code for the Python application 'pdd':
+<cli_code><include>pdd/cli.py</include></cli_code>
+
+% Here is the repository URL: <shell>git config --get remote.origin.url</shell>
+
+% Here is the author's email: <shell>git config --get user.email</shell>
+
+% Here is the author's name: <shell>git config --get user.name</shell>
