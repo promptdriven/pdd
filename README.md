@@ -6,7 +6,7 @@ PDD (Prompt-Driven Development) is a versatile tool for generating code, creatin
 
 ## Version
 
-Current version: 0.1.0
+Current version: 0.2.0
 
 To check your installed version, run:
 ```
@@ -56,6 +56,7 @@ These options can be used with any command:
 - `--verbose`: Increase output verbosity for more detailed information.
 - `--quiet`: Decrease output verbosity for minimal information.
 - `--output-cost PATH_TO_CSV_FILE`: Enable cost tracking and output a CSV file with usage details.
+- `--review-examples`: Review and optionally exclude few-shot examples before command execution.
 
 ## AI Model Information
 
@@ -224,6 +225,7 @@ Options:
   - `--verification-program PATH`: Specify the path to a Python program that verifies if the code still runs correctly.
   - `--max-attempts INT`: Set the maximum number of fix attempts before giving up (default is 3).
   - `--budget FLOAT`: Set the maximum cost allowed for the fixing process (default is $5.0).
+- `--auto-submit`: Automatically submit the example if all unit tests pass during the fix loop.
 
 When the `--loop` option is used, the fix command will attempt to fix errors through multiple iterations. It will use the specified verification program to check if the code runs correctly after each fix attempt. The process will continue until either the errors are fixed, the maximum number of attempts is reached, or the budget is exhausted.
 
@@ -367,6 +369,22 @@ Example:
 ```
 pdd crash --output fixed_data_processor.py data_processing_module_python.prompt crashed_data_processor.py main_pipeline.py crash_errors.log 
 ```
+## Example Review Process
+
+When the global `--review-examples` option is used with any command, PDD will present potential few-shot examples that might be used for the current operation. The review process follows these steps:
+
+1. PDD displays the inputs (but not the outputs) of potential few-shot examples.
+2. For each example, you can choose to:
+   - Accept the example (it will be used in the operation)
+   - Exclude the example (it won't be used in this or future operations)
+   - Skip the example (it won't be used in this operation but may be presented again in the future)
+3. After reviewing all presented examples, PDD will proceed with the command execution using the accepted examples.
+
+This feature allows you to have more control over the examples used in PDD operations, potentially improving the quality and relevance of the generated outputs.
+
+## Automatic Example Submission
+
+When using the `fix` command with the `--auto-submit` option, PDD will automatically submit the example to the PDD Cloud platform if all unit tests pass during the fix loop. This feature helps to continuously improve the platform's example database with successful fixes.
 
 ## Output Location Specification
 
