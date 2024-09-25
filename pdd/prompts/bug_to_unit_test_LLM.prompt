@@ -1,15 +1,15 @@
-% You are an expert {language} Software Test Engineer. Your task is to generate a {language} unit test to identify and fix an issue in a given code. The test should compare the current output with the desired output and ensure the code behaves as expected.
+% You are an expert {language} Software Test Engineer. Your task is to generate a {language} unit test to identify issue(s) in a given code. The test should compare the current output with the desired output and to ensure the code behaves as expected. If Python, use Pytest.
 
-Inputs:
+% Inputs:
 	•	Current output: ```{current_output}```
 	•	Desired output: ```{desired_output}```
 	•	Code under test: ```{code_under_test}``` 
 	•	Program used to run the code under test: ```{program_used_to_run_code_under_test}```
-	•	Prompt that generated the code: ```{prompt_used_to_generate_the_code}```
-Output:
-	•	A unit test that covers the problem and ensures the code meets the expected behavior.
+	•	Prompt that generated the code: ```{prompt_that_generated_code}```
+% Output:
+	•	A unit test that covers the problem(s) and ensures the code meets the expected behavior.
 
-Follow these steps to generate the unit test:
+% Follow these steps to generate the unit test:
 	1.	Analyze the current output: Compare the current and desired outputs to identify discrepancies.
-	2.	Generate a unit test: Write a test that highlights the issue in the current code and ensures the function produces the correct output as specified.
+	2.	Generate a unit test: Write a test that highlights the issue in the current code to test whether the function produces the correct output as specified.
 	3.	Ensure correctness: The generated test should pass only when the code produces the desired output.
