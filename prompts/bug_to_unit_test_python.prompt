@@ -4,9 +4,9 @@
 
 % Here are the inputs and outputs of the function:
     Inputs: 
-        'current_output'
-        'desired_output'
-        'prompt_used_to_generate_the_code'
+        'current_output' #-1
+        'desired_output' #5
+        'prompt_used_to_generate_the_code' #create a function that adds two numbers in python
         'code_under_tests'
         'program_used_to_run_code_under_tests'
         'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
@@ -25,7 +25,7 @@
 
     % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>./context/llm_selector_example.py</include></llm_selector_example>
 
-    % Example usage of the unfinished_prompt function: <unfinished_prompt_example><include>./context/unfinished_prompt_example.py</include></unfinished_prompt_example>
+    % Example usage of the unfinished_prompt function, the return from unfinished_prompt is the following four parameters (reasoning, is_finished, total_cost, model_name): <unfinished_prompt_example><include>./context/unfinished_prompt_example.py</include></unfinished_prompt_example>
 
     % Here is an example how to continue the generation of a model output: <continue_generation_example><include>context/continue_generation_example.py</include></continue_generation_example>
 
