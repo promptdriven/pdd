@@ -42,13 +42,13 @@ def bug_to_unit_test(current_output: str, desired_output: str, prompt_used_to_ge
         # Step 2: Preprocess the prompt
         processed_prompt = preprocess.preprocess(prompt_template, recursive=False, double_curly_brackets=False)
 
-        # Create a Langchain LCEL template
+        # Create a LangChain LCEL template
         prompt = PromptTemplate.from_template(processed_prompt)
 
         # Step 3: Use llm_selector for the model
         llm, token_counter, input_cost, output_cost, model_name = llm_selector.llm_selector(strength, temperature)
 
-        # Step 4: Run the inputs through the model using Langchain LCEL
+        # Step 4: Run the inputs through the model using LangChain LCEL
         chain = prompt | llm | StrOutputParser()
 
         # Preprocess the prompt_used_to_generate_the_code
@@ -69,7 +69,7 @@ def bug_to_unit_test(current_output: str, desired_output: str, prompt_used_to_ge
         input_cost_estimate = (input_tokens / 1_000_000) * input_cost
 
         console.print(f"[bold]Running the model with {input_tokens} input tokens.[/bold]")
-        console.print(f"[bold]Estimated input cost: ${input_cost_estimate:.6f}[/bold]")
+        console.print(f"[bold]Estimated input cost: ${input_cost_estimate:.6f}")
 
         # Invoke the chain
         result = chain.invoke(model_input)
@@ -80,11 +80,11 @@ def bug_to_unit_test(current_output: str, desired_output: str, prompt_used_to_ge
         output_tokens = token_counter(result)
         output_cost_estimate = (output_tokens / 1_000_000) * output_cost
         console.print(f"[bold]Output tokens: {output_tokens}[/bold]")
-        console.print(f"[bold]Estimated output cost: ${output_cost_estimate:.6f}[/bold]")
+        console.print(f"[bold]Estimated output cost: ${output_cost_estimate:.6f}")
 
         # Step 6: Detect if the generation is incomplete
         last_600_chars = result[-600:]
-        _, is_finished, unfinished_cost, _ = unfinished_prompt.unfinished_prompt(last_600_chars, strength=0.7, temperature=temperature)
+        reasoning, is_finished, unfinished_cost, _ = unfinished_prompt.unfinished_prompt(last_600_chars, strength=0.7, temperature=temperature)
 
         if not is_finished:
             # Step 6a: Continue the generation if incomplete
@@ -105,11 +105,11 @@ def bug_to_unit_test(current_output: str, desired_output: str, prompt_used_to_ge
         return final_result, total_cost, model_name
 
     except FileNotFoundError as e:
-        console.print(f"[bold red]Error: {e}[/bold red]")
+        console.print(f"[bold red]Error: {e}")
         raise
     except ValueError as e:
-        console.print(f"[bold red]Error: {e}[/bold red]")
+        console.print(f"[bold red]Error: {e}")
         raise
     except Exception as e:
-        console.print(f"[bold red]An unexpected error occurred: {e}[/bold red]")
+        console.print(f"[bold red]An unexpected error occurred: {e}")
         raise
