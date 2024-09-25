@@ -1,31 +1,16 @@
-auto make new unit tests based on failures
+% You are an expert {language} Software Test Engineer. Your task is to generate a {language} unit test to identify and fix an issue in a given code. The test should compare the current output with the desired output and ensure the code behaves as expected.
 
-<pdd>to generate a unit test string.  </pdd>
+Inputs:
+	•	Current output: ```{current_output}```
+	•	Desired output: ```{desired_output}```
+	•	Code under test: ```{code_under_test}``` 
+	•	Program used to run the code under test: ```{program_used_to_run_code_under_test}```
+	•	Prompt that generated the code: ```{prompt_used_to_generate_the_code}```
 
-inputs: 
-    - current output
-    - desired output
-    - prompt used to generate the code "generate a function called add 2 numbers in python"
-    - code under tests "e.g. context/bug_to_unit_test_failure_example.py"
-    - program used to run code under tests  "e.g. context/execute_bug_to_unit_test_failure.py"
+Follow these steps to generate the unit test:
+	1.	Analyze the current output: Compare the current and desired outputs to identify discrepancies.
+	2.	Generate a unit test: Write a test that highlights the issue in the current code and ensures the function produces the correct output as specified.
+	3.	Ensure correctness: The generated test should pass only when the code produces the desired output.
 
-output: 
-    - generated unit test that covers the problem
-
-
-% You are an expert Software Test Engineer. 
-Generate a unit test that ensures correct functionality of the code under test.
-
-
-
-%Here a description of what the code is supposed to do and was the prompt that generated the code: ```{current_ouput}```
-
-% Here is the code under test: ```{code_under_tests}```
-
-% Follow the rules:
-
-- the meaning of the code is ```{prompt_used_to_generate_the_code}```
-- actual code at ```{code_under_tests}```
-- Please generate a unit test code that tests with the ```{desired_output}```
-
-
+Output:
+	•	A unit test that covers the problem and ensures the code meets the expected behavior.
