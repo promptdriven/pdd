@@ -4,11 +4,11 @@
 
 % Here are the inputs and outputs of the function:
     Inputs: 
-        'current_output' #-1
-        'desired_output' #5
+        'current_output' - A string that is the current output of the code.
+        'desired_output' - A string that is the desired output of the code.
         'prompt_used_to_generate_the_code' #create a function that adds two numbers in python
-        'code_under_tests'
-        'program_used_to_run_code_under_tests'
+        'code_under_test' - A string that is the code to be tested.
+        'program_used_to_run_code_under_test' - A string that is the program used to run the code under test.
         'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
         'temperature' - A float that is the temperature of the LLM model to use.
         'language' - A string that is the language of the unit test to be generated.
