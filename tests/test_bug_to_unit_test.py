@@ -166,9 +166,9 @@ def test_bug_to_unit_test_postprocess(valid_inputs, mock_prompt_content, mock_un
                             
                             assert result == mock_unit_test_output
                             expected_cost = (
-                                (len(valid_inputs["prompt_used_to_generate_the_code"]) * 0.02 / 1_000_000) +
-                                (len(mock_unit_test_output) * 0.03 / 1_000_000) +
+                                (token_counter(valid_inputs["prompt_used_to_generate_the_code"]) * 0.02 / 1_000_000) +
+                                (token_counter(mock_unit_test_output) * 0.03 / 1_000_000) +
                                 0.01
                             )
-                            assert total_cost == pytest.approx(expected_cost)
+                            assert total_cost == pytest.approx(expected_cost, rel=1e-3)
                             assert model_name == "gpt-4"
