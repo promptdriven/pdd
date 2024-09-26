@@ -1,6 +1,6 @@
 import os
 import pytest
-from unittest.mock import patch, mock_open, MagicMock
+from unittest.mock import patch, mock_open, Mock
 from pdd.bug_to_unit_test import bug_to_unit_test
 
 @pytest.fixture
@@ -38,11 +38,11 @@ def test_bug_to_unit_test_valid_input(valid_inputs, mock_prompt_content, mock_un
     with patch("builtins.open", mock_open(read_data=mock_prompt_content)) as mocked_file:
         with patch("pdd.bug_to_unit_test.preprocess.preprocess", return_value=mock_prompt_content) as mock_preprocess:
             with patch("pdd.bug_to_unit_test.llm_selector.llm_selector") as mock_llm_selector:
-                mock_llm = MagicMock()
-                mock_llm.invoke.return_value = mock_unit_test_output
+                mock_llm = Mock()
+                mock_llm.invoke.side_effect = lambda x: mock_unit_test_output
                 mock_llm_selector.return_value = (mock_llm, lambda x: len(x), 0.02, 0.03, "gpt-4")
 
-                with patch("pdd.unfinished_prompt.last_prompt_status", return_value=("", True, 0.0, "gpt-4")) as mock_unfinished:
+                with patch("pdd.unfinished_prompt.unfinished_prompt", return_value=("", True, 0.0, "gpt-4")) as mock_unfinished:
                     with patch("pdd.continue_generation.continue_generation", return_value=("", 0.0, "")) as mock_continue:
                         with patch("pdd.postprocess.postprocess", return_value=(mock_unit_test_output, 0.01)) as mock_postprocess:
                             result, total_cost, model_name = bug_to_unit_test(**valid_inputs)
@@ -93,11 +93,11 @@ def test_bug_to_unit_test_empty_inputs():
     with patch("builtins.open", mock_open(read_data="")) as mocked_file:
         with patch("pdd.bug_to_unit_test.preprocess.preprocess", return_value="") as mock_preprocess:
             with patch("pdd.bug_to_unit_test.llm_selector.llm_selector") as mock_llm_selector:
-                mock_llm = MagicMock()
-                mock_llm.invoke.return_value = ""
+                mock_llm = Mock()
+                mock_llm.invoke.side_effect = lambda x: ""
                 mock_llm_selector.return_value = (mock_llm, lambda x: 0, 0.0, 0.0, "gpt-4")
                 
-                with patch("pdd.unfinished_prompt.last_prompt_status", return_value=("", True, 0.0, "gpt-4")) as mock_unfinished:
+                with patch("pdd.unfinished_prompt.unfinished_prompt", return_value=("", True, 0.0, "gpt-4")) as mock_unfinished:
                     with patch("pdd.continue_generation.continue_generation", return_value=("", 0.0, "")) as mock_continue:
                         with patch("pdd.postprocess.postprocess", return_value=("", 0.0)) as mock_postprocess:
                             result, total_cost, model_name = bug_to_unit_test(**empty_inputs)
@@ -120,11 +120,11 @@ def test_bug_to_unit_test_continue_generation(valid_inputs, mock_prompt_content,
     with patch("builtins.open", mock_open(read_data=mock_prompt_content)) as mocked_file:
         with patch("pdd.bug_to_unit_test.preprocess.preprocess", return_value=mock_prompt_content) as mock_preprocess:
             with patch("pdd.bug_to_unit_test.llm_selector.llm_selector") as mock_llm_selector:
-                mock_llm = MagicMock()
-                mock_llm.invoke.return_value = mock_unit_test_output
+                mock_llm = Mock()
+                mock_llm.invoke.side_effect = lambda x: mock_unit_test_output
                 mock_llm_selector.return_value = (mock_llm, lambda x: len(x), 0.02, 0.03, "gpt-4")
 
-                with patch("pdd.unfinished_prompt.last_prompt_status", return_value=("Reasoning incomplete", False, 0.005, "gpt-4")) as mock_unfinished:
+                with patch("pdd.unfinished_prompt.unfinished_prompt", return_value=("Reasoning incomplete", False, 0.005, "gpt-4")) as mock_unfinished:
                     with patch("pdd.continue_generation.continue_generation", return_value=("Completed unit test.", 0.002, "gpt-4")) as mock_continue:
                         with patch("pdd.postprocess.postprocess", return_value=("Completed unit test.", 0.002)) as mock_postprocess:
                             result, total_cost, model_name = bug_to_unit_test(**valid_inputs)
@@ -143,11 +143,11 @@ def test_bug_to_unit_test_postprocess(valid_inputs, mock_prompt_content, mock_un
     with patch("builtins.open", mock_open(read_data=mock_prompt_content)) as mocked_file:
         with patch("pdd.bug_to_unit_test.preprocess.preprocess", return_value=mock_prompt_content) as mock_preprocess:
             with patch("pdd.bug_to_unit_test.llm_selector.llm_selector") as mock_llm_selector:
-                mock_llm = MagicMock()
-                mock_llm.invoke.return_value = mock_unit_test_output
+                mock_llm = Mock()
+                mock_llm.invoke.side_effect = lambda x: mock_unit_test_output
                 mock_llm_selector.return_value = (mock_llm, lambda x: len(x), 0.02, 0.03, "gpt-4")
 
-                with patch("pdd.unfinished_prompt.last_prompt_status", return_value=("", True, 0.0, "gpt-4")) as mock_unfinished:
+                with patch("pdd.unfinished_prompt.unfinished_prompt", return_value=("", True, 0.0, "gpt-4")) as mock_unfinished:
                     with patch("pdd.continue_generation.continue_generation", return_value=("", 0.0, "")) as mock_continue:
                         with patch("pdd.postprocess.postprocess", return_value=(mock_unit_test_output, 0.01)) as mock_postprocess:
                             result, total_cost, model_name = bug_to_unit_test(**valid_inputs)
