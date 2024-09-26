@@ -2,7 +2,7 @@ import os
 from rich.console import Console
 from rich.markdown import Markdown
 from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import StrOutputParser
+from langchain_core.outputs import Generation
 from . import preprocess, llm_selector, unfinished_prompt, continue_generation, postprocess
 
 console = Console()
@@ -49,7 +49,7 @@ def bug_to_unit_test(current_output: str, desired_output: str, prompt_used_to_ge
         llm, token_counter, input_cost, output_cost, model_name = llm_selector.llm_selector(strength, temperature)
 
         # Step 4: Run the inputs through the model using LangChain LCEL
-        chain = prompt | llm | StrOutputParser()
+        chain = prompt | llm
 
         # Preprocess the prompt_used_to_generate_the_code
         processed_prompt_used = preprocess.preprocess(prompt_used_to_generate_the_code, recursive=False, double_curly_brackets=False)
@@ -64,41 +64,58 @@ def bug_to_unit_test(current_output: str, desired_output: str, prompt_used_to_ge
             "language": language
         }
 
-        # Count tokens and calculate cost
+        # Count input tokens
         input_tokens = sum(token_counter(str(value)) for value in model_input.values())
-        input_cost_estimate = (input_tokens / 1_000_000) * input_cost
-
         console.print(f"[bold]Running the model with {input_tokens} input tokens.[/bold]")
-        console.print(f"[bold]Estimated input cost: ${input_cost_estimate:.6f}")
+        console.print(f"[bold]Input tokens: {input_tokens}, cost: ${input_tokens * input_cost / 1_000_000:.6f}[/bold]")
 
         # Invoke the chain
         result = chain.invoke(model_input)
 
-        # Step 5: Pretty print the result
-        console.print(Markdown(result))
+        # Extract text from the result
+        if isinstance(result, list) and len(result) > 0 and isinstance(result[0], Generation):
+            result_text = result[0].text
+        else:
+            result_text = str(result)
 
-        output_tokens = token_counter(result)
-        output_cost_estimate = (output_tokens / 1_000_000) * output_cost
-        console.print(f"[bold]Output tokens: {output_tokens}[/bold]")
-        console.print(f"[bold]Estimated output cost: ${output_cost_estimate:.6f}")
+        # Debug logging
+        console.print(f"[bold]LLM output type: {type(result)}[/bold]")
+        console.print(f"[bold]LLM output content: {result}[/bold]")
+        console.print(f"[bold]Extracted text: {result_text}[/bold]")
+
+        # Step 5: Pretty print the result
+        console.print(Markdown(result_text))
+
+        # Count output tokens
+        output_tokens = token_counter(result_text)
+        console.print(f"[bold]Output tokens: {output_tokens}, cost: ${output_tokens * output_cost / 1_000_000:.6f}[/bold]")
+
+        # Calculate base cost
+        base_cost = (input_tokens * input_cost + output_tokens * output_cost) / 1_000_000
+        console.print(f"[bold]Base cost: ${base_cost:.6f}[/bold]")
 
         # Step 6: Detect if the generation is incomplete
-        last_600_chars = result[-600:]
+        last_600_chars = result_text[-600:]
         reasoning, is_finished, unfinished_cost, _ = unfinished_prompt.unfinished_prompt(last_600_chars, strength=0.7, temperature=temperature)
+        console.print(f"[bold]Unfinished cost: ${unfinished_cost:.6f}[/bold]")
 
+        additional_cost = unfinished_cost
         if not is_finished:
             # Step 6a: Continue the generation if incomplete
-            final_result, continue_cost, _ = continue_generation.continue_generation(processed_prompt, result, strength, temperature)
+            final_result, continue_cost, _ = continue_generation.continue_generation(processed_prompt, result_text, strength, temperature)
+            additional_cost += continue_cost
         else:
             # Step 6b: Postprocess the result if complete
-            final_result, postprocess_cost = postprocess.postprocess(result, language, strength=0.7, temperature=temperature)
+            final_result, postprocess_cost = postprocess.postprocess(result_text, language, strength=0.7, temperature=temperature)
+            additional_cost += postprocess_cost
 
-        # Step 7: Calculate and print the total cost
-        total_cost = input_cost_estimate + output_cost_estimate + unfinished_cost
-        if not is_finished:
-            total_cost += continue_cost
-        else:
-            total_cost += postprocess_cost
+        console.print(f"[bold]Additional costs: ${additional_cost:.6f}[/bold]")
+
+        # Calculate total cost
+        total_cost = base_cost + additional_cost
+
+        # Round the total cost to 6 decimal places
+        total_cost = round(total_cost, 6)
 
         console.print(f"[bold green]Total cost: ${total_cost:.6f}[/bold green]")
 

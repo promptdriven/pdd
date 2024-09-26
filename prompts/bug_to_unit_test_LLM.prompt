@@ -13,3 +13,5 @@
 	1.	Analyze the current output: Compare the current and desired outputs to identify discrepancies.
 	2.	Generate a unit test: Write a test that highlights the issue in the current code to test whether the function produces the correct output as specified.
 	3.	Ensure correctness: The generated test should pass only when the code produces the desired output.
+
+% Focus exclusively on generating a robust unit test to detect and identify the issue(s) in the code provided.
