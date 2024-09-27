@@ -38,6 +38,7 @@ def unfinished_prompt(prompt_text: str, strength: float = 0.5, temperature: floa
     # Step 3: Use the llm_selector function for the LLM model
     try:
         llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
+        print(f"DEBUG: Raw input_cost = ${input_cost:.6f} per million tokens, output_cost = ${output_cost:.6f} per million tokens")
     except Exception as e:
         raise RuntimeError(f"Error selecting LLM model: {e}")
 
@@ -50,7 +51,9 @@ def unfinished_prompt(prompt_text: str, strength: float = 0.5, temperature: floa
     # 4b: Pretty print a message letting the user know it is running
     try:
         token_count = token_counter(prompt_text)
-        print(f"Running analysis on the prompt. Token count: {token_count}, Estimated cost: ${(token_count / 1_000_000) * input_cost:.6f}")
+        estimated_cost = (token_count / 1_000_000) * input_cost
+        print(f"Running analysis on the prompt. Token count: {token_count}, Estimated cost: ${estimated_cost:.6f}")
+        print(f"DEBUG: Estimated cost calculation: {token_count} tokens / 1,000,000 * ${input_cost:.6f} per million tokens = ${estimated_cost:.6f}")
     except Exception as e:
         print(f"Error calculating token count: {e}")
         token_count = 0
@@ -72,13 +75,17 @@ def unfinished_prompt(prompt_text: str, strength: float = 0.5, temperature: floa
         print(f"Error calculating output token count: {e}")
         output_token_count = 0
 
-    total_cost = (token_count / 1_000_000) * input_cost + (output_token_count / 1_000_000) * output_cost
-    print(f"Input tokens: {token_count}, Input cost: ${input_cost}")
-    print(f"Output tokens: {output_token_count}, Output cost: ${output_cost}")
+    input_cost_total = (token_count / 1_000_000) * input_cost
+    output_cost_total = (output_token_count / 1_000_000) * output_cost
+    total_cost = input_cost_total + output_cost_total
+
+    print(f"Input tokens: {token_count}, Input cost: ${input_cost_total:.6f}")
+    print(f"Output tokens: {output_token_count}, Output cost: ${output_cost_total:.6f}")
     print(f"Reasoning: {reasoning}")
     print(f"Is Finished: {is_finished}")
-    print(f"Output Token Count: {output_token_count}, Output Token Cost: ${(output_token_count / 1_000_000) * output_cost:.6f}")
-    print(f"Calculated total cost: ${total_cost:.8f}")
+    print(f"DEBUG: Input cost calculation: {token_count} tokens / 1,000,000 * ${input_cost:.6f} per million tokens = ${input_cost_total:.6f}")
+    print(f"DEBUG: Output cost calculation: {output_token_count} tokens / 1,000,000 * ${output_cost:.6f} per million tokens = ${output_cost_total:.6f}")
+    print(f"Calculated total cost: ${total_cost:.6f}")
 
     # Step 5: Return the 'reasoning', 'is_finished', 'total_cost', and 'model_name'
     return reasoning, is_finished, total_cost, model_name
