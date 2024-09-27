@@ -22,4 +22,4 @@
 
 % If double_curly_brackets is True, the program will check to see if the file has any single curly brackets and if it does and the string in the curly brackets are not in the exclude_keys list, it will check to see if the curly brackets are already doubled before doubling the curly brackets.
 
-% The program should resolve file paths using the PDD_PATH environment variable. Implement a function 'get_file_path' that takes a file name and returns the full path using this environment variable.
+% The program should resolve file paths using the current directory as the base path. Implement a function 'get_file_path' that takes a file name and returns the full path using './' as the base path.
