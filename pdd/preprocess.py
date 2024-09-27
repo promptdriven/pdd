@@ -109,7 +109,7 @@ def get_file_path(file_name: str) -> str:
     :param file_name: The name of the file to locate.
     :return: The full path to the file.
     """
-    pdd_path = os.getenv('PDD_PATH', '')
+    pdd_path = './'#os.getenv('PDD_PATH', '')
     return os.path.join(pdd_path, file_name)
 
 def double_curly(text: str, exclude_keys: List[str] = None) -> str:
