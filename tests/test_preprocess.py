@@ -149,3 +149,46 @@ def test_double_curly_brackets_in_javascript() -> None:
 
     # Assert that the result matches the expected output
     assert result == expected_output, f"Expected:\n{expected_output}\n\nGot:\n{result}"
+
+def test_double_curly_brackets_json() -> None:
+    """
+    Test to ensure that the preprocess function correctly doubles curly brackets
+    within a JSON object without adding extra brackets around the entire object.
+    """
+    # Input prompt
+    prompt = """### Error Handling
+
+All endpoints return standard HTTP status codes. In case of an error, the response will include an error object:
+
+```json
+{
+  "error": {
+    "code": "string",
+    "message": "string"
+  }
+}
+```"""
+
+    # Expected output
+    expected_output = """### Error Handling
+
+All endpoints return standard HTTP status codes. In case of an error, the response will include an error object:
+
+```json
+{{
+  "error": {{
+    "code": "string",
+    "message": "string"
+  }}
+}}
+```"""
+
+    # Process the prompt
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+
+    # Assert that the processed output matches the expected output
+    assert processed.strip() == expected_output.strip(), \
+        f"Expected:\n{expected_output}\n\nGot:\n{processed}"
+
+    # Additional check to ensure no extra curly brackets are added around the entire JSON
+    assert '{{{\n  "error"' not in processed, "Extra curly brackets were added around the entire JSON object"
