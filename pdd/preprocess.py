@@ -129,32 +129,43 @@ def double_curly(text: str, exclude_keys: List[str] = None) -> str:
     if exclude_keys is None:
         exclude_keys = []
 
-    # Process code blocks first
-    def replace_in_code(match):
-        code_block = match.group(0)
-        # Remove the starting ```javascript\n and ending ```
-        code_content = code_block[len('```javascript\n'):-3]
-        # Replace single '{' with '{{' and single '}' with '}}'
-        code_content = re.sub(r'(?<!{){(?!{)', '{{', code_content)
-        code_content = re.sub(r'(?<!})}(?!})', '}}', code_content)
-        # Reconstruct code block
-        return f"```javascript\n{code_content}\n```"
-
     console.print(f"Before doubling:\n{text}")
 
-    text = re.sub(r'```javascript\n[\s\S]*?```', replace_in_code, text)
+    # Define the pattern for JavaScript code blocks
+    code_pattern = r"```javascript\n[\s\S]*?```"
 
-    # Then process non-code blocks
-    def replace_non_code(match):
-        key = match.group(1)
-        if key in exclude_keys:
-            return f"{{{key}}}"
-        return f"{{{{{key}}}}}"
+    # Split the text into code and non-code segments
+    parts = re.split(f"({code_pattern})", text)
 
-    # Handle non-code blocks
-    text = re.sub(r'\{([^{}]+)\}', replace_non_code, text)
-    # Handle empty curly brackets
-    text = re.sub(r'\{\}', '{{}}', text)
+    processed_parts = []
+    for part in parts:
+        if re.match(code_pattern, part):
+            # It's a JavaScript code block
+            console.print("Processing code block for curly brackets")
+            # Extract the code content without the backticks and language specifier
+            code_content = part[len("```javascript\n"):-3]
+            # Replace single '{' with '{{' and single '}' with '}}' within the code block
+            code_content = re.sub(r'(?<!{){(?!{)', '{{', code_content)
+            code_content = re.sub(r'(?<!})}(?!})', '}}', code_content)
+            # Reconstruct the code block
+            processed_part = f"```javascript\n{code_content}\n```"
+            processed_parts.append(processed_part)
+        else:
+            # It's a non-code segment
+            # Replace '{key}' with '{{key}}' unless the key is in exclude_keys
+            def replace_non_code(match):
+                key = match.group(1)
+                if key in exclude_keys:
+                    return f"{{{key}}}"
+                return f"{{{{key}}}}"  # Correctly produces '{{key}}'
+
+            processed_part = re.sub(r'\{([^{}]+)\}', replace_non_code, part)
+            # Handle empty curly brackets
+            processed_part = re.sub(r'\{\}', '{{}}', processed_part)
+            processed_parts.append(processed_part)
+
+    # Reconstruct the full text after processing
+    text = ''.join(processed_parts)
 
     console.print(f"After doubling:\n{text}")
     return text
