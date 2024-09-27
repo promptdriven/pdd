@@ -147,8 +147,7 @@ def double_curly(text: str, exclude_keys: List[str] = None) -> str:
             # Replace single '{' with '{{' and single '}' with '}}' within the code block
             code_content = re.sub(r'(?<!{){(?!{)', '{{', code_content)
             code_content = re.sub(r'(?<!})}(?!})', '}}', code_content)
-            # Reconstruct the code block
-            processed_part = f"```javascript\n{code_content}\n```"
+            processed_part = f"```javascript\n{code_content}```"
             processed_parts.append(processed_part)
         else:
             # It's a non-code segment
@@ -157,8 +156,7 @@ def double_curly(text: str, exclude_keys: List[str] = None) -> str:
                 key = match.group(1)
                 if key in exclude_keys:
                     return f"{{{key}}}"
-                return f"{{{{key}}}}"  # Correctly produces '{{key}}'
-
+                return f"{{{{{key}}}}}"
             processed_part = re.sub(r'\{([^{}]+)\}', replace_non_code, part)
             # Handle empty curly brackets
             processed_part = re.sub(r'\{\}', '{{}}', processed_part)
