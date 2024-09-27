@@ -119,7 +119,7 @@ def get_file_path(file_name: str) -> str:
 def double_curly(text: str, exclude_keys: List[str] = None) -> str:
     """
     Double the curly brackets in the text, excluding specified keys.
-    Supports nested curly brackets and handles JavaScript code blocks specially.
+    Supports nested curly brackets and handles all code blocks uniformly.
 
     :param text: The input text with single curly brackets.
     :param exclude_keys: List of keys to exclude from doubling.
@@ -131,8 +131,8 @@ def double_curly(text: str, exclude_keys: List[str] = None) -> str:
 
     console.print(f"Before doubling:\n{text}")
 
-    # Define the pattern for JavaScript code blocks
-    code_pattern = r"```javascript\n[\s\S]*?```"
+    # Define the pattern for all code blocks (e.g., ```javascript, ```json)
+    code_pattern = r"```[\w]*\n[\s\S]*?```"
 
     # Split the text into code and non-code segments
     parts = re.split(f"({code_pattern})", text)
@@ -140,14 +140,15 @@ def double_curly(text: str, exclude_keys: List[str] = None) -> str:
     processed_parts = []
     for part in parts:
         if re.match(code_pattern, part):
-            # It's a JavaScript code block
+            # It's a code block
             console.print("Processing code block for curly brackets")
             # Extract the code content without the backticks and language specifier
-            code_content = part[len("```javascript\n"):-3]
-            # Replace single '{' with '{{' and single '}' with '}}' within the code block
+            language_line_end = part.find('\n')
+            code_content = part[language_line_end+1:-3]  # Removes ```lang\n and ```
+            # Double curly brackets inside the code block
             code_content = re.sub(r'(?<!{){(?!{)', '{{', code_content)
             code_content = re.sub(r'(?<!})}(?!})', '}}', code_content)
-            processed_part = f"```javascript\n{code_content}```"
+            processed_part = f"```{part[:language_line_end+1]}{code_content}```"
             processed_parts.append(processed_part)
         else:
             # It's a non-code segment
@@ -157,6 +158,7 @@ def double_curly(text: str, exclude_keys: List[str] = None) -> str:
                 if key in exclude_keys:
                     return f"{{{key}}}"
                 return f"{{{{{key}}}}}"
+
             processed_part = re.sub(r'\{([^{}]+)\}', replace_non_code, part)
             # Handle empty curly brackets
             processed_part = re.sub(r'\{\}', '{{}}', processed_part)
