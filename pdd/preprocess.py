@@ -1,7 +1,7 @@
 import os
 import re
 import subprocess
-from typing import List, Tuple
+from typing import List
 from rich import print
 from rich.console import Console
 from rich.panel import Panel
@@ -33,6 +33,7 @@ def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool
     console.print(Panel("Preprocessing complete", style="bold green"))
     return prompt
 
+
 def process_backtick_includes(text: str, recursive: bool) -> str:
     """
     Process includes within triple backticks in the text.
@@ -41,7 +42,7 @@ def process_backtick_includes(text: str, recursive: bool) -> str:
     :param recursive: Whether to recursively preprocess included content.
     :return: The text with includes processed.
     """
-    pattern = r"```<(.+?)>```"
+    pattern = r"```<(.*?)>```"
     matches = re.findall(pattern, text)
 
     for match in matches:
@@ -58,6 +59,7 @@ def process_backtick_includes(text: str, recursive: bool) -> str:
 
     return text
 
+
 def process_specific_tags(text: str, recursive: bool) -> str:
     """
     Process specific tags in the text without adding closing tags.
@@ -71,7 +73,7 @@ def process_specific_tags(text: str, recursive: bool) -> str:
         tag = match.group(2)
         content = match.group(3) if match.group(3) else ""
         post_whitespace = match.group(4)
-        
+
         if tag == 'include':
             file_path = get_file_path(content.strip())
             console.print(f"Processing XML include: [cyan]{file_path}[/cyan]")
@@ -99,8 +101,9 @@ def process_specific_tags(text: str, recursive: bool) -> str:
             return match.group(0)  # Return the original match for any other tags
 
     # Process only specific tags, capturing whitespace around them
-    pattern = r'(\s*)<(include|pdd|shell)(?:\s+[^>]*)?(?:>(.*?)</\2>|/>|>)(\s*)'
+    pattern = r'(\s*)<(include|pdd|shell)(?:\s+[^>]*)?(?:>(.*?)</\2>|/|>)(\s*)'
     return re.sub(pattern, process_tag, text, flags=re.DOTALL)
+
 
 def get_file_path(file_name: str) -> str:
     """
@@ -109,12 +112,14 @@ def get_file_path(file_name: str) -> str:
     :param file_name: The name of the file to locate.
     :return: The full path to the file.
     """
-    pdd_path = './'#os.getenv('PDD_PATH', '')
+    pdd_path = './'  # Using './' as the base path
     return os.path.join(pdd_path, file_name)
+
 
 def double_curly(text: str, exclude_keys: List[str] = None) -> str:
     """
     Double the curly brackets in the text, excluding specified keys.
+    Supports nested curly brackets and handles JavaScript code blocks specially.
 
     :param text: The input text with single curly brackets.
     :param exclude_keys: List of keys to exclude from doubling.
@@ -123,16 +128,33 @@ def double_curly(text: str, exclude_keys: List[str] = None) -> str:
     console.print("Doubling curly brackets")
     if exclude_keys is None:
         exclude_keys = []
-    
-    def replace_curly(match):
+
+    # Process code blocks first
+    def replace_in_code(match):
+        code_block = match.group(0)
+        # Remove the starting ```javascript\n and ending ```
+        code_content = code_block[len('```javascript\n'):-3]
+        # Replace single '{' with '{{' and single '}' with '}}'
+        code_content = re.sub(r'(?<!{){(?!{)', '{{', code_content)
+        code_content = re.sub(r'(?<!})}(?!})', '}}', code_content)
+        # Reconstruct code block
+        return f"```javascript\n{code_content}\n```"
+
+    console.print(f"Before doubling:\n{text}")
+
+    text = re.sub(r'```javascript\n[\s\S]*?```', replace_in_code, text)
+
+    # Then process non-code blocks
+    def replace_non_code(match):
         key = match.group(1)
-        if not key:  # Handle empty curly brackets
-            return "{{}}"
         if key in exclude_keys:
             return f"{{{key}}}"
         return f"{{{{{key}}}}}"
-    
-    console.print(f"Before doubling: {text}")
-    result = re.sub(r'\{([^{}]*)\}', replace_curly, text)
-    console.print(f"After doubling: {result}")
-    return result
+
+    # Handle non-code blocks
+    text = re.sub(r'\{([^{}]+)\}', replace_non_code, text)
+    # Handle empty curly brackets
+    text = re.sub(r'\{\}', '{{}}', text)
+
+    console.print(f"After doubling:\n{text}")
+    return text

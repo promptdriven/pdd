@@ -103,3 +103,49 @@ def teardown_module(module) -> None:
     """Clean up the environment variable after tests."""
     if 'PDD_PATH' in os.environ:
         del os.environ['PDD_PATH']
+
+def test_double_curly_brackets_in_javascript() -> None:
+    """
+    Test to ensure that curly brackets in JavaScript code blocks are doubled correctly.
+    """
+    input_text = (
+        """5. **Configure Tailwind CSS**:\n\n"
+        "   Update your `tailwind.config.js` with the paths to all of your template files:\n\n"
+        "   ```javascript\n"
+        "   module.exports = {\n"
+        "     content: [\n"
+        "       \"./src/**/*.{js,jsx,ts,tsx}\",\n"
+        "       \"./public/index.html\",\n"
+        "       // Add any other paths where Tailwind CSS classes are used\n"
+        "     ],\n"
+        "     theme: {\n"
+        "       extend: {},\n"
+        "     },\n"
+        "     plugins: [],\n"
+        "   }\n"
+        "   ```"""
+    )
+
+    expected_output = (
+        """5. **Configure Tailwind CSS**:\n\n"
+        "   Update your `tailwind.config.js` with the paths to all of your template files:\n\n"
+        "   ```javascript\n"
+        "   module.exports = {{\n"
+        "     content: [\n"
+        "       \"./src/**/*.{{js,jsx,ts,tsx}}\",\n"
+        "       \"./public/index.html\",\n"
+        "       // Add any other paths where Tailwind CSS classes are used\n"
+        "     ],\n"
+        "     theme: {{\n"
+        "       extend: {{}},\n"
+        "     }},\n"
+        "     plugins: [],\n"
+        "   }}\n"
+        "   ```"""
+    )
+
+    # Call the preprocess function with the input text
+    result = preprocess(input_text, recursive=False, double_curly_brackets=True)
+
+    # Assert that the result matches the expected output
+    assert result == expected_output, f"Expected:\n{expected_output}\n\nGot:\n{result}"
