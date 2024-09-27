@@ -11,29 +11,23 @@ import re
 
 console = Console()
 
+
 def parse_pytest_results(error_output):
-    # Pattern to match the summary line
-    pattern = r"=+ (\d+) (failed|error)(?:, (\d+) (failed|error))?, (\d+) passed,? .* in \d+\.\d+s =+"
+    # Pattern to match different result types
+    pattern = r"(\d+)\s+(failed|error|passed)"
     
     # Find all matches in the error_output
-    matches = re.findall(pattern, error_output, re.MULTILINE)
+    matches = re.findall(pattern, error_output)
     
     total_fails = 0
     total_errors = 0
     
-    for match in matches:
-        # Count fails and errors
-        if match[1] == 'failed':
-            total_fails += int(match[0])
-        elif match[1] == 'error':
-            total_errors += int(match[0])
-        
-        # Check if there's a second count (for cases with both fails and errors)
-        if match[2]:
-            if match[3] == 'failed':
-                total_fails += int(match[2])
-            elif match[3] == 'error':
-                total_errors += int(match[2])
+    for count, result_type in matches:
+        count = int(count)
+        if result_type == 'failed':
+            total_fails += count
+        elif result_type == 'error':
+            total_errors += count
     
     return total_fails, total_errors
 
