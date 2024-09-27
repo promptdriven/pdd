@@ -20,6 +20,6 @@
     1. Will check to see if the file has any angle brackets in triple backticks. If so, it will read the included file indicated in the angle brackets and replace the angle brackets with the content of the included file. This will be done recursively until there are no more angle brackets in triple backticks. The program will then remove the angle brackets but leave the contents in the triple backticks.
     2. The XML 'include' mentioned above.
 
-% If double_curly_brackets is True, the program will check to see if the file has any single curly brackets and if it does and the string in the curly brackets are not in the exclude_keys list, it will check to see if the curly brackets are already doubled before doubling the curly brackets.
+% If double_curly_brackets is True, the program will check to see if the file has any single curly brackets and if it does and the string in the curly brackets are not in the exclude_keys list, it will check to see if the curly brackets are already doubled before doubling the curly brackets. The curly brackets may be on different lines and may have nested curly brackets. Use recursion to handle nested curly brackets.
 
 % The program should resolve file paths using the current directory as the base path. Implement a function 'get_file_path' that takes a file name and returns the full path using './' as the base path.
