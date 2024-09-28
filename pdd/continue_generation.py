@@ -1,6 +1,6 @@
 import os
 import json
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, Callable
 from rich.console import Console
 from rich.markdown import Markdown
 from langchain_core.prompts import PromptTemplate
@@ -30,7 +30,13 @@ def extract_text_from_response(response: str) -> Tuple[str, bool]:
     except json.JSONDecodeError:
         return response, False
 
-def continue_generation(formatted_input_prompt: str, llm_output: str, strength: float, temperature: float) -> Tuple[str, float, str]:
+def continue_generation(
+    formatted_input_prompt: str,
+    llm_output: str,
+    strength: float,
+    temperature: float,
+    unfinished_prompt_func: Callable = unfinished_prompt
+) -> Tuple[str, float, str]:
     # Step 1: Load prompts
     pdd_path = os.getenv('PDD_PATH')
     if not pdd_path:
@@ -82,6 +88,7 @@ def continue_generation(formatted_input_prompt: str, llm_output: str, strength: 
             "LLM_OUTPUT": code_block
         })
         continue_result, _ = extract_text_from_response(continue_result)
+        console.print(f"Continue generation result (loop {loop_count}):")
         console.print(Markdown(f"```python\n{continue_result}\n```"))
         input_tokens = token_counter(formatted_input_prompt + code_block)
         output_tokens = token_counter(continue_result)
@@ -90,8 +97,8 @@ def continue_generation(formatted_input_prompt: str, llm_output: str, strength: 
         console.print(f"Continue generation cost (loop {loop_count}): ${continue_cost:.6f}")
 
         # Step 7: Check if generation is complete
-        last_200_chars = continue_result[-600:]
-        reasoning, is_finished, unfinished_cost, _ = unfinished_prompt(last_200_chars, 0.5, 0)
+        last_600_chars = continue_result[-600:]
+        reasoning, is_finished, unfinished_cost, _ = unfinished_prompt_func(last_600_chars, 0.5, 0)
         total_cost += unfinished_cost
         console.print(f"Unfinished prompt cost: ${unfinished_cost:.6f}")
 
@@ -121,6 +128,7 @@ def continue_generation(formatted_input_prompt: str, llm_output: str, strength: 
             console.print(f"Generation incomplete. Continuing... (Loop count: {loop_count})")
 
     # Step 8: Pretty print the final output
+    console.print("Final output:")
     console.print(Markdown(f"```python\n{code_block}\n```"))
     console.print(f"Total tokens: {token_counter(code_block)}")
     console.print(f"Total cost: ${total_cost:.6f}")

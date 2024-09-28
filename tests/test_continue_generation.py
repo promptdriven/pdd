@@ -64,7 +64,8 @@ def test_continue_generation_success(mock_environment, mock_prompts, mock_llm_se
                             'Test input prompt',
                             'Test LLM output',
                             0.5,
-                            0.0
+                            0.0,
+                            unfinished_prompt_func=mock_unfinished_prompt
                         )
 
                         assert isinstance(result, str)
@@ -83,39 +84,43 @@ def test_continue_generation_file_not_found(mock_environment):
         with pytest.raises(FileNotFoundError):
             continue_generation('Test input', 'Test output', 0.5, 0.0)
 
-def test_continue_generation_multiple_iterations(mock_environment, mock_prompts, mock_llm_selector):
+def test_continue_generation_multiple_iterations(mock_environment, mock_prompts, mock_llm_selector, mock_unfinished_prompt):
     with patch('builtins.open', mock_open(read_data='Mock prompt content')):
         with patch('pdd.continue_generation.preprocess', lambda x, **kwargs: x):
             with patch('pdd.continue_generation.llm_selector', mock_llm_selector):
-                with patch('pdd.continue_generation.unfinished_prompt', mock_unfinished_prompt):
-                    with patch('rich.console.Console.print') as mock_print:
-                        result, total_cost, model_name = continue_generation(
-                            'Test input prompt',
-                            'Test LLM output',
-                            0.5,
-                            0.0
-                        )
+                with patch('rich.console.Console.print') as mock_print:
+                    result, total_cost, model_name = continue_generation(
+                        'Test input prompt',
+                        'Test LLM output',
+                        0.5,
+                        0.0,
+                        unfinished_prompt_func=mock_unfinished_prompt
+                    )
 
-                        assert isinstance(result, str)
-                        assert "def example(): pass" in result
-                        assert "This is the first mock LLM response" in result
-                        assert "This is the third mock LLM response" in result
-                        assert isinstance(total_cost, float)
-                        assert model_name == 'mock_model'
-                        assert mock_print.call_count > 3  # Ensure multiple iterations
+                    assert isinstance(result, str)
+                    assert "def example(): pass" in result
+                    assert "Test LLM output" in result
+                    assert "This is the third mock LLM response" in result
+                    assert isinstance(total_cost, float)
+                    assert model_name == 'mock_model'
+                    assert mock_print.call_count > 3  # Ensure multiple iterations
+
+                    # Check the order of responses
+                    assert result.index("Test LLM output") < result.index("def example(): pass")
+                    assert result.index("def example(): pass") < result.index("This is the third mock LLM response")
 
 def test_continue_generation_cost_calculation(mock_environment, mock_prompts, mock_llm_selector, mock_unfinished_prompt):
     with patch('builtins.open', mock_open(read_data='Mock prompt content')):
         with patch('pdd.continue_generation.preprocess', lambda x, **kwargs: x):
             with patch('pdd.continue_generation.llm_selector', mock_llm_selector):
-                with patch('pdd.continue_generation.unfinished_prompt', mock_unfinished_prompt):
-                    with patch('rich.console.Console.print'):
-                        _, total_cost, _ = continue_generation(
-                            'Test input prompt',
-                            'Test LLM output',
-                            0.5,
-                            0.0
-                        )
+                with patch('rich.console.Console.print'):
+                    _, total_cost, _ = continue_generation(
+                        'Test input prompt',
+                        'Test LLM output',
+                        0.5,
+                        0.0,
+                        unfinished_prompt_func=mock_unfinished_prompt
+                    )
 
-                        assert total_cost > 0
-                        assert isinstance(total_cost, float)
+                    assert total_cost > 0
+                    assert isinstance(total_cost, float)
