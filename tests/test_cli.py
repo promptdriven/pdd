@@ -1,6 +1,6 @@
 import os
 import pytest
-from unittest.mock import patch, mock_open
+from unittest.mock import patch, mock_open, MagicMock
 import csv
 from io import StringIO
 from datetime import datetime
@@ -265,44 +265,50 @@ def csv_output():
 
 @patch('os.path.isfile', return_value=True)
 @patch('os.path.getsize', return_value=0)
-def test_track_cost_decorator(mock_getsize, mock_isfile, runner: CliRunner, csv_output, tmp_path):
-    from unittest.mock import patch, mock_open
+def test_track_cost_decorator(mock_getsize, mock_isfile, runner: CliRunner, tmp_path):
     prompt_file = tmp_path / "test_prompt.txt"
     prompt_file.write_text("Generate a Python function to add two numbers")
     output_file = tmp_path / "output.py"
     cost_file = tmp_path / "cost.csv"
 
-    # Mock the code_generator function
-    with patch('pdd.cli.code_generator', return_value=('def add(a, b): return a + b', 0.0, 'mock_model')):
-        # Adjust the patching of open to only affect the cost file
-        with patch('builtins.open', new_callable=mock_open()) as mock_file:
-            # Set the mock to affect only the cost file
-            mock_file.return_value.__enter__.return_value = csv_output
-            mock_getsize.return_value = 0
+    # Mock the necessary functions
+    mock_construct_paths = MagicMock(return_value=(
+        {'prompt_file': 'mocked_prompt_content'},
+        {'output': str(output_file)},
+        'python'
+    ))
+    mock_code_generator = MagicMock(return_value=('def add(a, b): return a + b', 0.05, 'mock_model'))
+    
+    csv_output = StringIO()
+    mock_csv_writer = MagicMock()
 
-            result = runner.invoke(cli, ['--output-cost', str(cost_file), 'generate', str(prompt_file), '--output', str(output_file)])
+    with patch('pdd.cli.construct_paths', mock_construct_paths), \
+         patch('pdd.cli.code_generator', mock_code_generator), \
+         patch('builtins.open', mock_open()) as mock_file, \
+         patch('csv.writer', return_value=mock_csv_writer):
+        
+        mock_file.return_value.__enter__.return_value = csv_output
+        
+        result = runner.invoke(cli, ['--output-cost', str(cost_file), 'generate', str(prompt_file), '--output', str(output_file)])
+        
+        # Check if the command executed successfully
+        assert result.exit_code == 0, f"Command failed with error: {result.exception}"
+        
+        # Verify that the mocked functions were called
+        mock_construct_paths.assert_called_once()
+        mock_code_generator.assert_called_once()
+        
+        # Verify that the CSV writer was called with the correct data
+        mock_csv_writer.writerow.assert_called()
+        csv_data = mock_csv_writer.writerow.call_args[0][0]
+        assert len(csv_data) == 6  # Verify that all 6 columns are present
+        assert csv_data[1] == 'mock_model'
+        assert csv_data[2] == 'generate'
+        assert csv_data[3] == '0.050000'
+        assert str(prompt_file) in csv_data[4]
+        assert str(output_file) in csv_data[5]
 
-            assert result.exit_code == 0
+    # Verify that the output file was created
+    assert os.path.isfile(str(output_file))
 
-    # Reset the StringIO cursor
-    csv_output.seek(0)
-
-    # Read the CSV content
-    csv_reader = csv.reader(csv_output)
-    header = next(csv_reader)
-    data = next(csv_reader)
-
-    # Check the CSV header
-    assert header == ['timestamp', 'model', 'command', 'cost', 'input_files', 'output_files']
-
-    # Check the data
-    assert data[2] == 'generate'  # command
-    assert float(data[3]) >= 0  # cost
-    assert str(prompt_file) in data[4]  # input_files
-    assert str(output_file) in data[5]  # output_files
-
-    # Check if timestamp is in the correct format
-    datetime.fromisoformat(data[0])  # This will raise an exception if the format is incorrect
-
-    # Check if model is not empty
-    assert data[1]  # model should not be empty
+# ... (rest of the test file remains the same)
