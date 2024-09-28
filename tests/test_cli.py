@@ -86,7 +86,7 @@ def test_fix_command(runner: CliRunner, tmp_path) -> None:
     output_test = tmp_path / "fixed_test.py"
     output_code = tmp_path / "fixed_code.py"
     
-    result = runner.invoke(cli, ['fix', str(prompt_file), str(code_file), str(unit_test_file), str(error_file),
+    result = runner.invoke(cli, ['--force','fix', str(prompt_file), str(code_file), str(unit_test_file), str(error_file),
                                  '--output-test', str(output_test), '--output-code', str(output_code)])
     assert result.exit_code == 0
     assert "Fixed unit test saved to:" in result.output
