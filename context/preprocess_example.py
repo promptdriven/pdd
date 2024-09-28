@@ -42,3 +42,19 @@ console.print(processed)
 # write the processed prompt to a file
 with open('tests/preprocess_test_example_generator_LLM.prompt', 'w') as file:
     file.write(processed)
+
+prompt = """### Error Handling
+
+All endpoints return standard HTTP status codes. In case of an error, the response will include an error object:
+
+```json
+{
+  "error": {
+    "code": "string",
+    "message": "string"
+  }
+}
+```"""
+processed = preprocess(prompt, recursive, True)
+console.print("[bold white]Processed change_LLM Prompt:[/bold white]")
+console.print(processed)

@@ -31,7 +31,7 @@ def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool
         prompt = double_curly(prompt, exclude_keys)
 
     console.print(Panel("Preprocessing complete", style="bold green"))
-    return prompt.strip()
+    return prompt  # Removed .strip() to preserve trailing whitespace
 
 
 def process_backtick_includes(text: str, recursive: bool) -> str:
