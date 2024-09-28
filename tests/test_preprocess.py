@@ -191,4 +191,5 @@ All endpoints return standard HTTP status codes. In case of an error, the respon
         f"Expected:\n{expected_output}\n\nGot:\n{processed}"
 
     # Additional check to ensure no extra curly brackets are added around the entire JSON
-    assert '{{{\n  "error"' not in processed, "Extra curly brackets were added around the entire JSON object"
+    assert processed.count('{{') == expected_output.count('{{'), \
+        "Extra curly brackets were added around the entire JSON object"
