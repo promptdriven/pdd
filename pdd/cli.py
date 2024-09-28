@@ -30,10 +30,11 @@ def track_cost(func: Callable) -> Callable:
     @wraps(func)
     def wrapper(*args, **kwargs):
         start_time = datetime.now()
+        result = None
         try:
             result = func(*args, **kwargs)
         except Exception as e:
-            rprint(f"[bold red]Error: {str(e)}[/bold red]")
+            rprint(f"[bold red]Error in {func.__name__}: {str(e)}[/bold red]")
             raise
 
         end_time = datetime.now()
