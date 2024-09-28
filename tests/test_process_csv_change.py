@@ -224,12 +224,7 @@ def test_nonexistent_code_file_in_row(mock_change, capsys):
          patch("builtins.open", mock_open(read_data=csv_content)), \
          patch("pdd.process_csv_change.console.print") as mock_print:
 
-        def is_file_side_effect(self, path):
-            if str(self) == "/path/to/code/valid_prompt.py":
-                return False
-            return True
-
-        with patch.object(Path, 'is_file', side_effect=is_file_side_effect):
+        with patch.object(Path, 'is_file', new=lambda self: str(self) != "/path/to/code/valid_prompt.py"):
             success, list_of_jsons, total_cost, model_name = process_csv_change(
                 csv_file, strength, temperature, code_directory, language, extension, budget
             )
@@ -259,12 +254,7 @@ def test_nonexistent_prompt_file_in_row(mock_change, capsys):
          patch("builtins.open", mock_open(read_data=csv_content)), \
          patch("pdd.process_csv_change.console.print") as mock_print:
 
-        def is_file_side_effect(self, path):
-            if "valid_prompt_language.prompt" in str(self):
-                return False
-            return True
-
-        with patch.object(Path, 'is_file', side_effect=is_file_side_effect):
+        with patch.object(Path, 'is_file', new=lambda self: "valid_prompt_language.prompt" not in str(self)):
             success, list_of_jsons, total_cost, model_name = process_csv_change(
                 csv_file, strength, temperature, code_directory, language, extension, budget
             )
@@ -428,7 +418,7 @@ def test_change_function_exception(mock_change, capsys):
     assert total_cost == 1.0
     assert model_name == "model_v1"
     captured = capsys.readouterr()
-    assert "Error: Failed to apply change in row 2: Change function failed" in captured.out
+    assert "Error: Failed to process 'prompt_name' in row 2: Change function failed" in captured.out
     assert "Row 1 processed successfully." in captured.out
 
 def test_unexpected_exception(mock_change, capsys):
@@ -449,10 +439,7 @@ def test_unexpected_exception(mock_change, capsys):
          patch("builtins.open", mock_open(read_data=csv_content)), \
          patch("pdd.process_csv_change.console.print") as mock_print:
 
-        def is_file_side_effect(self, path):
-            raise Exception("Unexpected error")
-
-        with patch.object(Path, 'is_file', side_effect=is_file_side_effect):
+        with patch.object(Path, 'is_file', new=lambda self: False):
             success, list_of_jsons, total_cost, model_name = process_csv_change(
                 csv_file, strength, temperature, code_directory, language, extension, budget
             )
@@ -461,9 +448,8 @@ def test_unexpected_exception(mock_change, capsys):
     assert list_of_jsons == []
     assert total_cost == 0.0
     assert model_name == ""
-    expected_error_message = "[red]Error:[/red] Failed to process 'prompt_name' in row 1: Unexpected error"
-    mock_print.assert_any_call(expected_error_message)
-
+    expected_warning_message = f"[yellow]Warning:[/yellow] Input code file '{code_directory}/prompt1.py' does not exist. Skipping row 1."
+    mock_print.assert_any_call(expected_warning_message)
 
 def test_no_rows_to_process(mock_change, capsys):
     """
