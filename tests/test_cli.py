@@ -192,21 +192,22 @@ def test_crash_command(runner: CliRunner, tmp_path) -> None:
     assert "Fixed code saved to:" in result.output
     assert output_file.exists()
 
-def test_install_completion_command(runner: CliRunner, monkeypatch) -> None:
+def test_install_completion_command(runner: CliRunner, tmp_path) -> None:
     """Test the install-completion command of the CLI."""
-    monkeypatch.setattr(os, 'environ', {'SHELL': '/bin/bash'})
-    monkeypatch.setattr(os.path, 'expanduser', lambda x: '/home/user')
-    
-    with runner.isolated_filesystem():
-        with open('/home/user/.bashrc', 'w') as f:
+    with runner.isolated_filesystem() as fs:
+        home_dir = os.path.join(fs, "home", "user")
+        os.makedirs(home_dir)
+        bashrc_file = os.path.join(home_dir, ".bashrc")
+        with open(bashrc_file, 'w') as f:
             f.write("# Existing content")
-        
-        result = runner.invoke(cli, ['install-completion'])
+
+        with patch.dict(os.environ, {'HOME': home_dir, 'SHELL': '/bin/bash'}):
+            result = runner.invoke(cli, ['install-completion'])
         
         assert result.exit_code == 0
         assert "Shell completion installed for bash" in result.output
         
-        with open('/home/user/.bashrc', 'r') as f:
+        with open(bashrc_file, 'r') as f:
             content = f.read()
             assert "# PDD CLI completion" in content
             assert "eval \"$(_PDD_COMPLETE=bash_source pdd)\"" in content
