@@ -24,7 +24,6 @@ def test_cli_help(runner: CliRunner) -> None:
     assert result.exit_code == 0
     assert 'PDD (Prompt-Driven Development) Command Line Interface' in result.output
     
-
 def test_generate_command(runner: CliRunner, tmp_path) -> None:
     """Test the generate command of the CLI."""
     prompt_file = tmp_path / "test_prompt.txt"
@@ -75,24 +74,28 @@ def test_preprocess_command(runner: CliRunner, tmp_path) -> None:
 
 def test_fix_command(runner: CliRunner, tmp_path) -> None:
     """Test the fix command of the CLI."""
+    from unittest.mock import patch
     prompt_file = tmp_path / "test_prompt.txt"
     prompt_file.write_text("Generate a Python function to add two numbers")
     code_file = tmp_path / "code.py"
-    code_file.write_text("def add(a, b): return a + b")
+    # Introduce an error in the code that needs fixing
+    code_file.write_text("def add(a, b): return a * b")
     unit_test_file = tmp_path / "test_code.py"
     unit_test_file.write_text("def test_add(): assert add(1, 2) == 3")
     error_file = tmp_path / "error.txt"
-    error_file.write_text("AssertionError: assert 3 == 4")
+    error_file.write_text("AssertionError: assert 2 == 3")
     output_test = tmp_path / "fixed_test.py"
     output_code = tmp_path / "fixed_code.py"
-    
-    result = runner.invoke(cli, ['--force','fix', str(prompt_file), str(code_file), str(unit_test_file), str(error_file),
-                                 '--output-test', str(output_test), '--output-code', str(output_code)])
-    assert result.exit_code == 0
-    assert "Fixed unit test saved to:" in result.output
-    assert "Fixed code saved to:" in result.output
-    assert output_test.exists()
-    assert output_code.exists()
+ 
+    # Mock the function that interacts with the LLM
+    with patch('pdd.cli.fix_errors_from_unit_tests', return_value=(True, True, 'fixed test content', 'fixed code content', 0.0, 'mock_model')):
+        result = runner.invoke(cli, ['--force', 'fix', str(prompt_file), str(code_file), str(unit_test_file), str(error_file),
+                                     '--output-test', str(output_test), '--output-code', str(output_code)])
+        assert result.exit_code == 0
+        assert "Fixed unit test saved to:" in result.output
+        assert "Fixed code saved to:" in result.output
+        assert output_test.exists()
+        assert output_code.exists()
 
 def test_split_command(runner: CliRunner, tmp_path) -> None:
     """Test the split command of the CLI."""
@@ -163,16 +166,24 @@ def test_detect_command(runner: CliRunner, tmp_path) -> None:
 
 def test_conflicts_command(runner: CliRunner, tmp_path) -> None:
     """Test the conflicts command of the CLI."""
+    from unittest.mock import patch
     prompt1 = tmp_path / "prompt1.txt"
     prompt1.write_text("Generate a Python function to add two numbers")
     prompt2 = tmp_path / "prompt2.txt"
     prompt2.write_text("Generate a Python function to subtract two numbers")
     output_file = tmp_path / "conflicts_results.csv"
-    
-    result = runner.invoke(cli, ['conflicts', str(prompt1), str(prompt2), '--output', str(output_file)])
-    assert result.exit_code == 0
-    assert "Conflict analysis results saved to:" in result.output
-    assert output_file.exists()
+
+    # Mock the function that interacts with the LLM
+    with patch('pdd.cli.conflicts_in_prompts', return_value=([{
+        'description': 'Conflict in function names',
+        'explanation': 'Both functions are named differently but could cause confusion.',
+        'suggestion1': 'Rename function in prompt1 to sum_numbers.',
+        'suggestion2': 'Rename function in prompt2 to subtract_numbers.'
+    }], 0.0, 'mock_model')):
+        result = runner.invoke(cli, ['conflicts', str(prompt1), str(prompt2), '--output', str(output_file)])
+        assert result.exit_code == 0
+        assert "Conflict analysis results saved to:" in result.output
+        assert output_file.exists()
 
 def test_crash_command(runner: CliRunner, tmp_path) -> None:
     """Test the crash command of the CLI."""
@@ -255,17 +266,23 @@ def csv_output():
 @patch('os.path.isfile', return_value=True)
 @patch('os.path.getsize', return_value=0)
 def test_track_cost_decorator(mock_getsize, mock_isfile, runner: CliRunner, csv_output, tmp_path):
+    from unittest.mock import patch, mock_open
     prompt_file = tmp_path / "test_prompt.txt"
     prompt_file.write_text("Generate a Python function to add two numbers")
     output_file = tmp_path / "output.py"
     cost_file = tmp_path / "cost.csv"
 
-    with patch('builtins.open', mock_open()) as mock_file:
-        mock_file.return_value.__enter__.return_value = csv_output
+    # Mock the code_generator function
+    with patch('pdd.cli.code_generator', return_value=('def add(a, b): return a + b', 0.0, 'mock_model')):
+        # Adjust the patching of open to only affect the cost file
+        with patch('builtins.open', new_callable=mock_open()) as mock_file:
+            # Set the mock to affect only the cost file
+            mock_file.return_value.__enter__.return_value = csv_output
+            mock_getsize.return_value = 0
 
-        result = runner.invoke(cli, ['--output-cost', str(cost_file), 'generate', str(prompt_file), '--output', str(output_file)])
+            result = runner.invoke(cli, ['--output-cost', str(cost_file), 'generate', str(prompt_file), '--output', str(output_file)])
 
-    assert result.exit_code == 0
+            assert result.exit_code == 0
 
     # Reset the StringIO cursor
     csv_output.seek(0)
