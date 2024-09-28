@@ -30,37 +30,45 @@ def track_cost(func: Callable) -> Callable:
     @wraps(func)
     def wrapper(*args, **kwargs):
         start_time = datetime.now()
-        result = func(*args, **kwargs)
+        try:
+            result = func(*args, **kwargs)
+        except Exception as e:
+            rprint(f"[bold red]Error: {str(e)}[/bold red]")
+            raise
+
         end_time = datetime.now()
-        
+
         ctx = click.get_current_context()
         output_cost_file = ctx.obj.get('output_cost')
-        
+
         if output_cost_file:
             command = ctx.command.name
             model = result[-1] if isinstance(result, tuple) and len(result) > 2 else "Unknown"
             cost = result[-2] if isinstance(result, tuple) and len(result) > 1 else 0
-            
+
             input_files = [v for k, v in kwargs.items() if not k.startswith('output') and isinstance(v, str) and os.path.isfile(v)]
             output_files = [v for k, v in kwargs.items() if k.startswith('output') and v]
-            
-            with open(output_cost_file, 'a', newline='') as csvfile:
-                writer = csv.writer(csvfile)
-                if os.path.getsize(output_cost_file) == 0:
-                    writer.writerow(['timestamp', 'model', 'command', 'cost', 'input_files', 'output_files'])
-                writer.writerow([
-                    start_time.isoformat(),
-                    model,
-                    command,
-                    f"{cost:.6f}",
-                    '|'.join(input_files),  # Use '|' as separator to avoid conflicts with CSV commas
-                    '|'.join(output_files)
-                ])
-        
+
+            try:
+                with open(output_cost_file, 'a', newline='') as csvfile:
+                    writer = csv.writer(csvfile)
+                    if os.path.getsize(output_cost_file) == 0:
+                        writer.writerow(['timestamp', 'model', 'command', 'cost', 'input_files', 'output_files'])
+                    writer.writerow([
+                        start_time.isoformat(),
+                        model,
+                        command,
+                        f"{cost:.6f}",
+                        '|'.join(input_files),  # Use '|' as separator to avoid conflicts with CSV commas
+                        '|'.join(output_files)
+                    ])
+            except Exception as e:
+                rprint(f"[bold red]Failed to log cost: {str(e)}[/bold red]")
+
         return result
     return wrapper
 
-@click.group(chain=True)
+@click.group() # chain = True breaks unit tests
 @click.option('--force', is_flag=True, help='Overwrite existing files without asking for confirmation.')
 @click.option('--strength', type=float, default=0.5, help='Set the strength of the AI model (0.0 to 1.0).')
 @click.option('--temperature', type=float, default=0.0, help='Set the temperature of the AI model.')
@@ -245,7 +253,7 @@ def preprocess(ctx, prompt_file: str, output: Optional[str], xml: bool) -> Tuple
 @click.argument('error_file', type=click.Path())
 @click.option('--output-test', type=click.Path(), help='Specify where to save the fixed unit test file.')
 @click.option('--output-code', type=click.Path(), help='Specify where to save the fixed code file.')
-@click.option('--output-results', type=click.Path(), help='Specify where to save the results of the error fixing process.')
+@click.option('--output-results', type=click.Path(), help='Specify where to save the results from the error fixing process.')
 @click.option('--loop', is_flag=True, help='Enable iterative fixing process.')
 @click.option('--verification-program', type=click.Path(exists=True), help='Specify the path to a Python program that verifies if the code still runs correctly.')
 @click.option('--max-attempts', type=int, default=3, help='Set the maximum number of fix attempts before giving up.')
