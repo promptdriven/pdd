@@ -31,7 +31,7 @@ def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool
         prompt = double_curly(prompt, exclude_keys)
 
     console.print(Panel("Preprocessing complete", style="bold green"))
-    return prompt
+    return prompt.strip()
 
 
 def process_backtick_includes(text: str, recursive: bool) -> str:
@@ -107,7 +107,7 @@ def process_specific_tags(text: str, recursive: bool) -> str:
 
 def get_file_path(file_name: str) -> str:
     """
-    Get the full file path based on PDD_PATH environment variable.
+    Get the full file path based on the current directory ('./').
 
     :param file_name: The name of the file to locate.
     :return: The full path to the file.
@@ -142,13 +142,15 @@ def double_curly(text: str, exclude_keys: List[str] = None) -> str:
         if re.match(code_pattern, part):
             # It's a code block
             console.print("Processing code block for curly brackets")
-            # Extract the code content without the backticks and language specifier
-            language_line_end = part.find('\n')
-            code_content = part[language_line_end+1:-3]  # Removes ```lang\n and ```
+            # Find the index after the first newline character
+            first_line_end = part.find('\n') + 1
+            # Extract code content without the opening and closing backticks
+            code_content = part[first_line_end:-3]  # Exclude the last ```
             # Double curly brackets inside the code block
             code_content = re.sub(r'(?<!{){(?!{)', '{{', code_content)
             code_content = re.sub(r'(?<!})}(?!})', '}}', code_content)
-            processed_part = f"```{part[:language_line_end+1]}{code_content}```"
+            # Reconstruct the code block correctly
+            processed_part = part[:first_line_end] + code_content + part[-3:]
             processed_parts.append(processed_part)
         else:
             # It's a non-code segment
