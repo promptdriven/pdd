@@ -4,6 +4,7 @@ from typing import List, Dict, Tuple
 import os
 import csv
 from pathlib import Path
+import logging
 
 from rich.console import Console
 from rich.pretty import Pretty
@@ -13,6 +14,9 @@ from .change import change  # Relative import for the internal change function
 
 console = Console()
 
+# Set up logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 def process_csv_change(
     csv_file: str,
@@ -99,6 +103,14 @@ def process_csv_change(
 
                     if not input_code_path.is_file():
                         console.print(f"[yellow]Warning:[/yellow] Input code file '{input_code_path}' does not exist. Skipping row {row_number}.")
+                        logger.warning(f"Input code file '{input_code_path}' does not exist for row {row_number}")
+                        any_failures = True
+                        continue
+
+                    # Check if prompt file exists
+                    if not prompt_path.is_file():
+                        console.print(f"[yellow]Warning:[/yellow] Prompt file '{prompt_name}' does not exist. Skipping row {row_number}.")
+                        logger.warning(f"Prompt file '{prompt_name}' does not exist for row {row_number}")
                         any_failures = True
                         continue
 
@@ -106,29 +118,11 @@ def process_csv_change(
                     with open(input_code_path, 'r', encoding='utf-8') as code_file:
                         input_code = code_file.read()
 
-                except Exception as e:
-                    console.print(f"[red]Error:[/red] Failed to process 'prompt_name' in row {row_number}: {e}")
-                    any_failures = True
-                    continue
-
-                # Read the input_prompt from the prompt file
-                try:
-                    prompt_file_path = Path(prompt_name)
-                    if not prompt_file_path.is_file():
-                        console.print(f"[yellow]Warning:[/yellow] Prompt file '{prompt_name}' does not exist. Skipping row {row_number}.")
-                        any_failures = True
-                        continue
-
-                    with open(prompt_file_path, 'r', encoding='utf-8') as prompt_file:
+                    # Read the input_prompt from the prompt file
+                    with open(prompt_path, 'r', encoding='utf-8') as prompt_file:
                         input_prompt = prompt_file.read()
 
-                except Exception as e:
-                    console.print(f"[red]Error:[/red] Failed to read prompt file '{prompt_name}' in row {row_number}: {e}")
-                    any_failures = True
-                    continue
-
-                # Call the change function
-                try:
+                    # Call the change function
                     modified_prompt, cost, current_model_name = change(
                         input_prompt=input_prompt,
                         input_code=input_code,
@@ -161,7 +155,8 @@ def process_csv_change(
                     console.print(Panel(f"[green]Row {row_number} processed successfully.[/green]"))
 
                 except Exception as e:
-                    console.print(f"[red]Error:[/red] Failed to apply change in row {row_number}: {e}")
+                    console.print(f"[red]Error:[/red] Failed to process 'prompt_name' in row {row_number}: {str(e)}")
+                    logger.exception(f"Failed to process row {row_number}")
                     any_failures = True
                     continue
 
@@ -181,9 +176,7 @@ def process_csv_change(
 
         return success, list_of_jsons, total_cost, model_name
 
-    except FileNotFoundError:
-        console.print(f"[bold red]Error:[/bold red] CSV file '{csv_file}' not found.")
-        return success, list_of_jsons, total_cost, model_name
     except Exception as e:
-        console.print(f"[bold red]Unexpected Error:[/bold red] {e}")
+        console.print(f"[bold red]Unexpected Error:[/bold red] {str(e)}")
+        logger.exception("Unexpected error occurred")
         return success, list_of_jsons, total_cost, model_name
