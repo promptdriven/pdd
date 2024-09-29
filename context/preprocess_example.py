@@ -43,18 +43,10 @@ console.print(processed)
 with open('tests/preprocess_test_example_generator_LLM.prompt', 'w') as file:
     file.write(processed)
 
-prompt = """### Error Handling
-
-All endpoints return standard HTTP status codes. In case of an error, the response will include an error object:
-
-```json
-{
-  "error": {
-    "code": "string",
-    "message": "string"
-  }
-}
-```"""
+prompt = """    mock_db = {
+        "1": {"id": "1", "name": "Resource One"},
+        "2": {"id": "2", "name": "Resource Two"}
+    }"""
 processed = preprocess(prompt, recursive, True)
 console.print("[bold white]Processed change_LLM Prompt:[/bold white]")
 console.print(processed)

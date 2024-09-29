@@ -31,7 +31,7 @@ def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool
         prompt = double_curly(prompt, exclude_keys)
 
     console.print(Panel("Preprocessing complete", style="bold green"))
-    return prompt  # Removed .strip() to preserve trailing whitespace
+    return prompt
 
 
 def process_backtick_includes(text: str, recursive: bool) -> str:
@@ -138,33 +138,59 @@ def double_curly(text: str, exclude_keys: List[str] = None) -> str:
     parts = re.split(f"({code_pattern})", text)
 
     processed_parts = []
+    placeholder_mapping = {}
+    placeholder_prefix_excl = "__EXCLUDE_KEY_PLACEHOLDER_"
+    placeholder_suffix = "__"
+    placeholder_prefix_empty = "__EMPTY_BRACE_PLACEHOLDER_"
+
+    placeholder_counter = 0
+
     for part in parts:
         if re.match(code_pattern, part):
-            # It's a code block
+            # It's a code block; process separately
             console.print("Processing code block for curly brackets")
-            # Find the index after the first newline character
             first_line_end = part.find('\n') + 1
-            # Extract code content without the opening and closing backticks
             code_content = part[first_line_end:-3]  # Exclude the last ```
             # Double curly brackets inside the code block
             code_content = re.sub(r'(?<!{){(?!{)', '{{', code_content)
             code_content = re.sub(r'(?<!})}(?!})', '}}', code_content)
-            # Reconstruct the code block correctly
+            # Reconstruct the code block
             processed_part = part[:first_line_end] + code_content + part[-3:]
             processed_parts.append(processed_part)
         else:
             # It's a non-code segment
-            # Replace '{key}' with '{{key}}' unless the key is in exclude_keys
-            def replace_non_code(match):
-                key = match.group(1)
-                if key in exclude_keys:
-                    return f"{{{key}}}"
-                return f"{{{{{key}}}}}"
+            temp_part = part
 
-            processed_part = re.sub(r'\{([^{}]+)\}', replace_non_code, part)
-            # Handle empty curly brackets
-            processed_part = re.sub(r'\{\}', '{{}}', processed_part)
-            processed_parts.append(processed_part)
+            # Step 1: Protect excluded keys by replacing {exclude_key} with placeholders
+            for key in exclude_keys:
+                pattern_excl = r'\{' + re.escape(key) + r'\}'
+                placeholder_excl = f"{placeholder_prefix_excl}{placeholder_counter}{placeholder_suffix}"
+                temp_part = re.sub(pattern_excl, placeholder_excl, temp_part)
+                placeholder_mapping[placeholder_excl] = f"{{{key}}}"
+                placeholder_counter += 1
+
+            # Step 2: Protect empty braces '{}' by replacing with placeholders
+            pattern_empty = r'\{\}'
+            placeholder_empty = f"{placeholder_prefix_empty}{placeholder_counter}{placeholder_suffix}"
+            temp_part = re.sub(pattern_empty, placeholder_empty, temp_part)
+            placeholder_mapping[placeholder_empty] = '{{}}'
+            placeholder_counter += 1
+
+            # Step 3: Replace single '{' with '{{' and '}' with '}}'
+            temp_part = re.sub(r'(?<!{){(?!{)', '{{', temp_part)
+            temp_part = re.sub(r'(?<!})}(?!})', '}}', temp_part)
+
+            # Step 4: Restore excluded keys from placeholders
+            for placeholder, original in placeholder_mapping.items():
+                if original != '{{}}':
+                    temp_part = temp_part.replace(placeholder, original)
+
+            # Step 5: Restore empty braces from placeholders
+            for placeholder, original in placeholder_mapping.items():
+                if original == '{{}}':
+                    temp_part = temp_part.replace(placeholder, original)
+
+            processed_parts.append(temp_part)
 
     # Reconstruct the full text after processing
     text = ''.join(processed_parts)
