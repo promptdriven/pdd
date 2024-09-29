@@ -10,21 +10,39 @@ def main() -> None:
     It sets up the parameters, calls the function, and prints the results.
     """
     # Set up input parameters
-    current_output = "-1"
-    desired_output = "5"
-    prompt_used_to_generate_the_code = "Create a function that adds two numbers in Python"
+    current_output = """```json
+{
+  "error": {{
+    "code": "string",
+    "message": "string"
+  }}
+}
+```"""
+    desired_output = """```json
+{{
+  "error": {{
+    "code": "string",
+    "message": "string"
+  }}
+}}
+```"""
+    
+    # prompt_used_to_generate_the_code = "Create a function that adds two numbers in Python"
 #     code_under_test = """
 # def add_numbers(a, b):
 #     return a - b  # Bug: subtraction instead of addition
 #     """
+    # load prompt from a file
+    with open("prompts/preprocess_python.prompt", "r") as file:
+        prompt_used_to_generate_the_code = file.read()
     # load code under tests from a file
-    with open("context/bug_to_unit_test_failure_example.py", "r") as file:
+    with open("pdd/preprocess.py", "r") as file:
         code_under_test = file.read()
     # program_used_to_run_code_under_test = "python"
     # load program used to run code under tests from a file
-    with open("context/execute_bug_to_unit_test_failure.py", "r") as file:
+    with open("context/preprocess_example.py", "r") as file:
         program_used_to_run_code_under_test = file.read()
-    strength = 0.7  # Strength of the LLM model (0 to 1)
+    strength = 0.9  # Strength of the LLM model (0 to 1)
     temperature = 0  # Temperature for the LLM model
     language = "Python"
 
