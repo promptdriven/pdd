@@ -120,3 +120,7 @@ regression:
 install:
 	@echo "Installing pdd"
 	@pip install -e .
+
+build:
+	@echo "Building pdd"
+	@python -m build    

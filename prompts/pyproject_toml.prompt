@@ -1,0 +1,5 @@
+% You are an expert Python Engineer. Your goal is to write the pyproject.toml file for the Python project 'pdd'.
+
+% Here is the README.md file: <readme><include>README.md</include></readme>
+
+% Here is the setup.py file: <setup><include>setup.py</include></setup>
