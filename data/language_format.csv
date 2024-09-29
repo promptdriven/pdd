@@ -53,3 +53,4 @@ Ada,--,.ada
 Nim,#,.nim
 OCaml,"(**)",.ml
 LLM,del,.prompt
+prompt,del,.prompt
