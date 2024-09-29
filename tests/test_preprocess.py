@@ -193,3 +193,26 @@ All endpoints return standard HTTP status codes. In case of an error, the respon
     # Additional check to ensure no extra curly brackets are added around the entire JSON
     assert processed.count('{{') == expected_output.count('{{'), \
         "Extra curly brackets were added around the entire JSON object"
+
+def test_preprocess_double_curly_brackets():
+    """
+    Test that the preprocess function correctly doubles curly brackets
+    in the provided prompt, matching the desired output.
+    """
+    # Input prompt with single curly brackets
+    prompt = """    mock_db = {
+            "1": {"id": "1", "name": "Resource One"},
+            "2": {"id": "2", "name": "Resource Two"}
+        }"""
+
+    # Desired output with doubled curly brackets
+    desired_output = """    mock_db = {{
+            "1": {{"id": "1", "name": "Resource One"}},
+            "2": {{"id": "2", "name": "Resource Two"}}
+        }}"""
+
+    # Call the preprocess function with appropriate parameters
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+
+    # Assert that the processed output matches the desired output
+    assert processed == desired_output, "The preprocess function did not double the curly brackets as expected."
