@@ -1,4 +1,4 @@
-% You are an expert Python engineer. Your goal is to write a Python function, "context_generator", that will output the line number of the prompt_file that corresponds to the code_str, which is a substring of code_file, properly.
+% You are an expert Python engineer. Your goal is to write a Python function, "trace", that will output the line number of the prompt_file that corresponds to the code_line in code_file properly.
 
 <include>context/python_preamble.prompt</include>
 
@@ -7,43 +7,40 @@
         'code_file' (str) - A string that contains the text of the code file.
         'code_line' (int) - An integer that represents the line number in the code file that the debugger is on.
         'prompt_file' (str) - A string that contains the text of the .prompt file.
-        'language' - A string that is the language of the code module. Default is "python". 
         'strength' - A float that is the strength of the LLM model to use. Default is 0.5.
         'temperature' - A float that is the temperature of the LLM model to use. Default is 0.
     Outputs:
-        'prompt_line' (int) - An integer that represents the equivalent line number in the .prompt file that matches with the line number in the code file.
+        'prompt_line' (int) - An integer that represents the equivalent line number in the prompt file that matches with the line number in the code file.
         'total_cost' - A float that is the total cost of the function.
         'model_name' - A string that is the name of the selected LLM model
 
 % Here is an example of a LangChain Expression Language (LCEL) program: <lcel_example><include>context/langchain_lcel_example.py</include></lcel_example>
 
 % Here are examples of how to use internal modules:
-<internal_example_modules>
+<internal_module_examples>
     % Here is an example how to preprocess the prompt from a file: <preprocess_example><include>context/preprocess_example.py</include></preprocess_example>
 
     % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>context/llm_selector_example.py</include></llm_selector_example>
-</internal_example_modules> 
+</internal_module_examples>
 
 % This function will use Langchain to do the following:
-    Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/trace_LLM.prompt' file.
+    Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/trace_LLM.prompt' and '$PDD_PATH/prompts/extract_promptline_LLM.prompt' files.
     Step 2. Find the substring of the code_file that matches the code_line.
     Step 3. Preprocess the loaded trace_LLM prompt using the preprocess function with parameters recursive=False and double_curly_brackets=False.
     Step 4. Create a Langchain LCEL template from the preprocessed trace_LLM prompt.
     Step 5. Use llm_selector for the model.
-    Step 6. Preprocess the prompt_file using the preprocess function for the processed_prompt using the parameters recursive=False and double_curly_brackets=False.
-    Step 7. Invoke the code through the model using Langchain LCEL. 
-        7a. Pass the following string parameters to the prompt during invoke:
+    Step 6. Invoke the code through the model using Langchain LCEL. 
+        6a. Pass the following string parameters to the prompt during invoke:
             - 'CODE_FILE'
             - 'CODE_STR'
             - 'PROMPT_FILE'
-        7b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
-    Step 8. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/extract_promptline_LLM.prompt' file.
-    Step 9. Preprocess the loaded extract_promptline_LLM prompt using the preprocess function with parameters recursive=False and double_curly_brackets=False.
-    Step 10. Create a Langchain LCEL template from the preprocessed extract_promptline_LLM prompt.
-    Step 11. Use llm_selector for the model.
-    Step 12. Invoke the code through the model using Langchain LCEL. 
-        12a. Pass the following string parameters to the prompt during invoke:
+        6b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+    Step 7. Preprocess the loaded extract_promptline_LLM prompt using the preprocess function with parameters recursive=False and double_curly_brackets=False.
+    Step 8. Create a Langchain LCEL template from the preprocessed extract_promptline_LLM prompt.
+    Step 9. Use llm_selector for the model with strength of 0.5.
+    Step 10. Invoke the code through the model using Langchain LCEL. 
+        10a. Pass the following string parameters to the prompt during invoke:
             - 'llm_output'
-        12b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
-    Step 13. Find the line of the prompt_file that matches the prompt_line as an integer.
-    Step 14. Return the prompt_line, total_cost, and model_name.
+        10b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+    Step 11. Find the line (integer) of the prompt_file that matches the prompt_line by doing a fuzzy string search to find the line number.
+    Step 12. Return the prompt_line, total_cost, and model_name.
