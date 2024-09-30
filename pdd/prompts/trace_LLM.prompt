@@ -1,33 +1,31 @@
-% You are a highly accurate Python Software Engineer. Your job is to locate the exact line (or smallest excerpt) in the prompt file that produced the current line in the generated code.
+% Imagine you're a an expert Python Software Engineer. Your goal is to find the part of the .prompt file. It will take in three arguments, the text of the .prompt file, the text of the code file, and the line that the debugger is on in the code file. Your task is to find the equivalent line number in the .prompt file that matches with the line number in the code file.
 
-% Inputs
-    code_file (str)    : full contents of the generated code file
-    code_str (str)     : the single line from the code file currently under inspection
-    prompt_file (str)  : full contents of the originating prompt file
+% Here are the inputs and outputs of the prompt:
+    Input:
+        `code_file` (str) - A string that contains the text of the code file.
+        `code_str` (str) - A substring of code_file that represents the line that the debugger is on in the code_file.
+        `prompt_file` (str) - A string that contains the text of the .prompt file.
+    Output:
+        `prompt_line` (int) - An integer that represents the equivalent line number in the .prompt file that matches with the line number in the code file.
 
-% Rules
-1. Identify the minimal substring in prompt_file whose wording most directly corresponds to code_str. Copy it VERBATIM.
-2. Do not paraphrase, summarize, or reformat; the substring must appear exactly in prompt_file.
-3. If multiple lines apply, choose the most specific line or snippet (prefer the shortest exact match).
-4. Provide a short explanation of why the substring matches code_str.
+% Here is the code_file to reference: 
 
-% Output format (MUST follow exactly; no additional text)
-<analysis>
-Explain your reasoning here in plain text (no JSON). Reference the file sections you compared.
-</analysis>
-<verbatim_prompt_line>
-<<PASTE THE EXACT SUBSTRING FROM prompt_file HERE>>
-</verbatim_prompt_line>
-
-% Reference materials
 <code_file>
-{CODE_FILE}
+    {CODE_FILE}
 </code_file>
 
+% Here is the code_str to reference:
+
 <code_str>
-{CODE_STR}
+    {CODE_STR}
 </code_str>
 
+% Here is the prompt_file to reference:
+
 <prompt_file>
-{PROMPT_FILE}
+    {PROMPT_FILE}
 </prompt_file>
+
+% To generate the prompt_line, perform the following steps:
+    1. Find a substring of prompt_file that matches code_str, which is a substring of code_file.
+
