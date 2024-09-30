@@ -6,6 +6,10 @@ from langchain_core.output_parsers import StrOutputParser
 from .preprocess import preprocess
 from .llm_selector import llm_selector
 from fuzzywuzzy import process
+import logging
+
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 console = Console()
 
@@ -36,10 +40,17 @@ def trace(code_file: str, code_line: int, prompt_file: str, strength: float = 0.
         if not pdd_path:
             raise ValueError("PDD_PATH environment variable is not set")
 
-        with open(os.path.join(pdd_path, 'prompts/trace_LLM.prompt'), 'r') as f:
-            trace_prompt = f.read()
-        with open(os.path.join(pdd_path, 'prompts/extract_promptline_LLM.prompt'), 'r') as f:
-            extract_prompt = f.read()
+        try:
+            with open(os.path.join(pdd_path, 'prompts/trace_LLM.prompt'), 'r') as f:
+                trace_prompt = f.read()
+        except FileNotFoundError as e:
+            raise FileNotFoundError(f"No such file: trace_LLM.prompt") from e
+
+        try:
+            with open(os.path.join(pdd_path, 'prompts/extract_promptline_LLM.prompt'), 'r') as f:
+                extract_prompt = f.read()
+        except FileNotFoundError as e:
+            raise FileNotFoundError(f"No such file: extract_promptline_LLM.prompt") from e
 
         # Step 2: Find the substring of the code_file that matches the code_line
         code_lines = code_file.splitlines()
@@ -61,43 +72,47 @@ def trace(code_file: str, code_line: int, prompt_file: str, strength: float = 0.
         }
         
         token_count = sum(token_counter(v) for v in trace_input.values())
-        estimated_cost = (input_cost * token_count) / 1_000_000  # Convert to actual cost
+        trace_cost = (input_cost * token_count) / 1_000_000
         
         console.print(f"[bold]Running trace LLM (model: {model_name})[/bold]")
         console.print(f"Estimated input tokens: {token_count}")
-        console.print(f"Estimated cost: ${estimated_cost:.6f}")
+        console.print(f"Estimated trace cost: ${trace_cost:.6f}")
 
-        llm_output = trace_chain.invoke(trace_input)
+        trace_output = trace_chain.invoke(trace_input)
 
         # Step 7-10: Process extract_promptline_LLM prompt and invoke LLM
         extract_prompt_processed = preprocess(extract_prompt, recursive=False, double_curly_brackets=False)
         extract_template = PromptTemplate.from_template(extract_prompt_processed)
         
-        llm, token_counter, input_cost, output_cost, model_name = llm_selector(0.5, temperature)
-
         extract_chain = extract_template | llm | StrOutputParser()
         
-        extract_input = {"llm_output": llm_output}
+        extract_input = {"llm_output": trace_output}
         
-        token_count = token_counter(llm_output)
-        estimated_cost += (input_cost * token_count) / 1_000_000  # Add to total cost
+        token_count = token_counter(trace_output)
+        extract_cost = (input_cost * token_count) / 1_000_000
         
         console.print(f"[bold]Running extract LLM (model: {model_name})[/bold]")
         console.print(f"Estimated input tokens: {token_count}")
-        console.print(f"Estimated cost: ${estimated_cost:.6f}")
+        console.print(f"Estimated extract cost: ${extract_cost:.6f}")
 
         extracted_line = extract_chain.invoke(extract_input)
-        print(extracted_line)
+        
         # Step 11: Find the matching line in prompt_file
         prompt_lines = prompt_file.splitlines()
-        match = process.extractOne(extracted_line, prompt_lines)
+        logger.debug(f"Extracted line: {extracted_line}")
+        logger.debug(f"Prompt lines: {prompt_lines}")
+        
+        match = process.extractOne(extracted_line, prompt_lines, score_cutoff=80)
         if match:
             prompt_line = prompt_lines.index(match[0]) + 1
+            logger.debug(f"Matched line: {match[0]}, score: {match[1]}, index: {prompt_line}")
         else:
+            logger.debug("No match found")
             raise ValueError("Could not find a matching line in the prompt file")
 
         # Step 12: Return results
-        total_cost = estimated_cost
+        total_cost = trace_cost + extract_cost
+        console.print(f"Total cost: ${total_cost:.6f}")
         return prompt_line, total_cost, model_name
 
     except FileNotFoundError as e:
