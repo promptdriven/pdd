@@ -62,7 +62,7 @@ def conflicts_in_prompts(prompt1: str, prompt2: str, strength: float = 0.5, temp
         llm_output = conflict_chain.invoke(input_params)
 
         # Step 5: Extract conflicts using a separate LLM call
-        extract_llm, extract_token_counter, extract_input_cost, extract_output_cost, _ = llm_selector(0.9, 0)
+        extract_llm, extract_token_counter, extract_input_cost, extract_output_cost, _ = llm_selector(0.8, 0)
 
         parser = JsonOutputParser(pydantic_object=ConflictOutput)
         extract_prompt = PromptTemplate(
@@ -80,9 +80,9 @@ def conflicts_in_prompts(prompt1: str, prompt2: str, strength: float = 0.5, temp
         rprint(f"[bold]Extracting conflicts...[/bold]")
         rprint(f"Input tokens: {extract_input_tokens}")
         rprint(f"Estimated input cost: ${extract_input_cost_estimate:.6f}")
-
+        print(extract_input_params)
         result = extract_chain.invoke(extract_input_params)
-
+        print(result)
         # Calculate total cost
         output_tokens = token_counter(llm_output) + token_counter(str(result))
         output_cost_estimate = (output_tokens / 1_000_000) * output_cost

@@ -33,7 +33,7 @@
             - 'PROMPT1'
             - 'PROMPT2'
         4b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
-    Step 5. Create a Langchain LCEL template using a .9 strength llm_selector and token counter from the extract_conflict_LLM prompt that outputs JSON:
+    Step 5. Create a Langchain LCEL template using a .8 strength llm_selector and token counter from the extract_conflict_LLM prompt that outputs JSON:
         5a. Pass the following string parameters to the prompt during invocation: 'llm_output' (this string is from Step 4).
         5b. Calculate input and output token count using token_counter from llm_selector and pretty print the running message with the token count and cost.
         5c. Use 'get' function to extract 'conflicts' list values using from the dictionary output.

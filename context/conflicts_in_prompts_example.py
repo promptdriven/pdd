@@ -7,11 +7,20 @@ def main() -> None:
     It defines two example prompts, calls the function, and prints the results.
     """
     # Example prompts
-    prompt1: str = "Write a story about a happy dog."
-    prompt2: str = "Write a story about a sad cat."
+    prompt1: str = """You are an expert Python engineer and Firebase specialist working on the PDD Cloud project. Your goal is to write the `auth_helpers.py` module, which provides authentication helper functions for user validation in Firebase Cloud Functions. This module will be placed in the `backend/functions/utils/` directory.
+"""
+
+    prompt2: str = """You are an expert Python engineer and Firebase specialist. Your task is to write the `db_helpers.py` module for our Firebase Cloud Functions backend. This module provides utility functions for common Firestore database operations to be used across various Cloud Functions.
+    
+The `db_helpers.py` module should include the following:
+
+1. **Firestore Initialization**:
+   - Import and initialize the Firestore client using the Firebase Admin SDK.
+   - Ensure that the Firestore client is properly configured for use in Cloud Functions.
+"""
 
     # Call the function
-    conflicts, total_cost, model_name = conflicts_in_prompts(prompt1, prompt2, strength=0.7, temperature=0.2)
+    conflicts, total_cost, model_name = conflicts_in_prompts(prompt1, prompt2, strength=0.9, temperature=0)
 
     # Print the results
     rprint("[bold]Conflicts found:[/bold]")
