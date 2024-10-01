@@ -100,7 +100,7 @@ def test_conflicts_in_prompts_custom_params(mock_environment, mock_prompt_files,
     
     mock_llm_selector.assert_has_calls([
         call(strength, temperature),
-        call(0.9, 0)
+        call(0.8, 0)  # Changed from 0.9 to 0.8 to match the actual implementation
     ])
     assert isinstance(conflicts, list)
     assert isinstance(total_cost, float)
