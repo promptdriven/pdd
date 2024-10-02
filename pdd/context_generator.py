@@ -25,26 +25,38 @@ def context_generator(code_module: str, prompt: str, language: str = "python", s
     Returns:
         Tuple[str, float, str]: A tuple containing the example code, total cost, and model name.
     """
+    # Check for PDD_PATH environment variable first
+    pdd_path = os.getenv('PDD_PATH')
+    if not pdd_path:
+        raise ValueError("PDD_PATH environment variable is not set")
+
+    total_cost = 0.0
+    model_name = ""
+    chain_invocation_error = False
+
     try:
         # Step 1: Load the example_generator prompt
-        pdd_path = os.getenv('PDD_PATH')
-        if not pdd_path:
-            raise ValueError("PDD_PATH environment variable is not set")
-        
-        with open(f"{pdd_path}/prompts/example_generator_LLM.prompt", "r") as file:
-            example_generator_prompt = file.read()
+        try:
+            with open(f"{pdd_path}/prompts/example_generator_LLM.prompt", "r") as file:
+                example_generator_prompt = file.read()
+        except FileNotFoundError:
+            console.print("[bold red]Error: example_generator_LLM.prompt file not found[/bold red]")
+            return "", 0.0, ""
 
         # Step 2: Preprocess the example_generator prompt
         processed_example_generator = preprocess(example_generator_prompt, recursive=False, double_curly_brackets=False)
+        console.print(f"[bold]Debug: Preprocessed example generator prompt: {processed_example_generator[:100]}...[/bold]")
 
         # Step 3: Create a Langchain LCEL template
         prompt_template = PromptTemplate.from_template(processed_example_generator)
 
         # Step 4: Use llm_selector for the model
         llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
+        console.print(f"[bold]Debug: Selected model: {model_name}[/bold]")
 
         # Step 5: Preprocess the prompt
         processed_prompt = preprocess(prompt, recursive=False, double_curly_brackets=False)
+        console.print(f"[bold]Debug: Preprocessed prompt: {processed_prompt[:100]}...[/bold]")
 
         # Step 6: Invoke the code through the model using Langchain LCEL
         chain = prompt_template | llm | StrOutputParser()
@@ -52,34 +64,49 @@ def context_generator(code_module: str, prompt: str, language: str = "python", s
         # Calculate token count and cost
         total_tokens = token_counter(processed_example_generator + code_module + processed_prompt + language)
         estimated_cost = (total_tokens / 1_000_000) * input_cost
+        total_cost += estimated_cost
 
         console.print(f"[bold]Generating example for {code_module}...[/bold]")
         console.print(f"Estimated input tokens: {total_tokens}")
         console.print(f"Estimated input cost: ${estimated_cost:.6f}")
 
-        result = chain.invoke({
-            "code_module": code_module,
-            "processed_prompt": processed_prompt,
-            "language": language
-        })
+        console.print(f"[bold]Debug: Invoking chain with parameters: {code_module}, {processed_prompt}, {language}[/bold]")
+        try:
+            result = chain.invoke({
+                "code_module": code_module,
+                "processed_prompt": processed_prompt,
+                "language": language
+            })
+            console.print(f"[bold]Debug: Chain invocation result: {result[:100]}...[/bold]")
+        except Exception as e:
+            console.print(f"[bold red]Debug: Error during chain invocation: {e}[/bold red]")
+            result = "Error occurred during chain invocation"
+            chain_invocation_error = True
 
-        # Step 7: Detect if the generation is incomplete
-        last_600_chars = result[-600:]
-        _, is_finished, unfinished_cost, _ = unfinished_prompt(last_600_chars, strength=0.5, temperature=temperature)
+        if not chain_invocation_error:
+            # Step 7: Detect if the generation is incomplete
+            last_600_chars = result[-600:]
+            _, is_finished, unfinished_cost, _ = unfinished_prompt(last_600_chars, strength=0.5, temperature=temperature)
+            total_cost += unfinished_cost
+            console.print(f"[bold]Debug: Is generation finished: {is_finished}[/bold]")
 
-        if not is_finished:
-            # Step 7a: Continue the generation if incomplete
-            result, continue_cost, _ = continue_generation(processed_example_generator, result, strength, temperature)
-        else:
-            continue_cost = 0
+            if not is_finished:
+                # Step 7a: Continue the generation if incomplete
+                result, continue_cost, _ = continue_generation(processed_example_generator, result, strength, temperature)
+                total_cost += continue_cost
+                console.print(f"[bold]Debug: Continued generation result: {result[:100]}...[/bold]")
+            else:
+                continue_cost = 0
 
         # Step 7b: Postprocess the result
         example_code, postprocess_cost = postprocess(result, language, strength=0.9, temperature=temperature)
+        total_cost += postprocess_cost
+        console.print(f"[bold]Debug: Postprocessed result: {example_code[:100]}...[/bold]")
 
         # Step 8: Calculate and print the total cost
         output_tokens = token_counter(example_code)
         output_cost_value = (output_tokens / 1_000_000) * output_cost
-        total_cost = estimated_cost + output_cost_value + unfinished_cost + continue_cost + postprocess_cost
+        total_cost += output_cost_value
 
         console.print(f"[bold green]Example generation complete![/bold green]")
         console.print(f"Total cost: ${total_cost:.6f}")
@@ -87,12 +114,6 @@ def context_generator(code_module: str, prompt: str, language: str = "python", s
         # Step 9: Return the results
         return example_code, total_cost, model_name
 
-    except FileNotFoundError as e:
-        console.print(f"[bold red]Error: {e}[/bold red]")
-        raise
-    except ValueError as e:
-        console.print(f"[bold red]Error: {e}[/bold red]")
-        raise
     except Exception as e:
         console.print(f"[bold red]An unexpected error occurred: {e}[/bold red]")
-        raise
+        return "", 0.0, ""
