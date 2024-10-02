@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=65.5.0", "wheel"]
+requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,54 +7,55 @@ name = "pdd"
 version = "0.2.0"
 description = "PDD (Prompt-Driven Development) Command Line Interface"
 readme = "README.md"
-authors = [
-    { name = "Greg Tanaka", email = "glt@alumni.caltech.edu" }
-]
+authors = [{ name = "Greg Tanaka", email = "glt@alumni.caltech.edu" }]
 license = { text = "MIT" }
-keywords = ["prompt-driven development", "code generation", "CLI", "AI-assisted development", "unit testing", "code management"]
 classifiers = [
-    "Development Status :: 4 - Beta",
-    "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.7",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Operating System :: OS Independent",
-    "Environment :: Console",
+    "License :: OSI Approved :: MIT License",
+    "Intended Audience :: Developers",
     "Topic :: Software Development :: Code Generators",
+    "Topic :: Software Development :: Build Tools",
 ]
+keywords = ["cli", "prompt-driven development", "code generation", "AI development"]
 dependencies = [
     "GitPython==3.1.43",
     "anthropic==0.34.2",
     "click==8.1.7",
-    "langchain==0.3.0",
+    "fuzzywuzzy==0.18.0",
+    "langchain==0.3.1",
     "langchain_anthropic==0.2.1",
-    "langchain_community==0.3.0",
-    "langchain_core==0.3.5",
+    "langchain_community==0.3.1",
+    "langchain_core==0.3.7",
     "langchain_fireworks==0.2.0",
     "langchain_google_genai==2.0.0",
     "langchain_groq==0.2.0",
-    "langchain_openai==0.2.0",
+    "langchain_openai==0.2.1",
     "langchain_together==0.2.0",
     "pandas==2.2.3",
-    "pytest==8.3.2",
-    "rich==13.8.1",
+    "pydantic==2.9.2",
+    "rich==13.9.1",
     "tiktoken==0.7.0",
     "transformers==4.44.0",
+    "python-Levenshtein",
 ]
 requires-python = ">=3.7"
 
+[project.optional-dependencies]
+dev = ["pytest==8.3.2", "build"]
+
 [project.urls]
-Bug-Reports = "https://github.com/gltanaka/PPD/issues"
-Source = "https://github.com/gltanaka/PPD.git"
+"Homepage" = "https://github.com/gltanaka/PDD"
+"Bug Tracker" = "https://github.com/gltanaka/PDD/issues"
 
 [project.scripts]
 pdd = "pdd.cli:cli"
 
 [tool.setuptools.packages.find]
-exclude = ["tests", "docs"]
-
-[tool.setuptools]
-include-package-data = true
+include = ["pdd*"]
+exclude = ["tests*"]
