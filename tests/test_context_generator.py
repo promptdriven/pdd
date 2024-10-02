@@ -24,15 +24,17 @@ def mock_llm_selector():
     )
 
 @pytest.fixture
-def mock_chain_run():
+def mock_chain_invoke():
     return lambda **kwargs: "Mock generated output"
 
-def test_context_generator_success(mock_environment, mock_file_content, mock_llm_selector, mock_chain_run):
+def test_context_generator_success(mock_environment, mock_file_content, mock_llm_selector, mock_chain_invoke):
     with patch('builtins.open', mock_open(read_data=mock_file_content)):
         with patch('pdd.context_generator.preprocess', side_effect=lambda x, **kwargs: x):
             with patch('pdd.context_generator.llm_selector', mock_llm_selector):
-                with patch('pdd.context_generator.LLMChain') as mock_llm_chain:
-                    mock_llm_chain.return_value.run = mock_chain_run
+                with patch('langchain_core.prompts.PromptTemplate.from_template') as mock_prompt_template:
+                    mock_prompt_template.return_value = mock_prompt_template
+                    mock_prompt_template.__or__ = lambda self, _: mock_prompt_template
+                    mock_prompt_template.invoke = mock_chain_invoke
                     with patch('pdd.context_generator.unfinished_prompt', return_value=(None, True, 0, None)):
                         with patch('pdd.context_generator.postprocess', return_value=("Postprocessed output", 0.001)):
                             result = context_generator("test_module", "test_prompt", "python", 0.5, 0.0)
@@ -45,12 +47,14 @@ def test_context_generator_success(mock_environment, mock_file_content, mock_llm
                             assert result[0] == "Postprocessed output"
                             assert result[2] == "mock_model"
 
-def test_context_generator_unfinished_prompt(mock_environment, mock_file_content, mock_llm_selector, mock_chain_run):
+def test_context_generator_unfinished_prompt(mock_environment, mock_file_content, mock_llm_selector, mock_chain_invoke):
     with patch('builtins.open', mock_open(read_data=mock_file_content)):
         with patch('pdd.context_generator.preprocess', side_effect=lambda x, **kwargs: x):
             with patch('pdd.context_generator.llm_selector', mock_llm_selector):
-                with patch('pdd.context_generator.LLMChain') as mock_llm_chain:
-                    mock_llm_chain.return_value.run = mock_chain_run
+                with patch('langchain_core.prompts.PromptTemplate.from_template') as mock_prompt_template:
+                    mock_prompt_template.return_value = mock_prompt_template
+                    mock_prompt_template.__or__ = lambda self, _: mock_prompt_template
+                    mock_prompt_template.invoke = mock_chain_invoke
                     with patch('pdd.context_generator.unfinished_prompt', return_value=(None, False, 0.001, None)):
                         with patch('pdd.context_generator.continue_generation', return_value=("Continued output", 0.002, None)):
                             with patch('pdd.context_generator.postprocess', return_value=("Postprocessed output", 0.001)):
@@ -79,3 +83,16 @@ def test_context_generator_exception_handling(mock_environment, mock_file_conten
         with patch('pdd.context_generator.preprocess', side_effect=Exception("Mocked error")):
             result = context_generator("test_module", "test_prompt")
             assert result == ("", 0.0, "")
+
+def test_context_generator_chain_invocation_error(mock_environment, mock_file_content, mock_llm_selector):
+    with patch('builtins.open', mock_open(read_data=mock_file_content)):
+        with patch('pdd.context_generator.preprocess', side_effect=lambda x, **kwargs: x):
+            with patch('pdd.context_generator.llm_selector', mock_llm_selector):
+                with patch('langchain_core.prompts.PromptTemplate.from_template') as mock_prompt_template:
+                    mock_prompt_template.return_value = mock_prompt_template
+                    mock_prompt_template.__or__ = lambda self, _: mock_prompt_template
+                    mock_prompt_template.invoke = lambda **kwargs: (_ for _ in ()).throw(TypeError("Mocked chain invocation error"))
+                    with patch('pdd.context_generator.postprocess', return_value=("Postprocessed output", 0.001)):
+                        result = context_generator("test_module", "test_prompt", "python", 0.5, 0.0)
+                        assert result[0] == "Postprocessed output"
+                        assert result[2] == "mock_model"
