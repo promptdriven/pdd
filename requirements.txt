@@ -1,6 +1,6 @@
 GitPython==3.1.43
 anthropic==0.34.2
-click==8.1.7
+click
 langchain==0.3.0
 langchain_anthropic==0.2.1
 langchain_community==0.3.0
@@ -18,3 +18,4 @@ tiktoken==0.7.0
 transformers==4.44.0
 fuzzywuzzy
 build
+python-Levenshtein
