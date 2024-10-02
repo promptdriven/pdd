@@ -3,7 +3,7 @@ import json
 from typing import Tuple
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
-from langchain_core.pydantic_v1 import BaseModel, Field
+from pydantic import BaseModel, Field
 from rich.console import Console
 from rich.markdown import Markdown
 from .postprocess_0 import postprocess_0
