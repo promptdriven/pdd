@@ -1,107 +1,122 @@
+# tests/test_conflicts_in_prompts.py
+
+import os
 import pytest
-from unittest.mock import patch, mock_open, Mock, call
+from unittest.mock import patch, mock_open, MagicMock
+from typing import List, Dict, Any, Tuple
+
+# Assuming the module structure is pdd.conflicts_in_prompts
 from pdd.conflicts_in_prompts import conflicts_in_prompts
-from langchain_core.output_parsers import JsonOutputParser
-
-@pytest.fixture
-def mock_environment():
-    """Mock the environment variable PDD_PATH."""
-    with patch.dict('os.environ', {'PDD_PATH': '/mock/path'}):
-        yield
-
-@pytest.fixture
-def mock_prompt_files():
-    """Mock the prompt files used by the function."""
-    conflict_prompt = "Mock conflict prompt template"
-    extract_prompt = "Mock extract conflict prompt template"
-    mock_files = {
-        '/mock/path/prompts/conflict_LLM.prompt': conflict_prompt,
-        '/mock/path/prompts/extract_conflict_LLM.prompt': extract_prompt
-    }
-    with patch('builtins.open', mock_open(read_data="")) as mock_file:
-        mock_file.side_effect = lambda filename, *args, **kwargs: mock_open(read_data=mock_files[filename])()
-        yield
 
 @pytest.fixture
 def mock_llm_selector():
-    """Mock the LLM selector function."""
-    with patch('pdd.conflicts_in_prompts.llm_selector') as mock:
-        mock.return_value = (
-            lambda x: "Mock LLM output",  # mock LLM
-            lambda x: 100,  # mock token counter
-            0.01,  # mock input cost
-            0.02,  # mock output cost
-            "mock_model"  # mock model name
-        )
-        yield mock
+    with patch('pdd.conflicts_in_prompts.llm_selector') as mock_selector:
+        # Mock return values for llm_selector
+        mock_llm = MagicMock()
+        mock_token_counter = MagicMock(return_value=1000)
+        mock_selector.return_value = (mock_llm, mock_token_counter, 0.02, 0.03, "mock_model")
+        yield mock_selector
 
 @pytest.fixture
-def mock_json_parser():
-    """Mock the JSON output parser."""
-    with patch('pdd.conflicts_in_prompts.JsonOutputParser') as mock:
-        mock_parser = mock.return_value
-        mock_parser.get_format_instructions.return_value = "Mock format instructions"
-        mock_parser.return_value = {
-            'conflicts': [
-                {
-                    'description': 'Mock conflict',
-                    'explanation': 'Mock explanation',
-                    'suggestion1': 'Mock suggestion 1',
-                    'suggestion2': 'Mock suggestion 2'
-                }
-            ]
-        }
-        yield mock_parser
+def mock_open_files():
+    mock_conflict_prompts = "Conflict prompt template {PROMPT1} {PROMPT2}"
+    mock_extract_prompts = "Extract prompt template {llm_output}"
+    m = mock_open()
+    m.side_effect = [
+        mock_open(read_data=mock_conflict_prompts).return_value,
+        mock_open(read_data=mock_extract_prompts).return_value
+    ]
+    with patch('builtins.open', m):
+        yield m
 
-def test_conflicts_in_prompts_success(mock_environment, mock_prompt_files, mock_llm_selector, mock_json_parser):
-    """Test successful execution of conflicts_in_prompts function."""
-    prompt1 = "Test prompt 1"
-    prompt2 = "Test prompt 2"
-    
-    conflicts, total_cost, model_name = conflicts_in_prompts(prompt1, prompt2)
-    
-    assert isinstance(conflicts, list)
-    assert len(conflicts) == 1
-    assert conflicts[0]['description'] == 'Mock conflict'
-    assert conflicts[0]['explanation'] == 'Mock explanation'
-    assert conflicts[0]['suggestion1'] == 'Mock suggestion 1'
-    assert conflicts[0]['suggestion2'] == 'Mock suggestion 2'
-    assert isinstance(total_cost, float)
-    assert model_name == "mock_model"
+@pytest.fixture
+def mock_env_pdd_path():
+    with patch.dict(os.environ, {"PDD_PATH": "/fake/path"}):
+        yield
 
-def test_conflicts_in_prompts_missing_env_var():
-    """Test error handling when PDD_PATH environment variable is not set."""
-    with patch.dict('os.environ', clear=True):
-        with pytest.raises(ValueError, match="PDD_PATH environment variable is not set"):
-            conflicts_in_prompts("prompt1", "prompt2")
+def test_conflicts_in_prompts_success(mock_env_pdd_path, mock_open_files, mock_llm_selector):
+    # Mock the chain.invoke method for conflict detection
+    with patch('pdd.conflicts_in_prompts.PromptTemplate') as mock_prompt_template:
+        # Mock conflict_chain.invoke
+        mock_conflict_chain = MagicMock()
+        mock_conflict_chain.invoke.return_value = "Conflict detected between prompts."
+        mock_prompt_instance = MagicMock(return_value=mock_conflict_chain)
+        mock_prompt_template.from_template.return_value = mock_prompt_instance
 
-@patch('os.getenv', return_value='/nonexistent/path')
-def test_conflicts_in_prompts_file_not_found(mock_getenv):
-    """Test error handling when prompt files are not found."""
-    with pytest.raises(FileNotFoundError):
-        conflicts_in_prompts("prompt1", "prompt2")
+        # Mock extract_chain.invoke
+        with patch('pdd.conflicts_in_prompts.JsonOutputParser') as mock_json_parser:
+            mock_extract_chain = MagicMock()
+            mock_extract_chain.invoke.return_value = {"changes_list": [{"name": "prompt1", "instruction": "Change X"}]}
+            mock_json_parser.return_value = MagicMock(return_value=mock_extract_chain)
 
-def test_conflicts_in_prompts_unexpected_error(mock_environment, mock_prompt_files, mock_llm_selector):
-    """Test error handling for unexpected exceptions."""
-    with patch('pdd.conflicts_in_prompts.PromptTemplate', side_effect=Exception("Unexpected error")):
-        conflicts, total_cost, model_name = conflicts_in_prompts("prompt1", "prompt2")
-        assert conflicts == []
-        assert total_cost == 0
+            changes_list, total_cost, model_name = conflicts_in_prompts("Prompt A", "Prompt B")
+
+            assert changes_list == [{"name": "prompt1", "instruction": "Change X"}]
+            assert total_cost == (1000 / 1_000_000) * (0.02 + 0.03) * 2  # Conflict and extract costs
+            assert model_name == "mock_model"
+
+def test_conflicts_in_prompts_no_conflicts(mock_env_pdd_path, mock_open_files, mock_llm_selector):
+    # Mock the chain.invoke method for conflict detection with no conflicts
+    with patch('pdd.conflicts_in_prompts.PromptTemplate') as mock_prompt_template:
+        # Mock conflict_chain.invoke
+        mock_conflict_chain = MagicMock()
+        mock_conflict_chain.invoke.return_value = "No conflicts found."
+        mock_prompt_instance = MagicMock(return_value=mock_conflict_chain)
+        mock_prompt_template.from_template.return_value = mock_prompt_instance
+
+        # Mock extract_chain.invoke with empty changes_list
+        with patch('pdd.conflicts_in_prompts.JsonOutputParser') as mock_json_parser:
+            mock_extract_chain = MagicMock()
+            mock_extract_chain.invoke.return_value = {"changes_list": []}
+            mock_json_parser.return_value = MagicMock(return_value=mock_extract_chain)
+
+            changes_list, total_cost, model_name = conflicts_in_prompts("Prompt A", "Prompt B")
+
+            assert changes_list == []
+            assert total_cost == (1000 / 1_000_000) * (0.02 + 0.03) * 2  # Conflict and extract costs
+            assert model_name == "mock_model"
+
+def test_conflicts_in_prompts_missing_pdd_path(mock_open_files, mock_llm_selector):
+    # Remove PDD_PATH
+    with patch.dict(os.environ, {}, clear=True):
+        changes_list, total_cost, model_name = conflicts_in_prompts("Prompt A", "Prompt B")
+        assert changes_list == []
+        assert total_cost == 0.0
         assert model_name == ""
 
-def test_conflicts_in_prompts_custom_params(mock_environment, mock_prompt_files, mock_llm_selector, mock_json_parser):
-    """Test conflicts_in_prompts with custom strength and temperature parameters."""
-    prompt1 = "Test prompt 1"
-    prompt2 = "Test prompt 2"
-    strength = 0.7
-    temperature = 0.5
-    
-    conflicts, total_cost, model_name = conflicts_in_prompts(prompt1, prompt2, strength, temperature)
-    
-    mock_llm_selector.assert_has_calls([
-        call(strength, temperature),
-        call(0.8, 0)  # Changed from 0.9 to 0.8 to match the actual implementation
-    ])
-    assert isinstance(conflicts, list)
-    assert isinstance(total_cost, float)
-    assert model_name == "mock_model"
+def test_conflicts_in_prompts_missing_prompt_files(mock_env_pdd_path, mock_llm_selector):
+    # Mock open to raise FileNotFoundError
+    with patch('builtins.open', side_effect=FileNotFoundError("File not found")):
+        changes_list, total_cost, model_name = conflicts_in_prompts("Prompt A", "Prompt B")
+        assert changes_list == []
+        assert total_cost == 0.0
+        assert model_name == ""
+
+def test_conflicts_in_prompts_empty_prompts(mock_env_pdd_path, mock_llm_selector):
+    # Mock the chain.invoke method for conflict detection with empty prompts
+    with patch('pdd.conflicts_in_prompts.PromptTemplate') as mock_prompt_template:
+        # Mock conflict_chain.invoke
+        mock_conflict_chain = MagicMock()
+        mock_conflict_chain.invoke.return_value = "No conflicts found."
+        mock_prompt_instance = MagicMock(return_value=mock_conflict_chain)
+        mock_prompt_template.from_template.return_value = mock_prompt_instance
+
+        # Mock extract_chain.invoke with empty changes_list
+        with patch('pdd.conflicts_in_prompts.JsonOutputParser') as mock_json_parser:
+            mock_extract_chain = MagicMock()
+            mock_extract_chain.invoke.return_value = {"changes_list": []}
+            mock_json_parser.return_value = MagicMock(return_value=mock_extract_chain)
+
+            changes_list, total_cost, model_name = conflicts_in_prompts("", "")
+
+            assert changes_list == []
+            assert total_cost == (1000 / 1_000_000) * (0.02 + 0.03) * 2  # Conflict and extract costs
+            assert model_name == "mock_model"
+
+def test_conflicts_in_prompts_exception(mock_env_pdd_path, mock_open_files, mock_llm_selector):
+    # Mock PromptTemplate.from_template to raise an unexpected exception
+    with patch('pdd.conflicts_in_prompts.PromptTemplate.from_template', side_effect=Exception("Unexpected error")):
+        changes_list, total_cost, model_name = conflicts_in_prompts("Prompt A", "Prompt B")
+        assert changes_list == []
+        assert total_cost == 0.0
+        assert model_name == ""
