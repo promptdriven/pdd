@@ -72,6 +72,11 @@ def conflicts_in_prompts(prompt1: str, prompt2: str, strength: float = 0.5, temp
         # Step 6c: Extract changes_list
         changes_list = extract_output.get('changes_list', [])
 
+        # Ensure changes_list is a list
+        if not isinstance(changes_list, list):
+            rprint(f"[bold yellow]Warning: changes_list is not a list. Actual value: {changes_list}[/bold yellow]")
+            changes_list = []
+
         # Step 7: Calculate total cost and return results
         total_cost = conflict_cost + extract_cost
         return changes_list, total_cost, model_name
