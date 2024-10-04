@@ -73,7 +73,7 @@ def test_preprocess_command(runner: CliRunner, tmp_path) -> None:
     assert output_file.exists()
 
 def test_fix_command(runner: CliRunner, tmp_path) -> None:
-    """Test the fix command of the CLI."""
+    """Test the fix command of the CLI with --auto-submit option."""
     from unittest.mock import patch
     prompt_file = tmp_path / "test_prompt.txt"
     prompt_file.write_text("Generate a Python function to add two numbers")
@@ -90,7 +90,7 @@ def test_fix_command(runner: CliRunner, tmp_path) -> None:
     # Mock the function that interacts with the LLM
     with patch('pdd.cli.fix_errors_from_unit_tests_func', return_value=(True, True, 'fixed test content', 'fixed code content', 0.0, 'mock_model')):
         result = runner.invoke(cli, ['--force', 'fix', str(prompt_file), str(code_file), str(unit_test_file), str(error_file),
-                                     '--output-test', str(output_test), '--output-code', str(output_code)])
+                                     '--output-test', str(output_test), '--output-code', str(output_code), '--auto-submit'])
         assert result.exit_code == 0
         assert "Fixed unit test saved to:" in result.output
         assert "Fixed code saved to:" in result.output
