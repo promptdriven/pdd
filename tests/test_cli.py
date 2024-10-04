@@ -246,24 +246,6 @@ def test_output_cost_tracking(runner: CliRunner, tmp_path) -> None:
         assert str(prompt_file) in content
         assert str(output_file) in content
 
-def test_output_cost_tracking(runner: CliRunner, tmp_path) -> None:
-    """Test the output cost tracking feature of the CLI."""
-    prompt_file = tmp_path / "test_prompt.txt"
-    prompt_file.write_text("Generate a Python function to add two numbers")
-    output_file = tmp_path / "output.py"
-    cost_file = tmp_path / "cost.csv"
-    
-    result = runner.invoke(cli, ['--output-cost', str(cost_file), 'generate', str(prompt_file), '--output', str(output_file)])
-    assert result.exit_code == 0
-    assert cost_file.exists()
-    
-    with open(cost_file, 'r') as f:
-        content = f.read()
-        assert 'timestamp,model,command,cost,input_files,output_files' in content
-        assert 'generate' in content
-        assert str(prompt_file) in content
-        assert str(output_file) in content
-
 @pytest.fixture
 def csv_output():
     return StringIO()
