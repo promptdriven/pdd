@@ -6,7 +6,7 @@ PDD (Prompt-Driven Development) is a versatile tool for generating code, creatin
 
 ## Version
 
-Current version: 0.2.0
+Current version: 0.2.1
 
 To check your installed version, run:
 ```
@@ -115,7 +115,7 @@ For commands that support it (like the `fix` command), you can set a maximum bud
 
 Example:
 ```
-pdd fix --budget 5.0 [OTHER OPTIONS] [ARGS]...
+pdd [GLOBAL OPTIONS] fix --budget 5.0 [OTHER OPTIONS] [ARGS]...
 ```
 This sets a maximum budget of $5.00 for the fix operation.
 
@@ -128,7 +128,7 @@ Here are the main commands provided by PDD:
 Create runnable code from a prompt file.
 
 ```
-pdd generate [GLOBAL OPTIONS] [OPTIONS] PROMPT_FILE
+pdd [GLOBAL OPTIONS] generate [OPTIONS] PROMPT_FILE
 ```
 
 Arguments:
@@ -139,7 +139,7 @@ Options:
 
 Example:
 ```
-pdd generate --output src/factorial_calculator.py factorial_calculator_python.prompt 
+pdd [GLOBAL OPTIONS] generate --output src/factorial_calculator.py factorial_calculator_python.prompt 
 ```
 
 ### 2. example
@@ -147,7 +147,7 @@ pdd generate --output src/factorial_calculator.py factorial_calculator_python.pr
 Create an example file from an existing code file and the prompt that generated the code file.
 
 ```
-pdd example [GLOBAL OPTIONS] [OPTIONS] PROMPT_FILE CODE_FILE
+pdd [GLOBAL OPTIONS] example [OPTIONS] PROMPT_FILE CODE_FILE
 ```
 
 Arguments:
@@ -159,7 +159,7 @@ Options:
 
 Example:
 ```
-pdd example --output examples/factorial_calculator_example.py factorial_calculator_python.prompt src/factorial_calculator.py
+pdd [GLOBAL OPTIONS] example --output examples/factorial_calculator_example.py factorial_calculator_python.prompt src/factorial_calculator.py
 ```
 
 ### 3. test
@@ -167,7 +167,7 @@ pdd example --output examples/factorial_calculator_example.py factorial_calculat
 Generate a unit test file for a given code file and its corresponding prompt file.
 
 ```
-pdd test [GLOBAL OPTIONS] [OPTIONS] PROMPT_FILE CODE_FILE
+pdd [GLOBAL OPTIONS] test [OPTIONS] PROMPT_FILE CODE_FILE
 ```
 
 Arguments:
@@ -180,7 +180,7 @@ Options:
 
 Example:
 ```
-pdd test --output tests/test_factorial_calculator.py factorial_calculator_python.prompt src/factorial_calculator.py
+pdd [GLOBAL OPTIONS] test --output tests/test_factorial_calculator.py factorial_calculator_python.prompt src/factorial_calculator.py
 ```
 
 ### 4. preprocess
@@ -188,7 +188,7 @@ pdd test --output tests/test_factorial_calculator.py factorial_calculator_python
 Preprocess prompt files and save the results.
 
 ```
-pdd preprocess [GLOBAL OPTIONS] [OPTIONS] PROMPT_FILE
+pdd [GLOBAL OPTIONS] preprocess [OPTIONS] PROMPT_FILE
 ```
 
 Arguments:
@@ -200,7 +200,7 @@ Options:
 
 Example:
 ```
-pdd preprocess --output preprocessed/factorial_calculator_python_preprocessed.prompt --xml factorial_calculator_python.prompt 
+pdd [GLOBAL OPTIONS] preprocess --output preprocessed/factorial_calculator_python_preprocessed.prompt --xml factorial_calculator_python.prompt 
 ```
 
 ### 5. fix
@@ -208,7 +208,7 @@ pdd preprocess --output preprocessed/factorial_calculator_python_preprocessed.pr
 Fix errors in code and unit tests based on error messages and the original prompt file.
 
 ```
-pdd fix [GLOBAL OPTIONS] [OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE ERROR_FILE
+pdd [GLOBAL OPTIONS] fix [OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE ERROR_FILE
 ```
 
 Arguments:
@@ -240,7 +240,7 @@ Outputs:
 
 Example:
 ```
-pdd fix --output-test tests/test_factorial_calculator_fixed.py --output-code src/factorial_calculator_fixed.py --output-results results/factorial_fix_results.log factorial_calculator_python.prompt src/factorial_calculator.py tests/test_factorial_calculator.py errors.log
+pdd [GLOBAL OPTIONS] fix --output-test tests/test_factorial_calculator_fixed.py --output-code src/factorial_calculator_fixed.py --output-results results/factorial_fix_results.log factorial_calculator_python.prompt src/factorial_calculator.py tests/test_factorial_calculator.py errors.log
 ```
 In this example, `factorial_calculator_python.prompt` is the prompt file that originally generated the code under test.
 
@@ -249,7 +249,7 @@ In this example, `factorial_calculator_python.prompt` is the prompt file that or
 Split large complex prompt files into smaller, more manageable prompt files.
 
 ```
-pdd split [GLOBAL OPTIONS] [OPTIONS] INPUT_PROMPT INPUT_CODE EXAMPLE_CODE
+pdd [GLOBAL OPTIONS] split [OPTIONS] INPUT_PROMPT INPUT_CODE EXAMPLE_CODE
 ```
 
 Arguments:
@@ -263,7 +263,7 @@ Options:
 
 Example:
 ```
-pdd split --output-sub prompts/sub_data_processing.prompt --output-modified prompts/modified_main_pipeline.prompt data_processing_pipeline_python.prompt src/data_pipeline.py examples/pipeline_interface.py 
+pdd [GLOBAL OPTIONS] split --output-sub prompts/sub_data_processing.prompt --output-modified prompts/modified_main_pipeline.prompt data_processing_pipeline_python.prompt src/data_pipeline.py examples/pipeline_interface.py 
 ```
 
 ### 7. change
@@ -271,7 +271,7 @@ pdd split --output-sub prompts/sub_data_processing.prompt --output-modified prom
 Modify an input prompt file based on a change prompt and the corresponding input code.
 
 ```
-pdd change [GLOBAL OPTIONS] [OPTIONS] INPUT_PROMPT_FILE INPUT_CODE_FILE CHANGE_PROMPT_FILE
+pdd [GLOBAL OPTIONS] change [OPTIONS] INPUT_PROMPT_FILE INPUT_CODE_FILE CHANGE_PROMPT_FILE
 ```
 
 Arguments:
@@ -284,7 +284,7 @@ Options:
 
 Example:
 ```
-pdd change --output modified_factorial_calculator_python.prompt factorial_calculator_python.prompt src/factorial_calculator.py changes_factorial.prompt
+pdd [GLOBAL OPTIONS] change --output modified_factorial_calculator_python.prompt factorial_calculator_python.prompt src/factorial_calculator.py changes_factorial.prompt
 ```
 
 ### 8. update
@@ -292,7 +292,7 @@ pdd change --output modified_factorial_calculator_python.prompt factorial_calcul
 Update the original prompt file based on the original code and the modified code.
 
 ```
-pdd update [GLOBAL OPTIONS] [OPTIONS] INPUT_PROMPT_FILE INPUT_CODE_FILE MODIFIED_CODE_FILE
+pdd [GLOBAL OPTIONS] update [OPTIONS] INPUT_PROMPT_FILE INPUT_CODE_FILE MODIFIED_CODE_FILE
 ```
 
 Arguments:
@@ -302,10 +302,11 @@ Arguments:
 
 Options:
 - `--output LOCATION`: Specify where to save the modified prompt file. The default file name is `modified_<basename>.prompt`.  If an environment variable `PDD_UPDATE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--git`: This option eliminates the need for the 'INPUT_CODE_FILE' argument by using the git history to find the original code file.
 
 Example:
 ```
-pdd update --output updated_factorial_calculator_python.prompt factorial_calculator_python.prompt src/original_factorial_calculator.py src/modified_factorial_calculator.py
+pdd [GLOBAL OPTIONS] update --output updated_factorial_calculator_python.prompt factorial_calculator_python.prompt src/original_factorial_calculator.py src/modified_factorial_calculator.py
 ```
 
 ### 9. detect
@@ -313,7 +314,7 @@ pdd update --output updated_factorial_calculator_python.prompt factorial_calcula
 Analyze a list of prompt files and a change description to determine which prompts need to be changed.
 
 ```
-pdd detect [GLOBAL OPTIONS] [OPTIONS] PROMPT_FILES... CHANGE_FILE
+pdd [GLOBAL OPTIONS] detect [OPTIONS] PROMPT_FILES... CHANGE_FILE
 ```
 
 Arguments:
@@ -325,7 +326,7 @@ Options:
 
 Example:
 ```
-pdd detect --output detect_results.csv factorial_calculator_python.prompt data_processing_python.prompt web_scraper_python.prompt changes_description.prompt
+pdd [GLOBAL OPTIONS] detect --output detect_results.csv factorial_calculator_python.prompt data_processing_python.prompt web_scraper_python.prompt changes_description.prompt
 ```
 
 ### 10. conflicts
@@ -333,7 +334,7 @@ pdd detect --output detect_results.csv factorial_calculator_python.prompt data_p
 Analyze two prompt files to find conflicts between them and suggest how to resolve those conflicts.
 
 ```
-pdd conflicts [GLOBAL OPTIONS] [OPTIONS] PROMPT1 PROMPT2
+pdd [GLOBAL OPTIONS] conflicts [OPTIONS] PROMPT1 PROMPT2
 ```
 
 Arguments:
@@ -345,7 +346,7 @@ Options:
 
 Example:
 ```
-pdd conflicts --output conflicts_analysis.csv data_processing_module_python.prompt data_visualization_module_python.prompt 
+pdd [GLOBAL OPTIONS] conflicts --output conflicts_analysis.csv data_processing_module_python.prompt data_visualization_module_python.prompt 
 ```
 
 ### 11. crash
@@ -353,7 +354,7 @@ pdd conflicts --output conflicts_analysis.csv data_processing_module_python.prom
 Fix errors in a code module that caused a program to crash.
 
 ```
-pdd crash [GLOBAL OPTIONS] [OPTIONS] PROMPT_FILE CODE_FILE PROGRAM_FILE ERROR_FILE
+pdd [GLOBAL OPTIONS] crash [OPTIONS] PROMPT_FILE CODE_FILE PROGRAM_FILE ERROR_FILE
 ```
 
 Arguments:
@@ -367,8 +368,56 @@ Options:
 
 Example:
 ```
-pdd crash --output fixed_data_processor.py data_processing_module_python.prompt crashed_data_processor.py main_pipeline.py crash_errors.log 
+pdd [GLOBAL OPTIONS] crash --output fixed_data_processor.py data_processing_module_python.prompt crashed_data_processor.py main_pipeline.py crash_errors.log 
 ```
+
+### 12. trace
+
+Fine the associated line number between a prompt file and the generated code.
+
+```
+pdd [GLOBAL OPTIONS] trace [OPTIONS] PROMPT_FILE CODE_FILE CODE_LINE
+```
+
+Arguments:
+- `PROMPT_FILE`: Filename of the prompt file that generated the code.
+- `CODE_FILE`: Filename of the code file to be analyzed.
+- `CODE_LINE`: Line number in the code file that the debugger trace line is on.
+
+Options:
+- `--output LOCATION`: Specify where to save the trace analysis results. The default file name is `<basename>_trace_results.log`.
+
+Example:
+```
+pdd [GLOBAL OPTIONS] trace --output trace_results.log factorial_calculator_python.prompt src/factorial_calculator.py
+```
+
+This will print out the line number in the prompt file for the associated the code line.
+
+### 13. bug
+
+Generate a unit test based on observed and desired outputs, given the original prompt and code.
+
+```
+pdd [GLOBAL OPTIONS] bug [OPTIONS] PROMPT_FILE CODE_FILE PROGRAM_FILE CURRENT_OUTPUT DESIRED_OUTPUT
+```
+
+Arguments:
+- `PROMPT_FILE`: Filename of the prompt file that generated the code.
+- `CODE_FILE`: Filename of the code file being tested.
+- `PROGRAM_FILE`: Filename of the program used to run the code under test.
+- `CURRENT_OUTPUT`: The current (incorrect) output of the program.
+- `DESIRED_OUTPUT`: The desired (correct) output of the program.
+
+Options:
+- `--output LOCATION`: Specify where to save the generated unit test. The default file name is `test_<basename>_bug.<language_extension>`.
+- `--language`: Specify the programming language for the unit test (default is "Python").
+
+Example:
+```
+pdd [GLOBAL OPTIONS] bug --output tests/test_factorial_calculator_bug.py factorial_calculator_python.prompt src/factorial_calculator.py main_program.py "Factorial of 5 is 60" "Factorial of 5 is 120"
+```
+
 ## Example Review Process
 
 When the global `--review-examples` option is used with any command, PDD will present potential few-shot examples that might be used for the current operation. The review process follows these steps:
@@ -409,7 +458,7 @@ Here are some examples of multi-command chaining to illustrate its power and fle
 
 1. Generate code, create an example, and run tests in one go:
 ```
-pdd generate --output src/factorial_calculator.py factorial_calculator_python.prompt example --output examples/factorial_usage.py factorial_calculator_python.prompt src/factorial_calculator.py test --output tests/test_factorial_calculator.py factorial_calculator_python.prompt src/factorial_calculator.py
+pdd [GLOBAL OPTIONS] generate --output src/factorial_calculator.py factorial_calculator_python.prompt example --output examples/factorial_usage.py factorial_calculator_python.prompt src/factorial_calculator.py test --output tests/test_factorial_calculator.py factorial_calculator_python.prompt src/factorial_calculator.py
 ```
 
 2. Preprocess a prompt, generate code, and create an example with cost tracking:
@@ -419,27 +468,27 @@ pdd --output-cost usage.csv preprocess --output preprocessed/data_pipeline_prepr
 
 3. Split a large prompt, generate code from the sub-prompt, and create a test:
 ```
-pdd split --output-sub sub_prompts/data_processing_module.prompt --output-modified modified_prompts/main_pipeline.prompt large_data_pipeline_python.prompt src/data_pipeline.py examples/pipeline_interface.py generate --output src/data_processing_module.py sub_prompts/data_processing_module.prompt test --output tests/test_data_processing_module.py sub_prompts/data_processing_module.prompt src/data_processing_module.py
+pdd [GLOBAL OPTIONS] split --output-sub sub_prompts/data_processing_module.prompt --output-modified modified_prompts/main_pipeline.prompt large_data_pipeline_python.prompt src/data_pipeline.py examples/pipeline_interface.py generate --output src/data_processing_module.py sub_prompts/data_processing_module.prompt test --output tests/test_data_processing_module.py sub_prompts/data_processing_module.prompt src/data_processing_module.py
 ```
 
 4. Update a prompt based on code changes, then generate new code and tests:
 ```
-pdd update --output updated_prompts/updated_web_scraper.prompt web_scraper_python.prompt src/original_scraper.py src/modified_scraper.py generate --output src/new_scraper.py updated_prompts/updated_web_scraper.prompt test --output tests/test_new_scraper.py updated_prompts/updated_web_scraper.prompt src/new_scraper.py
+pdd [GLOBAL OPTIONS] update --output updated_prompts/updated_web_scraper.prompt web_scraper_python.prompt src/original_scraper.py src/modified_scraper.py generate --output src/new_scraper.py updated_prompts/updated_web_scraper.prompt test --output tests/test_new_scraper.py updated_prompts/updated_web_scraper.prompt src/new_scraper.py
 ```
 
 5. Detect prompts that need changes, then apply changes to those prompts:
 ```
-pdd detect --output to_change.csv data_processing_python.prompt web_scraper_python.prompt api_interface_python.prompt changes.prompt change --output modified_prompts/modified_$(cat to_change.csv | cut -d',' -f1 | tail -n +2) $(cat to_change.csv | cut -d',' -f1 | tail -n +2) $(cat to_change.csv | cut -d',' -f1 | tail -n +2 | sed 's/\.prompt/_code.py/') changes.prompt
+pdd [GLOBAL OPTIONS] detect --output to_change.csv data_processing_python.prompt web_scraper_python.prompt api_interface_python.prompt changes.prompt change --output modified_prompts/modified_$(cat to_change.csv | cut -d',' -f1 | tail -n +2) $(cat to_change.csv | cut -d',' -f1 | tail -n +2) $(cat to_change.csv | cut -d',' -f1 | tail -n +2 | sed 's/\.prompt/_code.py/') changes.prompt
 ```
 
 6. Analyze conflicts between two prompts and then update one of them:
 ```
-pdd conflicts --output conflicts.csv data_processing_module_python.prompt data_visualization_module_python.prompt update --output updated_data_processing_module.prompt data_processing_module_python.prompt $(head -n 1 conflicts.csv | cut -d',' -f4) $(head -n 1 conflicts.csv | cut -d',' -f5)
+pdd [GLOBAL OPTIONS] conflicts --output conflicts.csv data_processing_module_python.prompt data_visualization_module_python.prompt update --output updated_data_processing_module.prompt data_processing_module_python.prompt $(head -n 1 conflicts.csv | cut -d',' -f4) $(head -n 1 conflicts.csv | cut -d',' -f5)
 ```
 
 7. Generate code, fix errors, and run tests:
 ```
-pdd generate --output src/factorial_calculator.py factorial_calculator_python.prompt fix --output-test tests/test_factorial_calculator_fixed.py --output-code src/factorial_calculator_fixed.py --output-results results/factorial_fix_results.log factorial_calculator_python.prompt src/factorial_calculator.py tests/test_factorial_calculator.py errors.log test --output tests/test_factorial_calculator.py factorial_calculator_python.prompt src/factorial_calculator_fixed.py
+pdd [GLOBAL OPTIONS] generate --output src/factorial_calculator.py factorial_calculator_python.prompt fix --output-test tests/test_factorial_calculator_fixed.py --output-code src/factorial_calculator_fixed.py --output-results results/factorial_fix_results.log factorial_calculator_python.prompt src/factorial_calculator.py tests/test_factorial_calculator.py errors.log test --output tests/test_factorial_calculator.py factorial_calculator_python.prompt src/factorial_calculator_fixed.py
 ```
 
 These examples demonstrate how you can combine multiple PDD commands to create sophisticated workflows, automating complex development tasks in a single command line invocation. Remember that options always come before arguments for each command in the chain.
@@ -487,6 +536,24 @@ You can set environment variables to define default output paths for each comman
 - **`PDD_DETECT_OUTPUT_PATH`**: Default path for the CSV file generated by the `detect` command.
 - **`PDD_CONFLICTS_OUTPUT_PATH`**: Default path for the CSV file generated by the `conflicts` command.
 - **`PDD_CRASH_OUTPUT_PATH`**: Default path for the fixed code file generated by the `crash` command.
+- **`PDD_TRACE_OUTPUT_PATH`**: Default path for the trace analysis results generated by the `trace` command.
+- **`PDD_BUG_OUTPUT_PATH`**: Default path for the unit test file generated by the `bug` command.
+
+These environment variables allow you to set default output locations for each command. If an environment variable is set and the corresponding `--output` option is not used in the command, PDD will use the path specified by the environment variable. This can help streamline your workflow by reducing the need to specify output paths for frequently used commands.
+
+For example, if you set `PDD_GENERATE_OUTPUT_PATH=/path/to/generated/code/`, all files created by the `generate` command will be saved in that directory by default, unless overridden by the `--output` option in the command line.
+
+To set these environment variables, you can add them to your shell configuration file (e.g., `.bashrc` or `.zshrc`) or set them before running PDD commands:
+
+```bash
+export PDD_GENERATE_OUTPUT_PATH=/path/to/generated/code/
+export PDD_TEST_OUTPUT_PATH=/path/to/tests/
+# ... set other variables as needed
+
+pdd generate factorial_calculator_python.prompt  # Output will be saved in /path/to/generated/code/
+```
+
+This feature allows for more flexible and customized setups, especially in team environments or when working across multiple projects with different directory structures.
 
 ## Error Handling
 
@@ -542,6 +609,10 @@ PDD can be integrated into various development workflows. Here are some typical 
 4. **Continuous Integration**: Incorporate PDD commands into CI/CD pipelines to automate code generation, testing, and maintenance tasks.
 
 5. **Debugging**: Use `crash` to quickly address runtime errors and generate fixes for failing modules.
+
+6. **Code Analysis**: Use `trace` to analyze the relationship between prompts and generated code, helping to improve prompt quality and code consistency.
+
+7. **Bug Fixing**: Use `bug` to generate targeted unit tests based on observed bugs, facilitating the debugging process.
 
 ## Conclusion
 
