@@ -27,7 +27,7 @@ STAGING_PATH="${PDD_PATH}/staging"
 REGRESSION_DIR="${STAGING_PATH}/regression"
 PDD_SCRIPT="pdd"
 PROMPTS_PATH="${PDD_PATH}/prompts"
-CONTEXT_PATH="${PDD_PATH}/context"
+CONTEXT_PATH="${STAGING_PATH}/context"
 LOG_FILE="${REGRESSION_DIR}/regression.log"
 COST_FILE="${REGRESSION_DIR}/regression_cost.csv"
 
@@ -86,18 +86,18 @@ run_pdd_command() {
     shift
     local args=("$@")
 
-    log "Running: $PDD_SCRIPT ${GLOBAL_OPTIONS} $command ${args[*]}"
-    echo "Running: $PDD_SCRIPT ${GLOBAL_OPTIONS} $command ${args[*]}" >> "$LOG_FILE"
+    log "Running: $PDD_SCRIPT ${GLOBAL_OPTIONS[*]} $command ${args[*]}"
+    echo "Running: $PDD_SCRIPT ${GLOBAL_OPTIONS[*]} $command ${args[*]}" >> "$LOG_FILE"
     
     # Execute the pdd command
     $PDD_SCRIPT "${GLOBAL_OPTIONS[@]}" "$command" "${args[@]}" >> "$LOG_FILE" 2>&1
 
     if [ $? -eq 0 ]; then
         log "Command '$command' completed successfully."
-        log_timestamped "Command: $PDD_SCRIPT ${GLOBAL_OPTIONS[@]} $command ${args[*]} - Completed successfully."
+        log_timestamped "Command: $PDD_SCRIPT ${GLOBAL_OPTIONS[*]} $command ${args[*]} - Completed successfully."
     else
         log "Command '$command' failed. Check $LOG_FILE for details."
-        log_timestamped "Command: $PDD_SCRIPT ${GLOBAL_OPTIONS[@]} $command ${args[*]} - Failed."
+        log_timestamped "Command: $PDD_SCRIPT ${GLOBAL_OPTIONS[*]} $command ${args[*]} - Failed."
         exit 1
     fi
     log "----------------------------------------" >> "$LOG_FILE"
@@ -160,9 +160,9 @@ run_pdd_command update --output "${REGRESSION_DIR}/updated_${EXTENSION_PROMPT}" 
 # 7. Change
 log "Running 'change' command"
 run_pdd_command change --output "${REGRESSION_DIR}/changed_${CHANGE_PROMPT}" \
-                           "${CONTEXT_PATH}/change/11/${CHANGE_PROMPT}" \
-                           "${CONTEXT_PATH}/change/11/${CHANGE_SCRIPT}" \
-                           "${CONTEXT_PATH}/change/11/${CHANGE_CONTEXT_PROMPT}"
+                       "${CHANGE_CONTEXT_PROMPT}" \
+                       "${CONTEXT_PATH}/change/11/${CHANGE_SCRIPT}" \
+                       "${CHANGE_CONTEXT_PROMPT}"
 
 # 8. Fix
 log "Running 'fix' command"
@@ -186,50 +186,50 @@ run_pdd_command fix --loop \
 # 10. Split
 log "Running 'split' command"
 run_pdd_command split --output-sub "${REGRESSION_DIR}/sub_${SPLIT_PROMPT}" \
-                          --output-modified "${REGRESSION_DIR}/modified_${SPLIT_PROMPT}" \
-                          "${CONTEXT_PATH}/split/4/${SPLIT_PROMPT}" \
-                          "${CONTEXT_PATH}/split/4/${SPLIT_SCRIPT}" \
-                          "${CONTEXT_PATH}/split/4/${SPLIT_EXAMPLE_SCRIPT}"
+                      --output-modified "${REGRESSION_DIR}/modified_${SPLIT_PROMPT}" \
+                      "${CONTEXT_PATH}/split/4/${SPLIT_PROMPT}" \
+                      "${CONTEXT_PATH}/split/4/${SPLIT_SCRIPT}" \
+                      "${CONTEXT_PATH}/split/4/${SPLIT_EXAMPLE_SCRIPT}"
 
 # 11. Detect
 log "Running 'detect' command"
 run_pdd_command detect --output "${REGRESSION_DIR}/detect_results.csv" \
-                           "${PROMPTS_PATH}/${EXTENSION_PROMPT}" \
-                           "${CONTEXT_PATH}/change/11/${CHANGE_PROMPT}" \
-                           "${CONTEXT_PATH}/split/4/${SPLIT_PROMPT}" \
-                           "${CONTEXT_PATH}/change/11/change_description.prompt"
+                       "${PROMPTS_PATH}/${EXTENSION_PROMPT}" \
+                       "${CONTEXT_PATH}/change/11/${CHANGE_PROMPT}" \
+                       "${CONTEXT_PATH}/split/4/${SPLIT_PROMPT}" \
+                       "${CONTEXT_PATH}/change/11/change_description.prompt"
 
 # 12. Conflicts
 log "Running 'conflicts' command"
 run_pdd_command conflicts --output "${REGRESSION_DIR}/conflicts_analysis.csv" \
-                              "${PROMPTS_PATH}/${EXTENSION_PROMPT}" \
-                              "${CONTEXT_PATH}/change/11/${CHANGE_PROMPT}"
+                          "${PROMPTS_PATH}/${EXTENSION_PROMPT}" \
+                          "${CONTEXT_PATH}/change/11/${CHANGE_PROMPT}"
 
 # 13. Crash
 log "Running 'crash' command"
 # Simulate a crash by running a faulty program
 python "${EXTENSION_VERIFICATION_PROGRAM}" >& "${EXTENSION_ERROR_LOG}" || true
 run_pdd_command crash --output "${REGRESSION_DIR}/fixed_crash_${EXTENSION_SCRIPT}" \
-                          "${PROMPTS_PATH}/${EXTENSION_PROMPT}" \
-                          "${REGRESSION_DIR}/${EXTENSION_SCRIPT}" \
-                          "${TRACE_PROGRAM}" \
-                          "${EXTENSION_ERROR_LOG}"
+                        "${PROMPTS_PATH}/${EXTENSION_PROMPT}" \
+                        "${REGRESSION_DIR}/${EXTENSION_SCRIPT}" \
+                        "${TRACE_PROGRAM}" \
+                        "${EXTENSION_ERROR_LOG}"
 
 # 14. Trace
 log "Running 'trace' command"
 run_pdd_command trace --output "${REGRESSION_DIR}/trace_results.log" \
-                         "${PROMPTS_PATH}/${TRACE_PROMPT}" \
-                         "${REGRESSION_DIR}/${TRACE_SCRIPT}" \
-                         "${TRACE_LINE}"
+                       "${PROMPTS_PATH}/${TRACE_PROMPT}" \
+                       "${REGRESSION_DIR}/${TRACE_SCRIPT}" \
+                       "${TRACE_LINE}"
 
 # 15. Bug
 log "Running 'bug' command"
 run_pdd_command bug --output "${REGRESSION_DIR}/test_${BUG_PROMPT}" \
-                       "${PROMPTS_PATH}/${BUG_PROMPT}" \
-                       "${REGRESSION_DIR}/${BUG_SCRIPT}" \
-                       "${REGRESSION_DIR}/${BUG_PROGRAM}" \
-                       "${CURRENT_OUTPUT}" \
-                       "${DESIRED_OUTPUT}"
+                     "${PROMPTS_PATH}/${BUG_PROMPT}" \
+                     "${REGRESSION_DIR}/${BUG_SCRIPT}" \
+                     "${REGRESSION_DIR}/${BUG_PROGRAM}" \
+                     "${CURRENT_OUTPUT}" \
+                     "${DESIRED_OUTPUT}"
 
 # ------------------------------ Completion -------------------------------------
 
