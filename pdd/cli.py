@@ -95,6 +95,7 @@ def track_cost(func: Callable) -> Callable:
 @click.option('--review-examples', is_flag=True, help='Review and optionally exclude few-shot examples before command execution.')
 @click.version_option(version="0.2.1")
 @click.pass_context
+
 def cli(ctx, force: bool, strength: float, temperature: float, verbose: bool, quiet: bool, output_cost: Optional[str], review_examples: bool):
     """PDD (Prompt-Driven Development) Command Line Interface"""
     ctx.ensure_object(dict)
@@ -177,7 +178,7 @@ def example(ctx, prompt_file: str, code_file: str, output: Optional[str]) -> Tup
         if not ctx.obj['quiet']:
             rprint(f"[bold green]Generated example code saved to:[/bold green] {output_file_paths['output']}")
 
-        return output_file_paths['output'], total_cost, model_name
+        return example_code, total_cost, model_name
     except Exception as e:
         rprint(f"[bold red]Error: {str(e)}[/bold red]")
         ctx.exit(1)
@@ -219,7 +220,7 @@ def test(ctx, prompt_file: str, code_file: str, output: Optional[str], language:
         if not ctx.obj['quiet']:
             rprint(f"[bold green]Generated unit test saved to:[/bold green] {output_file_paths['output']}")
 
-        return output_file_paths['output'], total_cost, model_name
+        return unit_test, total_cost, model_name
     except Exception as e:
         rprint(f"[bold red]Error: {str(e)}[/bold red]")
         ctx.exit(1)
@@ -260,7 +261,7 @@ def preprocess(ctx, prompt_file: str, output: Optional[str], xml: bool) -> Tuple
         if not ctx.obj['quiet']:
             rprint(f"[bold green]Preprocessed prompt saved to:[/bold green] {output_file_paths['output']}")
 
-        return output_file_paths['output'], total_cost, model_name
+        return processed_prompt, total_cost, model_name
     except Exception as e:
         rprint(f"[bold red]Error: {str(e)}[/bold red]")
         ctx.exit(1)
@@ -295,7 +296,7 @@ def fix(ctx, prompt_file: str, code_file: str, unit_test_file: str, error_file: 
         'output_code': output_code,
         'output_results': output_results
     }
-    
+
     try:
         input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_files,
@@ -304,9 +305,8 @@ def fix(ctx, prompt_file: str, code_file: str, unit_test_file: str, error_file: 
             command="fix",
             command_options=command_options
         )
-        
+
         if loop:
-            rprint(f"Starting fix loop with auto_submit: {auto_submit}")
             success, final_unit_test, final_code, total_attempts, total_cost, model_name = fix_error_loop_func(
                 unit_test_file,
                 code_file,
@@ -316,54 +316,51 @@ def fix(ctx, prompt_file: str, code_file: str, unit_test_file: str, error_file: 
                 ctx.obj['temperature'],
                 max_attempts,
                 budget,
-                output_file_paths['output_results'],
-                auto_submit
+                output_file_paths['output_results']
             )
-            
+
             if success:
                 with open(output_file_paths['output_test'], 'w') as f:
                     f.write(final_unit_test)
                 with open(output_file_paths['output_code'], 'w') as f:
                     f.write(final_code)
-                
+
                 if not ctx.obj['quiet']:
-                    rprint(f"Fixed unit test saved to: {output_file_paths['output_test']}")
-                    rprint(f"Fixed code saved to: {output_file_paths['output_code']}")
-                    rprint(f"Fix results saved to: {output_file_paths['output_results']}")
+                    rprint(f"[bold green]Fixed unit test saved to:[/bold green] {output_file_paths['output_test']}")
+                    rprint(f"[bold green]Fixed code saved to:[/bold green] {output_file_paths['output_code']}")
+                    rprint(f"[bold green]Fix results saved to:[/bold green] {output_file_paths['output_results']}")
                     rprint(f"Total attempts: {total_attempts}")
                     rprint(f"Total cost: ${total_cost:.6f}")
             else:
                 rprint("[bold red]Failed to fix errors within the given constraints.[/bold red]")
-            
+
             return success, final_unit_test, final_code, total_attempts, total_cost, model_name
         else:
-            rprint("Running single fix attempt")
             update_unit_test, update_code, fixed_unit_test, fixed_code, total_cost, model_name = fix_errors_from_unit_tests_func(
                 input_strings['unit_test_file'],
                 input_strings['code_file'],
                 input_strings['prompt_file'],
                 input_strings['error_file'],
+                output_file_paths['output_results'],
                 ctx.obj['strength'],
                 ctx.obj['temperature']
             )
-            
-            rprint(f"Fix attempt results: update_unit_test={update_unit_test}, update_code={update_code}")
-            
+
             if update_unit_test:
                 with open(output_file_paths['output_test'], 'w') as f:
                     f.write(fixed_unit_test)
                 if not ctx.obj['quiet']:
-                    rprint(f"Fixed unit test saved to: {output_file_paths['output_test']}")
-            
+                    rprint(f"[bold green]Fixed unit test saved to:[/bold green] {output_file_paths['output_test']}")
+
             if update_code:
                 with open(output_file_paths['output_code'], 'w') as f:
                     f.write(fixed_code)
                 if not ctx.obj['quiet']:
-                    rprint(f"Fixed code saved to: {output_file_paths['output_code']}")
-            
+                    rprint(f"[bold green]Fixed code saved to:[/bold green] {output_file_paths['output_code']}")
+
             if not ctx.obj['quiet']:
-                rprint(f"Fix results saved to: {output_file_paths['output_results']}")
-            
+                rprint(f"[bold green]Fix results saved to:[/bold green] {output_file_paths['output_results']}")
+
             return True, fixed_unit_test, fixed_code, 1, total_cost, model_name
     except Exception as e:
         rprint(f"[bold red]Error in fix command: {str(e)}[/bold red]")
@@ -480,6 +477,7 @@ def update(ctx, input_prompt_file: str, input_code_file: Optional[str], modified
     """Update the original prompt file based on the original code and the modified code."""
     input_files = {
         'input_prompt_file': input_prompt_file,
+        'input_code_file': input_code_file,
         'modified_code_file': modified_code_file
     }
 
@@ -500,8 +498,8 @@ def update(ctx, input_prompt_file: str, input_code_file: Optional[str], modified
         )
 
         modified_prompt, total_cost, model_name = update_prompt_func(
-            input_strings.get('input_prompt_file'),
-            input_strings.get('input_code_file'),
+            input_strings['input_prompt_file'],
+            input_strings['input_code_file'],
             input_strings['modified_code_file'],
             ctx.obj['strength'],
             ctx.obj['temperature']
@@ -548,7 +546,6 @@ def detect(ctx, prompt_files: List[str], change_file: str, output: Optional[str]
             ctx.obj['temperature']
         )
 
-        # Write changes to CSV
         with open(output_file_paths['output'], 'w', newline='') as csvfile:
             fieldnames = ['prompt_name', 'change_instructions']
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
@@ -611,7 +608,7 @@ def conflicts(ctx, prompt1: str, prompt2: str, output: Optional[str]) -> Tuple[L
 @click.argument('prompt_file', type=click.Path(exists=True))
 @click.argument('code_file', type=click.Path(exists=True))
 @click.argument('program_file', type=click.Path(exists=True))
-@click.argument('error_file', type=click.Path(exists=True))
+@click.argument('error_file', type=click.Path())
 @click.option('--output', type=click.Path(), help='Specify where to save the fixed code file.')
 @click.pass_context
 @track_cost
@@ -649,7 +646,7 @@ def crash(ctx, prompt_file: str, code_file: str, program_file: str, error_file: 
         if not ctx.obj['quiet']:
             rprint(f"[bold green]Fixed code saved to:[/bold green] {output_file_paths['output']}")
 
-        return output_file_paths['output'], total_cost, model_name
+        return fixed_code, total_cost, model_name
     except Exception as e:
         rprint(f"[bold red]Error: {str(e)}[/bold red]")
         ctx.exit(1)
@@ -751,24 +748,27 @@ def bug(ctx, prompt_file: str, code_file: str, program_file: str, current_output
         ctx.exit(1)
 
 @cli.command()
-@click.argument('prompt_file', type=click.Path(exists=True))
-@click.option('--output-cost', type=click.Path(), help='Specify CSV file for cost tracking.')
-@click.pass_context
-def install_completion(ctx, prompt_file: str, output_cost: Optional[str]):
+def install_completion():
     """Install shell completion for the PDD CLI."""
     import subprocess
 
-    shell = os.path.basename(os.environ.get('SHELL', ''))
-    home = os.path.expanduser('~')
-    rc_file = None
+    def get_shell():
+        return os.path.basename(os.environ.get('SHELL', ''))
 
-    if shell == 'bash':
-        rc_file = os.path.join(home, '.bashrc')
-    elif shell == 'zsh':
-        rc_file = os.path.join(home, '.zshrc')
-    elif shell == 'fish':
-        rc_file = os.path.join(home, '.config', 'fish', 'config.fish')
-    else:
+    def get_rc_file(shell: str, home: str) -> Optional[str]:
+        if shell == 'bash':
+            return os.path.join(home, '.bashrc')
+        elif shell == 'zsh':
+            return os.path.join(home, '.zshrc')
+        elif shell == 'fish':
+            return os.path.join(home, '.config', 'fish', 'config.fish')
+        return None
+
+    shell = get_shell()
+    home = os.path.expanduser('~')
+    rc_file = get_rc_file(shell, home)
+
+    if not rc_file:
         rprint(f"[bold red]Unsupported shell: {shell}[/bold red]")
         sys.exit(1)
 
@@ -777,7 +777,7 @@ def install_completion(ctx, prompt_file: str, output_cost: Optional[str]):
     try:
         with open(rc_file, 'r') as f:
             content = f.read()
-        
+
         if completion_command not in content:
             with open(rc_file, 'a') as f:
                 f.write(f"\n# PDD CLI completion\n{completion_command}\n")
