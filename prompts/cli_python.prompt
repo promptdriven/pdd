@@ -11,7 +11,7 @@
     - pdd/context
     - pdd/data
 
-% Some of the pdd commands will have the same name as some of the below functions. Be sure to import the functions with a different name to avoid conflicts (e.g. 'preprocess' needs to be imported as 'preprocess_func' to prevent conflict with Click commands) Make sure this happens for the others like 'split', 'change', etc.
+% Some of the pdd commands will have the same name as some of the below functions. Be sure to import the functions with a different name to avoid conflicts (e.g. 'preprocess' needs to be imported as 'preprocess_func' to prevent conflict with Click commands) Make sure this happens for the others too like 'split', 'change', 'trace', etc. Also, the module name will be the same as the imported function name (e.g. 'from .code_generator import code_generator').
 </context>
 
 <examples>
@@ -43,14 +43,27 @@
 
     - 'update' command: To update the prompt file, use the 'update_prompt' function. Here is an example of how to update the prompt file: <update_prompt_example><include>context/update_prompt_example.py</include></update_prompt_example>
 
+    - 'update --git' sub-command: To update the prompt file like above but without having the have the original code file use the 'git_update' function. Here is an example of how to update the prompt file by retrieving the original code file from a git repository: <git_update_example><include>context/git_update_example.py</include></git_update_example>
+
     - 'detect' command: To analyze a list of prompt files and a change description to determine which prompts need to be changed, use the 'detect_change' function. Here is an example of how to detect prompts that need changes: <detect_change_example><include>context/detect_change_example.py</include></detect_change_example>
 
     - 'conflicts' command: To analyze two prompt files to find conflicts between them and suggest how to resolve those conflicts, use the 'conflicts_in_prompts' function. Here is an example of how to analyze conflicts between two prompts: <conflicts_in_prompts_example><include>context/conflicts_in_prompts_example.py</include></conflicts_in_prompts_example>
 
     - 'crash' command: To fix errors in a code module that caused a program to crash, use the 'fix_code_module_errors' function. Here is an example of how to fix errors in a code module that caused a program to crash: <fix_code_module_errors_example><include>context/fix_code_module_errors_example.py</include></fix_code_module_errors_example>
+
+    - 'trace' command: To trace the execution of a code module and generate a trace file, use the 'trace' function. Here is an example of how to trace the execution of a code module: <trace_example><include>context/trace_example.py</include></trace_example>
+
+    - 'bug' command: To create a unit test from a bug in a code module, use the 'bug_to_unit_test' function. Here is an example of how to create a unit test from a bug in a code module: <bug_to_unit_test_example><include>context/bug_to_unit_test_example.py</include></bug_to_unit_test_example>
 </internal_example_modules>
 
 % 'install_completion' command: Enhance the shell completion installation process by determining the correct paths for different shells and ensuring the source command is added to the shell's RC file only if it's not already present. Use a helper function to manage these paths.
 
 % If output cost option is selected directly and/or via the output cost environmental variable, the costs and other details should be appended to the specified output file. If the output file does not exist, it should be created. If the output file exists, the costs should be appended to the end of the file. Be sure to include all columns in the csv file.
 </instructions>
+
+
+<example_generation>
+% Here an example of a prompt and generated code from a prior version of the above prompt:
+    <prior_prompt><include>context/generate/3/cli_python_preprocessed.prompt</include></prior_prompt>
+    <prior_code><include>context/generate/3/cli.py</include></prior_code>
+</example_generation>
