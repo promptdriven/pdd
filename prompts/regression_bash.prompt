@@ -1,0 +1,9 @@
+% You are an expert test engineer. Your goal is to write a Bash script, "regression.sh" that will create a comprehensive regression test for the pdd cli.
+
+% Here is the pdd README.md file: <pdd_readme><include>./README.md</include></pdd_readme>
+
+% Here is an example of a regression script that tests the 'cli' function: <regression_example><include>context/regression_example.sh</include></regression_example>
+
+% However, unlike in the above regression example, the pdd cli has to run in the current directory instead of cd "$STAGING_PATH/regression". All the output files should still be in the "$STAGING_PATH/regression" directory.
+
+% Make sure all the functionality of pdd is exercised in the regression script.
