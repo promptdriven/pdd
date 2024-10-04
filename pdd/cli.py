@@ -1,5 +1,3 @@
-# pdd/pdd/cli.py
-
 import os
 import csv
 import sys
@@ -297,7 +295,7 @@ def fix(ctx, prompt_file: str, code_file: str, unit_test_file: str, error_file: 
         'output_code': output_code,
         'output_results': output_results
     }
-
+    
     try:
         input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_files,
@@ -306,8 +304,9 @@ def fix(ctx, prompt_file: str, code_file: str, unit_test_file: str, error_file: 
             command="fix",
             command_options=command_options
         )
-
+        
         if loop:
+            rprint(f"Starting fix loop with auto_submit: {auto_submit}")
             success, final_unit_test, final_code, total_attempts, total_cost, model_name = fix_error_loop_func(
                 unit_test_file,
                 code_file,
@@ -320,25 +319,26 @@ def fix(ctx, prompt_file: str, code_file: str, unit_test_file: str, error_file: 
                 output_file_paths['output_results'],
                 auto_submit
             )
-
+            
             if success:
                 with open(output_file_paths['output_test'], 'w') as f:
                     f.write(final_unit_test)
                 with open(output_file_paths['output_code'], 'w') as f:
                     f.write(final_code)
-
+                
                 if not ctx.obj['quiet']:
-                    rprint(f"[bold green]Fixed unit test saved to:[/bold green] {output_file_paths['output_test']}")
-                    rprint(f"[bold green]Fixed code saved to:[/bold green] {output_file_paths['output_code']}")
-                    rprint(f"[bold green]Fix results saved to:[/bold green] {output_file_paths['output_results']}")
-                    rprint(f"[bold green]Total attempts: {total_attempts}[/bold green]")
-                    rprint(f"[bold green]Total cost: ${total_cost:.6f}[/bold green]")
+                    rprint(f"Fixed unit test saved to: {output_file_paths['output_test']}")
+                    rprint(f"Fixed code saved to: {output_file_paths['output_code']}")
+                    rprint(f"Fix results saved to: {output_file_paths['output_results']}")
+                    rprint(f"Total attempts: {total_attempts}")
+                    rprint(f"Total cost: ${total_cost:.6f}")
             else:
                 rprint("[bold red]Failed to fix errors within the given constraints.[/bold red]")
-
+            
             return success, final_unit_test, final_code, total_attempts, total_cost, model_name
         else:
-            fixed_unit_test, fixed_code, total_cost, model_name = fix_errors_from_unit_tests_func(
+            rprint("Running single fix attempt")
+            update_unit_test, update_code, fixed_unit_test, fixed_code, total_cost, model_name = fix_errors_from_unit_tests_func(
                 input_strings['unit_test_file'],
                 input_strings['code_file'],
                 input_strings['prompt_file'],
@@ -346,25 +346,30 @@ def fix(ctx, prompt_file: str, code_file: str, unit_test_file: str, error_file: 
                 ctx.obj['strength'],
                 ctx.obj['temperature']
             )
-
-            if fixed_unit_test:
+            
+            rprint(f"Fix attempt results: update_unit_test={update_unit_test}, update_code={update_code}")
+            
+            if update_unit_test:
                 with open(output_file_paths['output_test'], 'w') as f:
                     f.write(fixed_unit_test)
                 if not ctx.obj['quiet']:
-                    rprint(f"[bold green]Fixed unit test saved to:[/bold green] {output_file_paths['output_test']}")
-
-            if fixed_code:
+                    rprint(f"Fixed unit test saved to: {output_file_paths['output_test']}")
+            
+            if update_code:
                 with open(output_file_paths['output_code'], 'w') as f:
                     f.write(fixed_code)
                 if not ctx.obj['quiet']:
-                    rprint(f"[bold green]Fixed code saved to:[/bold green] {output_file_paths['output_code']}")
-
+                    rprint(f"Fixed code saved to: {output_file_paths['output_code']}")
+            
             if not ctx.obj['quiet']:
-                rprint(f"[bold green]Fix results saved to:[/bold green] {output_file_paths['output_results']}")
-
+                rprint(f"Fix results saved to: {output_file_paths['output_results']}")
+            
             return True, fixed_unit_test, fixed_code, 1, total_cost, model_name
     except Exception as e:
-        rprint(f"[bold red]Error: {str(e)}[/bold red]")
+        rprint(f"[bold red]Error in fix command: {str(e)}[/bold red]")
+        if ctx.obj['verbose']:
+            import traceback
+            rprint(traceback.format_exc())
         ctx.exit(1)
 
 @cli.command()
