@@ -21,7 +21,7 @@
 </internal_example_modules>
 
 % This function will use Langchain to do the following:
-    Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/conflict_LLM.prompt' and '$PDD_PATH/prompts/extract_detect_change_LLM.prompt' files.
+    Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/conflict_LLM.prompt' and '$PDD_PATH/prompts/extract_conflicts_LLM.prompt' files.
     Step 2. Then this will create a Langchain LCEL template from the conflict_LLM prompt.
     Step 3. This will use llm_selector for the model, imported from a relative path.
     Step 4. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
@@ -30,7 +30,7 @@
             - 'PROMPT1'
             - 'PROMPT2'
         5b.  Pretty print the output of 5a which will be in Markdown format.
-    Step 6. Create a Langchain LCEL template using a .8 strength llm_selector and token counter from the extract_detect_change_LLM prompt that outputs JSON:
+    Step 6. Create a Langchain LCEL template using a .8 strength llm_selector and token counter from the extract_conflicts_LLM prompt that outputs JSON:
         6a. Pass the following string parameters to the prompt during invocation: 'llm_output' (this string is from Step 5a).
         6b. Calculate input and output token count using token_counter from llm_selector and pretty print the running message with the token count and cost.
         6c. Use 'get' function to extract 'changes_list' list values using from the dictionary output.

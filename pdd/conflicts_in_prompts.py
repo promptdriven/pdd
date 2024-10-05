@@ -30,7 +30,7 @@ def conflicts_in_prompts(prompt1: str, prompt2: str, strength: float = 0.5, temp
         with open(os.path.join(pdd_path, 'prompts', 'conflict_LLM.prompt'), 'r') as f:
             conflict_prompt_template = f.read()
 
-        with open(os.path.join(pdd_path, 'prompts', 'extract_detect_change_LLM.prompt'), 'r') as f:
+        with open(os.path.join(pdd_path, 'prompts', 'extract_conflict_LLM.prompt'), 'r') as f:
             extract_prompt_template = f.read()
 
         # Step 2: Create Langchain LCEL template for conflict detection
