@@ -56,10 +56,11 @@ def track_cost(func):
             output_files = []
 
             for param, value in ctx.params.items():
-                if isinstance(value, str) and 'input' in param.lower():
+                if isinstance(value, str) and not 'output' in param.lower():
                     input_files.append(value)
                 elif isinstance(value, str) and 'output' in param.lower():
-                    output_files.append(value)
+                    if not value == output_cost_path:
+                        output_files.append(value)
                 elif isinstance(value, (list, tuple)):
                     # Handle multiple input/output files
                     for item in value:
