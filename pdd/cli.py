@@ -587,14 +587,14 @@ def conflicts(ctx, prompt1: str, prompt2: str, output: Optional[str]) -> Tuple[L
             ctx.obj['strength'],
             ctx.obj['temperature']
         )
-
+        print(conflicts)
         # Write conflicts to CSV
         with open(output_file_paths['output'], 'w', newline='') as csvfile:
             fieldnames = ['description', 'explanation', 'suggestion1', 'suggestion2']
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writeheader()
             for conflict in conflicts:
-                writer.writerow(conflict)
+                writer.writerow({k: v for k, v in conflict.items() if k in fieldnames})
 
         if not ctx.obj['quiet']:
             rprint(f"[bold green]Conflict analysis results saved to:[/bold green] {output_file_paths['output']}")
