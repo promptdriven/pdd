@@ -1,0 +1,1520 @@
+<context>
+% You are an expert Python engineer. Your goal is to write a Python command line program, "pdd". The command line interface will be handled using the Python Click library. It will contain the 'cli' function.
+
+% The function should be part of a Python package, using relative imports (single dot) for internal modules (e.g. 'from .module_name import module_name'). All output to the console will be pretty printed using the Python Rich library. Ensure the function handles edge cases, such as missing inputs or model errors, and provide clear error messages.
+
+% Here is a detailed description of the program functionality: <program_description># PDD (Prompt-Driven Development) Command Line Interface
+
+## Introduction
+
+PDD (Prompt-Driven Development) is a versatile tool for generating code, creating examples, running unit tests, and managing prompt files. It leverages AI models to streamline the development process, allowing developers to work more efficiently with prompt-driven code generation.
+
+## Version
+
+Current version: 0.2.0
+
+To check your installed version, run:
+```
+pdd --version
+```
+
+## Supported Programming Languages
+
+PDD supports a wide range of programming languages, including but not limited to:
+- Python
+- JavaScript
+- Java
+- C++
+- Ruby
+- Go
+
+The specific language is often determined by the prompt file's naming convention or specified in the command options.
+
+## Prompt File Naming Convention
+
+Prompt files in PDD follow this specific naming format:
+```
+<basename>_<language>.prompt
+```
+Where:
+- `<basename>` is the base name of the file or project
+- `<language>` is the programming language or context of the prompt file
+
+Examples:
+- `factorial_calculator_python.prompt` (basename: factorial_calculator, language: python)
+- `responsive_layout_css.prompt` (basename: responsive_layout, language: css)
+- `data_processing_pipeline_python.prompt` (basename: data_processing_pipeline, language: python)
+
+## Basic Usage
+
+```
+pdd [GLOBAL OPTIONS] COMMAND [OPTIONS] [ARGS]...
+```
+
+## Global Options
+
+These options can be used with any command:
+
+- `--force`: Overwrite existing files without asking for confirmation.
+- `--strength FLOAT`: Set the strength of the AI model (0.0 to 1.0, default is 0.5).
+- `--temperature FLOAT`: Set the temperature of the AI model (default is 0.0).
+- `--verbose`: Increase output verbosity for more detailed information.
+- `--quiet`: Decrease output verbosity for minimal information.
+- `--output-cost PATH_TO_CSV_FILE`: Enable cost tracking and output a CSV file with usage details.
+- `--review-examples`: Review and optionally exclude few-shot examples before command execution.
+
+## AI Model Information
+
+PDD uses a large language model to generate and manipulate code. The `--strength` and `--temperature` options allow you to control the model's output:
+
+- Strength: Determines how powerful/expensive a model should be used. Higher values (closer to 1.0) result in high performance, while lower values are cheaper.
+- Temperature: Controls the randomness of the output. Higher values increase diversity but may lead to less coherent results, while lower values produce more focused and deterministic outputs.
+
+## Output Cost Tracking
+
+PDD includes a feature for tracking and reporting the cost of operations. When enabled, it generates a CSV file with usage details for each command execution.
+
+### Usage
+
+To enable cost tracking, use the `--output-cost` option with any command:
+
+```
+pdd --output-cost PATH_TO_CSV_FILE [COMMAND] [OPTIONS] [ARGS]...
+```
+
+The `PATH_TO_CSV_FILE` should be the desired location and filename for the CSV output.
+
+### Cost Calculation and Presentation
+
+PDD calculates costs based on the AI model usage for each operation. Costs are presented in USD (United States Dollars) and are calculated using the following factors:
+
+1. Model strength: Higher strength settings generally result in higher costs.
+2. Input size: Larger inputs (e.g., longer prompts or code files) typically incur higher costs.
+3. Operation complexity: Some operations (like `fix` with multiple iterations) may be more costly than simpler operations.
+
+The exact cost per operation is determined by the AI service provider's current pricing model. PDD uses an internal pricing table that is regularly updated to reflect the most current rates.
+
+### CSV Output
+
+The generated CSV file includes the following columns:
+- timestamp: The date and time of the command execution
+- model: The AI model used for the operation
+- command: The PDD command that was executed
+- cost: The estimated cost of the operation in USD (e.g., 0.05 for 5 cents)
+- input_files: A list of input files involved in the operation
+- output_files: A list of output files generated or modified by the operation
+
+This comprehensive output allows for detailed tracking of not only the cost and type of operations but also the specific files involved in each PDD command execution.
+
+### Environment Variable
+
+You can set a default location for the cost output CSV file using the environment variable:
+
+- **`PDD_OUTPUT_COST_PATH`**: Default path for the cost tracking CSV file.
+
+If this environment variable is set, the CSV file will be saved to the specified path by default, unless overridden by the `--output-cost` option. For example, if `PDD_OUTPUT_COST_PATH=/path/to/cost/reports/`, the CSV file will be saved in that directory with a default filename.
+
+### Cost Budgeting
+
+For commands that support it (like the `fix` command), you can set a maximum budget using the `--budget` option. This helps prevent unexpected high costs, especially for operations that might involve multiple AI model calls.
+
+Example:
+```
+pdd fix --budget 5.0 [OTHER OPTIONS] [ARGS]...
+```
+This sets a maximum budget of $5.00 for the fix operation.
+
+## Commands
+
+Here are the main commands provided by PDD:
+
+### 1. generate
+
+Create runnable code from a prompt file.
+
+```
+pdd generate [GLOBAL OPTIONS] [OPTIONS] PROMPT_FILE
+```
+
+Arguments:
+- `PROMPT_FILE`: The filename of the prompt file used to generate the code.
+
+Options:
+- `--output LOCATION`: Specify where to save the generated code. The default file name is `<basename>.<language_file_extension>`. If an environment variable `PDD_GENERATE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+
+Example:
+```
+pdd generate --output src/factorial_calculator.py factorial_calculator_python.prompt 
+```
+
+### 2. example
+
+Create an example file from an existing code file and the prompt that generated the code file.
+
+```
+pdd example [GLOBAL OPTIONS] [OPTIONS] PROMPT_FILE CODE_FILE
+```
+
+Arguments:
+- `PROMPT_FILE`: The filename of the prompt file that generated the code.
+- `CODE_FILE`: The filename of the existing code file.
+
+Options:
+- `--output LOCATION`: Specify where to save the generated example code. The default file name is `<basename>_example.<language_file_extension>`. If an environment variable `PDD_EXAMPLE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+
+Example:
+```
+pdd example --output examples/factorial_calculator_example.py factorial_calculator_python.prompt src/factorial_calculator.py
+```
+
+### 3. test
+
+Generate a unit test file for a given code file and its corresponding prompt file.
+
+```
+pdd test [GLOBAL OPTIONS] [OPTIONS] PROMPT_FILE CODE_FILE
+```
+
+Arguments:
+- `PROMPT_FILE`: The filename of the prompt file that generated the code.
+- `CODE_FILE`: The filename of the code file to be tested.
+
+Options:
+- `--output LOCATION`: Specify where to save the generated test file. The default file name is `test_<basename>.<language_file_extension>`.
+- `--language`: Specify the programming language. Defaults to the language specified by the prompt file name.
+
+Example:
+```
+pdd test --output tests/test_factorial_calculator.py factorial_calculator_python.prompt src/factorial_calculator.py
+```
+
+### 4. preprocess
+
+Preprocess prompt files and save the results.
+
+```
+pdd preprocess [GLOBAL OPTIONS] [OPTIONS] PROMPT_FILE
+```
+
+Arguments:
+- `PROMPT_FILE`: The filename of the prompt file to preprocess.
+
+Options:
+- `--output LOCATION`: Specify where to save the preprocessed prompt file. The default file name is `<basename>_<language>_preprocessed.prompt`.
+- `--xml`: Automatically insert XML delimiters for long and complex prompt files to structure the content better.
+
+Example:
+```
+pdd preprocess --output preprocessed/factorial_calculator_python_preprocessed.prompt --xml factorial_calculator_python.prompt 
+```
+
+### 5. fix
+
+Fix errors in code and unit tests based on error messages and the original prompt file.
+
+```
+pdd fix [GLOBAL OPTIONS] [OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE ERROR_FILE
+```
+
+Arguments:
+- `PROMPT_FILE`: The filename of the prompt file that generated the code under test.
+- `CODE_FILE`: The filename of the code file to be fixed.
+- `UNIT_TEST_FILE`: The filename of the unit test file.
+- `ERROR_FILE`: The filename containing the unit test runtime error messages. Optional and does not need to exist when used with the `--loop` command.
+
+Options:
+- `--output-test LOCATION`: Specify where to save the fixed unit test file. The default file name is `test_<basename>_fixed.<language_file_extension>`. If an environment variable `PDD_FIX_TEST_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output-code LOCATION`: Specify where to save the fixed code file. The default file name is `<basename>_fixed.<language_file_extension>`. If an environment variable `PDD_FIX_CODE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output-results LOCATION`: Specify where to save the results of the error fixing process. The default file name is `<basename>_fix_results.log`. If an environment variable `PDD_FIX_RESULTS_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--loop`: Enable iterative fixing process.
+  - `--verification-program PATH`: Specify the path to a Python program that verifies if the code still runs correctly.
+  - `--max-attempts INT`: Set the maximum number of fix attempts before giving up (default is 3).
+  - `--budget FLOAT`: Set the maximum cost allowed for the fixing process (default is $5.0).
+- `--auto-submit`: Automatically submit the example if all unit tests pass during the fix loop.
+
+When the `--loop` option is used, the fix command will attempt to fix errors through multiple iterations. It will use the specified verification program to check if the code runs correctly after each fix attempt. The process will continue until either the errors are fixed, the maximum number of attempts is reached, or the budget is exhausted.
+
+Outputs:
+- Fixed unit test file
+- Fixed code file
+- Results file containing the LLM model's output with unit test results.
+- Print out of results when using '--loop' containing:
+  - Success status (boolean)
+  - Total number of fix attempts made
+  - Total cost of all fix attempts
+
+Example:
+```
+pdd fix --output-test tests/test_factorial_calculator_fixed.py --output-code src/factorial_calculator_fixed.py --output-results results/factorial_fix_results.log factorial_calculator_python.prompt src/factorial_calculator.py tests/test_factorial_calculator.py errors.log
+```
+In this example, `factorial_calculator_python.prompt` is the prompt file that originally generated the code under test.
+
+### 6. split
+
+Split large complex prompt files into smaller, more manageable prompt files.
+
+```
+pdd split [GLOBAL OPTIONS] [OPTIONS] INPUT_PROMPT INPUT_CODE EXAMPLE_CODE
+```
+
+Arguments:
+- `INPUT_PROMPT`: The filename of the large prompt file to be split.
+- `INPUT_CODE`: The filename of the code generated from the input prompt.
+- `EXAMPLE_CODE`: The filename of the example code that serves as the interface to the sub-module prompt file.
+
+Options:
+- `--output-sub LOCATION`: Specify where to save the generated sub-prompt file. The default file name is `sub_<basename>.prompt`. If an environment variable `PDD_SPLIT_SUB_PROMPT_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output-modified LOCATION`: Specify where to save the modified prompt file. The default file name is `modified_<basename>.prompt`. If an environment variable `PDD_SPLIT_MODIFIED_PROMPT_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+
+Example:
+```
+pdd split --output-sub prompts/sub_data_processing.prompt --output-modified prompts/modified_main_pipeline.prompt data_processing_pipeline_python.prompt src/data_pipeline.py examples/pipeline_interface.py 
+```
+
+### 7. change
+
+Modify an input prompt file based on a change prompt and the corresponding input code.
+
+```
+pdd change [GLOBAL OPTIONS] [OPTIONS] INPUT_PROMPT_FILE INPUT_CODE_FILE CHANGE_PROMPT_FILE
+```
+
+Arguments:
+- `INPUT_PROMPT_FILE`: The filename of the prompt file that will be modified.
+- `INPUT_CODE_FILE`: The filename of the code that was generated from the input prompt file.
+- `CHANGE_PROMPT_FILE`: The filename containing the instructions on how to modify the input prompt file.
+
+Options:
+- `--output LOCATION`: Specify where to save the modified prompt file. The default file name is `modified_<basename>.prompt`. If an environment variable `PDD_CHANGE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+
+Example:
+```
+pdd change --output modified_factorial_calculator_python.prompt factorial_calculator_python.prompt src/factorial_calculator.py changes_factorial.prompt
+```
+
+### 8. update
+
+Update the original prompt file based on the original code and the modified code.
+
+```
+pdd update [GLOBAL OPTIONS] [OPTIONS] INPUT_PROMPT_FILE INPUT_CODE_FILE MODIFIED_CODE_FILE
+```
+
+Arguments:
+- `INPUT_PROMPT_FILE`: The filename of the prompt file that generated the original code.
+- `INPUT_CODE_FILE`: The filename of the original code that was generated from the input prompt file.
+- `MODIFIED_CODE_FILE`: The filename of the code that was modified by the user.
+
+Options:
+- `--output LOCATION`: Specify where to save the modified prompt file. The default file name is `modified_<basename>.prompt`.  If an environment variable `PDD_UPDATE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+
+Example:
+```
+pdd update --output updated_factorial_calculator_python.prompt factorial_calculator_python.prompt src/original_factorial_calculator.py src/modified_factorial_calculator.py
+```
+
+### 9. detect
+
+Analyze a list of prompt files and a change description to determine which prompts need to be changed.
+
+```
+pdd detect [GLOBAL OPTIONS] [OPTIONS] PROMPT_FILES... CHANGE_FILE
+```
+
+Arguments:
+- `PROMPT_FILES`: A list of filenames of prompts that may need to be changed.
+- `CHANGE_FILE`: Filename whose content describes the changes that need to be analyzed and potentially applied to the prompts.
+
+Options:
+- `--output LOCATION`: Specify where to save the CSV file containing the analysis results. The default file name is `<change_file_basename>_detect.csv`.  If an environment variable `PDD_DETECT_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+
+Example:
+```
+pdd detect --output detect_results.csv factorial_calculator_python.prompt data_processing_python.prompt web_scraper_python.prompt changes_description.prompt
+```
+
+### 10. conflicts
+
+Analyze two prompt files to find conflicts between them and suggest how to resolve those conflicts.
+
+```
+pdd conflicts [GLOBAL OPTIONS] [OPTIONS] PROMPT1 PROMPT2
+```
+
+Arguments:
+- `PROMPT1`: First prompt in the pair of prompts we are comparing.
+- `PROMPT2`: Second prompt in the pair of prompts we are comparing.
+
+Options:
+- `--output LOCATION`: Specify where to save the CSV file containing the conflict analysis results. The default file name is `<prompt1_basename>_<prompt2_basename>_conflict.csv`.  If an environment variable `PDD_CONFLICTS_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+
+Example:
+```
+pdd conflicts --output conflicts_analysis.csv data_processing_module_python.prompt data_visualization_module_python.prompt 
+```
+
+### 11. crash
+
+Fix errors in a code module that caused a program to crash.
+
+```
+pdd crash [GLOBAL OPTIONS] [OPTIONS] PROMPT_FILE CODE_FILE PROGRAM_FILE ERROR_FILE
+```
+
+Arguments:
+- `PROMPT_FILE`: Filename of the prompt file that generated the code module.
+- `CODE_FILE`: Filename of the code module that caused the crash and will be modified so it runs properly.
+- `PROGRAM_FILE`: Filename of the program that was running the code module.
+- `ERROR_FILE`: Filename of the file containing the errors from the program run.
+
+Options:
+- `--output LOCATION`: Specify where to save the fixed code file. The default file name is `<basename>_fixed.<language_extension>`.  If an environment variable `PDD_CRASH_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+
+Example:
+```
+pdd crash --output fixed_data_processor.py data_processing_module_python.prompt crashed_data_processor.py main_pipeline.py crash_errors.log 
+```
+## Example Review Process
+
+When the global `--review-examples` option is used with any command, PDD will present potential few-shot examples that might be used for the current operation. The review process follows these steps:
+
+1. PDD displays the inputs (but not the outputs) of potential few-shot examples.
+2. For each example, you can choose to:
+   - Accept the example (it will be used in the operation)
+   - Exclude the example (it won't be used in this or future operations)
+   - Skip the example (it won't be used in this operation but may be presented again in the future)
+3. After reviewing all presented examples, PDD will proceed with the command execution using the accepted examples.
+
+This feature allows you to have more control over the examples used in PDD operations, potentially improving the quality and relevance of the generated outputs.
+
+## Automatic Example Submission
+
+When using the `fix` command with the `--auto-submit` option, PDD will automatically submit the example to the PDD Cloud platform if all unit tests pass during the fix loop. This feature helps to continuously improve the platform's example database with successful fixes.
+
+## Output Location Specification
+
+For all commands that generate or modify files, the `--output` option (or its variant, such as `--output-sub` or `--output-modified` for the `split` command) allows flexible specification of the output location:
+
+1. **Filename only**: If you provide just a filename (e.g., `--output result.py`), the file will be created in the current working directory.
+2. **Full path**: If you provide a full path (e.g., `--output /home/user/projects/result.py`), the file will be created at that exact location.
+3. **Directory**: If you provide a directory name (e.g., `--output ./generated/`), a file with an automatically generated name will be created in that directory.
+4. **Environment Variable**: If the `--output` option is not provided, and an environment variable specific to the command is set, PDD will use the path specified by this variable. Otherwise, it will use default naming conventions and save the file in the current working directory.
+5. **No Output Location**: If no output location is specified and no environment variable is set, the file will be saved in the current working directory with a default name given the command.
+
+## Multi-Command Chaining
+
+PDD supports multi-command chaining, allowing you to execute multiple commands in a single line. Commands will be executed in the order they are specified. This feature enables you to perform complex workflows efficiently, combining various PDD operations into a single, streamlined process.
+
+Basic syntax for multi-command chaining:
+```
+pdd [GLOBAL OPTIONS] COMMAND1 [OPTIONS] [ARGS]... [COMMAND2 [OPTIONS] [ARGS]...]...
+```
+
+Here are some examples of multi-command chaining to illustrate its power and flexibility:
+
+1. Generate code, create an example, and run tests in one go:
+```
+pdd generate --output src/factorial_calculator.py factorial_calculator_python.prompt example --output examples/factorial_usage.py factorial_calculator_python.prompt src/factorial_calculator.py test --output tests/test_factorial_calculator.py factorial_calculator_python.prompt src/factorial_calculator.py
+```
+
+2. Preprocess a prompt, generate code, and create an example with cost tracking:
+```
+pdd --output-cost usage.csv preprocess --output preprocessed/data_pipeline_preprocessed.prompt data_processing_pipeline_python.prompt generate --output src/data_pipeline.py preprocessed/data_pipeline_preprocessed.prompt example --output examples/pipeline_usage.py preprocessed/data_pipeline_preprocessed.prompt src/data_pipeline.py
+```
+
+3. Split a large prompt, generate code from the sub-prompt, and create a test:
+```
+pdd split --output-sub sub_prompts/data_processing_module.prompt --output-modified modified_prompts/main_pipeline.prompt large_data_pipeline_python.prompt src/data_pipeline.py examples/pipeline_interface.py generate --output src/data_processing_module.py sub_prompts/data_processing_module.prompt test --output tests/test_data_processing_module.py sub_prompts/data_processing_module.prompt src/data_processing_module.py
+```
+
+4. Update a prompt based on code changes, then generate new code and tests:
+```
+pdd update --output updated_prompts/updated_web_scraper.prompt web_scraper_python.prompt src/original_scraper.py src/modified_scraper.py generate --output src/new_scraper.py updated_prompts/updated_web_scraper.prompt test --output tests/test_new_scraper.py updated_prompts/updated_web_scraper.prompt src/new_scraper.py
+```
+
+5. Detect prompts that need changes, then apply changes to those prompts:
+```
+pdd detect --output to_change.csv data_processing_python.prompt web_scraper_python.prompt api_interface_python.prompt changes.prompt change --output modified_prompts/modified_$(cat to_change.csv | cut -d',' -f1 | tail -n +2) $(cat to_change.csv | cut -d',' -f1 | tail -n +2) $(cat to_change.csv | cut -d',' -f1 | tail -n +2 | sed 's/\.prompt/_code.py/') changes.prompt
+```
+
+6. Analyze conflicts between two prompts and then update one of them:
+```
+pdd conflicts --output conflicts.csv data_processing_module_python.prompt data_visualization_module_python.prompt update --output updated_data_processing_module.prompt data_processing_module_python.prompt $(head -n 1 conflicts.csv | cut -d',' -f4) $(head -n 1 conflicts.csv | cut -d',' -f5)
+```
+
+7. Generate code, fix errors, and run tests:
+```
+pdd generate --output src/factorial_calculator.py factorial_calculator_python.prompt fix --output-test tests/test_factorial_calculator_fixed.py --output-code src/factorial_calculator_fixed.py --output-results results/factorial_fix_results.log factorial_calculator_python.prompt src/factorial_calculator.py tests/test_factorial_calculator.py errors.log test --output tests/test_factorial_calculator.py factorial_calculator_python.prompt src/factorial_calculator_fixed.py
+```
+
+These examples demonstrate how you can combine multiple PDD commands to create sophisticated workflows, automating complex development tasks in a single command line invocation. Remember that options always come before arguments for each command in the chain.
+
+## Getting Help
+
+PDD provides comprehensive help features:
+
+1. **General Help**:
+   ```
+   pdd --help
+   ```
+   Displays a list of available commands and options.
+
+2. **Command-Specific Help**:
+   ```
+   pdd COMMAND --help
+   ```
+   Provides detailed help for a specific command, including available options and usage examples.
+
+## Additional Features
+
+- **Tab Completion**: PDD supports tab completion for commands and options in compatible shells. You can install tab completion by running:
+  ```
+  pdd --install-completion
+  ```
+- **Colorized Output**: PDD provides colorized output for better readability in compatible terminals.
+
+## Environment Variables for Output Paths
+
+You can set environment variables to define default output paths for each command, reducing the need to specify output locations in the command line. The following environment variables are supported:
+
+- **`PDD_GENERATE_OUTPUT_PATH`**: Default path for the `generate` command.
+- **`PDD_EXAMPLE_OUTPUT_PATH`**: Default path for the `example` command.
+- **`PDD_TEST_OUTPUT_PATH`**: Default path for the `test` command.
+- **`PDD_PREPROCESS_OUTPUT_PATH`**: Default path for the `preprocess` command.
+- **`PDD_FIX_TEST_OUTPUT_PATH`**: Default path for the fixed unit test files in the `fix` command.
+- **`PDD_FIX_CODE_OUTPUT_PATH`**: Default path for the fixed code files in the `fix` command.
+- **`PDD_FIX_RESULTS_OUTPUT_PATH`**: Default path for the results file generated by the `fix` command.
+- **`PDD_SPLIT_SUB_PROMPT_OUTPUT_PATH`**: Default path for the sub-prompts generated by the `split` command.
+- **`PDD_SPLIT_MODIFIED_PROMPT_OUTPUT_PATH`**: Default path for the modified prompts generated by the `split` command.
+- **`PDD_CHANGE_OUTPUT_PATH`**: Default path for the modified prompts generated by the `change` command.
+- **`PDD_UPDATE_OUTPUT_PATH`**: Default path for the updated prompts generated by the `update` command.
+- **`PDD_OUTPUT_COST_PATH`**: Default path for the cost tracking CSV file.
+- **`PDD_DETECT_OUTPUT_PATH`**: Default path for the CSV file generated by the `detect` command.
+- **`PDD_CONFLICTS_OUTPUT_PATH`**: Default path for the CSV file generated by the `conflicts` command.
+- **`PDD_CRASH_OUTPUT_PATH`**: Default path for the fixed code file generated by the `crash` command.
+
+## Error Handling
+
+PDD provides informative error messages when issues occur during command execution. Common error scenarios include:
+
+- Invalid input files or formats
+- Insufficient permissions to read/write files
+- AI model-related errors (e.g., API failures)
+- Syntax errors in generated code
+
+When an error occurs, PDD will display a message describing the issue and, when possible, suggest steps to resolve it.
+
+## Troubleshooting
+
+Here are some common issues and their solutions:
+
+1. **Command not found**: Ensure PDD is properly installed and added to your system's PATH.
+
+2. **Permission denied errors**: Check that you have the necessary permissions to read input files and write to output locations.
+
+3. **AI model not responding**: Verify your internet connection and check the status of the AI service.
+
+4. **Unexpected output**: Try adjusting the `--strength` and `--temperature` parameters to fine-tune the AI model's behavior.
+
+5. **High costs**: Use the `--output-cost` option to track usage and set appropriate budgets for the `fix` command's `--budget` option.
+
+If you encounter persistent issues, consult the PDD documentation or reach out to the support team for assistance.
+
+## Security Considerations
+
+When using PDD, keep the following security considerations in mind:
+
+1. **Code Execution**: PDD generates and modifies code. Always review generated code before execution, especially in production environments.
+
+2. **Data Privacy**: Avoid using sensitive data in prompts or code files, as this information may be processed by the AI model.
+
+3. **API Keys**: If PDD requires API keys for AI model access, store these securely and never include them in version control systems.
+
+4. **Input Validation**: PDD assumes input files are trustworthy. Implement proper input validation if using PDD in a multi-user or networked environment.
+
+5. **Output Handling**: Treat output files with the same security considerations as you would any other code or configuration files in your project.
+
+## Workflow Integration
+
+PDD can be integrated into various development workflows. Here are some typical use cases:
+
+1. **Initial Development**: Use `generate` to create initial code from prompts, then `example` and `test` to build out the project structure.
+
+2. **Maintenance**: Use `update` to keep prompts in sync with code changes, and `fix` to address issues that arise during development.
+
+3. **Refactoring**: Use `split` to break down large prompts, and `conflicts` to manage potential issues when working with multiple prompts.
+
+4. **Continuous Integration**: Incorporate PDD commands into CI/CD pipelines to automate code generation, testing, and maintenance tasks.
+
+5. **Debugging**: Use `crash` to quickly address runtime errors and generate fixes for failing modules.
+
+## Conclusion
+
+PDD (Prompt-Driven Development) CLI provides a comprehensive set of tools for managing prompt files, generating code, creating examples, running tests, and handling various aspects of prompt-driven development. By leveraging the power of AI models and iterative processes, PDD aims to streamline the development workflow and improve code quality.
+
+The various commands and options allow for flexible usage, from simple code generation to complex workflows involving multiple steps. The ability to track costs, manage output locations through environment variables, and chain multiple commands further enhances the tool's utility in different development environments.
+
+With the consistent argument order placing prompt files first, PDD emphasizes its prompt-driven nature and provides a more intuitive interface for users. This consistency across commands should make the tool easier to learn and use effectively.
+
+As you become more familiar with PDD, you can create more complex workflows by chaining multiple commands and utilizing the full range of options available. Always refer to the latest documentation and use the built-in help features to make the most of PDD in your development process.
+
+Remember to stay mindful of security considerations, especially when working with generated code or sensitive data. Regularly update PDD to access the latest features and improvements.
+
+Happy coding with PDD!</program_description>
+
+% Here is the directory structure of the program:
+    - pdd/pdd/*.py (including this file cli.py)
+    - pdd/prompts
+    - pdd/context
+    - pdd/data
+
+% Some of the pdd commands will have the same name as some of the below functions. Be sure to import the functions with a different name to avoid conflicts (e.g. 'preprocess' needs to be imported as 'preprocess_func' to prevent conflict with Click commands) Make sure this happens for the others like 'split', 'change', etc.
+</context>
+
+<examples>
+% Here is how to use the Python Click library to create a command line program: <click_example>from functools import update_wrapper
+
+from PIL import Image
+from PIL import ImageEnhance
+from PIL import ImageFilter
+
+import click
+
+
+@click.group(chain=True)
+def cli():
+    """This script processes a bunch of images through pillow in a unix
+    pipe.  One commands feeds into the next.
+
+    Example:
+
+    \b
+        imagepipe open -i example01.jpg resize -w 128 display
+        imagepipe open -i example02.jpg blur save
+    """
+
+
+@cli.result_callback()
+def process_commands(processors):
+    """This result callback is invoked with an iterable of all the chained
+    subcommands.  As in this example each subcommand returns a function
+    we can chain them together to feed one into the other, similar to how
+    a pipe on unix works.
+    """
+    # Start with an empty iterable.
+    stream = ()
+
+    # Pipe it through all stream processors.
+    for processor in processors:
+        stream = processor(stream)
+
+    # Evaluate the stream and throw away the items.
+    for _ in stream:
+        pass
+
+
+def processor(f):
+    """Helper decorator to rewrite a function so that it returns another
+    function from it.
+    """
+
+    def new_func(*args, **kwargs):
+        def processor(stream):
+            return f(stream, *args, **kwargs)
+
+        return processor
+
+    return update_wrapper(new_func, f)
+
+
+def generator(f):
+    """Similar to the :func:`processor` but passes through old values
+    unchanged and does not pass through the values as parameter.
+    """
+
+    @processor
+    def new_func(stream, *args, **kwargs):
+        yield from stream
+        yield from f(*args, **kwargs)
+
+    return update_wrapper(new_func, f)
+
+
+def copy_filename(new, old):
+    new.filename = old.filename
+    return new
+
+
+@cli.command("open")
+@click.option(
+    "-i",
+    "--image",
+    "images",
+    type=click.Path(),
+    multiple=True,
+    help="The image file to open.",
+)
+@generator
+def open_cmd(images):
+    """Loads one or multiple images for processing.  The input parameter
+    can be specified multiple times to load more than one image.
+    """
+    for image in images:
+        try:
+            click.echo(f"Opening '{{image}}'")
+            if image == "-":
+                img = Image.open(click.get_binary_stdin())
+                img.filename = "-"
+            else:
+                img = Image.open(image)
+            yield img
+        except Exception as e:
+            click.echo(f"Could not open image '{{image}}': {{e}}", err=True)
+
+
+@cli.command("save")
+@click.option(
+    "--filename",
+    default="processed-{{:04}}.png",
+    type=click.Path(),
+    help="The format for the filename.",
+    show_default=True,
+)
+@processor
+def save_cmd(images, filename):
+    """Saves all processed images to a series of files."""
+    for idx, image in enumerate(images):
+        try:
+            fn = filename.format(idx + 1)
+            click.echo(f"Saving '{{image.filename}}' as '{{fn}}'")
+            yield image.save(fn)
+        except Exception as e:
+            click.echo(f"Could not save image '{{image.filename}}': {{e}}", err=True)
+
+
+@cli.command("display")
+@processor
+def display_cmd(images):
+    """Opens all images in an image viewer."""
+    for image in images:
+        click.echo(f"Displaying '{{image.filename}}'")
+        image.show()
+        yield image
+
+
+@cli.command("resize")
+@click.option("-w", "--width", type=int, help="The new width of the image.")
+@click.option("-h", "--height", type=int, help="The new height of the image.")
+@processor
+def resize_cmd(images, width, height):
+    """Resizes an image by fitting it into the box without changing
+    the aspect ratio.
+    """
+    for image in images:
+        w, h = (width or image.size[0], height or image.size[1])
+        click.echo(f"Resizing '{{image.filename}}' to {{w}}x{{h}}")
+        image.thumbnail((w, h))
+        yield image
+
+
+@cli.command("crop")
+@click.option(
+    "-b", "--border", type=int, help="Crop the image from all sides by this amount."
+)
+@processor
+def crop_cmd(images, border):
+    """Crops an image from all edges."""
+    for image in images:
+        box = [0, 0, image.size[0], image.size[1]]
+
+        if border is not None:
+            for idx, val in enumerate(box):
+                box[idx] = max(0, val - border)
+            click.echo(f"Cropping '{{image.filename}}' by {{border}}px")
+            yield copy_filename(image.crop(box), image)
+        else:
+            yield image
+
+
+def convert_rotation(ctx, param, value):
+    if value is None:
+        return
+    value = value.lower()
+    if value in ("90", "r", "right"):
+        return (Image.ROTATE_90, 90)
+    if value in ("180", "-180"):
+        return (Image.ROTATE_180, 180)
+    if value in ("-90", "270", "l", "left"):
+        return (Image.ROTATE_270, 270)
+    raise click.BadParameter(f"invalid rotation '{{value}}'")
+
+
+def convert_flip(ctx, param, value):
+    if value is None:
+        return
+    value = value.lower()
+    if value in ("lr", "leftright"):
+        return (Image.FLIP_LEFT_RIGHT, "left to right")
+    if value in ("tb", "topbottom", "upsidedown", "ud"):
+        return (Image.FLIP_LEFT_RIGHT, "top to bottom")
+    raise click.BadParameter(f"invalid flip '{{value}}'")
+
+
+@cli.command("transpose")
+@click.option(
+    "-r", "--rotate", callback=convert_rotation, help="Rotates the image (in degrees)"
+)
+@click.option("-f", "--flip", callback=convert_flip, help="Flips the image  [LR / TB]")
+@processor
+def transpose_cmd(images, rotate, flip):
+    """Transposes an image by either rotating or flipping it."""
+    for image in images:
+        if rotate is not None:
+            mode, degrees = rotate
+            click.echo(f"Rotate '{{image.filename}}' by {{degrees}}deg")
+            image = copy_filename(image.transpose(mode), image)
+        if flip is not None:
+            mode, direction = flip
+            click.echo(f"Flip '{{image.filename}}' {{direction}}")
+            image = copy_filename(image.transpose(mode), image)
+        yield image
+
+
+@cli.command("blur")
+@click.option("-r", "--radius", default=2, show_default=True, help="The blur radius.")
+@processor
+def blur_cmd(images, radius):
+    """Applies gaussian blur."""
+    blur = ImageFilter.GaussianBlur(radius)
+    for image in images:
+        click.echo(f"Blurring '{{image.filename}}' by {{radius}}px")
+        yield copy_filename(image.filter(blur), image)
+
+
+@cli.command("smoothen")
+@click.option(
+    "-i",
+    "--iterations",
+    default=1,
+    show_default=True,
+    help="How many iterations of the smoothen filter to run.",
+)
+@processor
+def smoothen_cmd(images, iterations):
+    """Applies a smoothening filter."""
+    for image in images:
+        click.echo(
+            f"Smoothening {{image.filename!r}} {{iterations}}"
+            f" time{{'s' if iterations != 1 else ''}}"
+        )
+        for _ in range(iterations):
+            image = copy_filename(image.filter(ImageFilter.BLUR), image)
+        yield image
+
+
+@cli.command("emboss")
+@processor
+def emboss_cmd(images):
+    """Embosses an image."""
+    for image in images:
+        click.echo(f"Embossing '{{image.filename}}'")
+        yield copy_filename(image.filter(ImageFilter.EMBOSS), image)
+
+
+@cli.command("sharpen")
+@click.option(
+    "-f", "--factor", default=2.0, help="Sharpens the image.", show_default=True
+)
+@processor
+def sharpen_cmd(images, factor):
+    """Sharpens an image."""
+    for image in images:
+        click.echo(f"Sharpen '{{image.filename}}' by {{factor}}")
+        enhancer = ImageEnhance.Sharpness(image)
+        yield copy_filename(enhancer.enhance(max(1.0, factor)), image)
+
+
+@cli.command("paste")
+@click.option("-l", "--left", default=0, help="Offset from left.")
+@click.option("-r", "--right", default=0, help="Offset from right.")
+@processor
+def paste_cmd(images, left, right):
+    """Pastes the second image on the first image and leaves the rest
+    unchanged.
+    """
+    imageiter = iter(images)
+    image = next(imageiter, None)
+    to_paste = next(imageiter, None)
+
+    if to_paste is None:
+        if image is not None:
+            yield image
+        return
+
+    click.echo(f"Paste '{{to_paste.filename}}' on '{{image.filename}}'")
+    mask = None
+    if to_paste.mode == "RGBA" or "transparency" in to_paste.info:
+        mask = to_paste
+    image.paste(to_paste, (left, right), mask)
+    image.filename += f"+{{to_paste.filename}}"
+    yield image
+
+    yield from imageiter</click_example>
+</examples>
+
+<instructions>
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+    - Here is how to use the 'construct_paths' function to load the input files and create the output file paths: <construct_paths_example>from pdd.construct_paths import construct_paths
+
+def main() -> None:
+    """
+    Main function to demonstrate the usage of the construct_paths function.
+    It sets up input parameters, calls the function, and handles its output.
+    """
+    # Define input file paths
+    input_file_paths = {{ # Keys are the lower case version of the command inputs (e.g. "test" command would have the keys "code_file" and "prompt_file")
+        "code_file": "pdd/unfinished_prompt.py",
+        "prompt_file": "prompts/unfinished_prompt_python.prompt"
+    }}
+
+    # Define command options
+    command_options = {{ # This dictionary contains the command options that are passed to the construct_paths function. For instance the "test" command would have the keys "output" and "language".
+        "output": None
+    }}
+
+    # Call the construct_paths function
+    try:
+        input_strings, output_file_paths, language = construct_paths(
+            input_file_paths=input_file_paths,
+            force=False,  # Set to True to overwrite existing files
+            quiet=False,  # Set to True to suppress output messages
+            command="example",  # Command can be 'generate', 'test', etc.
+            command_options=command_options
+        )
+
+        # Output the results
+        print(f"Input Strings: {{input_strings}}") # This dictionary contains the contents of the input files with the same keys as input_file_paths
+        print(f"Output File Paths: {{output_file_paths}}")
+        print(f"Language: {{language}}")
+
+    except Exception as e:
+        print(f"An error occurred: {{e}}")
+
+if __name__ == "__main__":
+    main()</construct_paths_example>
+
+    - 'generate' command: To generate runnable code from a prompt file, use code_generator. Here is an example how to generate code from the prompt from a file: <code_generator_example># Import the code_generator function from the module
+from pdd.code_generator import code_generator
+
+def main() -> None:
+    """
+    Main function to demonstrate the usage of the code_generator function.
+    It generates code based on a given prompt using a language model.
+    """
+    # Define the input parameters for the code_generator function
+    # prompt: str = "Create a Python function that calculates the factorial of a number."
+    # load the prompt from a file prompts/generate_test_python.prompt
+    with open("prompts/generate_test_python.prompt", "r") as file:
+        prompt = file.read()
+    language: str = "python"
+    strength: float = 1  # Strength of the LLM model (0.0 to 1.0)
+    temperature: float = 0.5  # Temperature for the LLM model (0.0 to 1.0)
+
+    try:
+        # Call the code_generator function
+        runnable_code, total_cost, model_name = code_generator(prompt, language, strength, temperature)
+
+        # Output the results
+        print("Generated Code:")
+        print(runnable_code)
+        print(f"Total Cost: ${{total_cost:.6f}}")
+        print(f"Model Name: {{model_name}}")
+
+    except Exception as e:
+        print(f"An error occurred: {{e}}")
+
+if __name__ == "__main__":
+    main()
+</code_generator_example>
+
+    - 'example' command: To generate example code from a code file, use context_generator. Here is an example how to generate an example from a code file: <context_generator_example>import os
+from pdd.context_generator import context_generator
+from rich import print
+
+# Ensure PDD_PATH environment variable is set
+pdd_path = os.getenv('PDD_PATH')
+if not pdd_path:
+    raise ValueError("PDD_PATH environment variable is not set")
+
+# Define input parameters
+code_module = "def add(a, b):\n    return a + b"
+prompt = "Write a function 'add' that adds two numbers."
+language = "python"
+strength = 0.7
+temperature = 0.2
+
+# Call the context_generator function
+example_code, total_cost, model_name = context_generator(
+    code_module=code_module,
+    prompt=prompt,
+    language=language,
+    strength=strength,
+    temperature=temperature
+)
+
+# Print the results
+print("[bold]Generated Example Code:[/bold]")
+print(example_code)
+print(f"\n[bold]Total Cost:[/bold] ${{total_cost:.6f}}")
+print(f"[bold]Model Used:[/bold] {{model_name}}")</context_generator_example>
+
+    - 'test' command: To generate a unit test from code and its prompt file, use generate_test. Here is an example how to generate a unit test from a code file: <generate_test_example>import os
+from pdd.generate_test import generate_test
+from rich import print
+
+# Set the PDD_PATH environment variable if not already set
+# os.environ['PDD_PATH'] = '/path/to/your/project'
+
+# Define input parameters
+prompt = "Write a function that calculates the factorial of a number"
+code = """
+def factorial(n):
+    if n == 0 or n == 1:
+        return 1
+    else:
+        return n * factorial(n-1)
+"""
+strength = 0.7
+temperature = 0.5
+language = "python"
+
+# Call the generate_test function
+try:
+    unit_test, total_cost, model_name = generate_test(prompt, code, strength, temperature, language)
+    
+    print("[bold green]Generated Unit Test:[/bold green]")
+    print(unit_test)
+    print(f"[bold blue]Total Cost: ${{total_cost:.6f}}[/bold blue]")
+    print(f"[bold]Model Used: {{model_name}}[/bold]")
+except Exception as e:
+    print(f"[bold red]An error occurred: {{e}}[/bold red]")</generate_test_example>
+
+    - 'preprocess' command: To preprocess a prompt from a prompt file, use preprocess. Here is an example of how to preprocess the prompt from a file: <preprocess_example>from pdd.preprocess import preprocess
+from rich.console import Console   
+console = Console()     
+prompt = """
+<prompt>
+    <include>Makefile</include>
+    <shell>echo Hello World</shell>
+    <pdd>This is a comment</pdd>
+    ```<TODO.md>```
+</prompt>
+"""
+
+recursive = False
+double_curly_brackets = True
+
+processed = preprocess(prompt, recursive, double_curly_brackets)
+console.print("[bold white]Processed Prompt:[/bold white]")
+console.print(processed)
+
+# load prompts/change_LLM.prompt
+with open('prompts/xml/change_LLM.prompt', 'r') as file:
+    change_LLM_prompt = file.read()
+    
+# call preprocess on change_LLM_prompt
+processed = preprocess(change_LLM_prompt, recursive, False)
+console.print("[bold white]Processed change_LLM Prompt:[/bold white]")
+console.print(processed)
+
+# write the processed prompt to a file
+with open('tests/preprocess_test_change_example_full_complete.prompt', 'w') as file:
+    file.write(processed)
+    
+
+with open('prompts/example_generator_LLM.prompt', 'r') as file:
+    example_generator_LLM_prompt = file.read()
+    
+# call preprocess on change_LLM_prompt
+processed = preprocess(example_generator_LLM_prompt, recursive, False)
+console.print("[bold white]Processed change_LLM Prompt:[/bold white]")
+console.print(processed)
+
+# write the processed prompt to a file
+with open('tests/preprocess_test_example_generator_LLM.prompt', 'w') as file:
+    file.write(processed)
+
+prompt = """    mock_db = {{
+        "1": {{"id": "1", "name": "Resource One"}},
+        "2": {{"id": "2", "name": "Resource Two"}}
+    }}"""
+processed = preprocess(prompt, recursive, True)
+console.print("[bold white]Processed change_LLM Prompt:[/bold white]")
+console.print(processed)</preprocess_example>
+
+    - 'preprocess --xml' sub-command: To preprocess a prompt from a prompt file and output the result in XML format, use xml_tagger. Here is an example of how to preprocess the prompt from a file and output the result in XML format: <xml_tagger_example>from pdd.xml_tagger import xml_tagger
+from rich import print as rprint
+
+# Example usage
+raw_prompt = "Write a story about a magical forest"
+strength = 0.5  # Strength parameter for the LLM model (0 = cheapest, 0.5 = base, 1 = highest ELO)
+temperature = 0.7  # Temperature parameter for the LLM model (0.0 to 1.0)
+
+try:
+    xml_tagged, total_cost, model_name = xml_tagger(raw_prompt, strength, temperature)
+    
+    rprint("[bold green]XML Tagging completed successfully![/bold green]")
+    rprint(f"[bold]XML Tagged Prompt:[/bold]\n{{xml_tagged}}")
+    rprint(f"[bold]Total cost: ${{total_cost:.6f}}[/bold]")
+    rprint(f"[bold]Model used: {{model_name}}[/bold]")
+except Exception as e:
+    rprint(f"[bold red]Error: {{str(e)}}[/bold red]")</xml_tagger_example>
+
+    - 'fix' command: To fix errors in code and unit test based on error messages use fix_errors_from_unit_tests. Be sure to load the required files for this function and only save the output files if there is an update. Note that the 'error_file' argument does not need to exist beforehand. Here is an example how to fix errors in code and unit test based on error messages: <fix_errors_from_unit_tests_example>import os
+from pdd.fix_errors_from_unit_tests import fix_errors_from_unit_tests
+from rich import print as rprint
+
+def main() -> None:
+    """
+    Main function to demonstrate the usage of fix_errors_from_unit_tests.
+    Sets up example inputs, calls the function, and prints the results.
+    """
+    # Example inputs
+    unit_test = """
+def test_add():
+    assert add(2, 3) == 5
+    assert add(-1, 1) == 0
+    assert add(0, 0) == 1  # This test case is incorrect
+"""
+    
+    code = """
+def add(a, b):
+    return a + b
+"""
+    
+    prompt = "Write a function that adds two numbers"
+    error = "AssertionError: assert 0 == 1" # String of the Error message from the unit test
+    error_file = "error_logs.txt"       # This is the fix results file
+    strength = 0.7  # LLM strength (0 to 1)
+    temperature = 0.5  # LLM temperature
+
+    # Call the function
+    update_unit_test, update_code, fixed_unit_test, fixed_code, total_cost, model_name = fix_errors_from_unit_tests(
+        unit_test, code, prompt, error, error_file, strength, temperature
+    )
+
+    # Print results
+    rprint(f"[bold]Results:[/bold]")
+    rprint(f"Update unit test: {{update_unit_test}}")
+    rprint(f"Update code: {{update_code}}")
+    rprint(f"Fixed unit test:\n{{fixed_unit_test}}")
+    rprint(f"Fixed code:\n{{fixed_code}}")
+    rprint(f"Total cost: ${{total_cost:.6f}}")
+    rprint(f"Model used: {{model_name}}")
+
+if __name__ == "__main__":
+    main()
+</fix_errors_from_unit_tests_example>
+
+    - 'fix --loop' sub-command: To loop on the above fix errors in code and unit tests use 'fix_error_loop' function. Be sure to load the prompt_file as the function expects the prompt string and not the prompt filepath. Here is an example how to loop on the above fix errors in code and unit tests: <fix_error_loop_example>from pdd.fix_error_loop import fix_error_loop
+from rich import print as rprint
+from rich.panel import Panel
+
+def main() -> None:
+    """
+    Main function to demonstrate the usage of the fix_error_loop function.
+    It sets up the parameters, calls the function, and prints the results.
+    """
+    # Define input parameters
+    base = 'conflicts_in_prompts'
+    # Define the parameters for the function
+    unit_test_file: str = f'tests/test_{{base}}.py'  # Path to your unit test file
+    code_file: str = f'pdd/{{base}}.py'          # Path to your code file
+    # load the prompt from the prompt file
+    with open(f'prompts/{{base}}_python.prompt', 'r') as file:
+        prompt = file.read()
+    verification_program: str = f'context/{{base}}_example.py'          # Path to your verification program
+    strength: float = 1                            # Strength parameter for error fixing
+    temperature: float = 1                         # Temperature parameter for error fixing
+    max_attempts: int = 5                           # Maximum number of attempts to fix errors
+    budget: float = 100.0                            # Maximum budget for fixing errors
+    error_log_file = "error.log"  # Path to the error log file
+
+    try:
+        # Call the fix_error_loop function
+        success, final_unit_test, final_code, total_attempts, total_cost, model_name = fix_error_loop(
+            unit_test_file, code_file, prompt, verification_program,
+            strength, temperature, max_attempts, budget, error_log_file
+        )
+
+        # Print the results
+        rprint(Panel.fit(f"Success: {{success}}"))
+        rprint(Panel.fit(f"Total attempts: {{total_attempts}}"))
+        rprint(Panel.fit(f"Total cost: ${{total_cost:.6f}}"))
+        rprint(Panel.fit(f"Model used: {{model_name}}"))
+
+        rprint(Panel.fit(f"Final Unit Test: {{final_unit_test}}"))
+        rprint(Panel.fit(f"Final Code: {{final_code}}"))
+    except Exception as e:
+        rprint(Panel.fit(f"An error occurred: {{e}}"))
+
+if __name__ == "__main__":
+    main()
+</fix_error_loop_example>
+
+    - 'split' command: To split a prompt file into multiple prompt files, use the 'split' function. Here is an example of how to split a prompt file into multiple prompt files: <split_example>import os
+from rich.console import Console
+from pdd.split import split
+
+# Set up the Rich console for pretty printing
+console = Console()
+
+def main() -> None:
+    """
+    Main function to demonstrate the usage of the split function from the pdd.split module.
+    Sets up environment variables, prepares input parameters, calls the split function, and prints the results.
+    """
+    try:
+        # Set the PDD_PATH environment variable if not already set
+        os.environ['PDD_PATH'] = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
+        # Input parameters
+        input_prompt: str = "Create a Python function to calculate the factorial of a number."
+        input_code: str = """
+def factorial(n):
+    if n == 0 or n == 1:
+        return 1
+    else:
+        return n * factorial(n-1)
+    """
+        example_code: str = """
+# Example usage
+result = factorial(5)
+print(f"Factorial of 5 is: {{result}}")
+    """
+        strength: float = 0.7  # Float value between 0 and 1
+        temperature: float = 0.5  # Float value between 0 and 1
+
+        # Call the split function
+        sub_prompt, modified_prompt, total_cost = split(
+            input_prompt=input_prompt,
+            input_code=input_code,
+            example_code=example_code,
+            strength=strength,
+            temperature=temperature
+        )
+
+        # Print the results
+        console.print(f"[bold]Sub Prompt:[/bold]\n{{sub_prompt}}")
+        console.print(f"[bold]Modified Prompt:[/bold]\n{{modified_prompt}}")
+        console.print(f"[bold]Total Cost:[/bold] ${{total_cost:.6f}}")
+    except Exception as e:
+        console.print(f"[bold red]An error occurred:[/bold red] {{e}}")
+
+if __name__ == "__main__":
+    main()
+</split_example>
+
+    - 'change' command: To change the prompt file, use the 'change' function. Keep in mind that the change prompt is also an input file that needs to be loaded by construct_paths. Here is an example of how to change the prompt file: <change_example>import os
+from pdd.change import change
+from rich.console import Console
+
+console = Console()
+
+def main() -> None:
+    """
+    Main function to demonstrate the use of the `change` function from the `pdd.change` module.
+    Sets up environment variables, defines input parameters, and calls the `change` function.
+    """
+    # Set up the environment variable for PDD_PATH
+    # os.environ['PDD_PATH'] = '/path/to/pdd'  # Replace with actual path
+
+    # Example inputs
+    input_prompt = "Write a function to calculate the factorial of a number."
+    input_code = """
+def factorial(n):
+    if n == 0 or n == 1:
+        return 1
+    else:
+        return n * factorial(n-1)
+    """
+    change_prompt = "Modify the function to take the square root of the factorial output."
+    strength = 0.7  # Strength parameter for the LLM (0.0 to 1.0)
+    temperature = 0.5  # Temperature parameter for the LLM (0.0 to 1.0)
+
+    try:
+        # Call the change function
+        modified_prompt, total_cost, model_name = change(
+            input_prompt, input_code, change_prompt, strength, temperature
+        )
+
+        # Print the results
+        console.print(f"[bold]Modified Prompt:[/bold]\n{{modified_prompt}}")
+        console.print(f"[bold]Total Cost:[/bold] ${{total_cost:.6f}}")
+        console.print(f"[bold]Model Used:[/bold] {{model_name}}")
+
+    except Exception as e:
+        console.print(f"[bold red]An error occurred:[/bold red] {{str(e)}}")
+
+if __name__ == "__main__":
+    main()
+</change_example>
+
+    - 'update' command: To update the prompt file, use the 'update_prompt' function. Here is an example of how to update the prompt file: <update_prompt_example>import os
+from update_prompt import update_prompt
+
+def main() -> None:
+    """
+    Main function to demonstrate the usage of the update_prompt function.
+    """
+    # Define the input parameters
+    input_prompt = "Please add two numbers and return the sum."
+    input_code = "def add(a, b): return a + b"
+    modified_code = "def mul_numbers(x, y): return x * y"
+    strength = 0.9  # Example strength parameter for the LLM
+    temperature = 0  # Example temperature parameter for the LLM
+
+    try:
+        # Call the update_prompt function
+        modified_prompt, total_cost, model_name = update_prompt(
+            input_prompt=input_prompt,
+            input_code=input_code,
+            modified_code=modified_code,
+            strength=strength,
+            temperature=temperature
+        )
+
+        # Check the results
+        if modified_prompt is not None:
+            print(f"Modified Prompt: {{modified_prompt}}")
+            print(f"Total Cost: ${{total_cost:.6f}}")
+            print(f"Model Name: {{model_name}}")
+        else:
+            print("Failed to update the prompt.")
+    except Exception as e:
+        print(f"An error occurred: {{e}}")
+
+if __name__ == "__main__":
+    main()</update_prompt_example>
+
+    - 'detect' command: To analyze a list of prompt files and a change description to determine which prompts need to be changed, use the 'detect_change' function. Here is an example of how to detect prompts that need changes: <detect_change_example>from pdd.detect_change import detect_change
+from rich.console import Console
+from pathlib import Path
+
+console = Console()
+
+# List of prompt files to analyze
+prompt_files = [
+    "context/python_preamble.prompt",
+    "prompts/change_python.prompt",
+    "prompts/fix_error_loop_python.prompt",
+    "prompts/code_generator_python.prompt"
+]
+# create a list of all prompt files in the prompts and context directory
+# prompt_files = [str(prompt_file) for prompt_file in Path("prompts").glob("*.prompt")] + [str(prompt_file) for prompt_file in Path("context").glob("*.prompt")]
+print("prompt files", prompt_files)
+# Description of the change to be analyzed
+change_description = "Use context/python_preamble.prompt to make prompts more compact. Some prompts might already have this."
+
+# LLM model parameters
+strength = 1  # Range: 0.0 to 1.0, higher values use stronger (and typically more expensive) models
+temperature = 0  # Range: 0.0 to 1.0, higher values increase randomness in the output
+
+try:
+    changes_list, total_cost, model_name = detect_change(prompt_files, change_description, strength, temperature)
+
+    console.print("[bold green]Changes detected:[/bold green]")
+    for change in changes_list:
+        console.print(f"[cyan]Prompt:[/cyan] {{change['prompt_name']}}")
+        console.print(f"[yellow]Instructions:[/yellow] {{change['change_instructions']}}\n")
+
+    console.print(f"[bold]Total cost:[/bold] ${{total_cost:.6f}}")
+    console.print(f"[bold]Model used:[/bold] {{model_name}}")
+
+except Exception as e:
+    console.print(f"[bold red]An error occurred:[/bold red] {{str(e)}}")</detect_change_example>
+
+    - 'conflicts' command: To analyze two prompt files to find conflicts between them and suggest how to resolve those conflicts, use the 'conflicts_in_prompts' function. Here is an example of how to analyze conflicts between two prompts: <conflicts_in_prompts_example>from pdd.conflicts_in_prompts import conflicts_in_prompts
+from rich import print as rprint
+
+def main() -> None:
+    """
+    Main function to demonstrate the use of the conflicts_in_prompts function.
+    """
+    # Example prompts
+    prompt1: str = """You are an expert Python engineer and Firebase specialist working on the PDD Cloud project. Your goal is to write the `auth_helpers.py` module, which provides authentication helper functions for user validation in Firebase Cloud Functions. This module will be placed in the `backend/functions/utils/` directory.
+
+**Requirements:**
+
+- **Functionality**:
+  - Implement functions to verify Firebase ID tokens from incoming HTTP requests.
+  - Extract user information, such as UID and email, from the verified tokens.
+  - Check user permissions or roles as needed.
+  - Raise appropriate errors for authentication failures or insufficient permissions.
+
+- **Dependencies**:
+  - Use the `firebase_admin` library, specifically `firebase_admin.auth`, for authentication operations.
+  - Include any necessary internal modules, such as error handling utilities.
+
+- **Error Handling**:
+  - Use standardized error responses for authentication errors.
+  - Log unauthorized access attempts securely.
+
+- **Security Best Practices**:
+  - Securely handle and validate tokens to prevent unauthorized access.
+  - Ensure that no sensitive information is exposed in error messages or logs.
+
+- **Code Structure**:
+  - Follow the project's coding standards and conventions.
+  - Include docstrings and comments for clarity.
+  - Organize the code into reusable functions.
+
+**Include the following dependencies in your code where necessary:**
+
+- `<include>context/error_handling_example.py</include>`: Functions and classes for standardized error handling.
+
+**Instructions:**
+
+- Write the `auth_helpers.py` module code that fulfills the above requirements.
+- Make sure to import dependencies correctly, using relative imports for internal modules.
+- Ensure that the code is clean, well-documented, and adheres to best practices.
+
+**Deliverable:**
+
+The complete code for `auth_helpers.py`, ready to be integrated into the PDD Cloud project."""
+    prompt2: str = """You are an expert Python engineer. Your goal is to write a Python class named `User` that defines the user data model for the PDD Cloud platform.
+
+**Requirements**:
+
+- **Class Definition**:
+  - Create a `User` class that encapsulates user-related fields used throughout the backend.
+  - The class should be located in `backend/functions/models/user.py`.
+  - The class should inherit from `dataclass` for automatic method generation.
+
+- **Fields to Include**:
+  - `uid`: `str`
+  - `email`: `str`
+  - `display_name`: `str`
+  - `photo_url`: `str` (optional)
+  - `created_at`: `datetime`
+  - `last_login_at`: `datetime`
+  - `credits`: `int`
+  - `contributor_tier`: `str` (options: `'bronze'`, `'silver'`, `'gold'`, `'platinum'`)
+  - `bio`: `str` (optional)
+  - `github_username`: `str` (optional)
+  - `is_admin`: `bool`
+  - `settings`: `Dict[str, Any]` containing:
+    - `email_notifications`: `bool`
+    - `two_factor_auth`: `bool`
+
+- **Methods to Include**:
+  - **Initialization**: Constructor that sets default values where appropriate.
+  - **Validation Methods**:
+    - Ensure all fields meet required formats and constraints.
+    - For example, validate email format, contributor tier options, and that credits are non-negative.
+  - **Serialization Methods**:
+    - `to_dict()`: Converts the user instance into a dictionary suitable for Firestore storage.
+    - `from_dict(data: Dict[str, Any])`: Creates a user instance from a dictionary retrieved from Firestore.
+  - **Firestore Interaction**:
+    - Methods to save, update, and delete user documents in the Firestore `users` collection.
+    - Use asynchronous Firestore methods for non-blocking operations.
+  - **Credit Management**:
+    - `update_credits(amount: int)`: Safely updates the user's credits.
+  - **Permission Management**:
+    - Methods to check and update user roles and permissions.
+
+- **Imports and Dependencies**:
+  - Import necessary modules:
+    - `from dataclasses import dataclass, field`
+    - `from typing import Dict, Any`
+    - `from datetime import datetime`
+    - `from firebase_admin import firestore`
+  - Utilize utility functions from the `utils` package for Firestore interactions and error handling.
+    - Include the following dependency:
+
+<db_helpers_example>
+<include>context/db_helpers_example.py</include>
+</db_helpers_example>
+
+- **Error Handling**:
+  - Implement appropriate try-except blocks to handle exceptions.
+  - Use custom exceptions from the `utils/error_handling.py` module.
+
+- **Additional Requirements**:
+  - Ensure all methods are well-documented with docstrings explaining their functionality.
+  - Follow PEP 8 style guidelines for code style and formatting.
+  - Include type hints for all function arguments and return types.
+  - Avoid hardcoding any values; use class variables or configurations where necessary.
+
+**Note**: The `User` class should be designed to ensure consistency across the backend and simplify database operations. By centralizing the user data structure, it enhances code maintainability and readability."""
+
+    # Set strength and temperature for the LLM
+    strength: float = .9  # Adjust between 0 and 1 for different model strengths
+    temperature: float = 0  # Adjust between 0 and 1 for output randomness
+
+    # Call the conflicts_in_prompts function
+    changes, total_cost, model_name = conflicts_in_prompts(prompt1, prompt2, strength, temperature)
+
+    # Print the results
+    rprint("[bold]Conflict Detection Results:[/bold]")
+    rprint(f"Model used: {{model_name}}")
+    rprint(f"Total cost: ${{total_cost:.6f}}")
+    
+    if changes:
+        rprint("[bold]Suggested Changes:[/bold]")
+        for change in changes:
+            rprint(f"Prompt: {{change['prompt_name']}}")
+            rprint(f"Instructions: {{change['change_instructions']}}")
+            rprint("---")
+    else:
+        rprint("No conflicts detected or changes suggested.")
+
+if __name__ == "__main__":
+    main()</conflicts_in_prompts_example>
+
+    - 'crash' command: To fix errors in a code module that caused a program to crash, use the 'fix_code_module_errors' function. Here is an example of how to fix errors in a code module that caused a program to crash: <fix_code_module_errors_example>import os
+from rich.console import Console
+from pdd.fix_code_module_errors import fix_code_module_errors
+
+console = Console()
+
+
+def main() -> None:
+    """
+    Main function to demonstrate the usage of fix_code_module_errors.
+    Sets up example inputs, calls the function, and displays the results.
+    """
+    # Set up example inputs
+    program: str = """from calculate_mean import calculate_mean
+    calculate_mean([1, 2, 3, 4, 5])"""
+    prompt: str = "Create a function to calculate the mean of a list of numbers"
+    code: str = """
+    def calculate_mean(numbers):
+        returnsum(numbers) / len(numbers)
+    """
+    errors: str = "SyntaxError: invalid syntax"
+    strength: float = 0.7  # Strength parameter for LLM selection (0.0 to 1.0)
+    temperature: float = 0.0  # Temperature parameter for LLM selection (0.0 to 1.0), DEFAULT: 0.0
+    
+    # Call the function
+    fixed_code, total_cost, model_name = fix_code_module_errors(
+        program, prompt, code, errors, strength, temperature
+    )
+
+    # Display results
+    console.print("\n[bold]Results:[/bold]")
+    console.print(f"Fixed Code:\n{{fixed_code}}")
+    console.print(f"Total Cost: ${{total_cost:.6f}}")
+    console.print(f"Model Used: {{model_name}}")
+
+
+if __name__ == "__main__":
+    main()
+</fix_code_module_errors_example>
+</internal_example_modules>
+
+% 'install_completion' command: Enhance the shell completion installation process by determining the correct paths for different shells and ensuring the source command is added to the shell's RC file only if it's not already present. Use a helper function to manage these paths.
+
+% If output cost option is selected directly and/or via the output cost environmental variable, the costs and other details should be appended to the specified output file. If the output file does not exist, it should be created. If the output file exists, the costs should be appended to the end of the file. Be sure to include all columns in the csv file.
+</instructions>
