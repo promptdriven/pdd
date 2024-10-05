@@ -180,19 +180,32 @@ def test_conflicts_command(runner: CliRunner, tmp_path) -> None:
     prompt1.write_text("Generate a Python function to add two numbers")
     prompt2 = tmp_path / "prompt2.txt"
     prompt2.write_text("Generate a Python function to subtract two numbers")
-    output_file = tmp_path / "conflicts_results.csv"
-        
-    # Mock the function that interacts with the LLM
+    output_file = tmp_path / "conflicts_analysis.csv"
+
+    # Mock the function that interacts with the LLM to return consistent keys
     with patch('pdd.cli.conflicts_in_prompts', return_value=([{
-        'description': 'Conflict in function names',
-        'explanation': 'Both functions are named differently but could cause confusion.',
-        'suggestion1': 'Rename function in prompt1 to sum_numbers.',
-        'suggestion2': 'Rename function in prompt2 to subtract_numbers.'
+        'prompt_name': 'prompt1.prompt',
+        'change_instructions': 'Update prompt1.prompt to include more specific details about authentication methods and error handling in Firebase Cloud Functions.'
+    }, {
+        'prompt_name': 'prompt2.prompt',
+        'change_instructions': 'Modify prompt2.prompt to include information about integrating the User class with Firebase authentication and how it relates to the auth_helpers module.'
     }], 0.0, 'mock_model')):
         result = runner.invoke(cli, ['conflicts', str(prompt1), str(prompt2), '--output', str(output_file)])
-        assert result.exit_code == 0
+        assert result.exit_code == 0, f"Command failed with error: {result.output}"
         assert "Conflict analysis results saved to:" in result.output
         assert output_file.exists()
+
+        # Read and verify the CSV content
+        with open(output_file, 'r') as f:
+            content = f.read().strip()
+
+        # Define the desired output
+        desired_output = """prompt_name,change_instructions
+prompt1.prompt,Update prompt1.prompt to include more specific details about authentication methods and error handling in Firebase Cloud Functions.
+prompt2.prompt,Modify prompt2.prompt to include information about integrating the User class with Firebase authentication and how it relates to the auth_helpers module."""
+
+        # Assert content matches the desired output
+        assert content == desired_output, f"Output content does not match. Expected:\n{desired_output}\n\nGot:\n{content}"
 
 def test_conflicts_command_csv():
     """
@@ -206,25 +219,40 @@ def test_conflicts_command_csv():
             f.write("Test prompt 1")
         with open('prompt2.prompt', 'w') as f:
             f.write("Test prompt 2")
-        
-        # Run the conflicts command
-        result = runner.invoke(cli, ['--force', '--strength', '0.7', '--temperature', '0.3', '--verbose', 
-                                     '--output-cost', 'cost.csv', 'conflicts', 
-                                     '--output', 'conflicts_analysis.csv', 
-                                     'prompt1.prompt', 'prompt2.prompt'])
-        
-        # Assert command execution success
-        assert result.exit_code == 0, f"Command failed with error: {result.output}"
-        
-        # Check if the output file was created
-        assert os.path.exists('conflicts_analysis.csv'), "Output file was not created"
-        
-        # Read the content of the output file
-        with open('conflicts_analysis.csv', 'r') as f:
-            content = f.read().strip()
-        
-        # Define the desired output
-        desired_output = """prompt_name,change_instructions
+
+        # Mock the conflicts_in_prompts function to return expected results
+        with patch('pdd.cli.conflicts_in_prompts', return_value=([{
+            'prompt_name': 'prompt1.prompt',
+            'change_instructions': 'Update prompt1.prompt to include more specific details about authentication methods and error handling in Firebase Cloud Functions.'
+        }, {
+            'prompt_name': 'prompt2.prompt',
+            'change_instructions': 'Modify prompt2.prompt to include information about integrating the User class with Firebase authentication and how it relates to the auth_helpers module.'
+        }], 0.0, 'mock_model')):
+            # Run the conflicts command with necessary options
+            result = runner.invoke(cli, [
+                '--force',
+                '--strength', '0.7',
+                '--temperature', '0.3',
+                '--verbose',
+                '--output-cost', 'cost.csv',
+                'conflicts',
+                '--output', 'conflicts_analysis.csv',
+                'prompt1.prompt',
+                'prompt2.prompt'
+            ])
+
+            # Assert command execution success
+            assert result.exit_code == 0, f"Command failed with error: {result.output}"
+
+            # Check if the output file was created
+            assert os.path.exists('conflicts_analysis.csv'), "Output file was not created"
+
+            # Read the content of the output file
+            with open('conflicts_analysis.csv', 'r') as f:
+                content = f.read().strip()
+
+            # Define the desired output
+            desired_output = """prompt_name,change_instructions
 prompt1.prompt,Update prompt1.prompt to include more specific details about authentication methods and error handling in Firebase Cloud Functions.
 prompt2.prompt,Modify prompt2.prompt to include information about integrating the User class with Firebase authentication and how it relates to the auth_helpers module."""
         
