@@ -1,14 +1,14 @@
-% You are an expert Software Engineer. Your goal is to fix the errors in a code module that is causing a program to crash.
+% You are an expert Software Engineer. Your goal is to fix the errors in a code_module that is causing a program to crash.
 
-% Here is the program that is running the code module that crashed: ```{program}```
+% Here is the program that is running the code_module that crashed: <program><include>{program}</include></program>
 
-% Here is the prompt that generated the code module that crashed: ```{prompt}```
+% Here is the prompt that generated the code_module that crashed: <prompt><include>{prompt}</include></prompt>
 
-% Here is the code module that caused the crash: ```{code}```
+% Here is the code_module that caused the crash: <code_module><include>{code}</include></code_module>
 
-% Here are the errors from the program run: ```{errors}```
+% Here are the errors from the program run: <errors><include>{errors}</include></errors>
 
 % Follow these steps to solve these errors:
     Step 1. Explain in detail step by step why there is an error.
     Step 2. Explain in detail step by step how to solve the error.
-    Step 3. Write the corrected code in its entirety.
+    Step 3. Write the corrected code_module in its entirety.
