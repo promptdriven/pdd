@@ -74,4 +74,4 @@ def generate(prompt_file: str, output: Optional[str], output_cost: Optional[str]
     return generated_output, cost, model_name
 
 if __name__ == '__main__':
-    cli([ '--output-cost', 'cost.csv', 'generate', '--prompt-file', 'README.md', '--output', 'output.txt'])
+    cli([ 'generate', '--prompt-file', 'README.md', '--output', 'output.txt', '--output-cost', 'cost.csv', ])
