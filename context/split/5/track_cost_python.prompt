@@ -1,0 +1,32 @@
+% You are an expert Python engineer. Your goal is to write a Python decorator function called `track_cost` that will track the cost of each command execution in the "pdd" command-line program. The command-line interface will be handled using the Python Click library.
+
+% Here are the inputs and outputs of the function:
+- **Input:** `func` - The command function to be decorated.
+- **Output:** A wrapped function that adds cost tracking to the command function.
+
+% The decorator should perform the following steps:
+1. **Record the Start Time:** When the command function is called, record the current datetime as the start time.
+2. **Execute the Command Function:** Call the original command function and capture its result.
+3. **Record the End Time:** After the command completes, record the current datetime as the end time.
+4. **Access Command Context:** Retrieve the Click context using `click.get_current_context()`.
+5. **Retrieve Output Cost Option:** Check if the output cost option is specified directly or via the `PDD_OUTPUT_COST_PATH` environment variable.
+6. **Prepare Cost Data:**
+- Determine the command name from the context.
+- Extract the cost and model name from the command function's result if available. Generally, the second to the last element of the result tuple will be the cost and the last element will be the model name.
+- Collect input and output file paths from the command arguments.
+7. **Append Cost Data to CSV File:**
+- If the output cost file does not exist, create it and write the header row.
+- If the file exists, append the cost data to the end of the file.
+- Ensure all columns are included in the CSV file: timestamp, model, command, cost, input files, and output files.
+8. **Handle Exceptions Gracefully:**
+- If any errors occur during cost logging, print an error message using Rich's `rprint` but do not interrupt the command execution.
+9. **Return the Command Result:** Return the result of the original command function.
+
+% The decorator should be robust and ensure that the main command functionality is not adversely affected by the cost tracking. Use the `functools.wraps` decorator to preserve the metadata of the original function.
+
+% Here is an example of how the `track_cost` decorator will be used in the `pdd` program:
+```@cli.command()
+@track_cost
+def generate(ctx, prompt_file: str, output: Optional[str]) -> Tuple[str, float, str]:
+    # Command implementation
+    ...```
