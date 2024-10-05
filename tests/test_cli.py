@@ -72,9 +72,20 @@ def test_preprocess_command(runner: CliRunner, tmp_path) -> None:
     assert "Preprocessed prompt saved to:" in result.output
     assert output_file.exists()
 
+
+
+@pytest.fixture
+def mock_getsize():
+    with patch('os.path.getsize', return_value=0) as mock:
+        yield mock
+
+@pytest.fixture
+def mock_isfile():
+    with patch('os.path.isfile', return_value=True) as mock:
+        yield mock
+
 def test_fix_command(runner: CliRunner, tmp_path) -> None:
     """Test the fix command of the CLI with --auto-submit option."""
-    from unittest.mock import patch
     prompt_file = tmp_path / "test_prompt.txt"
     prompt_file.write_text("Generate a Python function to add two numbers")
     code_file = tmp_path / "code.py"
@@ -86,9 +97,8 @@ def test_fix_command(runner: CliRunner, tmp_path) -> None:
     error_file.write_text("AssertionError: assert 2 == 3")
     output_test = tmp_path / "fixed_test.py"
     output_code = tmp_path / "fixed_code.py"
- 
     # Mock the function that interacts with the LLM
-    with patch('pdd.cli.fix_errors_from_unit_tests_func', return_value=(True, True, 'fixed test content', 'fixed code content', 0.0, 'mock_model')):
+    with patch('pdd.cli.fix_errors_from_unit_tests', return_value=(True, True, 'fixed test content', 'fixed code content', 0.0, 'mock_model')):
         result = runner.invoke(cli, ['--force', 'fix', str(prompt_file), str(code_file), str(unit_test_file), str(error_file),
                                      '--output-test', str(output_test), '--output-code', str(output_code), '--auto-submit'])
         assert result.exit_code == 0
@@ -166,15 +176,14 @@ def test_detect_command(runner: CliRunner, tmp_path) -> None:
 
 def test_conflicts_command(runner: CliRunner, tmp_path) -> None:
     """Test the conflicts command of the CLI."""
-    from unittest.mock import patch
     prompt1 = tmp_path / "prompt1.txt"
     prompt1.write_text("Generate a Python function to add two numbers")
     prompt2 = tmp_path / "prompt2.txt"
     prompt2.write_text("Generate a Python function to subtract two numbers")
     output_file = tmp_path / "conflicts_results.csv"
-
+        
     # Mock the function that interacts with the LLM
-    with patch('pdd.cli.conflicts_in_prompts_func', return_value=([{
+    with patch('pdd.cli.conflicts_in_prompts', return_value=([{
         'description': 'Conflict in function names',
         'explanation': 'Both functions are named differently but could cause confusion.',
         'suggestion1': 'Rename function in prompt1 to sum_numbers.',
@@ -270,7 +279,7 @@ def test_track_cost_decorator(mock_getsize, mock_isfile, runner: CliRunner, tmp_
     mock_csv_writer = MagicMock()
 
     with patch('pdd.cli.construct_paths', mock_construct_paths), \
-         patch('pdd.cli.code_generator_func', mock_code_generator), \
+         patch('pdd.cli.code_generator', mock_code_generator), \
          patch('builtins.open', mock_open()) as mock_file, \
          patch('csv.writer', return_value=mock_csv_writer):
         
