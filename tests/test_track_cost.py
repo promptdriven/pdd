@@ -60,6 +60,29 @@ def mock_rprint():
     with mock.patch('pdd.track_cost.rprint') as mocked_rprint:
         yield mocked_rprint
 
+def test_csv_row_appended_if_file_exists(mock_click_context, mock_open_file, mock_rprint):
+    mock_ctx = create_mock_context('generate', {
+        'prompt_file': '/path/to/prompt.txt',
+        'output_cost': '/path/to/cost.csv',
+        'output': '/path/to/output'
+    })
+    mock_click_context.return_value = mock_ctx
+
+    with mock.patch('os.path.isfile', return_value=True):
+        result = sample_command(mock_ctx, '/path/to/prompt.txt', output='/path/to/output')
+
+    mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
+
+    handle = mock_open_file()
+    assert not any('timestamp,model,command,cost,input_files,output_files' in call.args[0] 
+                   for call in handle.write.call_args_list)
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output\r\n')
+    assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
+
+    mock_rprint.assert_not_called()
+    assert result == ('/path/to/output', 25.5, 'gpt-3')
+
+
 
 def test_no_output_cost_path(mock_click_context, mock_open_file, mock_rprint):
     """
@@ -139,9 +162,10 @@ def test_output_cost_path_via_env(mock_click_context, mock_open_file, mock_rprin
     # Retrieve the file handle to check written content
     handle = mock_open_file()
     handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files\r\n')
-    handle.write.assert_any_call(
-        f"{mock.ANY},gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output\r\n"
-    )
+    
+    # Use a regex pattern to match the row, ignoring the specific timestamp
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output\r\n')
+    assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
     mock_rprint.assert_not_called()
@@ -173,44 +197,12 @@ def test_csv_header_written_if_file_not_exists(mock_click_context, mock_open_fil
     # Header should be written first
     handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files\r\n')
     # Data row should be written
-    handle.write.assert_any_call(
-        f"{mock.ANY},gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output\r\n"
-    )
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output\r\n')
+    assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
     mock_rprint.assert_not_called()
 
-
-def test_csv_row_appended_if_file_exists(mock_click_context, mock_open_file, mock_rprint):
-    """
-    Test that a new row is appended to the CSV file when it already exists.
-    """
-    # Setup the mocked Click context with 'output_cost' parameter
-    mock_ctx = create_mock_context('generate', {
-        'prompt_file': '/path/to/prompt.txt',
-        'output_cost': '/path/to/cost.csv',
-        'output': '/path/to/output'
-    })
-    mock_click_context.return_value = mock_ctx
-
-    # Mock os.path.isfile to return True (file exists)
-    with mock.patch('os.path.isfile', return_value=True):
-        result = sample_command(mock_ctx, '/path/to/prompt.txt', output='/path/to/output')
-
-    # Ensure that open was called once
-    mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
-
-    # Retrieve the file handle to check written content
-    handle = mock_open_file()
-    # Header should NOT be written
-    handle.write.assert_not_any_call('timestamp,model,command,cost,input_files,output_files\r\n')
-    # Only data row should be written
-    handle.write.assert_any_call(
-        f"{mock.ANY},gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output\r\n"
-    )
-
-    # Ensure no error was printed
-    mock_rprint.assert_not_called()
 
 
 def test_cost_and_model_extracted_correctly(mock_click_context, mock_open_file, mock_rprint):
@@ -241,9 +233,8 @@ def test_cost_and_model_extracted_correctly(mock_click_context, mock_open_file, 
     # Header should be written
     handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files\r\n')
     # Data row should have correct cost and model
-    handle.write.assert_any_call(
-        f"{mock.ANY},bert-base,train,50.0,/path/to/input.txt,/path/to/output\r\n"
-    )
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,bert-base,train,50.0,/path/to/input.txt,/path/to/output\r\n')
+    assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
     mock_rprint.assert_not_called()
@@ -278,9 +269,8 @@ def test_result_tuple_too_short(mock_click_context, mock_open_file, mock_rprint)
     # Header should be written
     handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files\r\n')
     # Data row should have empty cost and model
-    handle.write.assert_any_call(
-        f"{mock.ANY},,short,,/path/to/prompt.txt,\r\n"
-    )
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,,short,,/path/to/prompt.txt,\r\n')
+    assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
     mock_rprint.assert_not_called()
@@ -316,9 +306,8 @@ def test_input_output_files_collected(mock_click_context, mock_open_file, mock_r
     # Header should be written
     handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files\r\n')
     # Data row should have correct input and output files
-    handle.write.assert_any_call(
-        f"{mock.ANY},custom-model,process,15.0,/path/to/input.txt,/path/to/output.txt\r\n"
-    )
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,custom-model,process,15.0,/path/to/input.txt,/path/to/output.txt\r\n')
+    assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
     mock_rprint.assert_not_called()
@@ -359,9 +348,8 @@ def test_multiple_input_output_files(mock_click_context, mock_open_file, mock_rp
     # Header should be written
     handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files\r\n')
     # Data row should have multiple input and output files separated by semicolons
-    handle.write.assert_any_call(
-        f"{mock.ANY},batch-model,batch,100.0,/path/to/input1.txt;/path/to/input2.txt,/path/to/output1.txt;/path/to/output2.txt\r\n"
-    )
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,batch-model,batch,100.0,/path/to/input1.txt;/path/to/input2.txt,/path/to/output1.txt;/path/to/output2.txt\r\n')
+    assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
     mock_rprint.assert_not_called()
@@ -425,9 +413,8 @@ def test_non_string_file_parameters(mock_click_context, mock_open_file, mock_rpr
     # Retrieve the file handle to check written content
     handle = mock_open_file()
     # Data row should include only string file paths
-    handle.write.assert_any_call(
-        f"{mock.ANY},mixed-model,mixed,30.0,/path/to/input.txt,/path/to/output.txt\r\n"
-    )
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,mixed-model,mixed,30.0,/path/to/input.txt,/path/to/output.txt\r\n')
+    assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
     mock_rprint.assert_not_called()
@@ -476,9 +463,8 @@ def test_non_tuple_result(mock_click_context, mock_open_file, mock_rprint):
     # Retrieve the file handle to check written content
     handle = mock_open_file()
     # Data row should have empty cost and model
-    handle.write.assert_any_call(
-        f"{mock.ANY},,non_tuple,,/path/to/prompt.txt,\r\n"
-    )
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,,non_tuple,,/path/to/prompt.txt,\r\n')
+    assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
     mock_rprint.assert_not_called()
