@@ -7,7 +7,7 @@ import os
 from datetime import datetime
 from typing import Tuple
 import csv
-
+import re
 # Import the decorator from the pdd.track_cost module
 from pdd.track_cost import track_cost
 
@@ -71,7 +71,7 @@ def test_no_output_cost_path(mock_click_context, mock_open_file, mock_rprint):
 
     # Remove environment variable if set
     with mock.patch.dict(os.environ, {}, clear=True):
-        result = sample_command('/path/to/prompt.txt')
+        result = sample_command(mock_ctx, '/path/to/prompt.txt')
 
     # Ensure that open was not called since output_cost_path is not specified
     mock_open_file.assert_not_called()
@@ -79,6 +79,7 @@ def test_no_output_cost_path(mock_click_context, mock_open_file, mock_rprint):
     mock_rprint.assert_not_called()
     # Ensure the command result is returned correctly
     assert result == ('/path/to/output', 25.5, 'gpt-3')
+
 
 
 def test_output_cost_path_via_param(mock_click_context, mock_open_file, mock_rprint):
@@ -95,7 +96,7 @@ def test_output_cost_path_via_param(mock_click_context, mock_open_file, mock_rpr
 
     # Mock os.path.isfile to return False (file does not exist)
     with mock.patch('os.path.isfile', return_value=False):
-        result = sample_command('/path/to/prompt.txt', output='/path/to/output')
+        result = sample_command(mock_ctx, '/path/to/prompt.txt', output='/path/to/output')
 
     # Ensure that open was called with the correct path and mode
     mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
@@ -103,9 +104,10 @@ def test_output_cost_path_via_param(mock_click_context, mock_open_file, mock_rpr
     # Retrieve the file handle to check written content
     handle = mock_open_file()
     handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files\r\n')
-    handle.write.assert_any_call(
-        f"{mock.ANY},gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output\r\n"
-    )
+    
+    # Use a regex pattern to match the row, ignoring the specific timestamp
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output\r\n')
+    assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
     mock_rprint.assert_not_called()
@@ -129,7 +131,7 @@ def test_output_cost_path_via_env(mock_click_context, mock_open_file, mock_rprin
 
     # Mock os.path.isfile to return False (file does not exist)
     with mock.patch('os.path.isfile', return_value=False):
-        result = sample_command('/path/to/prompt.txt', output='/path/to/output')
+        result = sample_command(mock_ctx, '/path/to/prompt.txt', output='/path/to/output')
 
     # Ensure that open was called with the path from environment variable
     mock_open_file.assert_called_once_with('/env/path/cost.csv', 'a', newline='', encoding='utf-8')
@@ -161,7 +163,7 @@ def test_csv_header_written_if_file_not_exists(mock_click_context, mock_open_fil
 
     # Mock os.path.isfile to return False (file does not exist)
     with mock.patch('os.path.isfile', return_value=False):
-        result = sample_command('/path/to/prompt.txt', output='/path/to/output')
+        result = sample_command(mock_ctx, '/path/to/prompt.txt', output='/path/to/output')
 
     # Ensure that open was called once
     mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
@@ -193,7 +195,7 @@ def test_csv_row_appended_if_file_exists(mock_click_context, mock_open_file, moc
 
     # Mock os.path.isfile to return True (file exists)
     with mock.patch('os.path.isfile', return_value=True):
-        result = sample_command('/path/to/prompt.txt', output='/path/to/output')
+        result = sample_command(mock_ctx, '/path/to/prompt.txt', output='/path/to/output')
 
     # Ensure that open was called once
     mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
@@ -229,7 +231,7 @@ def test_cost_and_model_extracted_correctly(mock_click_context, mock_open_file, 
         return ('/path/to/output', 50.0, 'bert-base')
 
     with mock.patch('os.path.isfile', return_value=False):
-        result = train_command('/path/to/input.txt', output='/path/to/output')
+        result = train_command(mock_ctx, '/path/to/input.txt', output='/path/to/output')
 
     # Ensure that open was called with the correct path
     mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
@@ -266,7 +268,7 @@ def test_result_tuple_too_short(mock_click_context, mock_open_file, mock_rprint)
     mock_click_context.return_value = mock_ctx
 
     with mock.patch('os.path.isfile', return_value=False):
-        result = short_result_command('/path/to/prompt.txt')
+        result = short_result_command(mock_ctx, '/path/to/prompt.txt')
 
     # Ensure that open was called
     mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
@@ -304,7 +306,7 @@ def test_input_output_files_collected(mock_click_context, mock_open_file, mock_r
     mock_click_context.return_value = mock_ctx
 
     with mock.patch('os.path.isfile', return_value=False):
-        result = process_command('/path/to/input.txt', output_file='/path/to/output.txt')
+        result = process_command(mock_ctx, '/path/to/input.txt', output_file='/path/to/output.txt')
 
     # Ensure that open was called with the correct path
     mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
@@ -343,6 +345,7 @@ def test_multiple_input_output_files(mock_click_context, mock_open_file, mock_rp
 
     with mock.patch('os.path.isfile', return_value=False):
         result = batch_command(
+            mock_ctx,
             ['/path/to/input1.txt', '/path/to/input2.txt'],
             output_files=['/path/to/output1.txt', '/path/to/output2.txt'],
             output_cost='/path/to/cost.csv'
@@ -381,7 +384,7 @@ def test_exception_in_logging(mock_click_context, mock_open_file, mock_rprint):
     mock_open_file.side_effect = IOError("Failed to open file")
 
     with mock.patch('os.path.isfile', return_value=True):
-        result = sample_command('/path/to/prompt.txt')
+        result = sample_command(mock_ctx, '/path/to/prompt.txt')
 
     # Ensure that open was attempted
     mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
@@ -414,7 +417,7 @@ def test_non_string_file_parameters(mock_click_context, mock_open_file, mock_rpr
     mock_click_context.return_value = mock_ctx
 
     with mock.patch('os.path.isfile', return_value=False):
-        result = mixed_command('/path/to/input.txt', output_file='/path/to/output.txt', config={'key': 'value'})
+        result = mixed_command(mock_ctx, '/path/to/input.txt', output_file='/path/to/output.txt', config={'key': 'value'})
 
     # Ensure that open was called with the correct path
     mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
@@ -438,7 +441,7 @@ def test_missing_click_context(mock_open_file, mock_rprint):
     """
     # Mock click.get_current_context to return None
     with mock.patch('click.get_current_context', return_value=None):
-        result = sample_command('/path/to/prompt.txt')
+        result = sample_command(None, '/path/to/prompt.txt')
 
     # Ensure that open was not called
     mock_open_file.assert_not_called()
@@ -465,7 +468,7 @@ def test_non_tuple_result(mock_click_context, mock_open_file, mock_rprint):
     mock_click_context.return_value = mock_ctx
 
     with mock.patch('os.path.isfile', return_value=False):
-        result = non_tuple_command('/path/to/prompt.txt')
+        result = non_tuple_command(mock_ctx, '/path/to/prompt.txt')
 
     # Ensure that open was called
     mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
