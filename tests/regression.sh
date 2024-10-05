@@ -27,11 +27,13 @@ STAGING_PATH="${PDD_PATH}/staging"
 REGRESSION_DIR="${STAGING_PATH}/regression"
 PDD_SCRIPT="pdd"
 PROMPTS_PATH="${PDD_PATH}/prompts"
-CONTEXT_PATH="${STAGING_PATH}/context"
+CONTEXT_PATH="${PDD_PATH}/context"
+TESTS_DIR="${STAGING_PATH}/tests"
 LOG_FILE="${REGRESSION_DIR}/regression.log"
 COST_FILE="${REGRESSION_DIR}/regression_cost.csv"
 
 # Define variables for commonly used filenames
+
 # Example 1: Extension
 EXTENSION_PROMPT="get_extension_python.prompt"
 EXTENSION_SCRIPT="get_extension.py"
@@ -44,7 +46,9 @@ XML_OUTPUT_PROMPT="${REGRESSION_DIR}/get_extension_python_xml.prompt"
 # Example 2: Change
 CHANGE_PROMPT="initial_code_generator_python.prompt"
 CHANGE_SCRIPT="initial_code_generator.py"
+CHANGE_DESCRIPTION_PROMPT="change.prompt"
 CHANGE_CONTEXT_PROMPT="${CONTEXT_PATH}/change/11/${CHANGE_PROMPT}"
+CHANGE_DESCRIPTION_FILE="${CONTEXT_PATH}/change/11/${CHANGE_DESCRIPTION_PROMPT}"
 
 # Example 3: Split
 SPLIT_PROMPT="initial_construct_paths_python.prompt"
@@ -159,29 +163,36 @@ run_pdd_command update --output "${REGRESSION_DIR}/updated_${EXTENSION_PROMPT}" 
 
 # 7. Change
 log "Running 'change' command"
+
+# Ensure that the change description prompt exists
+if [ ! -f "${CHANGE_DESCRIPTION_FILE}" ]; then
+    log "Change description prompt file '${CHANGE_DESCRIPTION_FILE}' does not exist. Creating a default change prompt."
+    echo "% Describe the changes to be applied to the 'initial_code_generator_python.prompt'." > "${CHANGE_DESCRIPTION_FILE}"
+fi
+
 run_pdd_command change --output "${REGRESSION_DIR}/changed_${CHANGE_PROMPT}" \
                        "${CHANGE_CONTEXT_PROMPT}" \
                        "${CONTEXT_PATH}/change/11/${CHANGE_SCRIPT}" \
-                       "${CHANGE_CONTEXT_PROMPT}"
+                       "${CHANGE_DESCRIPTION_FILE}"
 
 # 8. Fix
 log "Running 'fix' command"
 # Assuming pytest is set up correctly
 python -m pytest "${REGRESSION_DIR}/${EXTENSION_TEST}" > "${REGRESSION_DIR}/pytest_output.log" || true
 run_pdd_command fix --output-test "${REGRESSION_DIR}/fixed_${EXTENSION_TEST}" \
-                        --output-code "${REGRESSION_DIR}/fixed_${EXTENSION_SCRIPT}" \
-                        "${PROMPTS_PATH}/${EXTENSION_PROMPT}" "${REGRESSION_DIR}/${EXTENSION_SCRIPT}" "${REGRESSION_DIR}/${EXTENSION_TEST}" "${REGRESSION_DIR}/pytest_output.log"
+                    --output-code "${REGRESSION_DIR}/fixed_${EXTENSION_SCRIPT}" \
+                    "${PROMPTS_PATH}/${EXTENSION_PROMPT}" "${REGRESSION_DIR}/${EXTENSION_SCRIPT}" "${REGRESSION_DIR}/${EXTENSION_TEST}" "${REGRESSION_DIR}/pytest_output.log"
 
 # 9. Fix with Loop
 log "Running 'fix' command with --loop option"
 run_pdd_command fix --loop \
-                        --output-test "${REGRESSION_DIR}/fixed_loop_${EXTENSION_TEST}" \
-                        --output-code "${REGRESSION_DIR}/fixed_loop_${EXTENSION_SCRIPT}" \
-                        --output-results "${REGRESSION_DIR}/fixed_loop_results.log" \
-                        --verification-program "${EXTENSION_VERIFICATION_PROGRAM}" \
-                        --max-attempts 2 \
-                        --budget 5.0 \
-                        "${PROMPTS_PATH}/${EXTENSION_PROMPT}" "${REGRESSION_DIR}/${EXTENSION_SCRIPT}" "${REGRESSION_DIR}/${EXTENSION_TEST}" "${REGRESSION_DIR}/fix_loop_error.log"
+                    --output-test "${REGRESSION_DIR}/fixed_loop_${EXTENSION_TEST}" \
+                    --output-code "${REGRESSION_DIR}/fixed_loop_${EXTENSION_SCRIPT}" \
+                    --output-results "${REGRESSION_DIR}/fixed_loop_results.log" \
+                    --verification-program "${EXTENSION_VERIFICATION_PROGRAM}" \
+                    --max-attempts 2 \
+                    --budget 5.0 \
+                    "${PROMPTS_PATH}/${EXTENSION_PROMPT}" "${REGRESSION_DIR}/${EXTENSION_SCRIPT}" "${REGRESSION_DIR}/${EXTENSION_TEST}" "${REGRESSION_DIR}/fix_loop_error.log"
 
 # 10. Split
 log "Running 'split' command"
@@ -210,26 +221,26 @@ log "Running 'crash' command"
 # Simulate a crash by running a faulty program
 python "${EXTENSION_VERIFICATION_PROGRAM}" >& "${EXTENSION_ERROR_LOG}" || true
 run_pdd_command crash --output "${REGRESSION_DIR}/fixed_crash_${EXTENSION_SCRIPT}" \
-                        "${PROMPTS_PATH}/${EXTENSION_PROMPT}" \
-                        "${REGRESSION_DIR}/${EXTENSION_SCRIPT}" \
-                        "${TRACE_PROGRAM}" \
-                        "${EXTENSION_ERROR_LOG}"
+                      "${PROMPTS_PATH}/${EXTENSION_PROMPT}" \
+                      "${REGRESSION_DIR}/${EXTENSION_SCRIPT}" \
+                      "${TRACE_PROGRAM}" \
+                      "${EXTENSION_ERROR_LOG}"
 
 # 14. Trace
 log "Running 'trace' command"
 run_pdd_command trace --output "${REGRESSION_DIR}/trace_results.log" \
-                       "${PROMPTS_PATH}/${TRACE_PROMPT}" \
-                       "${REGRESSION_DIR}/${TRACE_SCRIPT}" \
-                       "${TRACE_LINE}"
+                      "${PROMPTS_PATH}/${TRACE_PROMPT}" \
+                      "${REGRESSION_DIR}/${TRACE_SCRIPT}" \
+                      "${TRACE_LINE}"
 
 # 15. Bug
 log "Running 'bug' command"
 run_pdd_command bug --output "${REGRESSION_DIR}/test_${BUG_PROMPT}" \
-                     "${PROMPTS_PATH}/${BUG_PROMPT}" \
-                     "${REGRESSION_DIR}/${BUG_SCRIPT}" \
-                     "${REGRESSION_DIR}/${BUG_PROGRAM}" \
-                     "${CURRENT_OUTPUT}" \
-                     "${DESIRED_OUTPUT}"
+                   "${PROMPTS_PATH}/${BUG_PROMPT}" \
+                   "${REGRESSION_DIR}/${BUG_SCRIPT}" \
+                   "${REGRESSION_DIR}/${BUG_PROGRAM}" \
+                   "${CURRENT_OUTPUT}" \
+                   "${DESIRED_OUTPUT}"
 
 # ------------------------------ Completion -------------------------------------
 
