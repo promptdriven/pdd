@@ -40,7 +40,7 @@ def fix_error_loop(
     temperature: float,
     max_attempts: int,
     budget: float,
-    error_log_file: str = "error_log.txt"
+    error_log_file: str = "error.log"
 ) -> Tuple[bool, str, str, int, float, str]:
     """
     Attempt to fix errors in a unit test and its corresponding code file through multiple iterations.
