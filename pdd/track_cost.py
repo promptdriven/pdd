@@ -4,176 +4,108 @@ import csv
 import os
 import click
 from rich import print as rprint
-from typing import Any, Tuple
 
 def track_cost(func):
+    """
+    Decorator to track the cost of command execution in the "pdd" CLI program.
+    
+    It logs the execution details into a CSV file specified by the user or
+    through the PDD_OUTPUT_COST_PATH environment variable.
+    """
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        ctx = click.get_current_context()
-        if ctx is None:
-            return func(*args, **kwargs)
-
         start_time = datetime.now()
-        result = None
-        exception_raised = None
-
         try:
-            # Record the invoked subcommand name on the shared ctx.obj so
-            # the CLI result callback can display proper names instead of
-            # falling back to "Unknown Command X".
-            try:
-                # Avoid interfering with pytest-based CLI tests which expect
-                # Click's default behavior (yielding "Unknown Command X").
-                if not os.environ.get('PYTEST_CURRENT_TEST'):
-                    if ctx.obj is not None:
-                        invoked = ctx.obj.get('invoked_subcommands') or []
-                        # Use the current command name if available
-                        cmd_name = ctx.command.name if ctx.command else None
-                        if cmd_name:
-                            invoked.append(cmd_name)
-                            ctx.obj['invoked_subcommands'] = invoked
-            except Exception:
-                # Non-fatal: if we cannot record, proceed normally
-                pass
-
+            # Execute the original command function
             result = func(*args, **kwargs)
         except Exception as e:
-            exception_raised = e
-        finally:
-            end_time = datetime.now()
+            # Let any exceptions from the command propagate
+            raise e
+        end_time = datetime.now()
 
-            try:
-                # Always collect files for core dump, even if output_cost is not set
-                input_files, output_files = collect_files(args, kwargs)
+        try:
+            # Retrieve the current Click context
+            ctx = click.get_current_context()
 
-                # Store collected files in context for core dump (even if output_cost not set)
-                if ctx.obj is not None and ctx.obj.get('core_dump'):
-                    files_set = ctx.obj.get('core_dump_files', set())
-                    for f in input_files + output_files:
-                        if isinstance(f, str) and f:
-                            # Convert to absolute path for reliable access later
-                            abs_path = os.path.abspath(f)
-                            # Add the file if it exists OR if it looks like a file path
-                            # (it might have been created/deleted during command execution)
-                            if os.path.exists(abs_path) or '.' in os.path.basename(f):
-                                files_set.add(abs_path)
-                    ctx.obj['core_dump_files'] = files_set
+            # Step 5: Retrieve Output Cost Option
+            output_cost_path = (
+                ctx.params.get('output_cost') or
+                os.getenv('PDD_OUTPUT_COST_PATH')
+            )
+            
+            if not output_cost_path:
+                # If no output cost path is specified, skip logging
+                return result
 
-                # Check if we need to write cost tracking (only on success)
-                if exception_raised is None:
-                    if ctx.obj and hasattr(ctx.obj, 'get'):
-                        output_cost_path = ctx.obj.get('output_cost') or os.getenv('PDD_OUTPUT_COST_PATH')
-                    else:
-                        output_cost_path = os.getenv('PDD_OUTPUT_COST_PATH')
+            # Step 6: Prepare Cost Data
 
-                    if output_cost_path and os.environ.get('PYTEST_CURRENT_TEST') is None:
-                        command_name = ctx.command.name
-                        cost, model_name = extract_cost_and_model(result)
+            # Determine the command name
+            command_name = ctx.command.name
 
-                        timestamp = start_time.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3]
+            # Extract cost and model name from the result tuple
+            # Assuming the second to last element is cost and the last is model name
+            if isinstance(result, tuple) and len(result) >= 2:
+                cost = result[-2]
+                model_name = result[-1]
+            else:
+                cost = None
+                model_name = None
 
-                        row = {
-                            'timestamp': timestamp,
-                            'model': model_name,
-                            'command': command_name,
-                            'cost': cost,
-                            'input_files': ';'.join(input_files),
-                            'output_files': ';'.join(output_files),
-                        }
+            # Collect input and output file paths from command arguments
+            input_files = []
+            output_files = []
 
-                        file_has_content = os.path.isfile(output_cost_path) and os.path.getsize(output_cost_path) > 0
-                        fieldnames = ['timestamp', 'model', 'command', 'cost', 'input_files', 'output_files']
+            for param, value in ctx.params.items():
+                if isinstance(value, str) and 'input' in param.lower():
+                    input_files.append(value)
+                elif isinstance(value, str) and 'output' in param.lower():
+                    output_files.append(value)
+                elif isinstance(value, (list, tuple)):
+                    # Handle multiple input/output files
+                    for item in value:
+                        if isinstance(item, str):
+                            if 'input' in param.lower():
+                                input_files.append(item)
+                            elif 'output' in param.lower():
+                                output_files.append(item)
 
-                        with open(output_cost_path, 'a', newline='', encoding='utf-8') as csvfile:
-                            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                            if not file_has_content:
-                                writer.writeheader()
-                            writer.writerow(row)
+            # Format the timestamp
+            timestamp = start_time.isoformat()
 
-            except Exception as e:
-                rprint(f"[red]Error tracking cost: {e}[/red]")
+            # Prepare the CSV row
+            row = {
+                'timestamp': timestamp,
+                'model': model_name if model_name else '',
+                'command': command_name,
+                'cost': cost if cost is not None else '',
+                'input_files': ';'.join(input_files),
+                'output_files': ';'.join(output_files),
+            }
 
-        # Re-raise the exception if one occurred
-        if exception_raised is not None:
-            raise exception_raised
+            # Step 7: Append Cost Data to CSV File
 
+            # Check if the CSV file exists to determine if header is needed
+            file_exists = os.path.isfile(output_cost_path)
+
+            # Define the CSV headers
+            fieldnames = ['timestamp', 'model', 'command', 'cost', 'input_files', 'output_files']
+
+            # Open the CSV file in append mode
+            with open(output_cost_path, 'a', newline='', encoding='utf-8') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+                # Write header if the file is new
+                if not file_exists:
+                    writer.writeheader()
+
+                # Write the cost data row
+                writer.writerow(row)
+
+        except Exception as e:
+            # Step 8: Handle Exceptions Gracefully
+            rprint(f"[red]Error tracking cost: {e}[/red]")
+
+        # Step 9: Return the Command Result
         return result
 
     return wrapper
-
-def extract_cost_and_model(result: Any) -> Tuple[Any, str]:
-    if isinstance(result, tuple) and len(result) >= 3:
-        return result[-2], result[-1]
-    return '', ''
-
-def collect_files(args, kwargs):
-    input_files = []
-    output_files = []
-
-    # Known input parameter names that typically contain file paths
-    input_param_names = {
-        'prompt_file', 'prompt', 'input', 'input_file', 'source', 'source_file',
-        'file', 'path', 'original_prompt_file_path', 'files', 'core_file',
-        'code_file', 'unit_test_file', 'error_file', 'test_file', 'example_file'
-    }
-
-    # Known output parameter names (anything with 'output' in the name)
-    output_param_names = {
-        'output', 'output_file', 'output_path', 'destination', 'dest', 'target',
-        'output_test', 'output_code', 'output_results'
-    }
-
-    # Helper to check if something looks like a file path
-    def looks_like_file(path_str):
-        """Check if string looks like a file path."""
-        if not path_str or not isinstance(path_str, str):
-            return False
-        # Has file extension or exists
-        return '.' in os.path.basename(path_str) or os.path.isfile(path_str)
-
-    # Collect from kwargs (most reliable since Click uses named parameters)
-    for k, v in kwargs.items():
-        if k in ('ctx', 'context', 'output_cost'):
-            continue
-
-        # Check if this is a known parameter name
-        is_input_param = k in input_param_names or 'file' in k.lower() or 'prompt' in k.lower()
-        is_output_param = k in output_param_names or 'output' in k.lower()
-
-        if isinstance(v, str) and v:
-            # For known parameter names, trust that they represent file paths
-            # For unknown parameters, check if it looks like a file
-            if is_input_param or is_output_param or looks_like_file(v):
-                if is_output_param:
-                    output_files.append(v)
-                elif is_input_param:
-                    input_files.append(v)
-                else:
-                    # Unknown parameter but looks like a file, treat as input
-                    input_files.append(v)
-        elif isinstance(v, list):
-            for item in v:
-                if isinstance(item, str) and item:
-                    # Same logic for list items
-                    if is_input_param or is_output_param or looks_like_file(item):
-                        if is_output_param:
-                            output_files.append(item)
-                        elif is_input_param:
-                            input_files.append(item)
-                        else:
-                            input_files.append(item)
-
-    # Collect from positional args (skip first arg which is usually Click context)
-    for i, arg in enumerate(args):
-        # Skip first argument if it looks like a Click context
-        if i == 0 and hasattr(arg, 'obj'):
-            continue
-
-        if isinstance(arg, str) and arg and looks_like_file(arg):
-            input_files.append(arg)
-        elif isinstance(arg, list):
-            for item in arg:
-                if isinstance(item, str) and item and looks_like_file(item):
-                    input_files.append(item)
-
-    return input_files, output_files
