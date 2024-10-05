@@ -13,7 +13,7 @@
 6. **Prepare Cost Data:**
 - Determine the command name from the context.
 - Extract the cost and model name from the command function's result if available. Generally, the second to the last element of the result tuple will be the cost and the last element will be the model name.
-- Collect input and output file paths from the command arguments.
+- Collect input and output file paths from the command arguments. Input file paths are parameters that don't have 'output' in their name, and output file paths are parameters that have 'output' in their name. The output cost file should not be included in the output file path collection.
 7. **Append Cost Data to CSV File:**
 - If the output cost file does not exist, create it and write the header row.
 - If the file exists, append the cost data to the end of the file.
