@@ -271,16 +271,17 @@ pdd [GLOBAL OPTIONS] split --output-sub prompts/sub_data_processing.prompt --out
 Modify an input prompt file based on a change prompt and the corresponding input code.
 
 ```
-pdd [GLOBAL OPTIONS] change [OPTIONS] INPUT_PROMPT_FILE INPUT_CODE_FILE CHANGE_PROMPT_FILE
+pdd [GLOBAL OPTIONS] change [OPTIONS] INPUT_PROMPT_FILE INPUT_CODE CHANGE_PROMPT_FILE
 ```
 
 Arguments:
 - `INPUT_PROMPT_FILE`: The filename of the prompt file that will be modified.
-- `INPUT_CODE_FILE`: The filename of the code that was generated from the input prompt file.
+- `INPUT_CODE`: The filename or directory (when used with the '--csv' option) of the code that was generated from the input prompt file.
 - `CHANGE_PROMPT_FILE`: The filename containing the instructions on how to modify the input prompt file.
 
 Options:
 - `--output LOCATION`: Specify where to save the modified prompt file. The default file name is `modified_<basename>.prompt`. If an environment variable `PDD_CHANGE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--csv`: Use a CSV file for the change prompts instead of a text file. The CSV file should have columns: `prompt_name` and  `change_instructions`. `INPUT_PROMPT_FILE` argument is not needed when using this option. Also, `INPUT_CODE_FILE` now needs to represent the directory where the code files are located instead of the actual code file.
 
 Example:
 ```
@@ -348,6 +349,8 @@ Example:
 ```
 pdd [GLOBAL OPTIONS] conflicts --output conflicts_analysis.csv data_processing_module_python.prompt data_visualization_module_python.prompt 
 ```
+
+Both the `detect` and `conflicts` commands generate a csv file with the following columns: `prompt_name` and `change_instructions`. This csv file can be used as input for the `change --csv` command.
 
 ### 11. crash
 

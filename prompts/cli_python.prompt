@@ -1,3 +1,9 @@
+<example_generation>
+% Here an example of a prompt and generated code from a prior version of the below prompt:
+    <prior_prompt><include>context/generate/3/cli_python_preprocessed.prompt</include></prior_prompt>
+    <prior_code><include>context/generate/3/cli.py</include></prior_code>
+</example_generation>
+
 <context>
 % You are an expert Python engineer. Your goal is to write a Python command line program, "pdd". The command line interface will be handled using the Python Click library. It will contain the 'cli' function.
 
@@ -41,6 +47,8 @@
 
     - 'change' command: To change the prompt file, use the 'change' function. Keep in mind that the change prompt is also an input file that needs to be loaded by construct_paths. Here is an example of how to change the prompt file: <change_example><include>context/change_example.py</include></change_example>
 
+    - 'change --csv' sub-command: To change the prompt file using a csv file, use the 'process_csv_change' function. Here is an example of how to change the prompt file using a csv file: <process_csv_change_example><include>context/process_csv_change_example.py</include></process_csv_change_example>
+
     - 'update' command: To update the prompt file, use the 'update_prompt' function. Here is an example of how to update the prompt file: <update_prompt_example><include>context/update_prompt_example.py</include></update_prompt_example>
 
     - 'update --git' sub-command: To update the prompt file like above but without having the have the original code file use the 'git_update' function. Here is an example of how to update the prompt file by retrieving the original code file from a git repository: <git_update_example><include>context/git_update_example.py</include></git_update_example>
@@ -60,10 +68,3 @@
 
 % If output cost option is selected directly and/or via the output cost environmental variable, the costs and other details should be appended to the specified output file. If the output file does not exist, it should be created. If the output file exists, the costs should be appended to the end of the file. Be sure to include all columns in the csv file.
 </instructions>
-
-
-<example_generation>
-% Here an example of a prompt and generated code from a prior version of the above prompt:
-    <prior_prompt><include>context/generate/3/cli_python_preprocessed.prompt</include></prior_prompt>
-    <prior_code><include>context/generate/3/cli.py</include></prior_code>
-</example_generation>
