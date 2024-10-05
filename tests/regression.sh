@@ -208,7 +208,7 @@ run_pdd_command detect --output "${REGRESSION_DIR}/detect_results.csv" \
                        "${PROMPTS_PATH}/${EXTENSION_PROMPT}" \
                        "${CONTEXT_PATH}/change/11/${CHANGE_PROMPT}" \
                        "${CONTEXT_PATH}/split/4/${SPLIT_PROMPT}" \
-                       "${CONTEXT_PATH}/change/11/change_description.prompt"
+                       "${CHANGE_DESCRIPTION_FILE}"
 
 # 12. Conflicts
 log "Running 'conflicts' command"
