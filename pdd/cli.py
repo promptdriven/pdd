@@ -309,7 +309,7 @@ def fix(ctx, prompt_file: str, code_file: str, unit_test_file: str, error_file: 
                 max_attempts,
                 budget,
                 output_file_paths['output_results'],
-                auto_submit
+                # auto_submit
             )
             
             if success:
@@ -611,7 +611,7 @@ def conflicts(ctx, prompt1: str, prompt2: str, output: Optional[str]) -> Tuple[L
         )
         
         with open(output_file_paths['output'], 'w', newline='') as csvfile:
-            fieldnames = ['description', 'explanation', 'suggestion1', 'suggestion2']
+            fieldnames = ['prompt_name', 'change_instructions']
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writeheader()
             for conflict in conflicts_list:
