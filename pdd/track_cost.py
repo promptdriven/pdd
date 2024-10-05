@@ -14,6 +14,10 @@ def track_cost(func):
     """
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
+        ctx = click.get_current_context()
+        if ctx is None:
+            return func(*args, **kwargs)
+
         start_time = datetime.now()
         try:
             # Execute the original command function
@@ -24,9 +28,6 @@ def track_cost(func):
         end_time = datetime.now()
 
         try:
-            # Retrieve the current Click context
-            ctx = click.get_current_context()
-
             # Step 5: Retrieve Output Cost Option
             output_cost_path = (
                 ctx.params.get('output_cost') or
@@ -44,22 +45,22 @@ def track_cost(func):
 
             # Extract cost and model name from the result tuple
             # Assuming the second to last element is cost and the last is model name
-            if isinstance(result, tuple) and len(result) >= 2:
+            if isinstance(result, tuple) and len(result) >= 3:
                 cost = result[-2]
                 model_name = result[-1]
             else:
-                cost = None
-                model_name = None
+                cost = ''
+                model_name = ''
 
             # Collect input and output file paths from command arguments
             input_files = []
             output_files = []
 
             for param, value in ctx.params.items():
-                if isinstance(value, str) and not 'output' in param.lower():
-                    input_files.append(value)
-                elif isinstance(value, str) and 'output' in param.lower():
-                    if not value == output_cost_path:
+                if isinstance(value, str):
+                    if 'output' not in param.lower() and param != 'output_cost':
+                        input_files.append(value)
+                    elif 'output' in param.lower() and param != 'output_cost':
                         output_files.append(value)
                 elif isinstance(value, (list, tuple)):
                     # Handle multiple input/output files
@@ -67,7 +68,7 @@ def track_cost(func):
                         if isinstance(item, str):
                             if 'input' in param.lower():
                                 input_files.append(item)
-                            elif 'output' in param.lower():
+                            elif 'output' in param.lower() and param != 'output_cost':
                                 output_files.append(item)
 
             # Format the timestamp
@@ -76,9 +77,9 @@ def track_cost(func):
             # Prepare the CSV row
             row = {
                 'timestamp': timestamp,
-                'model': model_name if model_name else '',
+                'model': model_name,
                 'command': command_name,
-                'cost': cost if cost is not None else '',
+                'cost': cost,
                 'input_files': ';'.join(input_files),
                 'output_files': ';'.join(output_files),
             }
