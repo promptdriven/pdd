@@ -51,11 +51,11 @@
 
     - 'update' command: To update the prompt file, use the 'update_prompt' function. Here is an example of how to update the prompt file: <update_prompt_example><include>context/update_prompt_example.py</include></update_prompt_example>
 
-    - 'update --git' sub-command: To update the prompt file like above but without having the have the original code file use the 'git_update' function. Here is an example of how to update the prompt file by retrieving the original code file from a git repository: <git_update_example><include>context/git_update_example.py</include></git_update_example>
+    - 'update --git' sub-command: To update the prompt file like above but without having to have the original code file, use the 'git_update' function. Here is an example of how to update the prompt file by retrieving the original code file from a git repository: <git_update_example><include>context/git_update_example.py</include></git_update_example>
 
     - 'detect' command: To analyze a list of prompt files and a change description to determine which prompts need to be changed, use the 'detect_change' function. Here is an example of how to detect prompts that need changes: <detect_change_example><include>context/detect_change_example.py</include></detect_change_example>
 
-    - 'conflicts' command: To analyze two prompt files to find conflicts between them and suggest how to resolve those conflicts, use the 'conflicts_in_prompts' function. Here is an example of how to analyze conflicts between two prompts: <conflicts_in_prompts_example><include>context/conflicts_in_prompts_example.py</include></conflicts_in_prompts_example>
+    - 'conflicts' command: To analyze two prompt files to find conflicts between them and suggest how to resolve those conflicts, use the 'conflicts_in_prompts' function. The prompt names: 'prompt_1' and 'prompt_2' need to be replaced with the full filepath of the respective prompts. Here is an example of how to analyze conflicts between two prompts: <conflicts_in_prompts_example><include>context/conflicts_in_prompts_example.py</include></conflicts_in_prompts_example>
 
     - 'crash' command: To fix errors in a code module that caused a program to crash, use the 'fix_code_module_errors' function. Here is an example of how to fix errors in a code module that caused a program to crash: <fix_code_module_errors_example><include>context/fix_code_module_errors_example.py</include></fix_code_module_errors_example>
 
