@@ -50,7 +50,7 @@
       - Replace the `prompt_1` and `prompt_2` strings with the actual file paths in the conflicts list for the 'prompt_name' column.
 
    5. **Save Results**:
-      - If an output path is specified, write the conflicts list to a CSV file using the `csv` module.
+      - Write the conflicts list to a CSV file using the `csv` module.
       - Include headers and ensure proper formatting.
 
    6. **Provide User Feedback**:

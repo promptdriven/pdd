@@ -48,7 +48,7 @@
       - Capture the returned conflicts list, total cost, and model name.
 
    4. **Save Results**:
-      - If an output path is specified, write the conflicts list to a CSV file using the `csv` module.
+      - Write the conflicts list to a CSV file using the `csv` module.
       - Include headers and ensure proper formatting.
 
    5. **Provide User Feedback**:
