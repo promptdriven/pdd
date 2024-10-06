@@ -3,20 +3,9 @@ import pathlib
 from typing import Dict, Optional
 
 def generate_output_paths(command: str, output_locations: Dict[str, Optional[str]], basename: str, language: str, file_extension: str) -> Dict[str, str]:
-    """
-    Generate output paths based on the command, output locations, and other parameters.
-
-    :param command: The command type which determines the naming convention.
-    :param output_locations: A dictionary of output locations specified by the user.
-    :param basename: The base name for the file.
-    :param language: The programming language for the file.
-    :param file_extension: The file extension for the output file.
-    :return: A dictionary with keys as output types and values as the generated paths.
-    """
     result = {}
 
     def get_default_filename(key: str) -> str:
-        """Get the default filename based on the command and key."""
         if command == 'generate':
             return f"{basename}{file_extension}"
         elif command == 'example':
@@ -45,15 +34,10 @@ def generate_output_paths(command: str, output_locations: Dict[str, Optional[str
             return f"{basename}_conflict.csv"
         elif command == 'crash':
             return f"{basename}_fixed{file_extension}"
-        elif command == 'trace':
-            return f"{basename}_trace_results.log"
-        elif command == 'bug':
-            return f"test_{basename}_bug{file_extension}"
         else:
-            raise ValueError(f"Unrecognized command: {command}")
+            raise KeyError(f"Unrecognized command: {command}")
 
     def get_env_var(key: str) -> Optional[str]:
-        """Get the environment variable for the given command and key."""
         env_var_map = {
             'generate': 'PDD_GENERATE_OUTPUT_PATH',
             'example': 'PDD_EXAMPLE_OUTPUT_PATH',
@@ -72,15 +56,13 @@ def generate_output_paths(command: str, output_locations: Dict[str, Optional[str
             'update': 'PDD_UPDATE_OUTPUT_PATH',
             'detect': 'PDD_DETECT_OUTPUT_PATH',
             'conflicts': 'PDD_CONFLICTS_OUTPUT_PATH',
-            'crash': 'PDD_CRASH_OUTPUT_PATH',
-            'trace': 'PDD_TRACE_OUTPUT_PATH',
-            'bug': 'PDD_BUG_OUTPUT_PATH'
+            'crash': 'PDD_CRASH_OUTPUT_PATH'
         }
 
         if command in ['fix', 'split']:
             return os.environ.get(env_var_map[command][key])
         else:
-            return os.environ.get(env_var_map.get(command))
+            return os.environ.get(env_var_map[command])
 
     keys = output_locations.keys() if output_locations else ['output']
     if command == 'fix':
@@ -105,10 +87,6 @@ def generate_output_paths(command: str, output_locations: Dict[str, Optional[str
         elif not path.suffix:
             # If the path doesn't have an extension, assume it's a directory
             path = path / get_default_filename(key)
-        
-        # Ensure the directory exists
-        path.parent.mkdir(parents=True, exist_ok=True)
-        
         result[key] = str(path)
 
     return result
