@@ -27,10 +27,10 @@
 
 <instructions>
 % Here are examples of how to use internal modules:
+    <internal_example_modules>
     - The `track_cost` decorator has already been definined in another module. Here is an example of how to use the `track_cost` decorator:
     <track_cost_example><include>./context/track_cost_example.py</include></track_cost_example>
 
-    <internal_example_modules>
     - Here is how to use the `construct_paths` function to load the input files and create the output file paths:
     <construct_paths_example><include>context/construct_paths_example.py</include></construct_paths_example>
 
