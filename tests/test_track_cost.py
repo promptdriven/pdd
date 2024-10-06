@@ -1,14 +1,10 @@
-# tests/test_track_cost.py
-
 import pytest
 import unittest.mock as mock
 from unittest.mock import MagicMock, mock_open, patch
 import os
+import re
 from datetime import datetime
 from typing import Tuple
-import csv
-import re
-# Import the decorator from the pdd.track_cost module
 from pdd.track_cost import track_cost
 
 # Sample command function to be decorated
@@ -23,14 +19,32 @@ def sample_command(ctx, prompt_file: str, output: str = None) -> Tuple[str, floa
     return ('/path/to/output', 25.5, 'gpt-3')
 
 
-# Helper function to create a mocked Click context
-def create_mock_context(command_name: str, params: dict):
+# Revised create_mock_context function
+def create_mock_context(command_name: str, params: dict, obj: dict = None):
     """
-    Creates a mocked Click context with the specified command name and parameters.
+    Creates a mocked Click context with the specified command name, parameters, and obj dictionary.
+
+    Args:
+        command_name (str): The name of the command.
+        params (dict): Dictionary of command parameters.
+        obj (dict, optional): Dictionary to mock ctx.obj.get method. Defaults to None.
+
+    Returns:
+        MagicMock: Mocked Click context.
     """
     mock_ctx = MagicMock()
     mock_ctx.command.name = command_name
     mock_ctx.params = params
+
+    if obj is not None:
+        mock_obj = MagicMock()
+        # Mock the get method for obj
+        mock_obj.get.side_effect = lambda key: obj.get(key, None)
+        mock_ctx.obj = mock_obj
+    else:
+        # If obj is not provided, set obj to None to simulate absence
+        mock_ctx.obj = None
+
     return mock_ctx
 
 
@@ -60,12 +74,17 @@ def mock_rprint():
     with mock.patch('pdd.track_cost.rprint') as mocked_rprint:
         yield mocked_rprint
 
+
 def test_csv_row_appended_if_file_exists(mock_click_context, mock_open_file, mock_rprint):
-    mock_ctx = create_mock_context('generate', {
-        'prompt_file': '/path/to/prompt.txt',
-        'output_cost': '/path/to/cost.csv',
-        'output': '/path/to/output'
-    })
+    mock_ctx = create_mock_context(
+        'generate',
+        {
+            'prompt_file': '/path/to/prompt.txt',
+            'output_cost': '/path/to/cost.csv',
+            'output': '/path/to/output'
+        },
+        obj={'output_cost': '/path/to/cost.csv'}
+    )
     mock_click_context.return_value = mock_ctx
 
     with mock.patch('os.path.isfile', return_value=True):
@@ -74,14 +93,12 @@ def test_csv_row_appended_if_file_exists(mock_click_context, mock_open_file, moc
     mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
 
     handle = mock_open_file()
-    assert not any('timestamp,model,command,cost,input_files,output_files' in call.args[0] 
-                   for call in handle.write.call_args_list)
+    assert not any('timestamp,model,command,cost,input_files,output_files' in call.args[0] for call in handle.write.call_args_list)
     row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     mock_rprint.assert_not_called()
     assert result == ('/path/to/output', 25.5, 'gpt-3')
-
 
 
 def test_no_output_cost_path(mock_click_context, mock_open_file, mock_rprint):
@@ -104,17 +121,20 @@ def test_no_output_cost_path(mock_click_context, mock_open_file, mock_rprint):
     assert result == ('/path/to/output', 25.5, 'gpt-3')
 
 
-
 def test_output_cost_path_via_param(mock_click_context, mock_open_file, mock_rprint):
     """
     Test that the CSV file is written correctly when output_cost_path is specified via parameter.
     """
     # Setup the mocked Click context with 'output_cost' parameter
-    mock_ctx = create_mock_context('generate', {
-        'prompt_file': '/path/to/prompt.txt',
-        'output_cost': '/path/to/cost.csv',
-        'output': '/path/to/output'
-    })
+    mock_ctx = create_mock_context(
+        'generate',
+        {
+            'prompt_file': '/path/to/prompt.txt',
+            'output_cost': '/path/to/cost.csv',
+            'output': '/path/to/output'
+        },
+        obj={'output_cost': '/path/to/cost.csv'}
+    )
     mock_click_context.return_value = mock_ctx
 
     # Mock os.path.isfile to return False (file does not exist)
@@ -143,10 +163,14 @@ def test_output_cost_path_via_env(mock_click_context, mock_open_file, mock_rprin
     Test that the CSV file is written correctly when output_cost_path is specified via environment variable.
     """
     # Setup the mocked Click context without 'output_cost' parameter
-    mock_ctx = create_mock_context('generate', {
-        'prompt_file': '/path/to/prompt.txt',
-        'output': '/path/to/output'
-    })
+    mock_ctx = create_mock_context(
+        'generate',
+        {
+            'prompt_file': '/path/to/prompt.txt',
+            'output': '/path/to/output'
+        },
+        obj=None
+    )
     mock_click_context.return_value = mock_ctx
 
     # Set the environment variable PDD_OUTPUT_COST_PATH
@@ -178,11 +202,15 @@ def test_csv_header_written_if_file_not_exists(mock_click_context, mock_open_fil
     Test that the CSV header is written when the CSV file does not exist.
     """
     # Setup the mocked Click context with 'output_cost' parameter
-    mock_ctx = create_mock_context('generate', {
-        'prompt_file': '/path/to/prompt.txt',
-        'output_cost': '/path/to/cost.csv',
-        'output': '/path/to/output'
-    })
+    mock_ctx = create_mock_context(
+        'generate',
+        {
+            'prompt_file': '/path/to/prompt.txt',
+            'output_cost': '/path/to/cost.csv',
+            'output': '/path/to/output'
+        },
+        obj={'output_cost': '/path/to/cost.csv'}
+    )
     mock_click_context.return_value = mock_ctx
 
     # Mock os.path.isfile to return False (file does not exist)
@@ -204,17 +232,20 @@ def test_csv_header_written_if_file_not_exists(mock_click_context, mock_open_fil
     mock_rprint.assert_not_called()
 
 
-
 def test_cost_and_model_extracted_correctly(mock_click_context, mock_open_file, mock_rprint):
     """
     Test that cost and model name are correctly extracted from the command result.
     """
     # Setup the mocked Click context with 'output_cost' parameter
-    mock_ctx = create_mock_context('train', {
-        'input_file': '/path/to/input.txt',
-        'output_cost': '/path/to/cost.csv',
-        'output': '/path/to/output'
-    })
+    mock_ctx = create_mock_context(
+        'train',
+        {
+            'input_file': '/path/to/input.txt',
+            'output_cost': '/path/to/cost.csv',
+            'output': '/path/to/output'
+        },
+        obj={'output_cost': '/path/to/cost.csv'}
+    )
     mock_click_context.return_value = mock_ctx
 
     # Modify the sample_command to return different values
@@ -252,10 +283,14 @@ def test_result_tuple_too_short(mock_click_context, mock_open_file, mock_rprint)
         return ('/path/to/output',)
 
     # Setup the mocked Click context with 'output_cost' parameter
-    mock_ctx = create_mock_context('short', {
-        'prompt_file': '/path/to/prompt.txt',
-        'output_cost': '/path/to/cost.csv'
-    })
+    mock_ctx = create_mock_context(
+        'short',
+        {
+            'prompt_file': '/path/to/prompt.txt',
+            'output_cost': '/path/to/cost.csv'
+        },
+        obj={'output_cost': '/path/to/cost.csv'}
+    )
     mock_click_context.return_value = mock_ctx
 
     with mock.patch('os.path.isfile', return_value=False):
@@ -288,11 +323,15 @@ def test_input_output_files_collected(mock_click_context, mock_open_file, mock_r
         return ('/path/to/output', 15.0, 'custom-model')
 
     # Setup the mocked Click context with 'output_cost' parameter
-    mock_ctx = create_mock_context('process', {
-        'input_file': '/path/to/input.txt',
-        'output_file': '/path/to/output.txt',
-        'output_cost': '/path/to/cost.csv'
-    })
+    mock_ctx = create_mock_context(
+        'process',
+        {
+            'input_file': '/path/to/input.txt',
+            'output_file': '/path/to/output.txt',
+            'output_cost': '/path/to/cost.csv'
+        },
+        obj={'output_cost': '/path/to/cost.csv'}
+    )
     mock_click_context.return_value = mock_ctx
 
     with mock.patch('os.path.isfile', return_value=False):
@@ -325,11 +364,15 @@ def test_multiple_input_output_files(mock_click_context, mock_open_file, mock_rp
         return (['/path/to/output1', '/path/to/output2'], 100.0, 'batch-model')
 
     # Setup the mocked Click context with multiple input and output files
-    mock_ctx = create_mock_context('batch', {
-        'input_files': ['/path/to/input1.txt', '/path/to/input2.txt'],
-        'output_files': ['/path/to/output1.txt', '/path/to/output2.txt'],
-        'output_cost': '/path/to/cost.csv'
-    })
+    mock_ctx = create_mock_context(
+        'batch',
+        {
+            'input_files': ['/path/to/input1.txt', '/path/to/input2.txt'],
+            'output_files': ['/path/to/output1.txt', '/path/to/output2.txt'],
+            'output_cost': '/path/to/cost.csv'
+        },
+        obj={'output_cost': '/path/to/cost.csv'}
+    )
     mock_click_context.return_value = mock_ctx
 
     with mock.patch('os.path.isfile', return_value=False):
@@ -362,10 +405,14 @@ def test_exception_in_logging(mock_click_context, mock_open_file, mock_rprint):
     Test that if an exception occurs during cost logging, an error is printed and the command result is still returned.
     """
     # Setup the mocked Click context with 'output_cost' parameter
-    mock_ctx = create_mock_context('error_command', {
-        'prompt_file': '/path/to/prompt.txt',
-        'output_cost': '/path/to/cost.csv'
-    })
+    mock_ctx = create_mock_context(
+        'error_command',
+        {
+            'prompt_file': '/path/to/prompt.txt',
+            'output_cost': '/path/to/cost.csv'
+        },
+        obj={'output_cost': '/path/to/cost.csv'}
+    )
     mock_click_context.return_value = mock_ctx
 
     # Configure the open mock to raise an exception when called
@@ -396,12 +443,16 @@ def test_non_string_file_parameters(mock_click_context, mock_open_file, mock_rpr
         return ('/path/to/output', 30.0, 'mixed-model')
 
     # Setup the mocked Click context with mixed parameters
-    mock_ctx = create_mock_context('mixed', {
-        'input_file': '/path/to/input.txt',
-        'output_file': '/path/to/output.txt',
-        'config': {'key': 'value'},
-        'output_cost': '/path/to/cost.csv'
-    })
+    mock_ctx = create_mock_context(
+        'mixed',
+        {
+            'input_file': '/path/to/input.txt',
+            'output_file': '/path/to/output.txt',
+            'config': {'key': 'value'},
+            'output_cost': '/path/to/cost.csv'
+        },
+        obj={'output_cost': '/path/to/cost.csv'}
+    )
     mock_click_context.return_value = mock_ctx
 
     with mock.patch('os.path.isfile', return_value=False):
@@ -448,10 +499,14 @@ def test_non_tuple_result(mock_click_context, mock_open_file, mock_rprint):
         return '/path/to/output'
 
     # Setup the mocked Click context with 'output_cost' parameter
-    mock_ctx = create_mock_context('non_tuple', {
-        'prompt_file': '/path/to/prompt.txt',
-        'output_cost': '/path/to/cost.csv'
-    })
+    mock_ctx = create_mock_context(
+        'non_tuple',
+        {
+            'prompt_file': '/path/to/prompt.txt',
+            'output_cost': '/path/to/cost.csv'
+        },
+        obj={'output_cost': '/path/to/cost.csv'}
+    )
     mock_click_context.return_value = mock_ctx
 
     with mock.patch('os.path.isfile', return_value=False):
