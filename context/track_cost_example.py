@@ -1,5 +1,3 @@
-# File: /pdd/cli.py
-
 import click
 from typing import Optional, Tuple
 import os
@@ -7,12 +5,15 @@ from pdd.track_cost import track_cost  # Absolute import of the track_cost decor
 from rich import print as rprint
 
 @click.group()
-def cli():
+@click.option('--output-cost', type=click.Path(), help='Enable cost tracking and output a CSV file with usage details.')
+@click.pass_context
+def cli(ctx, output_cost):
     """PDD Command-Line Interface.
-
+    
     PDD is a tool for processing prompts and generating outputs with cost tracking.
     """
-    pass
+    ctx.ensure_object(dict)
+    ctx.obj['output_cost'] = output_cost
 
 @cli.command()
 @click.option(
@@ -27,26 +28,20 @@ def cli():
     required=False,
     help='Path to the output file.'
 )
-@click.option(
-    '--output-cost',
-    type=click.Path(),
-    required=False,
-    help='Path to the cost tracking CSV file. Overrides PDD_OUTPUT_COST_PATH environment variable.'
-)
+@click.pass_context
 @track_cost
-def generate(prompt_file: str, output: Optional[str], output_cost: Optional[str]) -> Tuple[str, float, str]:
+def generate(ctx, prompt_file: str, output: Optional[str]) -> Tuple[str, float, str]:
     """
     Generate output based on the provided prompt file.
-
+    
     This command reads a prompt from the specified input file, processes it,
     and writes the result to the output file. It also returns the cost of
     the operation and the model used.
-
+    
     Parameters:
         prompt_file (str): Path to the input prompt file.
         output (Optional[str]): Path to the output file. If not provided, output is printed to console.
-        output_cost (Optional[str]): Path to the cost tracking CSV file.
-
+    
     Returns:
         Tuple[str, float, str]:
             - Generated output as a string.
@@ -63,7 +58,7 @@ def generate(prompt_file: str, output: Optional[str], output_cost: Optional[str]
     # Simulate cost and model name
     cost = 0.05  # Dollars per million tokens
     model_name = "gpt-4"
-
+    
     # Write output to file if specified
     if output:
         with open(output, 'w', encoding='utf-8') as out_file:
@@ -74,4 +69,4 @@ def generate(prompt_file: str, output: Optional[str], output_cost: Optional[str]
     return generated_output, cost, model_name
 
 if __name__ == '__main__':
-    cli([ 'generate', '--prompt-file', 'README.md', '--output', 'output.txt', '--output-cost', 'cost.csv', ])
+    cli(['--output-cost', 'cost.csv', 'generate', '--prompt-file', 'README.md', '--output', 'output.txt'])
