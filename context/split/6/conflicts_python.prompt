@@ -1,4 +1,7 @@
-% You are an expert Python engineer. Your goal is to write a Python function called 'conflicts_main' that will analyze two prompt files to find conflicts between them and suggest how to resolve those conflicts. This function will be used by the 'conflicts' command in the main CLI program.
+
+% You are an expert Python engineer. Your goal is to write the 'conflicts_main' function that will be part of the 'pdd' command-line program. This function will handle the core logic for the 'conflicts' command.
+
+<include>context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the function:
     Inputs:
@@ -12,21 +15,46 @@
       - float: The total cost of the operation.
       - str: The name of the model used.
 
-% Here is an example of how to use the 'conflicts_in_prompts' function:
-<conflicts_in_prompts_example><include>context/conflicts_in_prompts_example.py</include></conflicts_in_prompts_example>
+<examples>
+% Here is how to use the Python Click library to create a command line program:
+<click_example>
+<include>context/click_example.py</include>
+</click_example>
+</examples>
 
-% Here is an example of how to use the 'construct_paths' function:
-<construct_paths_example><include>context/construct_paths_example.py</include></construct_paths_example>
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+    % Here is an example of how to use the `construct_paths` function:
+    <construct_paths_example>
+    <include>context/construct_paths_example.py</include>
+    </construct_paths_example>
 
-% This function should do the following:
-    1. Import necessary modules (csv, click, rich).
-    2. Define the 'conflicts_main' function with the specified inputs.
-    3. Create input_files and command_options dictionaries for 'construct_paths'.
-    4. Call 'construct_paths' to process input files and generate output paths.
-    5. Call 'conflicts_in_prompts' with the processed input strings, strength, and temperature from the context.
-    6. Write the conflicts list to a CSV file using the output path from 'construct_paths'.
-    7. Print relevant information if not in quiet mode.
-    8. Handle exceptions and print error messages using rich.print.
-    9. Return the conflicts list, total cost, and model name.
+    % Here is an example of how to use the `conflicts_in_prompts` function:
+    <conflicts_in_prompts_example>
+    <include>context/conflicts_in_prompts_example.py</include>
+    </conflicts_in_prompts_example>
+</internal_example_modules>
 
-% Ensure that the function handles all cases correctly, including error handling and proper use of the Click context for accessing CLI options.
+% The function should perform the following steps:
+1. **Construct File Paths**:
+   - Use the `construct_paths` function to determine the input and output file paths.
+   - Ensure that existing files are handled appropriately based on the `--force` and `--quiet` options.
+
+2. **Load Input Files**:
+   - Read the contents of `prompt1` and `prompt2`.
+
+3. **Analyze Conflicts**:
+   - Call the `conflicts_in_prompts` function with the contents of the prompt files, along with the necessary parameters (e.g., strength, temperature).
+   - Capture the returned conflicts list, total cost, and model name.
+
+4. **Save Results**:
+   - If an output path is specified, write the conflicts list to a CSV file using the `csv` module.
+   - Include headers and ensure proper formatting.
+
+5. **Provide User Feedback**:
+   - Use `rprint` from Rich to display messages to the user, indicating success or failure.
+   - Respect the verbosity levels determined by the `--quiet` option.
+
+6. **Error Handling**:
+   - Wrap the main logic in a `try-except` block.
+   - Catch exceptions, display error messages, and exit gracefully using `ctx.exit(1)` if necessary.
