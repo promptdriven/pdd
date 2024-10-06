@@ -4,4 +4,4 @@
 
 % Output a JSON object with the following keys:
     - 'explanation': String explanation of why the extracted prompt is the prompt with inserted XML tags.
-    - 'xml_tagged': String of just the entire prompt with inserted XML tags.
+    - 'xml_tagged': String of just the entire prompt with inserted XML tags. Preserve the formatting so the text is easy to read.
