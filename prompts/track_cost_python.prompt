@@ -9,11 +9,11 @@
 2. **Execute the Command Function:** Call the original command function and capture its result.
 3. **Record the End Time:** After the command completes, record the current datetime as the end time.
 4. **Access Command Context:** Retrieve the Click context using `click.get_current_context()`.
-5. **Retrieve Output Cost Option:** Check if the output cost option is specified directly or via the `PDD_OUTPUT_COST_PATH` environment variable.
+5. **Retrieve Output Cost Option:** Check if the output cost option is specified directly via `ctx.obj` or via the `PDD_OUTPUT_COST_PATH` environment variable.
 6. **Prepare Cost Data:**
 - Determine the command name from the context.
 - Extract the cost and model name from the command function's result if available. Generally, the second to the last element of the result tuple will be the cost and the last element will be the model name.
-- Collect input and output file paths from the command arguments. Input file paths are parameters that don't have 'output' in their name, and output file paths are parameters that have 'output' in their name. The output cost file should not be included in the output file path collection.
+- Collect input and output file paths from the command arguments using `kwargs`. Input file paths should be validated to ensure they exist, and output file paths should be identified by their parameter names starting with 'output'.
 7. **Append Cost Data to CSV File:**
 - If the output cost file does not exist, create it and write the header row.
 - If the file exists, append the cost data to the end of the file.
