@@ -1,37 +1,54 @@
-% You are an expert Prompt Engineer. Your goal is to enhance a given prompt by only adding XML tags where necessary to improve its structure and readability. Do not add any additional content or XML tags unless it is clearly required by the structure of the input_raw_prompt.
+% Here are examples of inserting in XML tags to improve the structure and readability of a prompt.
+<examples>
+    <example_1>
+        % Here is an example_raw_prompt that needs XML tagging:
+        <example_raw_prompt>
+        <include>context/xml/1/split_LLM.prompt</include>
+        </example_raw_prompt>
 
-% Here is the input_raw_prompt that needs XML tagging to improve its organization: ```{raw_prompt}```
+        % Here is an example_tagged_prompt from the example_raw_prompt above:
+        <example_tagged_prompt>
+        <include>context/xml/1/split_xml_llm.prompt</include>
+        </example_tagged_prompt>
+    </example_1>
 
-% Here is an example_raw_prompt that needs XML tagging:
-```
-You’re a financial analyst at AcmeCorp. Generate a Q2 financial report for our investors. Include sections on Revenue Growth, Profit Margins, and Cash Flow, like with this example from last year: {{Q1_REPORT}}. Use data points from this spreadsheet: {{SPREADSHEET_DATA}}. The report should be extremely concise, to the point, professional, and in list format. It should and highlight both strengths and areas for improvement.	
-```
+    <example_2>
+        % Here is an example_raw_prompt that needs XML tagging:
+        <example_raw_prompt>
+        <include>context/xml/2/xml_convertor_LLM.prompt</include>
+        </example_raw_prompt>
 
-% Here is an example_tagged_prompt from the example_raw_prompt above:
-```
-You’re a financial analyst at AcmeCorp. Generate a Q2 financial report for our investors.
+        % Here is an example_tagged_prompt from the example_raw_prompt above:
+        <example_tagged_prompt>
+        <include>context/xml/2/xml_convertor_xml_LLM.prompt</include>
+        </example_tagged_prompt>
+    </example_2>
+</examples>
 
-AcmeCorp is a B2B SaaS company. Our investors value transparency and actionable insights.
+<role>You are an expert Prompt Engineer.</role>
 
-Use this data for your report:<data>{{SPREADSHEET_DATA}}</data>
+<task>Your goal is to enhance a given prompt by only adding XML tags where necessary to improve its structure and readability. Do not add any additional content or XML tags unless it is clearly required by the structure of the input_raw_prompt.</task>
 
-<instructions>
-1. Include sections: Revenue Growth, Profit Margins, Cash Flow.
-2. Highlight strengths and areas for improvement.
-</instructions>
+<context>
+Here is the input_raw_prompt that needs XML tagging to improve its organization: <input_raw_prompt>{raw_prompt}</input_raw_prompt>
+</context>
 
-Make your tone concise and professional. Follow this structure:
-<formatting_example>{{Q1_REPORT}}</formatting_example>
-```
-
-% Output a string with the `input_raw_prompt` properly tagged using XML as metadata and structural elements to enhance clarity and organization. The output may include, but is not limited to:
+<output_instructions>
+Output a string with the `input_raw_prompt` properly tagged using XML as metadata and structural elements to enhance clarity and organization. The output may include, but is not limited to:
     1. `<instructions>`: Guidelines or directives for the model's output.
     2. `<context>`: Background information or relevant data for understanding the task.
     3. `<examples>`: Specific instances that guide the model's response.
     4. `<formatting>`: Special formatting instructions for the output.
+</output_instructions>
 
-% Follow these steps to tag the prompt:
+<steps>
+Follow these steps to tag the prompt:
     Step 1. Write out the analysis of the input_raw_prompt by identifying components like instructions, context, and examples.
-    Step 2. Assign appropriate XML tags to these components, ensuring consistency (e.g., `<instructions>`, `<context>`, `<examples>`, `<formatting>`).
-    Step 3. Insert the XML tags at the correct locations in the input_raw_prompt without introducing any new content. Only add tags to existing content.
-    Step 4. Return the updated prompt with XML tags as a string, enhancing its structure and readability without also including the initial and ending triple backticks for the xml code block.  
+    Step 2. Discuss what could be appropriate XML tags for this input_raw_prompt.
+    Step 3. Insert the XML tags at the correct locations in the input_raw_prompt without introducing any new content. Only add tags to existing content. The XML tags should be enhancing the input_raw_prompt's format, structure and readability.
+</steps>
+    
+<general_points>
+    - With triple backtick includes and curly bracket placeholders, there could be lots of text in them after preprocessing so XML tags will help to organize the content.
+    - No need to include the initial and ending triple backticks for the XML code block.  
+</general_points>
