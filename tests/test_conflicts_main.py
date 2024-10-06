@@ -119,7 +119,8 @@ def test_success_with_output(mock_file, mock_rprint, mock_construct_paths, mock_
 @patch('pdd.conflicts_main.conflicts_in_prompts')
 @patch('pdd.conflicts_main.construct_paths')
 @patch('pdd.conflicts_main.rprint')
-def test_success_without_output(mock_rprint, mock_construct_paths, mock_conflicts_in_prompts, mock_ctx):
+@patch('builtins.open', new_callable=mock_open)
+def test_success_without_output(mock_file, mock_rprint, mock_construct_paths, mock_conflicts_in_prompts, mock_ctx):
     """Test conflicts_main with valid inputs and no output path."""
     # Setup mock for construct_paths
     mock_construct_paths.return_value = (
@@ -172,8 +173,9 @@ def test_success_without_output(mock_rprint, mock_construct_paths, mock_conflict
         0
     )
     
-    # Ensure no file was attempted to be opened
-    # No open called since output is None
+    # Ensure a file was attempted to be opened and written to
+    mock_file.assert_called_once_with('conflicts.json', 'w')
+    mock_file().write.assert_called_once()
     
     # Ensure rprint was called for user feedback
     mock_rprint.assert_any_call("[bold green]Conflict analysis completed successfully.[/bold green]")
@@ -183,6 +185,7 @@ def test_success_without_output(mock_rprint, mock_construct_paths, mock_conflict
     mock_rprint.assert_any_call("[bold]Prompt:[/bold] path/to/prompt1")
     mock_rprint.assert_any_call("[bold]Instructions:[/bold] Change A")
     mock_rprint.assert_any_call("---")
+    mock_rprint.assert_any_call("[bold]Results written to:[/bold] conflicts.json")
 
 
 @patch('pdd.conflicts_main.construct_paths')
