@@ -8,16 +8,13 @@ from .conflicts_in_prompts import conflicts_in_prompts
 
 def conflicts_main(ctx: click.Context, prompt1: str, prompt2: str, output: Optional[str]) -> Tuple[List[Dict], float, str]:
     """
-    Main function to detect conflicts between two prompts.
+    Main function to analyze conflicts between two prompts.
 
-    Args:
-        ctx (click.Context): The Click context object containing command-line options.
-        prompt1 (str): Path to the first prompt file.
-        prompt2 (str): Path to the second prompt file.
-        output (Optional[str]): Path to the output CSV file.
-
-    Returns:
-        Tuple[List[Dict], float, str]: A tuple containing the list of conflicts, the total cost, and the model name used.
+    :param ctx: Click context containing command-line parameters.
+    :param prompt1: Path to the first prompt file.
+    :param prompt2: Path to the second prompt file.
+    :param output: Optional path to save the output CSV file.
+    :return: A tuple containing the list of conflicts, total cost, and model name used.
     """
     try:
         # Construct file paths
@@ -30,8 +27,8 @@ def conflicts_main(ctx: click.Context, prompt1: str, prompt2: str, output: Optio
         }
         input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
-            force=ctx.obj.get('force', False),
-            quiet=ctx.obj.get('quiet', False),
+            force=ctx.params.get('force', False),
+            quiet=ctx.params.get('quiet', False),
             command="conflicts",
             command_options=command_options
         )
@@ -41,40 +38,43 @@ def conflicts_main(ctx: click.Context, prompt1: str, prompt2: str, output: Optio
         prompt2_content = input_strings["prompt2"]
 
         # Analyze conflicts
-        strength = ctx.obj.get('strength', 0.9)
-        temperature = ctx.obj.get('temperature', 0)
+        strength = ctx.params.get('strength', 0.9)
+        temperature = ctx.params.get('temperature', 0)
         conflicts, total_cost, model_name = conflicts_in_prompts(prompt1_content, prompt2_content, strength, temperature)
+
+        # Replace prompt1 and prompt2 with actual file paths
+        for conflict in conflicts:
+            if conflict['prompt_name'] == 'prompt_1':
+                conflict['prompt_name'] = prompt1
+            elif conflict['prompt_name'] == 'prompt_2':
+                conflict['prompt_name'] = prompt2
 
         # Save results
         if output:
-            output_path = output_file_paths.get("output")
-            if output_path:
-                with open(output_path, 'w', newline='') as csvfile:
-                    fieldnames = ['prompt_name', 'change_instructions']
-                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                    writer.writeheader()
-                    for conflict in conflicts:
-                        writer.writerow(conflict)
-                if not ctx.obj.get('quiet', False):
-                    rprint(f"[green]Conflicts saved to {output_path}[/green]")
+            with open(output_file_paths["output"], 'w', newline='') as csvfile:
+                fieldnames = ['prompt_name', 'change_instructions']
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                for conflict in conflicts:
+                    writer.writerow(conflict)
 
         # Provide user feedback
-        if not ctx.obj.get('quiet', False):
-            rprint(f"[bold]Conflict Detection Results:[/bold]")
-            rprint(f"Model used: {model_name}")
-            rprint(f"Total cost: ${total_cost:.6f}")
-            
-            if conflicts:
-                rprint("[bold]Suggested Changes:[/bold]")
-                for conflict in conflicts:
-                    rprint(f"Prompt: {conflict['prompt_name']}")
-                    rprint(f"Instructions: {conflict['change_instructions']}")
-                    rprint("---")
+        if not ctx.params.get('quiet', False):
+            rprint("[bold green]Conflict analysis completed successfully.[/bold green]")
+            rprint(f"[bold]Model used:[/bold] {model_name}")
+            rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
+            if output:
+                rprint(f"[bold]Results saved to:[/bold] {output_file_paths['output']}")
             else:
-                rprint("No conflicts detected or changes suggested.")
+                rprint("[bold]Conflicts detected:[/bold]")
+                for conflict in conflicts:
+                    rprint(f"[bold]Prompt:[/bold] {conflict['prompt_name']}")
+                    rprint(f"[bold]Instructions:[/bold] {conflict['change_instructions']}")
+                    rprint("---")
 
         return conflicts, total_cost, model_name
 
     except Exception as e:
-        rprint(f"[bold red]Error:[/bold red] {str(e)}")
+        if not ctx.params.get('quiet', False):
+            rprint(f"[bold red]Error:[/bold red] {str(e)}")
         ctx.exit(1)
