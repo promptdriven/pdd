@@ -27,11 +27,12 @@ def mock_ctx():
     return ctx
 
 
+@patch('csv.DictWriter')  # Added patch for csv.DictWriter
 @patch('pdd.conflicts_main.conflicts_in_prompts')
 @patch('pdd.conflicts_main.construct_paths')
 @patch('pdd.conflicts_main.rprint')
 @patch('builtins.open', new_callable=mock_open)
-def test_success_with_output(mock_file, mock_rprint, mock_construct_paths, mock_conflicts_in_prompts, mock_ctx):
+def test_success_with_output(mock_file, mock_rprint, mock_construct_paths, mock_conflicts_in_prompts, mock_dict_writer, mock_ctx):
     """Test conflicts_main with valid inputs and an output path."""
     # Setup mock for construct_paths
     mock_construct_paths.return_value = (
@@ -44,14 +45,18 @@ def test_success_with_output(mock_file, mock_rprint, mock_construct_paths, mock_
         },
         'some_language'
     )
-    
+
     # Setup mock for conflicts_in_prompts
     sample_conflicts = [
         {'prompt_name': 'prompt_1', 'change_instructions': 'Change A'},
         {'prompt_name': 'prompt_2', 'change_instructions': 'Change B'}
     ]
     mock_conflicts_in_prompts.return_value = (sample_conflicts, 0.123456, 'model_xyz')
-    
+
+    # Create a mock writer instance
+    mock_writer_instance = MagicMock()
+    mock_dict_writer.return_value = mock_writer_instance
+
     # Call the function under test
     conflicts, total_cost, model_name = conflicts_main(
         ctx=mock_ctx,
@@ -59,7 +64,7 @@ def test_success_with_output(mock_file, mock_rprint, mock_construct_paths, mock_
         prompt2='path/to/prompt2',
         output='path/to/output.csv'
     )
-    
+
     # Assertions
     assert conflicts == [
         {'prompt_name': 'path/to/prompt1', 'change_instructions': 'Change A'},
@@ -67,7 +72,7 @@ def test_success_with_output(mock_file, mock_rprint, mock_construct_paths, mock_
     ]
     assert total_cost == 0.123456
     assert model_name == 'model_xyz'
-    
+
     # Ensure construct_paths was called correctly
     mock_construct_paths.assert_called_once_with(
         input_file_paths={
@@ -79,7 +84,7 @@ def test_success_with_output(mock_file, mock_rprint, mock_construct_paths, mock_
         command='conflicts',
         command_options={'output': 'path/to/output.csv'}
     )
-    
+
     # Ensure conflicts_in_prompts was called correctly
     mock_conflicts_in_prompts.assert_called_once_with(
         'Content of prompt1',
@@ -87,15 +92,23 @@ def test_success_with_output(mock_file, mock_rprint, mock_construct_paths, mock_
         0.9,
         0
     )
-    
-    # Ensure CSV file was opened and written to
+
+    # Ensure CSV file was opened correctly
     mock_file.assert_called_once_with('output.csv', 'w', newline='')
-    handle = mock_file()
-    writer = csv.DictWriter(handle, fieldnames=['prompt_name', 'change_instructions'])
-    writer.writeheader.assert_called_once()
-    writer.writerow.assert_any_call({'prompt_name': 'path/to/prompt1', 'change_instructions': 'Change A'})
-    writer.writerow.assert_any_call({'prompt_name': 'path/to/prompt2', 'change_instructions': 'Change B'})
-    
+
+    # Ensure DictWriter was instantiated correctly
+    mock_dict_writer.assert_called_once_with(mock_file.return_value, fieldnames=['prompt_name', 'change_instructions'])
+
+    # Ensure writer.writeheader() was called once
+    mock_writer_instance.writeheader.assert_called_once()
+
+    # Ensure writer.writerow() was called for each conflict
+    expected_calls = [
+        (({'prompt_name': 'path/to/prompt1', 'change_instructions': 'Change A'},),),
+        (({'prompt_name': 'path/to/prompt2', 'change_instructions': 'Change B'},),)
+    ]
+    mock_writer_instance.writerow.assert_has_calls(expected_calls, any_order=False)
+
     # Ensure rprint was called for user feedback
     mock_rprint.assert_any_call("[bold green]Conflict analysis completed successfully.[/bold green]")
     mock_rprint.assert_any_call("[bold]Model used:[/bold] model_xyz")
