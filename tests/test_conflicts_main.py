@@ -1,18 +1,8 @@
 import pytest
 from unittest.mock import patch, MagicMock, mock_open
-from typing import List, Dict, Tuple
-import csv
+from typing import List, Dict, Tuple, Optional
 
-# Assume the project structure is as follows:
-# project/
-# ├── pdd/
-# │   └── conflicts_main.py
-# └── tests/
-#     └── test_conflicts_main.py
-
-# Absolute import of the function under test
 from pdd.conflicts_main import conflicts_main
-
 
 @pytest.fixture
 def mock_ctx():
@@ -114,13 +104,19 @@ def test_success_with_output(mock_file, mock_rprint, mock_construct_paths, mock_
     mock_rprint.assert_any_call("[bold]Model used:[/bold] model_xyz")
     mock_rprint.assert_any_call("[bold]Total cost:[/bold] $0.123456")
     mock_rprint.assert_any_call("[bold]Results saved to:[/bold] output.csv")
-
-
+@patch('csv.DictWriter')
 @patch('pdd.conflicts_main.conflicts_in_prompts')
 @patch('pdd.conflicts_main.construct_paths')
 @patch('pdd.conflicts_main.rprint')
 @patch('builtins.open', new_callable=mock_open)
-def test_success_without_output(mock_file, mock_rprint, mock_construct_paths, mock_conflicts_in_prompts, mock_ctx):
+def test_success_without_output(
+    mock_file,
+    mock_rprint,
+    mock_construct_paths,
+    mock_conflicts_in_prompts,
+    mock_dict_writer,
+    mock_ctx
+):
     """Test conflicts_main with valid inputs and no output path."""
     # Setup mock for construct_paths
     mock_construct_paths.return_value = (
@@ -128,7 +124,9 @@ def test_success_without_output(mock_file, mock_rprint, mock_construct_paths, mo
             'prompt1': 'Content of prompt1',
             'prompt2': 'Content of prompt2'
         },
-        {},
+        {
+            'output': 'conflicts.csv'
+        },
         'some_language'
     )
     
@@ -137,6 +135,10 @@ def test_success_without_output(mock_file, mock_rprint, mock_construct_paths, mo
         {'prompt_name': 'prompt_1', 'change_instructions': 'Change A'}
     ]
     mock_conflicts_in_prompts.return_value = (sample_conflicts, 0.654321, 'model_abc')
+    
+    # Create a mock writer instance
+    mock_writer_instance = MagicMock()
+    mock_dict_writer.return_value = mock_writer_instance
     
     # Call the function under test
     conflicts, total_cost, model_name = conflicts_main(
@@ -173,19 +175,26 @@ def test_success_without_output(mock_file, mock_rprint, mock_construct_paths, mo
         0
     )
     
-    # Ensure a file was attempted to be opened and written to
-    mock_file.assert_called_once_with('conflicts.json', 'w')
-    mock_file().write.assert_called_once()
+    # Ensure CSV file was opened correctly with the correct filename and mode
+    mock_file.assert_called_once_with('conflicts.csv', 'w', newline='')
     
-    # Ensure rprint was called for user feedback
+    # Ensure DictWriter was instantiated correctly
+    mock_dict_writer.assert_called_once_with(mock_file.return_value, fieldnames=['prompt_name', 'change_instructions'])
+    
+    # Ensure writer.writeheader() was called once
+    mock_writer_instance.writeheader.assert_called_once()
+    
+    # Ensure writer.writerow() was called for each conflict
+    expected_calls = [
+        (({'prompt_name': 'path/to/prompt1', 'change_instructions': 'Change A'},),)
+    ]
+    mock_writer_instance.writerow.assert_has_calls(expected_calls, any_order=False)
+    
+    # Ensure rprint was called for user feedback without output path
     mock_rprint.assert_any_call("[bold green]Conflict analysis completed successfully.[/bold green]")
     mock_rprint.assert_any_call("[bold]Model used:[/bold] model_abc")
     mock_rprint.assert_any_call("[bold]Total cost:[/bold] $0.654321")
-    mock_rprint.assert_any_call("[bold]Conflicts detected:[/bold]")
-    mock_rprint.assert_any_call("[bold]Prompt:[/bold] path/to/prompt1")
-    mock_rprint.assert_any_call("[bold]Instructions:[/bold] Change A")
-    mock_rprint.assert_any_call("---")
-    mock_rprint.assert_any_call("[bold]Results written to:[/bold] conflicts.json")
+    
 
 
 @patch('pdd.conflicts_main.construct_paths')
