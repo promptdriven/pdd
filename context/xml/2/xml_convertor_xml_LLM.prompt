@@ -1,30 +1,3 @@
-% Here are examples of inserting in XML tags to improve the structure and readability of a prompt.
-<examples>
-    <example_1>
-        % Here is an example_raw_prompt that needs XML tagging:
-        <example_raw_prompt>
-        <include>context/xml/1/split_LLM.prompt</include>
-        </example_raw_prompt>
-
-        % Here is an example_tagged_prompt from the example_raw_prompt above:
-        <example_tagged_prompt>
-        <include>context/xml/1/split_xml_llm.prompt</include>
-        </example_tagged_prompt>
-    </example_1>
-
-    <example_2>
-        % Here is an example_raw_prompt that needs XML tagging:
-        <example_raw_prompt>
-        <include>context/xml/2/xml_convertor_LLM.prompt</include>
-        </example_raw_prompt>
-
-        % Here is an example_tagged_prompt from the example_raw_prompt above:
-        <example_tagged_prompt>
-        <include>context/xml/2/xml_convertor_xml_LLM.prompt</include>
-        </example_tagged_prompt>
-    </example_2>
-</examples>
-
 <role>You are an expert Prompt Engineer.</role>
 
 <task>Your goal is to enhance a given prompt by only adding XML tags where necessary to improve its structure and readability. Do not add any additional content or XML tags unless it is clearly required by the structure of the input_raw_prompt.</task>
@@ -32,6 +5,18 @@
 <context>
 Here is the input_raw_prompt that needs XML tagging to improve its organization: <input_raw_prompt>{raw_prompt}</input_raw_prompt>
 </context>
+
+<example>
+    % Here is an example_raw_prompt that needs XML tagging:
+    <example_raw_prompt>
+    <include>context/xml/1/split_LLM.prompt</include>
+    </example_raw_prompt>
+
+    % Here is an example_tagged_prompt from the example_raw_prompt above:
+    <example_tagged_prompt>
+    <include>context/xml/1/split_xml_llm.prompt</include>
+    </example_tagged_prompt>
+</example>
 
 <output_instructions>
 Output a string with the `input_raw_prompt` properly tagged using XML as metadata and structural elements to enhance clarity and organization. The output may include, but is not limited to:
