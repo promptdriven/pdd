@@ -28,11 +28,11 @@ def track_cost(func):
         end_time = datetime.now()
 
         try:
-            # Step 5: Retrieve Output Cost Option
-            output_cost_path = (
-                ctx.obj.get('output_cost') or
-                os.getenv('PDD_OUTPUT_COST_PATH')
-            )
+            # Safely retrieve Output Cost Option
+            if ctx.obj and hasattr(ctx.obj, 'get'):
+                output_cost_path = ctx.obj.get('output_cost') or os.getenv('PDD_OUTPUT_COST_PATH')
+            else:
+                output_cost_path = os.getenv('PDD_OUTPUT_COST_PATH')
             
             if not output_cost_path:
                 # If no output cost path is specified, skip logging
@@ -53,11 +53,9 @@ def track_cost(func):
                 model_name = ''
 
             # Collect input and output file paths from command arguments
-            input_files = []
-            output_files = []
-
+            # Only include string paths that exist
             input_files = [v for k, v in kwargs.items() if not k.startswith('output') and isinstance(v, str) and os.path.isfile(v)]
-            output_files = [v for k, v in kwargs.items() if k.startswith('output') and v]
+            output_files = [v for k, v in kwargs.items() if k.startswith('output') and isinstance(v, str) and os.path.isfile(v)]
 
             # Format the timestamp
             timestamp = start_time.isoformat()
@@ -72,9 +70,7 @@ def track_cost(func):
                 'output_files': ';'.join(output_files),
             }
 
-            # Step 7: Append Cost Data to CSV File
-
-            # Check if the CSV file exists to determine if header is needed
+            # Append Cost Data to CSV File
             file_exists = os.path.isfile(output_cost_path)
 
             # Define the CSV headers
@@ -92,10 +88,10 @@ def track_cost(func):
                 writer.writerow(row)
 
         except Exception as e:
-            # Step 8: Handle Exceptions Gracefully
+            # Handle Exceptions Gracefully
             rprint(f"[red]Error tracking cost: {e}[/red]")
 
-        # Step 9: Return the Command Result
+        # Return the Command Result
         return result
 
     return wrapper
