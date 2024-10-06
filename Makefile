@@ -25,7 +25,7 @@ EXAMPLE_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(CONTEXT_DIR)/%_example.py,$(PY_O
 # Test files
 TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 
-.PHONY: all clean test requirements production coverage staging regression install build
+.PHONY: all clean test requirements production coverage staging regression install build analysis
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -124,3 +124,10 @@ install:
 build:
 	@echo "Building pdd"
 	@python -m build
+
+analysis:
+	@echo "Running regression analysis"
+	@mkdir -p staging/regression
+	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH pdd --strength .9 generate --output staging/regression/regression_analysis.log prompts/regression_analysis_LLM.prompt
+	@echo "Analysis results:"
+	@python -c "from rich.console import Console; from rich.syntax import Syntax; console = Console(); content = open('staging/regression/regression_analysis.log').read(); syntax = Syntax(content, 'python', theme='monokai', line_numbers=True); console.print(syntax)"
