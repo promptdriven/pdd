@@ -22,7 +22,7 @@ from .change import change as change_func
 from .update_prompt import update_prompt
 from .git_update import git_update
 from .detect_change import detect_change
-from .conflicts_in_prompts import conflicts_in_prompts
+from .conflicts_main import conflicts_main
 from .fix_code_module_errors import fix_code_module_errors
 from .trace import trace as trace_func
 from .bug_to_unit_test import bug_to_unit_test
@@ -544,39 +544,7 @@ def detect(ctx, prompt_files: List[str], change_file: str, output: Optional[str]
 @track_cost
 def conflicts(ctx, prompt1: str, prompt2: str, output: Optional[str]) -> Tuple[List[dict], float, str]:
     """Analyze two prompt files to find conflicts between them and suggest how to resolve those conflicts."""
-    input_files = {'prompt1': prompt1, 'prompt2': prompt2}
-    command_options = {'output': output}
-    
-    try:
-        input_strings, output_file_paths, _ = construct_paths(
-            input_file_paths=input_files,
-            force=ctx.obj['force'],
-            quiet=ctx.obj['quiet'],
-            command="conflicts",
-            command_options=command_options
-        )
-        
-        conflicts_list, total_cost, model_name = conflicts_in_prompts(
-            input_strings['prompt1'],
-            input_strings['prompt2'],
-            ctx.obj['strength'],
-            ctx.obj['temperature']
-        )
-        
-        with open(output_file_paths['output'], 'w', newline='') as csvfile:
-            fieldnames = ['prompt_name', 'change_instructions']
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writeheader()
-            for conflict in conflicts_list:
-                writer.writerow(conflict)
-        
-        if not ctx.obj['quiet']:
-            rprint(f"Conflict analysis results saved to: {output_file_paths['output']}")
-        
-        return conflicts_list, total_cost, model_name
-    except Exception as e:
-        rprint(f"[bold red]Error: {str(e)}[/bold red]")
-        ctx.exit(1)
+    return conflicts_main(ctx, prompt1, prompt2, output)
 
 @cli.command()
 @click.argument('prompt_file', type=click.Path(exists=True))
