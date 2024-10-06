@@ -1,7 +1,7 @@
 import pytest
 import os
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, call
 from pdd.generate_output_paths import generate_output_paths
 
 @pytest.fixture
@@ -26,13 +26,13 @@ def test_generate_command_default(mock_mkdir):
 def test_generate_command_with_output_location(mock_mkdir):
     result = generate_output_paths('generate', {'output': '/custom/path/output.py'}, 'myfile', 'python', '.py')
     assert result == {'output': '/custom/path/output.py'}
-    mock_mkdir.assert_not_called()
+    mock_mkdir.assert_called_once_with(parents=True, exist_ok=True)
 
 @patch('pathlib.Path.mkdir')
 def test_generate_command_with_output_directory(mock_mkdir):
     result = generate_output_paths('generate', {'output': '/custom/directory'}, 'myfile', 'python', '.py')
     assert result == {'output': '/custom/directory/myfile.py'}
-    mock_mkdir.assert_not_called()
+    mock_mkdir.assert_called_once_with(parents=True, exist_ok=True)
 
 @patch('pathlib.Path.mkdir')
 def test_example_command(mock_mkdir):
@@ -109,13 +109,17 @@ def test_fix_command_with_custom_output(mock_mkdir):
         'output_code': '/custom/code.py',
         'output_results': 'myfile_fix_results.log'
     }
-    mock_mkdir.assert_not_called()
+    expected_calls = [
+        call(parents=True, exist_ok=True),
+        call(parents=True, exist_ok=True)
+    ]
+    mock_mkdir.assert_has_calls(expected_calls, any_order=True)
 
 @patch('pathlib.Path.mkdir')
 def test_generate_command_with_environment_variable(mock_mkdir, setup_environment):
     result = generate_output_paths('generate', {}, 'myfile', 'python', '.py')
     assert result == {'output': '/env/path/generate/myfile.py'}
-    mock_mkdir.assert_not_called()
+    mock_mkdir.assert_called_once_with(parents=True, exist_ok=True)
 
 @patch('pathlib.Path.mkdir')
 def test_fix_command_with_environment_variables(mock_mkdir, setup_environment):
@@ -125,7 +129,11 @@ def test_fix_command_with_environment_variables(mock_mkdir, setup_environment):
         'output_code': '/env/path/fix_code/myfile_fixed.py',
         'output_results': 'myfile_fix_results.log'
     }
-    mock_mkdir.assert_not_called()
+    expected_calls = [
+        call(parents=True, exist_ok=True),
+        call(parents=True, exist_ok=True)
+    ]
+    mock_mkdir.assert_has_calls(expected_calls, any_order=True)
 
 def test_invalid_command():
     with pytest.raises(ValueError):
