@@ -26,57 +26,10 @@ from .conflicts_in_prompts import conflicts_in_prompts
 from .fix_code_module_errors import fix_code_module_errors
 from .trace import trace as trace_func
 from .bug_to_unit_test import bug_to_unit_test
+from .track_cost import track_cost
 
 console = Console()
 
-def track_cost(func: Callable) -> Callable:
-    """Decorator to track the cost of each command execution."""
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        start_time = datetime.now()
-        result = None
-        try:
-            result = func(*args, **kwargs)
-        except Exception as e:
-            rprint(f"[bold red]Error in {func.__name__}: {str(e)}[/bold red]")
-            raise
-
-        end_time = datetime.now()
-
-        ctx = click.get_current_context()
-        output_cost_file = ctx.obj.get('output_cost')
-
-        if output_cost_file:
-            command = ctx.command.name
-            if isinstance(result, tuple) and len(result) > 2:
-                model = result[-1]
-                cost = result[-2]
-            else:
-                model = "Unknown"
-                cost = 0.0
-
-            input_files = [v for k, v in kwargs.items() if not k.startswith('output') and isinstance(v, str) and os.path.isfile(v)]
-            output_files = [v for k, v in kwargs.items() if k.startswith('output') and v]
-
-            try:
-                file_exists = os.path.isfile(output_cost_file)
-                with open(output_cost_file, 'a', newline='') as csvfile:
-                    writer = csv.writer(csvfile)
-                    if not file_exists or os.path.getsize(output_cost_file) == 0:
-                        writer.writerow(['timestamp', 'model', 'command', 'cost', 'input_files', 'output_files'])
-                    writer.writerow([
-                        start_time.isoformat(),
-                        model,
-                        command,
-                        f"{cost:.6f}",
-                        '|'.join(input_files),
-                        '|'.join(output_files)
-                    ])
-            except Exception as e:
-                rprint(f"[bold red]Failed to log cost: {str(e)}[/bold red]")
-
-        return result
-    return wrapper
 
 @click.group()
 @click.option('--force', is_flag=True, help='Overwrite existing files without asking for confirmation.')
