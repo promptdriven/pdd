@@ -1,52 +1,64 @@
-<context>
-    You are an expert LLM Prompt Engineer. Your goal is to split the input_prompt into a sub_prompt and modified_prompt with no loss of functionality.
-</context>
+<examples>
+    <example_1>
+    <input_prompt><include>./context/split/1/initial_pdd_python.prompt</include></input_prompt>
+    <input_code><include>./context/split/1/pdd.py</include></input_code>
+    <example_code><include>./context/split/1/split_get_extension.py</include></example_code>
+    <sub_prompt><include>./context/split/1/sub_pdd_python.prompt</include></sub_prompt>
+    <modified_prompt><include>./context/split/1/final_pdd_python.prompt</include></modified_prompt>
+    </example_1>
 
-<instructions>
-    Here are the inputs and outputs of this prompt:
+    <example_2>
+    <input_prompt><include>./context/split/2/initial_pdd_python.prompt</include></input_prompt>
+    <input_code><include>./context/split/2/pdd.py</include></input_code>
+    <example_code><include>./context/split/2/split_pdd_construct_output_path.py</include></example_code>
+    <sub_prompt><include>./context/split/2/sub_pdd_python.prompt</include></sub_prompt>
+    <modified_prompt><include>./context/split/2/final_pdd_python.prompt</include></modified_prompt>
+    </example_2>
+
+    <example_3>
+    <input_prompt><include>./context/split/3/initial_postprocess_python.prompt</include></input_prompt>
+    <input_code><include>./context/split/3/postprocess.py</include></input_code>
+    <example_code><include>./context/split/3/split_postprocess_find_section.py</include></example_code>
+    <sub_prompt><include>./context/split/3/sub_postprocess_python.prompt</include></sub_prompt>
+    <modified_prompt><include>./context/split/3/final_postprocess_python.prompt</include></modified_prompt>
+    </example_3>
+
+    <example_4>
+    <input_prompt><include>./context/split/4/initial_construct_paths_python.prompt</include></input_prompt>
+    <input_code><include>./context/split/4/construct_paths.py</include></input_code>
+    <example_code><include>./context/split/4/split_construct_paths_generate_output_filename.py</include></example_code>
+    <sub_prompt><include>./context/split/4/sub_construct_paths_python.prompt</include></sub_prompt>
+    <modified_prompt><include>./context/split/4/final_construct_paths_python.prompt</include></modified_prompt>
+    </example_4>
+</examples>
+
+<context>
+% You are an expert LLM Prompt Engineer. Your goal is to split the input_prompt into a sub_prompt and modified_prompt with no loss of functionality.
+
+% Here are the inputs and outputs of this prompt:
     <inputs>
+    Input: 
         'input_prompt' - A string contains the prompt that will be split into a sub_prompt and modified_prompt.
         'input_code' - A string that contains the code that was generated from the input_prompt.
         'example_code' - A string that contains the code example of how the code generated from the sub_prompt would be used by the code generated from the modified_prompt.
     </inputs>
     <outputs>
+    Output: 
         'sub_prompt' - A string that contains the sub_prompt that was split from the input_prompt.
         'modified_prompt' - A string that contains the modified prompt from input_prompt split from the above sub_prompt.
     </outputs>
-</instructions>
+</context>
 
-<examples>
-    <example1>
-        <example_input_prompt>example_1_input_prompt: ```<./context/split/1/initial_pdd_python.prompt>```</example_input_prompt>
-        <example_input_code>example_1_input_code: ```<./context/split/1/pdd.py>```</example_input_code>
-        <example_example_code>example_1_example_code: ```<./context/split/1/split_get_extension.py>```</example_example_code>
-        <example_sub_prompt>example_1_sub_prompt: ```<./context/split/1/sub_pdd_python.prompt>```</example_sub_prompt>
-        <example_modified_prompt>example_1_modified_prompt: ```<./context/split/1/final_pdd_python.prompt>```</example_modified_prompt>
-    </example1>
-    <example2>
-        <example_input_prompt>example_2_input_prompt: ```<./context/split/2/initial_pdd_python.prompt>```</example_input_prompt>
-        <example_input_code>example_2_input_code: ```<./context/split/2/pdd.py>```</example_input_code>
-        <example_example_code>example_2_example_code: ```<./context/split/2/split_pdd_construct_output_path.py>```</example_example_code>
-        <example_sub_prompt>example_2_sub_prompt: ```<./context/split/2/sub_pdd_python.prompt>```</example_sub_prompt>
-        <example_modified_prompt>example_2_modified_prompt: ```<./context/split/2/final_pdd_python.prompt>```</example_modified_prompt>
-    </example2>
-    <example3>
-        <example_input_prompt>example_3_input_prompt: ```<./context/split/3/initial_pdd_python.prompt>```</example_input_prompt>
-        <example_input_code>example_3_input_code: ```<./context/split/3/pdd.py>```</example_input_code>
-        <example_example_code>example_3_example_code: ```<./context/split/3/split_pdd_construct_output_path.py>```</example_example_code>
-        <example_sub_prompt>example_3_sub_prompt: ```<./context/split/3/sub_pdd_python.prompt>```</example_sub_prompt>
-        <example_modified_prompt>example_3_modified_prompt: ```<./context/split/3/final_pdd_python.prompt>```</example_modified_prompt>
-    </example3>
-</examples>
-
-<task>
-    Here is the input_prompt to split: <input_prompt>```{input_prompt}```</input_prompt>
-    Here is the input_code: <input_code>```{input_code}```</input_code>
-    Here is the example_code: <example_code>```{example_code}```</example_code>
-</task>
+<input>
+    <input_prompt<include>{input_prompt}</include></input_prompt>
+    <input_code<include>{input_code}</include></input_code>
+    <example_code<include>{example_code}</include></example_code>
+</input>
 
 <instructions>
-    Follow these instructions:
-    1. Generate the sub_prompt.
-    2. Generate the modified_prompt.
+% Follow these instructions:
+    1. Write out the difficulties in spliting the prompt
+    2. Write out how to overcome the difficulties
+    3. Generate the sub_prompt.
+    4. Generate the modified_prompt.
 </instructions>
