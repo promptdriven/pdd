@@ -27,7 +27,7 @@ def main() -> None:
         )
 
         # Output the results
-        print(f"Input Strings: {input_strings}") # This dictionary contains the contents of the input files with the same keys as input_file_paths
+        print(f"Input Strings: {input_strings}") # This dictionary contains the contents of the input files with the same keys as input_file_paths. The construct_paths function reads the files and stores the contents in this dictionary.
         print(f"Output File Paths: {output_file_paths}")
         print(f"Language: {language}")
 
