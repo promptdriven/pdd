@@ -84,15 +84,19 @@ def collect_files(args, kwargs):
 
     # Collect from kwargs
     for k, v in kwargs.items():
+        if k == 'output_cost':
+            continue
         if isinstance(v, str):
-            if k.startswith('output') and k != 'output_cost':
+            if k.startswith('output'):
                 output_files.append(v)
             else:
                 input_files.append(v)
         elif isinstance(v, list):
-            if k.startswith('output') and k != 'output_cost':
+            if k.startswith('output'):
                 output_files.extend([f for f in v if isinstance(f, str)])
             else:
                 input_files.extend([f for f in v if isinstance(f, str)])
 
+    print(f"Debug: Collected input files: {input_files}")
+    print(f"Debug: Collected output files: {output_files}")
     return input_files, output_files
