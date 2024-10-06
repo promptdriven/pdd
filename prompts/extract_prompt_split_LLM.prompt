@@ -4,5 +4,5 @@
 
 % Output a JSON object with the following keys:
     - 'sub_prompt': String containing the sub_prompt that was split from the input_prompt.
-    - 'modified_prompt': String containing the modified prompt from input_prompt split from the sub_prompt.
+    - 'modified_prompt': String containing the complete modified prompt from input_prompt split from the sub_prompt. Sometimes only the changed portion of the modified prompt is given so you may need to combine it with parts of the input prompt get the complete modified prompt.
     

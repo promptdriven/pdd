@@ -42,7 +42,7 @@
 </examples>
 
 <context>
-% You are an expert LLM Prompt Engineer. Your goal is to split the input_prompt into a sub_prompt and modified_prompt with no loss of functionality.
+% You are an expert LLM Prompt Engineer. Your goal is to split the input_prompt (a larger prompt) into a sub_prompt and modified_prompt (two smaller prompts) with no loss of functionality. This is to make it easier to generate and test the modules easier.
 
 % Here are the inputs and outputs of this prompt:
     <input_definitions>
@@ -66,8 +66,10 @@
 
 <instructions>
 % Follow these instructions:
-    1. Write out what are the possible difficulties in splitting the prompt according to the input example_code. The function that will be split off is `conflicts_main`.
-    2. Write out how to overcome the difficulties.
-    3. Generate the sub_prompt that generates the prompt which could generate the code that could be used by the example_code.
-    4. Generate the modified_prompt which would incorporate the sub_prompt without any duplications or conflicts.
+    1. Write several paragraphs to explain based on the example_code how the input_prompt could be split into a sub_prompt and modified_prompt.
+    2. Write out several paragraphs in detail all the functionality of the sub_prompt by looking at the input_prompt and input_code.
+    3. Write out what are the possible difficulties in splitting the prompt according to the input example_code. For each difficulty write several paragraphs
+    4. Write out how to overcome the difficulties. Write several paragraphs for each difficulty.
+    5. Write the sub_prompt which would generate the code that could be used by the example_code. This prompt should carefully consider all the prior steps and ensure enough detail is provided to generate the code properly. Internal modules need to be imported using include and other appropriate xml tags in the same style as the input_prompt. 
+    6. Write the complete modified_prompt which would incorporate the sub_prompt without any duplications or conflicting functionalities.
 </instructions>
