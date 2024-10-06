@@ -50,9 +50,9 @@
 </context>
 
 <inputs>
-    <input_prompt<include>{input_prompt}</include></input_prompt>
-    <input_code<include>{input_code}</include></input_code>
-    <example_code<include>{example_code}</include></example_code>
+    <input_prompt>{input_prompt}</input_prompt>
+    <input_code>{input_code}</input_code>
+    <example_code>{example_code}</example_code>
 </inputs>
 
 <instructions>
