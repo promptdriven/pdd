@@ -77,10 +77,15 @@ def generate_output_paths(command: str, output_locations: Dict[str, Optional[str
             'bug': 'PDD_BUG_OUTPUT_PATH'
         }
 
+        if command not in env_var_map:
+            return None
+
         if command in ['fix', 'split']:
-            return os.environ.get(env_var_map[command][key])
+            env_var = env_var_map[command].get(key)
         else:
-            return os.environ.get(env_var_map.get(command))
+            env_var = env_var_map[command]
+
+        return os.environ.get(env_var) if env_var else None
 
     keys = output_locations.keys() if output_locations else ['output']
     if command == 'fix':
