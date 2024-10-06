@@ -1,4 +1,5 @@
 import csv
+import sys
 from typing import List, Dict, Tuple, Optional
 import click
 from rich import print as rprint
@@ -65,16 +66,20 @@ def conflicts_main(ctx: click.Context, prompt1: str, prompt2: str, output: Optio
             rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
             if output:
                 rprint(f"[bold]Results saved to:[/bold] {output_file_paths['output']}")
-            else:
-                rprint("[bold]Conflicts detected:[/bold]")
-                for conflict in conflicts:
-                    rprint(f"[bold]Prompt:[/bold] {conflict['prompt_name']}")
-                    rprint(f"[bold]Instructions:[/bold] {conflict['change_instructions']}")
-                    rprint("---")
+
+        # Always print conflicts, even in quiet mode
+        rprint("[bold]Conflicts detected:[/bold]")
+        if conflicts:
+            for conflict in conflicts:
+                rprint(f"[bold]Prompt:[/bold] {conflict['prompt_name']}")
+                rprint(f"[bold]Instructions:[/bold] {conflict['change_instructions']}")
+                rprint("---")
+        else:
+            rprint("No conflicts detected or changes suggested.")
 
         return conflicts, total_cost, model_name
 
     except Exception as e:
         if not ctx.params.get('quiet', False):
             rprint(f"[bold red]Error:[/bold red] {str(e)}")
-        ctx.exit(1)
+        sys.exit(1)
