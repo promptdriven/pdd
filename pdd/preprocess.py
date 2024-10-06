@@ -129,7 +129,7 @@ def double_curly(text: str, exclude_keys: List[str] = None) -> str:
     if exclude_keys is None:
         exclude_keys = []
 
-    console.print(f"Before doubling:\n{text}")
+    # console.print(f"Before doubling:\n{text}")
 
     # Define the pattern for all code blocks (e.g., ```javascript, ```json)
     code_pattern = r"```[\w]*\n[\s\S]*?```"
