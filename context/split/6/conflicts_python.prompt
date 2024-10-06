@@ -1,49 +1,27 @@
-
-% You are an expert Python engineer. Your goal is to write a Python function called `conflicts_main` that analyzes two prompt files to find conflicts between them and suggests how to resolve those conflicts. This function will be part of the "pdd" command-line program.
+% You are an expert Python engineer. Your goal is to write a Python function called 'conflicts_main' that will analyze two prompt files to find conflicts between them and suggest how to resolve those conflicts. This function will be used by the 'conflicts' command in the main CLI of the 'pdd' program.
 
 % Here are the inputs and outputs of the function:
-- **Inputs:**
-  - `ctx` (Click Context): The Click context object passed from the CLI command.
-  - `prompt1` (str): The file path to the first prompt file.
-  - `prompt2` (str): The file path to the second prompt file.
-  - `output` (Optional[str]): The file path where the CSV file containing the conflict analysis results should be saved.
-  
-- **Outputs:**
-  - Returns a tuple containing:
-    - `conflicts_list` (List[dict]): A list of dictionaries representing the conflicts found.
-    - `total_cost` (float): The total cost of the conflict analysis process.
-    - `model_name` (str): The name of the AI model used.
+    Inputs:
+    - 'ctx' (click.Context): The Click context object containing configuration and state.
+    - 'prompt1' (str): Path to the first prompt file.
+    - 'prompt2' (str): Path to the second prompt file.
+    - 'output' (Optional[str]): Path to save the CSV file containing the conflict analysis results.
+    Outputs: 
+    - Returns a tuple containing (List[dict], float, str):
+      - List[dict]: A list of dictionaries containing conflict analysis results.
+      - float: The total cost of the operation.
+      - str: The name of the model used.
 
-% The function should perform the following steps:
-1. **Load Prompt Files:** Read the contents of `prompt1` and `prompt2`.
+% Here is an example of how to use the 'conflicts_in_prompts' function:
+<conflicts_in_prompts_example><include>context/conflicts_in_prompts_example.py</include></conflicts_in_prompts_example>
 
-2. **Analyze Conflicts:** Use an AI model to analyze the prompts and detect any conflicts between them. This involves identifying discrepancies, overlapping functionalities, or contradictory instructions.
+% Here is an example of how to use the 'construct_paths' function:
+<construct_paths_example><include>context/construct_paths_example.py</include></construct_paths_example>
 
-3. **Suggest Resolutions:** For each conflict found, generate suggestions on how to resolve them.
+% This function will do the following:
+    Step 1: Use 'construct_paths' to prepare input and output file paths.
+    Step 2: Call 'conflicts_in_prompts' with the content of the input prompt files.
+    Step 3: Write the conflicts list to a CSV file if an output path is provided.
+    Step 4: Return the conflicts list, total cost, and model name.
 
-4. **Prepare Results:** Compile the conflicts and resolutions into a list of dictionaries.
-
-5. **Save Results:** If an `output` path is provided, save the results to a CSV file at that location.
-
-6. **Return Outputs:** Return the `conflicts_list`, `total_cost`, and `model_name`.
-
-% Additional Requirements:
-- **Cost Tracking:** Keep track of the cost incurred during the AI model operations to return `total_cost`.
-
-- **Error Handling:** Include proper error handling to manage exceptions, such as file not found errors or issues during AI model inference.
-
-- **Logging:** Utilize the `rich` library for printing informative messages to the console.
-
-% Ensure that the function is self-contained and can be imported and used by the CLI application. Do not include any code related to the CLI commands in this module.
-
-% Here is an example of how the function might be used:
-```python
-from pdd.conflicts_module import conflicts_main
-
-conflicts_list, total_cost, model_name = conflicts_main(
-    ctx,
-    'path/to/prompt1.prompt',
-    'path/to/prompt2.prompt',
-    output='conflicts_report.csv'
-)
-```
+% Ensure to handle exceptions and use the 'rprint' function from rich for any console output. The function should respect the 'quiet' flag from the context for controlling verbosity.
