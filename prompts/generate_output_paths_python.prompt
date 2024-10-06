@@ -1,9 +1,10 @@
+<pdd>
 % Here is an example of prior a generation of the prompt below:
 <example>
     <example_prompt><include>context/generate/5/generate_output_paths_python.prompt</include></example_prompt>
     <example_code><include>context/generate/5/generate_output_paths.py</include></example_code>
 </example>
-
+</pdd>
 % You are an expert Python software engineer. Your task is to implement a function called `generate_output_paths` that creates appropriate output filenames for different commands in the 'pdd' Python program.
 
 % Inputs: The function should take the following parameters:
