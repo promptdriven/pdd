@@ -36,29 +36,29 @@
 % You are an expert LLM Prompt Engineer. Your goal is to split the input_prompt into a sub_prompt and modified_prompt with no loss of functionality.
 
 % Here are the inputs and outputs of this prompt:
-    <inputs>
+    <input_definitions>
     Input: 
         'input_prompt' - A string contains the prompt that will be split into a sub_prompt and modified_prompt.
         'input_code' - A string that contains the code that was generated from the input_prompt.
         'example_code' - A string that contains the code example of how the code generated from the sub_prompt would be used by the code generated from the modified_prompt.
-    </inputs>
-    <outputs>
+    </input_definitions>
+    <output_definitions>
     Output: 
         'sub_prompt' - A string that contains the sub_prompt that was split from the input_prompt.
         'modified_prompt' - A string that contains the modified prompt from input_prompt split from the above sub_prompt.
-    </outputs>
+    </output_definitions>
 </context>
 
-<input>
+<inputs>
     <input_prompt<include>{input_prompt}</include></input_prompt>
     <input_code<include>{input_code}</include></input_code>
     <example_code<include>{example_code}</include></example_code>
-</input>
+</inputs>
 
 <instructions>
 % Follow these instructions:
-    1. Write out the difficulties in spliting the prompt
-    2. Write out how to overcome the difficulties
+    1. Write out the difficulties in spliting the prompt.
+    2. Write out how to overcome the difficulties.
     3. Generate the sub_prompt.
     4. Generate the modified_prompt.
 </instructions>
