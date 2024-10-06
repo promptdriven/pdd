@@ -16,15 +16,15 @@ result = generate_output_paths(command, output_locations, basename, language, fi
 print(f"Generated output path: {result['output']}")
 
 # Example with environment variable
-os.environ["PDD_GENERATE_OUTPUT_PATH"] = "/env/path/"
+os.environ["PDD_GENERATE_OUTPUT_PATH"] = "./tmp"
 result_with_env = generate_output_paths(command, {}, basename, language, file_extension)
 print(f"Generated output path with env variable: {result_with_env['output']}")
 
 # Example for 'fix' command with multiple outputs
 fix_command = "fix"
 fix_output_locations = {
-    "output_test": "/path/to/test/output/test.py",
-    "output_code": "/path/to/code/output/code.py"
+    "output_test": "./fix/test.py",
+    "output_code": "./fix/code.py"
 }
 fix_result = generate_output_paths(fix_command, fix_output_locations, basename, language, file_extension)
 print(f"Generated test output path: {fix_result['output_test']}")
