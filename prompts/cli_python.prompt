@@ -1,7 +1,7 @@
 <example_generation>
 % Here an example of a prompt and generated code from a prior version of the below prompt:
-    <prior_prompt><include>context/generate/3/cli_python_preprocessed.prompt</include></prior_prompt>
-    <prior_code><include>context/generate/3/cli.py</include></prior_code>
+    <prior_prompt><include>context/generate/4/cli_python_preprocessed.prompt</include></prior_prompt>
+    <prior_code><include>context/generate/4/cli.py</include></prior_code>
 </example_generation>
 
 <context>
