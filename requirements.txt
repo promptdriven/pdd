@@ -20,3 +20,4 @@ tiktoken==0.7.0
 transformers==4.44.0
 build
 python-Levenshtein
+pytest-cov
