@@ -1,46 +1,73 @@
-% You are an expert LLM Prompt Engineer. Your goal is to split the input_prompt into a sub_prompt and modified_prompt with no loss of functionality. 
+% Here are some examples of splitting prompts:
+<examples>
+    <example_1>
+    <1_input_prompt><include>./context/split/1/initial_pdd_python.prompt</include></1_input_prompt>
+    <1_input_code><include>./context/split/1/pdd.py</include></1_input_code>
+    <1_example_code><include>./context/split/1/split_get_extension.py</include></1_example_code>
+    <1_sub_prompt><include>./context/split/1/sub_pdd_python.prompt</include></1_sub_prompt>
+    <1_modified_prompt><include>./context/split/1/final_pdd_python.prompt</include></1_modified_prompt>
+    </example_1>
+
+    <example_2>
+    <2_input_prompt><include>./context/split/2/initial_pdd_python.prompt</include></2_input_prompt>
+    <2_input_code><include>./context/split/2/pdd.py</include></2_input_code>
+    <2_example_code><include>./context/split/2/split_pdd_construct_output_path.py</include></2_example_code>
+    <2_sub_prompt><include>./context/split/2/sub_pdd_python.prompt</include></2_sub_prompt>
+    <2_modified_prompt><include>./context/split/2/final_pdd_python.prompt</include></2_modified_prompt>
+    </example_2>
+
+    <example_3>
+    <3_input_prompt><include>./context/split/3/initial_postprocess_python.prompt</include></3_input_prompt>
+    <3_input_code><include>./context/split/3/postprocess.py</include></3_input_code>
+    <3_example_code><include>./context/split/3/split_postprocess_find_section.py</include></3_example_code>
+    <3_sub_prompt><include>./context/split/3/sub_postprocess_python.prompt</include></3_sub_prompt>
+    <3_modified_prompt><include>./context/split/3/final_postprocess_python.prompt</include></3_modified_prompt>
+    </example_3>
+
+    <example_4>
+    <4_input_prompt><include>./context/split/4/initial_construct_paths_python.prompt</include></4_input_prompt>
+    <4_input_code><include>./context/split/4/construct_paths.py</include></4_input_code>
+    <4_example_code><include>./context/split/4/split_construct_paths_generate_output_filename.py</include></4_example_code>
+    <4_sub_prompt><include>./context/split/4/sub_construct_paths_python.prompt</include></4_sub_prompt>
+    <4_modified_prompt><include>./context/split/4/final_construct_paths_python.prompt</include></4_modified_prompt>
+    </example_4>
+
+    <example_5>
+    <5_input_prompt><include>context/split/5/cli_python.prompt</include></5_input_prompt>
+    <5_input_code><include>context/split/5/cli.py</include></5_input_code>
+    <5_example_code><include>context/split/5/split_track_cost.py</include></5_example_code>
+    <5_sub_prompt><include>context/split/5/track_cost_python.prompt</include></5_sub_prompt>
+    <5_modified_prompt><include>context/split/5/modified_cli_python.prompt</include></5_modified_prompt>
+    </example_5>
+</examples>
+
+<context>
+% You are an expert LLM Prompt Engineer. Your goal is to split the input_prompt into a sub_prompt and modified_prompt with no loss of functionality.
 
 % Here are the inputs and outputs of this prompt:
+    <input_definitions>
     Input: 
         'input_prompt' - A string contains the prompt that will be split into a sub_prompt and modified_prompt.
         'input_code' - A string that contains the code that was generated from the input_prompt.
         'example_code' - A string that contains the code example of how the code generated from the sub_prompt would be used by the code generated from the modified_prompt.
+    </input_definitions>
+    <output_definitions>
     Output: 
         'sub_prompt' - A string that contains the sub_prompt that was split from the input_prompt.
         'modified_prompt' - A string that contains the modified prompt from input_prompt split from the above sub_prompt.
+    </output_definitions>
+</context>
 
-% Here is example_1 of how to split and generate the sub_prompt and modified_prompt:
-    example_1_input_prompt: ```<./context/split/1/initial_pdd_python.prompt>```
-    example_1_input_code: ```<./context/split/1/pdd.py>```
-    example_1_example_code: ```<./context/split/1/split_get_extension.py>```
-    example_1_sub_prompt: ```<./context/split/1/sub_pdd_python.prompt>```
-    example_1_modified_prompt: ```<./context/split/1/final_pdd_python.prompt>```
+<inputs>
+    <input_prompt>{input_prompt}</input_prompt>
+    <input_code>{input_code}</input_code>
+    <example_code>{example_code}</example_code>
+</inputs>
 
-% Here is example_2 of how to split and generate the sub_prompt and modified_prompt:
-    example_2_input_prompt: ```<./context/split/2/initial_pdd_python.prompt>```
-    example_2_input_code: ```<./context/split/2/pdd.py>```
-    example_2_example_code: ```<./context/split/2/split_pdd_construct_output_path.py>```
-    example_2_sub_prompt: ```<./context/split/2/sub_pdd_python.prompt>```
-    example_2_modified_prompt: ```<./context/split/2/final_pdd_python.prompt>```
-    
-% Here is example_3 of how to split and generate the sub_prompt and modified_prompt:
-    example_3_input_prompt: ```<./context/split/3/initial_postprocess_python.prompt>```
-    example_3_input_code: ```<./context/split/3/postprocess.py>```
-    example_3_example_code: ```<./context/split/3/split_postprocess_find_section.py>```
-    example_3_sub_prompt: ```<./context/split/3/sub_postprocess_python.prompt>```
-    example_3_modified_prompt: ```<./context/split/3/final_postprocess_python.prompt>```
-
-% Here is example_4 of how to split and generate the sub_prompt and modified_prompt:
-    example_4_input_prompt: ```<./context/split/4/initial_construct_paths_python.prompt>```
-    example_4_input_code: ```<./context/split/4/construct_paths.py>```
-    example_4_example_code: ```<./context/split/4/split_construct_paths_generate_output_filename.py>```
-    example_4_sub_prompt: ```<./context/split/4/sub_construct_paths_python.prompt>```
-    example_4_modified_prompt: ```<./context/split/4/final_construct_paths_python.prompt>```
-
-% Here is the input_prompt to split: ```{input_prompt}```
-% Here is the input_code: ```{input_code}```
-% Here is the example_code: ```{example_code}```
-
+<instructions>
 % Follow these instructions:
-    1. Generate the sub_prompt.
-    2. Generate the modified_prompt.
+    1. Write out what are the possible difficulties in splitting the prompt according to the input example_code. The function that will be split off is `conflicts_main`.
+    2. Write out how to overcome the difficulties.
+    3. Generate the sub_prompt that generates the prompt which could generate the code that could be used by the example_code.
+    4. Generate the modified_prompt which would incorporate the sub_prompt without any duplications or conflicts.
+</instructions>
