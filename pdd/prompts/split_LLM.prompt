@@ -16,21 +16,23 @@
     <2_modified_prompt><include>./context/split/2/final_pdd_python.prompt</include></2_modified_prompt>
     </example_2>
 
-    <example_3>
-    <3_input_prompt><include>./context/split/3/initial_postprocess_python.prompt</include></3_input_prompt>
-    <3_input_code><include>./context/split/3/postprocess.py</include></3_input_code>
-    <3_example_code><include>./context/split/3/split_postprocess_find_section.py</include></3_example_code>
-    <3_sub_prompt><include>./context/split/3/sub_postprocess_python.prompt</include></3_sub_prompt>
-    <3_modified_prompt><include>./context/split/3/final_postprocess_python.prompt</include></3_modified_prompt>
-    </example_3>
+    <pdd>
+        <example_3>
+        <3_input_prompt><include>./context/split/3/initial_postprocess_python.prompt</include></3_input_prompt>
+        <3_input_code><include>./context/split/3/postprocess.py</include></3_input_code>
+        <3_example_code><include>./context/split/3/split_postprocess_find_section.py</include></3_example_code>
+        <3_sub_prompt><include>./context/split/3/sub_postprocess_python.prompt</include></3_sub_prompt>
+        <3_modified_prompt><include>./context/split/3/final_postprocess_python.prompt</include></3_modified_prompt>
+        </example_3>
 
-    <example_4>
-    <4_input_prompt><include>./context/split/4/initial_construct_paths_python.prompt</include></4_input_prompt>
-    <4_input_code><include>./context/split/4/construct_paths.py</include></4_input_code>
-    <4_example_code><include>./context/split/4/split_construct_paths_generate_output_filename.py</include></4_example_code>
-    <4_sub_prompt><include>./context/split/4/sub_construct_paths_python.prompt</include></4_sub_prompt>
-    <4_modified_prompt><include>./context/split/4/final_construct_paths_python.prompt</include></4_modified_prompt>
-    </example_4>
+        <example_4>
+        <4_input_prompt><include>./context/split/4/initial_construct_paths_python.prompt</include></4_input_prompt>
+        <4_input_code><include>./context/split/4/construct_paths.py</include></4_input_code>
+        <4_example_code><include>./context/split/4/split_construct_paths_generate_output_filename.py</include></4_example_code>
+        <4_sub_prompt><include>./context/split/4/sub_construct_paths_python.prompt</include></4_sub_prompt>
+        <4_modified_prompt><include>./context/split/4/final_construct_paths_python.prompt</include></4_modified_prompt>
+        </example_4>
+    </pdd>
 
     <example_5>
     <5_input_prompt><include>context/split/5/cli_python.prompt</include></5_input_prompt>
