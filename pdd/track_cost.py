@@ -4,14 +4,9 @@ import csv
 import os
 import click
 from rich import print as rprint
+from typing import Any, Tuple
 
 def track_cost(func):
-    """
-    Decorator to track the cost of command execution in the "pdd" CLI program.
-    
-    It logs the execution details into a CSV file specified by the user or
-    through the PDD_OUTPUT_COST_PATH environment variable.
-    """
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         ctx = click.get_current_context()
@@ -20,47 +15,28 @@ def track_cost(func):
 
         start_time = datetime.now()
         try:
-            # Execute the original command function
             result = func(*args, **kwargs)
         except Exception as e:
-            # Let any exceptions from the command propagate
             raise e
         end_time = datetime.now()
 
         try:
-            # Safely retrieve Output Cost Option
             if ctx.obj and hasattr(ctx.obj, 'get'):
                 output_cost_path = ctx.obj.get('output_cost') or os.getenv('PDD_OUTPUT_COST_PATH')
             else:
                 output_cost_path = os.getenv('PDD_OUTPUT_COST_PATH')
             
             if not output_cost_path:
-                # If no output cost path is specified, skip logging
                 return result
 
-            # Step 6: Prepare Cost Data
-
-            # Determine the command name
             command_name = ctx.command.name
 
-            # Extract cost and model name from the result tuple
-            # Assuming the second to last element is cost and the last is model name
-            if isinstance(result, tuple) and len(result) >= 3:
-                cost = result[-2]
-                model_name = result[-1]
-            else:
-                cost = ''
-                model_name = ''
+            cost, model_name = extract_cost_and_model(result)
 
-            # Collect input and output file paths from command arguments
-            # Only include string paths that exist
-            input_files = [v for k, v in kwargs.items() if not k.startswith('output') and isinstance(v, str) and os.path.isfile(v)]
-            output_files = [v for k, v in kwargs.items() if k.startswith('output') and isinstance(v, str) and os.path.isfile(v)]
+            input_files, output_files = collect_files(args, kwargs)
 
-            # Format the timestamp
-            timestamp = start_time.isoformat()
+            timestamp = start_time.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3]
 
-            # Prepare the CSV row
             row = {
                 'timestamp': timestamp,
                 'model': model_name,
@@ -70,28 +46,53 @@ def track_cost(func):
                 'output_files': ';'.join(output_files),
             }
 
-            # Append Cost Data to CSV File
             file_exists = os.path.isfile(output_cost_path)
-
-            # Define the CSV headers
             fieldnames = ['timestamp', 'model', 'command', 'cost', 'input_files', 'output_files']
 
-            # Open the CSV file in append mode
             with open(output_cost_path, 'a', newline='', encoding='utf-8') as csvfile:
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-
-                # Write header if the file is new
                 if not file_exists:
                     writer.writeheader()
-
-                # Write the cost data row
                 writer.writerow(row)
 
+            print(f"Debug: Writing row to CSV: {row}")
+            print(f"Debug: Input files: {input_files}")
+            print(f"Debug: Output files: {output_files}")
+
         except Exception as e:
-            # Handle Exceptions Gracefully
             rprint(f"[red]Error tracking cost: {e}[/red]")
 
-        # Return the Command Result
         return result
 
     return wrapper
+
+def extract_cost_and_model(result: Any) -> Tuple[Any, str]:
+    if isinstance(result, tuple) and len(result) >= 3:
+        return result[-2], result[-1]
+    return '', ''
+
+def collect_files(args, kwargs):
+    input_files = []
+    output_files = []
+
+    # Collect from args
+    for arg in args:
+        if isinstance(arg, str):
+            input_files.append(arg)
+        elif isinstance(arg, list):
+            input_files.extend([f for f in arg if isinstance(f, str)])
+
+    # Collect from kwargs
+    for k, v in kwargs.items():
+        if isinstance(v, str):
+            if k.startswith('output') and k != 'output_cost':
+                output_files.append(v)
+            else:
+                input_files.append(v)
+        elif isinstance(v, list):
+            if k.startswith('output') and k != 'output_cost':
+                output_files.extend([f for f in v if isinstance(f, str)])
+            else:
+                input_files.extend([f for f in v if isinstance(f, str)])
+
+    return input_files, output_files
