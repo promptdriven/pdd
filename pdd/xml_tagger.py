@@ -50,7 +50,7 @@ def xml_tagger(raw_prompt: str, strength: float, temperature: float) -> Tuple[st
         rprint(f"Estimated cost: ${prompt_cost:.6f}")
 
         xml_generated_analysis = xml_chain.invoke({"raw_prompt": raw_prompt})
-
+        rprint(xml_generated_analysis)
         # Step 5: Extract XML using a different model
         extract_llm, extract_token_counter, extract_input_cost, extract_output_cost, extract_model_name = llm_selector(0.8, temperature)
         extract_chain = extract_template | extract_llm | JsonOutputParser(pydantic_object=XMLExtractResult)
