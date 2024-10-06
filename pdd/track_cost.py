@@ -30,7 +30,7 @@ def track_cost(func):
         try:
             # Step 5: Retrieve Output Cost Option
             output_cost_path = (
-                ctx.params.get('output_cost') or
+                ctx.obj.get('output_cost') or
                 os.getenv('PDD_OUTPUT_COST_PATH')
             )
             
@@ -56,20 +56,8 @@ def track_cost(func):
             input_files = []
             output_files = []
 
-            for param, value in ctx.params.items():
-                if isinstance(value, str):
-                    if 'output' not in param.lower() and param != 'output_cost':
-                        input_files.append(value)
-                    elif 'output' in param.lower() and param != 'output_cost':
-                        output_files.append(value)
-                elif isinstance(value, (list, tuple)):
-                    # Handle multiple input/output files
-                    for item in value:
-                        if isinstance(item, str):
-                            if 'input' in param.lower():
-                                input_files.append(item)
-                            elif 'output' in param.lower() and param != 'output_cost':
-                                output_files.append(item)
+            input_files = [v for k, v in kwargs.items() if not k.startswith('output') and isinstance(v, str) and os.path.isfile(v)]
+            output_files = [v for k, v in kwargs.items() if k.startswith('output') and v]
 
             # Format the timestamp
             timestamp = start_time.isoformat()
