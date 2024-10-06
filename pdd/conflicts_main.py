@@ -51,13 +51,12 @@ def conflicts_main(ctx: click.Context, prompt1: str, prompt2: str, output: Optio
                 conflict['prompt_name'] = prompt2
 
         # Save results
-        if output:
-            with open(output_file_paths["output"], 'w', newline='') as csvfile:
-                fieldnames = ['prompt_name', 'change_instructions']
-                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                writer.writeheader()
-                for conflict in conflicts:
-                    writer.writerow(conflict)
+        with open(output_file_paths["output"], 'w', newline='') as csvfile:
+            fieldnames = ['prompt_name', 'change_instructions']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            for conflict in conflicts:
+                writer.writerow(conflict)
 
         # Provide user feedback
         if not ctx.params.get('quiet', False):
