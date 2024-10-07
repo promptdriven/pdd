@@ -45,6 +45,7 @@
    3. **Analyze Conflicts**:
       - Call the `conflicts_in_prompts` function with the contents of the prompt files, along with the necessary parameters (e.g., strength, temperature).
       - Capture the returned conflicts list, total cost, and model name.
+      - Important: Use `ctx.obj.get('strength', 0.9)` and `ctx.obj.get('temperature', 0)` to get the strength and temperature values.
 
    4. **Replace prompt1 and prompt2 with the actual file paths**:
       - Replace the `prompt_1` and `prompt_2` strings with the actual file paths in the conflicts list for the 'prompt_name' column.
@@ -59,4 +60,4 @@
 
    7. **Error Handling**:
       - Wrap the main logic in a `try-except` block.
-      - Catch exceptions, display error messages, and exit gracefully using `ctx.exit(1)` if necessary.
+      - Catch exceptions, display error messages, and exit gracefully using `sys.exit(1)` if necessary.
