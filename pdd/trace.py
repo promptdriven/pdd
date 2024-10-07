@@ -68,28 +68,28 @@ def trace(code_file: str, code_line: int, prompt_file: str, strength: float = 0.
             "CODE_STR": code_str,
             "PROMPT_FILE": prompt_file
         }
-        
+
         token_count = token_counter(str(trace_input))
         estimated_cost = (input_cost + output_cost) * token_count / 1_000_000
 
         console.print(Panel(f"Running trace LLM with {token_count} tokens. Estimated cost: ${estimated_cost:.6f}"))
-        
+
         llm_output = trace_chain.invoke(trace_input)
 
         # Step 7-10: Process extract_promptline_LLM prompt and invoke the model
         preprocessed_extract_prompt = preprocess(extract_prompt, recursive=False, double_curly_brackets=False)
         extract_template = PromptTemplate.from_template(preprocessed_extract_prompt)
-        
+
         parser = JsonOutputParser(pydantic_object=TraceOutput)
         extract_chain = extract_template | llm | parser
 
         extract_input = {"llm_output": llm_output}
-        
+
         token_count = token_counter(str(extract_input))
         estimated_cost += (input_cost + output_cost) * token_count / 1_000_000
 
         console.print(Panel(f"Running extract LLM with {token_count} tokens. Estimated cost: ${estimated_cost:.6f}"))
-        
+
         try:
             result = extract_chain.invoke(extract_input)
             console.print(f"LLM output: {result}")

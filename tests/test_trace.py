@@ -1,7 +1,8 @@
 import pytest
 from unittest.mock import patch, mock_open, MagicMock
 from io import StringIO
-from pdd.trace import trace
+from pdd.trace import trace, TraceOutput  # Ensure TraceOutput is imported
+from pydantic import BaseModel, Field
 
 # Sample data for tests
 SAMPLE_CODE_FILE = """def foo():
@@ -21,6 +22,11 @@ MOCK_EXTRACTED_LINE = '{"prompt_line": "Line 3: Print greeting"}'
 MOCK_PROMPT_LINE_NUMBER = 3
 MOCK_MODEL_NAME = "mock-model"
 MOCK_TOTAL_COST = 0.000001
+
+# Define a mock TraceOutput class that supports __getitem__
+class TraceOutputMock(TraceOutput):
+    def __getitem__(self, key):
+        return getattr(self, key)
 
 @pytest.fixture
 def mock_environment():
@@ -71,7 +77,9 @@ def mock_trace_chain_invoke():
 def mock_extract_chain_invoke():
     with patch('pdd.trace.PromptTemplate.from_template') as mock_prompt_template:
         mock_chain = MagicMock()
-        mock_chain.invoke.return_value = MOCK_EXTRACTED_LINE
+        # Use TraceOutputMock to support __getitem__
+        trace_output_mock = TraceOutputMock(prompt_line="Line 3: Print greeting")
+        mock_chain.invoke.return_value = trace_output_mock
         mock_prompt_template.return_value.__or__.return_value.__or__.return_value = mock_chain
         yield mock_prompt_template
 
@@ -114,7 +122,7 @@ def test_trace_missing_extract_prompt_file(mock_environment, mock_preprocess, mo
             return mock_open(read_data="Trace LLM prompt content")()
         else:
             raise FileNotFoundError(f"No such file: {file}")
-    
+
     with patch('builtins.open', side_effect=side_effect):
         with pytest.raises(FileNotFoundError) as excinfo:
             trace(
@@ -216,8 +224,8 @@ def test_trace_cost_computation(mock_environment, mock_open_files, mock_preproce
 def test_trace_function(mock_environment):
     """Test the trace function to ensure it matches the correct prompt line."""
     code_file = """def hello_world():
-    print("Hello, World!")
-    return 42
+        print("Hello, World!")
+        return 42
 
 result = hello_world()
 print(f"The answer is {result}")"""
@@ -242,7 +250,9 @@ Print the result of calling the function."""
     with patch('builtins.open', side_effect=mock_open_side_effect):
         with patch('pdd.trace.PromptTemplate.from_template') as mock_prompt_template:
             mock_chain = MagicMock()
-            mock_chain.invoke.return_value = '{"prompt_line": "The function should be named hello_world."}'
+            # Use TraceOutputMock for consistent behavior
+            trace_output_mock = TraceOutputMock(prompt_line="The function should be named hello_world.")
+            mock_chain.invoke.return_value = trace_output_mock
             mock_prompt_template.return_value.__or__.return_value.__or__.return_value = mock_chain
 
             with patch('pdd.trace.process.extractOne', return_value=('The function should be named hello_world.', 100, 2)):
