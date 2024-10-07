@@ -56,14 +56,9 @@ SPLIT_SCRIPT="construct_paths.py"
 SPLIT_EXAMPLE_SCRIPT="split_construct_paths_generate_output_filename.py"
 
 # Example 4: Trace
-TRACE_PROMPT="factorial_calculator_python.prompt"
-TRACE_SCRIPT="src/factorial_calculator.py"
-TRACE_LINE=10  # Example line number
+TRACE_LINE=31  # Example line number
 
 # Example 5: Bug
-BUG_PROMPT="bug_report_python.prompt"
-BUG_SCRIPT="buggy_script.py"
-BUG_PROGRAM="run_buggy_program.py"
 CURRENT_OUTPUT="Incorrect output"
 DESIRED_OUTPUT="Correct output"
 
@@ -223,24 +218,24 @@ python "${EXTENSION_VERIFICATION_PROGRAM}" >& "${EXTENSION_ERROR_LOG}" || true
 run_pdd_command crash --output "${REGRESSION_DIR}/fixed_crash_${EXTENSION_SCRIPT}" \
                       "${PROMPTS_PATH}/${EXTENSION_PROMPT}" \
                       "${REGRESSION_DIR}/${EXTENSION_SCRIPT}" \
-                      "${TRACE_PROGRAM}" \
+                      "${EXTENSION_VERIFICATION_PROGRAM}" \
                       "${EXTENSION_ERROR_LOG}"
 
 # 14. Trace
 log "Running 'trace' command"
 run_pdd_command trace --output "${REGRESSION_DIR}/trace_results.log" \
-                      "${PROMPTS_PATH}/${TRACE_PROMPT}" \
-                      "${REGRESSION_DIR}/${TRACE_SCRIPT}" \
+                      "${PROMPTS_PATH}/${EXTENSION_PROMPT}" \
+                      "${REGRESSION_DIR}/${EXTENSION_SCRIPT}" \
                       "${TRACE_LINE}"
 
 # 15. Bug
 log "Running 'bug' command"
-run_pdd_command bug --output "${REGRESSION_DIR}/test_${BUG_PROMPT}" \
-                   "${PROMPTS_PATH}/${BUG_PROMPT}" \
-                   "${REGRESSION_DIR}/${BUG_SCRIPT}" \
-                   "${REGRESSION_DIR}/${BUG_PROGRAM}" \
-                   "${CURRENT_OUTPUT}" \
-                   "${DESIRED_OUTPUT}"
+run_pdd_command bug --output "${REGRESSION_DIR}/test_bug_${EXTENSION_SCRIPT}" \
+                   "${PROMPTS_PATH}/${EXTENSION_PROMPT}" \
+                   "${REGRESSION_DIR}/${EXTENSION_SCRIPT}" \
+                   "${EXTENSION_VERIFICATION_PROGRAM}" \
+                   "\"${CURRENT_OUTPUT}\"" \
+                   "\"${DESIRED_OUTPUT}\""
 
 # ------------------------------ Completion -------------------------------------
 
