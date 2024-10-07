@@ -25,10 +25,6 @@
 - [ ] VS code for prompt editing/display
 - [ ] during fix rather than just have the fix loop check to see if the example crashed, have it use a llm to check if the results are largely correct still
 - [ ] separate out the failing test and then run fix loop on that
-- [ ] report a bug and generate the associated unit tests and then have it fix the code via a loop 
-- [ ] auto make new unit tests based on failures
-- [ ] debugger that matches prompt lines to code lines
-
 
 ## Bugs
 
