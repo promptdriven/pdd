@@ -27,12 +27,12 @@ print(factorial(5))
 with open("prompt.txt", "w") as f:
     f.write(prompt_content)
 
-with open("code.py", "w") as f:
+with open("code2.py", "w") as f:
     f.write(code_content)
 
 @click.command()
 @click.option("--prompt-file", default="prompt.txt", help="Path to the prompt file")
-@click.option("--code-file", default="code.py", help="Path to the generated code file")
+@click.option("--code-file", default="code2.py", help="Path to the generated code file")
 @click.option("--code-line", default=2, help="Line number in the code file to trace")
 @click.option("--output", default="trace_output.txt", help="Path to save trace analysis results")
 @click.option("--force", is_flag=True, help="Overwrite existing output file")
