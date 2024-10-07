@@ -334,9 +334,6 @@ def test_output_cost_tracking(runner: CliRunner, tmp_path) -> None:
         assert str(prompt_file) in content
         assert str(output_file) in content
 
-@pytest.fixture
-def csv_output():
-    return StringIO()
 
 @patch('os.path.isfile', return_value=True)
 @patch('os.path.getsize', return_value=0)
@@ -368,14 +365,14 @@ def test_track_cost_decorator(mock_getsize, mock_isfile, runner: CliRunner, tmp_
         
         # Check if the command executed successfully
         assert result.exit_code == 0, f"Command failed with error: {result.exception}"
-        
+
         # Verify that the mocked functions were called
         mock_construct_paths.assert_called_once()
         mock_code_generator.assert_called_once()
-        
+
         # Verify that the CSV writer was called with the correct data
         mock_csv_writer.writerow.assert_called()
-        csv_data = mock_csv_writer.writerow.call_args[0][0]
+        csv_data = list(mock_csv_writer.writerow.call_args[0][0])
         assert len(csv_data) == 6  # Verify that all 6 columns are present
         assert csv_data[1] == 'mock_model'
         assert csv_data[2] == 'generate'
