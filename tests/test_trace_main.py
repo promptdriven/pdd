@@ -1,5 +1,3 @@
-# tests/test_trace_main.py
-
 import pytest
 from unittest.mock import Mock, patch
 from typing import Tuple, Optional
@@ -17,6 +15,10 @@ def mock_ctx():
         'strength': 0.5,
         'temperature': 0.0
     }
+    # Configure ctx.exit to raise SystemExit with the exit code
+    def exit_side_effect(code=0):
+        raise SystemExit(code)
+    mock_context.exit.side_effect = exit_side_effect
     return mock_context
 
 
@@ -564,8 +566,7 @@ def test_trace_main_large_code_line_number(mock_rprint, mock_trace, mock_constru
         "python"
     )
 
-    # Assume trace function handles this by returning an indicative value or raising an error
-    # Here, we'll mock it to raise a ValueError
+    # Assume trace function handles this by raising a ValueError
     mock_trace.side_effect = ValueError("Code line number out of range")
 
     # Act

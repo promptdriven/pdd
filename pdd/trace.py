@@ -79,7 +79,7 @@ def trace(code_file: str, code_line: int, prompt_file: str, strength: float = 0.
         # Step 7-10: Process extract_promptline_LLM prompt and invoke the model
         preprocessed_extract_prompt = preprocess(extract_prompt, recursive=False, double_curly_brackets=False)
         extract_template = PromptTemplate.from_template(preprocessed_extract_prompt)
-
+        # llm, token_counter, input_cost, output_cost, _ = llm_selector(.5, temperature)
         parser = JsonOutputParser(pydantic_object=TraceOutput)
         extract_chain = extract_template | llm | parser
 
