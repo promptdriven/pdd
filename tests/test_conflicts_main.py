@@ -14,6 +14,10 @@ def mock_ctx():
         'strength': 0.9,
         'temperature': 0
     }
+    ctx.obj.get.side_effect = lambda key, default: {
+        'strength': 0.9,
+        'temperature': 0
+    }.get(key, default)
     return ctx
 
 
@@ -104,6 +108,7 @@ def test_success_with_output(mock_file, mock_rprint, mock_construct_paths, mock_
     mock_rprint.assert_any_call("[bold]Model used:[/bold] model_xyz")
     mock_rprint.assert_any_call("[bold]Total cost:[/bold] $0.123456")
     mock_rprint.assert_any_call("[bold]Results saved to:[/bold] output.csv")
+
 @patch('csv.DictWriter')
 @patch('pdd.conflicts_main.conflicts_in_prompts')
 @patch('pdd.conflicts_main.construct_paths')
