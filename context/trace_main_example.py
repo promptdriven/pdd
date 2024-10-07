@@ -1,51 +1,68 @@
-from pdd.trace_main import trace_main
 import click
+from pdd.trace_main import trace_main
 
-# Create example files
+# Example content for prompt file
 prompt_content = """
-# Prompt for a simple calculator
-Create a Python function that:
-1. Takes two numbers as input
-2. Adds them together
-3. Returns the result
+# This is a sample prompt file
+Write a function that calculates the factorial of a number.
+The function should be named 'factorial'.
+Include error handling for negative numbers.
 """
 
+# Example content for code file
 code_content = """
-def add_numbers(a: float, b: float) -> float:
-    # Add two numbers together
-    return a + b
+def factorial(n):
+    if n < 0:
+        raise ValueError("Factorial is not defined for negative numbers")
+    if n == 0 or n == 1:
+        return 1
+    else:
+        return n * factorial(n - 1)
 
-result = add_numbers(5.0, 3.0)
-print(f"The sum is: {result}")
+# Test the function
+print(factorial(5))
 """
 
 # Write example files
-with open("output/calculator.prompt", "w") as f:
+with open("prompt.txt", "w") as f:
     f.write(prompt_content)
-with open("output/calculator.py", "w") as f:
+
+with open("code.py", "w") as f:
     f.write(code_content)
 
-# Create a Click context with configuration
-ctx = click.Context(click.Command("trace"))
-ctx.obj = {
-    'quiet': False,  # Set to True to suppress console output
-    'force': True,   # Set to True to overwrite existing output files
-    'strength': 0.7, # Controls LLM analysis strength (0.0 to 1.0)
-    'temperature': 0.0 # Controls LLM randomness (0.0 to 1.0)
-}
+@click.command()
+@click.option("--prompt-file", default="prompt.txt", help="Path to the prompt file")
+@click.option("--code-file", default="code.py", help="Path to the generated code file")
+@click.option("--code-line", default=2, help="Line number in the code file to trace")
+@click.option("--output", default="trace_output.txt", help="Path to save trace analysis results")
+@click.option("--force", is_flag=True, help="Overwrite existing output file")
+@click.option("--quiet", is_flag=True, help="Suppress console output")
+@click.option("--strength", default=0.7, help="Strength of the LLM model (0.0 to 1.0)")
+@click.option("--temperature", default=0.2, help="Temperature for LLM generation (0.0 to 1.0)")
+@click.pass_context
+def cli(ctx, prompt_file, code_file, code_line, output, force, quiet, strength, temperature):
+    """
+    CLI command to trace a line of code using the trace_main function.
 
-# Call trace_main
-try:
+    :param ctx: Click context object.
+    :param prompt_file: Path to the prompt file.
+    :param code_file: Path to the code file.
+    :param code_line: Line number in the code file to trace.
+    :param output: Path to save trace analysis results.
+    :param force: Flag to overwrite existing output file.
+    :param quiet: Flag to suppress console output.
+    :param strength: Strength of the LLM model.
+    :param temperature: Temperature for LLM generation.
+    """
+    # Call trace_main function
     prompt_line, total_cost, model_name = trace_main(
-        ctx=ctx,
-        prompt_file="output/calculator.prompt",
-        code_file="output/calculator.py",
-        code_line=2,  # Line number to trace (the add_numbers function definition)
-        output="output/trace_results.txt"  # Optional: save results to file
+        ctx, prompt_file, code_file, code_line, output
     )
+    
+    if not quiet:
+        click.echo(f"Prompt Line: {prompt_line}")
+        click.echo(f"Total Cost: ${total_cost:.6f}")
+        click.echo(f"Model Used: {model_name}")
 
-    print(f"Prompt line number: {prompt_line}")  # Line in prompt file corresponding to code
-    print(f"Analysis cost: ${total_cost:.6f}")   # Cost in USD
-    print(f"Model used: {model_name}")           # Name of the LLM model used
-except Exception as e:
-    print(f"An error occurred: {e}")
+if __name__ == "__main__":
+    cli()

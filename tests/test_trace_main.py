@@ -1,25 +1,22 @@
+# tests/test_trace_main.py
+
 import pytest
 from unittest.mock import Mock, patch
 from typing import Tuple, Optional
 from click import Context
 from pdd.trace_main import trace_main
-from pdd import DEFAULT_STRENGTH
 
 
 @pytest.fixture
 def mock_ctx():
     """Fixture to create a mock Click context with default parameters."""
     mock_context = Mock(spec=Context)
-    mock_context.obj = {
+    mock_context.params = {
         'force': False,
         'quiet': False,
         'strength': 0.5,
         'temperature': 0.0
     }
-    # Configure ctx.exit to raise SystemExit with the exit code
-    def exit_side_effect(code=0):
-        raise SystemExit(code)
-    mock_context.exit.side_effect = exit_side_effect
     return mock_context
 
 
@@ -38,7 +35,6 @@ def test_trace_main_success(mock_rprint, mock_trace, mock_construct_paths, mock_
 
     # Mock construct_paths return value
     mock_construct_paths.return_value = (
-        {},  # resolved_config
         {
             "prompt_file": "Prompt content here.",
             "code_file": "Code content here."
@@ -66,16 +62,14 @@ def test_trace_main_success(mock_rprint, mock_trace, mock_construct_paths, mock_
         force=False,
         quiet=False,
         command="trace",
-        command_options={"output": output},
-        context_override=None
+        command_options={"output": output}
     )
     mock_trace.assert_called_once_with(
         "Code content here.",
         code_line,
         "Prompt content here.",
         0.5,
-        0.0,
-        time=0.25
+        0.0
     )
     mock_rprint.assert_any_call("[bold green]Trace Analysis Complete[/bold green]")
     mock_rprint.assert_any_call(f"Corresponding prompt line: [cyan]{expected_return[0]}[/cyan]")
@@ -118,7 +112,6 @@ def test_trace_main_value_error(mock_rprint, mock_trace, mock_construct_paths, m
     output = 'output/trace_result.txt'
 
     mock_construct_paths.return_value = (
-        {},  # resolved_config
         {
             "prompt_file": "Valid prompt content.",
             "code_file": "Valid code content."
@@ -140,8 +133,7 @@ def test_trace_main_value_error(mock_rprint, mock_trace, mock_construct_paths, m
         code_line,
         "Valid prompt content.",
         0.5,
-        0.0,
-        time=0.25
+        0.0
     )
     mock_rprint.assert_called_once_with("[bold red]Invalid input: Invalid code line[/bold red]")
 
@@ -160,7 +152,6 @@ def test_trace_main_unexpected_exception(mock_rprint, mock_trace, mock_construct
     output = 'output/trace_result.txt'
 
     mock_construct_paths.return_value = (
-        {},  # resolved_config
         {
             "prompt_file": "Another prompt content.",
             "code_file": "Another code content."
@@ -182,8 +173,7 @@ def test_trace_main_unexpected_exception(mock_rprint, mock_trace, mock_construct
         code_line,
         "Another prompt content.",
         0.5,
-        0.0,
-        time=0.25
+        0.0
     )
     mock_rprint.assert_called_once_with("[bold red]An unexpected error occurred: Unexpected error[/bold red]")
 
@@ -202,7 +192,6 @@ def test_trace_main_no_output(mock_rprint, mock_trace, mock_construct_paths, moc
     output = None
 
     mock_construct_paths.return_value = (
-        {},  # resolved_config
         {
             "prompt_file": "Prompt content without output.",
             "code_file": "Code content without output."
@@ -226,16 +215,14 @@ def test_trace_main_no_output(mock_rprint, mock_trace, mock_construct_paths, moc
         force=False,
         quiet=False,
         command="trace",
-        command_options={"output": output},
-        context_override=None
+        command_options={"output": output}
     )
     mock_trace.assert_called_once_with(
         "Code content without output.",
         code_line,
         "Prompt content without output.",
         0.5,
-        0.0,
-        time=0.25
+        0.0
     )
     mock_rprint.assert_any_call("[bold green]Trace Analysis Complete[/bold green]")
     mock_rprint.assert_any_call(f"Corresponding prompt line: [cyan]{'25'}[/cyan]")
@@ -257,10 +244,9 @@ def test_trace_main_quiet_mode(mock_rprint, mock_trace, mock_construct_paths, mo
     output = 'output/trace_result_quiet.txt'
 
     # Update context to set 'quiet' to True
-    mock_ctx.obj['quiet'] = True
+    mock_ctx.params['quiet'] = True
 
     mock_construct_paths.return_value = (
-        {},  # resolved_config
         {
             "prompt_file": "Quiet prompt content.",
             "code_file": "Quiet code content."
@@ -286,16 +272,14 @@ def test_trace_main_quiet_mode(mock_rprint, mock_trace, mock_construct_paths, mo
         force=False,
         quiet=True,
         command="trace",
-        command_options={"output": output},
-        context_override=None
+        command_options={"output": output}
     )
     mock_trace.assert_called_once_with(
         "Quiet code content.",
         code_line,
         "Quiet prompt content.",
         0.5,
-        0.0,
-        time=0.25
+        0.0
     )
     mock_rprint.assert_not_called()
 
@@ -314,10 +298,9 @@ def test_trace_main_force_overwrite(mock_rprint, mock_trace, mock_construct_path
     output = 'output/trace_result_force.txt'
 
     # Update context to set 'force' to True
-    mock_ctx.obj['force'] = True
+    mock_ctx.params['force'] = True
 
     mock_construct_paths.return_value = (
-        {},  # resolved_config
         {
             "prompt_file": "Force prompt content.",
             "code_file": "Force code content."
@@ -343,16 +326,14 @@ def test_trace_main_force_overwrite(mock_rprint, mock_trace, mock_construct_path
         force=True,
         quiet=False,
         command="trace",
-        command_options={"output": output},
-        context_override=None
+        command_options={"output": output}
     )
     mock_trace.assert_called_once_with(
         "Force code content.",
         code_line,
         "Force prompt content.",
         0.5,
-        0.0,
-        time=0.25
+        0.0
     )
     mock_rprint.assert_any_call("[bold green]Trace Analysis Complete[/bold green]")
     mock_rprint.assert_any_call(f"Corresponding prompt line: [cyan]{'40'}[/cyan]")
@@ -374,7 +355,6 @@ def test_trace_main_zero_cost(mock_rprint, mock_trace, mock_construct_paths, moc
     output = 'output/trace_result_zero_cost.txt'
 
     mock_construct_paths.return_value = (
-        {},  # resolved_config
         {
             "prompt_file": "Zero cost prompt content.",
             "code_file": "Zero cost code content."
@@ -400,16 +380,14 @@ def test_trace_main_zero_cost(mock_rprint, mock_trace, mock_construct_paths, moc
         force=False,
         quiet=False,
         command="trace",
-        command_options={"output": output},
-        context_override=None
+        command_options={"output": output}
     )
     mock_trace.assert_called_once_with(
         "Zero cost code content.",
         code_line,
         "Zero cost prompt content.",
         0.5,
-        0.0,
-        time=0.25
+        0.0
     )
     mock_rprint.assert_any_call("[bold green]Trace Analysis Complete[/bold green]")
     mock_rprint.assert_any_call(f"Corresponding prompt line: [cyan]{'35'}[/cyan]")
@@ -431,11 +409,10 @@ def test_trace_main_missing_strength_temperature(mock_rprint, mock_trace, mock_c
     output = 'output/trace_result_missing_params.txt'
 
     # Remove 'strength' and 'temperature' from params
-    mock_ctx.obj.pop('strength', None)
-    mock_ctx.obj.pop('temperature', None)
+    mock_ctx.params.pop('strength', None)
+    mock_ctx.params.pop('temperature', None)
 
     mock_construct_paths.return_value = (
-        {},  # resolved_config
         {
             "prompt_file": "Missing params prompt content.",
             "code_file": "Missing params code content."
@@ -461,16 +438,14 @@ def test_trace_main_missing_strength_temperature(mock_rprint, mock_trace, mock_c
         force=False,
         quiet=False,
         command="trace",
-        command_options={"output": output},
-        context_override=None
+        command_options={"output": output}
     )
     mock_trace.assert_called_once_with(
         "Missing params code content.",
         code_line,
         "Missing params prompt content.",
-        DEFAULT_STRENGTH,
-        0.0,   # Default temperature
-        time=0.25
+        0.5,  # Default strength
+        0.0   # Default temperature
     )
     mock_rprint.assert_any_call("[bold green]Trace Analysis Complete[/bold green]")
     mock_rprint.assert_any_call(f"Corresponding prompt line: [cyan]{'50'}[/cyan]")
@@ -492,7 +467,6 @@ def test_trace_main_output_file_write_failure(mock_rprint, mock_trace, mock_cons
     output = 'output/trace_result_write_fail.txt'
 
     mock_construct_paths.return_value = (
-        {},  # resolved_config
         {
             "prompt_file": "Prompt content for write failure.",
             "code_file": "Code content for write failure."
@@ -517,10 +491,9 @@ def test_trace_main_output_file_write_failure(mock_rprint, mock_trace, mock_cons
         code_line,
         "Prompt content for write failure.",
         0.5,
-        0.0,
-        time=0.25
+        0.0
     )
-    mock_rprint.assert_called_with("[bold red]Error saving trace results: Cannot write to file[/bold red]")
+    mock_rprint.assert_called_once_with("[bold red]An unexpected error occurred: Cannot write to file[/bold red]")
 
 
 @patch('pdd.trace_main.construct_paths')
@@ -537,7 +510,6 @@ def test_trace_main_empty_files(mock_rprint, mock_trace, mock_construct_paths, m
     output = 'output/trace_result_empty.txt'
 
     mock_construct_paths.return_value = (
-        {},  # resolved_config
         {
             "prompt_file": "",
             "code_file": ""
@@ -560,8 +532,7 @@ def test_trace_main_empty_files(mock_rprint, mock_trace, mock_construct_paths, m
         code_line,
         "",
         0.5,
-        0.0,
-        time=0.25
+        0.0
     )
     mock_rprint.assert_any_call("[bold green]Trace Analysis Complete[/bold green]")
     mock_rprint.assert_any_call(f"Corresponding prompt line: [cyan]{'0'}[/cyan]")
@@ -583,7 +554,6 @@ def test_trace_main_large_code_line_number(mock_rprint, mock_trace, mock_constru
     output = 'output/trace_result_large_code_line.txt'
 
     mock_construct_paths.return_value = (
-        {},  # resolved_config
         {
             "prompt_file": "Prompt content for large code line.",
             "code_file": "Code content with fewer lines."
@@ -594,7 +564,8 @@ def test_trace_main_large_code_line_number(mock_rprint, mock_trace, mock_constru
         "python"
     )
 
-    # Assume trace function handles this by raising a ValueError
+    # Assume trace function handles this by returning an indicative value or raising an error
+    # Here, we'll mock it to raise a ValueError
     mock_trace.side_effect = ValueError("Code line number out of range")
 
     # Act
@@ -608,7 +579,6 @@ def test_trace_main_large_code_line_number(mock_rprint, mock_trace, mock_constru
         code_line,
         "Prompt content for large code line.",
         0.5,
-        0.0,
-        time=0.25
+        0.0
     )
     mock_rprint.assert_called_once_with("[bold red]Invalid input: Code line number out of range[/bold red]")
