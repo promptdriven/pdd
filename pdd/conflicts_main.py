@@ -39,8 +39,8 @@ def conflicts_main(ctx: click.Context, prompt1: str, prompt2: str, output: Optio
         prompt2_content = input_strings["prompt2"]
 
         # Analyze conflicts
-        strength = ctx.params.get('strength', 0.9)
-        temperature = ctx.params.get('temperature', 0)
+        strength = ctx.obj.get('strength', 0.9)
+        temperature = ctx.obj.get('temperature', 0)
         conflicts, total_cost, model_name = conflicts_in_prompts(prompt1_content, prompt2_content, strength, temperature)
 
         # Replace prompt1 and prompt2 with actual file paths
