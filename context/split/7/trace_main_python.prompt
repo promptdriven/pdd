@@ -1,0 +1,66 @@
+
+% You are an expert Python engineer. Your goal is to write the `trace_main` function that will be part of the `pdd` command-line program. This function will handle the core logic for the `trace` command.
+
+<include>context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+    - `ctx` (`click.Context`): The Click context object containing CLI options and parameters.
+    - `prompt_file` (`str`): Path to the prompt file.
+    - `code_file` (`str`): Path to the generated code file.
+    - `code_line` (`int`): Line number in the code file to trace back to the prompt.
+    - `output` (`Optional[str]`): Path to save the trace analysis results.
+
+    Outputs:
+    - Returns a tuple containing (`str`, `float`, `str`):
+      - `str`: The line number in the prompt file corresponding to the code line.
+      - `float`: The total cost of the operation.
+      - `str`: The name of the model used.
+
+<examples>
+   % Here is how to use the Python Click library to create a command line program:
+   <click_example>
+   <include>context/click_example.py</include>
+   </click_example>
+
+   % Here are examples of how to use internal modules:
+   <internal_example_modules>
+      - Here is an example of how to use the `construct_paths` function:
+      <construct_paths_example>
+      <include>context/construct_paths_example.py</include>
+      </construct_paths_example>
+
+      - Here is an example of how to use the `trace` function:
+      <trace_example>
+      <include>context/trace_example.py</include>
+      </trace_example>
+   </internal_example_modules>
+</examples>
+
+% The function should perform the following steps:
+   1. **Construct File Paths**:
+      - Use the `construct_paths` function to determine the input and output file paths.
+      - Ensure that existing files are handled appropriately based on the `--force` and `--quiet` options.
+
+   2. **Load Input Files**:
+      - Read the contents of `prompt_file` and `code_file`.
+      - Handle any file reading exceptions and provide informative error messages.
+
+   3. **Perform Trace Analysis**:
+      - Call the `trace` function with the contents of the code and prompt files, along with the line number, and necessary parameters (e.g., `strength`, `temperature`).
+      - Capture the returned prompt line (`str`), total cost (`float`), and model name (`str`).
+
+   4. **Save Results**:
+      - Write the trace analysis results to a file.
+      - Include the total cost and model name in the output.
+
+   5. **Provide User Feedback**:
+      - Use `rprint` from the Rich library to display messages to the user, indicating success or failure.
+      - Respect the verbosity levels determined by the `--quiet` option.
+
+   6. **Error Handling**:
+      - Wrap the main logic in a `try-except` block.
+      - Catch exceptions, display error messages using `rprint`, and exit gracefully using `ctx.exit(1)` if necessary.
+
+% Ensure that the function adheres to the existing codebase's coding style, including proper typing annotations, docstrings, and exception handling.
+

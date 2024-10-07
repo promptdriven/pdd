@@ -1,0 +1,129 @@
+<context>
+% You are an expert Python engineer. Your goal is to write a Python command line program, "pdd". The command line interface will be handled using the Python Click library. It will contain the 'cli' function.
+
+<include>context/python_preamble.prompt</include>
+
+% Here is a detailed description of the program functionality:
+    <program_description>
+    <include>./README.md</include>
+    </program_description>
+
+% Here is the directory structure of the program:
+    - `pdd/pdd/*.py` (including this file `cli.py`)
+    - `pdd/prompts`
+    - `pdd/context`
+    - `pdd/data`
+
+<examples>
+    % Here is how to use the Python Click library to create a command line program:
+    <click_example>
+    <include>context/click_example.py</include>
+    </click_example>
+</examples>
+
+<instructions>
+    % Some of the `pdd` commands will have the same name as some of the below functions. Be sure to import the functions with different names to avoid conflicts (e.g., `preprocess` needs to be imported as `preprocess_func` to prevent conflict with Click commands). Make sure this happens for others too, like `split`, `change`, `trace`, etc. Also, the module name will be the same as the imported function name (e.g., `from .code_generator import code_generator`).
+
+    % Here are examples of how to use internal modules:
+
+    <internal_example_modules>
+        - The `track_cost` decorator has already been defined in another module. Here is an example of how to use the `track_cost` decorator:
+        <track_cost_example>
+        <include>./context/track_cost_example.py</include>
+        </track_cost_example>
+
+        - Here is how to use the `construct_paths` function to load the input files and create the output file paths:
+        <construct_paths_example>
+        <include>context/construct_paths_example.py</include>
+        </construct_paths_example>
+
+        - `generate` command: To generate runnable code from a prompt file, use `code_generator`. Here is an example of how to generate code from the prompt from a file:
+        <code_generator_example>
+        <include>context/code_generator_example.py</include>
+        </code_generator_example>
+
+        - `example` command: To generate example code from a code file, use `context_generator`. Here is an example of how to generate an example from a code file:
+        <context_generator_example>
+        <include>context/context_generator_example.py</include>
+        </context_generator_example>
+
+        - `test` command: To generate a unit test from code and its prompt file, use `generate_test`. Here is an example of how to generate a unit test from a code file:
+        <generate_test_example>
+        <include>context/generate_test_example.py</include>
+        </generate_test_example>
+
+        - `preprocess` command: To preprocess a prompt from a prompt file, use `preprocess_func`. Here is an example of how to preprocess the prompt from a file:
+        <preprocess_example>
+        <include>context/preprocess_example.py</include>
+        </preprocess_example>
+
+        - `preprocess --xml` sub-command: To preprocess a prompt from a prompt file and output the result in XML format, use `xml_tagger`. Here is an example of how to preprocess the prompt from a file and output the result in XML format:
+        <xml_tagger_example>
+        <include>context/xml_tagger_example.py</include>
+        </xml_tagger_example>
+
+        - `fix` command: To fix errors in code and unit tests based on error messages, use `fix_errors_from_unit_tests`. Be sure to load the required files for this function and only save the output files if there is an update. Note that the `error_file` argument does not need to exist beforehand. Here is an example of how to fix errors in code and unit tests based on error messages:
+        <fix_errors_from_unit_tests_example>
+        <include>context/fix_errors_from_unit_tests_example.py</include>
+        </fix_errors_from_unit_tests_example>
+
+        - `fix --loop` sub-command: To loop on the above fix errors in code and unit tests, use the `fix_error_loop` function. Be sure to load the `prompt_file` as the function expects the prompt string and not the prompt filepath. Here is an example of how to loop on the above fix errors in code and unit tests:
+        <fix_error_loop_example>
+        <include>context/fix_error_loop_example.py</include>
+        </fix_error_loop_example>
+
+        - `split` command: To split a prompt file into multiple prompt files, use the `split` function. Here is an example of how to split a prompt file into multiple prompt files:
+        <split_example>
+        <include>context/split_example.py</include>
+        </split_example>
+
+        - `change` command: To change the prompt file, use the `change` function. Keep in mind that the change prompt is also an input file that needs to be loaded by `construct_paths`. Here is an example of how to change the prompt file:
+        <change_example>
+        <include>context/change_example.py</include>
+        </change_example>
+
+        - `change --csv` sub-command: To change the prompt file using a CSV file, use the `process_csv_change` function. Here is an example of how to change the prompt file using a CSV file:
+        <process_csv_change_example>
+        <include>context/process_csv_change_example.py</include>
+        </process_csv_change_example>
+
+        - `update` command: To update the prompt file, use the `update_prompt` function. Here is an example of how to update the prompt file:
+        <update_prompt_example>
+        <include>context/update_prompt_example.py</include>
+        </update_prompt_example>
+
+        - `update --git` sub-command: To update the prompt file like above but without having to have the original code file, use the `git_update` function. Here is an example of how to update the prompt file by retrieving the original code file from a git repository:
+        <git_update_example>
+        <include>context/git_update_example.py</include>
+        </git_update_example>
+
+        - `detect` command: To analyze a list of prompt files and a change description to determine which prompts need to be changed, use the `detect_change` function. Here is an example of how to detect prompts that need changes:
+        <detect_change_example>
+        <include>context/detect_change_example.py</include>
+        </detect_change_example>
+
+        - `conflicts` command: To analyze two prompt files to find conflicts between them and suggest how to resolve those conflicts, use the `conflicts_main` function. Here is an example of how to use the `conflicts_main` function:
+        <conflicts_main_example>
+        <include>context/conflicts_main_example.py</include>
+        </conflicts_main_example>
+
+        - `crash` command: To fix errors in a code module that caused a program to crash, use the `fix_code_module_errors` function. Here is an example of how to fix errors in a code module that caused a program to crash:
+        <fix_code_module_errors_example>
+        <include>context/fix_code_module_errors_example.py</include>
+        </fix_code_module_errors_example>
+
+        - `trace` command: To trace the execution of a code module and generate a trace file, use the `trace` function. Here is an example of how to trace the execution of a code module:
+        <trace_example>
+        <include>context/trace_example.py</include>
+        </trace_example>
+
+        - `bug` command: To create a unit test from a bug in a code module, use the `bug_to_unit_test` function. Here is an example of how to create a unit test from a bug in a code module:
+        <bug_to_unit_test_example>
+        <include>context/bug_to_unit_test_example.py</include>
+        </bug_to_unit_test_example>
+
+    </internal_example_modules>
+
+    % `install_completion` command: Enhance the shell completion installation process by determining the correct paths for different shells and ensuring the source command is added to the shell's RC file only if it's not already present. Use a helper function to manage these paths.
+
+</instructions>
