@@ -438,27 +438,36 @@ def change(ctx, input_prompt_file: str, input_code_file: str, change_prompt_file
 
 @cli.command()
 @click.argument('input_prompt_file', type=click.Path(exists=True))
-@click.argument('input_code_file', type=click.Path(exists=True))
 @click.argument('modified_code_file', type=click.Path(exists=True))
+@click.argument('input_code_file', type=click.Path(exists=True), required=False)
 @click.option('--output', type=click.Path(), help='Specify where to save the modified prompt file.')
 @click.option('--git', is_flag=True, help="Use git history to find the original code file instead of providing 'INPUT_CODE_FILE'.")
 @click.pass_context
 @track_cost
-def update(ctx, input_prompt_file: str, input_code_file: str, modified_code_file: str, output: Optional[str], git: bool) -> Tuple[str, float, str]:
+def update(ctx, input_prompt_file: str, modified_code_file: str, input_code_file: Optional[str], output: Optional[str], git: bool) -> Tuple[str, float, str]:
     """Update the original prompt file based on the original code and the modified code."""
     input_files = {
         'input_prompt_file': input_prompt_file,
-        'input_code_file': input_code_file,
         'modified_code_file': modified_code_file
     }
+    if input_code_file:
+        input_files['input_code_file'] = input_code_file
     command_options = {'output': output, 'git': git}
     
     try:
+        input_strings, output_file_paths, _ = construct_paths(
+            input_file_paths=input_files,
+            force=ctx.obj['force'],
+            quiet=ctx.obj['quiet'],
+            command="update",
+            command_options=command_options
+        )
+
         if git:
             # Use git to retrieve the original code file
             original_code = git_update(
-                input_prompt_file=input_prompt_file,
-                modified_code_file=modified_code_file,
+                input_prompt = input_strings['input_prompt_file'],
+                modified_code_file = modified_code_file,
                 strength=ctx.obj['strength'],
                 temperature=ctx.obj['temperature']
             )
@@ -467,13 +476,8 @@ def update(ctx, input_prompt_file: str, input_code_file: str, modified_code_file
             else:
                 raise Exception("Git update failed to retrieve original code.")
         else:
-            input_strings, output_file_paths, _ = construct_paths(
-                input_file_paths=input_files,
-                force=ctx.obj['force'],
-                quiet=ctx.obj['quiet'],
-                command="update",
-                command_options=command_options
-            )
+            if not input_code_file:
+                raise click.UsageError("INPUT_CODE_FILE is required when not using --git")
             
             modified_prompt, total_cost, model_name = update_prompt(
                 input_strings['input_prompt_file'],
@@ -483,8 +487,8 @@ def update(ctx, input_prompt_file: str, input_code_file: str, modified_code_file
                 ctx.obj['temperature']
             )
         
-            with open(output_file_paths['output'], 'w') as f:
-                f.write(modified_prompt)
+        with open(output_file_paths['output'], 'w') as f:
+            f.write(modified_prompt)
         
         if not ctx.obj['quiet']:
             rprint(f"Updated prompt saved to: {output_file_paths['output']}" if not git else "Prompt updated via git.")
