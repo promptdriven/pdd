@@ -61,6 +61,7 @@ def update_prompt(input_prompt: str, input_code: str, modified_code: str, streng
         console.print(f"Estimated cost: ${update_cost:.6f}")
 
         # Step 6: Create Langchain LCEL template for extract_prompt_update_LLM
+        llm, token_counter, input_cost, output_cost, _ = llm_selector(.5, temperature)
         extract_prompt_template = PromptTemplate.from_template(extract_prompt_update_llm)
         extract_chain = extract_prompt_template | llm | JsonOutputParser()
 
