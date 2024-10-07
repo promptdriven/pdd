@@ -3,7 +3,6 @@ import pytest
 from unittest.mock import patch, mock_open, MagicMock
 import csv
 from io import StringIO
-from datetime import datetime
 from click.testing import CliRunner
 from pdd.cli import cli
 
@@ -173,8 +172,7 @@ def test_detect_command(runner: CliRunner, tmp_path) -> None:
     assert result.exit_code == 0
     assert "Analysis results saved to:" in result.output
     assert output_file.exists()
-
-def test_conflicts_command(runner: CliRunner, tmp_path) -> None:
+def test_conflicts_command(runner, tmp_path):
     """Test the conflicts command of the CLI."""
     prompt1 = tmp_path / "prompt1.txt"
     prompt1.write_text("Generate a Python function to add two numbers")
@@ -182,17 +180,18 @@ def test_conflicts_command(runner: CliRunner, tmp_path) -> None:
     prompt2.write_text("Generate a Python function to subtract two numbers")
     output_file = tmp_path / "conflicts_analysis.csv"
 
-    # Mock the function that interacts with the LLM to return consistent keys
-    with patch('pdd.cli.conflicts_in_prompts', return_value=([{
+    # Mock the function that interacts with the LLM to return consistent results
+    with patch('pdd.conflicts_main.conflicts_in_prompts', return_value=([{
         'prompt_name': 'prompt1.prompt',
-        'change_instructions': 'Update prompt1.prompt to include more specific details about authentication methods and error handling in Firebase Cloud Functions.'
+        'change_instructions': 'Update prompt1.prompt to include more specific details about the addition function.'
     }, {
         'prompt_name': 'prompt2.prompt',
-        'change_instructions': 'Modify prompt2.prompt to include information about integrating the User class with Firebase authentication and how it relates to the auth_helpers module.'
+        'change_instructions': 'Modify prompt2.prompt to include error handling for subtraction.'
     }], 0.0, 'mock_model')):
         result = runner.invoke(cli, ['conflicts', str(prompt1), str(prompt2), '--output', str(output_file)])
         assert result.exit_code == 0, f"Command failed with error: {result.output}"
-        assert "Conflict analysis results saved to:" in result.output
+        assert "Conflict analysis completed successfully." in result.output
+        assert "Results saved to:" in result.output
         assert output_file.exists()
 
         # Read and verify the CSV content
@@ -201,16 +200,15 @@ def test_conflicts_command(runner: CliRunner, tmp_path) -> None:
 
         # Define the desired output
         desired_output = """prompt_name,change_instructions
-prompt1.prompt,Update prompt1.prompt to include more specific details about authentication methods and error handling in Firebase Cloud Functions.
-prompt2.prompt,Modify prompt2.prompt to include information about integrating the User class with Firebase authentication and how it relates to the auth_helpers module."""
+prompt1.prompt,Update prompt1.prompt to include more specific details about the addition function.
+prompt2.prompt,Modify prompt2.prompt to include error handling for subtraction."""
 
         # Assert content matches the desired output
         assert content == desired_output, f"Output content does not match. Expected:\n{desired_output}\n\nGot:\n{content}"
 
 def test_conflicts_command_csv():
     """
-    Test the `conflicts` command of the PDD CLI.
-    This test checks command execution, output file creation, content verification, and cost tracking.
+    Test the `conflicts` command of the PDD CLI with cost tracking.
     """
     runner = CliRunner()
     with runner.isolated_filesystem():
@@ -221,12 +219,12 @@ def test_conflicts_command_csv():
             f.write("Test prompt 2")
 
         # Mock the conflicts_in_prompts function to return expected results
-        with patch('pdd.cli.conflicts_in_prompts', return_value=([{
+        with patch('pdd.conflicts_main.conflicts_in_prompts', return_value=([{
             'prompt_name': 'prompt1.prompt',
-            'change_instructions': 'Update prompt1.prompt to include more specific details about authentication methods and error handling in Firebase Cloud Functions.'
+            'change_instructions': 'Update prompt1.prompt with additional context.'
         }, {
             'prompt_name': 'prompt2.prompt',
-            'change_instructions': 'Modify prompt2.prompt to include information about integrating the User class with Firebase authentication and how it relates to the auth_helpers module.'
+            'change_instructions': 'Modify prompt2.prompt to better align with the project goals.'
         }], 0.0, 'mock_model')):
             # Run the conflicts command with necessary options
             result = runner.invoke(cli, [
@@ -253,25 +251,25 @@ def test_conflicts_command_csv():
 
             # Define the desired output
             desired_output = """prompt_name,change_instructions
-prompt1.prompt,Update prompt1.prompt to include more specific details about authentication methods and error handling in Firebase Cloud Functions.
-prompt2.prompt,Modify prompt2.prompt to include information about integrating the User class with Firebase authentication and how it relates to the auth_helpers module."""
-        
-        # Assert content matches the desired output
-        assert content == desired_output, f"Output content does not match. Expected:\n{desired_output}\n\nGot:\n{content}"
-        
-        # Check if the cost file was created and has the correct format
-        assert os.path.exists('cost.csv'), "Cost file was not created"
-        
-        with open('cost.csv', 'r') as f:
-            csv_reader = csv.DictReader(f)
-            rows = list(csv_reader)
-            assert len(rows) == 1, "Cost file should contain one data row"
-            row = rows[0]
-            assert set(row.keys()) == {'timestamp', 'model', 'command', 'cost', 'input_files', 'output_files'}, "Cost file has incorrect columns"
-            assert row['command'] == 'conflicts', "Incorrect command in cost file"
-            assert float(row['cost']) > 0, "Cost should be greater than 0"
-            assert 'prompt1.prompt|prompt2.prompt' in row['input_files'], "Input files not correctly recorded"
-            assert 'conflicts_analysis.csv' in row['output_files'], "Output file not correctly recorded"
+prompt1.prompt,Update prompt1.prompt with additional context.
+prompt2.prompt,Modify prompt2.prompt to better align with the project goals."""
+
+            # Assert content matches the desired output
+            assert content == desired_output, f"Output content does not match. Expected:\n{desired_output}\n\nGot:\n{content}"
+
+            # Check if the cost file was created and has the correct format
+            assert os.path.exists('cost.csv'), "Cost file was not created"
+
+            with open('cost.csv', 'r') as f:
+                csv_reader = csv.DictReader(f)
+                rows = list(csv_reader)
+                assert len(rows) == 1, "Cost file should contain one data row"
+                row = rows[0]
+                assert set(row.keys()) == {'timestamp', 'model', 'command', 'cost', 'input_files', 'output_files'}, "Cost file has incorrect columns"
+                assert row['command'] == 'conflicts', "Incorrect command in cost file"
+                assert float(row['cost']) == 0.0, "Cost should be zero in mock"
+                assert row['input_files'] == 'prompt1.prompt;prompt2.prompt', "Input files not correctly recorded"
+                assert 'conflicts_analysis.csv' in row['output_files'], "Output file not correctly recorded"
 
 def test_crash_command(runner: CliRunner, tmp_path) -> None:
     """Test the crash command of the CLI."""
