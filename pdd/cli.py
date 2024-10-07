@@ -24,7 +24,7 @@ from .git_update import git_update
 from .detect_change import detect_change
 from .conflicts_main import conflicts_main
 from .fix_code_module_errors import fix_code_module_errors
-from .trace import trace as trace_func
+from .trace_main import trace_main
 from .bug_to_unit_test import bug_to_unit_test
 from .track_cost import track_cost
 
@@ -706,37 +706,7 @@ def bug(
 @track_cost
 def trace(ctx, prompt_file: str, code_file: str, code_line: int, output: Optional[str]) -> Tuple[str, float, str]:
     """Find the associated line number between a prompt file and the generated code."""
-    input_files = {
-        'prompt_file': prompt_file,
-        'code_file': code_file
-    }
-    command_options = {'output': output}
-    
-    try:
-        # Assuming trace function takes code_file, code_line, prompt_file
-        prompt_line, total_cost, model_name = trace_func(
-            code_file=code_file,
-            code_line=code_line,
-            prompt_file=prompt_file,
-            strength=ctx.obj['strength'],
-            temperature=ctx.obj['temperature']
-        )
-        
-        with open(output, 'w') as f:
-            f.write(f"Code Line {code_line} in {code_file} corresponds to Prompt Line {prompt_line} in {prompt_file}.\n")
-            f.write(f"Total Cost: ${total_cost:.6f}\n")
-            f.write(f"Model Used: {model_name}\n")
-        
-        if not ctx.obj['quiet']:
-            rprint(f"Trace analysis results saved to: {output}")
-            rprint(f"Corresponding prompt line: {prompt_line}")
-            rprint(f"Total Cost: ${total_cost:.6f}")
-            rprint(f"Model Used: {model_name}")
-        
-        return prompt_line, total_cost, model_name
-    except Exception as e:
-        rprint(f"[bold red]Error performing trace analysis: {str(e)}[/bold red]")
-        ctx.exit(1)
+    return trace_main(ctx, prompt_file, code_file, code_line, output) 
 
 if __name__ == '__main__':
     cli()
