@@ -35,15 +35,25 @@ def trace(code_file: str, code_line: int, prompt_file: str, strength: float = 0.
         if not pdd_path:
             raise ValueError("PDD_PATH environment variable is not set")
 
-        with open(f"{pdd_path}/prompts/trace_LLM.prompt", "r") as f:
-            trace_prompt = f.read()
-        with open(f"{pdd_path}/prompts/extract_promptline_LLM.prompt", "r") as f:
-            extract_prompt = f.read()
+        trace_prompt_path = f"{pdd_path}/prompts/trace_LLM.prompt"
+        extract_prompt_path = f"{pdd_path}/prompts/extract_promptline_LLM.prompt"
+
+        try:
+            with open(trace_prompt_path, "r") as f:
+                trace_prompt = f.read()
+        except FileNotFoundError:
+            raise FileNotFoundError(f"No such file: {trace_prompt_path}")
+
+        try:
+            with open(extract_prompt_path, "r") as f:
+                extract_prompt = f.read()
+        except FileNotFoundError:
+            raise FileNotFoundError(f"No such file: {extract_prompt_path}")
 
         # Step 2: Find the substring of the code_file that matches the code_line
         code_lines = code_file.splitlines()
         if code_line < 1 or code_line > len(code_lines):
-            raise ValueError(f"Invalid code_line: {code_line}")
+            raise ValueError(f"Invalid code_line: {code_line}. File has {len(code_lines)} lines.")
         code_str = code_lines[code_line - 1]
 
         # Step 3-6: Process trace_LLM prompt and invoke the model
@@ -80,21 +90,24 @@ def trace(code_file: str, code_line: int, prompt_file: str, strength: float = 0.
 
         console.print(Panel(f"Running extract LLM with {token_count} tokens. Estimated cost: ${estimated_cost:.6f}"))
         
-        result = extract_chain.invoke(extract_input)
-
-        # Ensure result is a dictionary
-        if isinstance(result, str):
-            result = json.loads(result)
-        
-        if not isinstance(result, dict):
-            raise ValueError(f"Unexpected result type: {type(result)}")
-
-        if 'prompt_line' not in result:
-            raise ValueError(f"'prompt_line' not found in result: {result}")
+        try:
+            result = extract_chain.invoke(extract_input)
+            console.print(f"LLM output: {result}")
+            if isinstance(result, str):
+                result_dict = json.loads(result)
+                result = TraceOutput(**result_dict)
+        except json.JSONDecodeError as e:
+            console.print(f"[bold red]Error: Failed to parse JSON - {e}[/bold red]")
+            raise
+        except Exception as e:
+            console.print(f"[bold red]Error: Failed to create TraceOutput object - {e}[/bold red]")
+            raise
 
         # Step 11: Find the line of the prompt_file that matches the prompt_line
         prompt_lines = prompt_file.splitlines()
         best_match = process.extractOne(result['prompt_line'], prompt_lines)
+        if best_match is None:
+            raise ValueError("Could not find a matching line in the prompt file")
         prompt_line = prompt_lines.index(best_match[0]) + 1
 
         # Step 12: Return the results

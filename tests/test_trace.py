@@ -17,7 +17,7 @@ Line 4: Return success
 
 # Mocked responses
 MOCK_TRACE_OUTPUT = "Extracted line from trace LLM"
-MOCK_EXTRACTED_LINE = "Line 3: Print greeting"
+MOCK_EXTRACTED_LINE = '{"prompt_line": "Line 3: Print greeting"}'
 MOCK_PROMPT_LINE_NUMBER = 3
 MOCK_MODEL_NAME = "mock-model"
 MOCK_TOTAL_COST = 0.000001
@@ -122,18 +122,17 @@ def test_trace_missing_extract_prompt_file(mock_environment, mock_preprocess, mo
                 code_line=2,
                 prompt_file=SAMPLE_PROMPT_FILE
             )
-        assert "No such file: extract_promptline_LLM.prompt" in str(excinfo.value)
+        assert "No such file: /fake/path/prompts/extract_promptline_LLM.prompt" in str(excinfo.value)
 
 def test_trace_missing_trace_prompt_file(mock_environment, mock_preprocess, mock_llm_selector, mock_fuzzywuzzy_process):
-    with patch('builtins.open', side_effect=FileNotFoundError("No such file: trace_LLM.prompt")):
+    with patch('builtins.open', side_effect=FileNotFoundError("No such file: /fake/path/prompts/trace_LLM.prompt")):
         with pytest.raises(FileNotFoundError) as excinfo:
             trace(
                 code_file=SAMPLE_CODE_FILE,
                 code_line=2,
                 prompt_file=SAMPLE_PROMPT_FILE
             )
-        assert "No such file: trace_LLM.prompt" in str(excinfo.value)
-
+        assert "No such file: /fake/path/prompts/trace_LLM.prompt" in str(excinfo.value)
 
 def test_trace_invalid_code_line(mock_environment, mock_open_files, mock_preprocess, mock_llm_selector, mock_fuzzywuzzy_process):
     invalid_code_line = 10  # Out of range
@@ -193,8 +192,9 @@ def test_trace_cost_computation(mock_environment, mock_open_files, mock_preproce
                                 mock_extract_chain_invoke, mock_fuzzywuzzy_process):
     with patch('pdd.trace.llm_selector') as mock_selector:
         mock_llm = MagicMock()
-        token_counter = MagicMock(side_effect=lambda x: len(x.split()))
-        mock_selector.return_value = (mock_llm, token_counter, 0.000001, 0.000002, MOCK_MODEL_NAME)
+        token_counter = MagicMock(side_effect=[26, 4])  # 26 for trace, 4 for extract
+        input_cost, output_cost = 0.000001, 0.000002
+        mock_selector.return_value = (mock_llm, token_counter, input_cost, output_cost, MOCK_MODEL_NAME)
 
         result = trace(
             code_file=SAMPLE_CODE_FILE,
@@ -205,18 +205,13 @@ def test_trace_cost_computation(mock_environment, mock_open_files, mock_preproce
         )
 
         # Calculate expected cost
-        token_count_trace = len(SAMPLE_CODE_FILE.split()) + len(SAMPLE_PROMPT_FILE.split())
-        cost_trace = (0.000001 * token_count_trace) / 1_000_000
-
-        token_count_extract = len(MOCK_TRACE_OUTPUT.split())
-        cost_extract = (0.000001 * token_count_extract) / 1_000_000
-
-        total_expected_cost = cost_trace + cost_extract
+        expected_cost_trace = (input_cost + output_cost) * 26 / 1_000_000
+        expected_cost_extract = (input_cost + output_cost) * 4 / 1_000_000
+        total_expected_cost = expected_cost_trace + expected_cost_extract
 
         assert result[0] == MOCK_PROMPT_LINE_NUMBER
         assert abs(result[1] - total_expected_cost) < 1e-12
         assert result[2] == MOCK_MODEL_NAME
-
 
 def test_trace_function(mock_environment):
     """Test the trace function to ensure it matches the correct prompt line."""
@@ -247,7 +242,7 @@ Print the result of calling the function."""
     with patch('builtins.open', side_effect=mock_open_side_effect):
         with patch('pdd.trace.PromptTemplate.from_template') as mock_prompt_template:
             mock_chain = MagicMock()
-            mock_chain.invoke.return_value = '{"explanation": "Explanation text", "prompt_line": "The function should be named hello_world."}'
+            mock_chain.invoke.return_value = '{"prompt_line": "The function should be named hello_world."}'
             mock_prompt_template.return_value.__or__.return_value.__or__.return_value = mock_chain
 
             with patch('pdd.trace.process.extractOne', return_value=('The function should be named hello_world.', 100, 2)):
