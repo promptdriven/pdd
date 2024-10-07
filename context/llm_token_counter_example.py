@@ -1,7 +1,7 @@
 import tiktoken
 import anthropic
 from transformers import AutoTokenizer
-from llm_token_counter import llm_token_counter  # Replace 'your_module' with the actual module name
+from pdd.llm_token_counter import llm_token_counter  # Replace 'your_module' with the actual module name
 
 def main() -> None:
     """
