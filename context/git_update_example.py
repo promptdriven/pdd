@@ -8,7 +8,7 @@ def main() -> None:
     # Define input parameters
     # input_prompt: str = "Create a function to calculate the area of a circle."
     # load input prompt from file
-    name = 'git_update'
+    name = 'xml_tagger'
     with open(f"prompts/{name}_python.prompt", "r") as file:
         input_prompt = file.read()
     modified_code_file: str = f"pdd/{name}.py"
