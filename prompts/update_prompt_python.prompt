@@ -35,8 +35,9 @@
             * 'modified_code'
         - b. Calculate the input and output token count using token_counter from llm_selector and pretty print the output of 4a, including the token count and estimated cost. The cost from llm_selector is in dollars per million tokens.
     5. Create a Langchain LCEL template from the extract_prompt_update_LLM prompt that outputs JSON:
-        - a. Pass the following string parameters to the prompt during invocation: 'llm_output' (this string is from Step 4).
-        - b. Calculate input and output token count using token_counter from llm_selector and pretty print the running message with the token count and cost.
-        - c. Use 'get' function to extract 'modified_prompt' key values using from the dictionary output.
+        - a. Use a fixed strength value of 0.5 for the LLM model during this step.
+        - b. Pass the following string parameters to the prompt during invocation: 'llm_output' (this string is from Step 4).
+        - c. Calculate input and output token count using token_counter from llm_selector and pretty print the running message with the token count and cost.
+        - d. Use 'get' function to extract 'modified_prompt' key values using from the dictionary output.
     6. Pretty print the extracted modified_prompt using Rich Markdown function. Include token counts and costs.
     7. Return the 'modified_prompt' string, the total_cost of both invokes and model_name use for the update_prompt_LLM prompt.
