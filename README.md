@@ -290,24 +290,29 @@ pdd [GLOBAL OPTIONS] change --output modified_factorial_calculator_python.prompt
 
 ### 8. update
 
-Update the original prompt file based on the original code and the modified code.
+Update the original prompt file based on the modified code and optionally the original code.
 
 ```
-pdd [GLOBAL OPTIONS] update [OPTIONS] INPUT_PROMPT_FILE INPUT_CODE_FILE MODIFIED_CODE_FILE
+pdd [GLOBAL OPTIONS] update [OPTIONS] INPUT_PROMPT_FILE MODIFIED_CODE_FILE [INPUT_CODE_FILE]
 ```
 
 Arguments:
 - `INPUT_PROMPT_FILE`: The filename of the prompt file that generated the original code.
-- `INPUT_CODE_FILE`: The filename of the original code that was generated from the input prompt file.
 - `MODIFIED_CODE_FILE`: The filename of the code that was modified by the user.
+- `INPUT_CODE_FILE`: (Optional) The filename of the original code that was generated from the input prompt file. This argument is not required when using the `--git` option.
 
 Options:
-- `--output LOCATION`: Specify where to save the modified prompt file. The default file name is `modified_<basename>.prompt`.  If an environment variable `PDD_UPDATE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
-- `--git`: This option eliminates the need for the 'INPUT_CODE_FILE' argument by using the git history to find the original code file.
+- `--output LOCATION`: Specify where to save the modified prompt file. The default file name is `modified_<basename>.prompt`. If an environment variable `PDD_UPDATE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--git`: Use git history to find the original code file, eliminating the need for the `INPUT_CODE_FILE` argument.
 
 Example:
 ```
-pdd [GLOBAL OPTIONS] update --output updated_factorial_calculator_python.prompt factorial_calculator_python.prompt src/original_factorial_calculator.py src/modified_factorial_calculator.py
+pdd [GLOBAL OPTIONS] update --output updated_factorial_calculator_python.prompt factorial_calculator_python.prompt src/modified_factorial_calculator.py src/original_factorial_calculator.py
+```
+
+Example using the `--git` option:
+```
+pdd [GLOBAL OPTIONS] update --git --output updated_factorial_calculator_python.prompt factorial_calculator_python.prompt src/modified_factorial_calculator.py
 ```
 
 ### 9. detect
@@ -476,7 +481,7 @@ pdd [GLOBAL OPTIONS] split --output-sub sub_prompts/data_processing_module.promp
 
 4. Update a prompt based on code changes, then generate new code and tests:
 ```
-pdd [GLOBAL OPTIONS] update --output updated_prompts/updated_web_scraper.prompt web_scraper_python.prompt src/original_scraper.py src/modified_scraper.py generate --output src/new_scraper.py updated_prompts/updated_web_scraper.prompt test --output tests/test_new_scraper.py updated_prompts/updated_web_scraper.prompt src/new_scraper.py
+pdd [GLOBAL OPTIONS] update --output updated_prompts/updated_web_scraper.prompt web_scraper_python.prompt src/modified_scraper.py src/original_scraper.py generate --output src/new_scraper.py updated_prompts/updated_web_scraper.prompt test --output tests/test_new_scraper.py updated_prompts/updated_web_scraper.prompt src/new_scraper.py
 ```
 
 5. Detect prompts that need changes, then apply changes to those prompts:
