@@ -64,12 +64,23 @@ def trace_main(ctx: click.Context, prompt_file: str, code_file: str, code_line: 
 
         # Save results
         if output:
+            output_path = output_file_paths.get("output")
+            output_dir = os.path.dirname(os.path.abspath(output_path))
+            if output_dir and not os.path.exists(output_dir):
+                try:
+                    os.makedirs(output_dir, exist_ok=True)
+                    logger.debug(f"Created output directory: {output_dir}")
+                except Exception as e:
+                    if not quiet:
+                        rprint(f"[bold red]Failed to create output directory: {e}[/bold red]")
+                    logger.error(f"Error creating output directory: {e}")
+                    ctx.exit(1)
             try:
-                with open(output_file_paths["output"], 'w') as f:
+                with open(output_path, 'w') as f:
                     f.write(f"Prompt Line: {prompt_line}\n")
                     f.write(f"Total Cost: ${total_cost:.6f}\n")
                     f.write(f"Model Used: {model_name}\n")
-                logger.debug(f"Results saved to {output_file_paths['output']}")
+                logger.debug(f"Results saved to {output_path}")
             except IOError as e:
                 if not quiet:
                     rprint(f"[bold red]An unexpected error occurred: {e}[/bold red]")
