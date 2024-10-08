@@ -1,0 +1,73 @@
+% You are an expert Python engineer. Your goal is to write the `change_main` function that will be part of the `pdd` command-line program. This function will handle the core logic for the `change` command.
+
+<include>context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+    - `ctx` (`click.Context`): The Click context object containing CLI options and parameters.
+    - `input_prompt_file` (`Optional[str]`): Path to the input prompt file.
+    - `input_code_file` (`Optional[str]`): Path to the input code file.
+    - `change_prompt_file` (`Optional[str]`): Path to the change prompt file.
+    - `output` (`Optional[str]`): Path to save the modified prompt file.
+    - `csv` (`Optional[str]`): Path to the CSV file containing change prompts.
+
+    Outputs:
+    - Returns a tuple containing (`str`, `float`, `str`):
+      - `str`: The modified prompt or a message indicating multiple prompts were updated.
+      - `float`: The total cost of the operation (may be zero if not applicable).
+      - `str`: The name of the model used.
+
+<examples>
+   % Here is how to use the Python Click library within a function:
+   <click_example>
+   <include>context/click_example.py</include>
+   </click_example>
+
+   % Examples of using internal modules:
+   <internal_example_modules>
+      - Using the `construct_paths` function:
+      <construct_paths_example>
+      <include>context/construct_paths_example.py</include>
+      </construct_paths_example>
+
+      - Using the `change` function (`change_func`):
+      <change_example>
+      <include>context/change_example.py</include>
+      </change_example>
+
+      - Using the `process_csv_change` function:
+      <process_csv_change_example>
+      <include>context/process_csv_change_example.py</include>
+      </process_csv_change_example>
+   </internal_example_modules>
+</examples>
+
+% The function should perform the following steps:
+   1. **Parse Arguments and Options**:
+      - Determine if the `--csv` option is provided.
+      - Validate mandatory arguments when `--csv` is not used.
+      - Provide informative messages if required arguments are missing.
+
+   2. **Construct File Paths**:
+      - Use `construct_paths` to load input files and establish output file paths.
+      - Respect `--force` and `--quiet` options from the CLI context.
+
+   3. **Perform Prompt Modification**:
+      - If `--csv` is used:
+        - Call `process_csv_change` to handle batch changes specified in CSV.
+      - Else:
+        - Call `change_func` to modify the input prompt based on the change prompt and code.
+
+   4. **Save Results**:
+      - Write the modified prompt(s) to the output location.
+      - Ensure that directories exist or are created as needed.
+
+   6. **Provide User Feedback**:
+      - Use `rprint` to display messages about the operation's success or failure.
+      - Respect verbosity settings from the CLI context.
+
+   7. **Error Handling**:
+      - Implement try-except blocks to catch exceptions.
+      - Use `ctx.exit(1)` to exit gracefully on fatal errors.
+
+% Ensure adherence to the existing codebase's style, including type annotations, docstrings, and exception handling. Avoid name conflicts by importing modules with aliases where necessary (e.g., `from .change import change as change_func`).
