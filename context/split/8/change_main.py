@@ -8,4 +8,4 @@
 @track_cost
 def change(ctx, input_prompt_file: Optional[str], input_code_file: Optional[str], change_prompt_file: Optional[str], output: Optional[str], csv: Optional[str]) -> Tuple[str, float, str]:
     """Modify an input prompt file based on a change prompt and the corresponding input code."""
-    return change_main(ctx, input_prompt_file, input_code_file, change_prompt_file, output) # This new function ('change_main') will contain all the functionality of the 'change' function and be split into a sub_prompt.
+    return change_main(ctx, input_prompt_file, input_code_file, change_prompt_file, output, csv) # This new function ('change_main') will contain all the functionality of the 'change' function and be split into a sub_prompt.
