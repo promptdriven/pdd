@@ -18,7 +18,7 @@ from .xml_tagger import xml_tagger
 from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
 from .fix_error_loop import fix_error_loop
 from .split import split as split_func
-from .change import change as change_func
+from .change_main import change_main
 from .update_prompt import update_prompt
 from .git_update import git_update
 from .detect_change import detect_change
@@ -382,68 +382,7 @@ def split(ctx, input_prompt: str, input_code: str, example_code: str,
 @track_cost
 def change(ctx, input_prompt_file: Optional[str], input_code_file: Optional[str], change_prompt_file: Optional[str], output: Optional[str], csv: Optional[str]) -> Tuple[str, float, str]:
     """Modify an input prompt file based on a change prompt and the corresponding input code."""
-    if csv:
-        if input_prompt_file or input_code_file or change_prompt_file:
-            click.echo("Warning: input_prompt_file, input_code_file, and change_prompt_file are ignored when using --csv option.")
-        change_prompt_file = csv
-    elif not (input_prompt_file and input_code_file and change_prompt_file):
-        click.echo("Error: input_prompt_file, input_code_file, and change_prompt_file are required when not using --csv option.")
-        ctx.exit(1)
-
-    input_files = {
-        'input_prompt_file': input_prompt_file,
-        'input_code_file': input_code_file,
-        'change_prompt_file': change_prompt_file
-    }
-
-    command_options = {'output': output, 'csv': bool(csv)}
-
-    try:
-        input_strings, output_file_paths = construct_paths(
-            input_file_paths=input_files,
-            force=ctx.obj['force'],
-            quiet=ctx.obj['quiet'],
-            command="change",
-            command_options=command_options
-        )
-
-        if csv:
-            # Handle CSV change prompts
-            from .process_csv_change import process_csv_change
-            
-            modified_prompts, total_cost, model_name = process_csv_change(
-                change_prompt_file,
-                ctx.obj['strength'],
-                ctx.obj['temperature'],
-                os.path.dirname(input_code_file) if input_code_file else None,
-                "python",  # Assuming language; adjust as needed
-                ".py",
-                budget=10.0  # Adjust budget as necessary
-            )
-            
-            if not ctx.obj['quiet']:
-                rprint(f"Modified prompts generated based on CSV changes.")
-            
-            return "Multiple prompts updated via CSV.", total_cost, model_name
-        else:
-            modified_prompt, total_cost, model_name = change_func(
-                input_prompt_file,
-                input_code_file,
-                change_prompt_file,
-                ctx.obj['strength'],
-                ctx.obj['temperature']
-            )
-            
-            with open(output_file_paths['output'], 'w') as f:
-                f.write(modified_prompt)
-            
-            if not ctx.obj['quiet']:
-                rprint(f"Modified prompt saved to: {output_file_paths['output']}")
-            
-            return modified_prompt, total_cost, model_name
-    except Exception as e:
-        rprint(f"[bold red]Error: {str(e)}[/bold red]")
-        ctx.exit(1)
+    return change_main(ctx, input_prompt_file, input_code_file, change_prompt_file, output, csv) 
 
 @cli.command()
 @click.argument('input_prompt_file', type=click.Path(exists=True))

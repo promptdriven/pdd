@@ -98,17 +98,17 @@ def change_main(
             )
 
         # Step 4: Save Results
-        if output:
-            with open(output_file_paths["output"], 'w', encoding='utf-8') as outfile:
-                if is_csv:
-                    # Assuming modified_prompt is a list of prompts
-                    writer = csv.writer(outfile)
-                    writer.writerow(['file_name', 'modified_prompt'])
-                    for item in modified_prompt:
-                        for file_name, prompt in item.items():
-                            writer.writerow([file_name, prompt])
-                else:
-                    outfile.write(modified_prompt)
+
+        with open(output_file_paths["output"], 'w', encoding='utf-8') as outfile:
+            if is_csv:
+                # Assuming modified_prompt is a list of prompts
+                writer = csv.writer(outfile)
+                writer.writerow(['file_name', 'modified_prompt'])
+                for item in modified_prompt:
+                    for file_name, prompt in item.items():
+                        writer.writerow([file_name, prompt])
+            else:
+                outfile.write(modified_prompt)
 
         # Step 5: Provide User Feedback
         if not ctx.params.get('quiet', False):
