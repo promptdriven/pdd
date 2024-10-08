@@ -14,7 +14,7 @@
     - `input_prompt_file` (`Optional[str]`): Path to the input prompt file.
     - `input_code` (`Optional[str]`): Path to the input code file or directory (when used with the '--csv' option).
     - `change_prompt_file` (`Optional[str]`): Path to the change prompt file.
-    - `output` (`Optional[str]`): Path to save the modified prompt file.
+    - `output` (`Optional[str]`): Path to save the modified prompt file. If not specified, this will be generated based on the input files or in the case with `--csv`, this is not needed because the csv file contains the filepaths (same for both input and output).
     - `csv` (`Optional[str]`): Path to the CSV file containing change prompts.
 
     Outputs:
@@ -31,6 +31,11 @@
 
    % Examples of using internal modules:
    <internal_example_modules>
+      - Using the `get_extension` function:
+      <get_extension_example>
+      <include>context/get_extension_example.py</include>
+      </get_extension_example>
+
       - Using the `construct_paths` function:
       <construct_paths_example>
       <include>context/construct_paths_example.py</include>
@@ -65,7 +70,7 @@
         - Call `change_func` to modify the input prompt based on the change prompt and code.
 
    4. **Save Results**:
-      - Write the modified prompt(s) to the output location.
+      - Write the modified prompt(s) to the output location. Keep in mind that for batch changes, the output will be a list of files to update.
       - Ensure that directories exist or are created as needed.
 
    6. **Provide User Feedback**:
