@@ -6,7 +6,7 @@
 </example_generation>
 </pdd>
 <context>
-% You are an expert Python engineer. Your goal is to write a Python command line program, `pdd`. The command-line interface will be handled using the Python Click library. It will contain the `cli` function.
+% You are an expert Python engineer. Your goal is to write a Python command-line program, `pdd`. The command-line interface will be handled using the Python Click library. It will contain the `cli` function.
 </context>
 
 <include>context/python_preamble.prompt</include>
@@ -16,8 +16,8 @@
     <include>./README.md</include>
     </program_description>
 
-% Here is the directory structure of the program:
-    - `pdd/pdd/*.py` (including this file `cli.py`)
+% Directory structure of the program:
+    - `pdd/pdd/*.py` (including `cli.py` and command modules)
     - `pdd/prompts`
     - `pdd/context`
     - `pdd/data`
@@ -30,9 +30,9 @@
 </examples>
 
 <instructions>
-    % Some of the `pdd` commands will have the same name as some of the below functions. Be sure to import the functions with different names to avoid conflicts (e.g., `preprocess` needs to be imported as `preprocess_func` to prevent conflict with Click commands). Make sure this happens for others too, like `split`, `change`, `trace`, etc. Also, the module name will be the same as the imported function name (e.g., `from .code_generator import code_generator`).
+    % To avoid name conflicts, import functions with aliases (e.g., `from .preprocess import preprocess as preprocess_func`). Ensure module names match imported function names.
 
-    % Here are examples of how to use internal modules:
+    % Examples of using internal modules:
 
     <internal_example_modules>
         - The `track_cost` decorator has already been defined in another module. Here is an example of how to use the `track_cost` decorator:
@@ -44,6 +44,11 @@
         <construct_paths_example>
         <include>context/construct_paths_example.py</include>
         </construct_paths_example>
+
+        - `change` command: The core logic is implemented in the `change_main` function, defined in a separate module. Here's how to use `change_main`:
+        <change_main_example>
+        <include>context/change_main_example.py</include>
+        </change_main_example>
 
         - `generate` command: To generate runnable code from a prompt file, use `code_generator`. Here is an example of how to generate code from the prompt from a file:
         <code_generator_example>
@@ -84,16 +89,6 @@
         <split_example>
         <include>context/split_example.py</include>
         </split_example>
-
-        - `change` command: To change the prompt file, use the `change` function. Keep in mind that the change prompt is also an input file that needs to be loaded by `construct_paths`. Here is an example of how to change the prompt file:
-        <change_example>
-        <include>context/change_example.py</include>
-        </change_example>
-
-        - `change --csv` sub-command: To change the prompt file using a CSV file, use the `process_csv_change` function. Here is an example of how to change the prompt file using a CSV file:
-        <process_csv_change_example>
-        <include>context/process_csv_change_example.py</include>
-        </process_csv_change_example>
 
         - `update` command: To update the prompt file, use the `update_prompt` function. Here is an example of how to update the prompt file:
         <update_prompt_example>
@@ -138,8 +133,6 @@
         - Decorate the command function with `@track_cost` to enable cost tracking.
         - The `trace` command function should be a thin wrapper that calls `trace_main`, passing all necessary parameters.
 
-    % Ensure that all commands are implemented consistently, adhering to the shared coding standards and documentation practices.
-
     % `install_completion` command: Enhance the shell completion installation process by determining the correct paths for different shells and ensuring the source command is added to the shell's RC file only if it's not already present. Use a helper function to manage these paths.
 
     % For the `update` command:
@@ -149,4 +142,11 @@
         - When using git, call the `git_update` function instead of `update_prompt`.
         - Ensure proper error handling and user feedback for both cases.
 
+    % For the `change` command in the `cli` function:
+        - Define the command using `@cli.command()`.
+        - Include necessary arguments and options.
+        - Decorate with `@track_cost` to enable cost tracking.
+        - The command function should be a thin wrapper that calls `change_main`, passing all required parameters.
+
+    % Ensure consistency across commands, following shared coding standards and documentation practices.
 </instructions>
