@@ -373,31 +373,40 @@ def split(ctx, input_prompt: str, input_code: str, example_code: str,
         ctx.exit(1)
 
 @cli.command()
-@click.argument('input_prompt_file', type=click.Path(exists=True))
-@click.argument('input_code_file', type=click.Path(exists=True))
-@click.argument('change_prompt_file', type=click.Path(exists=True))
+@click.argument('input_prompt_file', type=click.Path(exists=True), required=False)
+@click.argument('input_code_file', type=click.Path(exists=True), required=False)
+@click.argument('change_prompt_file', type=click.Path(exists=True), required=False)
 @click.option('--output', type=click.Path(), help='Specify where to save the modified prompt file.')
-@click.option('--csv', is_flag=True, help='Use a CSV file for the change prompts instead of a text file.')
+@click.option('--csv', type=click.Path(exists=True), help='Use a CSV file for the change prompts instead of a text file.')
 @click.pass_context
 @track_cost
-def change(ctx, input_prompt_file: str, input_code_file: str, change_prompt_file: str, output: Optional[str], csv: bool) -> Tuple[str, float, str]:
+def change(ctx, input_prompt_file: Optional[str], input_code_file: Optional[str], change_prompt_file: Optional[str], output: Optional[str], csv: Optional[str]) -> Tuple[str, float, str]:
     """Modify an input prompt file based on a change prompt and the corresponding input code."""
+    if csv:
+        if input_prompt_file or input_code_file or change_prompt_file:
+            click.echo("Warning: input_prompt_file, input_code_file, and change_prompt_file are ignored when using --csv option.")
+        change_prompt_file = csv
+    elif not (input_prompt_file and input_code_file and change_prompt_file):
+        click.echo("Error: input_prompt_file, input_code_file, and change_prompt_file are required when not using --csv option.")
+        ctx.exit(1)
+
     input_files = {
         'input_prompt_file': input_prompt_file,
         'input_code_file': input_code_file,
         'change_prompt_file': change_prompt_file
     }
-    command_options = {'output': output, 'csv': csv}
-    
+
+    command_options = {'output': output, 'csv': bool(csv)}
+
     try:
-        input_strings, output_file_paths, _ = construct_paths(
-            input_file_paths=input_files if not csv else {},
+        input_strings, output_file_paths = construct_paths(
+            input_file_paths=input_files,
             force=ctx.obj['force'],
             quiet=ctx.obj['quiet'],
             command="change",
             command_options=command_options
         )
-        
+
         if csv:
             # Handle CSV change prompts
             from .process_csv_change import process_csv_change
@@ -406,7 +415,7 @@ def change(ctx, input_prompt_file: str, input_code_file: str, change_prompt_file
                 change_prompt_file,
                 ctx.obj['strength'],
                 ctx.obj['temperature'],
-                os.path.dirname(input_code_file),
+                os.path.dirname(input_code_file) if input_code_file else None,
                 "python",  # Assuming language; adjust as needed
                 ".py",
                 budget=10.0  # Adjust budget as necessary
