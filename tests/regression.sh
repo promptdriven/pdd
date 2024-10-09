@@ -166,9 +166,9 @@ if [ ! -f "${CHANGE_DESCRIPTION_FILE}" ]; then
 fi
 
 run_pdd_command change --output "${REGRESSION_DIR}/changed_${CHANGE_PROMPT}" \
-                       "${CHANGE_CONTEXT_PROMPT}" \
+                       "${CHANGE_DESCRIPTION_FILE}" \
                        "${CONTEXT_PATH}/change/11/${CHANGE_SCRIPT}" \
-                       "${CHANGE_DESCRIPTION_FILE}"
+                       "${CHANGE_CONTEXT_PROMPT}"
 
 # 8. Fix
 log "Running 'fix' command"

@@ -1,6 +1,6 @@
 import csv
 import sys
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 import click
 from rich import print as rprint
 
@@ -10,49 +10,41 @@ from .process_csv_change import process_csv_change
 
 def change_main(
     ctx: click.Context,
+    change_prompt_file: str,
+    input_code: str,
     input_prompt_file: Optional[str],
-    input_code: Optional[str],
-    change_prompt_file: Optional[str],
     output: Optional[str],
-    csv: Optional[str]
+    csv: bool
 ) -> Tuple[str, float, str]:
     """
-    Main function to handle the 'change' command in the pdd CLI program.
+    Main function to handle the 'change' command logic.
 
     :param ctx: Click context containing command-line parameters.
-    :param input_prompt_file: Path to the input prompt file.
-    :param input_code: Path to the input code file or directory.
     :param change_prompt_file: Path to the change prompt file.
-    :param output: Optional path to save the modified prompt file.
-    :param csv: Optional path to the CSV file containing change prompts.
-    :return: A tuple containing the modified prompt/message, total cost, and model name used.
+    :param input_code: Path to the input code file or directory (when using '--csv').
+    :param input_prompt_file: Path to the input prompt file. Optional and not used when '--csv' is specified.
+    :param output: Optional path to save the modified prompt file. If not specified, it will be generated based on the input files.
+    :param csv: Flag indicating whether to use CSV mode for batch changes.
+    :return: A tuple containing the modified prompt or a message indicating multiple prompts were updated, total cost, and model name used.
     """
     try:
-        # Step 1: Parse Arguments and Options
-        is_csv = csv is not None
-        if is_csv:
-            if not csv:
-                raise ValueError("CSV file path must be provided when using the '--csv' option.")
-            if not input_code:
-                raise ValueError("Input code path must be provided when using the '--csv' option.")
-        else:
-            if not input_prompt_file:
-                raise ValueError("Input prompt file must be provided when not using the '--csv' option.")
-            if not input_code:
-                raise ValueError("Input code file or directory must be provided when not using the '--csv' option.")
-            if not change_prompt_file:
-                raise ValueError("Change prompt file must be provided when not using the '--csv' option.")
+        # Validate arguments
+        if not csv and not input_prompt_file:
+            rprint("[bold red]Error:[/bold red] 'input_prompt_file' is required when not using '--csv' mode.")
+            ctx.exit(1)
 
-        # Step 2: Construct File Paths
+        # Construct file paths
         input_file_paths = {
-            "input_prompt_file": input_prompt_file if input_prompt_file else "",
-            "input_code": input_code if input_code else "",
-            "change_prompt_file": change_prompt_file if change_prompt_file else ""
+            "change_prompt_file": change_prompt_file,
+            "input_code": input_code
         }
+        if not csv:
+            input_file_paths["input_prompt_file"] = input_prompt_file
+
         command_options = {
-            "output": output,
-            "csv": csv
+            "output": output
         }
+
         input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
             force=ctx.params.get('force', False),
@@ -61,78 +53,89 @@ def change_main(
             command_options=command_options
         )
 
-        # Step 3: Perform Prompt Modification
-        if is_csv:
-            if not csv:
-                raise ValueError("CSV file path must be provided when using the '--csv' option.")
-            csv_file = input_file_paths["csv"]
-            code_directory = input_file_paths["input_code"]
-            language = ctx.obj.get('language', 'python')
-            extension = ctx.obj.get('extension', '.py')
-            strength = ctx.obj.get('strength', 0.8)
-            temperature = ctx.obj.get('temperature', 0.5)
-            budget = ctx.obj.get('budget', 10.0)  # Example budget
+        # Load input files
+        change_prompt_content = input_strings["change_prompt_file"]
 
-            modified_prompt, total_cost, model_name = process_csv_change(
-                csv_file=csv_file,
+        if csv:
+            code_directory = input_strings["input_code"]
+        else:
+            input_code_content = input_strings["input_code"]
+            input_prompt_content = input_strings.get("input_prompt_file", "")
+
+        # Get strength and temperature from context
+        strength = ctx.obj.get('strength', 0.9)
+        temperature = ctx.obj.get('temperature', 0)
+
+        if csv:
+            # Perform batch changes using CSV
+            modified_prompts, total_cost, model_name = process_csv_change(
+                csv_file=change_prompt_content,
                 strength=strength,
                 temperature=temperature,
                 code_directory=code_directory,
-                language=language,
-                extension=extension,
-                budget=budget
-            )
-        else:
-            # Load input files
-            input_prompt = input_strings["input_prompt_file"]
-            input_code_content = input_strings["input_code"]
-            change_prompt = input_strings["change_prompt_file"]
-
-            # Perform the change
-            modified_prompt, total_cost, model_name = change_func(
-                input_prompt=input_prompt,
-                input_code=input_code_content,
-                change_prompt=change_prompt,
-                strength=ctx.obj.get('strength', 0.9),
-                temperature=ctx.obj.get('temperature', 0)
+                language=ctx.obj.get('language', 'python'),  # Assuming 'language' is part of ctx.obj
+                extension=ctx.obj.get('extension', '.py'),   # Assuming 'extension' is part of ctx.obj
+                budget=ctx.obj.get('budget', 10.0)          # Assuming 'budget' is part of ctx.obj
             )
 
-        # Step 4: Save Results
-
-        with open(output_file_paths["output"], 'w', encoding='utf-8') as outfile:
-            if is_csv:
-                # Assuming modified_prompt is a list of prompts
-                writer = csv.writer(outfile)
-                writer.writerow(['file_name', 'modified_prompt'])
-                for item in modified_prompt:
-                    for file_name, prompt in item.items():
-                        writer.writerow([file_name, prompt])
-            else:
-                outfile.write(modified_prompt)
-
-        # Step 5: Provide User Feedback
-        if not ctx.params.get('quiet', False):
-            rprint("[bold green]Change operation completed successfully.[/bold green]")
-            rprint(f"[bold]Model used:[/bold] {model_name}")
-            rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
+            # Save results
             if output:
-                rprint(f"[bold]Results saved to:[/bold] {output_file_paths['output']}")
+                with open(output, 'w', newline='') as csvfile:
+                    fieldnames = ['file_name', 'modified_prompt']
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writeheader()
+                    for item in modified_prompts:
+                        for file_name, prompt in item.items():
+                            writer.writerow({'file_name': file_name, 'modified_prompt': prompt})
 
-        # Always print the results, even in quiet mode
-        if is_csv:
-            rprint("[bold]Modified Prompts:[/bold]")
-            for item in modified_prompt:
-                for file_name, prompt in item.items():
-                    rprint(f"[bold]File:[/bold] {file_name}")
-                    rprint(f"[bold]Modified Prompt:[/bold] {prompt}")
-                    rprint("---")
-            return ("Multiple prompts updated.", total_cost, model_name)
+            # Provide user feedback
+            if not ctx.params.get('quiet', False):
+                rprint("[bold green]Batch change operation completed successfully.[/bold green]")
+                rprint(f"[bold]Model used:[/bold] {model_name}")
+                rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
+                if output:
+                    rprint(f"[bold]Results saved to:[/bold] {output}")
+            
+            return ("Multiple prompts have been updated.", total_cost, model_name)
+        
         else:
-            rprint("[bold]Modified Prompt:[/bold]")
-            rprint(modified_prompt)
-            return (modified_prompt, total_cost, model_name)
+            # Perform single change
+            modified_prompt, total_cost, model_name = change_func(
+                input_prompt=input_prompt_content,
+                input_code=input_code_content,
+                change_prompt=change_prompt_content,
+                strength=strength,
+                temperature=temperature
+            )
 
+            # Replace placeholders if necessary
+            modified_prompt_output = modified_prompt  # Modify if any placeholders need to be replaced
+
+            # Determine output path
+            output_path = output or f"modified_{input_prompt_file}"
+
+            # Save the modified prompt
+            with open(output_path, 'w') as f:
+                f.write(modified_prompt_output)
+
+            # Provide user feedback
+            if not ctx.params.get('quiet', False):
+                rprint("[bold green]Prompt modification completed successfully.[/bold green]")
+                rprint(f"[bold]Model used:[/bold] {model_name}")
+                rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
+                rprint(f"[bold]Modified prompt saved to:[/bold] {output_path}")
+
+            return (modified_prompt_output, total_cost, model_name)
+
+    except FileNotFoundError as fnf_error:
+        if not ctx.params.get('quiet', False):
+            rprint(f"[bold red]File Not Found Error:[/bold red] {fnf_error}")
+        ctx.exit(1)
+    except PermissionError as perm_error:
+        if not ctx.params.get('quiet', False):
+            rprint(f"[bold red]Permission Error:[/bold red] {perm_error}")
+        ctx.exit(1)
     except Exception as e:
         if not ctx.params.get('quiet', False):
-            rprint(f"[bold red]Error:[/bold red] {str(e)}")
-        sys.exit(1)
+            rprint(f"[bold red]An unexpected error occurred:[/bold red] {str(e)}")
+        ctx.exit(1)
