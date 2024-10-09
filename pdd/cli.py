@@ -373,16 +373,16 @@ def split(ctx, input_prompt: str, input_code: str, example_code: str,
         ctx.exit(1)
 
 @cli.command()
+@click.argument('change_prompt_file', type=click.Path(exists=True))
+@click.argument('input_code', type=click.Path(exists=True))
 @click.argument('input_prompt_file', type=click.Path(exists=True), required=False)
-@click.argument('input_code_file', type=click.Path(exists=True), required=False)
-@click.argument('change_prompt_file', type=click.Path(exists=True), required=False)
 @click.option('--output', type=click.Path(), help='Specify where to save the modified prompt file.')
-@click.option('--csv', type=click.Path(exists=True), help='Use a CSV file for the change prompts instead of a text file.')
+@click.option('--csv', is_flag=True, help='Use a CSV file for the change prompts instead of a text file.')
 @click.pass_context
 @track_cost
-def change(ctx, input_prompt_file: Optional[str], input_code_file: Optional[str], change_prompt_file: Optional[str], output: Optional[str], csv: Optional[str]) -> Tuple[str, float, str]:
+def change(ctx, change_prompt_file: str, input_code: str, input_prompt_file: Optional[str], output: Optional[str], csv: bool) -> Tuple[str, float, str]:
     """Modify an input prompt file based on a change prompt and the corresponding input code."""
-    return change_main(ctx, input_prompt_file, input_code_file, change_prompt_file, output, csv) 
+    return change_main(ctx, change_prompt_file, input_code, input_prompt_file, output, csv)
 
 @cli.command()
 @click.argument('input_prompt_file', type=click.Path(exists=True))
