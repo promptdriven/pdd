@@ -1,6 +1,6 @@
 import csv
-import sys
-from typing import Optional, Tuple, List
+import os
+from typing import Optional, Tuple
 import click
 from rich import print as rprint
 
@@ -36,9 +36,9 @@ def change_main(
         # Construct file paths
         input_file_paths = {
             "change_prompt_file": change_prompt_file,
-            "input_code": input_code
         }
         if not csv:
+            input_file_paths["input_code"] = input_code
             input_file_paths["input_prompt_file"] = input_prompt_file
 
         command_options = {
@@ -56,26 +56,24 @@ def change_main(
         # Load input files
         change_prompt_content = input_strings["change_prompt_file"]
 
-        if csv:
-            code_directory = input_strings["input_code"]
-        else:
-            input_code_content = input_strings["input_code"]
-            input_prompt_content = input_strings.get("input_prompt_file", "")
-
         # Get strength and temperature from context
         strength = ctx.obj.get('strength', 0.9)
         temperature = ctx.obj.get('temperature', 0)
 
         if csv:
+            # Verify that input_code is a directory
+            if not os.path.isdir(input_code):
+                raise ValueError(f"In CSV mode, 'input_code' must be a directory. Got: {input_code}")
+
             # Perform batch changes using CSV
             modified_prompts, total_cost, model_name = process_csv_change(
                 csv_file=change_prompt_content,
                 strength=strength,
                 temperature=temperature,
-                code_directory=code_directory,
-                language=ctx.obj.get('language', 'python'),  # Assuming 'language' is part of ctx.obj
-                extension=ctx.obj.get('extension', '.py'),   # Assuming 'extension' is part of ctx.obj
-                budget=ctx.obj.get('budget', 10.0)          # Assuming 'budget' is part of ctx.obj
+                code_directory=input_code,
+                language=ctx.obj.get('language', 'python'),
+                extension=ctx.obj.get('extension', '.py'),
+                budget=ctx.obj.get('budget', 10.0)
             )
 
             # Save results
@@ -99,6 +97,9 @@ def change_main(
             return ("Multiple prompts have been updated.", total_cost, model_name)
         
         else:
+            input_code_content = input_strings["input_code"]
+            input_prompt_content = input_strings["input_prompt_file"]
+
             # Perform single change
             modified_prompt, total_cost, model_name = change_func(
                 input_prompt=input_prompt_content,
@@ -108,15 +109,12 @@ def change_main(
                 temperature=temperature
             )
 
-            # Replace placeholders if necessary
-            modified_prompt_output = modified_prompt  # Modify if any placeholders need to be replaced
-
             # Determine output path
-            output_path = output or f"modified_{input_prompt_file}"
+            output_path = output or output_file_paths.get('output', f"modified_{input_prompt_file}")
 
             # Save the modified prompt
             with open(output_path, 'w') as f:
-                f.write(modified_prompt_output)
+                f.write(modified_prompt)
 
             # Provide user feedback
             if not ctx.params.get('quiet', False):
@@ -125,7 +123,7 @@ def change_main(
                 rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
                 rprint(f"[bold]Modified prompt saved to:[/bold] {output_path}")
 
-            return (modified_prompt_output, total_cost, model_name)
+            return (modified_prompt, total_cost, model_name)
 
     except FileNotFoundError as fnf_error:
         if not ctx.params.get('quiet', False):
