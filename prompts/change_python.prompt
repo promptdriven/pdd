@@ -1,5 +1,4 @@
-% You are an expert Python Software Engineer. Your goal is to write a Python function, "change", that will modify an input_prompt into a 
-modified_prompt per the change_prompt.
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "change", that will modify an input_prompt into a modified_prompt per the change_prompt.
 
 <include>./context/python_preamble.prompt</include>
 
@@ -32,9 +31,10 @@ modified_prompt per the change_prompt.
             * 'input_code'
             * 'change_prompt' (preprocess this with double_curly_brackets set to false)
         - b. Calculate the input and output token count using token_counter from llm_selector and pretty print the output of 4a, including the token count and estimated cost. The cost from llm_selector is in dollars per million tokens.
-    6. Create a Langchain LCEL template with strength .9 from the extract_prompt_change_LLM prompt that outputs JSON:
+    6. Create a new LLM using llm_selector with a strength of 0.5 and the original temperature.
+    7. Create a Langchain LCEL template with the new LLM from the extract_prompt_change_LLM prompt that outputs JSON:
         - a. Pass the following string parameters to the prompt during invocation: 'llm_output' (this string is from Step 4).
         - b. Calculate input and output token count using token_counter from llm_selector and pretty print the running message with the token count and cost.
         - c. Use 'get' function to extract 'modified_prompt' key values using from the dictionary output.
-    7. Pretty print the extracted modified_prompt using Rich Markdown function. Include token counts and costs.
-    8. Return the 'modified_prompt' string, the total_cost of both invokes and model_name use for the change_LLM prompt.
+    8. Pretty print the extracted modified_prompt using Rich Markdown function. Include token counts and costs.
+    9. Return the 'modified_prompt' string, the total_cost of both invokes and model_name use for the change_LLM prompt.
