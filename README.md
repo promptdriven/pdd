@@ -271,21 +271,26 @@ pdd [GLOBAL OPTIONS] split --output-sub prompts/sub_data_processing.prompt --out
 Modify an input prompt file based on a change prompt and the corresponding input code.
 
 ```
-pdd [GLOBAL OPTIONS] change [OPTIONS] INPUT_PROMPT_FILE INPUT_CODE CHANGE_PROMPT_FILE
+pdd [GLOBAL OPTIONS] change [OPTIONS] CHANGE_PROMPT_FILE INPUT_CODE [INPUT_PROMPT_FILE]
 ```
 
 Arguments:
-- `INPUT_PROMPT_FILE`: The filename of the prompt file that will be modified.
-- `INPUT_CODE`: The filename or directory (when used with the '--csv' option) of the code that was generated from the input prompt file.
 - `CHANGE_PROMPT_FILE`: The filename containing the instructions on how to modify the input prompt file.
+- `INPUT_CODE`: The filename of the code that was generated from the input prompt file, or the directory containing the code files when used with the '--csv' option.
+- `INPUT_PROMPT_FILE`: (Optional) The filename of the prompt file that will be modified. Not required when using the '--csv' option.
 
 Options:
 - `--output LOCATION`: Specify where to save the modified prompt file. The default file name is `modified_<basename>.prompt`. If an environment variable `PDD_CHANGE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
-- `--csv`: Use a CSV file for the change prompts instead of a text file. The CSV file should have columns: `prompt_name` and  `change_instructions`. `INPUT_PROMPT_FILE` argument is not needed when using this option. Also, `INPUT_CODE_FILE` now needs to represent the directory where the code files are located instead of the actual code file.
+- `--csv`: Use a CSV file for the change prompts instead of a single change prompt file. The CSV file should have columns: `prompt_name` and `change_instructions`. When this option is used, `INPUT_PROMPT_FILE` is not needed, and `INPUT_CODE` should be the directory where the code files are located.
 
-Example:
+Example (single prompt change):
 ```
-pdd [GLOBAL OPTIONS] change --output modified_factorial_calculator_python.prompt factorial_calculator_python.prompt src/factorial_calculator.py changes_factorial.prompt
+pdd [GLOBAL OPTIONS] change --output modified_factorial_calculator_python.prompt changes_factorial.prompt src/factorial_calculator.py factorial_calculator_python.prompt
+```
+
+Example (batch change using CSV):
+```
+pdd [GLOBAL OPTIONS] change --csv --output modified_prompts/ changes_batch.csv src/
 ```
 
 ### 8. update
@@ -486,7 +491,7 @@ pdd [GLOBAL OPTIONS] update --output updated_prompts/updated_web_scraper.prompt 
 
 5. Detect prompts that need changes, then apply changes to those prompts:
 ```
-pdd [GLOBAL OPTIONS] detect --output to_change.csv data_processing_python.prompt web_scraper_python.prompt api_interface_python.prompt changes.prompt change --output modified_prompts/modified_$(cat to_change.csv | cut -d',' -f1 | tail -n +2) $(cat to_change.csv | cut -d',' -f1 | tail -n +2) $(cat to_change.csv | cut -d',' -f1 | tail -n +2 | sed 's/\.prompt/_code.py/') changes.prompt
+pdd [GLOBAL OPTIONS] detect --output to_change.csv data_processing_python.prompt web_scraper_python.prompt api_interface_python.prompt changes.prompt change --csv --output modified_prompts/ to_change.csv src/
 ```
 
 6. Analyze conflicts between two prompts and then update one of them:
