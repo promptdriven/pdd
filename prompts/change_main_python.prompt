@@ -11,11 +11,11 @@
 % Here are the inputs and outputs of the function:
     Inputs:
     - `ctx` (`click.Context`): The Click context object containing CLI options and parameters.
-    - `input_prompt_file` (`Optional[str]`): Path to the input prompt file.
-    - `input_code` (`Optional[str]`): Path to the input code file or directory (when used with the '--csv' option).
-    - `change_prompt_file` (`Optional[str]`): Path to the change prompt file.
-    - `output` (`Optional[str]`): Path to save the modified prompt file. If not specified, this will be generated based on the input files or in the case with `--csv`, this is not needed because the csv file contains the filepaths (same for both input and output).
-    - `csv` (`Optional[str]`): Path to the CSV file containing change prompts.
+    - `change_prompt_file` (`str`): Path to the change prompt file.
+    - `input_code` (`str`): Path to the input code file or directory (when used with the '--csv' option).
+    - `input_prompt_file` (`Optional[str]`): Path to the input prompt file. Optional and not used when '--csv' is specified.
+    - `output` (`Optional[str]`): Path to save the modified prompt file. If not specified, this will be generated based on the input files.
+    - `csv` (`bool`): Flag indicating whether to use CSV mode for batch changes.
 
     Outputs:
     - Returns a tuple containing (`str`, `float`, `str`):
@@ -55,29 +55,31 @@
 
 % The function should perform the following steps:
    1. **Parse Arguments and Options**:
-      - Determine if the `--csv` option is provided.
-      - Validate mandatory arguments when `--csv` is not used.
+      - Check if the `csv` flag is set.
+      - Validate mandatory arguments: `change_prompt_file` and `input_code` are always required.
+      - When `csv` is False, validate that `input_prompt_file` is provided.
       - Provide informative messages if required arguments are missing.
 
    2. **Construct File Paths**:
       - Use `construct_paths` to load input files and establish output file paths.
+      - When `csv` is True, `input_code` should be treated as a directory path.
       - Respect `--force` and `--quiet` options from the CLI context.
 
    3. **Perform Prompt Modification**:
-      - If `--csv` is used:
-        - Call `process_csv_change` to handle batch changes specified in CSV.
+      - If `csv` is True:
+        - Call `process_csv_change` to handle batch changes specified in the change prompt file (which should be a CSV in this case).
       - Else:
         - Call `change_func` to modify the input prompt based on the change prompt and code.
 
    4. **Save Results**:
-      - Write the modified prompt(s) to the output location. Keep in mind that for batch changes, the output will be a list of files to update.
+      - Write the modified prompt(s) to the output location. For batch changes, this will involve updating multiple files.
       - Ensure that directories exist or are created as needed.
 
-   6. **Provide User Feedback**:
+   5. **Provide User Feedback**:
       - Use `rprint` to display messages about the operation's success or failure.
       - Respect verbosity settings from the CLI context.
 
-   7. **Error Handling**:
+   6. **Error Handling**:
       - Implement try-except blocks to catch exceptions.
       - Use `ctx.exit(1)` to exit gracefully on fatal errors.
 
