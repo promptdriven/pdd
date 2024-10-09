@@ -62,18 +62,20 @@
 
    2. **Construct File Paths**:
       - Use `construct_paths` to load input files and establish output file paths.
-      - When `csv` is True, `input_code` should be treated as a directory path.
+      - When `csv` is True, `input_code` should be treated as a directory path and not included in the `input_file_paths` dictionary.
       - Respect `--force` and `--quiet` options from the CLI context.
 
    3. **Perform Prompt Modification**:
       - If `csv` is True:
+        - Verify that `input_code` is a directory.
         - Call `process_csv_change` to handle batch changes specified in the change prompt file (which should be a CSV in this case).
       - Else:
+        - Load `input_code_content` and `input_prompt_content` from the `input_strings` dictionary.
         - Call `change_func` to modify the input prompt based on the change prompt and code.
 
    4. **Save Results**:
       - Write the modified prompt(s) to the output location. For batch changes, this will involve updating multiple files.
-      - Ensure that directories exist or are created as needed.
+      - Use the `output_file_paths` dictionary to determine the output path when not explicitly provided.
 
    5. **Provide User Feedback**:
       - Use `rprint` to display messages about the operation's success or failure.
@@ -84,3 +86,5 @@
       - Use `ctx.exit(1)` to exit gracefully on fatal errors.
 
 % Ensure adherence to the existing codebase's style, including type annotations, docstrings, and exception handling. Avoid name conflicts by importing modules with aliases where necessary (e.g., `from .change import change as change_func`).
+
+% Important: Make sure to handle the `input_code` parameter correctly in both CSV and non-CSV modes. In CSV mode, it should be a directory path, while in non-CSV mode, it should be a file path.
