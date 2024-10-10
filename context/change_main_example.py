@@ -29,33 +29,29 @@ def main() -> None:
     ctx = click.Context(click.Command("change"))
 
     # Set up CLI options (as would be parsed from command-line arguments)
-    # ctx.obj["force"] = True  # Do not overwrite existing files
-    # ctx.obj["quiet"] = False  # Verbose output
-    # ctx.obj["verbose"] = True  # Non-verbose output
+    ctx.params["force"] = False  # Do not overwrite existing files
+    ctx.params["quiet"] = False  # Verbose output
 
     # Set up global options accessible via 'ctx.obj'
     ctx.obj = {
-        "force" : True,  # Do not overwrite existing files
-        "quiet" : False,  # Verbose output
-        "verbose" : True,  # Non-verbose output
-        "strength": .8,      # LLM strength parameter (0.0 to 1.0)
+        "strength": 0.9,      # LLM strength parameter (0.0 to 1.0)
         "temperature": 0,     # LLM temperature parameter (0.0 to 1.0)
         "language": "python", # Programming language for code files
         "extension": ".py",   # File extension for code files
-        "budget": 10.0,        # Maximum budget in dollars
+        "budget": 10.0        # Maximum budget in dollars
     }
 
     # Create directories for the example
-    os.makedirs("output/example_code_directory", exist_ok=True)
-    os.makedirs("output/example_output_directory", exist_ok=True)
+    os.makedirs("example_code_directory", exist_ok=True)
+    os.makedirs("example_output_directory", exist_ok=True)
 
     # ------------- Single-Change Mode Example -------------
 
     # Create sample input files for single-change mode
-    change_prompt_file = "output/change_prompt.prompt"
-    input_code_file = "output/example_code.py"
-    input_prompt_file = "output/input_prompt.prompt"
-    output_file = "output/modified_prompt.prompt"
+    change_prompt_file = "change_prompt.prompt"
+    input_code_file = "example_code.py"
+    input_prompt_file = "input_prompt.prompt"
+    output_file = "modified_prompt.prompt"
 
     with open(change_prompt_file, "w") as f:
         f.write("Modify the function to add error handling for division by zero.")
@@ -68,11 +64,6 @@ def divide(a, b):
 
     with open(input_prompt_file, "w") as f:
         f.write("Write a function to perform division of two numbers.")
-    # base = 'split'
-    # change_prompt_file = "context/change/22/change.prompt"
-    # input_code_file = f"pdd/{base}.py"
-    # input_prompt_file = f"prompts/{base}_python.prompt"
-    # output_file = f"/{base}_main_python.prompt"
 
     # Call change_main in single-change mode
     rprint("[bold underline]Single-Change Mode Example[/bold underline]")
@@ -82,7 +73,7 @@ def divide(a, b):
         input_code=input_code_file,
         input_prompt_file=input_prompt_file,
         output=output_file,
-        use_csv=False,  # CSV mode disabled
+        use_csv=False  # CSV mode disabled
     )
 
     # Display the outputs
@@ -90,18 +81,18 @@ def divide(a, b):
     rprint(f"[bold]Total Cost:[/bold] ${total_cost:.6f}")
     rprint(f"[bold]Model Used:[/bold] {model_name}")
 
-#     # ------------- CSV Batch-Change Mode Example -------------
+    # ------------- CSV Batch-Change Mode Example -------------
 
     # Create sample code files in a directory
-    code_directory = "output/example_code_directory"
+    code_directory = "example_code_directory"
     prompt_file_1 = Path(code_directory) / "script1_python.prompt"
     prompt_file_2 = Path(code_directory) / "script2_python.prompt"
 
     with open(prompt_file_1, "w") as f:
-        f.write("Create the function to add two numbers.")
+        f.write("Modify the function to add two numbers.")
     
     with open(prompt_file_2, "w") as f:
-        f.write("Create the function to subtract two numbers.")
+        f.write("Modify the function to subtract two numbers.")
 
     code_file_1 = Path(code_directory) / "script1.py"
     code_file_2 = Path(code_directory) / "script2.py"
@@ -119,14 +110,14 @@ def subtract(a, b):
 """)
 
     # Create a CSV file specifying changes for batch processing
-    csv_change_prompt_file = "output/batch_changes.csv"
+    csv_change_prompt_file = "batch_changes.csv"
     with open(csv_change_prompt_file, "w") as csvfile:
         csvfile.write("prompt_name,change_instructions\n")
         csvfile.write(f"{prompt_file_1},Modify the function to handle overflow errors.\n")
         csvfile.write(f"{prompt_file_2},Optimize the function for large integers.\n")
 
     # Define output file for batch changes
-    batch_output_file = "output" #"output/batch_modified_prompts.csv"
+    batch_output_file = "batch_modified_prompts.csv"
 
     # Call change_main in CSV batch-change mode
     rprint("\n[bold underline]CSV Batch-Change Mode Example[/bold underline]")
