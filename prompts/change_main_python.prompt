@@ -15,7 +15,7 @@
     - `input_code` (`str`): Path to the input code file or directory (when used with the '--csv' option).
     - `input_prompt_file` (`Optional[str]`): Path to the input prompt file. Optional and not used when '--csv' is specified.
     - `output` (`Optional[str]`): Path to save the modified prompt file. If not specified, this will be generated based on the input files.
-    - `csv` (`bool`): Flag indicating whether to use CSV mode for batch changes.
+    - `use_csv` (`bool`): Flag indicating whether to use CSV mode for batch changes.
 
     Outputs:
     - Returns a tuple containing (`str`, `float`, `str`):
@@ -55,18 +55,18 @@
 
 % The function should perform the following steps:
    1. **Parse Arguments and Options**:
-      - Check if the `csv` flag is set.
+      - Check if the `use_csv` flag is set.
       - Validate mandatory arguments: `change_prompt_file` and `input_code` are always required.
-      - When `csv` is False, validate that `input_prompt_file` is provided.
+      - When `use_csv` is False, validate that `input_prompt_file` is provided.
       - Provide informative messages if required arguments are missing.
 
    2. **Construct File Paths**:
       - Use `construct_paths` to load input files and establish output file paths.
-      - When `csv` is True, `input_code` should be treated as a directory path and not included in the `input_file_paths` dictionary.
+      - When `use_csv` is True, `input_code` should be treated as a directory path and not included in the `input_file_paths` dictionary.
       - Respect `--force` and `--quiet` options from the CLI context.
 
    3. **Perform Prompt Modification**:
-      - If `csv` is True:
+      - If `use_csv` is True:
         - Verify that `input_code` is a directory.
         - Call `process_csv_change` to handle batch changes specified in the change prompt file (which should be a CSV in this case).
         - Ensure that `process_csv_change` returns a tuple with four elements: (success, modified_prompts, total_cost, model_name).
@@ -92,3 +92,5 @@
 % Important: Make sure to handle the `input_code` parameter correctly in both CSV and non-CSV modes. In CSV mode, it should be a directory path, while in non-CSV mode, it should be a file path.
 
 % Note: In the CSV mode, ensure that the `process_csv_change` function is called with the correct parameters, including using the `change_prompt_file` as the CSV file path directly, not its content. Also, handle the returned tuple correctly, which should now include a success flag.
+
+% Use `use_csv` instead of `csv` for the boolean flag to avoid conflicts with the imported csv module.
