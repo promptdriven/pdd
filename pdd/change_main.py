@@ -66,8 +66,8 @@ def change_main(
                 raise ValueError(f"In CSV mode, 'input_code' must be a directory. Got: {input_code}")
 
             # Perform batch changes using CSV
-            modified_prompts, total_cost, model_name = process_csv_change(
-                csv_file=change_prompt_content,
+            success, modified_prompts, total_cost, model_name = process_csv_change(
+                csv_file=change_prompt_file,
                 strength=strength,
                 temperature=temperature,
                 code_directory=input_code,
@@ -77,7 +77,7 @@ def change_main(
             )
 
             # Save results
-            if output:
+            if success:
                 with open(output, 'w', newline='') as csvfile:
                     fieldnames = ['file_name', 'modified_prompt']
                     writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
