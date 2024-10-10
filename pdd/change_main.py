@@ -14,7 +14,7 @@ def change_main(
     input_code: str,
     input_prompt_file: Optional[str],
     output: Optional[str],
-    csv: bool
+    use_csv: bool
 ) -> Tuple[str, float, str]:
     """
     Main function to handle the 'change' command logic.
@@ -24,12 +24,12 @@ def change_main(
     :param input_code: Path to the input code file or directory (when using '--csv').
     :param input_prompt_file: Path to the input prompt file. Optional and not used when '--csv' is specified.
     :param output: Optional path to save the modified prompt file. If not specified, it will be generated based on the input files.
-    :param csv: Flag indicating whether to use CSV mode for batch changes.
+    :param use_csv: Flag indicating whether to use CSV mode for batch changes.
     :return: A tuple containing the modified prompt or a message indicating multiple prompts were updated, total cost, and model name used.
     """
     try:
         # Validate arguments
-        if not csv and not input_prompt_file:
+        if not use_csv and not input_prompt_file:
             rprint("[bold red]Error:[/bold red] 'input_prompt_file' is required when not using '--csv' mode.")
             ctx.exit(1)
 
@@ -37,7 +37,7 @@ def change_main(
         input_file_paths = {
             "change_prompt_file": change_prompt_file,
         }
-        if not csv:
+        if not use_csv:
             input_file_paths["input_code"] = input_code
             input_file_paths["input_prompt_file"] = input_prompt_file
 
@@ -60,7 +60,7 @@ def change_main(
         strength = ctx.obj.get('strength', 0.9)
         temperature = ctx.obj.get('temperature', 0)
 
-        if csv:
+        if use_csv:
             # Verify that input_code is a directory
             if not os.path.isdir(input_code):
                 raise ValueError(f"In CSV mode, 'input_code' must be a directory. Got: {input_code}")
