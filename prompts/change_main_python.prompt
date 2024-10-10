@@ -69,6 +69,8 @@
       - If `csv` is True:
         - Verify that `input_code` is a directory.
         - Call `process_csv_change` to handle batch changes specified in the change prompt file (which should be a CSV in this case).
+        - Ensure that `process_csv_change` returns a tuple with four elements: (success, modified_prompts, total_cost, model_name).
+        - Use the `change_prompt_file` directly as the CSV file path, not its content.
       - Else:
         - Load `input_code_content` and `input_prompt_content` from the `input_strings` dictionary.
         - Call `change_func` to modify the input prompt based on the change prompt and code.
@@ -88,3 +90,5 @@
 % Ensure adherence to the existing codebase's style, including type annotations, docstrings, and exception handling. Avoid name conflicts by importing modules with aliases where necessary (e.g., `from .change import change as change_func`).
 
 % Important: Make sure to handle the `input_code` parameter correctly in both CSV and non-CSV modes. In CSV mode, it should be a directory path, while in non-CSV mode, it should be a file path.
+
+% Note: In the CSV mode, ensure that the `process_csv_change` function is called with the correct parameters, including using the `change_prompt_file` as the CSV file path directly, not its content. Also, handle the returned tuple correctly, which should now include a success flag.
