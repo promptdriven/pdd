@@ -19,9 +19,9 @@
 
     Outputs:
     - Returns a tuple containing (`str`, `float`, `str`):
-      - `str`: The modified prompt or a message indicating multiple prompts were updated.
-      - `float`: The total cost of the operation (may be zero if not applicable).
-      - `str`: The name of the model used.
+      - `str`: The modified prompt, a message indicating multiple prompts were updated, or an error message.
+      - `float`: The total cost of the operation (may be zero if not applicable or on error).
+      - `str`: The name of the model used (may be empty on error).
 
 <examples>
    % Here is how to use the Python Click library within a function:
@@ -54,20 +54,25 @@
 </examples>
 
 % The function should perform the following steps:
-   1. **Parse Arguments and Options**:
+   1. **Set up logging**:
+      - Import the logging module and set up a logger for the function.
+      - Set the logging level to DEBUG for detailed logging.
+
+   2. **Parse Arguments and Options**:
       - Check if the `use_csv` flag is set.
       - Validate mandatory arguments: `change_prompt_file` and `input_code` are always required.
       - When `use_csv` is False, validate that `input_prompt_file` is provided.
       - Provide informative messages if required arguments are missing.
 
-   2. **Construct File Paths**:
+   3. **Construct File Paths**:
       - Use `construct_paths` to load input files and establish output file paths.
       - When `use_csv` is True, `input_code` should be treated as a directory path and not included in the `input_file_paths` dictionary.
       - Respect `--force` and `--quiet` options from the CLI context.
 
-   3. **Perform Prompt Modification**:
+   4. **Perform Prompt Modification**:
       - If `use_csv` is True:
         - Verify that `input_code` is a directory.
+        - Validate the CSV file format to ensure it contains 'prompt_name' and 'change_instructions' columns.
         - Call `process_csv_change` to handle batch changes specified in the change prompt file (which should be a CSV in this case).
         - Ensure that `process_csv_change` returns a tuple with four elements: (success, modified_prompts, total_cost, model_name).
         - Use the `change_prompt_file` directly as the CSV file path, not its content.
@@ -75,22 +80,30 @@
         - Load `input_code_content` and `input_prompt_content` from the `input_strings` dictionary.
         - Call `change_func` to modify the input prompt based on the change prompt and code.
 
-   4. **Save Results**:
-      - Write the modified prompt(s) to the output location. For batch changes, this will involve updating multiple files.
+   5. **Save Results**:
+      - For CSV mode:
+        - If `output` is not specified, save individual files for each modified prompt.
+        - If `output` is specified, save results as a CSV file.
+      - For non-CSV mode:
+        - Write the modified prompt to the output location.
       - Use the `output_file_paths` dictionary to determine the output path when not explicitly provided.
 
-   5. **Provide User Feedback**:
+   6. **Provide User Feedback**:
       - Use `rprint` to display messages about the operation's success or failure.
       - Respect verbosity settings from the CLI context.
+      - In CSV mode, provide information about individual files saved or the CSV output file.
 
-   6. **Error Handling**:
-      - Implement try-except blocks to catch exceptions.
-      - Use `ctx.exit(1)` to exit gracefully on fatal errors.
+   7. **Error Handling and Logging**:
+      - Implement try-except blocks to catch exceptions at various stages.
+      - Log detailed information about the execution flow and any errors encountered.
+      - Return appropriate error messages, costs, and model names in case of failures.
 
-% Ensure adherence to the existing codebase's style, including type annotations, docstrings, and exception handling. Avoid name conflicts by importing modules with aliases where necessary (e.g., `from .change import change as change_func`).
+% Ensure adherence to the existing codebase's style, including type annotations, docstrings, and exception handling. Use logging extensively for debugging and tracing the execution flow. Handle all potential error scenarios and provide informative error messages.
 
 % Important: Make sure to handle the `input_code` parameter correctly in both CSV and non-CSV modes. In CSV mode, it should be a directory path, while in non-CSV mode, it should be a file path.
 
 % Note: In the CSV mode, ensure that the `process_csv_change` function is called with the correct parameters, including using the `change_prompt_file` as the CSV file path directly, not its content. Also, handle the returned tuple correctly, which should now include a success flag.
 
 % Use `use_csv` instead of `csv` for the boolean flag to avoid conflicts with the imported csv module.
+
+% Implement robust error handling and logging throughout the function to facilitate debugging and provide clear feedback to users.
