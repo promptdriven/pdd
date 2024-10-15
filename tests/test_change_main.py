@@ -79,7 +79,10 @@ def test_change_main_batch_mode(mock_process_csv_change, setup_environment, capl
     }
     
     # Mock the process_csv_change function
-    mock_process_csv_change.return_value = (True, [{'file1.py': 'Modified content 1'}, {'file2.py': 'Modified content 2'}], 0.5, 'gpt-3.5-turbo')
+    mock_process_csv_change.return_value = (True, [
+        {'file_name': 'file1.py', 'modified_prompt': 'Modified content 1'},
+        {'file_name': 'file2.py', 'modified_prompt': 'Modified content 2'}
+    ], 0.5, 'gpt-3.5-turbo')
     
     # Verify CSV file content
     with open(env["batch_changes_csv"], 'r') as csvfile:

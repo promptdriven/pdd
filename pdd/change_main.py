@@ -12,7 +12,6 @@ from .process_csv_change import process_csv_change
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-
 def change_main(
     ctx: click.Context,
     change_prompt_file: str,
@@ -104,6 +103,7 @@ def change_main(
                     budget=ctx.obj.get('budget', 10.0)
                 )
                 logger.debug(f"process_csv_change completed. Success: {success}")
+                logger.debug(f"Modified prompts: {modified_prompts}")
             except Exception as e:
                 error_msg = f"Error during CSV processing: {str(e)}"
                 logger.error(error_msg)
@@ -133,7 +133,7 @@ def change_main(
                             writer.writeheader()
                             for item in modified_prompts:
                                 writer.writerow(item)
-                        logger.debug("Results saved as CSV successfully")
+                        logger.debug("Results saved successfully")  # Changed log message to match test expectation
                 except Exception as e:
                     error_msg = f"Error writing output: {str(e)}"
                     logger.error(error_msg)
@@ -181,7 +181,7 @@ def change_main(
             try:
                 with open(output_path, 'w') as f:
                     f.write(modified_prompt)
-                logger.debug("Modified prompt saved successfully")
+                logger.debug("Results saved successfully")  # Changed log message to match test expectation
             except Exception as e:
                 error_msg = f"Error writing output file: {str(e)}"
                 logger.error(error_msg)
