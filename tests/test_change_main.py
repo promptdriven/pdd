@@ -1,3 +1,5 @@
+# tests/test_change_main.py
+
 import pytest
 import csv
 import os
@@ -133,3 +135,470 @@ def test_change_main_batch_mode(mock_process_csv_change, setup_environment, capl
     assert "Returning success message for CSV mode" in caplog.text
 
     print("All assertions passed successfully.")
+
+# Helper function to create a mocked Click context
+def create_mock_context(params: dict, obj: dict):
+    mock_ctx = MagicMock()
+    mock_ctx.params = params
+    mock_ctx.obj = obj
+    return mock_ctx
+
+@pytest.fixture
+def mock_construct_paths():
+    with patch('pdd.change_main.construct_paths') as mock:
+        yield mock
+
+@pytest.fixture
+def mock_change_func():
+    with patch('pdd.change_main.change_func') as mock:
+        yield mock
+
+@pytest.fixture
+def mock_process_csv_change():
+    with patch('pdd.change_main.process_csv_change') as mock:
+        yield mock
+
+@pytest.fixture
+def mock_rprint():
+    with patch('pdd.change_main.rprint') as mock:
+        yield mock
+
+@pytest.fixture
+def mock_os_path_isdir():
+    with patch('pdd.change_main.os.path.isdir') as mock:
+        yield mock
+
+@pytest.fixture
+def mock_csv_dictreader():
+    with patch('pdd.change_main.csv.DictReader') as mock:
+        yield mock
+
+@pytest.fixture
+def mock_open_function():
+    with patch('pdd.change_main.open', mock_open=True) as mock:
+        yield mock
+
+# Test cases for non-CSV mode
+def test_change_main_non_csv_success(
+    mock_construct_paths,
+    mock_change_func,
+    mock_rprint,
+):
+    # Arrange
+    ctx = create_mock_context(
+        params={'force': False, 'quiet': False},
+        obj={'strength': 0.8, 'temperature': 0.5, 'language': 'python', 'extension': '.py', 'budget': 10.0}
+    )
+    change_prompt_file = "path/to/change_prompt.txt"
+    input_code = "path/to/input_code.py"
+    input_prompt_file = "path/to/input_prompt.txt"
+    output = "path/to/output_prompt.txt"
+    use_csv = False
+
+    # Mock construct_paths return value
+    mock_construct_paths.return_value = (
+        {
+            "change_prompt_file": "Change Prompt Content",
+            "input_code": "Input Code Content",
+            "input_prompt_file": "Input Prompt Content"
+        },
+        {"output": output},
+        "python"
+    )
+
+    # Mock change_func return value
+    modified_prompt = "Modified Prompt Content"
+    total_cost = 0.05
+    model_name = "gpt-3.5-turbo"
+    mock_change_func.return_value = (modified_prompt, total_cost, model_name)
+
+    # Act
+    result = change_main(
+        ctx=ctx,
+        change_prompt_file=change_prompt_file,
+        input_code=input_code,
+        input_prompt_file=input_prompt_file,
+        output=output,
+        use_csv=use_csv
+    )
+
+    # Assert
+    assert result == (modified_prompt, total_cost, model_name)
+    mock_construct_paths.assert_called_once_with(
+        input_file_paths={
+            "change_prompt_file": change_prompt_file,
+            "input_code": input_code,
+            "input_prompt_file": input_prompt_file
+        },
+        force=False,
+        quiet=False,
+        command="change",
+        command_options={"output": output}
+    )
+    mock_change_func.assert_called_once_with(
+        input_prompt="Input Prompt Content",
+        input_code="Input Code Content",
+        change_prompt="Change Prompt Content",
+        strength=0.8,
+        temperature=0.5
+    )
+    mock_rprint.assert_any_call("[bold green]Prompt modification completed successfully.[/bold green]")
+    mock_rprint.assert_any_call(f"[bold]Model used:[/bold] {model_name}")
+    mock_rprint.assert_any_call(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
+    mock_rprint.assert_any_call(f"[bold]Modified prompt saved to:[/bold] {output}")
+
+def test_change_main_non_csv_missing_input_prompt_file(mock_rprint):
+    # Arrange
+    ctx = create_mock_context(
+        params={'force': False, 'quiet': False},
+        obj={'strength': 0.8, 'temperature': 0.5}
+    )
+    change_prompt_file = "path/to/change_prompt.txt"
+    input_code = "path/to/input_code.py"
+    input_prompt_file = None
+    output = "path/to/output_prompt.txt"
+    use_csv = False
+
+    # Act
+    result = change_main(
+        ctx=ctx,
+        change_prompt_file=change_prompt_file,
+        input_code=input_code,
+        input_prompt_file=input_prompt_file,
+        output=output,
+        use_csv=use_csv
+    )
+
+    # Assert
+    assert result == ("Error: 'input_prompt_file' is required when not using '--csv' mode.", 0.0, "")
+    mock_rprint.assert_called_once_with("[bold red]Error: 'input_prompt_file' is required when not using '--csv' mode.[/bold red]")
+
+def test_change_main_non_csv_construct_paths_error(
+    mock_construct_paths,
+    mock_rprint,
+):
+    # Arrange
+    ctx = create_mock_context(
+        params={'force': False, 'quiet': False},
+        obj={'strength': 0.8, 'temperature': 0.5}
+    )
+    change_prompt_file = "path/to/change_prompt.txt"
+    input_code = "path/to/input_code.py"
+    input_prompt_file = "path/to/input_prompt.txt"
+    output = "path/to/output_prompt.txt"
+    use_csv = False
+
+    # Mock construct_paths to raise an exception
+    mock_construct_paths.side_effect = Exception("Construct Paths Failed")
+
+    # Act
+    result = change_main(
+        ctx=ctx,
+        change_prompt_file=change_prompt_file,
+        input_code=input_code,
+        input_prompt_file=input_prompt_file,
+        output=output,
+        use_csv=use_csv
+    )
+
+    # Assert
+    assert result == ("An unexpected error occurred: Construct Paths Failed", 0.0, "")
+    mock_rprint.assert_called_once_with("[bold red]Error:[/bold red] An unexpected error occurred: Construct Paths Failed")
+
+def test_change_main_non_csv_change_func_error(
+    mock_construct_paths,
+    mock_change_func,
+    mock_rprint,
+):
+    # Arrange
+    ctx = create_mock_context(
+        params={'force': False, 'quiet': False},
+        obj={'strength': 0.8, 'temperature': 0.5}
+    )
+    change_prompt_file = "path/to/change_prompt.txt"
+    input_code = "path/to/input_code.py"
+    input_prompt_file = "path/to/input_prompt.txt"
+    output = "path/to/output_prompt.txt"
+    use_csv = False
+
+    # Mock construct_paths return value
+    mock_construct_paths.return_value = (
+        {
+            "change_prompt_file": "Change Prompt Content",
+            "input_code": "Input Code Content",
+            "input_prompt_file": "Input Prompt Content"
+        },
+        {"output": output},
+        "python"
+    )
+
+    # Mock change_func to raise an exception
+    mock_change_func.side_effect = Exception("Change Function Failed")
+
+    # Act
+    result = change_main(
+        ctx=ctx,
+        change_prompt_file=change_prompt_file,
+        input_code=input_code,
+        input_prompt_file=input_prompt_file,
+        output=output,
+        use_csv=use_csv
+    )
+
+    # Assert
+    assert result == ("An unexpected error occurred: Change Function Failed", 0.0, "")
+    mock_rprint.assert_called_once_with("[bold red]Error:[/bold red] An unexpected error occurred: Change Function Failed")
+
+# Test cases for CSV mode
+def test_change_main_csv_success(
+    mock_construct_paths,
+    mock_process_csv_change,
+    mock_rprint,
+    mock_os_path_isdir,
+    mock_csv_dictreader,
+    mock_open_function,
+):
+    # Arrange
+    ctx = create_mock_context(
+        params={'force': True, 'quiet': False},
+        obj={'strength': 0.7, 'temperature': 0.3, 'language': 'python', 'extension': '.py', 'budget': 20.0}
+    )
+    change_prompt_file = "path/to/change_prompts.csv"
+    input_code = "path/to/code_directory"
+    input_prompt_file = None
+    output = "path/to/output.csv"
+    use_csv = True
+
+    # Mock os.path.isdir to return True
+    mock_os_path_isdir.return_value = True
+
+    # Mock construct_paths return value
+    mock_construct_paths.return_value = (
+        {
+            "change_prompt_file": "Change Prompt Content"
+        },
+        {"output": output},
+        "python"
+    )
+
+    # Mock CSV file reading and validation
+    mock_csv_dictreader.return_value.fieldnames = ['prompt_name', 'change_instructions']
+    
+    # Mock process_csv_change return value
+    success = True
+    modified_prompts = [
+        {'file_name': 'file1.py', 'modified_prompt': 'Modified Prompt 1'},
+        {'file_name': 'file2.py', 'modified_prompt': 'Modified Prompt 2'}
+    ]
+    total_cost = 0.10
+    model_name = "gpt-4"
+    mock_process_csv_change.return_value = (success, modified_prompts, total_cost, model_name)
+
+    # Act
+    result = change_main(
+        ctx=ctx,
+        change_prompt_file=change_prompt_file,
+        input_code=input_code,
+        input_prompt_file=input_prompt_file,
+        output=output,
+        use_csv=use_csv
+    )
+
+    # Assert
+    assert result == ("Multiple prompts have been updated.", total_cost, model_name)
+    mock_construct_paths.assert_called_once_with(
+        input_file_paths={
+            "change_prompt_file": change_prompt_file,
+        },
+        force=True,
+        quiet=False,
+        command="change",
+        command_options={"output": output}
+    )
+    mock_os_path_isdir.assert_called_once_with(input_code)
+    mock_csv_dictreader.assert_called_once()
+    mock_process_csv_change.assert_called_once_with(
+        csv_file=change_prompt_file,
+        strength=0.7,
+        temperature=0.3,
+        code_directory=input_code,
+        language='python',
+        extension='.py',
+        budget=20.0
+    )
+    mock_rprint.assert_any_call("[bold green]Batch change operation completed successfully.[/bold green]")
+    mock_rprint.assert_any_call(f"[bold]Model used:[/bold] {model_name}")
+    mock_rprint.assert_any_call(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
+    mock_rprint.assert_any_call(f"[bold]Results saved to CSV:[/bold] {output}")
+
+def test_change_main_csv_input_code_not_directory(
+    mock_construct_paths,
+    mock_rprint,
+    mock_os_path_isdir,
+):
+    # Arrange
+    ctx = create_mock_context(
+        params={'force': False, 'quiet': False},
+        obj={'strength': 0.6, 'temperature': 0.4}
+    )
+    change_prompt_file = "path/to/change_prompts.csv"
+    input_code = "path/to/input_file.py"  # Not a directory
+    input_prompt_file = None
+    output = "path/to/output.csv"
+    use_csv = True
+
+    # Mock os.path.isdir to return False
+    mock_os_path_isdir.return_value = False
+
+    # Act
+    result = change_main(
+        ctx=ctx,
+        change_prompt_file=change_prompt_file,
+        input_code=input_code,
+        input_prompt_file=input_prompt_file,
+        output=output,
+        use_csv=use_csv
+    )
+
+    # Assert
+    expected_error = f"In CSV mode, 'input_code' must be a directory. Got: {input_code}"
+    assert result == (expected_error, 0.0, "")
+    mock_rprint.assert_called_once_with("[bold red]Error:[/bold red] In CSV mode, 'input_code' must be a directory. Got: path/to/input_file.py")
+
+def test_change_main_csv_missing_columns(
+    mock_construct_paths,
+    mock_csv_dictreader,
+    mock_rprint,
+    mock_os_path_isdir,
+    mock_open_function,
+):
+    # Arrange
+    ctx = create_mock_context(
+        params={'force': False, 'quiet': False},
+        obj={'strength': 0.6, 'temperature': 0.4}
+    )
+    change_prompt_file = "path/to/change_prompts.csv"
+    input_code = "path/to/code_directory"
+    input_prompt_file = None
+    output = "path/to/output.csv"
+    use_csv = True
+
+    # Mock os.path.isdir to return True
+    mock_os_path_isdir.return_value = True
+
+    # Mock construct_paths return value
+    mock_construct_paths.return_value = (
+        {
+            "change_prompt_file": "Change Prompt Content"
+        },
+        {"output": output},
+        "python"
+    )
+
+    # Mock CSV file with missing columns
+    mock_csv_dictreader.return_value.fieldnames = ['invalid_column1', 'invalid_column2']
+
+    # Act
+    result = change_main(
+        ctx=ctx,
+        change_prompt_file=change_prompt_file,
+        input_code=input_code,
+        input_prompt_file=input_prompt_file,
+        output=output,
+        use_csv=use_csv
+    )
+
+    # Assert
+    expected_error = "CSV file must contain 'prompt_name' and 'change_instructions' columns."
+    assert result == (expected_error, 0.0, "")
+    mock_rprint.assert_called_once_with("[bold red]Error:[/bold red] CSV file must contain 'prompt_name' and 'change_instructions' columns.")
+
+def test_change_main_csv_process_csv_change_error(
+    mock_construct_paths,
+    mock_process_csv_change,
+    mock_rprint,
+    mock_os_path_isdir,
+    mock_csv_dictreader,
+    mock_open_function,
+):
+    # Arrange
+    ctx = create_mock_context(
+        params={'force': True, 'quiet': False},
+        obj={'strength': 0.7, 'temperature': 0.3}
+    )
+    change_prompt_file = "path/to/change_prompts.csv"
+    input_code = "path/to/code_directory"
+    input_prompt_file = None
+    output = "path/to/output.csv"
+    use_csv = True
+
+    # Mock os.path.isdir to return True
+    mock_os_path_isdir.return_value = True
+
+    # Mock construct_paths return value
+    mock_construct_paths.return_value = (
+        {
+            "change_prompt_file": "Change Prompt Content"
+        },
+        {"output": output},
+        "python"
+    )
+
+    # Mock CSV file validation
+    mock_csv_dictreader.return_value.fieldnames = ['prompt_name', 'change_instructions']
+
+    # Mock process_csv_change to raise an exception
+    mock_process_csv_change.side_effect = Exception("CSV Processing Failed")
+
+    # Act
+    result = change_main(
+        ctx=ctx,
+        change_prompt_file=change_prompt_file,
+        input_code=input_code,
+        input_prompt_file=input_prompt_file,
+        output=output,
+        use_csv=use_csv
+    )
+
+    # Assert
+    expected_error = "Error during CSV processing: CSV Processing Failed"
+    assert result == (expected_error, 0.0, "")
+    mock_rprint.assert_called_once_with(f"[bold red]Error:[/bold red] {expected_error}")
+
+# Test cases for error handling and logging
+def test_change_main_unexpected_exception(
+    mock_construct_paths,
+    mock_change_func,
+    mock_process_csv_change,
+    mock_rprint,
+):
+    # Arrange
+    ctx = create_mock_context(
+        params={'force': False, 'quiet': False},
+        obj={'strength': 0.8, 'temperature': 0.5}
+    )
+    change_prompt_file = "path/to/change_prompt.txt"
+    input_code = "path/to/input_code.py"
+    input_prompt_file = "path/to/input_prompt.txt"
+    output = "path/to/output_prompt.txt"
+    use_csv = False
+
+    # Mock construct_paths to raise a generic exception
+    mock_construct_paths.side_effect = ValueError("Invalid value")
+
+    # Act
+    result = change_main(
+        ctx=ctx,
+        change_prompt_file=change_prompt_file,
+        input_code=input_code,
+        input_prompt_file=input_prompt_file,
+        output=output,
+        use_csv=use_csv
+    )
+
+    # Assert
+    expected_error = "An unexpected error occurred: Invalid value"
+    assert result == (expected_error, 0.0, "")
+    mock_rprint.assert_called_once_with(f"[bold red]Error:[/bold red] {expected_error}")
+
+# Additional test cases can be added here to cover more scenarios
