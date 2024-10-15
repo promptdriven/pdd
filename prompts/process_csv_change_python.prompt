@@ -37,5 +37,5 @@
         b. Call the change function with the input_prompt, input_code, and change_prompt.
         c. Add the returned total_cost to the total cost accumulator.
         d. If the total cost exceeds the budget, break the loop.
-        e If the change was successful, add the modified prompt to the list_of_jsons.
+        e. If the change was successful, add the modified prompt to the list_of_jsons. Use the original prompt_name (full path) as the "file_name" in the output dictionary.
     Step 3. Return the success status, list of modified prompts, total cost, and model name.
