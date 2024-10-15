@@ -35,7 +35,10 @@ def change_main(
     try:
         # Validate arguments
         if not use_csv and not input_prompt_file:
-            logger.error("'input_prompt_file' is required when not using '--csv' mode.")
+            error_msg = "'input_prompt_file' is required when not using '--csv' mode."
+            logger.error(error_msg)
+            if not ctx.params.get('quiet', False):
+                rprint(f"[bold red]Error:[/bold red] {error_msg}")
             return ("Error: 'input_prompt_file' is required when not using '--csv' mode.", 0.0, "")
 
         # Construct file paths
@@ -74,6 +77,8 @@ def change_main(
             if not os.path.isdir(input_code):
                 error_msg = f"In CSV mode, 'input_code' must be a directory. Got: {input_code}"
                 logger.error(error_msg)
+                if not ctx.params.get('quiet', False):
+                    rprint(f"[bold red]Error:[/bold red] {error_msg}")
                 return (error_msg, 0.0, "")
 
             # Validate CSV file format
@@ -83,11 +88,15 @@ def change_main(
                     if 'prompt_name' not in reader.fieldnames or 'change_instructions' not in reader.fieldnames:
                         error_msg = "CSV file must contain 'prompt_name' and 'change_instructions' columns."
                         logger.error(error_msg)
+                        if not ctx.params.get('quiet', False):
+                            rprint(f"[bold red]Error:[/bold red] {error_msg}")
                         return (error_msg, 0.0, "")
                     logger.debug(f"CSV file validated. Columns: {reader.fieldnames}")
             except Exception as e:
                 error_msg = f"Error reading CSV file: {str(e)}"
                 logger.error(error_msg)
+                if not ctx.params.get('quiet', False):
+                    rprint(f"[bold red]Error:[/bold red] {error_msg}")
                 return (error_msg, 0.0, "")
 
             # Perform batch changes using CSV
@@ -107,6 +116,8 @@ def change_main(
             except Exception as e:
                 error_msg = f"Error during CSV processing: {str(e)}"
                 logger.error(error_msg)
+                if not ctx.params.get('quiet', False):
+                    rprint(f"[bold red]Error:[/bold red] {error_msg}")
                 return (error_msg, 0.0, "")
 
             # Determine output path
@@ -133,10 +144,12 @@ def change_main(
                             writer.writeheader()
                             for item in modified_prompts:
                                 writer.writerow(item)
-                        logger.debug("Results saved successfully")  # Changed log message to match test expectation
+                        logger.debug("Results saved successfully")
                 except Exception as e:
                     error_msg = f"Error writing output: {str(e)}"
                     logger.error(error_msg)
+                    if not ctx.params.get('quiet', False):
+                        rprint(f"[bold red]Error:[/bold red] {error_msg}")
                     return (error_msg, total_cost, model_name)
 
             # Provide user feedback
@@ -153,10 +166,10 @@ def change_main(
                         rprint(f"  - {individual_output_path}")
                 else:
                     rprint(f"[bold]Results saved to CSV:[/bold] {output_path}")
-            
+
             logger.debug("Returning success message for CSV mode")
             return ("Multiple prompts have been updated.", total_cost, model_name)
-        
+
         else:
             logger.debug("Using non-CSV mode")
             input_code_content = input_strings["input_code"]
@@ -164,14 +177,21 @@ def change_main(
 
             # Perform single change
             logger.debug("Calling change_func")
-            modified_prompt, total_cost, model_name = change_func(
-                input_prompt=input_prompt_content,
-                input_code=input_code_content,
-                change_prompt=change_prompt_content,
-                strength=strength,
-                temperature=temperature
-            )
-            logger.debug("change_func completed")
+            try:
+                modified_prompt, total_cost, model_name = change_func(
+                    input_prompt=input_prompt_content,
+                    input_code=input_code_content,
+                    change_prompt=change_prompt_content,
+                    strength=strength,
+                    temperature=temperature
+                )
+                logger.debug("change_func completed")
+            except Exception as e:
+                error_msg = f"Error during prompt modification: {str(e)}"
+                logger.error(error_msg)
+                if not ctx.params.get('quiet', False):
+                    rprint(f"[bold red]Error:[/bold red] {error_msg}")
+                return (error_msg, 0.0, "")
 
             # Determine output path
             output_path = output or output_file_paths.get('output', f"modified_{input_prompt_file}")
@@ -181,10 +201,12 @@ def change_main(
             try:
                 with open(output_path, 'w') as f:
                     f.write(modified_prompt)
-                logger.debug("Results saved successfully")  # Changed log message to match test expectation
+                logger.debug("Results saved successfully")
             except Exception as e:
                 error_msg = f"Error writing output file: {str(e)}"
                 logger.error(error_msg)
+                if not ctx.params.get('quiet', False):
+                    rprint(f"[bold red]Error:[/bold red] {error_msg}")
                 return (error_msg, total_cost, model_name)
 
             # Provide user feedback
