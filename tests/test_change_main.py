@@ -2,7 +2,7 @@ import pytest
 import csv
 import os
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from click import Context
 from pdd.change_main import change_main
 
@@ -33,38 +33,35 @@ def subtract(a, b):
     
     # Create corresponding prompt files
     prompt1 = code_directory / "script1_python.prompt"
-    prompt1.write_text("Modify the function to handle overflow errors.")
+    prompt1.write_text("Write a function to calculate the factorial of a number.")
     
     prompt2 = code_directory / "script2_python.prompt"
-    prompt2.write_text("Optimize the function for large integers.")
+    prompt2.write_text("Write a function to calculate the fibonacci sequence.")
     
     # Create batch_changes.csv
     batch_changes_csv = tmp_path / "batch_changes.csv"
-    batch_changes_csv.write_text("prompt_name,change_instructions\n")
-    batch_changes_csv.write_text(f"{prompt1},Modify the function to handle overflow errors.\n")
-    batch_changes_csv.write_text(f"{prompt2},Optimize the function for large integers.\n")
+    with open(batch_changes_csv, 'w', newline='') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=['prompt_name', 'change_instructions'])
+        writer.writeheader()
+        writer.writerow({'prompt_name': str(prompt1), 'change_instructions': "Modify the function to handle overflow errors."})
+        writer.writerow({'prompt_name': str(prompt2), 'change_instructions': "Optimize the function for large numbers."})
     
     # Define the output file
     batch_output_file = tmp_path / "batch_modified_prompts.csv"
     
-    # Prepare the expected correct_batch.csv content
-    correct_batch_csv = tmp_path / "correct_batch.csv"
-    correct_batch_csv.write_text("file_name,modified_prompt\n")
-    correct_batch_csv.write_text(f"{prompt1},Modified function to handle overflow errors.\n")
-    correct_batch_csv.write_text(f"{prompt2},Optimized function for large integers.\n")
-    
     return {
         "code_directory": str(code_directory),
         "batch_changes_csv": str(batch_changes_csv),
-        "batch_output_file": str(batch_output_file),
-        "correct_batch_csv": str(correct_batch_csv)
+        "batch_output_file": str(batch_output_file)
     }
 
-def test_change_main_batch_mode(setup_environment, monkeypatch):
+@patch('pdd.change_main.process_csv_change')
+def test_change_main_batch_mode(mock_process_csv_change, setup_environment, caplog):
     """
     Tests the `change_main` function in CSV batch-change mode by comparing the generated
     output with the expected correct output.
     """
+    caplog.set_level('DEBUG')
     env = setup_environment
     
     # Mock the Click context
@@ -81,9 +78,13 @@ def test_change_main_batch_mode(setup_environment, monkeypatch):
         "budget": 10.0
     }
     
-    # Mock the process_csv_change function if necessary
-    # For this example, we'll assume it works correctly and does not need to be mocked.
-    # If the actual implementation interacts with external services, consider mocking it here.
+    # Mock the process_csv_change function
+    mock_process_csv_change.return_value = (True, [{'file1.py': 'Modified content 1'}, {'file2.py': 'Modified content 2'}], 0.5, 'gpt-3.5-turbo')
+    
+    # Verify CSV file content
+    with open(env["batch_changes_csv"], 'r') as csvfile:
+        reader = csv.DictReader(csvfile)
+        assert 'prompt_name' in reader.fieldnames and 'change_instructions' in reader.fieldnames, "CSV file does not have the correct columns"
     
     # Run the change_main function in CSV mode
     message, total_cost, model_name = change_main(
@@ -100,27 +101,32 @@ def test_change_main_batch_mode(setup_environment, monkeypatch):
     assert isinstance(total_cost, float), "Total cost should be a float."
     assert isinstance(model_name, str), "Model name should be a string."
     
-    # Read the generated output CSV
-    generated_output = {}
-    with open(env["batch_output_file"], mode='r', newline='', encoding='utf-8') as csvfile:
-        reader = csv.DictReader(csvfile)
-        for row in reader:
-            generated_output[row['file_name']] = row['modified_prompt']
-    
-    # Read the expected correct CSV
-    expected_output = {}
-    with open(env["correct_batch_csv"], mode='r', newline='', encoding='utf-8') as csvfile:
-        reader = csv.DictReader(csvfile)
-        for row in reader:
-            expected_output[row['file_name']] = row['modified_prompt']
-    
-    # Compare the generated output with the expected output
-    assert generated_output == expected_output, (
-        f"Generated output does not match expected output.\n"
-        f"Expected: {expected_output}\n"
-        f"Got: {generated_output}"
+    # Verify that process_csv_change was called with correct arguments
+    mock_process_csv_change.assert_called_once_with(
+        csv_file=env["batch_changes_csv"],
+        strength=0.9,
+        temperature=0,
+        code_directory=env["code_directory"],
+        language="python",
+        extension=".py",
+        budget=10.0
     )
     
-    # Optionally, assert that the total_cost and model_name meet certain criteria
-    assert total_cost > 0, "Total cost should be greater than zero."
-    assert model_name != "", "Model name should not be empty."
+    # Check if the output file was created
+    assert os.path.exists(env["batch_output_file"]), "Output file was not created"
+    
+    # Read the generated output CSV
+    with open(env["batch_output_file"], mode='r', newline='', encoding='utf-8') as csvfile:
+        reader = csv.DictReader(csvfile)
+        rows = list(reader)
+        assert len(rows) == 2, "Output CSV should have 2 rows"
+        assert 'file_name' in reader.fieldnames and 'modified_prompt' in reader.fieldnames, "Output CSV does not have the correct columns"
+    
+    # Check logs for debugging information
+    assert "Starting change_main with use_csv=True" in caplog.text
+    assert "CSV file validated" in caplog.text
+    assert "process_csv_change completed. Success: True" in caplog.text
+    assert "Results saved successfully" in caplog.text
+    assert "Returning success message for CSV mode" in caplog.text
+
+    print("All assertions passed successfully.")
