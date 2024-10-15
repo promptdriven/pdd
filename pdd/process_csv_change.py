@@ -148,7 +148,7 @@ def process_csv_change(
 
                     # Add to the list_of_jsons
                     list_of_jsons.append({
-                        "file_name": input_code_name,
+                        "file_name": prompt_name,
                         "modified_prompt": modified_prompt
                     })
 
