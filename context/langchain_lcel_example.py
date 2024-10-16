@@ -19,10 +19,38 @@ from langchain.callbacks.base import BaseCallbackHandler
 from langchain.schema import LLMResult
 
 
+
 # Define a base output parser (e.g., PydanticOutputParser)
 from pydantic import BaseModel, Field
 
+import json
 
+class CompletionStatusHandler(BaseCallbackHandler):
+    def __init__(self):
+        self.is_complete = False
+        self.finish_reason = None
+        self.input_tokens = None
+        self.output_tokens = None
+
+    def on_llm_end(self, response: LLMResult, **kwargs) -> None:
+        self.is_complete = True
+        if response.generations and response.generations[0]:
+            generation = response.generations[0][0]
+            self.finish_reason = generation.generation_info.get('finish_reason').lower()
+            
+            # Extract token usage
+            if hasattr(generation.message, 'usage_metadata'):
+                usage_metadata = generation.message.usage_metadata
+                self.input_tokens = usage_metadata.get('input_tokens')
+                self.output_tokens = usage_metadata.get('output_tokens')
+        # print("response:",response)
+        print(f"Extracted information:")
+        print(f"Finish reason: {self.finish_reason}")
+        print(f"Input tokens: {self.input_tokens}")
+        print(f"Output tokens: {self.output_tokens}")
+
+# Set up the LLM with the custom handler
+handler = CompletionStatusHandler()
 # Always setup cache to save money and increase speeds
 set_llm_cache(SQLiteCache(database_path=".langchain.db"))
 
@@ -30,7 +58,7 @@ set_llm_cache(SQLiteCache(database_path=".langchain.db"))
 # Create the LCEL template. Make note of the variable {topic} which will be filled in later.
 prompt_template = PromptTemplate.from_template("Tell me a joke about {topic}")
 
-llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0)
+llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0, callbacks=[handler])
 # Combine with a model and parser to output a string
 chain = prompt_template |llm| StrOutputParser()
 
@@ -55,7 +83,7 @@ prompt = PromptTemplate(
     partial_variables={"format_instructions": parser.get_format_instructions()},
 )
 
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, response_format={"type": "json_object"}) 
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, response_format={"type": "json_object"}, callbacks=[handler]) 
 
 # Chain the components. 
 #  The class `LLMChain` was deprecated in LangChain 0.1.17 and will be removed in 1.0. Use RunnableSequence, e.g., `prompt | llm` instead.
@@ -78,7 +106,7 @@ llm = ChatOpenAI(
     model='deepseek-chat', 
     openai_api_key=deepseek_api_key, 
     openai_api_base='https://api.deepseek.com',
-    temperature=0
+    temperature=0, callbacks=[handler]
 )
 
 # Chain the components
@@ -91,7 +119,7 @@ print("deepseek",result)
 
 llm = Fireworks(
     model="accounts/fireworks/models/mixtral-8x7b-instruct",
-    temperature=0)
+    temperature=0, callbacks=[handler])
 # Chain the components
 chain = prompt | llm | parser
 
@@ -106,9 +134,9 @@ print("fireworks",result)
 prompt = ChatPromptTemplate.from_template(
     "Tell me a short joke about {topic}"
 )
-chat_openai = ChatOpenAI(model="gpt-3.5-turbo")
-openai = OpenAI(model="gpt-3.5-turbo-instruct")
-anthropic = ChatAnthropic(model="claude-2")
+chat_openai = ChatOpenAI(model="gpt-3.5-turbo", callbacks=[handler])
+openai = OpenAI(model="gpt-3.5-turbo-instruct", callbacks=[handler])
+anthropic = ChatAnthropic(model="claude-2", callbacks=[handler])
 model = (
     chat_openai
     .with_fallbacks([anthropic])
@@ -131,7 +159,7 @@ print("config alt:",result)
 
 
 
-llm = ChatGroq(temperature=0, model_name="mixtral-8x7b-32768")
+llm = ChatGroq(temperature=0, model_name="mixtral-8x7b-32768", callbacks=[handler])
 system = "You are a helpful assistant."
 human = "{text}"
 prompt = ChatPromptTemplate.from_messages([("system", system), ("human", human)])
@@ -142,7 +170,7 @@ print(chain.invoke({"text": "Explain the importance of low latency LLMs."}))
 
 llm = Together(
     model="meta-llama/Llama-3-70b-chat-hf",
-    max_tokens=500,
+    max_tokens=500, callbacks=[handler]
 )
 chain = prompt | llm | StrOutputParser()
 print(chain.invoke({"text": "Explain the importance of together.ai."}))
@@ -160,19 +188,10 @@ formatted_prompt = prompt_template.format(adjective="funny", content="data scien
 print(formatted_prompt)
 
 
-
-class CompletionStatusHandler(BaseCallbackHandler):
-    def __init__(self):
-        self.is_complete = False
-        self.finish_reason = None
-
-    def on_llm_end(self, response: LLMResult, **kwargs) -> None:
-        self.is_complete = True
-        if response.generations:
-            self.finish_reason = response.generations[0][0].generation_info.get('finish_reason')
-
 # Set up the LLM with the custom handler
 handler = CompletionStatusHandler()
+
+
 llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0.9, callbacks=[handler])
 
 prompt = PromptTemplate.from_template("What is a good name for a company that makes {product}?")
@@ -186,3 +205,5 @@ response = chain.invoke({"product":"colorful socks"})
 print(f"Is complete: {handler.is_complete}")
 print(f"Finish reason: {handler.finish_reason}")
 print(f"Response: {response}")
+print(f"Input tokens: {handler.input_tokens}")
+print(f"Output tokens: {handler.output_tokens}")
