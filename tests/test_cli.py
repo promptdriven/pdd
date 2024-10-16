@@ -4,7 +4,7 @@ from unittest.mock import patch, mock_open, MagicMock
 import csv
 from io import StringIO
 from click.testing import CliRunner
-from pdd.cli import cli
+from pdd.cli import cli  # Import the CLI application
 
 @pytest.fixture
 def runner() -> CliRunner:
@@ -106,8 +106,9 @@ def test_fix_command(runner: CliRunner, tmp_path) -> None:
         assert output_test.exists()
         assert output_code.exists()
 
-def test_split_command(runner: CliRunner, tmp_path) -> None:
+def test_split_command(tmp_path) -> None:
     """Test the split command of the CLI."""
+    runner = CliRunner()
     input_prompt = tmp_path / "input_prompt.txt"
     input_prompt.write_text("Generate a complex Python program")
     input_code = tmp_path / "input_code.py"
@@ -116,14 +117,22 @@ def test_split_command(runner: CliRunner, tmp_path) -> None:
     example_code.write_text("complex_function()")
     output_sub = tmp_path / "sub_prompt.txt"
     output_modified = tmp_path / "modified_prompt.txt"
-    
-    result = runner.invoke(cli, ['split', str(input_prompt), str(input_code), str(example_code),
-                                 '--output-sub', str(output_sub), '--output-modified', str(output_modified)])
-    assert result.exit_code == 0
-    assert "Sub-prompt saved to:" in result.output
-    assert "Modified prompt saved to:" in result.output
-    assert output_sub.exists()
-    assert output_modified.exists()
+
+    # Mock the split_func to avoid external API calls
+    with patch('pdd.cli.split_func', return_value=('sub prompt content', 'modified prompt content', 0.0)):
+        result = runner.invoke(cli, [
+            'split',
+            str(input_prompt),
+            str(input_code),
+            str(example_code),
+            '--output-sub', str(output_sub),
+            '--output-modified', str(output_modified)
+        ])
+        assert result.exit_code == 0
+        assert "Sub-prompt saved to:" in result.output
+        assert "Modified prompt saved to:" in result.output
+        assert output_sub.exists()
+        assert output_modified.exists()
 
 def test_change_command(runner: CliRunner, tmp_path) -> None:
     """Test the change command of the CLI."""
