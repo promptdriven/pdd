@@ -35,11 +35,27 @@ def change_main(
     try:
         # Validate arguments
         if not use_csv and not input_prompt_file:
-            error_msg = "'input_prompt_file' is required when not using '--csv' mode."
+            error_msg = "Error: 'input_prompt_file' is required when not using '--csv' mode."
             logger.error(error_msg)
             if not ctx.params.get('quiet', False):
-                rprint(f"[bold red]Error: {error_msg}[/bold red]")
-            return ("Error: 'input_prompt_file' is required when not using '--csv' mode.", 0.0, "")
+                rprint(f"[bold red]{error_msg}[/bold red]")
+            return (error_msg, 0.0, "")
+
+        # Check if input_code is a directory when using CSV mode
+        if use_csv:
+            try:
+                if not os.path.isdir(input_code):
+                    error_msg = f"In CSV mode, 'input_code' must be a directory. Got: {input_code}"
+                    logger.error(error_msg)
+                    if not ctx.params.get('quiet', False):
+                        rprint(f"[bold red]Error: {error_msg}[/bold red]")
+                    return (error_msg, 0.0, "")
+            except Exception as e:
+                error_msg = f"Error checking input_code directory: {str(e)}"
+                logger.error(error_msg)
+                if not ctx.params.get('quiet', False):
+                    rprint(f"[bold red]Error: {error_msg}[/bold red]")
+                return (error_msg, 0.0, "")
 
         # Construct file paths
         input_file_paths = {
@@ -73,14 +89,6 @@ def change_main(
 
         if use_csv:
             logger.debug(f"Using CSV mode with input_code={input_code}")
-            # Verify that input_code is a directory
-            if not os.path.isdir(input_code):
-                error_msg = f"In CSV mode, 'input_code' must be a directory. Got: {input_code}"
-                logger.error(error_msg)
-                if not ctx.params.get('quiet', False):
-                    rprint(f"[bold red]Error: {error_msg}[/bold red]")
-                return (error_msg, 0.0, "")
-
             # Validate CSV file format
             try:
                 with open(change_prompt_file, mode='r', newline='', encoding='utf-8') as csvfile:
@@ -112,9 +120,8 @@ def change_main(
                     budget=ctx.obj.get('budget', 10.0)
                 )
                 logger.debug(f"process_csv_change completed. Success: {success}")
-                logger.debug(f"Modified prompts: {modified_prompts}")
             except Exception as e:
-                error_msg = f"An unexpected error occurred: {str(e)}"
+                error_msg = f"Error during CSV processing: {str(e)}"
                 logger.error(error_msg)
                 if not ctx.params.get('quiet', False):
                     rprint(f"[bold red]Error: {error_msg}[/bold red]")
