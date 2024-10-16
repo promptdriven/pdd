@@ -38,7 +38,7 @@ def change_main(
             error_msg = "'input_prompt_file' is required when not using '--csv' mode."
             logger.error(error_msg)
             if not ctx.params.get('quiet', False):
-                rprint(f"[bold red]Error:[/bold red] {error_msg}")
+                rprint(f"[bold red]Error: {error_msg}[/bold red]")
             return ("Error: 'input_prompt_file' is required when not using '--csv' mode.", 0.0, "")
 
         # Construct file paths
@@ -78,7 +78,7 @@ def change_main(
                 error_msg = f"In CSV mode, 'input_code' must be a directory. Got: {input_code}"
                 logger.error(error_msg)
                 if not ctx.params.get('quiet', False):
-                    rprint(f"[bold red]Error:[/bold red] {error_msg}")
+                    rprint(f"[bold red]Error: {error_msg}[/bold red]")
                 return (error_msg, 0.0, "")
 
             # Validate CSV file format
@@ -89,14 +89,14 @@ def change_main(
                         error_msg = "CSV file must contain 'prompt_name' and 'change_instructions' columns."
                         logger.error(error_msg)
                         if not ctx.params.get('quiet', False):
-                            rprint(f"[bold red]Error:[/bold red] {error_msg}")
+                            rprint(f"[bold red]Error: {error_msg}[/bold red]")
                         return (error_msg, 0.0, "")
                     logger.debug(f"CSV file validated. Columns: {reader.fieldnames}")
             except Exception as e:
                 error_msg = f"Error reading CSV file: {str(e)}"
                 logger.error(error_msg)
                 if not ctx.params.get('quiet', False):
-                    rprint(f"[bold red]Error:[/bold red] {error_msg}")
+                    rprint(f"[bold red]Error: {error_msg}[/bold red]")
                 return (error_msg, 0.0, "")
 
             # Perform batch changes using CSV
@@ -114,10 +114,10 @@ def change_main(
                 logger.debug(f"process_csv_change completed. Success: {success}")
                 logger.debug(f"Modified prompts: {modified_prompts}")
             except Exception as e:
-                error_msg = f"Error during CSV processing: {str(e)}"
+                error_msg = f"An unexpected error occurred: {str(e)}"
                 logger.error(error_msg)
                 if not ctx.params.get('quiet', False):
-                    rprint(f"[bold red]Error:[/bold red] {error_msg}")
+                    rprint(f"[bold red]Error: {error_msg}[/bold red]")
                 return (error_msg, 0.0, "")
 
             # Determine output path
@@ -149,23 +149,24 @@ def change_main(
                     error_msg = f"Error writing output: {str(e)}"
                     logger.error(error_msg)
                     if not ctx.params.get('quiet', False):
-                        rprint(f"[bold red]Error:[/bold red] {error_msg}")
+                        rprint(f"[bold red]Error: {error_msg}[/bold red]")
                     return (error_msg, total_cost, model_name)
 
             # Provide user feedback
             if not ctx.params.get('quiet', False):
-                rprint("[bold green]Batch change operation completed successfully.[/bold green]")
-                rprint(f"[bold]Model used:[/bold] {model_name}")
-                rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
-                if output is None:
-                    output_dir = os.path.dirname(output_path)
-                    rprint(f"[bold]Results saved as individual files in:[/bold] {output_dir}")
-                    for item in modified_prompts:
-                        file_name = item['file_name']
-                        individual_output_path = os.path.join(output_dir, file_name)
-                        rprint(f"  - {individual_output_path}")
-                else:
-                    rprint(f"[bold]Results saved to CSV:[/bold] {output_path}")
+                if use_csv and success:
+                    rprint("[bold green]Batch change operation completed successfully.[/bold green]")
+                    rprint(f"[bold]Model used:[/bold] {model_name}")
+                    rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
+                    if output is None:
+                        output_dir = os.path.dirname(output_path)
+                        rprint(f"[bold]Results saved as individual files in:[/bold] {output_dir}")
+                        for item in modified_prompts:
+                            file_name = item['file_name']
+                            individual_output_path = os.path.join(output_dir, file_name)
+                            rprint(f"  - {individual_output_path}")
+                    else:
+                        rprint(f"[bold]Results saved to CSV:[/bold] {output_path}")
 
             logger.debug("Returning success message for CSV mode")
             return ("Multiple prompts have been updated.", total_cost, model_name)
@@ -187,14 +188,14 @@ def change_main(
                 )
                 logger.debug("change_func completed")
             except Exception as e:
-                error_msg = f"Error during prompt modification: {str(e)}"
+                error_msg = f"An unexpected error occurred: {str(e)}"
                 logger.error(error_msg)
                 if not ctx.params.get('quiet', False):
-                    rprint(f"[bold red]Error:[/bold red] {error_msg}")
+                    rprint(f"[bold red]Error: {error_msg}[/bold red]")
                 return (error_msg, 0.0, "")
 
             # Determine output path
-            output_path = output or output_file_paths.get('output', f"modified_{input_prompt_file}")
+            output_path = output or output_file_paths.get('output', f"modified_{os.path.basename(input_prompt_file)}")
             logger.debug(f"Output path: {output_path}")
 
             # Save the modified prompt
@@ -206,7 +207,7 @@ def change_main(
                 error_msg = f"Error writing output file: {str(e)}"
                 logger.error(error_msg)
                 if not ctx.params.get('quiet', False):
-                    rprint(f"[bold red]Error:[/bold red] {error_msg}")
+                    rprint(f"[bold red]Error: {error_msg}[/bold red]")
                 return (error_msg, total_cost, model_name)
 
             # Provide user feedback
@@ -223,7 +224,7 @@ def change_main(
         error_msg = f"An unexpected error occurred: {str(e)}"
         logger.error(error_msg)
         if not ctx.params.get('quiet', False):
-            rprint(f"[bold red]Error:[/bold red] {error_msg}")
+            rprint(f"[bold red]Error: {error_msg}[/bold red]")
         return (error_msg, 0.0, "")
 
     # This line should never be reached, but we'll log it just in case

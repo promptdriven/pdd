@@ -303,7 +303,7 @@ def test_change_main_non_csv_construct_paths_error(
 
     # Assert
     assert result == ("An unexpected error occurred: Construct Paths Failed", 0.0, "")
-    mock_rprint.assert_called_once_with("[bold red]Error:[/bold red] An unexpected error occurred: Construct Paths Failed")
+    mock_rprint.assert_called_once_with("[bold red]Error: An unexpected error occurred: Construct Paths Failed[/bold red]")
 
 def test_change_main_non_csv_change_func_error(
     mock_construct_paths,
@@ -347,7 +347,7 @@ def test_change_main_non_csv_change_func_error(
 
     # Assert
     assert result == ("An unexpected error occurred: Change Function Failed", 0.0, "")
-    mock_rprint.assert_called_once_with("[bold red]Error:[/bold red] An unexpected error occurred: Change Function Failed")
+    mock_rprint.assert_called_once_with("[bold red]Error: An unexpected error occurred: Change Function Failed[/bold red]")
 
 # Test cases for CSV mode
 def test_change_main_csv_success(
@@ -463,7 +463,7 @@ def test_change_main_csv_input_code_not_directory(
     # Assert
     expected_error = f"In CSV mode, 'input_code' must be a directory. Got: {input_code}"
     assert result == (expected_error, 0.0, "")
-    mock_rprint.assert_called_once_with("[bold red]Error:[/bold red] In CSV mode, 'input_code' must be a directory. Got: path/to/input_file.py")
+    mock_rprint.assert_called_once_with("[bold red]Error: In CSV mode, 'input_code' must be a directory. Got: path/to/input_file.py[/bold red]")
 
 def test_change_main_csv_missing_columns(
     mock_construct_paths,
@@ -511,7 +511,7 @@ def test_change_main_csv_missing_columns(
     # Assert
     expected_error = "CSV file must contain 'prompt_name' and 'change_instructions' columns."
     assert result == (expected_error, 0.0, "")
-    mock_rprint.assert_called_once_with("[bold red]Error:[/bold red] CSV file must contain 'prompt_name' and 'change_instructions' columns.")
+    mock_rprint.assert_called_once_with("[bold red]Error: CSV file must contain 'prompt_name' and 'change_instructions' columns.[/bold red]")
 
 def test_change_main_csv_process_csv_change_error(
     mock_construct_paths,
@@ -563,7 +563,7 @@ def test_change_main_csv_process_csv_change_error(
     # Assert
     expected_error = "Error during CSV processing: CSV Processing Failed"
     assert result == (expected_error, 0.0, "")
-    mock_rprint.assert_called_once_with(f"[bold red]Error:[/bold red] {expected_error}")
+    mock_rprint.assert_called_once_with("[bold red]Error: Error during CSV processing: CSV Processing Failed[/bold red]")
 
 # Test cases for error handling and logging
 def test_change_main_unexpected_exception(
@@ -599,6 +599,4 @@ def test_change_main_unexpected_exception(
     # Assert
     expected_error = "An unexpected error occurred: Invalid value"
     assert result == (expected_error, 0.0, "")
-    mock_rprint.assert_called_once_with(f"[bold red]Error:[/bold red] {expected_error}")
-
-# Additional test cases can be added here to cover more scenarios
+    mock_rprint.assert_called_once_with("[bold red]Error: An unexpected error occurred: Invalid value[/bold red]")
