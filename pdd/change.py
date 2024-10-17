@@ -65,7 +65,7 @@ def change(input_prompt: str, input_code: str, change_prompt: str, strength: flo
         console.print(f"Input tokens: {input_tokens}, Output tokens: {output_tokens}")
         console.print(f"Estimated cost: ${change_cost:.6f}")
 
-        llm, token_counter, input_cost, output_cost, _ = llm_selector(.5, temperature)
+        llm, token_counter, input_cost, output_cost, _ = llm_selector(.8, temperature)
 
         # Step 5: Create and run LCEL template for extract_prompt
         extract_chain = extract_chain_creator(llm, extract_prompt)
