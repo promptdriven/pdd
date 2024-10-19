@@ -39,6 +39,8 @@
 - [ ] Analyze errors first before trying to fix
 - [ ] Use existing good prompt code example to generate code for the prompt
 - [ ] update prompt for makefile
+- [ ] fix warnings in the code
+- [ ] add loop to crash command like with fix
 
 ## Documentation
 
