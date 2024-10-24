@@ -1,4 +1,4 @@
-% You are an expert Python Software Engineer. Your goal is to write a python function, "fix_code_module_errors", that will fix errors in a code module that caused a program to crash.
+% You are an expert Python Software Engineer. Your goal is to write a python function, "fix_code_module_errors", that will fix errors in a code module that caused a program to crash and/or have errors.
 
 <include>./context/python_preamble.prompt</include>
 
@@ -11,6 +11,9 @@
         'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
         'temperature' - A float that is the temperature of the LLM model to use. Default is 0.
     Outputs:
+        'update_program': Boolean indicating whether the program needs to be updated.
+        'update_code': Boolean indicating whether the code module needs to be updated.
+        'fixed_program' - A string that is the fixed program.
         'fixed_code' - A string that is the fixed code module.
         'total_cost' - A float that is the total cost of the run.
         'model_name' - A string that is the name of the selected LLM model
@@ -22,12 +25,10 @@
     % Here is an example how to preprocess the prompt from a file: <preprocess_example><include>context/preprocess_example.py</include></preprocess_example>
 
     % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>./context/llm_selector_example.py</include></llm_selector_example>
-
-    % Here is an example how to postprocess the model output result: <postprocess_example><include>context/postprocess_example.py</include></postprocess_example>
 </internal_example_modules>
 
 % This program will use Langchain to do the following:
-    Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/fix_code_module_errors_LLM.prompt' file.
+    Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/fix_code_module_errors_LLM.prompt' file. Also load the 'extract_program_code_fix_LLM.prompt' from the same directory.
     Step 2. Create a Langchain LCEL template from the fix_code_module_errors prompt.
     Step 3. Use llm_selector for the llm model.
     Step 4. Run the code through the model using Langchain LCEL. 
@@ -38,5 +39,13 @@
             - 'errors'
         4b. Pretty print a message letting the user know it is running and how many tokens are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
     Step 5. Pretty print the markdown formatting that is present in the result via the rich Markdown function. Also print the number of tokens in the result and the cost.
-    Step 6. Extract the corrected code from the model's response using postprocess and strength of .9.
-    Step 7. Print the total cost of the run and return the 'total_cost', 'fixed_code', and 'model_name' strings.
+    Step 6. Then this will create a second Langchain LCEL template from the extract_program_code_fix prompt.
+    Step 7. This will use llm_selector with a strength setting of 0.8 and the provided temperature for the llm model. However, instead of using String output, it will use the JSON output parser to use the 'get' function to extract the value of these keys: 'update_program', 'update_code', 'fixed_program' and 'fixed_code'.
+    Step 8. This will run the code through the model using Langchain LCEL from Step 7. 
+        8a. Be sure to pass the following string parameters to the prompt during invoke:
+            - 'program_code_fix': This is the result of the Langchain LCEL from Step 5.
+            - 'program'
+            - 'code'
+        8b. Pretty print a message letting the user know it is running and how many input and output tokens (using token_counter from llm_selector) are in the prompt and the total cost.
+    Step 9. Calculate the total cost by summing the costs from both LCEL runs.
+    Step 10. Print the total cost of both runs and return 'update_program', 'update_code', 'fixed_program', 'fixed_code', and 'total_cost' as individual values from the JSON output parser using the get() function and also 'model_name'.

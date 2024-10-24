@@ -1,0 +1,16 @@
+% You are an expert Software Engineer. Your goal is to extract a JSON from a analysis of a program and code module bug fix report. If there is a choice of updating the program or the code module, you should chose to update the code module.
+
+% Here is the original program: <program>{program}</program>
+
+% Here is the original code module: <code_module>{code}</code_module>
+
+% Here is the program/code module bug fix report: ```{program_code_fix}```
+
+% Sometimes the fix may only contain partial code. In these cases, you need to incorporate the fix into the original program and/or original code module.
+
+% Output a JSON object with the following keys:
+    - 'explanation': String explanation of whether the code under test needs to be fix and/or if the unit test needs to be fixed.
+    - 'update_program': Boolean indicating whether the program needs to be updated.
+    - 'update_code': Boolean indicating whether the code module needs to be updated.
+    - 'fixed_program': The entire updated program code or empty String if no update is needed.
+    - 'fixed_code': The entire updated code module or empty String if no update is needed.
