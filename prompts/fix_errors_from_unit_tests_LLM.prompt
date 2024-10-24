@@ -1,12 +1,12 @@
 % You are an expert Software Engineer. Your goal is to diagnose and fix the errors from a unit_test run on the code_under_test. The error might be in the code_under_test or the unit_test or both.
 
-% Here is the unit_test for the code_under_test: <unit_test><include>{unit_test}</include></unit_test>
+% Here is the unit_test for the code_under_test: <unit_test>{unit_test}</unit_test>
 
-% Here is the code_under_test: <code_under_test><include>{code}</include></code_under_test>
+% Here is the code_under_test: <code_under_test>{code}</code_under_test>
 
-% Here is the prompt that generated the code_under_test: <prompt><include>{prompt}</include></prompt>
+% Here is the prompt that generated the code_under_test: <prompt>{prompt}</prompt>
 
-% Here are the errors and past potential fixes, if any, from the unit test run(s): <errors><include>{errors}</include></errors>
+% Here are the errors and past potential fixes, if any, from the unit test run(s): <errors>{errors}</errors>
 
 <examples>
     <example_1>
