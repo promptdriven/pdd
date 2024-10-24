@@ -22,8 +22,8 @@ def mock_prompt_files():
     }
 
     def _mock_open(file, mode='r', *args, **kwargs):
-        if file in mock_files:
-            return mock_open(read_data=mock_files[file])(file, mode)
+        if str(file) in mock_files:
+            return mock_open(read_data=mock_files[str(file)])(file, mode)
         else:
             raise FileNotFoundError(f"No such file or directory: '{file}'")
 
@@ -125,11 +125,8 @@ def test_fix_code_module_errors_missing_prompt_files(mock_pdd_path, mock_prompt_
 
 def test_fix_code_module_errors_invalid_strength(mock_pdd_path, mock_prompt_files, mock_llm_selector, mock_chain_invoke):
     """Test behavior with invalid strength values."""
-    # Assuming llm_selector does not handle invalid strength and it's up to the function to validate.
-    # If the function does not validate, it might still proceed. Here, we mock llm_selector to handle it.
-
     # Test strength below 0
-    with pytest.raises(SomeExpectedException):
+    with pytest.raises(ValueError):
         fix_code_module_errors(
             program="program",
             prompt="prompt",
@@ -139,7 +136,7 @@ def test_fix_code_module_errors_invalid_strength(mock_pdd_path, mock_prompt_file
         )
 
     # Test strength above 1
-    with pytest.raises(SomeExpectedException):
+    with pytest.raises(ValueError):
         fix_code_module_errors(
             program="program",
             prompt="prompt",
@@ -150,11 +147,8 @@ def test_fix_code_module_errors_invalid_strength(mock_pdd_path, mock_prompt_file
 
 def test_fix_code_module_errors_invalid_temperature(mock_pdd_path, mock_prompt_files, mock_llm_selector, mock_chain_invoke):
     """Test behavior with invalid temperature values."""
-    # Similar to strength, assuming validation is needed
-    # Here, we mock llm_selector to potentially handle it, or the function to raise an error.
-
     # Test temperature below 0
-    with pytest.raises(SomeExpectedException):
+    with pytest.raises(ValueError):
         fix_code_module_errors(
             program="program",
             prompt="prompt",
@@ -165,7 +159,7 @@ def test_fix_code_module_errors_invalid_temperature(mock_pdd_path, mock_prompt_f
         )
 
     # Test temperature above a reasonable upper bound, e.g., 1
-    with pytest.raises(SomeExpectedException):
+    with pytest.raises(ValueError):
         fix_code_module_errors(
             program="program",
             prompt="prompt",
