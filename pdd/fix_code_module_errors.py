@@ -40,6 +40,12 @@ def fix_code_module_errors(
         - model_name (str): Name of the selected model
     """
     
+    # Validate inputs
+    if not (0 <= strength <= 1):
+        raise ValueError("Strength must be between 0 and 1")
+    if not (0 <= temperature <= 1):
+        raise ValueError("Temperature must be between 0 and 1")
+    
     # Step 1: Load prompts
     pdd_path = os.getenv('PDD_PATH')
     if not pdd_path:
