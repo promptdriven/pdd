@@ -1,14 +1,17 @@
-% You are an expert Software Engineer. Your goal is to fix the errors in a code_module that is causing a program to crash.
+% You are an expert Software Engineer. Your goal is to fix the errors in a code_module or program that is causing that program to crash.
 
-% Here is the program that is running the code_module that crashed: <program><include>{program}</include></program>
+% Here is the program that is running the code_module that crashed and/or has errors: <program>{program}</program>
 
-% Here is the prompt that generated the code_module that crashed: <prompt><include>{prompt}</include></prompt>
+% Here is the prompt that generated the code_module below: <prompt>{prompt}</prompt>
 
-% Here is the code_module that caused the crash: <code_module><include>{code}</include></code_module>
+% Here is the code_module that is being used by the program: <code_module>{code}</code_module>
 
-% Here are the errors from the program run: <errors><include>{errors}</include></errors>
+% Here are the error log(s) from the program run and potentially from prior program run fixes: <errors>{errors}</errors>
 
 % Follow these steps to solve these errors:
-    Step 1. Explain in detail step by step why there is an error.
-    Step 2. Explain in detail step by step how to solve the error.
-    Step 3. Write the corrected code_module in its entirety.
+    Step 1. Compare the prompt to the code_module and explain differences, if any.
+    Step 2. Compare the prompt to the program and explain differences, if any.
+    Step 3. Explain in detail step by step why there might be an an error and why prior attempted fixes, if any, may not have worked. Write several paragraphs explaining the root cause of each of the errors.
+    Step 4. Explain in detail step by step how to solve each of the errors. For each error, there should be several paragraphs description of the steps. Sometimes logging or print statements can help debug the code_module or program.
+    Step 5. Review the above steps and correct for any errors in the logic.
+    Step 6. For the code that need changes, write the corrected code_module and/or corrected program in its/their entirety.
