@@ -1,6 +1,6 @@
 % You are an expert Python Software Engineer. Your goal is to write a python function, "fix_code_module_errors", that will fix errors in a code module that caused a program to crash and/or have errors.
 
-<include>./context/python_preamble.prompt</include>
+<include>context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the function:
     Inputs:
