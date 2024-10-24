@@ -46,23 +46,26 @@ def mock_llm_selector():
 def mock_chain_invoke():
     """Fixture to mock the chain.invoke method."""
     with patch('pdd.fix_code_module_errors.PromptTemplate') as mock_prompt_template:
+        # Create mock chains
         mock_fix_chain = MagicMock()
         mock_extract_chain = MagicMock()
 
-        # Configure the first chain.invoke to return a fake fix_result
-        mock_fix_chain.invoke.return_value = "Fixed code with no errors."
+        # Configure the first chain to return a string
+        mock_fix_chain.invoke.return_value = "# Fixed Code Analysis\nThe code has been analyzed and fixed."
+        mock_fix_chain.__or__ = MagicMock(return_value=mock_fix_chain)
 
-        # Configure the second chain.invoke to return a fake extract_result
-        mock_extract_chain.invoke.return_value = {
-            "update_program": True,
-            "update_code": True,
-            "fixed_program": "print('Fixed Program')",
-            "fixed_code": "print('Fixed Code')"
-        }
+        # Configure the second chain to return a proper FixOutput object
+        class MockFixOutput:
+            update_program = True
+            update_code = True
+            fixed_program = "print('Fixed Program')"
+            fixed_code = "print('Fixed Code')"
+            
+        mock_extract_chain.invoke.return_value = MockFixOutput()
+        mock_extract_chain.__or__ = MagicMock(return_value=mock_extract_chain)
 
-        # Mock the chaining of PromptTemplate
-        mock_prompt_template.from_template.side_effect = [MagicMock(return_value=mock_fix_chain),
-                                                           MagicMock(return_value=mock_extract_chain)]
+        # Configure PromptTemplate
+        mock_prompt_template.from_template.side_effect = [mock_fix_chain, mock_extract_chain]
 
         yield mock_fix_chain, mock_extract_chain
 
@@ -171,27 +174,29 @@ def test_fix_code_module_errors_invalid_temperature(mock_pdd_path, mock_prompt_f
 
 def test_fix_code_module_errors_llm_selector_failure(mock_pdd_path, mock_prompt_files):
     """Test behavior when llm_selector raises an exception."""
-    with patch('pdd.fix_code_module_errors.llm_selector', side_effect=Exception("LLM Selector Error")):
-        with pytest.raises(Exception) as exc_info:
-            fix_code_module_errors(
-                program="program",
-                prompt="prompt",
-                code="code",
-                errors="errors",
-                strength=0.5
-            )
-        assert "LLM Selector Error" in str(exc_info.value)
+    with patch("builtins.open", mock_prompt_files):
+        with patch('pdd.fix_code_module_errors.llm_selector', 
+                  side_effect=Exception("LLM Selector Error")):
+            with pytest.raises(Exception) as exc_info:
+                fix_code_module_errors(
+                    program="program",
+                    prompt="prompt",
+                    code="code",
+                    errors="errors",
+                    strength=0.5
+                )
+            assert "LLM Selector Error" in str(exc_info.value)
 
 def test_fix_code_module_errors_chain_invoke_failure(mock_pdd_path, mock_prompt_files, mock_llm_selector):
     """Test behavior when chain.invoke raises an exception."""
-    with patch("builtins.open", mock_open(read_data="data")):
+    with patch("builtins.open", mock_prompt_files):
         with patch('pdd.fix_code_module_errors.PromptTemplate') as mock_prompt_template:
-            mock_fix_chain = MagicMock()
-            mock_extract_chain = MagicMock()
-            mock_fix_chain.invoke.side_effect = Exception("Chain Invoke Error")
-            mock_extract_chain.invoke.return_value = {}
-            mock_prompt_template.from_template.side_effect = [MagicMock(return_value=mock_fix_chain),
-                                                               MagicMock(return_value=mock_extract_chain)]
+            mock_chain = MagicMock()
+            mock_chain.invoke.side_effect = Exception("Chain Invoke Error")
+            mock_chain.__or__ = MagicMock(return_value=mock_chain)
+            
+            mock_prompt_template.from_template.return_value = mock_chain
+            
             with pytest.raises(Exception) as exc_info:
                 fix_code_module_errors(
                     program="program",
