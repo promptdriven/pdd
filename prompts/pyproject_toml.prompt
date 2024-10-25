@@ -2,4 +2,16 @@
 
 % Here is the README.md file: <readme><include>README.md</include></readme>
 
-% Here is the setup.py file: <setup><include>setup.py</include></setup>
+% Here is the requirements.txt file:
+<requirements><include>requirements.txt</include></requirements>
+
+% Here is the code for the Python application 'pdd':
+<cli_code><include>pdd/cli.py</include></cli_code>
+
+% Here is the repository URL: <shell>git config --get remote.origin.url</shell>
+
+% Here is the author's email: <shell>git config --get user.email</shell>
+
+% Here is the author's name: <shell>git config --get user.name</shell>
+
+% The prompts needed to run the Python application 'pdd' are located in the ./prompts directory. The prompts that end with '_LLM.prompt' are the ones needed for the program. Only include these prompts.
