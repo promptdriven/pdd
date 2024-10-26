@@ -11,6 +11,12 @@ from .llm_selector import llm_selector
 
 console = Console()
 
+class FixOutput(BaseModel):
+    update_program: bool
+    update_code: bool
+    fixed_program: str
+    fixed_code: str
+
 def fix_code_module_errors(
     program: str,
     prompt: str,
@@ -94,12 +100,6 @@ def fix_code_module_errors(
     # Step 6 & 7: Create second LCEL template with JSON parser
     extract_llm, token_counter, extract_input_cost, extract_output_cost, _ = llm_selector(0.8, temperature)
     
-    class FixOutput(BaseModel):
-        update_program: bool
-        update_code: bool
-        fixed_program: str
-        fixed_code: str
-    
     json_parser = JsonOutputParser(pydantic_object=FixOutput)
     
     extract_prompt = PromptTemplate(
@@ -128,12 +128,24 @@ def fix_code_module_errors(
     # Step 9: Calculate total cost
     total_cost = prompt_cost + result_cost + extract_prompt_cost
 
-    # Step 10: Return results
+    # Step 10: Return results with safe access
+    def safe_get(obj: Any, key: str, default: Any = None) -> Any:
+        """Safely get a value from an object that might support either dictionary or attribute access."""
+        try:
+            # Try dictionary access first
+            if hasattr(obj, 'get'):
+                return obj.get(key, default)
+            # Try attribute access next
+            return getattr(obj, key, default)
+        except Exception as e:
+            console.print(f"[bold red]Error accessing {key}: {e}[/bold red]")
+            return default
+
     return (
-        extract_result.get("update_program"),
-        extract_result.get("update_code"),
-        extract_result.get("fixed_program"),
-        extract_result.get("fixed_code"),
+        safe_get(extract_result, "update_program", False),
+        safe_get(extract_result, "update_code", False),
+        safe_get(extract_result, "fixed_program", ""),
+        safe_get(extract_result, "fixed_code", ""),
         total_cost,
         model_name
     )
