@@ -41,6 +41,9 @@
 - [ ] update prompt for makefile
 - [ ] fix warnings in the code
 - [ ] add loop to crash command like with fix
+- [ ] auto set PDD_PATH for package install
+- [ ] fix toml file
+
 
 ## Documentation
 
