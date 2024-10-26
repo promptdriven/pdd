@@ -7,6 +7,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough, ConfigurableField
 
+from langchain_openai import AzureChatOpenAI
 from langchain_fireworks import Fireworks 
 from langchain_anthropic import ChatAnthropic
 from langchain_openai import ChatOpenAI # Chatbot and conversational tasks
@@ -83,17 +84,18 @@ prompt = PromptTemplate(
     partial_variables={"format_instructions": parser.get_format_instructions()},
 )
 
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, response_format={"type": "json_object"}, callbacks=[handler]) 
-
+llm_no_struct = ChatOpenAI(model="gpt-4o-mini", temperature=0, 
+                           callbacks=[handler]) 
+llm = llm_no_struct.with_structured_output(Joke) # with structured output forces the output to be a specific object, in this case Joke. Only OpenAI models have structured output
 # Chain the components. 
 #  The class `LLMChain` was deprecated in LangChain 0.1.17 and will be removed in 1.0. Use RunnableSequence, e.g., `prompt | llm` instead.
-chain = prompt | llm | parser
+chain = prompt | llm 
 
 # Invoke the chain with a query. 
 # IMPORTANT: chain.run is now obsolete. Use chain.invoke instead.
-result = chain.invoke({"query": "Tell me a joke."})
+result = chain.invoke({"query": "Tell me a joke about openai."})
 print("4o mini JSON: ",result)
-
+print(result.setup) # How to access the structured output
 
 # Get DEEKSEEK_API_KEY environmental variable
 deepseek_api_key = os.getenv('DEEKSEEK_API_KEY')
@@ -115,6 +117,19 @@ chain = prompt | llm | parser
 # Invoke the chain with a query
 result = chain.invoke({"query": "Write joke about the sky"})
 print("deepseek",result)
+
+# Set up the Azure ChatOpenAI LLM instance
+llm_no_struct = AzureChatOpenAI(
+    temperature=0,
+    callbacks=[handler]
+)
+llm = llm_no_struct.with_structured_output(Joke) # with structured output forces the output to be a specific JSON format
+# Chain the components: prompt | llm | parser
+chain = prompt | llm # returns a Joke object
+
+# Invoke the chain with a query
+result = chain.invoke({"query": "What is Azure?"})  # Pass a dictionary if `invoke` expects it
+print("Azure Result:", result)
 
 
 llm = Fireworks(
