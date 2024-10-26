@@ -191,8 +191,6 @@ chain = prompt | llm | StrOutputParser()
 print(chain.invoke({"text": "Explain the importance of together.ai."}))
 
 
-from langchain.prompts import PromptTemplate
-
 # Define a prompt template with placeholders for variables
 prompt_template = PromptTemplate.from_template("Tell me a {adjective} joke about {content}.")
 
