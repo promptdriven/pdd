@@ -1,0 +1,41 @@
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "auto_include", that will automatically find the proper depedencies and insert them into the prompt.
+
+<include>./context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs: 
+        'input_prompt' - A string that contains the prompt that requires the includes to be selected.
+        'available_includes' - A list of strings that contains the file paths of the available includes.
+
+        'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
+        'temperature' - A float that is the temperature of the LLM model to use.
+    Outputs: 
+        'output_prompt' - A string that contains the prompt with the includes inserted.
+        'total_cost' - A float that is the total cost to generate the output includes string. 
+        'model_name' - A string that is the name of the selected LLM model
+
+% Here is an example of a LangChain Expression Language (LCEL) program: <lcel_example><include>context/langchain_lcel_example.py</include></lcel_example>
+
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+
+    % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>./context/llm_selector_example.py</include></llm_selector_example>
+
+</internal_example_modules>
+
+% This program will use Langchain to do the following:
+    Step 1. use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/auto_include_LLM.prompt' file.
+    Step 2. Then this will create a Langchain LCEL template from the auto include prompt.
+    Step 3. This will use llm_selector for the model.
+    Step 4. This will run the inputs through the model using Langchain LCEL. 
+        4a. Be sure to pass the following string parameters to the prompt during invoke:
+        
+            - 'input_prompt' - A string that contains the prompt that requires the includes to be selected.
+
+            - 'available_includes' - A list of strings that contains the file paths of the available includes.
+ 
+        4b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+    Step 5. This will pretty print the markdown formatting that is present in the result via the rich Markdown function. It will also pretty print the number of tokens in the result and the cost.
+    Step 6. 
+    Step 7. Print out the total_cost including the input and output tokens and functions that incur cost (e.g. postprocessing).
+    Step 7. Return a boolean, total_cost and model_name
