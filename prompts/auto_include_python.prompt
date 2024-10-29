@@ -36,6 +36,18 @@
  
         4b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
     Step 5. This will pretty print the markdown formatting that is present in the result via the rich Markdown function. It will also pretty print the number of tokens in the result and the cost.
-    Step 6. 
-    Step 7. Print out the total_cost including the input and output tokens and functions that incur cost (e.g. postprocessing).
-    Step 7. Return a boolean, total_cost and model_name
+    Step 6. use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/extract_auto_include_LLM.prompt' file.
+    Step 7. Then this will create a Langchain LCEL template from the auto include prompt.
+    Step 8. This will use llm_selector for the model.
+    Step 9. This will run the output of auto_include_LLM LCEL through the model using Langchain LCEL. 
+        9a. Be sure to pass the following string parameters to the prompt during invoke:
+        
+            - 'llm_output' - A string that contains the output of the auto_include_LLM prompt, with possible and minimum required includes. 
+ 
+        9b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+    
+    Step 10. The extract_auto_include_LLM LCEL will return a JSON object, which will include the key string_of_includes. Concatenate the 'string_of_includes' with the input_prompt which is the 'output_prompt'. 
+    Step 11. The 'total_cost' will be the sum of the cost of the input and output tokens. 
+    Step 12. It should return 'output_prompt', 'total_cost' and 'model_name'.
+
+  
