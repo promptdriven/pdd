@@ -8,8 +8,8 @@
         'code_file' - A string containing the path to the code file being tested.
         'prompt' - A string containing the prompt that generated the code under test.
         'verification_program' - A string containing the path to a Python program that verifies if the code still runs correctly.
-        'strength' - A float between 0 and 1 that represents the strength of the LLM model to use.
-        'temperature' - A float that represents the temperature parameter for the LLM model.
+        'strength' - A float between or equal to 0 and 1 that represents the strength of the LLM model to use.
+        'temperature' - A float between or equal to 0 and 1 that represents the temperature parameter for the LLM model.
         'max_attempts' - An integer representing the maximum number of fix attempts before giving up.
         'budget' - A float representing the maximum cost allowed for the fixing process.
         'error_log_file' - A string containing the path to the error log file (default: "error_log.txt").
@@ -56,7 +56,7 @@
            - If updated_code is True:
               * Write the fixed_code back to the code_file.
               * Run the verification_program to check if the code still runs.
-              * If the verification fails, restore the last known working code_file from one of the backups and output the results of the failed verification run into the error log file indicating that a restore has happened. Then continue the loop. 
+              * If the verification fails, restore the last known working code_file from one of the backups and output the errors and results of the failed verification run into the error log file so that this can be debugged in the next iteration and indicate that a restore has happened. Then continue the loop. 
               * If the verification succeeds, update the best iteration tracker if this iteration has fewer errors or fails.
         d. Increment the attempt counter.
     Step 4. After the loop ends, run pytest one last time, pipe the output to the error log file, escape square brackets and print it to the console.
