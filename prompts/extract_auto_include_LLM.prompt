@@ -3,6 +3,12 @@
 % Here is the generated llm_output: ```{llm_output}```
 
 % Output a JSON object with the following keys:
-    - 'modified_prompt': String containing the modified prompt that will generate the modified code.
+    - 'string_of_includes': String containing the necessary modules to include in the prompt.
+
+
+
+    
+
+
     
 
