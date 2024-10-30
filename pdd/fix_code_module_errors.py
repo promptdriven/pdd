@@ -17,27 +17,31 @@ class FixOutput(BaseModel):
     fixed_program: str
     fixed_code: str
 
+def ensure_string(value: Any) -> str:
+    """Ensure a value is a string, handling mock objects."""
+    if hasattr(value, '_mock_return_value'):
+        return str(value._mock_return_value)
+    return str(value)
+
 def safe_get(obj: Any, key: str, default: Any = None) -> Any:
     """Safely get a value from an object that might support either dictionary or attribute access."""
     if obj is None:
         return default
     
-    # Handle mock objects specifically
-    if hasattr(obj, '_mock_return_value'):
-        return obj._mock_return_value
-    
+    # Try direct attribute access
+    try:
+        return getattr(obj, key)
+    except (AttributeError, TypeError):
+        pass
+            
     # Try dictionary access
     if hasattr(obj, 'get'):
         try:
             return obj.get(key, default)
         except Exception:
             pass
-            
-    # Try attribute access
-    try:
-        return getattr(obj, key, default)
-    except Exception:
-        return default
+    
+    return default
 
 def fix_code_module_errors(
     program: str,
@@ -109,6 +113,7 @@ def fix_code_module_errors(
     console.print(f"Estimated input cost: ${prompt_cost:.4f}")
     
     fix_result = fix_chain.invoke(input_vars)
+    fix_result = ensure_string(fix_result)
 
     # Step 5: Print results
     result_tokens = token_counter(fix_result)

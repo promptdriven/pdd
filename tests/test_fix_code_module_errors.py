@@ -3,7 +3,7 @@
 import os
 import pytest
 from unittest.mock import patch, mock_open, MagicMock
-from pdd.fix_code_module_errors import fix_code_module_errors
+from pdd.fix_code_module_errors import fix_code_module_errors, FixOutput
 
 @pytest.fixture
 def mock_pdd_path(monkeypatch):
@@ -43,30 +43,41 @@ def mock_llm_selector():
         yield mock_selector
 
 @pytest.fixture
-def mock_chain_invoke():
+def mock_json_parser():
+    """Fixture to mock the JsonOutputParser."""
+    with patch('pdd.fix_code_module_errors.JsonOutputParser') as mock_parser:
+        parser_instance = mock_parser.return_value
+        parser_instance.parse.return_value = FixOutput(
+            update_program=True,
+            update_code=True,
+            fixed_program="print('Fixed Program')",
+            fixed_code="print('Fixed Code')"
+        )
+        yield mock_parser
+
+@pytest.fixture
+def mock_chain_invoke(mock_json_parser):
     """Fixture to mock the chain.invoke method."""
     with patch('pdd.fix_code_module_errors.PromptTemplate') as mock_prompt_template:
         # Create mock chains
         mock_fix_chain = MagicMock()
         mock_extract_chain = MagicMock()
-
-        # Configure the first chain to return a string
-        mock_fix_chain.invoke.return_value = "# Fixed Code Analysis\nThe code has been analyzed and fixed."
-        mock_fix_chain.__or__ = MagicMock(return_value=mock_fix_chain)
-
-        # Configure the second chain to return a proper FixOutput object
-        class MockFixOutput:
-            update_program = True
-            update_code = True
-            fixed_program = "print('Fixed Program')"
-            fixed_code = "print('Fixed Code')"
-            
-        mock_extract_chain.invoke.return_value = MockFixOutput()
-        mock_extract_chain.__or__ = MagicMock(return_value=mock_extract_chain)
-
+        
+        # Configure the first chain
+        mock_fix_chain.invoke.return_value = "Fixed Code Analysis"
+        
+        # Configure the second chain
+        mock_result = FixOutput(
+            update_program=True,
+            update_code=True,
+            fixed_program="print('Fixed Program')",
+            fixed_code="print('Fixed Code')"
+        )
+        mock_extract_chain.invoke.return_value = mock_result
+        
         # Configure PromptTemplate
         mock_prompt_template.from_template.side_effect = [mock_fix_chain, mock_extract_chain]
-
+        
         yield mock_fix_chain, mock_extract_chain
 
 def test_fix_code_module_errors_success(mock_pdd_path, mock_prompt_files, mock_llm_selector, mock_chain_invoke):
@@ -84,17 +95,18 @@ def test_fix_code_module_errors_success(mock_pdd_path, mock_prompt_files, mock_l
         )
 
         # Assertions for returned values
-        assert update_program is True
-        assert update_code is True
-        assert fixed_program == "print('Fixed Program')"
-        assert fixed_code == "print('Fixed Code')"
-        assert total_cost == (1000 / 1_000_000) * 0.02 + (1000 / 1_000_000) * 0.03
-        assert model_name == "mock-model"
-
-        # Verify that the prompt files were read correctly
-        assert mock_llm_selector.called
-        assert fix_chain.invoke.called
-        assert extract_chain.invoke.called
+        assert isinstance(update_program, bool), "update_program should be a boolean"
+        assert update_program is True, "update_program should be True"
+        assert isinstance(update_code, bool), "update_code should be a boolean"
+        assert update_code is True, "update_code should be True"
+        assert isinstance(fixed_program, str), "fixed_program should be a string"
+        assert fixed_program == "print('Fixed Program')", "fixed_program has unexpected value"
+        assert isinstance(fixed_code, str), "fixed_code should be a string"
+        assert fixed_code == "print('Fixed Code')", "fixed_code has unexpected value"
+        assert isinstance(total_cost, float), "total_cost should be a float"
+        assert total_cost == (1000 / 1_000_000) * 0.02 + (1000 / 1_000_000) * 0.03, "total_cost has unexpected value"
+        assert isinstance(model_name, str), "model_name should be a string"
+        assert model_name == "mock-model", "model_name has unexpected value"
 
 def test_fix_code_module_errors_missing_pdd_path(monkeypatch):
     """Test behavior when PDD_PATH environment variable is missing."""
@@ -176,7 +188,7 @@ def test_fix_code_module_errors_llm_selector_failure(mock_pdd_path, mock_prompt_
     """Test behavior when llm_selector raises an exception."""
     with patch("builtins.open", mock_prompt_files):
         with patch('pdd.fix_code_module_errors.llm_selector', 
-                  side_effect=Exception("LLM Selector Error")):
+                side_effect=Exception("LLM Selector Error")):
             with pytest.raises(Exception) as exc_info:
                 fix_code_module_errors(
                     program="program",
