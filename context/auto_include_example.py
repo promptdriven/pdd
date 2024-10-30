@@ -1,43 +1,55 @@
 from pdd.auto_include import auto_include
-from rich import print as rprint
+from rich.console import Console
+
+# Initialize console for rich printing
+console = Console()
 
 def main() -> None:
     """
     Main function to demonstrate the use of the auto_include function.
-    It processes an input prompt, selects appropriate includes, and displays the results.
+    It processes an input prompt, selects relevant includes, calculates costs,
+    and returns the enhanced prompt with includes, total cost, and model name.
     """
     # Example input prompt that needs includes
-    input_prompt = """Write a function that calculates the fibonacci sequence."""
+    input_prompt = """
+    Write a function that calculates the fibonacci sequence.
+    Use efficient algorithms and proper error handling.
+    """
     
     # Example list of available include files
     available_includes = [
-        "math_utils/fibonacci.md",
-        "array_utils/sorting.md",
-        "string_utils/parsing.md"
+        "algorithms/math_utils.py",
+        "utils/error_handling.py",
+        "algorithms/fibonacci.py",
+        "data_structures/arrays.py"
     ]
     
+    # Set model parameters
+    strength = 0.7  # 0-1 scale, higher means stronger model
+    temperature = 0.2  # 0-1 scale, lower means more deterministic
+    
     try:
-        # Call auto_include with default strength and temperature
+        # Call auto_include function
         output_prompt, total_cost, model_name = auto_include(
             input_prompt=input_prompt,
             available_includes=available_includes,
-            strength=0.5,  # Controls model capability (0-1)
-            temperature=0.7  # Controls randomness in output
+            strength=strength,
+            temperature=temperature
         )
         
         # Display results
-        rprint("[bold green]Auto-include Results:[/bold green]")
-        rprint(f"Model used: {model_name}")
-        rprint(f"Total cost: ${total_cost:.6f}")
-        rprint("\n[bold]Final Prompt:[/bold]")
-        rprint(output_prompt)
+        console.print("\n[bold green]Results:[/]")
+        console.print(f"Selected Model: {model_name}")
+        console.print(f"Total Cost: ${total_cost:.6f}")
+        console.print("\n[bold]Final Prompt with Includes:[/]")
+        console.print(output_prompt)
         
     except ValueError as e:
-        rprint(f"[bold red]Configuration Error:[/bold red] {str(e)}")
+        console.print(f"[bold red]Value Error: {str(e)}[/]")
     except FileNotFoundError as e:
-        rprint(f"[bold red]File Error:[/bold red] {str(e)}")
+        console.print(f"[bold red]File Error: {str(e)}[/]")
     except Exception as e:
-        rprint(f"[bold red]Unexpected Error:[/bold red] {str(e)}")
+        console.print(f"[bold red]Unexpected Error: {str(e)}[/]")
 
 if __name__ == "__main__":
     main()
