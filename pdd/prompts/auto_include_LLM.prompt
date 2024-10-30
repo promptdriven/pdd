@@ -9,7 +9,10 @@ You are a prompt expert that helps select the necessary subset of "includes" (li
         'available_includes' - A list of strings that contains the file paths of the available includes.
     </input>
     <output>
-        'string_of_includes' - A string that contains the selected includes based on the input_prompt.
+        'Step 1.' - A string of possible includes based on the input_prompt.
+        'Step 2.' - A string explaining why an include might or might not be necessary for the prompt.
+        'Step 3.' - A string of the minimum set of includes required to achieve the goal of the input_prompt.
+        'Step 4.' - A string of the string_of_includes based on Step 3.
     </output>
 </definitions>
 
@@ -21,192 +24,200 @@ You are a prompt expert that helps select the necessary subset of "includes" (li
 Here are some examples of how to do this:
 <examples>
     <example_1>
-        <example_input_prompt>% You are an expert Python Software Engineer. Your goal is to write a Python function, "process_csv_change", that will read in a take in a csv file name and call change_example for each of the lines.
+        <example_input_prompt>
+            % You are an expert Python Software Engineer. Your goal is to write a Python function, "process_csv_change", that will read in a take in a csv file name and call change_example for each of the lines.
 
-<include>context/python_preamble.prompt</include>
+            <include>context/python_preamble.prompt</include>
 
-% Here are the inputs and outputs of the function:
-    Inputs: 
-        'csv_file' - A string containing the path to the csv file.
-        'strength' - A float between 0 and 1 that represents the strength of the LLM model to use.
-        'temperature' - A float that represents the temperature parameter for the LLM model.
-        'code_directory' - A string containing the path to the directory where the code files are stored.
-        'language' - A string representing the programming language of the code files. 
-        'extension' - A string representing the file extension of the code files. Includes the '.' in front of the extension.
-        'budget' - A float representing the maximum cost allowed for the change process.
-    Outputs:
-        'success' - A boolean indicating whether the changes were successfully made.
-        'list_of_jsons' - A list of dictionaries containing Key:file_name,  Value:modified_prompt.
-        'total_cost' - A float representing the total cost of all fix attempts.
-        'model_name' - A string representing the name of the LLM model used.
+            % Here are the inputs and outputs of the function:
+                Inputs: 
+                    'csv_file' - A string containing the path to the csv file.
+                    'strength' - A float between 0 and 1 that represents the strength of the LLM model to use.
+                    'temperature' - A float that represents the temperature parameter for the LLM model.
+                    'code_directory' - A string containing the path to the directory where the code files are stored.
+                    'language' - A string representing the programming language of the code files. 
+                    'extension' - A string representing the file extension of the code files. Includes the '.' in front of the extension.
+                    'budget' - A float representing the maximum cost allowed for the change process.
+                Outputs:
+                    'success' - A boolean indicating whether the changes were successfully made.
+                    'list_of_jsons' - A list of dictionaries containing Key:file_name,  Value:modified_prompt.
+                    'total_cost' - A float representing the total cost of all fix attempts.
+                    'model_name' - A string representing the name of the LLM model used.
 
-% This function will do the following:
-    Step 1. Read in the csv file with columns prompt_name and change_instructions.
-    Step 2. Loop through each line in the csv file:
-        a. Initialize variables:
-            - Initialize a list_of_jsons to store the modified prompts.
-            - Read the prompt from the prompt_name column (text file).
-            - Parse the prompt_name into a input_code name:
-                - remove the path and suffix _language.prompt from the prompt_name
-                - add the suffix extension to the prompt_name
-                - change the directory to code_directory
-            - Read the input_code from the input_code_name as a string
-            - Read the change_instructions from the change_instructions column
-        b. Call the change function with the input_prompt, input_code, and change_prompt.
-        c. Add the returned total_cost to the total cost accumulator.
-        d. If the total cost exceeds the budget, break the loop.
-        e If the change was successful, add the modified prompt to the list_of_jsons.
-    Step 3. Return the success status, list of modified prompts, total cost, and model name.</example_input_prompt>
-        <example_available_includes>context/DSPy_example.py
-context/anthropic_counter_example.py
-context/autotokenizer_example.py
-context/bug_to_unit_test_example.py
-context/bug_to_unit_test_failure_example.py
-context/change_example.py
-context/cli_example.py
-context/cli_python_preprocessed.prompt
-context/click_example.py
-context/cloud_function_call.py
-context/code_generator_example.py
-context/comment_line_example.py
-context/conflicts_in_prompts_example.py
-context/conflicts_in_prompts_python.prompt
-context/construct_paths_example.py
-context/context_generator_example.py
-context/continue_generation_example.py
-context/detect_change_example.py
-context/execute_bug_to_unit_test_failure.py
-context/final_llm_output.py
-context/find_section_example.py
-context/fix_code_module_errors_example.py
-context/fix_error_loop_example.py
-context/fix_errors_from_unit_tests_example.py
-context/generate_output_paths_example.py
-context/generate_test_example.py
-context/get_comment_example.py
-context/get_extension_example.py
-context/get_language_example.py
-context/git_update_example.py
-context/langchain_lcel_example.py
-context/llm_selector_example.py
-context/llm_token_counter_example.py
-context/postprocess_0_example.py
-context/postprocess_example.py
-context/postprocessed_runnable_llm_output.py
-context/preprocess_example.py
-context/process_csv_change_example.py
-context/prompt_caching.ipynb
-context/split_example.py
-context/tiktoken_example.py
-context/trace_example.py
-context/unfinished_prompt_example.py
-context/unrunnable_raw_llm_output.py
-context/update_prompt_example.py
-context/xml_tagger_example.py
-</example_available_includes>
-        <example_string_of_includes>% Here are examples of how to use internal modules:
-<internal_example_modules>
-    % Here is an example of the change function that will be used: <change_example><include>context/change_example.py</include></change_example>
-</internal_example_modules>
-</example_string_of_includes>
+            % This function will do the following:
+                Step 1. Read in the csv file with columns prompt_name and change_instructions.
+                Step 2. Loop through each line in the csv file:
+                    a. Initialize variables:
+                        - Initialize a list_of_jsons to store the modified prompts.
+                        - Read the prompt from the prompt_name column (text file).
+                        - Parse the prompt_name into a input_code name:
+                            - remove the path and suffix _language.prompt from the prompt_name
+                            - add the suffix extension to the prompt_name
+                            - change the directory to code_directory
+                        - Read the input_code from the input_code_name as a string
+                        - Read the change_instructions from the change_instructions column
+                    b. Call the change function with the input_prompt, input_code, and change_prompt.
+                    c. Add the returned total_cost to the total cost accumulator.
+                    d. If the total cost exceeds the budget, break the loop.
+                    e If the change was successful, add the modified prompt to the list_of_jsons.
+                Step 3. Return the success status, list of modified prompts, total cost, and model name.
+        </example_input_prompt>
+        <example_available_includes>
+            context/DSPy_example.py
+            context/anthropic_counter_example.py
+            context/autotokenizer_example.py
+            context/bug_to_unit_test_example.py
+            context/bug_to_unit_test_failure_example.py
+            context/change_example.py
+            context/cli_example.py
+            context/cli_python_preprocessed.prompt
+            context/click_example.py
+            context/cloud_function_call.py
+            context/code_generator_example.py
+            context/comment_line_example.py
+            context/conflicts_in_prompts_example.py
+            context/conflicts_in_prompts_python.prompt
+            context/construct_paths_example.py
+            context/context_generator_example.py
+            context/continue_generation_example.py
+            context/detect_change_example.py
+            context/execute_bug_to_unit_test_failure.py
+            context/final_llm_output.py
+            context/find_section_example.py
+            context/fix_code_module_errors_example.py
+            context/fix_error_loop_example.py
+            context/fix_errors_from_unit_tests_example.py
+            context/generate_output_paths_example.py
+            context/generate_test_example.py
+            context/get_comment_example.py
+            context/get_extension_example.py
+            context/get_language_example.py
+            context/git_update_example.py
+            context/langchain_lcel_example.py
+            context/llm_selector_example.py
+            context/llm_token_counter_example.py
+            context/postprocess_0_example.py
+            context/postprocess_example.py
+            context/postprocessed_runnable_llm_output.py
+            context/preprocess_example.py
+            context/process_csv_change_example.py
+            context/prompt_caching.ipynb
+            context/split_example.py
+            context/tiktoken_example.py
+            context/trace_example.py
+            context/unfinished_prompt_example.py
+            context/unrunnable_raw_llm_output.py
+            context/update_prompt_example.py
+            context/xml_tagger_example.py
+        </example_available_includes>
+        <example_string_of_includes>
+            % Here are examples of how to use internal modules:
+            <internal_example_modules>
+                % Here is an example of the change function that will be used: <change_example><include>context/change_example.py</include></change_example>
+            </internal_example_modules>
+        </example_string_of_includes>
     </example_1>
 
-        <example_2>
-        <example_input_prompt>% You are an expert Python Software Engineer. Your goal is to write a Python function, "generate_test", that will create a unit test from a code file.
+    <example_2>
+        <example_input_prompt>
+            % You are an expert Python Software Engineer. Your goal is to write a Python function, "generate_test", that will create a unit test from a code file.
 
-<include>./context/python_preamble.prompt</include>
+            <include>./context/python_preamble.prompt</include>
 
-% Here are the inputs and outputs of the function:
-    Inputs: 
-        'prompt' - A string containing the prompt that generated the code file to be processed.
-        'code' - A string containing the code to generate a unit test from.
-        'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
-        'temperature' - A float that is the temperature of the LLM model to use.
-        'language' - A string that is the language of the unit test to be generated.
-    Outputs: 
-        'unit_test'- A string that is the generated unit test code.
-        'total_cost' - A float that is the total cost to generate the unit test code.
-        'model_name' - A string that is the name of the selected LLM model
+            % Here are the inputs and outputs of the function:
+                Inputs: 
+                    'prompt' - A string containing the prompt that generated the code file to be processed.
+                    'code' - A string containing the code to generate a unit test from.
+                    'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
+                    'temperature' - A float that is the temperature of the LLM model to use.
+                    'language' - A string that is the language of the unit test to be generated.
+                Outputs: 
+                    'unit_test'- A string that is the generated unit test code.
+                    'total_cost' - A float that is the total cost to generate the unit test code.
+                    'model_name' - A string that is the name of the selected LLM model
 
-% This program will use Langchain to do the following:
-    Step 1. use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/generate_test_LLM.prompt' file.
-    Step 2. Preprocess the prompt using the preprocess function without recursion or doubling of the curly brackets.
-    Step 2. Then this will create a Langchain LCEL template from the test generator prompt.
-    Step 3. This will use llm_selector for the model.
-    Step 4. This will run the inputs through the model using Langchain LCEL. 
-        4a. Be sure to pass the following string parameters to the prompt during invoke:
-            - 'prompt_that_generated_code': preprocess the prompt using the preprocess function without recursion or doubling of the curly brackets.
-            - 'code'
-            - 'language'
-        4b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
-    Step 5. This will pretty print the markdown formatting that is present in the result via the rich Markdown function. It will also pretty print the number of tokens in the result and the cost.
-    Step 6. Detect if the generation is incomplete using the unfinished_prompt function (strength .7) by passing in the last 600 characters of the output of Step 4.
-        - a. If incomplete, call the continue_generation function to complete the generation.
-        - b. Else, if complete, postprocess the model output result using the postprocess function from the postprocess module with a strength of 0.7.
-    Step 7. Print out the total_cost including the input and output tokens and functions that incur cost (e.g. postprocessing).
-    Step 7. Return the unit_test, total_cost and model_name</example_input_prompt>
-        <example_available_includes>context/DSPy_example.py
-context/anthropic_counter_example.py
-context/autotokenizer_example.py
-context/bug_to_unit_test_example.py
-context/bug_to_unit_test_failure_example.py
-context/change_example.py
-context/cli_example.py
-context/cli_python_preprocessed.prompt
-context/click_example.py
-context/cloud_function_call.py
-context/code_generator_example.py
-context/comment_line_example.py
-context/conflicts_in_prompts_example.py
-context/conflicts_in_prompts_python.prompt
-context/construct_paths_example.py
-context/context_generator_example.py
-context/continue_generation_example.py
-context/detect_change_example.py
-context/execute_bug_to_unit_test_failure.py
-context/final_llm_output.py
-context/find_section_example.py
-context/fix_code_module_errors_example.py
-context/fix_error_loop_example.py
-context/fix_errors_from_unit_tests_example.py
-context/generate_output_paths_example.py
-context/generate_test_example.py
-context/get_comment_example.py
-context/get_extension_example.py
-context/get_language_example.py
-context/git_update_example.py
-context/langchain_lcel_example.py
-context/llm_selector_example.py
-context/llm_token_counter_example.py
-context/postprocess_0_example.py
-context/postprocess_example.py
-context/postprocessed_runnable_llm_output.py
-context/preprocess_example.py
-context/process_csv_change_example.py
-context/prompt_caching.ipynb
-context/split_example.py
-context/tiktoken_example.py
-context/trace_example.py
-context/unfinished_prompt_example.py
-context/unrunnable_raw_llm_output.py
-context/update_prompt_example.py
-context/xml_tagger_example.py
-</example_available_includes>
-        <example_string_of_includes>% Here is an example of a LangChain Expression Language (LCEL) program: <lcel_example><include>context/langchain_lcel_example.py</include></lcel_example>
+            % This program will use Langchain to do the following:
+                Step 1. use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/generate_test_LLM.prompt' file.
+                Step 2. Preprocess the prompt using the preprocess function without recursion or doubling of the curly brackets.
+                Step 2. Then this will create a Langchain LCEL template from the test generator prompt.
+                Step 3. This will use llm_selector for the model.
+                Step 4. This will run the inputs through the model using Langchain LCEL. 
+                    4a. Be sure to pass the following string parameters to the prompt during invoke:
+                        - 'prompt_that_generated_code': preprocess the prompt using the preprocess function without recursion or doubling of the curly brackets.
+                        - 'code'
+                        - 'language'
+                    4b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+                Step 5. This will pretty print the markdown formatting that is present in the result via the rich Markdown function. It will also pretty print the number of tokens in the result and the cost.
+                Step 6. Detect if the generation is incomplete using the unfinished_prompt function (strength .7) by passing in the last 600 characters of the output of Step 4.
+                    - a. If incomplete, call the continue_generation function to complete the generation.
+                    - b. Else, if complete, postprocess the model output result using the postprocess function from the postprocess module with a strength of 0.7.
+                Step 7. Print out the total_cost including the input and output tokens and functions that incur cost (e.g. postprocessing).
+                Step 7. Return the unit_test, total_cost and model_name
+        </example_input_prompt>
+        <example_available_includes>
+            context/DSPy_example.py
+            context/anthropic_counter_example.py
+            context/autotokenizer_example.py
+            context/bug_to_unit_test_example.py
+            context/bug_to_unit_test_failure_example.py
+            context/change_example.py
+            context/cli_example.py
+            context/cli_python_preprocessed.prompt
+            context/click_example.py
+            context/cloud_function_call.py
+            context/code_generator_example.py
+            context/comment_line_example.py
+            context/conflicts_in_prompts_example.py
+            context/conflicts_in_prompts_python.prompt
+            context/construct_paths_example.py
+            context/context_generator_example.py
+            context/continue_generation_example.py
+            context/detect_change_example.py
+            context/execute_bug_to_unit_test_failure.py
+            context/final_llm_output.py
+            context/find_section_example.py
+            context/fix_code_module_errors_example.py
+            context/fix_error_loop_example.py
+            context/fix_errors_from_unit_tests_example.py
+            context/generate_output_paths_example.py
+            context/generate_test_example.py
+            context/get_comment_example.py
+            context/get_extension_example.py
+            context/get_language_example.py
+            context/git_update_example.py
+            context/langchain_lcel_example.py
+            context/llm_selector_example.py
+            context/llm_token_counter_example.py
+            context/postprocess_0_example.py
+            context/postprocess_example.py
+            context/postprocessed_runnable_llm_output.py
+            context/preprocess_example.py
+            context/process_csv_change_example.py
+            context/prompt_caching.ipynb
+            context/split_example.py
+            context/tiktoken_example.py
+            context/trace_example.py
+            context/unfinished_prompt_example.py
+            context/unrunnable_raw_llm_output.py
+            context/update_prompt_example.py
+            context/xml_tagger_example.py
+        </example_available_includes>
+        <example_string_of_includes>
+            % Here is an example of a LangChain Expression Language (LCEL) program: <lcel_example><include>context/langchain_lcel_example.py</include></lcel_example>
 
-% Here are examples of how to use internal modules:
-<internal_example_modules>
-    % Here is an example how to preprocess the prompt from a file: <preprocess_example><include>./context/preprocess_example.py</include></preprocess_example>
+            % Here are examples of how to use internal modules:
+            <internal_example_modules>
+                % Here is an example how to preprocess the prompt from a file: <preprocess_example><include>./context/preprocess_example.py</include></preprocess_example>
 
-    % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>./context/llm_selector_example.py</include></llm_selector_example>
+                % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>./context/llm_selector_example.py</include></llm_selector_example>
 
-    % Example usage of the unfinished_prompt function: <unfinished_prompt_example><include>./context/unfinished_prompt_example.py</include></unfinished_prompt_example>
+                % Example usage of the unfinished_prompt function: <unfinished_prompt_example><include>./context/unfinished_prompt_example.py</include></unfinished_prompt_example>
 
-    % Here is an example how to continue the generation of a model output: <continue_generation_example><include>context/continue_generation_example.py</include></continue_generation_example>
+                % Here is an example how to continue the generation of a model output: <continue_generation_example><include>context/continue_generation_example.py</include></continue_generation_example>
 
-    % Here is an example how to postprocess the model output result: <postprocess_example><include>context/postprocess_example.py</include></postprocess_example>
-</internal_example_modules>
-</example_string_of_includes>
+                % Here is an example how to postprocess the model output result: <postprocess_example><include>context/postprocess_example.py</include></postprocess_example>
+            </internal_example_modules>
+        </example_string_of_includes>
     </example_2>
 </examples>
 
