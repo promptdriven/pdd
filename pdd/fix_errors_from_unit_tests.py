@@ -62,7 +62,7 @@ def fix_errors_from_unit_tests(
 
         # Step 5: Run the code through the model using Langchain LCEL
         chain = fix_errors_template | llm | StrOutputParser()
-        processed_prompt = preprocess(prompt, recursive=True, double_curly_brackets=False)
+        processed_prompt = preprocess(prompt, recursive=True, double_curly_brackets=True, exclude_keys=['unit_test', 'code', 'unit_test_fix'])
         input_data = {
             "unit_test": unit_test,
             "code": code,
@@ -103,7 +103,8 @@ def fix_errors_from_unit_tests(
             rprint(f"[bold red]Error writing markdown output to error file: {e}[/bold red]")
 
         # Step 7: Create a second Langchain LCEL template for extract_unit_code_fix
-        extract_fix_template = PromptTemplate.from_template(extract_fix_prompt)
+        extract_processed_prompt = preprocess(extract_fix_prompt, recursive=False, double_curly_brackets=True, exclude_keys=['unit_test', 'code', 'unit_test_fix'])
+        extract_fix_template = PromptTemplate.from_template(extract_processed_prompt)
 
         # Step 8: Use llm_selector with strength 0.5 and provided temperature
         llm, token_counter, input_cost, output_cost, _ = llm_selector(0.8, temperature)
