@@ -6,7 +6,6 @@
     Inputs: 
         'input_prompt' - A string that contains the prompt that requires the includes to be selected.
         'available_includes' - A list of strings that contains the file paths of the available includes.
-
         'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
         'temperature' - A float that is the temperature of the LLM model to use.
     Outputs: 
@@ -18,36 +17,25 @@
 
 % Here are examples of how to use internal modules:
 <internal_example_modules>
-
     % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>./context/llm_selector_example.py</include></llm_selector_example>
-
 </internal_example_modules>
 
 % This program will use Langchain to do the following:
-    Step 1. use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/auto_include_LLM.prompt' file.
+    Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/auto_include_LLM.prompt' and the '$PDD_PATH/prompts/extract_auto_include_LLM.prompt' files.
     Step 2. Then this will create a Langchain LCEL template from the auto include prompt.
     Step 3. This will use llm_selector for the model.
     Step 4. This will run the inputs through the model using Langchain LCEL. 
         4a. Be sure to pass the following string parameters to the prompt during invoke:
-        
             - 'input_prompt' - A string that contains the prompt that requires the includes to be selected.
-
             - 'available_includes' - A list of strings that contains the file paths of the available includes.
- 
         4b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
     Step 5. This will pretty print the markdown formatting that is present in the result via the rich Markdown function. It will also pretty print the number of tokens in the result and the cost.
-    Step 6. use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/extract_auto_include_LLM.prompt' file.
-    Step 7. Then this will create a Langchain LCEL template from the auto include prompt.
-    Step 8. This will use llm_selector for the model.
-    Step 9. This will run the output of auto_include_LLM LCEL through the model using Langchain LCEL. 
-        9a. Be sure to pass the following string parameters to the prompt during invoke:
-        
+    Step 6. Then this will create a Langchain LCEL template from the extract auto include prompt.
+    Step 7. This will use llm_selector for the model.
+    Step 8. This will run the output of auto_include_LLM LCEL through the model using Langchain LCEL. 
+        8a. Be sure to pass the following string parameter to the prompt during invoke:
             - 'llm_output' - A string that contains the output of the auto_include_LLM prompt, with possible and minimum required includes. 
- 
-        9b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
-    
-    Step 10. The extract_auto_include_LLM LCEL will return a JSON object, which will include the key string_of_includes. Concatenate the 'string_of_includes' with the input_prompt which is the 'output_prompt'. 
-    Step 11. The 'total_cost' will be the sum of the cost of the input and output tokens. 
-    Step 12. It should return 'output_prompt', 'total_cost' and 'model_name'.
-
-  
+        8b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+    Step 9. The extract_auto_include_LLM LCEL will return a JSON object, which will include the key 'string_of_includes' to be access via the get() function. Concatenate the 'string_of_includes' with the 'input_prompt' to form the 'output_prompt'. 
+    Step 10. The 'total_cost' will be the sum of the cost of all the input and output tokens. 
+    Step 11. It should return 'output_prompt', 'total_cost' and 'model_name'.
