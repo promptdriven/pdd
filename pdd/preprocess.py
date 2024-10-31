@@ -195,5 +195,5 @@ def double_curly(text: str, exclude_keys: List[str] = None) -> str:
     # Reconstruct the full text after processing
     text = ''.join(processed_parts)
 
-    console.print(f"After doubling:\n{text}")
+    # console.print(f"After doubling:\n{text}")
     return text
