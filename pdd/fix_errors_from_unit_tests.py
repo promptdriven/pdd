@@ -62,7 +62,7 @@ def fix_errors_from_unit_tests(
 
         # Step 5: Run the code through the model using Langchain LCEL
         chain = fix_errors_template | llm | StrOutputParser()
-        processed_prompt = preprocess(prompt, recursive=True, double_curly_brackets=True, exclude_keys=['unit_test', 'code', 'unit_test_fix'])
+        processed_prompt = preprocess(prompt, recursive=False, double_curly_brackets=True, exclude_keys=['unit_test', 'code', 'unit_test_fix'])
         input_data = {
             "unit_test": unit_test,
             "code": code,

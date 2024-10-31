@@ -1,4 +1,4 @@
-% You are an expert Software Engineer. Your goal is to extract a JSON (containing the entire update code under test and/or unit test) from an analysis of a unit test bug fix report. If there is a choice of updating the unit test or the code under test, you should chose to update the code under test.
+% You are an expert Software Engineer. Your goal is to extract a JSON (containing keys that have the entire updated code under test and/or unit test) from an analysis of a unit test bug fix report. If there is a choice of updating the unit test or the code under test to resolve the problem, you should chose to update the code under test.
 
 % Here is the original unit test code: <unit_test>{unit_test}</unit_test>
 
@@ -6,7 +6,7 @@
 
 % Here is the unit test bug fix report: <fix_report>{unit_test_fix}</fix_report>
 
-% Sometimes the fix report may only contain partial code snippet of the unit test or code under test. In these cases, you need to incorporate the partial fixes into the original unit test and/or original code under test so the test and code files are always complete. Often this is signified by comments like ```# Rest of the code remains the same``` or ```# ... rest of the test file remains unchanged ...``` at the end of code snippets. Here is an example of when there is a unit test fragment in the fix report that has to be incorporated into the original unit test to provide the entire updated unit test code:
+% Sometimes the fix report may only contain partial code snippet(s) of the unit test and/or code under test. In these cases, you need to incorporate the partial fix(es) into the original unit test and/or original code under test so the test and code files are always complete. Often this is signified by comments like `# Rest of the code remains the same`, `# Rest of the test cases remain the same...` or `# ... rest of the test file remains unchanged ...` at the end of code snippets. Here is an example of when there is a unit test fragment in the fix report that has to be reassembled into the original unit test to provide the entire updated unit test code:
     <example_fragment>
         <input_example>
             <unit_test_example>
@@ -588,7 +588,7 @@
     </example_fragment>
 
 % Output a JSON object with the following keys:
-    - 'explanation': String explanation of whether the code under test needs to be fix and/or if the unit test needs to be fixed. Also, explain whether only a fragment of code was provided and the entire unit test or code under test needs to be reassembled from the original code or unit test.
+    - 'explanation': String explanation of whether the code under test needs to be fix and/or if the unit test needs to be fixed. Also, explain whether only a fragment of code was provided and the entire unit test and/or code under test needs to be reassembled from the original code and/or unit test.
     - 'update_unit_test': Boolean indicating whether the unit test needs to be updated.
     - 'update_code': Boolean indicating whether the code under test needs to be updated.
     - 'fixed_unit_test': The entire updated unit test code or empty String if no update is needed.
