@@ -41,7 +41,7 @@
         - Total cost accumulator
         - Best iteration tracker (This is so that in case not all issues are solved, the iteration with the lowest errors get restored. In case there are iterations with the same number errors, then the iteration with the lowest fails will get restored.)
     Step 3. Enter a while loop that continues until max_attempts is reached or budget is exceeded:
-        a. Run the unit_test_file with 'python -m pytest -vv' and pipe all output appended to the specified error log file.
+        a. Run the unit_test_file with 'python -m pytest -vv --no-cov' and pipe all output appended to the specified error log file.
         b. If the test passes, break the loop.
         c. If the test fails:
            - Read and print the error message from the error log file, but be sure to escape square brackets first so rprint doesn't misinterpret them as a command.
@@ -60,5 +60,5 @@
               * If the verification succeeds, update the best iteration tracker if this iteration has fewer errors or fails.
         d. Increment the attempt counter.
     Step 4. After the loop ends, run pytest one last time, pipe the output to the error log file, escape square brackets and print it to the console.
-    Step 5. If the last run isn't the best iteration, copy back the files from the best iteration.
+    Step 5. If the last run isn't the best iteration, copy back the files from the best iteration and print out which was the best iteration.
     Step 6. Return the success status, final unit test contents, final code contents, total number of attempts, and total cost.
