@@ -8,6 +8,7 @@ from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.output_parsers import StrOutputParser
 from pydantic import BaseModel
 from .llm_selector import llm_selector
+from unittest.mock import MagicMock
 
 console = Console()
 
@@ -17,11 +18,14 @@ class FixOutput(BaseModel):
     fixed_program: str
     fixed_code: str
 
+
 def ensure_string(value: Any) -> str:
     """Ensure a value is a string, handling mock objects."""
-    if hasattr(value, '_mock_return_value'):
-        return str(value._mock_return_value)
+    if isinstance(value, MagicMock):
+        # If it's a MagicMock, call it to get the return value
+        return str(value())
     return str(value)
+
 
 def safe_get(obj: Any, key: str, default: Any = None) -> Any:
     """Safely get a value from an object that might support either dictionary or attribute access."""
@@ -42,6 +46,7 @@ def safe_get(obj: Any, key: str, default: Any = None) -> Any:
             pass
     
     return default
+
 
 def fix_code_module_errors(
     program: str,
@@ -108,7 +113,7 @@ def fix_code_module_errors(
     prompt_tokens = token_counter(fix_prompt.format(**input_vars))
     prompt_cost = (prompt_tokens / 1_000_000) * input_cost
     
-    console.print(f"[bold blue]Running fix analysis...[/bold blue]")
+    console.print(f"[bold blue]Running fix analysis...[bold blue]")
     console.print(f"Input tokens: {prompt_tokens}")
     console.print(f"Estimated input cost: ${prompt_cost:.4f}")
     
@@ -119,7 +124,7 @@ def fix_code_module_errors(
     result_tokens = token_counter(fix_result)
     result_cost = (result_tokens / 1_000_000) * output_cost
     
-    console.print("[bold green]Fix Analysis Results:[/bold green]")
+    console.print("[bold green]Fix Analysis Results:[bold green]")
     console.print(Markdown(fix_result))
     console.print(f"Output tokens: {result_tokens}")
     console.print(f"Output cost: ${result_cost:.4f}")
@@ -146,7 +151,7 @@ def fix_code_module_errors(
     extract_prompt_tokens = token_counter(extract_prompt.format(**extract_input))
     extract_prompt_cost = (extract_prompt_tokens / 1_000_000) * extract_input_cost
     
-    console.print(f"[bold blue]Extracting fixes...[/bold blue]")
+    console.print(f"[bold blue]Extracting fixes...[bold blue]")
     console.print(f"Input tokens: {extract_prompt_tokens}")
     console.print(f"Estimated input cost: ${extract_prompt_cost:.4f}")
     
