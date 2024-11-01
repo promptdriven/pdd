@@ -6,7 +6,7 @@
 
 % Here is the prompt that generated the code_under_test: <prompt>{prompt}</prompt>
 
-% Here are the errors and past potential fixes, if any, from the unit test and verification program run(s): <errors>{errors}</errors>
+% This prompt is run iteratively. Here are the current errors and past potential fix attempts, if any, from the unit test and verification program run(s): <errors>{errors}</errors>
 
 <examples>
     <example_1>
