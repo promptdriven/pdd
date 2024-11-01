@@ -6,7 +6,7 @@
 
 % Here is the unit test bug fix report: <fix_report>{unit_test_fix}</fix_report>
 
-% Sometimes the fix report may only contain partial code snippet(s) of the unit test and/or code under test. In these cases, you need to incorporate the partial fix(es) into the original unit test and/or original code under test so the test and code files are always complete. Often this is signified by comments like `# Rest of the code remains the same`, `# Rest of the test cases remain the same...` or `# ... rest of the test file remains unchanged ...` at the end of code snippets. 
+% Sometimes the fix report may only contain partial code snippet(s) of the unit test and/or code under test. In these cases, you need to incorporate the partial fix(es) into the original unit test and/or original code under test so the test and code files are always complete. Often this is signified by comments like `# Rest of the code remains the same`, `# Other tests remain unchanged` or `# ... rest of the test file remains unchanged ...` at the end of code snippets. 
 
 % Here are examples of inputs and proper outputs of this prompt:
     <examples>
