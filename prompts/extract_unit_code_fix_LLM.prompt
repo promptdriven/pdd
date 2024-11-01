@@ -6,586 +6,75 @@
 
 % Here is the unit test bug fix report: <fix_report>{unit_test_fix}</fix_report>
 
-% Sometimes the fix report may only contain partial code snippet(s) of the unit test and/or code under test. In these cases, you need to incorporate the partial fix(es) into the original unit test and/or original code under test so the test and code files are always complete. Often this is signified by comments like `# Rest of the code remains the same`, `# Rest of the test cases remain the same...` or `# ... rest of the test file remains unchanged ...` at the end of code snippets. Here are examples of when there are unit test fragments in the fix reports that has to be reassembled with the original unit tests to provide the entire updated unit test codes:
-    <example_fragments>
+% Sometimes the fix report may only contain partial code snippet(s) of the unit test and/or code under test. In these cases, you need to incorporate the partial fix(es) into the original unit test and/or original code under test so the test and code files are always complete. Often this is signified by comments like `# Rest of the code remains the same`, `# Rest of the test cases remain the same...` or `# ... rest of the test file remains unchanged ...` at the end of code snippets. 
+
+% Here are examples of inputs and proper outputs of this prompt:
+    <examples>
         <example_1>
             <input_example>
                 <unit_test_example>
-                    # tests/test_fix_code_module_errors.py
-
-                    import os
                     import pytest
-                    from unittest.mock import patch, mock_open, MagicMock
-                    from pdd.fix_code_module_errors import fix_code_module_errors
+                    from auth_service import AuthService
 
                     @pytest.fixture
-                    def mock_pdd_path(monkeypatch):
-                        """Fixture to mock the PDD_PATH environment variable."""
-                        monkeypatch.setenv('PDD_PATH', '/fake/path')
+                    def auth_service():
+                        return AuthService()
 
-                    @pytest.fixture
-                    def mock_prompt_files():
-                        """Fixture to mock the content of prompt files."""
-                        fix_prompt_content = "Fix the following code errors:\n{program}\n{prompt}\n{code}\n{errors}"
-                        extract_prompt_content = "Extract the fixes from the following response:\n{program_code_fix}\n{program}\n{code}"
+                    def test_valid_login(auth_service):
+                        result = auth_service.login("user@example.com", "password123")
+                        assert result.success
+                        assert result.token is not None
 
-                        mock_files = {
-                            '/fake/path/prompts/fix_code_module_errors_LLM.prompt': fix_prompt_content,
-                            '/fake/path/prompts/extract_program_code_fix_LLM.prompt': extract_prompt_content,
-                        }
-
-                        def _mock_open(file, mode='r', *args, **kwargs):
-                            if str(file) in mock_files:
-                                return mock_open(read_data=mock_files[str(file)])(file, mode)
-                            else:
-                                raise FileNotFoundError(f"No such file or directory: '{file}'")
-
-                        return _mock_open
-
-                    @pytest.fixture
-                    def mock_llm_selector():
-                        """Fixture to mock the llm_selector function."""
-                        with patch('pdd.fix_code_module_errors.llm_selector') as mock_selector:
-                            mock_selector.return_value = (
-                                MagicMock(),   # llm
-                                MagicMock(side_effect=lambda x: 1000),  # token_counter returns 1000 tokens
-                                0.02,          # input_cost per million tokens
-                                0.03,          # output_cost per million tokens
-                                "mock-model"   # model_name
-                            )
-                            yield mock_selector
-
-                    @pytest.fixture
-                    def mock_chain_invoke():
-                        """Fixture to mock the chain.invoke method."""
-                        with patch('pdd.fix_code_module_errors.PromptTemplate') as mock_prompt_template:
-                            # Create mock chains
-                            mock_fix_chain = MagicMock()
-                            mock_extract_chain = MagicMock()
-
-                            # Configure the first chain to return a string
-                            mock_fix_chain.invoke.return_value = "# Fixed Code Analysis\nThe code has been analyzed and fixed."
-                            mock_fix_chain.__or__ = MagicMock(return_value=mock_fix_chain)
-
-                            # Configure the second chain to return a proper FixOutput object
-                            class MockFixOutput:
-                                update_program = True
-                                update_code = True
-                                fixed_program = "print('Fixed Program')"
-                                fixed_code = "print('Fixed Code')"
-                                
-                            mock_extract_chain.invoke.return_value = MockFixOutput()
-                            mock_extract_chain.__or__ = MagicMock(return_value=mock_extract_chain)
-
-                            # Configure PromptTemplate
-                            mock_prompt_template.from_template.side_effect = [mock_fix_chain, mock_extract_chain]
-
-                            yield mock_fix_chain, mock_extract_chain
-
-                    def test_fix_code_module_errors_success(mock_pdd_path, mock_prompt_files, mock_llm_selector, mock_chain_invoke):
-                        """Test the successful execution of fix_code_module_errors."""
-                        mock_open_fn = mock_prompt_files
-                        with patch("builtins.open", mock_open_fn):
-                            fix_chain, extract_chain = mock_chain_invoke
-                            update_program, update_code, fixed_program, fixed_code, total_cost, model_name = fix_code_module_errors(
-                                program="original_program_code",
-                                prompt="original_prompt",
-                                code="original_code",
-                                errors="original_errors",
-                                strength=0.5,
-                                temperature=0.7
-                            )
-
-                            # Assertions for returned values
-                            assert update_program is True
-                            assert update_code is True
-                            assert fixed_program == "print('Fixed Program')"
-                            assert fixed_code == "print('Fixed Code')"
-                            assert total_cost == (1000 / 1_000_000) * 0.02 + (1000 / 1_000_000) * 0.03
-                            assert model_name == "mock-model"
-
-                            # Verify that the prompt files were read correctly
-                            assert mock_llm_selector.called
-                            assert fix_chain.invoke.called
-                            assert extract_chain.invoke.called
-
-                    def test_fix_code_module_errors_missing_pdd_path(monkeypatch):
-                        """Test behavior when PDD_PATH environment variable is missing."""
-                        monkeypatch.delenv('PDD_PATH', raising=False)
-
-                        with pytest.raises(ValueError) as exc_info:
-                            fix_code_module_errors(
-                                program="program",
-                                prompt="prompt",
-                                code="code",
-                                errors="errors",
-                                strength=0.5
-                            )
-                        assert "PDD_PATH environment variable not set" in str(exc_info.value)
-
-                    def test_fix_code_module_errors_missing_prompt_files(mock_pdd_path, mock_prompt_files, mock_llm_selector, mock_chain_invoke):
-                        """Test behavior when prompt files are missing."""
-                        # Modify mock_open to raise FileNotFoundError for prompt files
-                        def _missing_mock_open(file, mode='r', *args, **kwargs):
-                            raise FileNotFoundError(f"No such file or directory: '{file}'")
-
-                        with patch("builtins.open", _missing_mock_open):
-                            with pytest.raises(FileNotFoundError):
-                                fix_code_module_errors(
-                                    program="program",
-                                    prompt="prompt",
-                                    code="code",
-                                    errors="errors",
-                                    strength=0.5
-                                )
-
-                    def test_fix_code_module_errors_invalid_strength(mock_pdd_path, mock_prompt_files, mock_llm_selector, mock_chain_invoke):
-                        """Test behavior with invalid strength values."""
-                        # Test strength below 0
-                        with pytest.raises(ValueError):
-                            fix_code_module_errors(
-                                program="program",
-                                prompt="prompt",
-                                code="code",
-                                errors="errors",
-                                strength=-0.1
-                            )
-
-                        # Test strength above 1
-                        with pytest.raises(ValueError):
-                            fix_code_module_errors(
-                                program="program",
-                                prompt="prompt",
-                                code="code",
-                                errors="errors",
-                                strength=1.1
-                            )
-
-                    def test_fix_code_module_errors_invalid_temperature(mock_pdd_path, mock_prompt_files, mock_llm_selector, mock_chain_invoke):
-                        """Test behavior with invalid temperature values."""
-                        # Test temperature below 0
-                        with pytest.raises(ValueError):
-                            fix_code_module_errors(
-                                program="program",
-                                prompt="prompt",
-                                code="code",
-                                errors="errors",
-                                strength=0.5,
-                                temperature=-0.5
-                            )
-
-                        # Test temperature above a reasonable upper bound, e.g., 1
-                        with pytest.raises(ValueError):
-                            fix_code_module_errors(
-                                program="program",
-                                prompt="prompt",
-                                code="code",
-                                errors="errors",
-                                strength=0.5,
-                                temperature=1.5
-                            )
-
-                    def test_fix_code_module_errors_llm_selector_failure(mock_pdd_path, mock_prompt_files):
-                        """Test behavior when llm_selector raises an exception."""
-                        with patch("builtins.open", mock_prompt_files):
-                            with patch('pdd.fix_code_module_errors.llm_selector', 
-                                    side_effect=Exception("LLM Selector Error")):
-                                with pytest.raises(Exception) as exc_info:
-                                    fix_code_module_errors(
-                                        program="program",
-                                        prompt="prompt",
-                                        code="code",
-                                        errors="errors",
-                                        strength=0.5
-                                    )
-                                assert "LLM Selector Error" in str(exc_info.value)
-
-                    def test_fix_code_module_errors_chain_invoke_failure(mock_pdd_path, mock_prompt_files, mock_llm_selector):
-                        """Test behavior when chain.invoke raises an exception."""
-                        with patch("builtins.open", mock_prompt_files):
-                            with patch('pdd.fix_code_module_errors.PromptTemplate') as mock_prompt_template:
-                                mock_chain = MagicMock()
-                                mock_chain.invoke.side_effect = Exception("Chain Invoke Error")
-                                mock_chain.__or__ = MagicMock(return_value=mock_chain)
-                                
-                                mock_prompt_template.from_template.return_value = mock_chain
-                                
-                                with pytest.raises(Exception) as exc_info:
-                                    fix_code_module_errors(
-                                        program="program",
-                                        prompt="prompt",
-                                        code="code",
-                                        errors="errors",
-                                        strength=0.5
-                                    )
-                                assert "Chain Invoke Error" in str(exc_info.value)
-
-                    def test_fix_code_module_errors_empty_inputs(mock_pdd_path, mock_prompt_files, mock_llm_selector, mock_chain_invoke):
-                        """Test behavior when inputs are empty strings."""
-                        mock_open_fn = mock_prompt_files
-                        with patch("builtins.open", mock_open_fn):
-                            fix_chain, extract_chain = mock_chain_invoke
-                            update_program, update_code, fixed_program, fixed_code, total_cost, model_name = fix_code_module_errors(
-                                program="",
-                                prompt="",
-                                code="",
-                                errors="",
-                                strength=0.5,
-                                temperature=0.7
-                            )
-
-                            # Assert that the function still returns expected values
-                            assert update_program is True
-                            assert update_code is True
-                            assert fixed_program == "print('Fixed Program')"
-                            assert fixed_code == "print('Fixed Code')"
-                            assert total_cost == (1000 / 1_000_000) * 0.02 + (1000 / 1_000_000) * 0.03
-                            assert model_name == "mock-model"
+                    def test_invalid_password(auth_service):
+                        result = auth_service.login("user@example.com", "wrongpass")
+                        assert not result.success
+                        assert result.token is None
                 </unit_test_example>
 
                 <fix_report_example>
                     ```python
-                    # tests/test_fix_code_module_errors.py
+                    # Code above this line remains the same
+                    def test_invalid_email_format(auth_service):
+                        result = auth_service.login("invalid-email", "password123")
+                        assert not result.success
+                        assert result.error == "Invalid email format"
 
-                    import os
-                    import pytest
-                    from unittest.mock import patch, mock_open, MagicMock
-                    from pdd.fix_code_module_errors import fix_code_module_errors, FixOutput
-
-                    @pytest.fixture
-                    def mock_pdd_path(monkeypatch):
-                        """Fixture to mock the PDD_PATH environment variable."""
-                        monkeypatch.setenv('PDD_PATH', '/fake/path')
-
-                    @pytest.fixture
-                    def mock_prompt_files():
-                        """Fixture to mock the content of prompt files."""
-                        fix_prompt_content = "Fix the following code errors:\n{program}\n{prompt}\n{code}\n{errors}"
-                        extract_prompt_content = "Extract the fixes from the following response:\n{program_code_fix}\n{program}\n{code}"
-
-                        mock_files = {
-                            '/fake/path/prompts/fix_code_module_errors_LLM.prompt': fix_prompt_content,
-                            '/fake/path/prompts/extract_program_code_fix_LLM.prompt': extract_prompt_content,
-                        }
-
-                        def _mock_open(file, mode='r', *args, **kwargs):
-                            if str(file) in mock_files:
-                                return mock_open(read_data=mock_files[str(file)])(file, mode)
-                            else:
-                                raise FileNotFoundError(f"No such file or directory: '{file}'")
-
-                        return _mock_open
-
-                    @pytest.fixture
-                    def mock_llm_selector():
-                        """Fixture to mock the llm_selector function."""
-                        with patch('pdd.fix_code_module_errors.llm_selector') as mock_selector:
-                            mock_selector.return_value = (
-                                MagicMock(),   # llm
-                                MagicMock(side_effect=lambda x: 1000),  # token_counter returns 1000 tokens
-                                0.02,          # input_cost per million tokens
-                                0.03,          # output_cost per million tokens
-                                "mock-model"   # model_name
-                            )
-                            yield mock_selector
-
-                    @pytest.fixture
-                    def mock_chain_invoke():
-                        """Fixture to mock the chain.invoke method."""
-                        with patch('pdd.fix_code_module_errors.PromptTemplate') as mock_prompt_template:
-                            # Create mock chains
-                            mock_fix_chain = MagicMock()
-                            mock_extract_chain = MagicMock()
-
-                            # Configure the first chain to return a string
-                            mock_fix_chain.invoke.return_value = "# Fixed Code Analysis\nThe code has been analyzed and fixed."
-                            mock_fix_chain.__or__ = MagicMock(return_value=mock_fix_chain)
-
-                            # Create a proper FixOutput object
-                            mock_result = FixOutput(
-                                update_program=True,
-                                update_code=True,
-                                fixed_program="print('Fixed Program')",
-                                fixed_code="print('Fixed Code')"
-                            )
-                            
-                            # Configure the second chain to return the FixOutput object
-                            mock_extract_chain.invoke.return_value = mock_result
-                            mock_extract_chain.__or__ = MagicMock(return_value=mock_extract_chain)
-
-                            # Configure PromptTemplate
-                            mock_prompt_template.from_template.side_effect = [mock_fix_chain, mock_extract_chain]
-
-                            yield mock_fix_chain, mock_extract_chain
-
-                    def test_fix_code_module_errors_success(mock_pdd_path, mock_prompt_files, mock_llm_selector, mock_chain_invoke):
-                        """Test the successful execution of fix_code_module_errors."""
-                        mock_open_fn = mock_prompt_files
-                        with patch("builtins.open", mock_open_fn):
-                            fix_chain, extract_chain = mock_chain_invoke
-                            update_program, update_code, fixed_program, fixed_code, total_cost, model_name = fix_code_module_errors(
-                                program="original_program_code",
-                                prompt="original_prompt",
-                                code="original_code",
-                                errors="original_errors",
-                                strength=0.5,
-                                temperature=0.7
-                            )
-
-                            # Assertions for returned values
-                            assert isinstance(update_program, bool), "update_program should be a boolean"
-                            assert update_program is True, "update_program should be True"
-                            assert isinstance(update_code, bool), "update_code should be a boolean"
-                            assert update_code is True, "update_code should be True"
-                            assert isinstance(fixed_program, str), "fixed_program should be a string"
-                            assert fixed_program == "print('Fixed Program')", "fixed_program has unexpected value"
-                            assert isinstance(fixed_code, str), "fixed_code should be a string"
-                            assert fixed_code == "print('Fixed Code')", "fixed_code has unexpected value"
-                            assert isinstance(total_cost, float), "total_cost should be a float"
-                            assert total_cost == (1000 / 1_000_000) * 0.02 + (1000 / 1_000_000) * 0.03, "total_cost has unexpected value"
-                            assert isinstance(model_name, str), "model_name should be a string"
-                            assert model_name == "mock-model", "model_name has unexpected value"
-
-                    # ... rest of the test file remains unchanged ...
+                    def test_empty_credentials(auth_service):
+                        result = auth_service.login("", "")
+                        assert not result.success
+                        assert result.error == "Email and password required"
                     ```
                 </fix_report_example>
             </input_example>
 
             <output_example>
                 <fixed_unit_test_example>
-                    # tests/test_fix_code_module_errors.py
+                import pytest
+                from auth_service import AuthService
 
-                    import os
-                    import pytest
-                    from unittest.mock import patch, mock_open, MagicMock
-                    from pdd.fix_code_module_errors import fix_code_module_errors, FixOutput
+                @pytest.fixture
+                def auth_service():
+                    return AuthService()
 
-                    @pytest.fixture
-                    def mock_pdd_path(monkeypatch):
-                        """Fixture to mock the PDD_PATH environment variable."""
-                        monkeypatch.setenv('PDD_PATH', '/fake/path')
+                def test_valid_login(auth_service):
+                    result = auth_service.login("user@example.com", "password123")
+                    assert result.success
+                    assert result.token is not None
 
-                    @pytest.fixture
-                    def mock_prompt_files():
-                        """Fixture to mock the content of prompt files."""
-                        fix_prompt_content = "Fix the following code errors:\n{program}\n{prompt}\n{code}\n{errors}"
-                        extract_prompt_content = "Extract the fixes from the following response:\n{program_code_fix}\n{program}\n{code}"
+                def test_invalid_password(auth_service):
+                    result = auth_service.login("user@example.com", "wrongpass")
+                    assert not result.success
+                    assert result.token is None
 
-                        mock_files = {
-                            '/fake/path/prompts/fix_code_module_errors_LLM.prompt': fix_prompt_content,
-                            '/fake/path/prompts/extract_program_code_fix_LLM.prompt': extract_prompt_content,
-                        }
+                def test_invalid_email_format(auth_service):
+                    result = auth_service.login("invalid-email", "password123")
+                    assert not result.success
+                    assert result.error == "Invalid email format"
 
-                        def _mock_open(file, mode='r', *args, **kwargs):
-                            if str(file) in mock_files:
-                                return mock_open(read_data=mock_files[str(file)])(file, mode)
-                            else:
-                                raise FileNotFoundError(f"No such file or directory: '{file}'")
-
-                        return _mock_open
-
-                    @pytest.fixture
-                    def mock_llm_selector():
-                        """Fixture to mock the llm_selector function."""
-                        with patch('pdd.fix_code_module_errors.llm_selector') as mock_selector:
-                            mock_selector.return_value = (
-                                MagicMock(),   # llm
-                                MagicMock(side_effect=lambda x: 1000),  # token_counter returns 1000 tokens
-                                0.02,          # input_cost per million tokens
-                                0.03,          # output_cost per million tokens
-                                "mock-model"   # model_name
-                            )
-                            yield mock_selector
-
-                    @pytest.fixture
-                    def mock_chain_invoke():
-                        """Fixture to mock the chain.invoke method."""
-                        with patch('pdd.fix_code_module_errors.PromptTemplate') as mock_prompt_template:
-                            # Create mock chains
-                            mock_fix_chain = MagicMock()
-                            mock_extract_chain = MagicMock()
-
-                            # Configure the first chain to return a string
-                            mock_fix_chain.invoke.return_value = "# Fixed Code Analysis\nThe code has been analyzed and fixed."
-                            mock_fix_chain.__or__ = MagicMock(return_value=mock_fix_chain)
-
-                            # Create a proper FixOutput object
-                            mock_result = FixOutput(
-                                update_program=True,
-                                update_code=True,
-                                fixed_program="print('Fixed Program')",
-                                fixed_code="print('Fixed Code')"
-                            )
-                            
-                            # Configure the second chain to return the FixOutput object
-                            mock_extract_chain.invoke.return_value = mock_result
-                            mock_extract_chain.__or__ = MagicMock(return_value=mock_extract_chain)
-
-                            # Configure PromptTemplate
-                            mock_prompt_template.from_template.side_effect = [mock_fix_chain, mock_extract_chain]
-
-                            yield mock_fix_chain, mock_extract_chain
-
-                    def test_fix_code_module_errors_success(mock_pdd_path, mock_prompt_files, mock_llm_selector, mock_chain_invoke):
-                        """Test the successful execution of fix_code_module_errors."""
-                        mock_open_fn = mock_prompt_files
-                        with patch("builtins.open", mock_open_fn):
-                            fix_chain, extract_chain = mock_chain_invoke
-                            update_program, update_code, fixed_program, fixed_code, total_cost, model_name = fix_code_module_errors(
-                                program="original_program_code",
-                                prompt="original_prompt",
-                                code="original_code",
-                                errors="original_errors",
-                                strength=0.5,
-                                temperature=0.7
-                            )
-
-                            # Assertions for returned values
-                            assert isinstance(update_program, bool), "update_program should be a boolean"
-                            assert update_program is True, "update_program should be True"
-                            assert isinstance(update_code, bool), "update_code should be a boolean"
-                            assert update_code is True, "update_code should be True"
-                            assert isinstance(fixed_program, str), "fixed_program should be a string"
-                            assert fixed_program == "print('Fixed Program')", "fixed_program has unexpected value"
-                            assert isinstance(fixed_code, str), "fixed_code should be a string"
-                            assert fixed_code == "print('Fixed Code')", "fixed_code has unexpected value"
-                            assert isinstance(total_cost, float), "total_cost should be a float"
-                            assert total_cost == (1000 / 1_000_000) * 0.02 + (1000 / 1_000_000) * 0.03, "total_cost has unexpected value"
-                            assert isinstance(model_name, str), "model_name should be a string"
-                            assert model_name == "mock-model", "model_name has unexpected value"
-
-                    def test_fix_code_module_errors_missing_pdd_path(monkeypatch):
-                        """Test behavior when PDD_PATH environment variable is missing."""
-                        monkeypatch.delenv('PDD_PATH', raising=False)
-
-                        with pytest.raises(ValueError) as exc_info:
-                            fix_code_module_errors(
-                                program="program",
-                                prompt="prompt",
-                                code="code",
-                                errors="errors",
-                                strength=0.5
-                            )
-                        assert "PDD_PATH environment variable not set" in str(exc_info.value)
-
-                    def test_fix_code_module_errors_missing_prompt_files(mock_pdd_path, mock_prompt_files, mock_llm_selector, mock_chain_invoke):
-                        """Test behavior when prompt files are missing."""
-                        # Modify mock_open to raise FileNotFoundError for prompt files
-                        def _missing_mock_open(file, mode='r', *args, **kwargs):
-                            raise FileNotFoundError(f"No such file or directory: '{file}'")
-
-                        with patch("builtins.open", _missing_mock_open):
-                            with pytest.raises(FileNotFoundError):
-                                fix_code_module_errors(
-                                    program="program",
-                                    prompt="prompt",
-                                    code="code",
-                                    errors="errors",
-                                    strength=0.5
-                                )
-
-                    def test_fix_code_module_errors_invalid_strength(mock_pdd_path, mock_prompt_files, mock_llm_selector, mock_chain_invoke):
-                        """Test behavior with invalid strength values."""
-                        # Test strength below 0
-                        with pytest.raises(ValueError):
-                            fix_code_module_errors(
-                                program="program",
-                                prompt="prompt",
-                                code="code",
-                                errors="errors",
-                                strength=-0.1
-                            )
-
-                        # Test strength above 1
-                        with pytest.raises(ValueError):
-                            fix_code_module_errors(
-                                program="program",
-                                prompt="prompt",
-                                code="code",
-                                errors="errors",
-                                strength=1.1
-                            )
-
-                    def test_fix_code_module_errors_invalid_temperature(mock_pdd_path, mock_prompt_files, mock_llm_selector, mock_chain_invoke):
-                        """Test behavior with invalid temperature values."""
-                        # Test temperature below 0
-                        with pytest.raises(ValueError):
-                            fix_code_module_errors(
-                                program="program",
-                                prompt="prompt",
-                                code="code",
-                                errors="errors",
-                                strength=0.5,
-                                temperature=-0.5
-                            )
-
-                        # Test temperature above a reasonable upper bound, e.g., 1
-                        with pytest.raises(ValueError):
-                            fix_code_module_errors(
-                                program="program",
-                                prompt="prompt",
-                                code="code",
-                                errors="errors",
-                                strength=0.5,
-                                temperature=1.5
-                            )
-
-                    def test_fix_code_module_errors_llm_selector_failure(mock_pdd_path, mock_prompt_files):
-                        """Test behavior when llm_selector raises an exception."""
-                        with patch("builtins.open", mock_prompt_files):
-                            with patch('pdd.fix_code_module_errors.llm_selector', 
-                                    side_effect=Exception("LLM Selector Error")):
-                                with pytest.raises(Exception) as exc_info:
-                                    fix_code_module_errors(
-                                        program="program",
-                                        prompt="prompt",
-                                        code="code",
-                                        errors="errors",
-                                        strength=0.5
-                                    )
-                                assert "LLM Selector Error" in str(exc_info.value)
-
-                    def test_fix_code_module_errors_chain_invoke_failure(mock_pdd_path, mock_prompt_files, mock_llm_selector):
-                        """Test behavior when chain.invoke raises an exception."""
-                        with patch("builtins.open", mock_prompt_files):
-                            with patch('pdd.fix_code_module_errors.PromptTemplate') as mock_prompt_template:
-                                mock_chain = MagicMock()
-                                mock_chain.invoke.side_effect = Exception("Chain Invoke Error")
-                                mock_chain.__or__ = MagicMock(return_value=mock_chain)
-                                
-                                mock_prompt_template.from_template.return_value = mock_chain
-                                
-                                with pytest.raises(Exception) as exc_info:
-                                    fix_code_module_errors(
-                                        program="program",
-                                        prompt="prompt",
-                                        code="code",
-                                        errors="errors",
-                                        strength=0.5
-                                    )
-                                assert "Chain Invoke Error" in str(exc_info.value)
-
-                    def test_fix_code_module_errors_empty_inputs(mock_pdd_path, mock_prompt_files, mock_llm_selector, mock_chain_invoke):
-                        """Test behavior when inputs are empty strings."""
-                        mock_open_fn = mock_prompt_files
-                        with patch("builtins.open", mock_open_fn):
-                            fix_chain, extract_chain = mock_chain_invoke
-                            update_program, update_code, fixed_program, fixed_code, total_cost, model_name = fix_code_module_errors(
-                                program="",
-                                prompt="",
-                                code="",
-                                errors="",
-                                strength=0.5,
-                                temperature=0.7
-                            )
-
-                            # Assert that the function still returns expected values
-                            assert update_program is True
-                            assert update_code is True
-                            assert fixed_program == "print('Fixed Program')"
-                            assert fixed_code == "print('Fixed Code')"
-                            assert total_cost == (1000 / 1_000_000) * 0.02 + (1000 / 1_000_000) * 0.03
-                            assert model_name == "mock-model"
+                def test_empty_credentials(auth_service):
+                    result = auth_service.login("", "")
+                    assert not result.success
+                    assert result.error == "Email and password required"
                 </fixed_unit_test_example>
             <output_example>
         </example_1>
@@ -593,447 +82,86 @@
         <example_2>
             <input_example>
                 <unit_test_example>
-                    # tests/test_fix_code_module_errors.py
-
                     import pytest
-                    from unittest.mock import patch, mock_open, MagicMock
-                    from pydantic import ValidationError
-
-                    # Import the function to test
-                    from pdd.fix_code_module_errors import fix_code_module_errors
-
-                    # Define sample data for testing
-                    SAMPLE_PROGRAM = "print('Hello, World!')"
-                    SAMPLE_PROMPT = "Generate a simple Python program."
-                    SAMPLE_CODE = "def greet():\n    print('Hello')"
-                    SAMPLE_ERRORS = "NameError: name 'greet' is not defined"
-                    SAMPLE_FIX_RESULT = "print('Fixed Code')"
-                    SAMPLE_EXTRACT_RESULT = {
-                        "update_program": True,
-                        "update_code": True,
-                        "fixed_program": "print('Hello, World!')",
-                        "fixed_code": "def greet():\n    print('Hello, World!')"
-                    }
-                    TOTAL_COST = 0.05
-                    MODEL_NAME = "mock-model"
+                    from calculator import Calculator
 
                     @pytest.fixture
-                    def mock_llm_selector():
-                        with patch("pdd.fix_code_module_errors.llm_selector") as mock_selector:
-                            # Mock return value of llm_selector
-                            mock_llm = MagicMock()
-                            mock_llm.invoke = MagicMock(side_effect=[
-                                SAMPLE_FIX_RESULT,  # Result from first chain.invoke
-                                SAMPLE_EXTRACT_RESULT  # Result from second chain.invoke
-                            ])
-                            mock_selector.return_value = (mock_llm, lambda x: 1000, 0.02, 0.03, MODEL_NAME)
-                            yield mock_selector
+                    def calc():
+                        return Calculator()
 
-                    @pytest.fixture
-                    def mock_open_files():
-                        # Mock the open function to read prompt templates
-                        prompt_content = "Fix the following code:\n{program}\n{prompt}\n{code}\n{errors}"
-                        extract_prompt_content = '{"update_program": true, "update_code": true, "fixed_program": "print(\'Hello, World!\')", "fixed_code": "def greet():\\n    print(\'Hello, World!\')"}'
-                        
-                        m = mock_open()
-                        m.side_effect = [
-                            mock_open(read_data=prompt_content).return_value,
-                            mock_open(read_data=extract_prompt_content).return_value
-                        ]
-                        with patch("builtins.open", m):
-                            yield m
+                    def test_add(calc):
+                        assert calc.add(2, 3) == 5
+                        assert calc.add(-1, 1) == 0
 
-                    def test_fix_code_module_errors_valid_inputs(mock_llm_selector, mock_open_files):
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"):
-                            update_program, update_code, fixed_program, fixed_code, total_cost, model_name = fix_code_module_errors(
-                                program=SAMPLE_PROGRAM,
-                                prompt=SAMPLE_PROMPT,
-                                code=SAMPLE_CODE,
-                                errors=SAMPLE_ERRORS,
-                                strength=0.5,
-                                temperature=0.7
-                            )
-                        
-                        assert update_program is True
-                        assert update_code is True
-                        assert fixed_program == "print('Hello, World!')"
-                        assert fixed_code == "def greet():\n    print('Hello, World!')"
-                        assert total_cost == pytest.approx(0.05)
-                        assert model_name == MODEL_NAME
-
-                    def test_fix_code_module_errors_invalid_strength(mock_open_files):
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"):
-                            with pytest.raises(ValueError, match="Strength must be between 0 and 1"):
-                                fix_code_module_errors(
-                                    program=SAMPLE_PROGRAM,
-                                    prompt=SAMPLE_PROMPT,
-                                    code=SAMPLE_CODE,
-                                    errors=SAMPLE_ERRORS,
-                                    strength=1.5,  # Invalid strength
-                                    temperature=0.5
-                                )
-
-                    def test_fix_code_module_errors_invalid_temperature(mock_open_files):
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"):
-                            with pytest.raises(ValueError, match="Temperature must be between 0 and 1"):
-                                fix_code_module_errors(
-                                    program=SAMPLE_PROGRAM,
-                                    prompt=SAMPLE_PROMPT,
-                                    code=SAMPLE_CODE,
-                                    errors=SAMPLE_ERRORS,
-                                    strength=0.5,
-                                    temperature=1.5  # Invalid temperature
-                                )
-
-                    def test_fix_code_module_errors_missing_pdd_path(mock_llm_selector, mock_open_files):
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value=None):
-                            with pytest.raises(ValueError, match="PDD_PATH environment variable not set"):
-                                fix_code_module_errors(
-                                    program=SAMPLE_PROGRAM,
-                                    prompt=SAMPLE_PROMPT,
-                                    code=SAMPLE_CODE,
-                                    errors=SAMPLE_ERRORS,
-                                    strength=0.5,
-                                    temperature=0.5
-                                )
-
-                    def test_fix_code_module_errors_missing_fix_prompt(mock_llm_selector):
-                        # Simulate FileNotFoundError when opening fix prompt
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"), \
-                            patch("builtins.open", side_effect=FileNotFoundError("fix_code_module_errors_LLM.prompt not found")):
-                            with pytest.raises(FileNotFoundError, match="fix_code_module_errors_LLM.prompt not found"):
-                                fix_code_module_errors(
-                                    program=SAMPLE_PROGRAM,
-                                    prompt=SAMPLE_PROMPT,
-                                    code=SAMPLE_CODE,
-                                    errors=SAMPLE_ERRORS,
-                                    strength=0.5,
-                                    temperature=0.5
-                                )
-
-                    def test_fix_code_module_errors_llm_selector_exception(mock_open_files):
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"), \
-                            patch("pdd.fix_code_module_errors.llm_selector", side_effect=ValueError("Invalid strength")):
-                            with pytest.raises(ValueError, match="Invalid strength"):
-                                fix_code_module_errors(
-                                    program=SAMPLE_PROGRAM,
-                                    prompt=SAMPLE_PROMPT,
-                                    code=SAMPLE_CODE,
-                                    errors=SAMPLE_ERRORS,
-                                    strength=0.5,
-                                    temperature=0.5
-                                )
-
-                    def test_fix_code_module_errors_incomplete_extract_result(mock_llm_selector, mock_open_files):
-                        # Modify the extract_result to be incomplete
-                        incomplete_extract_result = {
-                            "update_program": True,
-                            # "update_code" is missing
-                            "fixed_program": "print('Hello, World!')",
-                            # "fixed_code" is missing
-                        }
-                        mock_llm_selector.return_value[0].invoke.side_effect = [
-                            SAMPLE_FIX_RESULT,
-                            incomplete_extract_result
-                        ]
-                        
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"):
-                            update_program, update_code, fixed_program, fixed_code, total_cost, model_name = fix_code_module_errors(
-                                program=SAMPLE_PROGRAM,
-                                prompt=SAMPLE_PROMPT,
-                                code=SAMPLE_CODE,
-                                errors=SAMPLE_ERRORS,
-                                strength=0.5,
-                                temperature=0.7
-                            )
-                        
-                        assert update_program is True
-                        assert update_code is False  # Default value since missing
-                        assert fixed_program == "print('Hello, World!')"
-                        assert fixed_code == ""  # Default value since missing
-                        assert total_cost == pytest.approx(0.05)
-                        assert model_name == MODEL_NAME
-
-                    def test_fix_code_module_errors_invalid_json_output(mock_llm_selector, mock_open_files):
-                        # Simulate invalid JSON output that doesn't conform to FixOutput
-                        invalid_extract_result = {
-                            "update_program": "yes",  # Should be bool
-                            "update_code": "no",      # Should be bool
-                            "fixed_program": 123,     # Should be str
-                            "fixed_code": None        # Should be str
-                        }
-                        mock_llm_selector.return_value[0].invoke.side_effect = [
-                            SAMPLE_FIX_RESULT,
-                            invalid_extract_result
-                        ]
-                        
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"), \
-                            patch("pdd.fix_code_module_errors.safe_get", side_effect=invalid_extract_result.get):
-                            with pytest.raises(ValidationError):
-                                fix_code_module_errors(
-                                    program=SAMPLE_PROGRAM,
-                                    prompt=SAMPLE_PROMPT,
-                                    code=SAMPLE_CODE,
-                                    errors=SAMPLE_ERRORS,
-                                    strength=0.5,
-                                    temperature=0.7
-                                )
-
-                    def test_fix_code_module_errors_empty_errors(mock_llm_selector, mock_open_files):
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"):
-                            update_program, update_code, fixed_program, fixed_code, total_cost, model_name = fix_code_module_errors(
-                                program=SAMPLE_PROGRAM,
-                                prompt=SAMPLE_PROMPT,
-                                code=SAMPLE_CODE,
-                                errors="",  # Empty errors
-                                strength=0.5,
-                                temperature=0.7
-                            )
-                        
-                        # Assuming the function can handle empty errors and still process
-                        assert update_program is True
-                        assert update_code is True
-                        assert fixed_program == "print('Hello, World!')"
-                        assert fixed_code == "def greet():\n    print('Hello, World!')"
-                        assert total_cost == pytest.approx(0.05)
-                        assert model_name == MODEL_NAME
+                    def test_subtract(calc):
+                        assert calc.subtract(5, 3) == 2
+                        assert calc.subtract(1, 1) == 0
                 </unit_test_example>
 
                 <fix_report_example>
                     ```python                
-                    # tests/test_fix_code_module_errors.py
-                    # (previous imports remain the same)
+                    import pytest
+                    from calculator import Calculator
 
                     @pytest.fixture
-                    def mock_llm_selector():
-                        with patch("pdd.fix_code_module_errors.llm_selector") as mock_selector:
-                            # Mock return value of llm_selector
-                            mock_llm = MagicMock()
-                            # Ensure string returns from invoke
-                            mock_llm.invoke = MagicMock(return_value=SAMPLE_FIX_RESULT)
-                            mock_selector.return_value = (mock_llm, lambda x: 1000, 0.02, 0.03, MODEL_NAME)
-                            yield mock_selector
+                    def calc():
+                        return Calculator()
 
-                    @pytest.fixture
-                    def mock_chain():
-                        chain = MagicMock()
-                        chain.invoke = MagicMock(side_effect=[
-                            str(SAMPLE_FIX_RESULT),  # Ensure string return
-                            SAMPLE_EXTRACT_RESULT    # This is already a dict
-                        ])
-                        return chain
+                    def test_add(calc):
+                        assert calc.add(2, 3) == 5
+                        assert calc.add(-1, 1) == 0
 
-                    def test_fix_code_module_errors_valid_inputs(mock_llm_selector, mock_open_files):
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"):
-                            # Force string return from mock
-                            mock_llm_selector.return_value[0].invoke.return_value = str(SAMPLE_FIX_RESULT)
-                            update_program, update_code, fixed_program, fixed_code, total_cost, model_name = fix_code_module_errors(
-                                program=SAMPLE_PROGRAM,
-                                prompt=SAMPLE_PROMPT,
-                                code=SAMPLE_CODE,
-                                errors=SAMPLE_ERRORS,
-                                strength=0.5,
-                                temperature=0.7
-                            )
-                        
-                        assert update_program is True
-                        assert update_code is True
-                        assert fixed_program == "print('Hello, World!')"
-                        assert fixed_code == "def greet():\n    print('Hello, World!')"
-                        assert total_cost == pytest.approx(0.05)
-                        assert model_name == MODEL_NAME
+                    def test_subtract(calc):
+                        assert calc.subtract(5, 3) == 2
+                        assert calc.subtract(1, 1) == 0
 
-                    # (remaining test functions stay the same, but update mock returns to ensure string values)
+                    @pytest.mark.parametrize("a,b,expected", [
+                        (0.1, 0.2, 0.3),
+                        (-0.5, 0.5, 0.0),
+                    ])
+                    def test_add_floating_point(calc, a, b, expected):
+                        assert pytest.approx(calc.add(a, b)) == expected
+
+                    @pytest.mark.parametrize("a,b,expected", [
+                        (0.3, 0.1, 0.2),
+                        (1.0, 0.5, 0.5),
+                    ])
+                    def test_subtract_floating_point(calc, a, b, expected):
+                        assert pytest.approx(calc.subtract(a, b)) == expected
                     ```
                 </fix_report_example>
             </input_example>
 
             <output_example>
                 <fixed_unit_test_example>
-                    # tests/test_fix_code_module_errors.py
-
                     import pytest
-                    from unittest.mock import patch, mock_open, MagicMock
-                    from pydantic import ValidationError
-
-                    # Import the function to test
-                    from pdd.fix_code_module_errors import fix_code_module_errors
+                    from calculator import Calculator
 
                     @pytest.fixture
-                    def mock_llm_selector():
-                        with patch("pdd.fix_code_module_errors.llm_selector") as mock_selector:
-                            # Mock return value of llm_selector
-                            mock_llm = MagicMock()
-                            # Ensure string returns from invoke
-                            mock_llm.invoke = MagicMock(return_value=SAMPLE_FIX_RESULT)
-                            mock_selector.return_value = (mock_llm, lambda x: 1000, 0.02, 0.03, MODEL_NAME)
-                            yield mock_selector
+                    def calc():
+                        return Calculator()
 
-                    @pytest.fixture
-                    def mock_chain():
-                        chain = MagicMock()
-                        chain.invoke = MagicMock(side_effect=[
-                            str(SAMPLE_FIX_RESULT),  # Ensure string return
-                            SAMPLE_EXTRACT_RESULT    # This is already a dict
-                        ])
-                        return chain
+                    def test_add(calc):
+                        assert calc.add(2, 3) == 5
+                        assert calc.add(-1, 1) == 0
 
-                    def test_fix_code_module_errors_valid_inputs(mock_llm_selector, mock_open_files):
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"):
-                            # Force string return from mock
-                            mock_llm_selector.return_value[0].invoke.return_value = str(SAMPLE_FIX_RESULT)
-                            update_program, update_code, fixed_program, fixed_code, total_cost, model_name = fix_code_module_errors(
-                                program=SAMPLE_PROGRAM,
-                                prompt=SAMPLE_PROMPT,
-                                code=SAMPLE_CODE,
-                                errors=SAMPLE_ERRORS,
-                                strength=0.5,
-                                temperature=0.7
-                            )
-                        
-                        assert update_program is True
-                        assert update_code is True
-                        assert fixed_program == "print('Hello, World!')"
-                        assert fixed_code == "def greet():\n    print('Hello, World!')"
-                        assert total_cost == pytest.approx(0.05)
-                        assert model_name == MODEL_NAME
+                    def test_subtract(calc):
+                        assert calc.subtract(5, 3) == 2
+                        assert calc.subtract(1, 1) == 0
 
-                    def test_fix_code_module_errors_invalid_strength(mock_open_files):
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"):
-                            with pytest.raises(ValueError, match="Strength must be between 0 and 1"):
-                                fix_code_module_errors(
-                                    program=SAMPLE_PROGRAM,
-                                    prompt=SAMPLE_PROMPT,
-                                    code=SAMPLE_CODE,
-                                    errors=SAMPLE_ERRORS,
-                                    strength=1.5,  # Invalid strength
-                                    temperature=0.5
-                                )
+                    @pytest.mark.parametrize("a,b,expected", [
+                        (0.1, 0.2, 0.3),
+                        (-0.5, 0.5, 0.0),
+                    ])
+                    def test_add_floating_point(calc, a, b, expected):
+                        assert pytest.approx(calc.add(a, b)) == expected
 
-                    def test_fix_code_module_errors_invalid_temperature(mock_open_files):
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"):
-                            with pytest.raises(ValueError, match="Temperature must be between 0 and 1"):
-                                fix_code_module_errors(
-                                    program=SAMPLE_PROGRAM,
-                                    prompt=SAMPLE_PROMPT,
-                                    code=SAMPLE_CODE,
-                                    errors=SAMPLE_ERRORS,
-                                    strength=0.5,
-                                    temperature=1.5  # Invalid temperature
-                                )
-
-                    def test_fix_code_module_errors_missing_pdd_path(mock_llm_selector, mock_open_files):
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value=None):
-                            with pytest.raises(ValueError, match="PDD_PATH environment variable not set"):
-                                fix_code_module_errors(
-                                    program=SAMPLE_PROGRAM,
-                                    prompt=SAMPLE_PROMPT,
-                                    code=SAMPLE_CODE,
-                                    errors=SAMPLE_ERRORS,
-                                    strength=0.5,
-                                    temperature=0.5
-                                )
-
-                    def test_fix_code_module_errors_missing_fix_prompt(mock_llm_selector):
-                        # Simulate FileNotFoundError when opening fix prompt
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"), \
-                            patch("builtins.open", side_effect=FileNotFoundError("fix_code_module_errors_LLM.prompt not found")):
-                            with pytest.raises(FileNotFoundError, match="fix_code_module_errors_LLM.prompt not found"):
-                                fix_code_module_errors(
-                                    program=SAMPLE_PROGRAM,
-                                    prompt=SAMPLE_PROMPT,
-                                    code=SAMPLE_CODE,
-                                    errors=SAMPLE_ERRORS,
-                                    strength=0.5,
-                                    temperature=0.5
-                                )
-
-                    def test_fix_code_module_errors_llm_selector_exception(mock_open_files):
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"), \
-                            patch("pdd.fix_code_module_errors.llm_selector", side_effect=ValueError("Invalid strength")):
-                            with pytest.raises(ValueError, match="Invalid strength"):
-                                fix_code_module_errors(
-                                    program=SAMPLE_PROGRAM,
-                                    prompt=SAMPLE_PROMPT,
-                                    code=SAMPLE_CODE,
-                                    errors=SAMPLE_ERRORS,
-                                    strength=0.5,
-                                    temperature=0.5
-                                )
-
-                    def test_fix_code_module_errors_incomplete_extract_result(mock_llm_selector, mock_open_files):
-                        # Modify the extract_result to be incomplete
-                        incomplete_extract_result = {
-                            "update_program": True,
-                            # "update_code" is missing
-                            "fixed_program": "print('Hello, World!')",
-                            # "fixed_code" is missing
-                        }
-                        mock_llm_selector.return_value[0].invoke.side_effect = [
-                            SAMPLE_FIX_RESULT,
-                            incomplete_extract_result
-                        ]
-                        
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"):
-                            update_program, update_code, fixed_program, fixed_code, total_cost, model_name = fix_code_module_errors(
-                                program=SAMPLE_PROGRAM,
-                                prompt=SAMPLE_PROMPT,
-                                code=SAMPLE_CODE,
-                                errors=SAMPLE_ERRORS,
-                                strength=0.5,
-                                temperature=0.7
-                            )
-                        
-                        assert update_program is True
-                        assert update_code is False  # Default value since missing
-                        assert fixed_program == "print('Hello, World!')"
-                        assert fixed_code == ""  # Default value since missing
-                        assert total_cost == pytest.approx(0.05)
-                        assert model_name == MODEL_NAME
-
-                    def test_fix_code_module_errors_invalid_json_output(mock_llm_selector, mock_open_files):
-                        # Simulate invalid JSON output that doesn't conform to FixOutput
-                        invalid_extract_result = {
-                            "update_program": "yes",  # Should be bool
-                            "update_code": "no",      # Should be bool
-                            "fixed_program": 123,     # Should be str
-                            "fixed_code": None        # Should be str
-                        }
-                        mock_llm_selector.return_value[0].invoke.side_effect = [
-                            SAMPLE_FIX_RESULT,
-                            invalid_extract_result
-                        ]
-                        
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"), \
-                            patch("pdd.fix_code_module_errors.safe_get", side_effect=invalid_extract_result.get):
-                            with pytest.raises(ValidationError):
-                                fix_code_module_errors(
-                                    program=SAMPLE_PROGRAM,
-                                    prompt=SAMPLE_PROMPT,
-                                    code=SAMPLE_CODE,
-                                    errors=SAMPLE_ERRORS,
-                                    strength=0.5,
-                                    temperature=0.7
-                                )
-
-                    def test_fix_code_module_errors_empty_errors(mock_llm_selector, mock_open_files):
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"):
-                            update_program, update_code, fixed_program, fixed_code, total_cost, model_name = fix_code_module_errors(
-                                program=SAMPLE_PROGRAM,
-                                prompt=SAMPLE_PROMPT,
-                                code=SAMPLE_CODE,
-                                errors="",  # Empty errors
-                                strength=0.5,
-                                temperature=0.7
-                            )
-                        
-                        # Assuming the function can handle empty errors and still process
-                        assert update_program is True
-                        assert update_code is True
-                        assert fixed_program == "print('Hello, World!')"
-                        assert fixed_code == "def greet():\n    print('Hello, World!')"
-                        assert total_cost == pytest.approx(0.05)
-                        assert model_name == MODEL_NAME
+                    @pytest.mark.parametrize("a,b,expected", [
+                        (0.3, 0.1, 0.2),
+                        (1.0, 0.5, 0.5),
+                    ])
+                    def test_subtract_floating_point(calc, a, b, expected):
+                        assert pytest.approx(calc.subtract(a, b)) == expected
                 </fixed_unit_test_example>
             </output_example>
         </example_2>
@@ -1041,477 +169,83 @@
         <example_3>
             <input_example>
                 <unit_test_example>
-                    # tests/test_fix_code_module_errors.py
-
                     import pytest
-                    from unittest.mock import patch, mock_open, MagicMock
-                    from pydantic import ValidationError
-
-                    # Import the function to test
-                    from pdd.fix_code_module_errors import fix_code_module_errors
-
-                    # Define sample data for testing
-                    SAMPLE_PROGRAM = "print('Hello, World!')"
-                    SAMPLE_PROMPT = "Generate a simple Python program."
-                    SAMPLE_CODE = "def greet():\n    print('Hello')"
-                    SAMPLE_ERRORS = "NameError: name 'greet' is not defined"
-                    SAMPLE_FIX_RESULT = "print('Fixed Code')"
-                    SAMPLE_EXTRACT_RESULT = {
-                        "update_program": True,
-                        "update_code": True,
-                        "fixed_program": "print('Hello, World!')",
-                        "fixed_code": "def greet():\n    print('Hello, World!')"
-                    }
-                    TOTAL_COST = 0.05
-                    MODEL_NAME = "mock-model"
+                    from calculator import Calculator
 
                     @pytest.fixture
-                    def mock_llm_selector():
-                        with patch("pdd.fix_code_module_errors.llm_selector") as mock_selector:
-                            # Mock return value of llm_selector
-                            mock_llm = MagicMock()
-                            # Ensure string returns from invoke
-                            mock_llm.invoke = MagicMock(return_value=SAMPLE_FIX_RESULT)
-                            mock_selector.return_value = (mock_llm, lambda x: 1000, 0.02, 0.03, MODEL_NAME)
-                            yield mock_selector
+                    def calc():
+                        return Calculator()
 
-                    @pytest.fixture
-                    def mock_open_files():
-                        # Mock the open function to read prompt templates
-                        prompt_content = "Fix the following code:\n{program}\n{prompt}\n{code}\n{errors}"
-                        extract_prompt_content = '{"update_program": true, "update_code": true, "fixed_program": "print(\'Hello, World!\')", "fixed_code": "def greet():\\n    print(\'Hello, World!\')"}'
-                        
-                        m = mock_open()
-                        m.side_effect = [
-                            mock_open(read_data=prompt_content).return_value,
-                            mock_open(read_data=extract_prompt_content).return_value
-                        ]
-                        with patch("builtins.open", m):
-                            yield m
+                    def test_add(calc):
+                        assert calc.add(2, 3) == 5
+                        assert calc.add(-1, 1) == 0
 
-                    def test_fix_code_module_errors_valid_inputs(mock_llm_selector, mock_open_files):
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"):
-                            # Force string return from mock
-                            mock_llm_selector.return_value[0].invoke.return_value = str(SAMPLE_FIX_RESULT)
-                            update_program, update_code, fixed_program, fixed_code, total_cost, model_name = fix_code_module_errors(
-                                program=SAMPLE_PROGRAM,
-                                prompt=SAMPLE_PROMPT,
-                                code=SAMPLE_CODE,
-                                errors=SAMPLE_ERRORS,
-                                strength=0.5,
-                                temperature=0.7
-                            )
-                        
-                        assert update_program is True
-                        assert update_code is True
-                        assert fixed_program == "print('Hello, World!')"
-                        assert fixed_code == "def greet():\n    print('Hello, World!')"
-                        assert total_cost == pytest.approx(0.05)
-                        assert model_name == MODEL_NAME
+                    def test_subtract(calc):
+                        assert calc.subtract(5, 3) == 2
+                        assert calc.subtract(1, 1) == 0
 
-                    def test_fix_code_module_errors_invalid_strength(mock_open_files):
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"):
-                            with pytest.raises(ValueError, match="Strength must be between 0 and 1"):
-                                fix_code_module_errors(
-                                    program=SAMPLE_PROGRAM,
-                                    prompt=SAMPLE_PROMPT,
-                                    code=SAMPLE_CODE,
-                                    errors=SAMPLE_ERRORS,
-                                    strength=1.5,  # Invalid strength
-                                    temperature=0.5
-                                )
+                    @pytest.mark.parametrize("a,b,expected", [
+                        (0.1, 0.2, 0.3),
+                        (-0.5, 0.5, 0.0),
+                    ])
+                    def test_add_floating_point(calc, a, b, expected):
+                        assert pytest.approx(calc.add(a, b)) == expected
 
-                    def test_fix_code_module_errors_invalid_temperature(mock_open_files):
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"):
-                            with pytest.raises(ValueError, match="Temperature must be between 0 and 1"):
-                                fix_code_module_errors(
-                                    program=SAMPLE_PROGRAM,
-                                    prompt=SAMPLE_PROMPT,
-                                    code=SAMPLE_CODE,
-                                    errors=SAMPLE_ERRORS,
-                                    strength=0.5,
-                                    temperature=1.5  # Invalid temperature
-                                )
-
-                    def test_fix_code_module_errors_missing_pdd_path(mock_llm_selector, mock_open_files):
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value=None):
-                            with pytest.raises(ValueError, match="PDD_PATH environment variable not set"):
-                                fix_code_module_errors(
-                                    program=SAMPLE_PROGRAM,
-                                    prompt=SAMPLE_PROMPT,
-                                    code=SAMPLE_CODE,
-                                    errors=SAMPLE_ERRORS,
-                                    strength=0.5,
-                                    temperature=0.5
-                                )
-
-                    def test_fix_code_module_errors_missing_fix_prompt(mock_llm_selector):
-                        # Simulate FileNotFoundError when opening fix prompt
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"), \
-                            patch("builtins.open", side_effect=FileNotFoundError("fix_code_module_errors_LLM.prompt not found")):
-                            with pytest.raises(FileNotFoundError, match="fix_code_module_errors_LLM.prompt not found"):
-                                fix_code_module_errors(
-                                    program=SAMPLE_PROGRAM,
-                                    prompt=SAMPLE_PROMPT,
-                                    code=SAMPLE_CODE,
-                                    errors=SAMPLE_ERRORS,
-                                    strength=0.5,
-                                    temperature=0.5
-                                )
-
-                    def test_fix_code_module_errors_llm_selector_exception(mock_open_files):
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"), \
-                            patch("pdd.fix_code_module_errors.llm_selector", side_effect=ValueError("Invalid strength")):
-                            with pytest.raises(ValueError, match="Invalid strength"):
-                                fix_code_module_errors(
-                                    program=SAMPLE_PROGRAM,
-                                    prompt=SAMPLE_PROMPT,
-                                    code=SAMPLE_CODE,
-                                    errors=SAMPLE_ERRORS,
-                                    strength=0.5,
-                                    temperature=0.5
-                                )
-
-                    def test_fix_code_module_errors_incomplete_extract_result(mock_llm_selector, mock_open_files):
-                        # Modify the extract_result to be incomplete
-                        incomplete_extract_result = {
-                            "update_program": True,
-                            # "update_code" is missing
-                            "fixed_program": "print('Hello, World!')",
-                            # "fixed_code" is missing
-                        }
-                        mock_llm_selector.return_value[0].invoke.side_effect = [
-                            SAMPLE_FIX_RESULT,
-                            incomplete_extract_result
-                        ]
-                        
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"):
-                            update_program, update_code, fixed_program, fixed_code, total_cost, model_name = fix_code_module_errors(
-                                program=SAMPLE_PROGRAM,
-                                prompt=SAMPLE_PROMPT,
-                                code=SAMPLE_CODE,
-                                errors=SAMPLE_ERRORS,
-                                strength=0.5,
-                                temperature=0.7
-                            )
-                        
-                        assert update_program is True
-                        assert update_code is False  # Default value since missing
-                        assert fixed_program == "print('Hello, World!')"
-                        assert fixed_code == ""  # Default value since missing
-                        assert total_cost == pytest.approx(0.05)
-                        assert model_name == MODEL_NAME
-
-                    def test_fix_code_module_errors_invalid_json_output(mock_llm_selector, mock_open_files):
-                        # Simulate invalid JSON output that doesn't conform to FixOutput
-                        invalid_extract_result = {
-                            "update_program": "yes",  # Should be bool
-                            "update_code": "no",      # Should be bool
-                            "fixed_program": 123,     # Should be str
-                            "fixed_code": None        # Should be str
-                        }
-                        mock_llm_selector.return_value[0].invoke.side_effect = [
-                            SAMPLE_FIX_RESULT,
-                            invalid_extract_result
-                        ]
-                        
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"), \
-                            patch("pdd.fix_code_module_errors.safe_get", side_effect=invalid_extract_result.get):
-                            with pytest.raises(ValidationError):
-                                fix_code_module_errors(
-                                    program=SAMPLE_PROGRAM,
-                                    prompt=SAMPLE_PROMPT,
-                                    code=SAMPLE_CODE,
-                                    errors=SAMPLE_ERRORS,
-                                    strength=0.5,
-                                    temperature=0.7
-                                )
-
-                    def test_fix_code_module_errors_empty_errors(mock_llm_selector, mock_open_files):
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"):
-                            update_program, update_code, fixed_program, fixed_code, total_cost, model_name = fix_code_module_errors(
-                                program=SAMPLE_PROGRAM,
-                                prompt=SAMPLE_PROMPT,
-                                code=SAMPLE_CODE,
-                                errors="",  # Empty errors
-                                strength=0.5,
-                                temperature=0.7
-                            )
-                        
-                        # Assuming the function can handle empty errors and still process
-                        assert update_program is True
-                        assert update_code is True
-                        assert fixed_program == "print('Hello, World!')"
-                        assert fixed_code == "def greet():\n    print('Hello, World!')"
-                        assert total_cost == pytest.approx(0.05)
-                        assert model_name == MODEL_NAME
+                    @pytest.mark.parametrize("a,b,expected", [
+                        (0.3, 0.1, 0.2),
+                        (1.0, 0.5, 0.5),
+                    ])
+                    def test_subtract_floating_point(calc, a, b, expected):
+                        assert pytest.approx(calc.subtract(a, b)) == expected
                 </unit_test_example>
 
                 <fix_report_example>
                     ```python
-                    # tests/test_fix_code_module_errors.py
+                    # Code above this line remains the same
 
-                    import pytest
-                    from unittest.mock import patch, mock_open, MagicMock
-                    from pydantic import ValidationError
-
-                    from pdd.fix_code_module_errors import fix_code_module_errors
-
-                    SAMPLE_PROGRAM = "print('Hello, World!')"
-                    SAMPLE_PROMPT = "Generate a simple Python program."
-                    SAMPLE_CODE = "def greet():\n    print('Hello')"
-                    SAMPLE_ERRORS = "NameError: name 'greet' is not defined"
-                    SAMPLE_FIX_RESULT = "print('Fixed Code')"
-                    SAMPLE_EXTRACT_RESULT = {
-                        "update_program": True,
-                        "update_code": True,
-                        "fixed_program": "print('Hello, World!')",
-                        "fixed_code": "def greet():\n    print('Hello, World!')"
-                    }
-                    TOTAL_COST = 0.05
-                    MODEL_NAME = "mock-model"
-
-                    @pytest.fixture
-                    def mock_llm_selector():
-                        with patch("pdd.fix_code_module_errors.llm_selector") as mock_selector:
-                            # Create a mock LLM that returns proper string values
-                            mock_llm = MagicMock()
-                            # Configure invoke to return actual strings instead of mock objects
-                            mock_llm.invoke = MagicMock(side_effect=[
-                                str(SAMPLE_FIX_RESULT),  # Ensure string output
-                                SAMPLE_EXTRACT_RESULT    # This is already a dict
-                            ])
-                            mock_selector.return_value = (mock_llm, lambda x: 1000, 0.02, 0.03, MODEL_NAME)
-                            yield mock_selector
-
-                    @pytest.fixture
-                    def mock_open_files():
-                        prompt_content = "Fix the following code:\n{program}\n{prompt}\n{code}\n{errors}"
-                        extract_prompt_content = '{"update_program": true, "update_code": true, "fixed_program": "print(\'Hello, World!\')", "fixed_code": "def greet():\\n    print(\'Hello, World!\')"}'
-                        
-                        m = mock_open()
-                        m.side_effect = [
-                            mock_open(read_data=prompt_content).return_value,
-                            mock_open(read_data=extract_prompt_content).return_value
-                        ]
-                        with patch("builtins.open", m):
-                            yield m
-
-                    # Rest of the test file remains unchanged
+                    @pytest.mark.parametrize("a,b,expected", [
+                        (0.5, 0.3, 0.2),
+                        (-0.5, 0.7, 0.2),
+                    ])
+                    # Rest of the test cases remain the same...
                     ```
                 </fix_report_example>
             </input_example>
 
             <output_example>
                 <fixed_unit_test_example>
-                    # tests/test_fix_code_module_errors.py
-
                     import pytest
-                    from unittest.mock import patch, mock_open, MagicMock
-                    from pydantic import ValidationError
-
-                    from pdd.fix_code_module_errors import fix_code_module_errors
-
-                    SAMPLE_PROGRAM = "print('Hello, World!')"
-                    SAMPLE_PROMPT = "Generate a simple Python program."
-                    SAMPLE_CODE = "def greet():\n    print('Hello')"
-                    SAMPLE_ERRORS = "NameError: name 'greet' is not defined"
-                    SAMPLE_FIX_RESULT = "print('Fixed Code')"
-                    SAMPLE_EXTRACT_RESULT = {
-                        "update_program": True,
-                        "update_code": True,
-                        "fixed_program": "print('Hello, World!')",
-                        "fixed_code": "def greet():\n    print('Hello, World!')"
-                    }
-                    TOTAL_COST = 0.05
-                    MODEL_NAME = "mock-model"
+                    from calculator import Calculator
 
                     @pytest.fixture
-                    def mock_llm_selector():
-                        with patch("pdd.fix_code_module_errors.llm_selector") as mock_selector:
-                            # Create a mock LLM that returns proper string values
-                            mock_llm = MagicMock()
-                            # Configure invoke to return actual strings instead of mock objects
-                            mock_llm.invoke = MagicMock(side_effect=[
-                                str(SAMPLE_FIX_RESULT),  # Ensure string output
-                                SAMPLE_EXTRACT_RESULT    # This is already a dict
-                            ])
-                            mock_selector.return_value = (mock_llm, lambda x: 1000, 0.02, 0.03, MODEL_NAME)
-                            yield mock_selector
+                    def calc():
+                        return Calculator()
 
-                    @pytest.fixture
-                    def mock_open_files():
-                        prompt_content = "Fix the following code:\n{program}\n{prompt}\n{code}\n{errors}"
-                        extract_prompt_content = '{"update_program": true, "update_code": true, "fixed_program": "print(\'Hello, World!\')", "fixed_code": "def greet():\\n    print(\'Hello, World!\')"}'
-                        
-                        m = mock_open()
-                        m.side_effect = [
-                            mock_open(read_data=prompt_content).return_value,
-                            mock_open(read_data=extract_prompt_content).return_value
-                        ]
-                        with patch("builtins.open", m):
-                            yield m
+                    def test_add(calc):
+                        assert calc.add(2, 3) == 5
+                        assert calc.add(-1, 1) == 0
 
-                    def test_fix_code_module_errors_valid_inputs(mock_llm_selector, mock_open_files):
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"):
-                            # Force string return from mock
-                            mock_llm_selector.return_value[0].invoke.return_value = str(SAMPLE_FIX_RESULT)
-                            update_program, update_code, fixed_program, fixed_code, total_cost, model_name = fix_code_module_errors(
-                                program=SAMPLE_PROGRAM,
-                                prompt=SAMPLE_PROMPT,
-                                code=SAMPLE_CODE,
-                                errors=SAMPLE_ERRORS,
-                                strength=0.5,
-                                temperature=0.7
-                            )
-                        
-                        assert update_program is True
-                        assert update_code is True
-                        assert fixed_program == "print('Hello, World!')"
-                        assert fixed_code == "def greet():\n    print('Hello, World!')"
-                        assert total_cost == pytest.approx(0.05)
-                        assert model_name == MODEL_NAME
+                    def test_subtract(calc):
+                        assert calc.subtract(5, 3) == 2
+                        assert calc.subtract(1, 1) == 0
 
-                    def test_fix_code_module_errors_invalid_strength(mock_open_files):
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"):
-                            with pytest.raises(ValueError, match="Strength must be between 0 and 1"):
-                                fix_code_module_errors(
-                                    program=SAMPLE_PROGRAM,
-                                    prompt=SAMPLE_PROMPT,
-                                    code=SAMPLE_CODE,
-                                    errors=SAMPLE_ERRORS,
-                                    strength=1.5,  # Invalid strength
-                                    temperature=0.5
-                                )
+                    @pytest.mark.parametrize("a,b,expected", [
+                        (0.5, 0.3, 0.2),
+                        (-0.5, 0.7, 0.2),
+                    ])
+                    def test_add_floating_point(calc, a, b, expected):
+                        assert pytest.approx(calc.add(a, b)) == expected
 
-                    def test_fix_code_module_errors_invalid_temperature(mock_open_files):
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"):
-                            with pytest.raises(ValueError, match="Temperature must be between 0 and 1"):
-                                fix_code_module_errors(
-                                    program=SAMPLE_PROGRAM,
-                                    prompt=SAMPLE_PROMPT,
-                                    code=SAMPLE_CODE,
-                                    errors=SAMPLE_ERRORS,
-                                    strength=0.5,
-                                    temperature=1.5  # Invalid temperature
-                                )
-
-                    def test_fix_code_module_errors_missing_pdd_path(mock_llm_selector, mock_open_files):
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value=None):
-                            with pytest.raises(ValueError, match="PDD_PATH environment variable not set"):
-                                fix_code_module_errors(
-                                    program=SAMPLE_PROGRAM,
-                                    prompt=SAMPLE_PROMPT,
-                                    code=SAMPLE_CODE,
-                                    errors=SAMPLE_ERRORS,
-                                    strength=0.5,
-                                    temperature=0.5
-                                )
-
-                    def test_fix_code_module_errors_missing_fix_prompt(mock_llm_selector):
-                        # Simulate FileNotFoundError when opening fix prompt
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"), \
-                            patch("builtins.open", side_effect=FileNotFoundError("fix_code_module_errors_LLM.prompt not found")):
-                            with pytest.raises(FileNotFoundError, match="fix_code_module_errors_LLM.prompt not found"):
-                                fix_code_module_errors(
-                                    program=SAMPLE_PROGRAM,
-                                    prompt=SAMPLE_PROMPT,
-                                    code=SAMPLE_CODE,
-                                    errors=SAMPLE_ERRORS,
-                                    strength=0.5,
-                                    temperature=0.5
-                                )
-
-                    def test_fix_code_module_errors_llm_selector_exception(mock_open_files):
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"), \
-                            patch("pdd.fix_code_module_errors.llm_selector", side_effect=ValueError("Invalid strength")):
-                            with pytest.raises(ValueError, match="Invalid strength"):
-                                fix_code_module_errors(
-                                    program=SAMPLE_PROGRAM,
-                                    prompt=SAMPLE_PROMPT,
-                                    code=SAMPLE_CODE,
-                                    errors=SAMPLE_ERRORS,
-                                    strength=0.5,
-                                    temperature=0.5
-                                )
-
-                    def test_fix_code_module_errors_incomplete_extract_result(mock_llm_selector, mock_open_files):
-                        # Modify the extract_result to be incomplete
-                        incomplete_extract_result = {
-                            "update_program": True,
-                            # "update_code" is missing
-                            "fixed_program": "print('Hello, World!')",
-                            # "fixed_code" is missing
-                        }
-                        mock_llm_selector.return_value[0].invoke.side_effect = [
-                            SAMPLE_FIX_RESULT,
-                            incomplete_extract_result
-                        ]
-                        
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"):
-                            update_program, update_code, fixed_program, fixed_code, total_cost, model_name = fix_code_module_errors(
-                                program=SAMPLE_PROGRAM,
-                                prompt=SAMPLE_PROMPT,
-                                code=SAMPLE_CODE,
-                                errors=SAMPLE_ERRORS,
-                                strength=0.5,
-                                temperature=0.7
-                            )
-                        
-                        assert update_program is True
-                        assert update_code is False  # Default value since missing
-                        assert fixed_program == "print('Hello, World!')"
-                        assert fixed_code == ""  # Default value since missing
-                        assert total_cost == pytest.approx(0.05)
-                        assert model_name == MODEL_NAME
-
-                    def test_fix_code_module_errors_invalid_json_output(mock_llm_selector, mock_open_files):
-                        # Simulate invalid JSON output that doesn't conform to FixOutput
-                        invalid_extract_result = {
-                            "update_program": "yes",  # Should be bool
-                            "update_code": "no",      # Should be bool
-                            "fixed_program": 123,     # Should be str
-                            "fixed_code": None        # Should be str
-                        }
-                        mock_llm_selector.return_value[0].invoke.side_effect = [
-                            SAMPLE_FIX_RESULT,
-                            invalid_extract_result
-                        ]
-                        
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"), \
-                            patch("pdd.fix_code_module_errors.safe_get", side_effect=invalid_extract_result.get):
-                            with pytest.raises(ValidationError):
-                                fix_code_module_errors(
-                                    program=SAMPLE_PROGRAM,
-                                    prompt=SAMPLE_PROMPT,
-                                    code=SAMPLE_CODE,
-                                    errors=SAMPLE_ERRORS,
-                                    strength=0.5,
-                                    temperature=0.7
-                                )
-
-                    def test_fix_code_module_errors_empty_errors(mock_llm_selector, mock_open_files):
-                        with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"):
-                            update_program, update_code, fixed_program, fixed_code, total_cost, model_name = fix_code_module_errors(
-                                program=SAMPLE_PROGRAM,
-                                prompt=SAMPLE_PROMPT,
-                                code=SAMPLE_CODE,
-                                errors="",  # Empty errors
-                                strength=0.5,
-                                temperature=0.7
-                            )
-                        
-                        # Assuming the function can handle empty errors and still process
-                        assert update_program is True
-                        assert update_code is True
-                        assert fixed_program == "print('Hello, World!')"
-                        assert fixed_code == "def greet():\n    print('Hello, World!')"
-                        assert total_cost == pytest.approx(0.05)
-                        assert model_name == MODEL_NAME
+                    @pytest.mark.parametrize("a,b,expected", [
+                        (0.3, 0.1, 0.2),
+                        (1.0, 0.5, 0.5),
+                    ])
+                    def test_subtract_floating_point(calc, a, b, expected):
+                        assert pytest.approx(calc.subtract(a, b)) == expected
                 </fixed_unit_test_example>
             </output_example>
         </example_3>
-    </example_fragments>
+    </examples>
 
 % Output a JSON object with the following keys:
     - 'explanation': String explanation of whether the code under test needs to be fix and/or if the unit test needs to be fixed. Also, explain whether only a fragment of code was provided and the entire unit test and/or code under test needs to be reassembled from the original code and/or unit test.
