@@ -10,7 +10,7 @@
     <example_fragments>
         <example_1>
             <input_example>
-                <original_unit_test_example>
+                <unit_test_example>
                     # tests/test_fix_code_module_errors.py
 
                     import os
@@ -241,9 +241,10 @@
                             assert fixed_code == "print('Fixed Code')"
                             assert total_cost == (1000 / 1_000_000) * 0.02 + (1000 / 1_000_000) * 0.03
                             assert model_name == "mock-model"
-                </original_unit_test_example>
+                </unit_test_example>
 
                 <fix_report_example>
+                    ```python
                     # tests/test_fix_code_module_errors.py
 
                     import os
@@ -346,6 +347,7 @@
                             assert model_name == "mock-model", "model_name has unexpected value"
 
                     # ... rest of the test file remains unchanged ...
+                    ```
                 </fix_report_example>
             </input_example>
 
@@ -590,7 +592,7 @@
 
         <example_2>
             <input_example>
-                <original_unit_test_example>
+                <unit_test_example>
                     # tests/test_fix_code_module_errors.py
 
                     import pytest
@@ -795,9 +797,10 @@
                         assert fixed_code == "def greet():\n    print('Hello, World!')"
                         assert total_cost == pytest.approx(0.05)
                         assert model_name == MODEL_NAME
-                </original_unit_test_example>
+                </unit_test_example>
 
                 <fix_report_example>
+                    ```python                
                     # tests/test_fix_code_module_errors.py
                     # (previous imports remain the same)
 
@@ -841,6 +844,7 @@
                         assert model_name == MODEL_NAME
 
                     # (remaining test functions stay the same, but update mock returns to ensure string values)
+                    ```
                 </fix_report_example>
             </input_example>
 
@@ -1036,7 +1040,7 @@
 
         <example_3>
             <input_example>
-                <original_unit_test_example>
+                <unit_test_example>
                     # tests/test_fix_code_module_errors.py
 
                     import pytest
@@ -1241,9 +1245,10 @@
                         assert fixed_code == "def greet():\n    print('Hello, World!')"
                         assert total_cost == pytest.approx(0.05)
                         assert model_name == MODEL_NAME
-                </original_unit_test_example>
+                </unit_test_example>
 
                 <fix_report_example>
+                    ```python
                     # tests/test_fix_code_module_errors.py
 
                     import pytest
@@ -1293,6 +1298,7 @@
                             yield m
 
                     # Rest of the test file remains unchanged
+                    ```
                 </fix_report_example>
             </input_example>
 
