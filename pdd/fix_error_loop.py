@@ -148,6 +148,7 @@ def fix_error_loop(
                 with open(error_log_file, 'a') as f:
                     f.write("****************************************************************************************************\n")
                     f.write("\nVerification failed! Here is the output and errors from the verification program that was running the code under test:\n" + verification_result.stdout + verification_result.stderr)
+                    f.write("****************************************************************************************************\n")
                     f.write(f"\nRestoring previous working code.\n")
                 continue
                 
