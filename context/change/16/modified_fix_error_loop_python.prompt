@@ -1,0 +1,67 @@
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "fix_code_loop", that will attempt to fix errors in a code module through multiple iterations.
+
+<include>context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+  Inputs:
+    - `code_file`: A string containing the path to the code file being tested.
+    - `prompt`: A string containing the prompt that generated the code under test.
+    - `verification_program`: A string containing the path to a Python program that verifies if the code runs correctly.
+    - `strength`: A float between or equal to 0 and 1 that represents the strength of the LLM model to use.
+    - `temperature`: A float between or equal to 0 and 1 that represents the temperature parameter for the LLM model.
+    - `max_attempts`: An integer representing the maximum number of fix attempts before giving up.
+    - `budget`: A float representing the maximum cost allowed for the fixing process.
+    - `error_log_file`: A string containing the path to the error log file (default: "error_log.txt").
+  Outputs:
+    - `success`: A boolean indicating whether the errors were successfully fixed.
+    - `final_code`: A string containing the contents of the final code file.
+    - `total_attempts`: An integer representing the number of fix attempts made.
+    - `total_cost`: A float representing the total cost of all fix attempts.
+    - `model_name`: A string representing the name of the LLM model used.
+
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+  % Here is an example of the `fix_code_module_errors` function that will be used:
+  <fix_code_module_errors_example>
+  <include>context/fix_code_module_errors_example.py</include>
+  </fix_code_module_errors_example>
+</internal_example_modules>
+
+
+% This function will do the following:
+  Step 1. Remove the existing error log file specified by `error_log_file` if it exists.
+  Step 2. Initialize variables:
+    - Counter for the number of attempts.
+    - Total cost accumulator.
+    - Best iteration tracker (to restore the iteration with the fewest errors if necessary).
+  Step 3. Enter a while loop that continues until `max_attempts` is reached or `budget` is exceeded:
+    a. Print out to console and error log file the attempt iteration.
+    b. Run the `verification_program` to test the `code_file`, capturing its output and errors, appending them to the specified error log file.
+    c. If the program runs without errors, break the loop.
+    d. If the program fails:
+       - Read and print the error message from the error log file, escaping square brackets so `rprint` doesn't misinterpret them.
+       - Create a backup copy of the `code_file`, appending the current iteration number to the filename, e.g., "code_3.py" for the third iteration.
+       - Read the contents of the `code_file`.
+       - Call `fix_code_module_errors` with:
+         * `program`: The contents of the `verification_program`.
+         * `prompt`: The prompt that generated the code.
+         * `code`: The contents of the `code_file`.
+         * `errors`: The errors extracted from the error log file.
+         * `error_log_file`: The path to the error log file.
+         * `strength` and `temperature`: The provided values.
+       - Add the returned `total_cost` to the total cost accumulator.
+       - If the total cost exceeds the `budget`, break the loop.
+       - If `update_code` is `False`, break the loop as no changes were needed.
+       - If `update_code` is `True`:
+         * Write the `fixed_code` back to the `code_file`.
+         * Run the `verification_program` again to check if the code runs.
+           - If the verification fails:
+             + Restore the last known working `code_file` from the backup.
+             + Output the errors and results of the failed verification into the error log file, indicating that a restore has occurred.
+             + Continue the loop.
+           - If the verification succeeds:
+             + Update the best iteration tracker if this iteration has fewer errors.
+    e. Increment the attempt counter.
+  Step 4. After the loop ends, run the `verification_program` one last time, pipe the output to the error log file, escape square brackets, and print it to the console.
+  Step 5. If the last run isn't the best iteration, copy back the `code_file` from the best iteration and print which was the best iteration.
+  Step 6. Return the success status, final code contents, total number of attempts, total cost, and model name.
