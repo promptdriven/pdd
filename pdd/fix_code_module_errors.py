@@ -12,12 +12,12 @@ from .llm_selector import llm_selector
 console = Console()
 
 class FixOutput(BaseModel):
-    update_program: bool
-    update_code: bool
-    fixed_program: str
-    fixed_code: str
+    update_program: bool = False
+    update_code: bool = False
+    fixed_program: str = ""
+    fixed_code: str = ""
 
-    model_config = ConfigDict(strict=True)
+    model_config = ConfigDict()
 
 def ensure_string(value: Any) -> str:
     """Ensure a value is a string."""
