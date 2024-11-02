@@ -81,10 +81,14 @@ def fix_error_loop(
     model_name = ""
     
     while attempt_count < max_attempts:
+        rprint(f"[bold yellow]Attempt {attempt_count + 1}[/bold yellow]")
         # Step 3a: Run pytest
         with open(error_log_file, 'a') as f:
             result = subprocess.run(['python', '-m', 'pytest', '-vv', '--no-cov', unit_test_file],
                                  capture_output=True, text=True)
+            f.write("\n****************************************************************************************************\n")
+            f.write("\nAttempt " + str(attempt_count + 1) + ":\n")
+            f.write("\n****************************************************************************************************\n")
             f.write(result.stdout + result.stderr)
         
         # Extract test results
@@ -133,6 +137,8 @@ def fix_error_loop(
         if update_unit_test:
             with open(unit_test_file, 'w') as f:
                 f.write(fixed_unit_test)
+
+        attempt_count += 1
                 
         if update_code:
             with open(code_file, 'w') as f:
@@ -147,7 +153,7 @@ def fix_error_loop(
                 shutil.copy2(backup_code, code_file)
                 with open(error_log_file, 'a') as f:
                     f.write("****************************************************************************************************\n")
-                    f.write("\nVerification failed! Here is the output and errors from the verification program that was running the code under test:\n" + verification_result.stdout + verification_result.stderr)
+                    f.write("\nVerification program failed! Here is the output and errors from the verification program that was running the code under test:\n" + verification_result.stdout + verification_result.stderr)
                     f.write("****************************************************************************************************\n")
                     f.write(f"\nRestoring previous working code.\n")
                 continue
@@ -156,7 +162,6 @@ def fix_error_loop(
         if current_iteration.is_better_than(best_iteration):
             best_iteration = current_iteration
             
-        attempt_count += 1
         
     # Step 4: Final test run
     with open(error_log_file, 'a') as f:
