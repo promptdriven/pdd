@@ -6,6 +6,8 @@ import json
 
 # Import the function to test
 from pdd.fix_code_module_errors import fix_code_module_errors
+from langchain_community.llms.fake import FakeListLLM
+from langchain.schema import OutputParserException
 
 # Define sample data for testing
 SAMPLE_PROGRAM = "print('Hello, World!')"
@@ -21,8 +23,6 @@ SAMPLE_EXTRACT_RESULT = {
 }
 TOTAL_COST = 0.00007  # Adjusted total cost based on calculations
 MODEL_NAME = "mock-model"
-
-from langchain_community.llms.fake import FakeListLLM
 
 @pytest.fixture
 def mock_llm_selector():
@@ -160,19 +160,18 @@ def test_fix_code_module_errors_incomplete_extract_result(mock_llm_selector, moc
 def test_fix_code_module_errors_invalid_json_output(mock_llm_selector, mock_open_files):
     # Simulate invalid JSON output that doesn't conform to FixOutput
     invalid_extract_result = {
-        "update_program": "yes",  # Should be bool
-        "update_code": "no",      # Should be bool
-        "fixed_program": 123,     # Should be str
+        "update_program": "not a boolean",  # Should be bool
+        "update_code": {"not": "a boolean"},      # Should be bool
+        "fixed_program": ["not", "a", "string"],  # Should be str
         "fixed_code": None        # Should be str
     }
-    mock_llm_selector.return_value[0].invoke.side_effect = [
+    # Update the LLM responses to return invalid JSON output
+    mock_llm_selector.return_value[0].responses = [
         SAMPLE_FIX_RESULT,
-        invalid_extract_result
+        json.dumps(invalid_extract_result)
     ]
-    
-    with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"), \
-         patch("pdd.fix_code_module_errors.safe_get", side_effect=invalid_extract_result.get):
-        with pytest.raises(ValidationError):
+    with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"):
+        with pytest.raises(OutputParserException):
             fix_code_module_errors(
                 program=SAMPLE_PROGRAM,
                 prompt=SAMPLE_PROMPT,
