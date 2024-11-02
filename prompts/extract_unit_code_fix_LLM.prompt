@@ -87,6 +87,79 @@
             <input_example>
                 <unit_test_example>
                     import pytest
+                    from auth_service import AuthService
+
+                    @pytest.fixture
+                    def auth_service():
+                        return AuthService()
+
+                    def test_valid_login(auth_service):
+                        result = auth_service.login("user@example.com", "password123")
+                        assert result.success
+                        assert result.token is not None
+
+                    def test_invalid_password(auth_service):
+                        result = auth_service.login("user@example.com", "wrongpass")
+                        assert not result.success
+                        assert result.token is None
+                </unit_test_example>
+
+                <fix_report_example>
+                    ```python
+                    import pytest
+                    from auth_service import AuthService                    
+
+                    # ... [other tests] ...
+
+                    def test_invalid_email_format(auth_service):
+                        result = auth_service.login("invalid-email", "password123")
+                        assert not result.success
+                        assert result.error == "Invalid email format"
+
+                    def test_empty_credentials(auth_service):
+                        result = auth_service.login("", "")
+                        assert not result.success
+                        assert result.error == "Email and password required"
+                    ```
+                </fix_report_example>
+            </input_example>
+
+            <output_example>
+                <fixed_unit_test_example>
+                import pytest
+                from auth_service import AuthService
+
+                @pytest.fixture
+                def auth_service():
+                    return AuthService()
+
+                def test_valid_login(auth_service):
+                    result = auth_service.login("user@example.com", "password123")
+                    assert result.success
+                    assert result.token is not None
+
+                def test_invalid_password(auth_service):
+                    result = auth_service.login("user@example.com", "wrongpass")
+                    assert not result.success
+                    assert result.token is None
+
+                def test_invalid_email_format(auth_service):
+                    result = auth_service.login("invalid-email", "password123")
+                    assert not result.success
+                    assert result.error == "Invalid email format"
+
+                def test_empty_credentials(auth_service):
+                    result = auth_service.login("", "")
+                    assert not result.success
+                    assert result.error == "Email and password required"
+                </fixed_unit_test_example>
+            <output_example>
+        </example_2>
+
+        <example_3>
+            <input_example>
+                <unit_test_example>
+                    import pytest
                     from calculator import Calculator
 
                     @pytest.fixture
@@ -168,9 +241,9 @@
                         assert pytest.approx(calc.subtract(a, b)) == expected
                 </fixed_unit_test_example>
             </output_example>
-        </example_2>
+        </example_3>
 
-        <example_3>
+        <example_4>
             <input_example>
                 <unit_test_example>
                     import pytest
@@ -248,7 +321,7 @@
                         assert pytest.approx(calc.subtract(a, b)) == expected
                 </fixed_unit_test_example>
             </output_example>
-        </example_3>
+        </example_4>
     </examples>
 
 % Output a JSON object with the following keys:
