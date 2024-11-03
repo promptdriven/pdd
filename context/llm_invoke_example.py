@@ -57,29 +57,25 @@ def main() -> None:
     # Verbose flag to enable detailed output
     verbose = True
 
-    try:
-        # Invoke the LLM
-        result = llm_invoke(
-            prompt=prompt,
-            input_json=input_json,
-            strength=strength,
-            temperature=temperature,
-            verbose=verbose,
-            output_json=output_json
-        )
+    # Invoke the LLM
+    result = llm_invoke(
+        prompt=prompt,
+        input_json=input_json,
+        strength=strength,
+        temperature=temperature,
+        verbose=verbose,
+        output_json=output_json
+    )
 
-        # Accessing the results
-        summary = result.get("result")
-        cost = result.get("cost")
-        model_name = result.get("model_name")
+    # Accessing the results
+    summary = result.get("result")
+    cost = result.get("cost")
+    model_name = result.get("model_name")
 
-        print("\n--- Invocation Results ---")
-        print(f"Summary: {summary}")
-        print(f"Cost: ${cost:.6f} per invocation")
-        print(f"Model Used: {model_name}")
-
-    except Exception as e:
-        print(f"An error occurred during LLM invocation: {e}")
+    print("\n--- Invocation Results ---")
+    print(f"Summary: {summary}")
+    print(f"Cost: ${cost:.6f} per invocation")
+    print(f"Model Used: {model_name}")
 
 if __name__ == "__main__":
     main()
