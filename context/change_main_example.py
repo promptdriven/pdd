@@ -29,7 +29,7 @@ def main() -> None:
     ctx = click.Context(click.Command("change"))
 
     # Set up CLI options (as would be parsed from command-line arguments)
-    ctx.params["force"] = False  # Do not overwrite existing files
+    ctx.params["force"] = True  # Do not overwrite existing files
     ctx.params["quiet"] = False  # Verbose output
 
     # Set up global options accessible via 'ctx.obj'
@@ -89,10 +89,10 @@ def divide(a, b):
     prompt_file_2 = Path(code_directory) / "script2_python.prompt"
 
     with open(prompt_file_1, "w") as f:
-        f.write("Modify the function to add two numbers.")
+        f.write("Create the function to add two numbers.")
     
     with open(prompt_file_2, "w") as f:
-        f.write("Modify the function to subtract two numbers.")
+        f.write("Create the function to subtract two numbers.")
 
     code_file_1 = Path(code_directory) / "script1.py"
     code_file_2 = Path(code_directory) / "script2.py"
@@ -117,7 +117,7 @@ def subtract(a, b):
         csvfile.write(f"{prompt_file_2},Optimize the function for large integers.\n")
 
     # Define output file for batch changes
-    batch_output_file = "batch_modified_prompts.csv"
+    batch_output_file = None#"batch_modified_prompts.csv"
 
     # Call change_main in CSV batch-change mode
     rprint("\n[bold underline]CSV Batch-Change Mode Example[/bold underline]")
