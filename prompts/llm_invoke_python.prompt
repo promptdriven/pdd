@@ -1,0 +1,39 @@
+% You are an expert Python engineer. Your goal is to write a python function, "llm_invoke", that will run a prompt with a given input. The entire code needed for this will be in a single file called llm_invoke.py. You will use the Langchain cache.
+
+<include>context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Input: 
+        'prompt' - String with the prompt to be used for the LLM model.
+        'input_json' - JSON object with the input to be used for the LLM model.
+        'strength' - Floating point number with 0 being the cheapest model, 0.5 being the base model and 1 being the model with the highest ELO score.
+        'temperature' - Floating point number indicating the temperature of the LLM.
+        'verbose' - Boolean indicating whether to print extra information.
+        'output_json' - Optional JSON object with the output from the LLM model. If not given, the output will be a string.
+    Output:
+        'result' - Output from the LLM model.
+        'cost' - Cost of the invoke run.
+        'model_name' - Name of the selected model.
+
+% Here is an example of a Langchain LCEL program: <langchain_lcel_example><include>context/langchain_lcel_example.py</include></langchain_lcel_example>
+
+% Here is an example (but not actual values) of the llm_model.csv: <llm_model_example><shell>head -6 data/llm_model.csv</shell></llm_model_example>
+
+% Here are the rules to follow when selecting the appropriate model:
+    - If environmental variable $PDD_MODEL_DEFAULT is set, use that as the base model, otherwise it is "gpt-4o-mini". If $PDD_PATH is set load $PDD_PATH/data/llm_model.csv, otherwise, assume $PDD_PATH is current working directory.
+    - When strength < 0.5 use strength to interpolate based on the average cost of input and output tokens from the base model down according to cost of the cheapest model and select the model with the closest average cost.
+    - When strength > 0.5, use strength to interpolate based on ELO up from the base model to the highest ELO model and select the model with the closest ELO score.
+    - Use base model when strength is 0.5.
+    - Make sure temperature is set for every llm model instantiation but only set the max tokens/completions if value is available.
+
+% For OpenAI models, use the structured output when a desired JSON output is requested.
+
+% If verbose is set to True, print the following information:
+    - The selected model.
+    - The per input and output token cost (in dollars per million tokens) of the selected model and the number of input and output tokens.
+    - The cost of the invoke run.
+    - The strength used.
+    - The temperature used.
+    - The input JSON.
+    - The output JSON.
+    - The result using rprint.
