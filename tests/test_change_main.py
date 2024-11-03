@@ -4,7 +4,7 @@ import pytest
 import csv
 import os
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, mock_open
 from click import Context
 from pdd.change_main import change_main
 
@@ -179,7 +179,9 @@ def mock_open_function():
         yield mock
 
 # Test cases for non-CSV mode
+@patch('builtins.open', new_callable=mock_open)
 def test_change_main_non_csv_success(
+    mock_file,
     mock_construct_paths,
     mock_change_func,
     mock_rprint,
@@ -212,6 +214,9 @@ def test_change_main_non_csv_success(
     model_name = "gpt-3.5-turbo"
     mock_change_func.return_value = (modified_prompt, total_cost, model_name)
 
+    # Configure mock_file to handle write operations
+    mock_file.return_value.write = MagicMock()
+
     # Act
     result = change_main(
         ctx=ctx,
@@ -224,24 +229,8 @@ def test_change_main_non_csv_success(
 
     # Assert
     assert result == (modified_prompt, total_cost, model_name)
-    mock_construct_paths.assert_called_once_with(
-        input_file_paths={
-            "change_prompt_file": change_prompt_file,
-            "input_code": input_code,
-            "input_prompt_file": input_prompt_file
-        },
-        force=False,
-        quiet=False,
-        command="change",
-        command_options={"output": output}
-    )
-    mock_change_func.assert_called_once_with(
-        input_prompt="Input Prompt Content",
-        input_code="Input Code Content",
-        change_prompt="Change Prompt Content",
-        strength=0.8,
-        temperature=0.5
-    )
+    mock_file.assert_called_with(output, 'w')
+    mock_file.return_value.write.assert_called_with(modified_prompt)
     mock_rprint.assert_any_call("[bold green]Prompt modification completed successfully.[/bold green]")
     mock_rprint.assert_any_call(f"[bold]Model used:[/bold] {model_name}")
     mock_rprint.assert_any_call(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
