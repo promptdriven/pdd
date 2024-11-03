@@ -41,7 +41,7 @@
     c. If the program runs without errors, break the loop.
     d. If the program fails:
        - Read and print the error message from the error log file, escaping square brackets so `rprint` doesn't misinterpret them.
-       - Create a backup copy of the `verification_program` and `code_file`, appending the current iteration number to the filename, e.g., "program_3.py" and "code_3.py" for the third iteration.
+       - Create a backup copy of the `verification_program` and `code_file`, appending the current iteration number to the filename, e.g., "program_3.py" and "code_3.py" for the third iteration. Be sure to strip the extension before appending the iteration number.
        - Read the contents of the `verification_program` and `code_file`.
        - Call `fix_code_module_errors` with:
          * `program`: The contents of the `verification_program`.
@@ -57,13 +57,6 @@
          * Write the `fixed_code` back to the `code_file`.
        - If `verification_program` is `True`:
          * Write the `fixed_program` back to the `verification_program`.
-       - Run the `verification_program` again to check if the code runs.
-        - If the verification fails:
-            + Restore the last known working `code_file` from the backup.
-            + Output the errors and results of the failed verification into the error log file, indicating that a restore has occurred.
-            + Increment the attempt counter.
-            + Continue the loop.
-        - If the verification succeeds:
-            + break the loop
+    e. Increment the attempt counter.
   Step 4. If the last run didn't work, copy back the `verification_program` and `code_file` from the original.
   Step 5. Return the success status,final verification program, final code contents, total number of attempts, total cost, and model name.
