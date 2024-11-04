@@ -1,355 +1,277 @@
+# llm_invoke.py
+
 import os
-import json
 import csv
-from typing import Optional, Dict, Any, Tuple
-from pathlib import Path
-
+import json
+from pydantic import BaseModel, Field
 from rich import print as rprint
-from rich.console import Console
-from rich.traceback import install
 
-from langchain.prompts import PromptTemplate, ChatPromptTemplate
+from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
 from langchain_community.cache import SQLiteCache
 from langchain.globals import set_llm_cache
 from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
+from langchain_core.runnables import RunnablePassthrough, ConfigurableField
+
 from langchain_openai import AzureChatOpenAI
-from langchain_fireworks import Fireworks 
+from langchain_fireworks import Fireworks
 from langchain_anthropic import ChatAnthropic
-from langchain_openai import ChatOpenAI # Chatbot and conversational tasks
-from langchain_openai import OpenAI # General language tasks
+from langchain_openai import ChatOpenAI  # Chatbot and conversational tasks
+from langchain_openai import OpenAI  # General language tasks
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_groq import ChatGroq
 from langchain_together import Together
+
 from langchain.callbacks.base import BaseCallbackHandler
 from langchain.schema import LLMResult
-from pydantic import BaseModel, Field
-
-# Enable Rich traceback for better error messages
-install()
-console = Console()
 
 
 class CompletionStatusHandler(BaseCallbackHandler):
-    """
-    Callback handler to capture token usage and completion status.
-    """
     def __init__(self):
         self.is_complete = False
         self.finish_reason = None
-        self.input_tokens = 0
-        self.output_tokens = 0
+        self.input_tokens = None
+        self.output_tokens = None
 
     def on_llm_end(self, response: LLMResult, **kwargs) -> None:
         self.is_complete = True
         if response.generations and response.generations[0]:
             generation = response.generations[0][0]
-            self.finish_reason = generation.generation_info.get('finish_reason', 'unknown').lower()
-            
-            # More robust token usage extraction
-            if hasattr(response, 'llm_output') and response.llm_output:
-                usage = response.llm_output.get('token_usage', {})
-                self.input_tokens = usage.get('prompt_tokens', 0)
-                self.output_tokens = usage.get('completion_tokens', 0)
-            elif hasattr(generation, 'message'):
-                # Try different metadata locations
-                usage = (getattr(generation.message, 'metadata', {}) or {}).get('usage', {})
-                self.input_tokens = usage.get('prompt_tokens', 0)
-                self.output_tokens = usage.get('completion_tokens', 0)
-        # Debug information
-        console.print("[bold green]CompletionStatusHandler[/bold green] extracted information:")
-        console.print(f"Finish reason: {self.finish_reason}")
-        console.print(f"Input tokens: {self.input_tokens}")
-        console.print(f"Output tokens: {self.output_tokens}")
+            self.finish_reason = generation.generation_info.get('finish_reason', "").lower()
+
+            # Extract token usage
+            if hasattr(generation.message, 'usage_metadata'):
+                usage_metadata = generation.message.usage_metadata
+                self.input_tokens = usage_metadata.get('input_tokens')
+                self.output_tokens = usage_metadata.get('output_tokens')
 
 
-class ModelConfig(BaseModel):
-    provider: str
-    model: str
-    input_cost: Optional[float] = 0.0  # Cost per million input tokens
-    output_cost: Optional[float] = 0.0  # Cost per million output tokens
-    coding_arena_elo: Optional[int] = 0
-    base_url: Optional[str] = None
-    api_key: Optional[str] = None
-    counter: Optional[str] = None
-    encoder: Optional[str] = None
-    max_tokens: Optional[int] = None
-    max_completion_tokens: Optional[int] = None
+class ModelInfo:
+    def __init__(self, provider, model, input_cost, output_cost, coding_arena_elo,
+                 base_url, api_key, counter, encoder, max_tokens, max_completion_tokens,
+                 structured_output):
+        self.provider = provider.strip()
+        self.model = model.strip()
+        self.input_cost = float(input_cost) if input_cost else 0.0
+        self.output_cost = float(output_cost) if output_cost else 0.0
+        self.average_cost = (self.input_cost + self.output_cost) / 2
+        self.coding_arena_elo = float(coding_arena_elo) if coding_arena_elo else 0.0
+        self.base_url = base_url.strip() if base_url else None
+        self.api_key = api_key.strip() if api_key else None
+        self.counter = counter.strip() if counter else None
+        self.encoder = encoder.strip() if encoder else None
+        self.max_tokens = int(max_tokens) if max_tokens else None
+        self.max_completion_tokens = int(
+            max_completion_tokens) if max_completion_tokens else None
+        self.structured_output = structured_output.lower(
+        ) == 'true' if structured_output else False
 
 
-def load_model_configs(csv_path: Path) -> Dict[str, ModelConfig]:
-    """
-    Load model configurations from a CSV file.
-    Returns a dictionary mapping model names to ModelConfig objects.
-    """
-    models = {}
+def load_models():
+    PDD_PATH = os.environ.get('PDD_PATH', '.')
+    # Assume that llm_model.csv is in PDD_PATH/data
+    models_file = os.path.join(PDD_PATH, 'data', 'llm_model.csv')
+    models = []
     try:
-        with csv_path.open(mode='r', encoding='utf-8') as file:
-            reader = csv.DictReader(file)
+        with open(models_file, newline='') as csvfile:
+            reader = csv.DictReader(csvfile)
             for row in reader:
-                model_name = row.get('model')
-                if not model_name:
-                    continue  # Skip rows without a model name
-                models[model_name] = ModelConfig(
-                    provider=row.get('provider', '').strip(),
-                    model=model_name.strip(),
-                    input_cost=float(row.get('input', 0)) if row.get('input') else 0.0,
-                    output_cost=float(row.get('output', 0)) if row.get('output') else 0.0,
-                    coding_arena_elo=int(row.get('coding_arena_elo', 0)) if row.get('coding_arena_elo') else 0,
-                    base_url=row.get('base_url', '').strip(),
-                    api_key=row.get('api_key', '').strip(),
-                    counter=row.get('counter', '').strip(),
-                    encoder=row.get('encoder', '').strip(),
-                    max_tokens=int(row.get('max_tokens')) if row.get('max_tokens') else None,
-                    max_completion_tokens=int(row.get('max_completion_tokens')) if row.get('max_completion_tokens') else None,
+                model_info = ModelInfo(
+                    provider=row['provider'],
+                    model=row['model'],
+                    input_cost=row['input'],
+                    output_cost=row['output'],
+                    coding_arena_elo=row['coding_arena_elo'],
+                    base_url=row['base_url'],
+                    api_key=row['api_key'],
+                    counter=row['counter'],
+                    encoder=row['encoder'],
+                    max_tokens=row['max_tokens'],
+                    max_completion_tokens=row['max_completion_tokens'],
+                    structured_output=row['structured_output']
                 )
-        if not models:
-            raise ValueError("No valid models found in the CSV file.")
-        return models
+                models.append(model_info)
     except FileNotFoundError:
-        raise FileNotFoundError(f"Model configuration CSV not found at path: {csv_path}")
-    except Exception as e:
-        raise Exception(f"Error loading model configurations: {str(e)}")
+        raise FileNotFoundError(f"llm_model.csv not found at {models_file}")
+    return models
 
 
-def select_model(
-    models: Dict[str, ModelConfig],
-    base_model_name: str,
-    strength: float
-) -> ModelConfig:
-    """
-    Selects an appropriate model based on the strength parameter.
-    """
-    if base_model_name not in models:
-        raise ValueError(f"Base model '{base_model_name}' not found in model configurations.")
-
-    base_model = models[base_model_name]
-
-    if strength < 0.0 or strength > 1.0:
-        raise ValueError("Strength must be between 0 and 1.")
+def select_model(strength, models, base_model_name):
+    # Get the base model
+    base_model = None
+    for model in models:
+        if model.model == base_model_name:
+            base_model = model
+            break
+    if not base_model:
+        raise ValueError(f"Base model {base_model_name} not found in the models list.")
 
     if strength == 0.5:
         return base_model
     elif strength < 0.5:
-        # Interpolate based on cost
-        cheapest_model = min(models.values(), key=lambda m: m.input_cost + m.output_cost)
-        target_cost = base_model.input_cost + base_model.output_cost
-        target_cost -= (base_model.input_cost + base_model.output_cost - (cheapest_model.input_cost + cheapest_model.output_cost)) * (strength / 0.5)
-        # Select model with closest average cost to target_cost
-        selected = min(
-            models.values(),
-            key=lambda m: abs((m.input_cost + m.output_cost) - target_cost)
-        )
+        # Models cheaper than or equal to the base model
+        cheaper_models = [
+            model for model in models if model.average_cost <= base_model.average_cost]
+        # Sort models by average_cost ascending
+        cheaper_models.sort(key=lambda m: m.average_cost)
+        if not cheaper_models:
+            return base_model
+        # Interpolate between cheapest model and base model
+        cheapest_model = cheaper_models[0]
+        cost_range = base_model.average_cost - cheapest_model.average_cost
+        target_cost = cheapest_model.average_cost + (strength / 0.5) * cost_range
+        # Find the model with closest average cost to target_cost
+        selected_model = min(
+            cheaper_models, key=lambda m: abs(m.average_cost - target_cost))
+        return selected_model
     else:
-        # Interpolate based on ELO
-        highest_elo = max(models.values(), key=lambda m: m.coding_arena_elo).coding_arena_elo
-        target_elo = base_model.coding_arena_elo + (highest_elo - base_model.coding_arena_elo) * ((strength - 0.5) / 0.5)
-        # Select model with closest ELO to target_elo
-        selected = min(
-            models.values(),
-            key=lambda m: abs(m.coding_arena_elo - target_elo)
-        )
-    return selected
+        # strength > 0.5
+        # Models better than or equal to the base model
+        better_models = [
+            model for model in models if model.coding_arena_elo >= base_model.coding_arena_elo]
+        # Sort models by coding_arena_elo ascending
+        better_models.sort(key=lambda m: m.coding_arena_elo)
+        if not better_models:
+            return base_model
+        # Interpolate between base model and highest ELO model
+        highest_elo_model = better_models[-1]
+        elo_range = highest_elo_model.coding_arena_elo - base_model.coding_arena_elo
+        target_elo = base_model.coding_arena_elo + \
+            ((strength - 0.5) / 0.5) * elo_range
+        # Find the model with closest ELO to target_elo
+        selected_model = min(
+            better_models, key=lambda m: abs(m.coding_arena_elo - target_elo))
+        return selected_model
 
 
-def calculate_cost(
-    model: ModelConfig,
-    input_tokens: int,
-    output_tokens: int
-) -> float:
-    """
-    Calculate the cost of the invocation based on token usage and model's token costs.
-    """
-    input_cost = model.input_cost if model.input_cost else 0.0
-    output_cost = model.output_cost if model.output_cost else 0.0
-    cost = (input_tokens * input_cost + output_tokens * output_cost) / 1_000_000
-    return cost
+def create_llm_instance(selected_model, temperature, handler):
+    provider = selected_model.provider.lower()
+    model_name = selected_model.model
+    base_url = selected_model.base_url
+    api_key_name = selected_model.api_key
+    max_tokens = selected_model.max_completion_tokens
+    # Retrieve API key from environment variable if needed
+    api_key = os.environ.get(api_key_name) if api_key_name else None
+
+    # Initialize the appropriate LLM class
+    if provider == 'openai':
+        if model_name.startswith('gpt-'):
+            llm = ChatOpenAI(model=model_name, temperature=temperature,
+                             openai_api_key=api_key, callbacks=[handler])
+        else:
+            llm = OpenAI(model=model_name, temperature=temperature,
+                         openai_api_key=api_key, callbacks=[handler])
+    elif provider == 'anthropic':
+        llm = ChatAnthropic(model=model_name, temperature=temperature,
+                            anthropic_api_key=api_key, callbacks=[handler])
+    elif provider == 'google':
+        llm = ChatGoogleGenerativeAI(
+            model=model_name, temperature=temperature, callbacks=[handler])
+    elif provider == 'azure':
+        llm = AzureChatOpenAI(
+            model=model_name, temperature=temperature, callbacks=[handler])
+    elif provider == 'fireworks':
+        llm = Fireworks(model=model_name, temperature=temperature,
+                        callbacks=[handler])
+    elif provider == 'together':
+        llm = Together(model=model_name, temperature=temperature,
+                       callbacks=[handler])
+    elif provider == 'groq':
+        llm = ChatGroq(model_name=model_name, temperature=temperature,
+                       callbacks=[handler])
+    else:
+        raise ValueError(f"Unsupported provider: {selected_model.provider}")
+    # Set base_url if available
+    if base_url:
+        llm.openai_api_base = base_url
+    # Set max tokens if available
+    if max_tokens:
+        llm.max_tokens = max_tokens
+    return llm
 
 
-def instantiate_llm(
-    model: ModelConfig,
-    temperature: float,
-) -> Any:
-    """
-    Instantiate the appropriate LLM based on the model configuration.
-    """
-    llm_kwargs = {
-        "temperature": temperature,
-    }
+def calculate_cost(handler, selected_model):
+    input_tokens = handler.input_tokens or 0
+    output_tokens = handler.output_tokens or 0
+    input_cost_per_million = selected_model.input_cost
+    output_cost_per_million = selected_model.output_cost
+    # Cost is (tokens / 1_000_000) * cost_per_million
+    total_cost = (input_tokens / 1_000_000) * input_cost_per_million + \
+        (output_tokens / 1_000_000) * output_cost_per_million
+    return total_cost
 
-    # Add max_tokens and max_completions if available
-    if model.max_tokens:
-        llm_kwargs["max_tokens"] = model.max_tokens
-    if model.max_completion_tokens:
-        llm_kwargs["max_completions"] = model.max_completion_tokens
 
+def llm_invoke(prompt, input_json, strength, temperature, verbose=False, output_pydantic=None):
+    # Validate inputs
+    if not prompt:
+        raise ValueError("Prompt is required.")
+    if input_json is None:
+        raise ValueError("Input JSON is required.")
+    if not isinstance(input_json, dict):
+        raise ValueError("Input JSON must be a dictionary.")
+
+    # Set up cache
+    set_llm_cache(SQLiteCache(database_path=".langchain.db"))
+
+    # Get default model
+    base_model_name = os.environ.get('PDD_MODEL_DEFAULT', 'gpt-4o-mini')
+
+    # Load models
+    models = load_models()
+
+    # Select model
+    selected_model = select_model(strength, models, base_model_name)
+
+    # Create the prompt template
+    try:
+        prompt_template = PromptTemplate.from_template(prompt)
+    except Exception as e:
+        raise ValueError(f"Invalid prompt template: {str(e)}")
+
+    # Create a handler to capture token counts
     handler = CompletionStatusHandler()
 
-    if model.provider.lower() == "openai":
-        llm = ChatOpenAI(
-            model=model.model,
-            temperature=temperature,
-            callbacks=[handler]
-        )
-    elif model.provider.lower() == "azure":
-        if not model.api_key:
-            raise ValueError(f"API key not provided for Azure model '{model.model}'.")
-        llm = AzureChatOpenAI(
-            model=model.model,
-            temperature=temperature,
-            openai_api_key=model.api_key,
-            openai_api_base=model.base_url,
-            callbacks=[handler]
-        )
-    elif model.provider.lower() == "anthropic":
-        llm = ChatAnthropic(
-            model=model.model,
-            temperature=temperature,
-            callbacks=[handler]
-        )
-    elif model.provider.lower() == "google":
-        llm = ChatGoogleGenerativeAI(
-            model=model.model,
-            temperature=temperature,
-            callbacks=[handler]
-        )
-    elif model.provider.lower() == "fireworks":
-        llm = Fireworks(
-            model=model.model,
-            temperature=temperature,
-            callbacks=[handler]
-        )
-    elif model.provider.lower() == "groq":
-        llm = ChatGroq(
-            model_name=model.model,
-            temperature=temperature,
-            callbacks=[handler]
-        )
-    elif model.provider.lower() == "together":
-        llm = Together(
-            model=model.model,
-            temperature=temperature,
-            max_tokens=model.max_tokens if model.max_tokens else 500,
-            callbacks=[handler]
-        )
-    else:
-        raise ValueError(f"Unsupported provider '{model.provider}' for model '{model.model}'.")
+    # Prepare LLM instance
+    llm = create_llm_instance(selected_model, temperature, handler)
 
-    return llm, handler
-
-
-def llm_invoke(
-    prompt: str,
-    input_json: Dict[str, Any],
-    strength: float,
-    temperature: float,
-    verbose: bool,
-    output_json: Optional[Dict[str, Any]] = None
-) -> Dict[str, Any]:
-    """
-    Invoke an LLM model with the given prompt and parameters.
-
-    Parameters:
-        prompt (str): The prompt template.
-        input_json (dict): Input variables for the prompt.
-        strength (float): Model selection strength between 0 and 1.
-        temperature (float): Temperature for the LLM.
-        verbose (bool): If True, print detailed information.
-        output_json (dict, optional): Desired output JSON structure.
-
-    Returns:
-        dict: Contains 'result', 'cost', and 'model_name'.
-    """
-    try:
-        # Validate inputs
-        if not isinstance(prompt, str) or not prompt.strip():
-            raise ValueError("The 'prompt' must be a non-empty string.")
-        if not isinstance(input_json, dict):
-            raise ValueError("The 'input_json' must be a dictionary.")
-        if not isinstance(strength, float) or not (0.0 <= strength <= 1.0):
-            raise ValueError("The 'strength' must be a float between 0 and 1.")
-        if not isinstance(temperature, float):
-            raise ValueError("The 'temperature' must be a float.")
-        if not isinstance(verbose, bool):
-            raise ValueError("The 'verbose' must be a boolean.")
-        if output_json is not None and not isinstance(output_json, dict):
-            raise ValueError("The 'output_json' must be a dictionary if provided.")
-
-        # Setup Langchain cache
-        set_llm_cache(SQLiteCache(database_path=".langchain.db"))
-
-        # Load model configurations
-        pdd_path = Path(os.getenv('PDD_PATH', '.'))
-        csv_path = pdd_path / 'data' / 'llm_model.csv' if pdd_path.exists() else Path.cwd() / 'llm_model.csv'
-        models = load_model_configs(csv_path)
-
-        # Determine base model
-        base_model_name = os.getenv('PDD_MODEL_DEFAULT', 'gpt-4o-mini')
-        base_model = models.get(base_model_name)
-        if not base_model:
-            raise ValueError(f"Base model '{base_model_name}' not found in model configurations.")
-
-        # Select appropriate model
-        selected_model = select_model(models, base_model_name, strength)
-
-        # Instantiate the LLM
-        llm, handler = instantiate_llm(selected_model, temperature)
-
-        # Create PromptTemplate
-        if output_json:
-            parser = JsonOutputParser()
-            # Escape JSON structure in prompt by replacing { with {{ and } with }}
-            json_structure = json.dumps(output_json, indent=2).replace("{", "{{").replace("}", "}}");
-            formatted_prompt = f"""
-                Respond with JSON matching this structure:
-                {json_structure}
-
-                {prompt}
-            """
-            prompt_template = ChatPromptTemplate.from_messages([
-                ("system", "You are a helpful assistant that always responds in valid JSON format."),
-                ("user", formatted_prompt)
-            ])
+    # Handle structured output if output_pydantic is provided
+    if output_pydantic:
+        pydantic_model = output_pydantic
+        parser = JsonOutputParser(pydantic_object=pydantic_model)
+        # Handle models that support structured output
+        if selected_model.structured_output:
+            llm = llm.with_structured_output(pydantic_model)
+            chain = prompt_template | llm
         else:
-            parser = StrOutputParser()
-            prompt_template = PromptTemplate(
-                template=prompt,
-                input_variables=list(input_json.keys())
-            )
+            # Use parser after the LLM
+            chain = prompt_template | llm | parser
+    else:
+        # Output is a string
+        chain = prompt_template | llm | StrOutputParser()
 
-        # Combine prompt and LLM
-        chain = prompt_template | llm | parser
-
-        # Invoke the chain
+    # Run the chain
+    try:
         result = chain.invoke(input_json)
-
-        # Calculate cost
-        cost = calculate_cost(selected_model, handler.input_tokens, handler.output_tokens)
-
-        # Prepare output
-        output = {
-            "result": result,
-            "cost": cost,
-            "model_name": selected_model.model
-        }
-
-        # Verbose output
-        if verbose:
-            rprint("[bold blue]Verbose Output[/bold blue]")
-            rprint(f"Selected Model: [green]{selected_model.model}[/green]")
-            rprint(f"Input Token Cost: ${selected_model.input_cost} per million tokens")
-            rprint(f"Output Token Cost: ${selected_model.output_cost} per million tokens")
-            rprint(f"Input Tokens Used: {handler.input_tokens}")
-            rprint(f"Output Tokens Used: {handler.output_tokens}")
-            rprint(f"Total Cost: ${cost:.6f}")
-            rprint(f"Strength Used: {strength}")
-            rprint(f"Temperature Used: {temperature}")
-            rprint(f"Input JSON: {json.dumps(input_json, indent=2)}")
-            if output_json:
-                rprint(f"Output JSON Structure: {json.dumps(output_json, indent=2)}")
-            rprint(f"Result: [bold]{result}[/bold]")
-
-        return output
-
     except Exception as e:
-        console.print(f"[bold red]Error:[/bold red] {str(e)}")
-        raise
+        raise RuntimeError(f"Error during LLM invocation: {str(e)}")
+
+    # Calculate cost
+    cost = calculate_cost(handler, selected_model)
+
+    # If verbose, print information
+    if verbose:
+        rprint(f"Selected model: {selected_model.model}")
+        rprint(
+            f"Per input token cost: ${selected_model.input_cost} per million tokens")
+        rprint(
+            f"Per output token cost: ${selected_model.output_cost} per million tokens")
+        rprint(f"Number of input tokens: {handler.input_tokens}")
+        rprint(f"Number of output tokens: {handler.output_tokens}")
+        rprint(f"Cost of invoke run: ${cost}")
+        rprint(f"Strength used: {strength}")
+        rprint(f"Temperature used: {temperature}")
+        rprint(f"Input JSON: {input_json}")
+        if output_pydantic:
+            rprint(f"Output Pydantic: {output_pydantic}")
+        rprint(f"Result: {result}")
+
+    return {'result': result, 'cost': cost, 'model_name': selected_model.model}
