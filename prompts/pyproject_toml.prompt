@@ -15,3 +15,5 @@
 % Here is the author's name: <shell>git config --get user.name</shell>
 
 % The prompts needed to run the Python application 'pdd' are located in the ./prompts directory. The prompts that end with '_LLM.prompt' are the ones needed for the program. Only include these prompts.
+
+% The data needed to run the Python application 'pdd' is located in the ./data directory.
