@@ -1,4 +1,3 @@
-# example_usage.py
 
 """
 Example Usage of llm_invoke Module
@@ -33,7 +32,10 @@ def main() -> None:
     Main function to demonstrate the usage of llm_invoke.
     """
     # Define the prompt template
-    prompt = "Provide a summary for the following article:\n{article}"
+    prompt = """
+    Provide a summary for the following article in JSON format:
+    {article}
+    """
 
     # Input JSON with variables for the prompt
     input_json = {
@@ -45,7 +47,7 @@ def main() -> None:
 
     # Desired output JSON structure (optional)
     output_json = {
-        "summary": "A brief summary of the article."
+        "summary": "string"  # Specify the expected type
     }
 
     # Strength parameter (0.0 to 1.0)

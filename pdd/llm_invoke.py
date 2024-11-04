@@ -1,5 +1,3 @@
-# llm_invoke.py
-
 import os
 import json
 import csv
@@ -46,10 +44,17 @@ class CompletionStatusHandler(BaseCallbackHandler):
         if response.generations and response.generations[0]:
             generation = response.generations[0][0]
             self.finish_reason = generation.generation_info.get('finish_reason', 'unknown').lower()
-            # Extract token usage
-            usage = generation.message.metadata.get('usage', {})
-            self.input_tokens = usage.get('prompt_tokens', 0)
-            self.output_tokens = usage.get('completion_tokens', 0)
+            
+            # More robust token usage extraction
+            if hasattr(response, 'llm_output') and response.llm_output:
+                usage = response.llm_output.get('token_usage', {})
+                self.input_tokens = usage.get('prompt_tokens', 0)
+                self.output_tokens = usage.get('completion_tokens', 0)
+            elif hasattr(generation, 'message'):
+                # Try different metadata locations
+                usage = (getattr(generation.message, 'metadata', {}) or {}).get('usage', {})
+                self.input_tokens = usage.get('prompt_tokens', 0)
+                self.output_tokens = usage.get('completion_tokens', 0)
         # Debug information
         console.print("[bold green]CompletionStatusHandler[/bold green] extracted information:")
         console.print(f"Finish reason: {self.finish_reason}")
@@ -292,10 +297,18 @@ def llm_invoke(
         # Create PromptTemplate
         if output_json:
             parser = JsonOutputParser()
-            prompt_template = PromptTemplate(
-                template=prompt,
-                input_variables=list(input_json.keys())
-            )
+            # Escape JSON structure in prompt by replacing { with {{ and } with }}
+            json_structure = json.dumps(output_json, indent=2).replace("{", "{{").replace("}", "}}");
+            formatted_prompt = f"""
+                Respond with JSON matching this structure:
+                {json_structure}
+
+                {prompt}
+            """
+            prompt_template = ChatPromptTemplate.from_messages([
+                ("system", "You are a helpful assistant that always responds in valid JSON format."),
+                ("user", formatted_prompt)
+            ])
         else:
             parser = StrOutputParser()
             prompt_template = PromptTemplate(
