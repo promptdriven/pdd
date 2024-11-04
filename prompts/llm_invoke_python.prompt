@@ -9,13 +9,14 @@
         'strength' - Floating point number with 0 being the cheapest model, 0.5 being the base model and 1 being the model with the highest ELO score.
         'temperature' - Floating point number indicating the temperature of the LLM.
         'verbose' - Boolean indicating whether to print extra information.
-        'output_json' - Optional JSON object with the output from the LLM model. If not given, the output will be a string.
+        'output_pydantic' - Optional. This specifies a pydantic_object output format from the LLM model. If not given, the output will be a string.
     Output:
         'result' - Output from the LLM model.
         'cost' - Cost of the invoke run.
         'model_name' - Name of the selected model.
 
 % Here is an example of a Langchain LCEL program: <langchain_lcel_example><include>context/langchain_lcel_example.py</include></langchain_lcel_example>
+Be sure the use the correct imports as shown in the above example.
 
 % Here is an example (but not actual values) of the llm_model.csv: <llm_model_example><shell>head -6 data/llm_model.csv</shell></llm_model_example>
 
@@ -26,7 +27,7 @@
     - Use base model when strength is 0.5.
     - Make sure temperature is set for every llm model instantiation but only set the max tokens/completions if value is available.
 
-% For OpenAI models, use the structured output when a desired JSON output is requested.
+% CRITICAL: For models that support 'structured_output', use the '.with_structured_output()' when a desired Pydantic output is requested.
 
 % If verbose is set to True, print the following information:
     - The selected model.
@@ -35,5 +36,5 @@
     - The strength used.
     - The temperature used.
     - The input JSON.
-    - The output JSON.
+    - The optional Pydantic output format.
     - The result using rprint.
