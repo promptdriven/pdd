@@ -115,11 +115,12 @@ llm = ChatOpenAI(
 chain = prompt | llm | parser
 
 # Invoke the chain with a query
-result = chain.invoke({"query": "Write joke about the sky"})
+result = chain.invoke({"query": "Write joke about deepseek."})
 print("deepseek",result)
 
 # Set up the Azure ChatOpenAI LLM instance
 llm_no_struct = AzureChatOpenAI(
+    model="o1-mini-2024-09-12",
     temperature=0,
     callbacks=[handler]
 )
