@@ -16,7 +16,7 @@
         'model_name' - Name of the selected model.
 
 % Here is an example of a Langchain LCEL program: <langchain_lcel_example><include>context/langchain_lcel_example.py</include></langchain_lcel_example>
-Be sure the use the correct imports as shown in the above example.
+Be sure to use the correct imports as shown in the above example.
 
 % Here is an example (but not actual values) of the llm_model.csv: <llm_model_example><shell>head -6 data/llm_model.csv</shell></llm_model_example>
 
@@ -25,9 +25,14 @@ Be sure the use the correct imports as shown in the above example.
     - When strength < 0.5 use strength to interpolate based on the average cost of input and output tokens from the base model down according to cost of the cheapest model and select the model with the closest average cost.
     - When strength > 0.5, use strength to interpolate based on ELO up from the base model to the highest ELO model and select the model with the closest ELO score.
     - Use base model when strength is 0.5.
-    - Make sure temperature is set for every llm model instantiation but only set the max tokens/completions if value is available.
 
-% CRITICAL: For models that support 'structured_output', use the '.with_structured_output()' when a desired Pydantic output is requested.
+% CRITICAL: For models that support 'structured_output', use the '.with_structured_output()' when a desired Pydantic output is requested. Use PydanticOutputParser instead of JsonOutputParser for better Pydantic handling.
+
+% CRITICAL: When handling model token limits:
+    - For Google models, use max_output_tokens instead of max_tokens
+    - When max_completion_tokens is available, set it in model_kwargs
+    - Otherwise, use max_tokens if available
+    - For OpenAI models with a base_url, set it during model initialization
 
 % If verbose is set to True, print the following information:
     - The selected model.
