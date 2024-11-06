@@ -1,0 +1,33 @@
+% 
+
+You are a Python Programmer. Generate a python function called summarize_directory that takes the following inputs and generates a csv output containing 2 columns (the path to the input file and the contents) 
+
+<include>context/python_preamble.prompt</include>
+
+% This program will use Langchain to do the following:
+    Step 1. Use $PDD_PATH environment variable to get the path to the project.
+    Step 2:  Create a Langchain LCEL template from the summarize_file_LLM prompt and read its prompt from prompts/summarize_file_LLM.prompt
+    Step 3. Use llm_selector for the llm model.
+    Step 4. Run the code through the model using Langchain LCEL. 
+        4a. Pass the following string parameters to the prompt during invoke:
+            - 'file_contents'
+        4b. Pretty print a message letting the user know it is running and how many tokens are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.   
+    Step 3. Iterate through all files in the directory specified by the 'directory_path' input.
+    Step 4: Read each file and return the contents of the file as a string.
+    Step 5: Pass the contents to the file to the summarize_file_LLM chain above to generate a summary of the file contents 
+    Step 6: Save the result of the output of the LCEL model as the 'file_summary' 
+    Step 7. Pretty print a message letting the user know it is running and how many input and output tokens (using token_counter from llm_selector) are in the prompt and the total cost.
+    Step 8. Calculate the total cost by summing the costs from both LCEL runs.
+    Step 9: Append the output to a list of tuples containing the path to the file and the summary of the file.
+    Step 10: Return the list of tuples containing the csv output string, the total_cost and the model_name of the LLM model used.
+inputs:
+    'directory_path': path to the directory to summarize with wildcard (e.g. /path/to/directory/*.py)
+    'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
+    'temperature' - A float that controls the randomness of the LLM's output.
+outputs:
+    ' csv_file' - A string containing the contents of the csv file that contains the summary of the files in the directory.
+    'total_cost' - A float representing the total cost of the LCEL runs.
+    'model_name' - A string representing the name of the LLM model used.
+
+
+full_path, file_summary

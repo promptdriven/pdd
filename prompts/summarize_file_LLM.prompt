@@ -1,0 +1,8 @@
+Review the input string and provide a summary of its contents in about 200 words. 
+
+input:
+    'file_contents': A string containing the contents of the file to summarize.
+output:
+    'file_summary': A string containing the summary of the file.
+
+The input string is {file_contents}    
