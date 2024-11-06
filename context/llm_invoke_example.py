@@ -16,10 +16,10 @@ def main():
     # Example 1: Unstructured Output
     prompt = "Tell me a joke about {topic}"
     input_json = {"topic": "programmers"}
-    temperature = 0.7
+    temperature = 1
     verbose = True
 
-    strength = 0
+    strength = 0.0
     while strength <= 1:
         print(f"\nStrength: {strength}")
     
@@ -47,7 +47,7 @@ def main():
             prompt=prompt_structured,
             input_json=input_json_structured,
             strength=strength,  # Select a model with higher ELO
-            temperature=0.5,
+            temperature=1,
             verbose=True,
             output_pydantic=output_pydantic
         )
