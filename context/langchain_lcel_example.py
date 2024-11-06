@@ -2,7 +2,7 @@ import os
 from langchain_core.prompts import PromptTemplate
 from langchain_community.cache import SQLiteCache
 from langchain.globals import set_llm_cache
-from langchain_core.output_parsers import JsonOutputParser # Parsers are only avaiable in langchain_core.output_parsers not langchain.output_parsers
+from langchain_core.output_parsers import JsonOutputParser, PydanticOutputParser # Parsers are only avaiable in langchain_core.output_parsers not langchain.output_parsers
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough, ConfigurableField
@@ -97,12 +97,24 @@ result = chain.invoke({"query": "Tell me a joke about openai."})
 print("4o mini JSON: ",result)
 print(result.setup) # How to access the structured output
 
-# Get DEEKSEEK_API_KEY environmental variable
-deepseek_api_key = os.getenv('DEEKSEEK_API_KEY')
+llm = ChatOpenAI(model="o1-preview", temperature=1, 
+                           callbacks=[handler],model_kwargs = {"max_completion_tokens" : 1000})
+# Chain the components. 
+#  The class `LLMChain` was deprecated in LangChain 0.1.17 and will be removed in 1.0. Use RunnableSequence, e.g., `prompt | llm` instead.
+chain = prompt | llm | parser
+
+# Invoke the chain with a query. 
+# IMPORTANT: chain.run is now obsolete. Use chain.invoke instead.
+result = chain.invoke({"query": "Tell me a joke about openai."})
+print("o1 JSON: ",result)
+
+# Get DEEPSEEK_API_KEY environmental variable
+
+deepseek_api_key = os.getenv('DEEPSEEK_API_KEY')
 
 # Ensure the API key is retrieved successfully
 if deepseek_api_key is None:
-    raise ValueError("DEEKSEEK_API_KEY environment variable is not set")
+    raise ValueError("DEEPSEEK_API_KEY environment variable is not set")
 
 llm = ChatOpenAI(
     model='deepseek-chat', 
@@ -118,6 +130,16 @@ chain = prompt | llm | parser
 result = chain.invoke({"query": "Write joke about deepseek."})
 print("deepseek",result)
 
+
+# Set up a parser
+parser = PydanticOutputParser(pydantic_object=Joke)
+# Chain the components
+chain = prompt | llm | parser
+
+# Invoke the chain with a query
+result = chain.invoke({"query": "Write joke about deepseek and pydantic."})
+print("deepseek pydantic",result)
+
 # Set up the Azure ChatOpenAI LLM instance
 llm_no_struct = AzureChatOpenAI(
     model="o1-mini-2024-09-12",
@@ -132,6 +154,8 @@ chain = prompt | llm # returns a Joke object
 result = chain.invoke({"query": "What is Azure?"})  # Pass a dictionary if `invoke` expects it
 print("Azure Result:", result)
 
+# Set up a parser
+parser = JsonOutputParser(pydantic_object=Joke)
 
 llm = Fireworks(
     model="accounts/fireworks/models/mixtral-8x7b-instruct",
