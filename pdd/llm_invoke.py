@@ -9,7 +9,7 @@ from rich import print as rprint
 from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
 from langchain_community.cache import SQLiteCache
 from langchain.globals import set_llm_cache
-from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
+from langchain_core.output_parsers import PydanticOutputParser, StrOutputParser
 from langchain_core.runnables import RunnablePassthrough, ConfigurableField
 
 from langchain_openai import AzureChatOpenAI
@@ -23,7 +23,6 @@ from langchain_together import Together
 
 from langchain.callbacks.base import BaseCallbackHandler
 from langchain.schema import LLMResult
-
 
 class CompletionStatusHandler(BaseCallbackHandler):
     def __init__(self):
@@ -148,21 +147,23 @@ def create_llm_instance(selected_model, temperature, handler):
     model_name = selected_model.model
     base_url = selected_model.base_url
     api_key_name = selected_model.api_key
-    max_tokens = selected_model.max_completion_tokens
+    max_completion_tokens = selected_model.max_completion_tokens
+    max_tokens = selected_model.max_tokens
+
     # Retrieve API key from environment variable if needed
     api_key = os.environ.get(api_key_name) if api_key_name else None
 
     # Initialize the appropriate LLM class
     if provider == 'openai':
-        if model_name.startswith('gpt-'):
+        if base_url:
             llm = ChatOpenAI(model=model_name, temperature=temperature,
-                             openai_api_key=api_key, callbacks=[handler])
-        else:
-            llm = OpenAI(model=model_name, temperature=temperature,
-                         openai_api_key=api_key, callbacks=[handler])
+                                openai_api_key=api_key, callbacks=[handler], openai_api_base = base_url)
+        else: 
+            llm = ChatOpenAI(model=model_name, temperature=temperature,
+                                openai_api_key=api_key, callbacks=[handler])
     elif provider == 'anthropic':
         llm = ChatAnthropic(model=model_name, temperature=temperature,
-                            anthropic_api_key=api_key, callbacks=[handler])
+                            callbacks=[handler])
     elif provider == 'google':
         llm = ChatGoogleGenerativeAI(
             model=model_name, temperature=temperature, callbacks=[handler])
@@ -180,12 +181,15 @@ def create_llm_instance(selected_model, temperature, handler):
                        callbacks=[handler])
     else:
         raise ValueError(f"Unsupported provider: {selected_model.provider}")
-    # Set base_url if available
-    if base_url:
-        llm.openai_api_base = base_url
-    # Set max tokens if available
-    if max_tokens:
-        llm.max_tokens = max_tokens
+    if max_completion_tokens:
+         llm.model_kwargs = {"max_completion_tokens" : max_completion_tokens}
+    else:
+        # Set max tokens if available
+        if max_tokens:
+            if provider == 'google':
+                llm.max_output_tokens = max_tokens
+            else:
+                llm.max_tokens = max_tokens
     return llm
 
 
@@ -236,7 +240,7 @@ def llm_invoke(prompt, input_json, strength, temperature, verbose=False, output_
     # Handle structured output if output_pydantic is provided
     if output_pydantic:
         pydantic_model = output_pydantic
-        parser = JsonOutputParser(pydantic_object=pydantic_model)
+        parser = PydanticOutputParser(pydantic_object=pydantic_model)
         # Handle models that support structured output
         if selected_model.structured_output:
             llm = llm.with_structured_output(pydantic_model)
