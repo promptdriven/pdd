@@ -1,32 +1,47 @@
-# Example usage of the summarize_directory function
+from pdd.summarize_directory import summarize_directory
 
-import os
-import glob
-from pdd.summarize_directory import summarize_directory  # Adjust the import based on your project structure
 
-# Set up the environment variable for the project path
-os.environ['PDD_PATH'] = '/absolute/path/to/pdd'  # Replace with your actual path
+def main() -> None:
+    """
+    Example usage of summarize_directory module
+    
+    This example will:
+    1. Create a sample CSV file with existing summaries
+    2. Summarize Python files in a directory
+    3. Print the results
+    """
+    # Example existing CSV content
+    existing_csv = """full_path,file_summary,date
+context/change_example.py,"This is an old summary",2023-01-01T10:00:00"""
 
-# Create the necessary directory structure and files
-os.makedirs('/absolute/path/to/pdd/prompts', exist_ok=True)
-os.makedirs('/absolute/path/to/pdd/sample_files', exist_ok=True)
+    try:
+        # Call summarize_directory
+        # directory_path: Path with wildcard to find files
+        # strength: 0.7 (higher values use more capable but expensive models)
+        # temperature: 0.5 (lower values make output more deterministic)
+        # verbose: True to see detailed progress
+        # csv_file: Optional existing CSV content
+        csv_output, total_cost, model_name = summarize_directory(
+            directory_path="context/c*.py",
+            strength=0.5,
+            temperature=0.0,
+            verbose=True,
+            csv_file=existing_csv
+        )
 
-# Write a sample prompt file
-with open('/absolute/path/to/pdd/prompts/summarize_file_LLM.prompt', 'w') as f:
-    f.write("Summarize the following content:\n{file_contents}")
+        # Print results
+        print("\nGenerated CSV content:")
+        print(csv_output)
+        print(f"\nTotal cost: ${total_cost:.4f}")  # Cost in USD
+        print(f"Model used: {model_name}")
 
-# Write a sample text file to summarize
-with open('/absolute/path/to/pdd/sample_files/sample_file.txt', 'w') as f:
-    f.write("This is a sample file that contains some text to be summarized.")
+        # save csv file
+        with open('output.csv', 'w') as file:
+            file.write(csv_output)
 
-# Define the directory path with a wildcard to match the sample file
-directory_path = '/absolute/path/to/pdd/sample_files/*.txt'
+    except Exception as e:
+        print(f"An error occurred: {e}")
 
-# Call the summarize_directory function with appropriate parameters
-csv_output, total_cost, model_name = summarize_directory(directory_path, strength=0.7, temperature=0.5)
 
-# Print the outputs
-print("CSV Output:")
-print(csv_output)
-print(f"Total Cost: ${total_cost:.6f}")
-print(f"Model Name: {model_name}")
+if __name__ == "__main__":
+    main()
