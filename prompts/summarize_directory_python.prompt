@@ -1,30 +1,34 @@
-% You are a Python Programmer. Generate a python function called summarize_directory that takes the following inputs and generates a csv output containing the following: the full path of the file, the summary of the file, and the current date.
-
-% Here are the inputs and outputs for the function:
-inputs:
-    'directory_path': path to the directory to summarize with wildcard (e.g. /path/to/directory/*.py)
-    'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
-    'temperature' - A float that controls the randomness of the LLM's output.
-outputs:
-    'csv_file' - A string containing the contents of the csv file that contains the full path of the file, summary, and date of the files in the directory.
-    'total_cost' - A float representing the total cost of the LCEL runs.
-    'model_name' - A string representing the name of the LLM model used.
+% You are am expert Python Programmer. Generate a Python function called `summarize_directory` that takes the following inputs and generates a csv output containing the following: 
+    'full_path': str, the full path of the file, 
+    'file_summary': str, the summary of the file, and 
+    'date': timestamp, the date of when the summary was generated.
 
 <include>context/python_preamble.prompt</include>
-% This program will use Langchain to do the following:
+
+% Here are the inputs and outputs for the function:
+    - Inputs:
+        'directory_path': str, path to the directory to summarize with wildcard (e.g. /path/to/directory/*.py)
+        'strength' - float, between 0 and 1 that is the strength of the LLM model to use.
+        'temperature' - float, controls the randomness of the LLM's output.
+        'verbose': bool, whether to print out the details of the function.
+        'csv_file': optional str, current csv file contents if it already exists.
+    - Outputs:
+        'csv_file' - A string containing the contents of the csv file that contains the full path of the file, summary, and date of the files in the directory.
+        'total_cost' - A float representing the total cost of the LCEL runs.
+        'model_name' - A string representing the name of the LLM model used.
+
+% Here is how to use the internal module llm_invoke:
+    <llm_invoke_example>
+        <include>context/llm_invoke_example.py</include>
+    </llm_invoke_example>
+
+% This program will do the following:
     Step 1: Use $PDD_PATH environment variable to get the path to the project.
-    Step 2: Create a Langchain LCEL template from the summarize_file_LLM prompt and read its prompt from prompts/summarize_file_LLM.prompt
-    Step 3: Use llm_selector for the llm model.
-    Step 4: Iterate through all files in the directory specified by the 'directory_path' input.
-    Step 5: Only proceed with the remaining steps if the file either has never been created before or if the file contents are newer than the last time the file was created.
-    Step 6: Read each file and read the contents of the file as a string.
-    Step 7: Invoke the LCEL chain to generate the summary given the following parameter: {'file_contents': file_contents}
-    Step 7b. Pretty print a message letting the user know it is running and how many tokens are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.   
-    Step 8: Save the result of the output of the LCEL chain as the 'file_summary' 
-    Step 9: Calculate the total cost by summing the costs from both LCEL runs.
-    Step 10: Append the output to a list of tuples containing the path to the file, the summary of the file, and the current datetime.
-    Step 11: Return the list of tuples containing the csv output string, the total_cost and the model_name of the LLM model used.
-
-
-csv format
-full_path: str, file_summary: , date
+    Step 2: Create a Langchain LCEL prompt template from $PDD_PATH/prompts/summarize_file_LLM.prompt
+    Step 3: Iterate through all files in the directory specified by the 'directory_path' input.
+        Step 3a: Only proceed with the remaining steps if the file either has never been created before or if the file contents are newer than the last time the summary was created.
+        Step 3b: Read each file and read the contents of the file as a string.
+        Step 3c: Summarize the files contents using llm_invoke with this parameter: {'file_contents': file_contents}
+        Step 3d: If a new file, append the full path of the file, the summary, and the date to the csv output string, otherwise update the summary and date for the existing file.
+    Step 4. Pretty print a message letting the user know it is running and the curent progress.
+    Step 5: Return the tuple containing the updated csv output string, the total_cost and the model_name of the LLM model used.
