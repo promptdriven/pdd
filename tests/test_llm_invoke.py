@@ -1,6 +1,5 @@
 import pytest
 from unittest.mock import patch, MagicMock
-import os
 from pydantic import BaseModel
 from pdd.llm_invoke import llm_invoke
 
@@ -12,7 +11,7 @@ class SampleOutputModel(BaseModel):
 # Sample models to be returned by the mocked load_models function
 class MockModelInfo:
     def __init__(self, provider, model, input_cost, output_cost, coding_arena_elo,
-                 base_url=None, api_key=None, counter=None, encoder=None, 
+                 base_url=None, api_key=None, counter=None, encoder=None,
                  max_tokens=None, max_completion_tokens=None, structured_output=False):
         self.provider = provider
         self.model = model
@@ -100,20 +99,42 @@ def mock_set_llm_cache():
     with patch('pdd.llm_invoke.set_llm_cache') as mock:
         yield mock
 
-def test_llm_invoke_valid_input(mock_load_models, mock_create_llm_instance,
-                                mock_select_model, mock_set_llm_cache):
-    prompt = "Tell me a joke about cats."
-    input_json = {"topic": "cats"}
-    strength = 0.5
-    temperature = 0.7
-    verbose = False
-    output_pydantic = None
+class MockLLM:
+    def __init__(self, response):
+        self.response = response
 
-    response = llm_invoke(prompt, input_json, strength, temperature, verbose, output_pydantic)
+    def __call__(self, prompt, **kwargs):
+        return self.response
 
-    assert response['result'] == "Mocked LLM response"
-    assert response['cost'] == (0 / 1_000_000) * 0.02 + (0 / 1_000_000) * 0.03  # Assuming tokens are 0
-    assert response['model_name'] == 'gpt-4o-mini'
+    def invoke(self, prompt, **kwargs):
+        return self.response
+
+    def generate(self, prompts, **kwargs):
+        return LLMResult(generations=[[Generation(text=self.response)] for _ in prompts])
+
+    def with_structured_output(self, pydantic_model):
+        if isinstance(self.response, str):
+            self.response = pydantic_model.parse_raw(self.response)
+        return self
+
+def test_llm_invoke_valid_input(mock_load_models, mock_set_llm_cache):
+    with patch('pdd.llm_invoke.create_llm_instance') as mock_create_llm_instance:
+        with patch('pdd.llm_invoke.select_model') as mock_select_model:
+            mock_create_llm_instance.return_value = MockLLM("Mocked LLM response")
+            mock_select_model.return_value = mock_load_models.return_value[0]
+
+            prompt = "Tell me a joke about cats."
+            input_json = {"topic": "cats"}
+            strength = 0.5
+            temperature = 0.7
+            verbose = False
+            output_pydantic = None
+
+            response = llm_invoke(prompt, input_json, strength, temperature, verbose, output_pydantic)
+
+            assert response['result'] == "Mocked LLM response"
+            assert response['cost'] == 0.0  # Tokens are mocked as None
+            assert response['model_name'] == 'gpt-4o-mini'
 
 def test_llm_invoke_missing_prompt(mock_load_models, mock_create_llm_instance,
                                    mock_select_model, mock_set_llm_cache):
@@ -207,37 +228,48 @@ def test_llm_invoke_strength_greater_than_half(mock_load_models, mock_create_llm
 
         assert response['model_name'] == 'claude-3'
 
-def test_llm_invoke_output_pydantic(mock_load_models, mock_create_llm_instance,
-                                   mock_select_model, mock_set_llm_cache):
-    prompt = "Provide data."
-    input_json = {"query": "Provide data."}
-    strength = 0.5
-    temperature = 0.7
-    verbose = False
-    output_pydantic = SampleOutputModel
+def test_llm_invoke_output_pydantic(mock_load_models, mock_set_llm_cache):
+    with patch('pdd.llm_invoke.create_llm_instance') as mock_create_llm_instance:
+        with patch('pdd.llm_invoke.select_model') as mock_select_model:
+            json_response = '{"field1": "value1", "field2": 123}'
+            mock_create_llm_instance.return_value = MockLLM(json_response)
+            mock_select_model.return_value = mock_load_models.return_value[0]
 
-    # Adjust the mocked LLM to return a dictionary matching the Pydantic model
-    mock_create_llm_instance.return_value.invoke.return_value = {"field1": "value1", "field2": 123}
+            prompt = "Provide data."
+            input_json = {"query": "Provide data."}
+            strength = 0.5
+            temperature = 0.7
+            verbose = False
+            output_pydantic = SampleOutputModel
 
-    response = llm_invoke(prompt, input_json, strength, temperature, verbose, output_pydantic)
+            response = llm_invoke(prompt, input_json, strength, temperature, verbose, output_pydantic)
 
-    assert response['result'] == {"field1": "value1", "field2": 123}
-    assert response['model_name'] == 'gpt-4o-mini'
+            expected_result = SampleOutputModel(field1="value1", field2=123)
+            assert response['result'] == expected_result
+            assert response['model_name'] == 'gpt-4o-mini'
 
-def test_llm_invoke_llm_error(mock_load_models, mock_create_llm_instance,
-                             mock_select_model, mock_set_llm_cache):
-    prompt = "Tell me a joke about cats."
-    input_json = {"topic": "cats"}
-    strength = 0.5
-    temperature = 0.7
-    verbose = False
-    output_pydantic = None
+def test_llm_invoke_llm_error(mock_load_models, mock_set_llm_cache):
+    class FaultyLLM:
+        def __call__(self, prompt, **kwargs):
+            raise Exception("LLM failure")
 
-    # Make the mocked LLM invoke method raise an exception
-    mock_create_llm_instance.return_value.invoke.side_effect = Exception("LLM failure")
+        def with_structured_output(self, pydantic_model):
+            return self
 
-    with pytest.raises(RuntimeError, match="Error during LLM invocation: LLM failure"):
-        llm_invoke(prompt, input_json, strength, temperature, verbose, output_pydantic)
+    with patch('pdd.llm_invoke.create_llm_instance') as mock_create_llm_instance:
+        with patch('pdd.llm_invoke.select_model') as mock_select_model:
+            mock_create_llm_instance.return_value = FaultyLLM()
+            mock_select_model.return_value = mock_load_models.return_value[0]
+
+            prompt = "Tell me a joke about cats."
+            input_json = {"topic": "cats"}
+            strength = 0.5
+            temperature = 0.7
+            verbose = False
+            output_pydantic = None
+
+            with pytest.raises(RuntimeError, match="Error during LLM invocation: LLM failure"):
+                llm_invoke(prompt, input_json, strength, temperature, verbose, output_pydantic)
 
 def test_llm_invoke_verbose(mock_load_models, mock_create_llm_instance,
                             mock_select_model, mock_set_llm_cache, mock_llm_instance, capsys):
