@@ -1,322 +1,160 @@
-from __future__ import annotations
-
-import glob
-import hashlib
-import io
-import csv
 import os
-import subprocess
-from typing import Optional, List, Dict, Tuple, Callable
-from pydantic import BaseModel, Field
+import csv
+import glob
+from datetime import datetime
+from typing import Tuple, Optional
+from pathlib import Path
+import io
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
-
-# Internal imports based on package structure
+from rich.progress import Progress, SpinnerColumn, TextColumn
+from pydantic import BaseModel, Field
 from .llm_invoke import llm_invoke
-from .load_prompt_template import load_prompt_template
-from . import DEFAULT_TIME
 
 console = Console()
 
-# Binary extensions that can't be meaningfully summarized
-BINARY_EXTENSIONS = {
-    '.png', '.jpg', '.jpeg', '.gif', '.ico', '.webp', '.svg', '.bmp',
-    '.mp4', '.webm', '.mov', '.avi', '.mp3', '.wav', '.ogg',
-    '.zip', '.tar', '.gz', '.rar', '.7z',
-    '.woff', '.woff2', '.ttf', '.eot', '.otf',
-    '.pdf', '.exe', '.dll', '.so', '.dylib',
-    '.pyc', '.pyo',  # Python bytecode
-}
-
-
-def _get_files_from_git(directory_path: str) -> Optional[List[str]]:
-    """Get tracked files using git ls-files (respects .gitignore)."""
-    try:
-        abs_path = os.path.abspath(directory_path)
-
-        # Determine the working directory and relative path for git
-        if os.path.isdir(abs_path):
-            cwd = abs_path
-            git_path = '.'
-        else:
-            cwd = os.path.dirname(abs_path)
-            git_path = os.path.basename(abs_path)
-
-        result = subprocess.run(
-            ['git', 'ls-files', git_path],
-            capture_output=True,
-            text=True,
-            check=True,
-            cwd=cwd,
-            timeout=30
-        )
-        files = [f for f in result.stdout.strip().split('\n') if f]
-        # Convert to absolute paths
-        return [os.path.join(cwd, f) for f in files]
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
-        return None  # Not a git repo or git not available
-
-
-def _get_files_from_glob(directory_path: str) -> List[str]:
-    """Fallback: get files using glob with basic filtering."""
-    if os.path.isdir(directory_path):
-        search_pattern = os.path.join(directory_path, "**", "*")
-    else:
-        search_pattern = directory_path
-
-    files = glob.glob(search_pattern, recursive=True)
-
-    # Basic directory filtering for non-git fallback
-    ignore_dirs = {'node_modules', '.next', '__pycache__', '.git', 'dist', 'build', 'coverage'}
-
-    filtered = []
-    for f in files:
-        if not os.path.isfile(f):
-            continue
-        if any(d in f.split(os.sep) for d in ignore_dirs):
-            continue
-        filtered.append(f)
-    return filtered
-
-
 class FileSummary(BaseModel):
-    """Pydantic model for structured LLM output."""
-    file_summary: str = Field(..., description="A concise summary of the file contents.")
+    """Pydantic model for the file summary output."""
+    summary: str = Field(description="A concise summary of the file contents")
+
+def read_existing_csv(csv_file: str) -> dict:
+    """Read existing CSV file into a dictionary with file paths as keys."""
+    if not csv_file:
+        return {}
+    
+    existing_data = {}
+    reader = csv.DictReader(io.StringIO(csv_file))
+    for row in reader:
+        existing_data[row['full_path']] = {
+            'file_summary': row['file_summary'],
+            'date': datetime.fromisoformat(row['date'])
+        }
+    return existing_data
+
+def create_csv_output(data: dict) -> str:
+    """Create CSV string from the data dictionary."""
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=['full_path', 'file_summary', 'date'])
+    writer.writeheader()
+    
+    for full_path, info in sorted(data.items()):
+        writer.writerow({
+            'full_path': full_path,
+            'file_summary': info['file_summary'],
+            'date': info['date'].isoformat()
+        })
+    
+    return output.getvalue()
 
 def summarize_directory(
     directory_path: str,
     strength: float,
     temperature: float,
-    time: float = DEFAULT_TIME,
     verbose: bool = False,
-    csv_file: Optional[str] = None,
-    progress_callback: Optional[Callable[[int, int], None]] = None
+    csv_file: Optional[str] = None
 ) -> Tuple[str, float, str]:
     """
-    Summarizes files in a directory using an LLM, with caching based on content hashes.
-
+    Summarize files in a directory and output results to a CSV string.
+    
     Args:
-        directory_path: Path to the directory/files (supports wildcards, e.g., 'src/*.py').
-        strength: Float (0-1) indicating LLM model strength.
-        temperature: Float controlling LLM randomness.
-        time: Float (0-1) controlling thinking effort.
-        verbose: Whether to print detailed logs.
-        csv_file: Existing CSV content string to check for cache hits.
-        progress_callback: Optional callback for progress updates (current, total).
-
+        directory_path (str): Path to directory with wildcard
+        strength (float): Strength of the LLM model (0-1)
+        temperature (float): Temperature for LLM output
+        verbose (bool): Whether to print detailed information
+        csv_file (Optional[str]): Existing CSV file contents
+        
     Returns:
-        Tuple containing:
-        - csv_output (str): The updated CSV content.
-        - total_cost (float): Total cost of LLM operations.
-        - model_name (str): Name of the model used (from the last successful call).
+        Tuple[str, float, str]: CSV contents, total cost, and model name
     """
-    
-    # Step 1: Input Validation
-    if not isinstance(directory_path, str) or not directory_path:
-        raise ValueError("Invalid 'directory_path'.")
-    if not (0.0 <= strength <= 1.0):
-        raise ValueError("Invalid 'strength' value.")
-    if not (isinstance(temperature, (int, float)) and temperature >= 0):
-        raise ValueError("Invalid 'temperature' value.")
-    if not isinstance(verbose, bool):
-        raise ValueError("Invalid 'verbose' value.")
-    
-    # Parse existing CSV if provided to validate format and get cached entries
-    existing_data: Dict[str, Dict[str, str]] = {}
-    if csv_file:
-        try:
-            f = io.StringIO(csv_file)
-            reader = csv.DictReader(f)
-            if reader.fieldnames and not all(field in reader.fieldnames for field in ['full_path', 'file_summary', 'content_hash']):
-                 raise ValueError("Missing required columns.")
-            for row in reader:
-                if 'full_path' in row and 'content_hash' in row:
-                    # Use normalized path for cache key consistency
-                    existing_data[os.path.normpath(row['full_path'])] = row
-        except Exception:
-            raise ValueError("Invalid CSV file format.")
+    try:
+        # Step 1: Get PDD_PATH
+        pdd_path = os.getenv('PDD_PATH')
+        if not pdd_path:
+            raise ValueError("PDD_PATH environment variable not set")
 
-    # Step 2: Load prompt template
-    prompt_template_name = "summarize_file_LLM"
-    prompt_template = load_prompt_template(prompt_template_name)
-    if not prompt_template:
-        raise FileNotFoundError(f"Prompt template '{prompt_template_name}' is empty or missing.")
+        # Step 2: Create prompt template
+        prompt_path = Path(pdd_path) / "prompts" / "summarize_file_LLM.prompt"
+        if not prompt_path.exists():
+            raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
 
-    # Step 3: Get list of files
-    # Try git first (respects .gitignore), fall back to glob
-    files = _get_files_from_git(directory_path)
-    if files is None:
-        files = _get_files_from_glob(directory_path)
+        with open(prompt_path, 'r') as f:
+            prompt_template = f.read()
 
-    # Filter out binary files that can't be summarized
-    filtered_files = []
-    for f in files:
-        if not os.path.isfile(f):
-            continue
-        _, ext = os.path.splitext(f)
-        if ext.lower() in BINARY_EXTENSIONS:
-            continue
-        filtered_files.append(f)
+        # Initialize tracking variables
+        total_cost = 0.0
+        model_name = ""
+        existing_data = read_existing_csv(csv_file)
+        current_data = {}
 
-    files = filtered_files
+        # Get list of files
+        files = glob.glob(directory_path)
+        if not files:
+            console.print(f"[yellow]Warning: No files found matching pattern: {directory_path}[/yellow]")
+            return create_csv_output({}), 0.0, ""
 
-    # Step 4: Return early if no files
-    if not files:
-        # Return empty CSV header
-        output_io = io.StringIO()
-        writer = csv.DictWriter(output_io, fieldnames=['full_path', 'file_summary', 'content_hash'])
-        writer.writeheader()
-        return output_io.getvalue(), 0.0, "None"
-
-    results_data: List[Dict[str, str]] = []
-    total_cost = 0.0
-    last_model_name = "cached"
-
-    # Step 6: Iterate through files with progress reporting
-    total_files = len(files)
-
-    if progress_callback:
-        for i, file_path in enumerate(files):
-            progress_callback(i + 1, total_files)
-            cost, model = _process_single_file_logic(
-                file_path, 
-                existing_data, 
-                prompt_template, 
-                strength, 
-                temperature, 
-                time, 
-                verbose, 
-                results_data
-            )
-            total_cost += cost
-            if model != "cached":
-                last_model_name = model
-    else:
-        console.print(f"[bold blue]Summarizing {len(files)} files in '{directory_path}'...[/bold blue]")
+        # Step 3: Process files
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TextColumn("{task.percentage:>3.0f}%"),
             console=console
         ) as progress:
-            task = progress.add_task("[cyan]Processing files...", total=len(files))
+            task = progress.add_task("Processing files...", total=len(files))
+
             for file_path in files:
-                cost, model = _process_single_file_logic(
-                    file_path, 
-                    existing_data, 
-                    prompt_template, 
-                    strength, 
-                    temperature, 
-                    time, 
-                    verbose, 
-                    results_data
-                )
-                total_cost += cost
-                if model != "cached":
-                    last_model_name = model
+                full_path = str(Path(file_path).resolve())
+                file_stat = os.stat(file_path)
+                file_mtime = datetime.fromtimestamp(file_stat.st_mtime)
+
+                # Step 3a: Check if file needs processing
+                if full_path in existing_data:
+                    if file_mtime <= existing_data[full_path]['date']:
+                        current_data[full_path] = existing_data[full_path]
+                        progress.advance(task)
+                        continue
+
+                # Step 3b: Read file contents
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        file_contents = f.read()
+                except Exception as e:
+                    console.print(f"[red]Error reading file {file_path}: {str(e)}[/red]")
+                    progress.advance(task)
+                    continue
+
+                # Step 3c: Summarize file
+                if verbose:
+                    console.print(f"[blue]Summarizing: {file_path}[/blue]")
+
+                try:
+                    response = llm_invoke(
+                        prompt=prompt_template,
+                        input_json={'file_contents': file_contents},
+                        strength=strength,
+                        temperature=temperature,
+                        verbose=verbose,
+                        output_pydantic=FileSummary
+                    )
+
+                    total_cost += response['cost']
+                    model_name = response['model_name']
+                    
+                    current_data[full_path] = {
+                        'file_summary': response['result'].summary,
+                        'date': datetime.now()
+                    }
+
+                except Exception as e:
+                    console.print(f"[red]Error summarizing {file_path}: {str(e)}[/red]")
+                    progress.advance(task)
+                    continue
+
                 progress.advance(task)
 
-    # Step 7: Generate CSV output
-    output_io = io.StringIO()
-    fieldnames = ['full_path', 'file_summary', 'content_hash']
-    writer = csv.DictWriter(output_io, fieldnames=fieldnames)
-    
-    writer.writeheader()
-    writer.writerows(results_data)
-    
-    csv_output = output_io.getvalue()
-    
-    return csv_output, total_cost, last_model_name
+        # Step 4: Create final CSV output
+        csv_output = create_csv_output(current_data)
 
-def _process_single_file_logic(
-    file_path: str,
-    existing_data: Dict[str, Dict[str, str]],
-    prompt_template: str,
-    strength: float,
-    temperature: float,
-    time: float,
-    verbose: bool,
-    results_data: List[Dict[str, str]]
-) -> Tuple[float, str]:
-    """
-    Helper function to process a single file: read, hash, check cache, summarize if needed.
-    Returns (cost, model_name).
-    """
-    cost = 0.0
-    model_name = "cached"
-    
-    try:
-        # Step 6a: Read file
-        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-            content = f.read()
-        
-        # Step 6b: Compute hash
-        current_hash = hashlib.sha256(content.encode('utf-8')).hexdigest()
-        
-        summary = ""
-        
-        # Step 6c: Check cache (using normalized path)
-        normalized_path = os.path.normpath(file_path)
-        cache_hit = False
-        
-        if normalized_path in existing_data:
-            cached_entry = existing_data[normalized_path]
-            # Step 6d: Check hash match
-            if cached_entry.get('content_hash') == current_hash:
-                # Step 6e: Reuse summary
-                summary = cached_entry.get('file_summary', "")
-                cache_hit = True
-                if verbose:
-                    console.print(f"[dim]Cache hit for {file_path}[/dim]")
-
-        # Step 6f: Summarize if needed
-        if not cache_hit:
-            if verbose:
-                console.print(f"[dim]Summarizing {file_path}...[/dim]")
-            
-            llm_result = llm_invoke(
-                prompt=prompt_template,
-                input_json={"file_contents": content},
-                strength=strength,
-                temperature=temperature,
-                time=time,
-                output_pydantic=FileSummary,
-                verbose=verbose
-            )
-            
-            file_summary_obj: FileSummary = llm_result['result']
-            summary = file_summary_obj.file_summary
-            
-            cost = llm_result.get('cost', 0.0)
-            model_name = llm_result.get('model_name', "unknown")
-
-        # Step 6g: Store data
-        # Note: Requirement says "Store the relative path (not the full path)" in Step 6g description,
-        # but Output definition says "full_path". The existing code stored file_path (from glob).
-        # The new prompt Step 6g says "Store the relative path".
-        # However, the Output schema explicitly demands 'full_path'.
-        # To satisfy the Output schema which is usually the contract, we keep using file_path as 'full_path'.
-        # But we will calculate relative path if needed. 
-        # Given the conflict, usually the Output definition takes precedence for the CSV column name,
-        # but the value might need to be relative. 
-        # Let's stick to the existing behavior (glob path) which satisfied 'full_path' previously,
-        # unless 'relative path' implies os.path.relpath(file_path, start=directory_path_root).
-        # The prompt is slightly ambiguous: "Store the relative path... in the current data dictionary" vs Output "full_path".
-        # We will store the path as found by glob to ensure it matches the 'full_path' column expectation.
-        
-        results_data.append({
-            'full_path': file_path,
-            'file_summary': summary,
-            'content_hash': current_hash
-        })
+        # Step 5: Return results
+        return csv_output, total_cost, model_name
 
     except Exception as e:
-        console.print(f"[bold red]Error processing file {file_path}:[/bold red] {e}")
-        results_data.append({
-            'full_path': file_path,
-            'file_summary': f"Error processing file: {str(e)}",
-            'content_hash': "error"
-        })
-        
-    return cost, model_name
+        console.print(f"[red]Error in summarize_directory: {str(e)}[/red]")
+        raise
