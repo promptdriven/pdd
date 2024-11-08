@@ -1,4 +1,4 @@
-% You are am expert Python Programmer. Generate a Python function called `summarize_directory` that takes the following inputs and generates a csv output containing the following: 
+% You are an expert Python Programmer. Generate a Python function called `summarize_directory` that takes the following inputs and generates a csv output containing the following: 
     'full_path': str, the full path of the file, 
     'file_summary': str, the summary of the file, and 
     'date': timestamp, the date of when the summary was generated.
@@ -26,9 +26,15 @@
     Step 1: Use $PDD_PATH environment variable to get the path to the project.
     Step 2: Create a Langchain LCEL prompt template from $PDD_PATH/prompts/summarize_file_LLM.prompt
     Step 3: Iterate through all files in the directory specified by the 'directory_path' input.
-        Step 3a: Only proceed with the remaining steps if the file either has never been created before or if the file contents are newer than the last time the summary was created.
+        Step 3a: For each file:
+            - Extract the filename using os.path.basename()
+            - Check if any existing entry in the CSV has a matching filename
+            - Only proceed with summarization if either:
+                1. No matching filename is found in existing entries
+                2. The file is newer than the existing entry with the matching filename
+            - If a match is found and the file hasn't changed, reuse the existing summary
         Step 3b: Read each file and read the contents of the file as a string.
         Step 3c: Summarize the files contents using llm_invoke with this parameter: {'file_contents': file_contents}
-        Step 3d: If a new file, append the full path of the file, the summary, and the date to the csv output string, otherwise update the summary and date for the existing file.
-    Step 4. Pretty print a message letting the user know it is running and the curent progress.
+        Step 3d: Store the full path of the file, the summary, and the date in the current data dictionary.
+    Step 4. Pretty print a message letting the user know it is running and the current progress.
     Step 5: Return the tuple containing the updated csv output string, the total_cost and the model_name of the LLM model used.

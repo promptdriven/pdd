@@ -12,7 +12,8 @@ def main() -> None:
     """
     # Example existing CSV content
     existing_csv = """full_path,file_summary,date
-context/change_example.py,"This is an old summary",2023-01-01T10:00:00"""
+context/change_example.py,"This is an old summary",2025-01-01T10:00:00
+context/click_example.py,"This is an old summary",2023-01-01T10:00:00"""
 
     try:
         # Call summarize_directory
@@ -23,7 +24,7 @@ context/change_example.py,"This is an old summary",2023-01-01T10:00:00"""
         # csv_file: Optional existing CSV content
         csv_output, total_cost, model_name = summarize_directory(
             directory_path="context/c*.py",
-            strength=0.5,
+            strength=0.0,
             temperature=0.0,
             verbose=True,
             csv_file=existing_csv

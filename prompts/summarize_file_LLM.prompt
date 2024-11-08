@@ -5,4 +5,6 @@ input:
 output:
     'file_summary': A string containing the summary of the file.
 
-input: {file_contents}
+<file_contents>
+    {file_contents}
+</file_contents>
