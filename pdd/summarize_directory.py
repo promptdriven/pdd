@@ -12,9 +12,20 @@ from .llm_invoke import llm_invoke
 
 console = Console()
 
+# Use Windows-style line endings for consistency
+LINE_ENDING = '\r\n'
+
 class FileSummary(BaseModel):
     """Pydantic model for the file summary output."""
     file_summary: str = Field(description="A concise summary of the file contents")
+
+def normalize_path(path: str) -> str:
+    """Normalize path for consistent comparison."""
+    return str(Path(path).resolve())
+
+def normalize_line_endings(text: str) -> str:
+    """Normalize line endings to \r\n for consistent comparison."""
+    return text.replace('\n', '\r\n').replace('\r\r\n', '\r\n')
 
 def read_existing_csv(csv_file: str) -> dict:
     """Read existing CSV file into a dictionary with file paths as keys."""
@@ -22,18 +33,21 @@ def read_existing_csv(csv_file: str) -> dict:
         return {}
     
     existing_data = {}
-    reader = csv.DictReader(io.StringIO(csv_file))
+    reader = csv.DictReader(io.StringIO(normalize_line_endings(csv_file)))
     for row in reader:
-        existing_data[row['full_path']] = {
-            'file_summary': row['file_summary'],
-            'date': datetime.fromisoformat(row['date'])
-        }
+        try:
+            existing_data[normalize_path(row['full_path'])] = {
+                'file_summary': row['file_summary'],
+                'date': datetime.fromisoformat(row['date'])
+            }
+        except Exception as e:
+            console.print(f"[red]Error parsing CSV row: {row} - {str(e)}[/red]")
     return existing_data
 
 def create_csv_output(data: dict) -> str:
     """Create CSV string from the data dictionary."""
     output = io.StringIO()
-    writer = csv.writer(output, lineterminator='\r\n')  # Use Windows-style line endings
+    writer = csv.writer(output, lineterminator=LINE_ENDING)
     writer.writerow(['full_path', 'file_summary', 'date'])
     
     for full_path, info in sorted(data.items()):
@@ -47,7 +61,7 @@ def create_csv_output(data: dict) -> str:
 
 def create_empty_csv() -> str:
     """Create empty CSV with header."""
-    return "full_path,file_summary,date\r\n"
+    return f"full_path,file_summary,date{LINE_ENDING}"
 
 def read_prompt_template(prompt_path: Path) -> str:
     """Read prompt template with specific error handling."""
@@ -112,65 +126,53 @@ def summarize_directory(
 
         for file_path in files:
             try:
-                full_path = str(Path(file_path).resolve())
+                full_path = normalize_path(file_path)
+                if verbose:
+                    console.print(f"[blue]Processing: {full_path}[blue]")
+
                 file_stat = os.stat(file_path)
                 file_mtime = datetime.fromtimestamp(file_stat.st_mtime)
 
-                file_name = os.path.basename(full_path)
-                matching_path = next((path for path in existing_data if os.path.basename(path) == file_name), None)
-
-                if matching_path and file_mtime <= existing_data[matching_path]['date']:
+                existing_entry = existing_data.get(full_path)
+                if existing_entry and file_mtime <= existing_entry['date']:
+                    if verbose:
+                        console.print(f"[green]Using existing summary for: {full_path}[green]")
                     current_data[full_path] = {
-                        'file_summary': existing_data[matching_path]['file_summary'],
-                        'date': existing_data[matching_path]['date']
+                        'file_summary': existing_entry['file_summary'],
+                        'date': existing_entry['date']
                     }
                     progress.advance(task)
                     continue
 
-                try:
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        file_contents = f.read()
-                except Exception as e:
-                    console.print(f"[red]Error reading file {file_path}: {str(e)}[/red]")
-                    progress.advance(task)
-                    continue
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    file_contents = f.read()
 
                 if verbose:
-                    console.print(f"[blue]Summarizing: {file_path}[/blue]")
+                    console.print(f"[blue]Summarizing: {full_path}[blue]")
 
-                try:
-                    response = llm_invoke(
-                        prompt=prompt_template,
-                        input_json={'file_contents': file_contents},
-                        strength=strength,
-                        temperature=temperature,
-                        verbose=verbose,
-                        output_pydantic=FileSummary
-                    )
+                response = llm_invoke(
+                    prompt=prompt_template,
+                    input_json={'file_contents': file_contents},
+                    strength=strength,
+                    temperature=temperature,
+                    verbose=verbose,
+                    output_pydantic=FileSummary
+                )
 
-                    if not isinstance(response, dict):
-                        raise ValueError(f"Invalid LLM response format: {response}")
+                result = response.get('result')
+                if not result or not hasattr(result, 'file_summary'):
+                    raise ValueError(f"Invalid LLM result format: {result}")
 
-                    result = response.get('result')
-                    if not result or not hasattr(result, 'file_summary'):
-                        raise ValueError(f"Invalid LLM result format: {result}")
-
-                    total_cost += response.get('cost', 0.0)
-                    model_name = response.get('model_name', '')
-                    
-                    current_data[full_path] = {
-                        'file_summary': result.file_summary,
-                        'date': datetime.now()
-                    }
-
-                except Exception as e:
-                    console.print(f"[red]Error processing {file_path}: {str(e)}[/red]")
-                    continue
+                total_cost += response.get('cost', 0.0)
+                model_name = response.get('model_name', '')
+                
+                current_data[full_path] = {
+                    'file_summary': result.file_summary,
+                    'date': datetime.now()
+                }
 
             except Exception as e:
-                console.print(f"[red]Error processing {file_path}: {str(e)}[/red]")
-                continue
-
+                console.print(f"[red]Error processing {full_path}: {str(e)}[/red]")
             finally:
                 progress.advance(task)
 
