@@ -14,7 +14,7 @@ console = Console()
 
 class FileSummary(BaseModel):
     """Pydantic model for the file summary output."""
-    summary: str = Field(description="A concise summary of the file contents")
+    file_summary: str = Field(description="A concise summary of the file contents")
 
 def read_existing_csv(csv_file: str) -> dict:
     """Read existing CSV file into a dictionary with file paths as keys."""
@@ -147,7 +147,7 @@ def summarize_directory(
                     model_name = response['model_name']
                     
                     current_data[full_path] = {
-                        'file_summary': response['result'].summary,
+                        'file_summary': response['result'].file_summary,
                         'date': datetime.now()
                     }
 
