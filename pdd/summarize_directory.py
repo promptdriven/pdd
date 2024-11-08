@@ -113,7 +113,7 @@ def summarize_directory(
     # Get list of files
     files = glob.glob(directory_path)
     if not files:
-        console.print(f"[yellow]Warning: No files found matching pattern: {directory_path}[/yellow]")
+        console.print(f"[yellow]Warning: No files found matching pattern: {directory_path}[yellow]")
         return create_empty_csv(), 0.0, ""
 
     # Step 3: Process files
@@ -173,6 +173,9 @@ def summarize_directory(
 
             except Exception as e:
                 console.print(f"[red]Error processing {full_path}: {str(e)}[/red]")
+                # If there's an existing entry, preserve it
+                if full_path in existing_data:
+                    current_data[full_path] = existing_data[full_path]
             finally:
                 progress.advance(task)
 
