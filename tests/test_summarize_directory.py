@@ -6,7 +6,7 @@ from unittest import mock
 from unittest.mock import mock_open, MagicMock
 from pathlib import Path
 from datetime import datetime
-from pdd.summarize_directory import summarize_directory
+from pdd.summarize_directory import summarize_directory, normalize_path
 
 # Helper function to create a temporary prompt file
 def create_temp_prompt_file(pdd_path, content="Prompt Template"):
@@ -165,6 +165,17 @@ def test_normal_operation_with_existing_csv(mock_pdd_path, mock_files_directory,
         'model_name': "MockModelV2"
     }
 
+    # Create a mapping of file contents
+    file_contents = {
+        files[0]: "# Contents of file1.py",
+        files[1]: "# Contents of file2.py"
+    }
+
+    def mock_open_side_effect(file_path, *args, **kwargs):
+        if file_path in file_contents:
+            return mock_open(read_data=file_contents[file_path])(*args, **kwargs)
+        return mock_open(read_data="")(*args, **kwargs)
+
     with mock.patch.dict(os.environ, {"PDD_PATH": mock_pdd_path}):
         with mock.patch("glob.glob", return_value=files):
             with mock.patch("pdd.summarize_directory.read_existing_csv", return_value={
@@ -177,11 +188,12 @@ def test_normal_operation_with_existing_csv(mock_pdd_path, mock_files_directory,
                     "date": datetime.fromisoformat("2023-10-02T12:00:00")
                 }
             }):
-                m = mock_open(read_data="# file contents")
-                with mock.patch("builtins.open", m):
+                with mock.patch("builtins.open", side_effect=mock_open_side_effect):
                     def llm_invoke_side_effect(*args, **kwargs):
-                        if normalized_files[0] in str(args[1]['file_contents']):
-                            return mock_llm_response
+                        if 'input_json' in kwargs and 'file_contents' in kwargs['input_json']:
+                            content = kwargs['input_json']['file_contents']
+                            if "Contents of file1.py" in content:
+                                return mock_llm_response
                         return {
                             'result': MagicMock(file_summary="Summary 2"),
                             'cost': 0.01,
@@ -193,10 +205,12 @@ def test_normal_operation_with_existing_csv(mock_pdd_path, mock_files_directory,
                             directory_path=f"{directory}/*.py",
                             strength=0.5,
                             temperature=0.7,
-                            csv_file=mock_existing_csv
+                            csv_file=mock_existing_csv,
+                            verbose=True
                         )
                         lines = normalize_line_endings(csv_output.strip()).split('\r\n')
                         assert len(lines) == 3
+                        assert "New Mock summary" in csv_output
 
 def test_invalid_strength(mock_pdd_path, mock_files_directory):
     # Create prompt file
