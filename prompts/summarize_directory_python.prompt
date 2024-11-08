@@ -35,6 +35,7 @@
             - If a match is found and the file hasn't changed, reuse the existing summary
         Step 3b: Read each file and read the contents of the file as a string.
         Step 3c: Summarize the files contents using llm_invoke with this parameter: {'file_contents': file_contents}
-        Step 3d: Store the full path of the file, the summary, and the date in the current data dictionary.
+            - Use a Pydantic model called FileSummary with a field named 'file_summary' for consistent naming
+        Step 3d: Store the full path of the file, the file_summary, and the date in the current data dictionary.
     Step 4. Pretty print a message letting the user know it is running and the current progress.
     Step 5: Return the tuple containing the updated csv output string, the total_cost and the model_name of the LLM model used.
