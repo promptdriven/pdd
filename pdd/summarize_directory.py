@@ -104,12 +104,21 @@ def summarize_directory(
                 file_stat = os.stat(file_path)
                 file_mtime = datetime.fromtimestamp(file_stat.st_mtime)
 
-                # Step 3a: Check if file needs processing
-                if full_path in existing_data:
-                    if file_mtime <= existing_data[full_path]['date']:
-                        current_data[full_path] = existing_data[full_path]
-                        progress.advance(task)
-                        continue
+                # get file name of full_path
+                file_name = os.path.basename(full_path)
+
+                # Check if any path in existing_data ends with this file_name
+                matching_path = next((path for path in existing_data if os.path.basename(path) == file_name), None)
+
+                # If we found a matching file and it's not newer than our existing data
+                if matching_path and file_mtime <= existing_data[matching_path]['date']:
+                    # Use the existing summary
+                    current_data[full_path] = {
+                        'file_summary': existing_data[matching_path]['file_summary'],
+                        'date': existing_data[matching_path]['date']
+                    }
+                    progress.advance(task)
+                    continue
 
                 # Step 3b: Read file contents
                 try:
