@@ -61,6 +61,8 @@ def main():
         print(f"\nJoke Setup: {joke.setup}")
         print(f"Joke Punchline: {joke.punchline}")
 
-        strength += 0.05
+        strength += 0.025
+        # round to 2 decimal places
+        strength = round(strength, 2)
 if __name__ == "__main__":
     main()
