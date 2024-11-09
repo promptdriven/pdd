@@ -17,7 +17,8 @@ def main() -> None:
         reasoning, is_finished, total_cost, model_name = unfinished_prompt(
             prompt_text=prompt_text,
             strength=strength,
-            temperature=temperature
+            temperature=temperature,
+            verbose=False
         )
 
         # Output the results
