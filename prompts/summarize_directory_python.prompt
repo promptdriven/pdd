@@ -24,7 +24,7 @@
 
 % This program will do the following:
     Step 1: Use $PDD_PATH environment variable to get the path to the project.
-    Step 2: Create a Langchain LCEL prompt template from $PDD_PATH/prompts/summarize_file_LLM.prompt
+    Step 2: Load prompt template from $PDD_PATH/prompts/summarize_file_LLM.prompt
     Step 3: Iterate through all files in the directory specified by the 'directory_path' input.
         Step 3a: For each file:
             - Extract the filename using os.path.basename()
