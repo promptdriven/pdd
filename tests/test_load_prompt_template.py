@@ -46,7 +46,7 @@ def test_load_prompt_template_missing_pdd_path(monkeypatch, capsys):
 
     # Capture the printed error message
     captured = capsys.readouterr()
-    assert "[red]PDD_PATH environment variable is not set[/red]" in captured.out
+    assert "PDD_PATH environment variable is not set" in captured.out
 
 # Test Case 3: Prompt file does not exist
 def test_load_prompt_template_file_not_found(monkeypatch, capsys):
@@ -69,7 +69,7 @@ def test_load_prompt_template_file_not_found(monkeypatch, capsys):
         
         # Capture the printed error message
         captured = capsys.readouterr()
-        assert f"[red]Prompt file not found: {prompt_path}[/red]" in captured.out
+        assert f"Prompt file not found: {prompt_path}" in captured.out
 
 # Test Case 4: IOError when reading the prompt file
 def test_load_prompt_template_io_error(monkeypatch, capsys):
@@ -96,7 +96,7 @@ def test_load_prompt_template_io_error(monkeypatch, capsys):
             
             # Capture the printed error message
             captured = capsys.readouterr()
-            assert f"[red]Error reading prompt file {prompt_name}: Unable to read file[/red]" in captured.out
+            assert f"Error reading prompt file {prompt_name}: Unable to read file" in captured.out
 
 # Additional Test Case: Empty prompt name
 def test_load_prompt_template_empty_prompt_name(monkeypatch, capsys):
@@ -117,6 +117,10 @@ def test_load_prompt_template_empty_prompt_name(monkeypatch, capsys):
             
             # Assert that the file was opened correctly
             mock_file.assert_called_once_with(prompt_path, 'r', encoding='utf-8')
+            
+            # Capture the printed success message
+            captured = capsys.readouterr()
+            assert f"Successfully loaded prompt: {prompt_name}" in captured.out
 
 # Additional Test Case: Non-string prompt name
 def test_load_prompt_template_non_string_prompt_name(monkeypatch, capsys):
