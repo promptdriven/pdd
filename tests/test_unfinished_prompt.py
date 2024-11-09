@@ -1,107 +1,246 @@
-import os
+# tests/test_unfinished_prompt.py
+
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, Mock
 from pdd.unfinished_prompt import unfinished_prompt
 
-# Test when everything works as expected
-def test_unfinished_prompt_success():
-    with patch('os.getenv', return_value='/mock/path'), \
-         patch('builtins.open', new_callable=MagicMock) as mock_open, \
-         patch('pdd.unfinished_prompt.llm_selector') as mock_llm_selector, \
-         patch('pdd.unfinished_prompt.PromptTemplate.from_template') as mock_prompt_template, \
-         patch('pdd.unfinished_prompt.JsonOutputParser') as mock_parser:
+# Define a mock response for llm_invoke
+mock_llm_response = {
+    'result': {
+        'reasoning': 'The prompt appears to be incomplete as it ends abruptly.',
+        'is_finished': False
+    },
+    'cost': 0.012345,
+    'model_name': 'mock-model'
+}
 
-        # Mock the file read
-        mock_open.return_value.__enter__.return_value.read.return_value = "mock template"
+@pytest.fixture
+def mock_load_prompt_template_success():
+    with patch('pdd.unfinished_prompt.load_prompt_template') as mock_load:
+        mock_load.return_value = "Mock prompt template content."
+        yield mock_load
 
-        # Mock the LLM selector
-        mock_token_counter = MagicMock(side_effect=[100, 50])  # First call for input, second for output
-        mock_llm_selector.return_value = (MagicMock(), mock_token_counter, 0.01, 0.02, "mock_model")
+@pytest.fixture
+def mock_load_prompt_template_failure():
+    with patch('pdd.unfinished_prompt.load_prompt_template') as mock_load:
+        mock_load.return_value = None
+        yield mock_load
 
-        # Mock the chain invocation
-        mock_chain = MagicMock()
-        mock_chain.invoke.return_value = {'reasoning': 'Mock reasoning', 'is_finished': True}
-        mock_prompt_template.return_value.__or__.return_value.__or__.return_value = mock_chain
+@pytest.fixture
+def mock_llm_invoke_success():
+    with patch('pdd.unfinished_prompt.llm_invoke') as mock_invoke:
+        mock_response = {
+            'result': mock_llm_response['result'],
+            'cost': mock_llm_response['cost'],
+            'model_name': mock_llm_response['model_name']
+        }
+        mock_invoke.return_value = mock_response
+        yield mock_invoke
 
-        reasoning, is_finished, total_cost, model_name = unfinished_prompt("This is a test prompt.")
+@pytest.fixture
+def mock_llm_invoke_failure():
+    with patch('pdd.unfinished_prompt.llm_invoke') as mock_invoke:
+        mock_invoke.side_effect = Exception("LLM invocation failed.")
+        yield mock_invoke
 
-        assert reasoning == 'Mock reasoning'
-        assert is_finished is True
-        # Correct calculation: (100 * 0.01 + 50 * 0.02) / 1,000,000 = 0.000002
-        assert total_cost == pytest.approx(0.000002, 1e-9)
-        assert model_name == "mock_model"
 
-        # Additional assertions
-        assert mock_token_counter.call_count == 2
-        assert mock_token_counter.call_args_list[0][0][0] == "This is a test prompt."
-        assert mock_token_counter.call_args_list[1][0][0] == '{"reasoning": "Mock reasoning", "is_finished": true}'
+def test_unfinished_prompt_success(
+    mock_load_prompt_template_success,
+    mock_llm_invoke_success
+):
+    prompt_text = "Write a function that"
+    reasoning, is_finished, total_cost, model_name = unfinished_prompt(
+        prompt_text=prompt_text,
+        strength=0.5,
+        temperature=0.5,
+        verbose=False
+    )
+    
+    assert reasoning == mock_llm_response['result']['reasoning']
+    assert is_finished == mock_llm_response['result']['is_finished']
+    assert total_cost == mock_llm_response['cost']
+    assert model_name == mock_llm_response['model_name']
 
-# Test when PDD_PATH environment variable is not set
-def test_unfinished_prompt_no_pdd_path():
-    with patch('os.getenv', return_value=None):
-        with pytest.raises(ValueError, match="PDD_PATH environment variable is not set"):
-            unfinished_prompt("This is a test prompt.")
 
-# Test when the prompt file is not found
-def test_unfinished_prompt_file_not_found():
-    with patch('os.getenv', return_value='/mock/path'), \
-         patch('builtins.open', side_effect=FileNotFoundError):
-        with pytest.raises(FileNotFoundError, match="Prompt file not found at /mock/path/prompts/unfinished_prompt_LLM.prompt"):
-            unfinished_prompt("This is a test prompt.")
+def test_unfinished_prompt_empty_prompt(
+    mock_load_prompt_template_success,
+    mock_llm_invoke_success
+):
+    with pytest.raises(ValueError) as exc_info:
+        unfinished_prompt(
+            prompt_text="   ",
+            strength=0.5,
+            temperature=0.5,
+            verbose=False
+        )
+    assert "Prompt text must be a non-empty string" in str(exc_info.value)
 
-# Test when there is an error selecting the LLM model
-def test_unfinished_prompt_llm_selector_error():
-    with patch('os.getenv', return_value='/mock/path'), \
-         patch('builtins.open', new_callable=MagicMock) as mock_open, \
-         patch('pdd.unfinished_prompt.llm_selector', side_effect=Exception("LLM selection error")):
-        
-        mock_open.return_value.__enter__.return_value.read.return_value = "mock template"
-        
-        with pytest.raises(RuntimeError, match="Error selecting LLM model: LLM selection error"):
-            unfinished_prompt("This is a test prompt.")
 
-# Test when there is an error during LLM invocation
-def test_unfinished_prompt_llm_invocation_error():
-    with patch('os.getenv', return_value='/mock/path'), \
-         patch('builtins.open', new_callable=MagicMock) as mock_open, \
-         patch('pdd.unfinished_prompt.llm_selector') as mock_llm_selector, \
-         patch('pdd.unfinished_prompt.PromptTemplate.from_template') as mock_prompt_template:
+def test_unfinished_prompt_non_string_prompt(
+    mock_load_prompt_template_success,
+    mock_llm_invoke_success
+):
+    with pytest.raises(ValueError) as exc_info:
+        unfinished_prompt(
+            prompt_text=12345,  # Non-string input
+            strength=0.5,
+            temperature=0.5,
+            verbose=False
+        )
+    assert "Prompt text must be a non-empty string" in str(exc_info.value)
 
-        # Mock the file read
-        mock_open.return_value.__enter__.return_value.read.return_value = "mock template"
 
-        # Mock the LLM selector
-        mock_token_counter = MagicMock(return_value=100)
-        mock_llm_selector.return_value = (MagicMock(), mock_token_counter, 0.01, 0.02, "mock_model")
+def test_unfinished_prompt_strength_below_range(
+    mock_load_prompt_template_success,
+    mock_llm_invoke_success
+):
+    with pytest.raises(ValueError) as exc_info:
+        unfinished_prompt(
+            prompt_text="Write a function that",
+            strength=-0.1,  # Invalid strength
+            temperature=0.5,
+            verbose=False
+        )
+    assert "Strength must be between 0 and 1" in str(exc_info.value)
 
-        # Mock the chain invocation to raise an exception
-        mock_chain = MagicMock()
-        mock_chain.invoke.side_effect = Exception("LLM invocation error")
-        mock_prompt_template.return_value.__or__.return_value.__or__.return_value = mock_chain
 
-        with pytest.raises(RuntimeError, match="Error during LLM invocation: LLM invocation error"):
-            unfinished_prompt("This is a test prompt.")
+def test_unfinished_prompt_strength_above_range(
+    mock_load_prompt_template_success,
+    mock_llm_invoke_success
+):
+    with pytest.raises(ValueError) as exc_info:
+        unfinished_prompt(
+            prompt_text="Write a function that",
+            strength=1.1,  # Invalid strength
+            temperature=0.5,
+            verbose=False
+        )
+    assert "Strength must be between 0 and 1" in str(exc_info.value)
 
-# Parameterized test for different token counts and costs
-@pytest.mark.parametrize("input_tokens,output_tokens,input_cost,output_cost,expected_total_cost", [
-    (100, 50, 0.01, 0.02, 0.000002),
-    (1000, 500, 0.005, 0.01, 0.000010),
-    (10000, 5000, 0.001, 0.002, 0.000020),
-])
-def test_unfinished_prompt_cost_calculation(input_tokens, output_tokens, input_cost, output_cost, expected_total_cost):
-    with patch('os.getenv', return_value='/mock/path'), \
-         patch('builtins.open', new_callable=MagicMock) as mock_open, \
-         patch('pdd.unfinished_prompt.llm_selector') as mock_llm_selector, \
-         patch('pdd.unfinished_prompt.PromptTemplate.from_template') as mock_prompt_template, \
-         patch('pdd.unfinished_prompt.JsonOutputParser') as mock_parser:
 
-        mock_open.return_value.__enter__.return_value.read.return_value = "mock template"
-        mock_token_counter = MagicMock(side_effect=[input_tokens, output_tokens])
-        mock_llm_selector.return_value = (MagicMock(), mock_token_counter, input_cost, output_cost, "mock_model")
-        mock_chain = MagicMock()
-        mock_chain.invoke.return_value = {'reasoning': 'Mock reasoning', 'is_finished': True}
-        mock_prompt_template.return_value.__or__.return_value.__or__.return_value = mock_chain
+def test_unfinished_prompt_temperature_below_range(
+    mock_load_prompt_template_success,
+    mock_llm_invoke_success
+):
+    with pytest.raises(ValueError) as exc_info:
+        unfinished_prompt(
+            prompt_text="Write a function that",
+            strength=0.5,
+            temperature=-0.2,  # Invalid temperature
+            verbose=False
+        )
+    assert "Temperature must be between 0 and 1" in str(exc_info.value)
 
-        _, _, total_cost, _ = unfinished_prompt("This is a test prompt.")
 
-        assert total_cost == pytest.approx(expected_total_cost, 1e-9)
+def test_unfinished_prompt_temperature_above_range(
+    mock_load_prompt_template_success,
+    mock_llm_invoke_success
+):
+    with pytest.raises(ValueError) as exc_info:
+        unfinished_prompt(
+            prompt_text="Write a function that",
+            strength=0.5,
+            temperature=1.5,  # Invalid temperature
+            verbose=False
+        )
+    assert "Temperature must be between 0 and 1" in str(exc_info.value)
+
+
+def test_unfinished_prompt_load_template_failure(
+    mock_load_prompt_template_failure,
+    mock_llm_invoke_success
+):
+    with pytest.raises(Exception) as exc_info:
+        unfinished_prompt(
+            prompt_text="Write a function that",
+            strength=0.5,
+            temperature=0.5,
+            verbose=False
+        )
+    assert "Failed to load prompt template" in str(exc_info.value)
+
+
+def test_unfinished_prompt_llm_invoke_failure(
+    mock_load_prompt_template_success,
+    mock_llm_invoke_failure
+):
+    with pytest.raises(Exception) as exc_info:
+        unfinished_prompt(
+            prompt_text="Write a function that",
+            strength=0.5,
+            temperature=0.5,
+            verbose=False
+        )
+    assert "LLM invocation failed." in str(exc_info.value)
+
+
+def test_unfinished_prompt_edge_strength_zero(
+    mock_load_prompt_template_success,
+    mock_llm_invoke_success
+):
+    prompt_text = "Write a function that"
+    reasoning, is_finished, total_cost, model_name = unfinished_prompt(
+        prompt_text=prompt_text,
+        strength=0.0,  # Edge case
+        temperature=0.5,
+        verbose=False
+    )
+    
+    assert reasoning == mock_llm_response['result']['reasoning']
+    assert is_finished == mock_llm_response['result']['is_finished']
+    assert total_cost == mock_llm_response['cost']
+    assert model_name == mock_llm_response['model_name']
+
+
+def test_unfinished_prompt_edge_strength_one(
+    mock_load_prompt_template_success,
+    mock_llm_invoke_success
+):
+    prompt_text = "Write a function that"
+    reasoning, is_finished, total_cost, model_name = unfinished_prompt(
+        prompt_text=prompt_text,
+        strength=1.0,  # Edge case
+        temperature=0.5,
+        verbose=False
+    )
+    
+    assert reasoning == mock_llm_response['result']['reasoning']
+    assert is_finished == mock_llm_response['result']['is_finished']
+    assert total_cost == mock_llm_response['cost']
+    assert model_name == mock_llm_response['model_name']
+
+
+def test_unfinished_prompt_edge_temperature_zero(
+    mock_load_prompt_template_success,
+    mock_llm_invoke_success
+):
+    prompt_text = "Write a function that"
+    reasoning, is_finished, total_cost, model_name = unfinished_prompt(
+        prompt_text=prompt_text,
+        strength=0.5,
+        temperature=0.0,  # Edge case
+        verbose=False
+    )
+    
+    assert reasoning == mock_llm_response['result']['reasoning']
+    assert is_finished == mock_llm_response['result']['is_finished']
+    assert total_cost == mock_llm_response['cost']
+    assert model_name == mock_llm_response['model_name']
+
+
+def test_unfinished_prompt_edge_temperature_one(
+    mock_load_prompt_template_success,
+    mock_llm_invoke_success
+):
+    prompt_text = "Write a function that"
+    reasoning, is_finished, total_cost, model_name = unfinished_prompt(
+        prompt_text=prompt_text,
+        strength=0.5,
+        temperature=1.0,  # Edge case
+        verbose=False
+    )
+    
+    assert reasoning == mock_llm_response['result']['reasoning']
+    assert is_finished == mock_llm_response['result']['is_finished']
+    assert total_cost == mock_llm_response['cost']
+    assert model_name == mock_llm_response['model_name']
