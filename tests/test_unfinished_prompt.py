@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import patch, Mock
-from pdd.unfinished_prompt import unfinished_prompt
+from pdd.unfinished_prompt import unfinished_prompt, PromptAnalysis
 
 # Define a mock response for llm_invoke
 mock_llm_response = {
@@ -29,8 +29,10 @@ def mock_load_prompt_template_failure():
 @pytest.fixture
 def mock_llm_invoke_success():
     with patch('pdd.unfinished_prompt.llm_invoke') as mock_invoke:
+        # Create a PromptAnalysis instance for 'result'
+        mock_prompt_analysis = PromptAnalysis(**mock_llm_response['result'])
         mock_response = {
-            'result': mock_llm_response['result'],
+            'result': mock_prompt_analysis,
             'cost': mock_llm_response['cost'],
             'model_name': mock_llm_response['model_name']
         }
