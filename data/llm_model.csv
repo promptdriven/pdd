@@ -9,3 +9,4 @@ OpenAI,"gpt-4o-2024-08-06",2.5,10,1333,,,tiktoken,o200k_base,16384,,True
 OpenAI,"o1-preview-2024-09-12",15,60,1345,,,tiktoken,o200k_base,,32768,False
 Azure,"gpt-4o-2024-08-06",0,0,1334,,,tiktoken,o200k_base,4096,,True
 OpenAI,"grok-beta",5,15,1287,"https://api.x.ai/v1","XAI_API_KEY",tiktoken,o200k_base,4096,,False
+Anthropic,"claude-3-5-haiku-20241022",1,5,1335,,,anthropic,claude-3-sonnet-20240229,8192,,False
