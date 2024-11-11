@@ -1,0 +1,36 @@
+% You are an expert Python engineer. Your goal is to write a python function called 'unfinished_prompt' that will determine if a given prompt is complete or needs to continue.
+
+<include>./context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        'prompt_text' - A string containing the prompt text to analyze.
+        'strength' - A float that is the strength of the LLM model to use for the analysis. Default is 0.5. Range is between 0 and 1.
+        'temperature' - A float that is the temperature of the LLM model to use for the analysis. Default is 0. Range is between 0 and 1.
+        'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
+    Outputs as a tuple:
+        'reasoning' - A string containing the structured reasoning for the completeness assessment.
+        'is_finished' - A boolean indicating whether the prompt is complete (True) or incomplete (False).
+        'total_cost' - A float that is the total cost of the analysis function. This is an optional output.
+        'model_name' - A string that is the name of the LLM model used for the analysis. This is an optional output.
+
+% Here is how to use the internal modules:
+    <internal_modules>
+        For loading prompt templates:
+        <load_prompt_template_example>
+            <include>context/load_prompt_template_example.py</include>
+        </load_prompt_template_example>
+
+        For running prompts with llm_invoke:
+        <llm_invoke_example>
+            <include>context/llm_invoke_example.py</include>
+        </llm_invoke_example>
+    </internal_modules>
+
+% This function will do the following:
+    Step 1. Load the 'unfinished_prompt_LLM' file.
+    Step 2. Run the prompt text through the model using llm_invoke.
+        2a. Pass the following string parameters to the prompt during invoke:
+            - 'PROMPT_TEXT'
+        2c. The Pydantic output of the invoke will have the keys 'reasoning' and 'is_finished'.
+    Step 3. Return the 'reasoning' string and 'is_finished' boolean from the output, and the 'total_cost' float, and 'model_name' string.
