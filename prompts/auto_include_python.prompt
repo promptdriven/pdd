@@ -5,9 +5,11 @@
 % Here are the inputs and outputs of the function:
     Inputs: 
         'input_prompt' - A string that contains the prompt that requires the includes to be selected.
-        'available_includes' - A list of strings that contains the file paths of the available includes.
+        'directory_path' - The directory of the dependencies (e.g. context/c*.py).
+        'csv_file' - A string representing the path of the csv file.
         'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
         'temperature' - A float that is the temperature of the LLM model to use.
+        'verbose' - Print out details of processing
     Outputs: 
         'output_prompt' - A string that contains the prompt with the includes inserted.
         'total_cost' - A float that is the total cost to generate the output includes string. 
@@ -18,12 +20,12 @@
 % Here are examples of how to use internal modules:
 <internal_example_modules>
     % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>./context/llm_selector_example.py</include></llm_selector_example>
-    % Example of using Python interpretor to summarize directory using summarize_directory: <summarize_directory_example><include>./context/summarize_directory_example.py</include></summarize_directory_example>
+    % Example of scanning and summarizing the content of the files in the directory_path using summarize_directory: <summarize_directory_example><include>./context/summarize_directory_example.py</include></summarize_directory_example>
 </internal_example_modules>
 
 % This program will use Langchain to do the following:
     Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/auto_include_LLM.prompt' and the '$PDD_PATH/prompts/extract_auto_include_LLM.prompt' files.
-    Step 2. Rub summarize_dictectory
+    Step 2. Use the csv_file variable as the path to load in all columns of the csv file to summarize_directory and get the csv_output, total_cost, model_name. The csv_output should be saved as a csv file. Only the full_path and file_summary columns should be passed to available_includes.
     Step 2. Then this will create a Langchain LCEL template from the auto include prompt.
     Step 3. This will use llm_selector for the model.
     Step 4. This will run the inputs through the model using Langchain LCEL. 
