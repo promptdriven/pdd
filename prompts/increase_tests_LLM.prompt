@@ -1,0 +1,10 @@
+generate more unit tests to increase coverage
+
+inputs:
+* prior/existing unit tests
+* coverage report
+* the code under tests
+* prompt that generated the code under tests
+
+output:
+* new unit tests that increase code coverage
