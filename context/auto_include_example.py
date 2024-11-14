@@ -1,55 +1,37 @@
+import os
+import pandas as pd
 from pdd.auto_include import auto_include
-from rich.console import Console
-
-# Initialize console for rich printing
-console = Console()
 
 def main() -> None:
     """
-    Main function to demonstrate the use of the auto_include function.
-    It processes an input prompt, selects relevant includes, calculates costs,
-    and returns the enhanced prompt with includes, total cost, and model name.
+    Example usage of the auto_include function.
     """
-    # Example input prompt that needs includes
-    input_prompt = """
-    Write a function that calculates the fibonacci sequence.
-    Use efficient algorithms and proper error handling.
-    """
-    
-    # Example list of available include files
-    available_includes = [
-        "algorithms/math_utils.py",
-        "utils/error_handling.py",
-        "algorithms/fibonacci.py",
-        "data_structures/arrays.py"
-    ]
-    
-    # Set model parameters
-    strength = 0.7  # 0-1 scale, higher means stronger model
-    temperature = 0.2  # 0-1 scale, lower means more deterministic
-    
-    try:
-        # Call auto_include function
-        output_prompt, total_cost, model_name = auto_include(
-            input_prompt=input_prompt,
-            available_includes=available_includes,
-            strength=strength,
-            temperature=temperature
-        )
-        
-        # Display results
-        console.print("\n[bold green]Results:[/]")
-        console.print(f"Selected Model: {model_name}")
-        console.print(f"Total Cost: ${total_cost:.6f}")
-        console.print("\n[bold]Final Prompt with Includes:[/]")
-        console.print(output_prompt)
-        
-    except ValueError as e:
-        console.print(f"[bold red]Value Error: {str(e)}[/]")
-    except FileNotFoundError as e:
-        console.print(f"[bold red]File Error: {str(e)}[/]")
-    except Exception as e:
-        console.print(f"[bold red]Unexpected Error: {str(e)}[/]")
+    # load output.csv
+    csv_file = pd.read_csv("output.csv")
+
+    # Define the parameters for the auto_include function
+    input_prompt = "Please include the necessary dependencies for the following code."
+    directory_path = "context/c*.py"
+    csv_file = "output.csv"
+    strength = 0.7
+    temperature = 0.5
+    verbose = True
+
+    # Call the auto_include function
+    output_prompt, csv_output, total_cost, model_name = auto_include(
+        input_prompt=input_prompt,
+        directory_path=directory_path,
+        csv_file=csv_file,
+        strength=strength,
+        temperature=temperature,
+        verbose=verbose
+    )
+
+    # Print the results
+    print("Output Prompt:")
+    print(output_prompt)
+    print(f"Total Cost: ${total_cost:.4f} (in dollars per million tokens)")
+    print(f"Model Name: {model_name}")
 
 if __name__ == "__main__":
     main()

@@ -5,13 +5,14 @@
 % Here are the inputs and outputs of the function:
     Inputs: 
         'input_prompt' - A string that contains the prompt that requires the includes to be selected.
-        'directory_path' - The directory of the dependencies (e.g. context/c*.py).
-        'csv_file' - A string representing the path of the csv file.
+        'directory_path' - The directory string of the dependencies (e.g. 'context/c*.py').
+        'csv_file' - A string representing the contents of the csv file.
         'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
         'temperature' - A float that is the temperature of the LLM model to use.
         'verbose' - Print out details of processing
     Outputs: 
         'output_prompt' - A string that contains the prompt with the includes inserted.
+        'csv_output' - A string that contains the updated csv file.
         'total_cost' - A float that is the total cost to generate the output includes string. 
         'model_name' - A string that is the name of the selected LLM model
 
@@ -25,13 +26,13 @@
 
 % This program will use Langchain to do the following:
     Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/auto_include_LLM.prompt' and the '$PDD_PATH/prompts/extract_auto_include_LLM.prompt' files.
-    Step 2. Use the csv_file variable as the path to load in all columns of the csv file to summarize_directory and get the csv_output, total_cost, model_name. The csv_output should be saved as a csv file. Only the full_path and file_summary columns should be passed to available_includes.
+    Step 2. Use csv_file to run summarize_directory to get the csv_output. The full_path and file_summary columns of csv_ouput becomes available_includes.
     Step 2. Then this will create a Langchain LCEL template from the auto include prompt.
     Step 3. This will use llm_selector for the model.
     Step 4. This will run the inputs through the model using Langchain LCEL. 
         4a. Be sure to pass the following string parameters to the prompt during invoke:
             - 'input_prompt' - A string that contains the prompt that requires the includes to be selected.
-            - 'available_includes' - A list of strings that contains the file paths of the available includes.
+            - 'available_includes' - A list of strings that contains the file paths and summaries of the available includes.
         4b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
     Step 5. This will pretty print the markdown formatting that is present in the result via the rich Markdown function. It will also pretty print the number of tokens in the result and the cost.
     Step 6. Then this will create a Langchain LCEL template from the extract auto include prompt.
