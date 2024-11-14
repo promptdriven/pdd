@@ -16,6 +16,11 @@
 
 % Here is how to use the internal modules:
     <internal_modules>
+        For loading prompt templates:
+        <load_prompt_template_example>
+            <include>context/load_prompt_template_example.py</include>
+        </load_prompt_template_example>
+
         For running prompts with llm_invoke:
         <llm_invoke_example>
             <include>context/llm_invoke_example.py</include>
@@ -44,10 +49,14 @@
 
 % This program will use Langchain to do the following:
     Step 1. Preprocess the raw prompt using the preprocess function from the preprocess module.
-
-    Step 2. Run the prompt through llm_invoke with an empty dictionary ('{}') and the provided strength and temperature.
-
-    Step 3. Detect if the generation is incomplete using the unfinished_prompt function (strength .5) by passing in the last 600 characters of the output of Step 3.
+    Step 2. Load the prompt template using load_prompt_template with recursive and double curly brackets enabled.
+    Step 3. Run the prompt through llm_invoke with the provided strength and temperature.
+        3a. If verbose is True, pretty print a message letting the user know it is running and how many tokens are in the prompt and the cost.
+    Step 4. If verbose is True, pretty print the markdown formatting that is present in the result via the rich Markdown function. Also pretty print the number of tokens in the result and the cost.
+    Step 5. Detect if the generation is incomplete using the unfinished_prompt function (strength .5) by passing in the last 600 characters of the output of Step 3.
         - a. If incomplete, call the continue_generation function to complete the generation.
         - b. Else, if complete, postprocess the model output result using the postprocess function from the postprocess module with a strength of 0.7.
-    Step 4. Return the runnable_code, total_cost and model_name.
+    Step 6. If verbose is True, print out the total_cost including the input and output tokens and functions that incur cost (e.g. postprocessing).
+    Step 7. Return the runnable_code, total_cost and model_name.
+
+% Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses.
