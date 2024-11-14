@@ -1,137 +1,132 @@
-import os
-import json
-from typing import Tuple, Dict, Any, Callable
+from typing import Tuple
 from rich.console import Console
-from rich.markdown import Markdown
-from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
+from rich.syntax import Syntax
 from pydantic import BaseModel, Field
-
+from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
-from .llm_selector import llm_selector
+from .llm_invoke import llm_invoke
 from .unfinished_prompt import unfinished_prompt
 
 console = Console()
 
+class TrimResultsStartOutput(BaseModel):
+    code_block: str = Field(description="The trimmed code block from the start")
+
 class TrimResultsOutput(BaseModel):
-    code_block: str = Field(description="The extracted code block")
-
-class TrimResultsContinuedOutput(BaseModel):
-    trimmed_continued_generation: str = Field(description="The trimmed continued generation")
-
-def extract_text_from_response(response: str) -> Tuple[str, bool]:
-    try:
-        json_response = json.loads(response)
-        if isinstance(json_response, dict):
-            for key in ['generated_text', 'code_block', 'trimmed_continued_generation']:
-                if key in json_response:
-                    return json_response[key], True
-        return response, False
-    except json.JSONDecodeError:
-        return response, False
+    trimmed_continued_generation: str = Field(description="The trimmed continuation of the generation")
 
 def continue_generation(
     formatted_input_prompt: str,
     llm_output: str,
     strength: float,
     temperature: float,
-    unfinished_prompt_func: Callable = unfinished_prompt
+    verbose: bool = False
 ) -> Tuple[str, float, str]:
-    # Step 1: Load prompts
-    pdd_path = os.getenv('PDD_PATH')
-    if not pdd_path:
-        raise ValueError("PDD_PATH environment variable is not set")
-
-    prompts = {}
-    for prompt_name in ['continue_generation_LLM', 'trim_results_start_LLM', 'trim_results_LLM']:
-        with open(f"{pdd_path}/prompts/{prompt_name}.prompt", 'r') as file:
-            prompts[prompt_name] = file.read()
-
-    # Step 2: Preprocess prompts
-    for prompt_name in prompts:
-        prompts[prompt_name] = preprocess(prompts[prompt_name], recursive=True, double_curly_brackets=False)
-
-    # Step 3: Create Langchain LCEL templates
-    continue_generation_template = PromptTemplate.from_template(prompts['continue_generation_LLM'])
-    trim_results_start_template = PromptTemplate.from_template(prompts['trim_results_start_LLM'])
-    trim_results_template = PromptTemplate.from_template(prompts['trim_results_LLM'])
-
-    # Step 4: Use llm_selector for models
-    llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
-    llm_trim, token_counter_trim, input_cost_trim, output_cost_trim, _ = llm_selector(0.9, 0)
-
-    continue_generation_chain = continue_generation_template | llm | StrOutputParser()
-    trim_results_start_chain = trim_results_start_template | llm_trim | JsonOutputParser(pydantic_object=TrimResultsOutput)
-    trim_results_chain = trim_results_template | llm_trim | JsonOutputParser(pydantic_object=TrimResultsContinuedOutput)
-
-    total_cost = 0
-    # Step 5: Extract code_block
+    """
+    Continue generating a prompt using a large language model until completion.
+    
+    Args:
+        formatted_input_prompt (str): The input prompt with variables substituted.
+        llm_output (str): Current output from the LLM to be checked and continued.
+        strength (float): Strength parameter for the LLM model (0-1).
+        temperature (float): Temperature parameter for the LLM model (0-1).
+        verbose (bool): Whether to print detailed information.
+        
+    Returns:
+        Tuple[str, float, str]: Final LLM output, total cost, and model name.
+    """
     try:
-        trim_start_result = trim_results_start_chain.invoke({"LLM_OUTPUT": llm_output})
-        code_block, is_json = extract_text_from_response(json.dumps(trim_start_result))
+        # Step 1: Load prompt templates
+        prompts = {
+            'continue': load_prompt_template('continue_generation_LLM'),
+            'trim_start': load_prompt_template('trim_results_start_LLM'),
+            'trim': load_prompt_template('trim_results_LLM')
+        }
+        
+        if not all(prompts.values()):
+            raise ValueError("Failed to load one or more prompt templates")
+
+        # Step 2: Preprocess prompts
+        processed_prompts = {
+            key: preprocess(prompt, recursive=True, double_curly_brackets=False)
+            for key, prompt in prompts.items()
+        }
+
+        # Initialize tracking variables
+        total_cost = 0.0
+        model_name = ""
+        loop_count = 0
+
+        # Step 3: Trim start of output
+        trim_start_response = llm_invoke(
+            prompt=processed_prompts['trim_start'],
+            input_json={"LLM_OUTPUT": llm_output},
+            strength=0.9,
+            temperature=0,
+            output_pydantic=TrimResultsStartOutput,
+            verbose=verbose
+        )
+        total_cost += trim_start_response['cost']
+        code_block = trim_start_response['result'].code_block
+
+        # Step 4: Continue generation loop
+        while True:
+            loop_count += 1
+            if verbose:
+                console.print(f"[cyan]Generation loop {loop_count}[/cyan]")
+
+            # Generate continuation
+            continue_response = llm_invoke(
+                prompt=processed_prompts['continue'],
+                input_json={
+                    "FORMATTED_INPUT_PROMPT": formatted_input_prompt,
+                    "LLM_OUTPUT": code_block
+                },
+                strength=strength,
+                temperature=temperature,
+                verbose=verbose
+            )
+            
+            total_cost += continue_response['cost']
+            model_name = continue_response['model_name']
+            continue_result = continue_response['result']
+
+            # Check if generation is complete
+            last_chunk = code_block[-600:] if len(code_block) > 600 else code_block
+            _, is_finished, check_cost, _ = unfinished_prompt(
+                prompt_text=last_chunk,
+                strength=0.5,
+                temperature=0,
+                verbose=verbose
+            )
+            total_cost += check_cost
+
+            if not is_finished:
+                code_block += continue_result
+            else:
+                # Trim and append final continuation
+                trim_response = llm_invoke(
+                    prompt=processed_prompts['trim'],
+                    input_json={
+                        "CONTINUED_GENERATION": continue_result,
+                        "GENERATED_RESULTS": code_block[-200:]
+                    },
+                    strength=0.9,
+                    temperature=0,
+                    output_pydantic=TrimResultsOutput,
+                    verbose=verbose
+                )
+                total_cost += trim_response['cost']
+                code_block += trim_response['result'].trimmed_continued_generation
+                break
+
+        if verbose:
+            syntax = Syntax(code_block, "python", theme="monokai", line_numbers=True)
+            console.print("[bold green]Final Generated Code:[/bold green]")
+            console.print(syntax)
+
+        return code_block, total_cost, model_name
+
     except Exception as e:
-        console.print(f"Error in trim_results_start_chain: {e}")
-        code_block, is_json = extract_text_from_response(llm_output)
-
-    input_tokens = token_counter_trim(llm_output)
-    output_tokens = token_counter_trim(code_block)
-    trim_start_cost = (input_tokens * input_cost_trim + output_tokens * output_cost_trim) / 1_000_000
-    total_cost += trim_start_cost
-    console.print(f"Trim start cost: ${trim_start_cost:.6f}")
-
-    # Step 6: Run continue_generation
-    loop_count = 0
-    while True:
-        loop_count += 1
-        continue_result = continue_generation_chain.invoke({
-            "FORMATTED_INPUT_PROMPT": formatted_input_prompt,
-            "LLM_OUTPUT": code_block
-        })
-        continue_result, _ = extract_text_from_response(continue_result)
-        console.print(f"Continue generation result (loop {loop_count}):")
-        console.print(Markdown(f"```python\n{continue_result}\n```"))
-        input_tokens = token_counter(formatted_input_prompt + code_block)
-        output_tokens = token_counter(continue_result)
-        continue_cost = (input_tokens * input_cost + output_tokens * output_cost) / 1_000_000
-        total_cost += continue_cost
-        console.print(f"Continue generation cost (loop {loop_count}): ${continue_cost:.6f}")
-
-        # Step 7: Check if generation is complete
-        last_600_chars = continue_result[-600:]
-        reasoning, is_finished, unfinished_cost, _ = unfinished_prompt_func(last_600_chars, 0.5, 0)
-        total_cost += unfinished_cost
-        console.print(f"Unfinished prompt cost: ${unfinished_cost:.6f}")
-
-        if is_finished:
-            # Step 7b: Trim results
-            try:
-                trim_result = trim_results_chain.invoke({
-                    "CONTINUED_GENERATION": continue_result,
-                    "GENERATED_RESULTS": code_block[-200:]
-                })
-                trimmed_continued_generation, _ = extract_text_from_response(json.dumps(trim_result))
-            except Exception as e:
-                console.print(f"Error in trim_results_chain: {e}")
-                trimmed_continued_generation = continue_result
-            code_block += trimmed_continued_generation
-
-            input_tokens = token_counter_trim(continue_result + code_block)
-            output_tokens = token_counter_trim(trimmed_continued_generation)
-            trim_cost = (input_tokens * input_cost_trim + output_tokens * output_cost_trim) / 1_000_000
-            total_cost += trim_cost
-            console.print(f"Trim results cost: ${trim_cost:.6f}")
-
-            break
-        else:
-            # Step 7a: Continue generation
-            code_block += continue_result
-            console.print(f"Generation incomplete. Continuing... (Loop count: {loop_count})")
-
-    # Step 8: Pretty print the final output
-    console.print("Final output:")
-    console.print(Markdown(f"```python\n{code_block}\n```"))
-    console.print(f"Total tokens: {token_counter(code_block)}")
-    console.print(f"Total cost: ${total_cost:.6f}")
-
-    # Step 9: Return results
-    return code_block, total_cost, model_name
+        console.print(f"[bold red]Error in continue_generation: {str(e)}[/bold red]")
+        raise
