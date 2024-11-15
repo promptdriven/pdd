@@ -100,7 +100,7 @@ def context_generator(
             if verbose:
                 print("[blue]Post-processing complete generation...[/blue]")
             
-            final_output, postprocess_cost = postprocess(
+            final_output, postprocess_cost, _ = postprocess(
                 initial_output,
                 language,
                 strength=0.9,

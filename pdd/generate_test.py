@@ -91,7 +91,7 @@ def generate_test(prompt: str, code: str, strength: float, temperature: float, l
             final_result, continue_cost, _ = continue_generation(processed_prompt, result, strength, temperature)
         else:
             console.print("[bold green]Generation complete. Postprocessing...[/bold green]")
-            final_result, postprocess_cost = postprocess(result, language, 0.7, temperature)
+            final_result, postprocess_cost, _ = postprocess(result, language, 0.7, temperature)
 
         # Step 7: Calculate and print total cost
         total_cost = input_cost_estimate + output_cost_estimate

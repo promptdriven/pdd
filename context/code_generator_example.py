@@ -12,12 +12,13 @@ def main() -> None:
     with open("prompts/generate_test_python.prompt", "r") as file:
         prompt = file.read()
     language: str = "python"
-    strength: float = 1  # Strength of the LLM model (0.0 to 1.0)
+    strength: float = 0.5  # Strength of the LLM model (0.0 to 1.0)
     temperature: float = 0.5  # Temperature for the LLM model (0.0 to 1.0)
+    verbose: bool = True  # Whether to print detailed information
 
     try:
         # Call the code_generator function
-        runnable_code, total_cost, model_name = code_generator(prompt, language, strength, temperature)
+        runnable_code, total_cost, model_name = code_generator(prompt, language, strength, temperature, verbose)
 
         # Output the results
         print("Generated Code:")
