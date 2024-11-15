@@ -1,119 +1,115 @@
-import os
 from typing import Tuple
-from rich.console import Console
-from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from .preprocess import preprocess
-from .llm_selector import llm_selector
+from rich import print
+from .load_prompt_template import load_prompt_template
+from .llm_invoke import llm_invoke
 from .unfinished_prompt import unfinished_prompt
 from .continue_generation import continue_generation
 from .postprocess import postprocess
 
-console = Console()
-
-def context_generator(code_module: str, prompt: str, language: str = "python", strength: float = 0.5, temperature: float = 0) -> Tuple[str, float, str]:
+def context_generator(
+    code_module: str,
+    prompt: str,
+    language: str = "python",
+    strength: float = 0.5,
+    temperature: float = 0.0,
+    verbose: bool = False
+) -> Tuple[str, float, str]:
     """
-    Generate a concise example on how to use code_module properly.
+    Generate a concise example demonstrating how to use a code module properly.
 
     Args:
         code_module (str): The code module to generate an example for.
         prompt (str): The prompt used to generate the code_module.
-        language (str, optional): The language of the code module. Defaults to "python".
-        strength (float, optional): The strength of the LLM model to use. Defaults to 0.5.
-        temperature (float, optional): The temperature of the LLM model to use. Defaults to 0.
+        language (str, optional): Programming language. Defaults to "python".
+        strength (float, optional): LLM model strength (0-1). Defaults to 0.5.
+        temperature (float, optional): LLM temperature (0-1). Defaults to 0.0.
+        verbose (bool, optional): Print detailed information. Defaults to False.
 
     Returns:
-        Tuple[str, float, str]: A tuple containing the example code, total cost, and model name.
+        Tuple[str, float, str]: (example_code, total_cost, model_name)
     """
-    # Check for PDD_PATH environment variable first
-    pdd_path = os.getenv('PDD_PATH')
-    if not pdd_path:
-        raise ValueError("PDD_PATH environment variable is not set")
-
-    total_cost = 0.0
-    model_name = ""
-    chain_invocation_error = False
-
     try:
-        # Step 1: Load the example_generator prompt
-        try:
-            with open(f"{pdd_path}/prompts/example_generator_LLM.prompt", "r") as file:
-                example_generator_prompt = file.read()
-        except FileNotFoundError:
-            console.print("[bold red]Error: example_generator_LLM.prompt file not found[/bold red]")
-            return "", 0.0, ""
+        # Input validation
+        if not code_module or not prompt:
+            raise ValueError("code_module and prompt must not be empty")
+        if not 0 <= strength <= 1 or not 0 <= temperature <= 1:
+            raise ValueError("strength and temperature must be between 0 and 1")
 
-        # Step 2: Preprocess the example_generator prompt
-        processed_example_generator = preprocess(example_generator_prompt, recursive=False, double_curly_brackets=False)
-        console.print(f"[bold]Debug: Preprocessed example generator prompt: {processed_example_generator[:100]}...[/bold]")
+        total_cost = 0.0
+        model_name = ""
 
-        # Step 3: Create a Langchain LCEL template
-        prompt_template = PromptTemplate.from_template(processed_example_generator)
+        # Step 1: Load the example generator prompt template
+        example_prompt = load_prompt_template("example_generator_LLM")
+        if not example_prompt:
+            raise ValueError("Failed to load example generator prompt template")
 
-        # Step 4: Use llm_selector for the model
-        llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
-        console.print(f"[bold]Debug: Selected model: {model_name}[/bold]")
+        if verbose:
+            print("[blue]Generating example using prompt template...[/blue]")
 
-        # Step 5: Preprocess the prompt
-        processed_prompt = preprocess(prompt, recursive=False, double_curly_brackets=False)
-        console.print(f"[bold]Debug: Preprocessed prompt: {processed_prompt[:100]}...[/bold]")
+        # Step 2: Generate initial example using llm_invoke
+        input_json = {
+            "code_module": code_module,
+            "processed_prompt": prompt,
+            "language": language
+        }
 
-        # Step 6: Invoke the code through the model using Langchain LCEL
-        chain = prompt_template | llm | StrOutputParser()
+        initial_response = llm_invoke(
+            prompt=example_prompt,
+            input_json=input_json,
+            strength=strength,
+            temperature=temperature,
+            verbose=verbose
+        )
 
-        # Calculate token count and cost
-        total_tokens = token_counter(processed_example_generator + code_module + processed_prompt + language)
-        estimated_cost = (total_tokens / 1_000_000) * input_cost
-        total_cost += estimated_cost
+        total_cost += initial_response['cost']
+        model_name = initial_response['model_name']
+        initial_output = initial_response['result']
 
-        console.print(f"[bold]Generating example for {code_module}...[/bold]")
-        console.print(f"Estimated input tokens: {total_tokens}")
-        console.print(f"Estimated input cost: ${estimated_cost:.6f}")
+        # Step 3: Check if generation is complete
+        last_chunk = initial_output[-600:] if len(initial_output) > 600 else initial_output
+        reasoning, is_finished, unfinished_cost, _ = unfinished_prompt(
+            prompt_text=last_chunk,
+            strength=0.5,
+            temperature=0.0,
+            verbose=verbose
+        )
+        total_cost += unfinished_cost
 
-        console.print(f"[bold]Debug: Invoking chain with parameters: {code_module}, {processed_prompt}, {language}[/bold]")
-        try:
-            result = chain.invoke({
-                "code_module": code_module,
-                "processed_prompt": processed_prompt,
-                "language": language
-            })
-            console.print(f"[bold]Debug: Chain invocation result: {result[:100]}...[/bold]")
-        except Exception as e:
-            console.print(f"[bold red]Debug: Error during chain invocation: {e}[/bold red]")
-            result = "Error occurred during chain invocation"
-            chain_invocation_error = True
+        if verbose:
+            print(f"[yellow]Completion check: {is_finished}[/yellow]")
+            print(f"[yellow]Reasoning: {reasoning}[/yellow]")
 
-        if not chain_invocation_error:
-            # Step 7: Detect if the generation is incomplete
-            last_600_chars = result[-600:]
-            _, is_finished, unfinished_cost, _ = unfinished_prompt(last_600_chars, strength=0.5, temperature=temperature)
-            total_cost += unfinished_cost
-            console.print(f"[bold]Debug: Is generation finished: {is_finished}[/bold]")
+        final_output = ""
+        if not is_finished:
+            # Step 3a: Continue generation if incomplete
+            if verbose:
+                print("[blue]Continuing incomplete generation...[/blue]")
+            
+            continued_output, continue_cost, continue_model = continue_generation(
+                formatted_input_prompt=example_prompt,
+                llm_output=initial_output,
+                strength=strength,
+                temperature=temperature,
+                verbose=verbose
+            )
+            total_cost += continue_cost
+            model_name = continue_model
+            final_output = continued_output
+        else:
+            # Step 3b: Postprocess if complete
+            if verbose:
+                print("[blue]Post-processing complete generation...[/blue]")
+            
+            final_output, postprocess_cost = postprocess(
+                initial_output,
+                language,
+                strength=0.9,
+                temperature=temperature
+            )
+            total_cost += postprocess_cost
 
-            if not is_finished:
-                # Step 7a: Continue the generation if incomplete
-                result, continue_cost, _ = continue_generation(processed_example_generator, result, strength, temperature)
-                total_cost += continue_cost
-                console.print(f"[bold]Debug: Continued generation result: {result[:100]}...[/bold]")
-            else:
-                continue_cost = 0
-
-        # Step 7b: Postprocess the result
-        example_code, postprocess_cost = postprocess(result, language, strength=0.9, temperature=temperature)
-        total_cost += postprocess_cost
-        console.print(f"[bold]Debug: Postprocessed result: {example_code[:100]}...[/bold]")
-
-        # Step 8: Calculate and print the total cost
-        output_tokens = token_counter(example_code)
-        output_cost_value = (output_tokens / 1_000_000) * output_cost
-        total_cost += output_cost_value
-
-        console.print(f"[bold green]Example generation complete![/bold green]")
-        console.print(f"Total cost: ${total_cost:.6f}")
-
-        # Step 9: Return the results
-        return example_code, total_cost, model_name
+        return final_output, total_cost, model_name
 
     except Exception as e:
-        console.print(f"[bold red]An unexpected error occurred: {e}[/bold red]")
-        return "", 0.0, ""
+        print(f"[red]Error in context_generator: {str(e)}[/red]")
+        raise
