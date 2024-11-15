@@ -96,7 +96,7 @@ def code_generator(
         # Step 4: Postprocess the output
         if verbose:
             console.print("[bold blue]Step 4: Postprocessing output[/bold blue]")
-        runnable_code, postprocess_cost = postprocess(
+        runnable_code, postprocess_cost, _ = postprocess(
             llm_output=final_output,
             language=language,
             strength=0.7,

@@ -32,14 +32,16 @@ def main() -> None:
     language = "python"
     strength = 0.7  # Strength of the LLM model (0 to 1)
     temperature = 0.2  # Temperature for the LLM model (0 to 1)
+    verbose = True
 
     # Call the postprocess function
-    extracted_code, total_cost = postprocess(llm_output, language, strength, temperature)
+    extracted_code, total_cost, model_name = postprocess(llm_output, language, strength, temperature, verbose)
 
     # Print the extracted code and total cost
     console.print("[bold green]Extracted Code:[/bold green]")
     console.print(extracted_code)
     console.print(f"[bold blue]Total Cost: ${total_cost:.6f}[/bold blue]")
-
+    console.print(f"[bold blue]Model Name: {model_name}[/bold blue]")
+    
 if __name__ == "__main__":
     main()
