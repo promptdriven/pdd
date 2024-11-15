@@ -77,3 +77,5 @@
     Step 1. Explain in detail step by step the ramifications of the change_prompt on the input_prompt.
     Step 2. Explain in detail step by step what changes need to be made to the input_prompt to generate the modified_prompt based on Step 1.
     Step 3. Generate the modified_prompt based on Step 2. Except for the change, the rest of the existing functionality of the input_prompt should remain. Structure the prompt similar to the example prompts more esp. including the descriptions of the inputs and outputs.
+
+% Never ask if you should proceed with generating the modified_prompt. Always assume that the change_prompt is correct and proceed with generating the modified_prompt.
