@@ -75,7 +75,8 @@ def generate(ctx, prompt_file: str, output: Optional[str]) -> Tuple[str, float, 
             input_strings['prompt_file'],
             language,
             ctx.obj['strength'],
-            ctx.obj['temperature']
+            ctx.obj['temperature'],
+            ctx.obj['verbose']
         )
         
         with open(output_file_paths['output'], 'w') as f:
@@ -114,7 +115,8 @@ def example(ctx, prompt_file: str, code_file: str, output: Optional[str]) -> Tup
             input_strings['prompt_file'],
             language,
             ctx.obj['strength'],
-            ctx.obj['temperature']
+            ctx.obj['temperature'],
+            ctx.obj['verbose']
         )
         
         with open(output_file_paths['output'], 'w') as f:
