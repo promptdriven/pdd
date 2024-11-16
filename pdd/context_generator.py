@@ -103,7 +103,7 @@ def context_generator(
             final_output, postprocess_cost, _ = postprocess(
                 initial_output,
                 language,
-                strength=0.9,
+                strength=0.8,
                 temperature=temperature
             )
             total_cost += postprocess_cost
