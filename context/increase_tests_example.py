@@ -1,4 +1,3 @@
-from pdd import DEFAULT_STRENGTH
 from pdd.increase_tests import increase_tests
 
 def example_usage():
@@ -48,8 +47,8 @@ calculate_average.py     5      2    60%
             code=existing_code,
             prompt_that_generated_code=original_prompt,
             language="python",
-            strength=DEFAULT_STRENGTH,
-            temperature=0.0,
+            strength=0.7,
+            temperature=0.2,
             verbose=True
         )
     

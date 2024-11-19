@@ -1,6 +1,6 @@
-from typing import Tuple, Optional
+from typing import Tuple
 from rich.console import Console
-from . import EXTRACTION_STRENGTH, DEFAULT_TIME
+
 from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
 from .postprocess import postprocess
@@ -13,7 +13,6 @@ def increase_tests(
     language: str = "python",
     strength: float = 0.5,
     temperature: float = 0.0,
-    time: Optional[float] = DEFAULT_TIME,
     verbose: bool = False
 ) -> Tuple[str, float, str]:
     """
@@ -27,7 +26,6 @@ def increase_tests(
         language (str, optional): Programming language. Defaults to "python".
         strength (float, optional): LLM model strength. Defaults to 0.5.
         temperature (float, optional): LLM model temperature. Defaults to 0.0.
-        time (Optional[float]): Time allocation for the LLM. Defaults to DEFAULT_TIME.
         verbose (bool, optional): Verbose output flag. Defaults to False.
 
     Returns:
@@ -53,10 +51,6 @@ def increase_tests(
         prompt_name = "increase_tests_LLM"
         prompt_template = load_prompt_template(prompt_name)
         
-        # Check if prompt template was loaded successfully
-        if prompt_template is None:
-            raise TypeError(f"Prompt template '{prompt_name}' not found or could not be loaded")
-            
         if verbose:
             console.print(f"[blue]Loaded Prompt Template:[/blue]\n{prompt_template}")
 
@@ -75,22 +69,15 @@ def increase_tests(
             input_json=input_json,
             strength=strength,
             temperature=temperature,
-            time=time,
             verbose=verbose
         )
-        
-        # Debug: Check LLM response
-        console.print(f"[blue]DEBUG increase_tests: LLM response type: {type(llm_response)}[/blue]")
-        console.print(f"[blue]DEBUG increase_tests: LLM response keys: {llm_response.keys() if isinstance(llm_response, dict) else 'Not a dict'}[/blue]")
-        console.print(f"[blue]DEBUG increase_tests: LLM result type: {type(llm_response.get('result', 'No result key'))}[/blue]")
-        console.print(f"[blue]DEBUG increase_tests: LLM result length: {len(llm_response['result']) if 'result' in llm_response and llm_response['result'] else 0}[/blue]")
-        console.print(f"[blue]DEBUG increase_tests: LLM result preview: {repr(llm_response['result'][:300]) if 'result' in llm_response and llm_response['result'] else 'Empty or no result'}[/blue]")
 
+        # Step 3: Postprocess the result
         increase_test_function, total_cost, model_name = postprocess(
             llm_response['result'], 
             language, 
-            EXTRACTION_STRENGTH,  # Fixed strength for extraction
-            temperature,
+            0.83,  # Same strength as LLM invoke
+            temperature, 
             verbose
         )
 
