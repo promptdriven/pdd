@@ -15,7 +15,7 @@ from .change import change  # Relative import for the internal change function
 console = Console()
 
 # Set up logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
 def process_csv_change(
