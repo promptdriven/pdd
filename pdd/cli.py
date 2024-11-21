@@ -527,7 +527,7 @@ def crash(ctx, prompt_file: str, code_file: str, program_file: str, error_file: 
             command_options=command_options
         )
         
-        fixed_code, total_cost, model_name = fix_code_module_errors(
+        update_program, update_code, fixed_program, fixed_code, total_cost, model_name = fix_code_module_errors(
             input_strings['program_file'],
             input_strings['prompt_file'],
             input_strings['code_file'],
