@@ -1,76 +1,53 @@
-import os
-import csv
-import glob
 from datetime import datetime
-from typing import Tuple, Optional
 from pathlib import Path
+import csv
 import io
-from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn
+import os
+import glob
+from typing import Tuple, Dict, Optional
 from pydantic import BaseModel, Field
+from rich.progress import track
+from rich.console import Console
+from rich import print as rprint
+
+from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
 
+# Initialize Rich console
 console = Console()
 
-# Use Windows-style line endings for consistency
-LINE_ENDING = '\r\n'
-
 class FileSummary(BaseModel):
-    """Pydantic model for the file summary output."""
+    """Pydantic model for file summary output"""
     file_summary: str = Field(description="A concise summary of the file contents")
 
-def normalize_path(path: str) -> str:
-    """Normalize path for consistent comparison."""
-    return str(Path(path).resolve())
-
-def normalize_line_endings(text: str) -> str:
-    """Normalize line endings to \r\n for consistent comparison."""
-    return text.replace('\n', '\r\n').replace('\r\r\n', '\r\n')
-
-def read_existing_csv(csv_file: str) -> dict:
-    """Read existing CSV file into a dictionary with file paths as keys."""
-    if not csv_file:
-        return {}
-    
+def parse_existing_csv(csv_content: Optional[str]) -> Dict[str, Dict]:
+    """Parse existing CSV content into a dictionary of file data"""
     existing_data = {}
-    reader = csv.DictReader(io.StringIO(normalize_line_endings(csv_file)))
+    if not csv_content:
+        return existing_data
+
+    reader = csv.DictReader(io.StringIO(csv_content))
     for row in reader:
-        try:
-            existing_data[normalize_path(row['full_path'])] = {
-                'file_summary': row['file_summary'],
-                'date': datetime.fromisoformat(row['date'])
-            }
-        except Exception as e:
-            console.print(f"[red]Error parsing CSV row: {row} - {str(e)}[/red]")
+        existing_data[row['full_path']] = {
+            'file_summary': row['file_summary'],
+            'date': row['date']
+        }
     return existing_data
 
-def create_csv_output(data: dict) -> str:
-    """Create CSV string from the data dictionary."""
+def create_csv_output(data: Dict[str, Dict]) -> str:
+    """Create CSV string from dictionary data"""
     output = io.StringIO()
-    writer = csv.writer(output, lineterminator=LINE_ENDING)
-    writer.writerow(['full_path', 'file_summary', 'date'])
+    writer = csv.DictWriter(output, fieldnames=['full_path', 'file_summary', 'date'])
+    writer.writeheader()
     
-    for full_path, info in sorted(data.items()):
-        writer.writerow([
-            full_path,
-            info['file_summary'],
-            info['date'].isoformat()
-        ])
+    for full_path, file_data in data.items():
+        writer.writerow({
+            'full_path': full_path,
+            'file_summary': file_data['file_summary'],
+            'date': file_data['date']
+        })
     
     return output.getvalue()
-
-def create_empty_csv() -> str:
-    """Create empty CSV with header."""
-    return f"full_path,file_summary,date{LINE_ENDING}"
-
-def read_prompt_template(prompt_path: Path) -> str:
-    """Read prompt template with specific error handling."""
-    try:
-        with open(prompt_path, 'r') as f:
-            return f.read().strip()
-    except Exception as e:
-        console.print(f"[red]Error reading prompt file: {str(e)}[/red]")
-        raise
 
 def summarize_directory(
     directory_path: str,
@@ -80,78 +57,62 @@ def summarize_directory(
     csv_file: Optional[str] = None
 ) -> Tuple[str, float, str]:
     """
-    Summarize files in a directory and output results to a CSV string.
+    Summarize all files in a directory and output results to CSV format.
+    
+    Args:
+        directory_path (str): Path to directory with wildcard
+        strength (float): Strength of the LLM model (0-1)
+        temperature (float): Temperature for LLM output
+        verbose (bool): Whether to print detailed information
+        csv_file (Optional[str]): Existing CSV content
+        
+    Returns:
+        Tuple[str, float, str]: (CSV content, total cost, model name)
     """
-    # Validate parameters
-    if not 0 <= strength <= 1:
-        raise ValueError("Strength must be between 0 and 1")
-    if not 0 <= temperature <= 1:
-        raise ValueError("Temperature must be between 0 and 1")
-
-    # Step 1: Get PDD_PATH
-    pdd_path = os.getenv('PDD_PATH')
-    if not pdd_path:
-        raise ValueError("PDD_PATH environment variable not set")
-
-    # Step 2: Create prompt template
-    prompt_path = Path(pdd_path) / "prompts" / "summarize_file_LLM.prompt"
-    if not prompt_path.exists():
-        raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
-
     try:
-        prompt_template = read_prompt_template(prompt_path)
-    except Exception as e:
-        console.print(f"[red]Error reading prompt file: {str(e)}[/red]")
-        return create_empty_csv(), 0.0, ""
+        # Step 1: Load prompt template
+        prompt = load_prompt_template("summarize_file_LLM")
+        if not prompt:
+            raise ValueError("Failed to load prompt template")
 
-    # Initialize tracking variables
-    total_cost = 0.0
-    model_name = ""
-    existing_data = read_existing_csv(csv_file)
-    current_data = {}
+        # Initialize tracking variables
+        total_cost = 0.0
+        model_name = ""
+        current_data = parse_existing_csv(csv_file)
+        
+        # Get list of files
+        files = glob.glob(directory_path)
+        if not files:
+            console.print(f"[yellow]Warning: No files found matching pattern: {directory_path}[/yellow]")
+            return create_csv_output(current_data), total_cost, model_name
 
-    # Get list of files
-    files = glob.glob(directory_path)
-    if not files:
-        console.print(f"[yellow]Warning: No files found matching pattern: {directory_path}[yellow]")
-        return create_empty_csv(), 0.0, ""
-
-    # Step 3: Process files
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console
-    ) as progress:
-        task = progress.add_task("Processing files...", total=len(files))
-
-        for file_path in files:
-            try:
-                full_path = normalize_path(file_path)
-                if verbose:
-                    console.print(f"[blue]Processing: {full_path}[blue]")
-
-                file_stat = os.stat(file_path)
-                file_mtime = datetime.fromtimestamp(file_stat.st_mtime)
-
-                existing_entry = existing_data.get(full_path)
-                if existing_entry and file_mtime <= existing_entry['date']:
+        # Step 2: Process each file
+        for file_path in track(files, description="Processing files"):
+            full_path = str(Path(file_path).resolve())
+            
+            # Step 2a: Check if file needs processing
+            file_stat = os.stat(file_path)
+            file_mtime = datetime.fromtimestamp(file_stat.st_mtime)
+            
+            if full_path in current_data:
+                existing_date = datetime.strptime(current_data[full_path]['date'], 
+                                               "%Y-%m-%d %H:%M:%S")
+                if file_mtime <= existing_date:
                     if verbose:
-                        console.print(f"[green]Using existing summary for: {full_path}[green]")
-                    current_data[full_path] = {
-                        'file_summary': existing_entry['file_summary'],
-                        'date': existing_entry['date']
-                    }
-                    progress.advance(task)
+                        console.print(f"[blue]Skipping unchanged file: {full_path}[/blue]")
                     continue
 
+            try:
+                # Step 2b: Read file contents
                 with open(file_path, 'r', encoding='utf-8') as f:
                     file_contents = f.read()
 
+                # Step 2c: Summarize file
                 if verbose:
-                    console.print(f"[blue]Summarizing: {full_path}[blue]")
-
+                    console.print(f"[green]Summarizing: {full_path}[/green]")
+                
                 response = llm_invoke(
-                    prompt=prompt_template,
+                    prompt=prompt,
                     input_json={'file_contents': file_contents},
                     strength=strength,
                     temperature=temperature,
@@ -159,28 +120,26 @@ def summarize_directory(
                     output_pydantic=FileSummary
                 )
 
-                result = response.get('result')
-                if not result or not hasattr(result, 'file_summary'):
-                    raise ValueError(f"Invalid LLM result format: {result}")
+                # Update tracking variables
+                total_cost += response['cost']
+                model_name = response['model_name']
 
-                total_cost += response.get('cost', 0.0)
-                model_name = response.get('model_name', '')
-                
+                # Step 2d: Store results
                 current_data[full_path] = {
-                    'file_summary': result.file_summary,
-                    'date': datetime.now()
+                    'file_summary': response['result'].file_summary,
+                    'date': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 }
 
             except Exception as e:
-                console.print(f"[red]Error processing {full_path}: {str(e)}[/red]")
-                # If there's an existing entry, preserve it
-                if full_path in existing_data:
-                    current_data[full_path] = existing_data[full_path]
-            finally:
-                progress.advance(task)
+                console.print(f"[red]Error processing file {full_path}: {str(e)}[/red]")
+                continue
 
-    # Step 4: Create final CSV output
-    if not current_data:
-        return create_empty_csv(), total_cost, model_name
+        # Step 3: Create CSV output
+        csv_output = create_csv_output(current_data)
         
-    return create_csv_output(current_data), total_cost, model_name
+        # Step 4: Return results
+        return csv_output, total_cost, model_name
+
+    except Exception as e:
+        console.print(f"[red]Error in summarize_directory: {str(e)}[/red]")
+        raise
