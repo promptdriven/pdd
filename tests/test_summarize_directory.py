@@ -48,10 +48,15 @@ def test_successful_summarization(
          patch('pdd.summarize_directory.llm_invoke') as mock_llm_invoke, \
          mock_datetime_now('pdd.summarize_directory.datetime', fixed_now) as mock_datetime:
         
-        # Setup mock os.stat
-        mock_stat.return_value.st_mtime = fixed_now.timestamp()
+        def mock_stat_side_effect(file_path, **kwargs):
+            mock_stat_result = MagicMock()
+            if file_path == '/path/to/directory/file1.py':
+                mock_stat_result.st_mtime = datetime(2023, 10, 1, 11, 0, 0).timestamp()
+            else:
+                mock_stat_result.st_mtime = fixed_now.timestamp()
+            return mock_stat_result
+        mock_stat.side_effect = mock_stat_side_effect
         
-        # Setup mock file handling
         mock_file_instances = {}
         def mock_open_side_effect(file_path, mode='r', encoding=None):
             if file_path not in mock_file_instances:
@@ -64,13 +69,11 @@ def test_successful_summarization(
             return mock_file_instances[file_path]
         mock_file.side_effect = mock_open_side_effect
         
-        # Setup mock llm_invoke
         def llm_invoke_side_effect(*args, **kwargs):
             file_contents = kwargs['input_json']['file_contents']
             if file_contents == mock_file_contents['/path/to/directory/file1.py']:
-                summary = "Summary of file1"  # Keep existing summary
+                summary = "Summary of file1"
             else:
-                # Generate summary based on actual content
                 if "def foo" in file_contents:
                     summary = "Summary of def foo"
                 elif "import os" in file_contents:
@@ -84,7 +87,6 @@ def test_successful_summarization(
             }
         mock_llm_invoke.side_effect = llm_invoke_side_effect
         
-        # Call function under test
         csv_output, total_cost, model_name = summarize_directory(
             directory_path="/path/to/directory/*.py",
             strength=0.5,
@@ -93,15 +95,14 @@ def test_successful_summarization(
             csv_file=existing_csv
         )
         
-        # Verify results
         expected_csv = (
             "full_path,file_summary,date\r\n"
-            "/path/to/directory/file1.py,Summary of file1,2023-10-02 15:30:00\r\n"
+            "/path/to/directory/file1.py,Summary of file1,2023-10-01 12:00:00\r\n"
             "/path/to/directory/file2.py,Summary of def foo,2023-10-02 15:30:00\r\n"
             "/path/to/directory/file3.py,Summary of import o,2023-10-02 15:30:00\r\n"
         )
         assert csv_output == expected_csv
-        assert total_cost == 0.03  # Updated from 0.02 to 0.03
+        assert total_cost == 0.02  # Corrected total cost
         assert model_name == 'MockModel'
 
 def test_existing_csv_unchanged_files(
@@ -151,7 +152,7 @@ def test_existing_csv_unchanged_files(
         assert csv_output == expected_csv
         assert total_cost == 0.02
         assert model_name == 'MockModel'
-    
+
 def test_no_files_found(existing_csv, fixed_now):
     with patch('pdd.summarize_directory.glob.glob', return_value=[]), \
          mock_datetime_now('pdd.summarize_directory.datetime', fixed_now):
@@ -191,21 +192,33 @@ def test_llm_invoke_exception(
 ):
     with patch('pdd.summarize_directory.glob.glob', return_value=mock_files), \
          patch('pdd.summarize_directory.os.stat') as mock_stat, \
-         patch('pdd.summarize_directory.open', mock_open(read_data="")) as mock_file, \
+         patch('pdd.summarize_directory.open') as mock_file, \
          patch('pdd.summarize_directory.load_prompt_template', return_value="Summarize the file."), \
          patch('pdd.summarize_directory.llm_invoke') as mock_llm_invoke, \
          mock_datetime_now('pdd.summarize_directory.datetime', fixed_now):
-        
-        # Setup mock os.stat to return a fixed modification time
-        mock_stat.return_value.st_mtime = fixed_now.timestamp()
-        
-        # Setup mock file reads
-        handle = mock_file()
-        handle.read.side_effect = lambda: mock_file_contents[handle.name]
-        
-        # Setup llm_invoke to raise an exception for one file
+
+        def mock_stat_side_effect(file_path, **kwargs):
+            mock_stat_result = MagicMock()
+            if file_path == '/path/to/directory/file1.py':
+                mock_stat_result.st_mtime = datetime(2023, 10, 1, 11, 0, 0).timestamp()
+            else:
+                mock_stat_result.st_mtime = fixed_now.timestamp()
+            return mock_stat_result
+        mock_stat.side_effect = mock_stat_side_effect
+
+        def mock_open_side_effect(file_path, mode='r', encoding=None):
+            mock = MagicMock()
+            mock.__enter__.return_value = mock
+            mock.name = file_path
+            if file_path in mock_file_contents:
+                mock.read.return_value = mock_file_contents[file_path]
+            else:
+                mock.read.return_value = ""
+            return mock
+        mock_file.side_effect = mock_open_side_effect
+
         def llm_invoke_side_effect(*args, **kwargs):
-            if "file2.py" in kwargs['input_json']['file_contents']:
+            if "def foo" in kwargs['input_json']['file_contents']:
                 raise RuntimeError("LLM invocation failed")
             return {
                 'result': MagicMock(file_summary="Valid summary"),
@@ -213,8 +226,7 @@ def test_llm_invoke_exception(
                 'model_name': 'MockModel'
             }
         mock_llm_invoke.side_effect = llm_invoke_side_effect
-        
-        # Call the function under test
+
         csv_output, total_cost, model_name = summarize_directory(
             directory_path="/path/to/directory/*.py",
             strength=0.5,
@@ -222,15 +234,14 @@ def test_llm_invoke_exception(
             verbose=False,
             csv_file=existing_csv
         )
-        
-        # Assertions
+
         expected_csv = (
             "full_path,file_summary,date\r\n"
             "/path/to/directory/file1.py,Summary of file1,2023-10-01 12:00:00\r\n"
             "/path/to/directory/file3.py,Valid summary,2023-10-02 15:30:00\r\n"
         )
         assert csv_output == expected_csv
-        assert total_cost == 0.02  # Two successful summaries
+        assert total_cost == 0.01
         assert model_name == 'MockModel'
 
 def test_empty_directory_no_csv():
@@ -269,26 +280,37 @@ def test_invalid_directory_path():
 def test_verbose_flag(capsys, mock_files, mock_file_contents, existing_csv, fixed_now):
     with patch('pdd.summarize_directory.glob.glob', return_value=mock_files), \
          patch('pdd.summarize_directory.os.stat') as mock_stat, \
-         patch('pdd.summarize_directory.open', mock_open(read_data="")) as mock_file, \
+         patch('pdd.summarize_directory.open') as mock_file, \
          patch('pdd.summarize_directory.load_prompt_template', return_value="Summarize the file."), \
          patch('pdd.summarize_directory.llm_invoke') as mock_llm_invoke, \
          mock_datetime_now('pdd.summarize_directory.datetime', fixed_now):
+
+        def mock_stat_side_effect(file_path, **kwargs):
+            mock_stat_result = MagicMock()
+            if file_path == '/path/to/directory/file1.py':
+                mock_stat_result.st_mtime = datetime(2023, 10, 1, 11, 0, 0).timestamp()
+            else:
+                mock_stat_result.st_mtime = fixed_now.timestamp()
+            return mock_stat_result
+        mock_stat.side_effect = mock_stat_side_effect
+
+        def mock_open_side_effect(file_path, mode='r', encoding=None):
+            mock = MagicMock()
+            mock.__enter__.return_value = mock
+            mock.name = file_path
+            if file_path in mock_file_contents:
+                mock.read.return_value = mock_file_contents[file_path]
+            else:
+                mock.read.return_value = ""
+            return mock
+        mock_file.side_effect = mock_open_side_effect
         
-        # Setup mock os.stat to return a fixed modification time
-        mock_stat.return_value.st_mtime = fixed_now.timestamp()
-        
-        # Setup mock file reads
-        handle = mock_file()
-        handle.read.side_effect = lambda: mock_file_contents[handle.name]
-        
-        # Setup mock llm_invoke responses
         mock_llm_invoke.return_value = {
             'result': MagicMock(file_summary="Verbose summary"),
             'cost': 0.01,
             'model_name': 'VerboseModel'
         }
-        
-        # Call the function under test with verbose=True
+
         csv_output, total_cost, model_name = summarize_directory(
             directory_path="/path/to/directory/*.py",
             strength=0.5,
@@ -296,11 +318,9 @@ def test_verbose_flag(capsys, mock_files, mock_file_contents, existing_csv, fixe
             verbose=True,
             csv_file=existing_csv
         )
-        
-        # Capture printed output
+
         captured = capsys.readouterr()
-        
-        # Assertions for CSV output
+
         expected_csv = (
             "full_path,file_summary,date\r\n"
             "/path/to/directory/file1.py,Summary of file1,2023-10-01 12:00:00\r\n"
@@ -310,8 +330,8 @@ def test_verbose_flag(capsys, mock_files, mock_file_contents, existing_csv, fixe
         assert csv_output == expected_csv
         assert total_cost == 0.02
         assert model_name == 'VerboseModel'
-        
-        # Assertions for verbose output (checking some expected print statements)
+
+        # Assertions for verbose output
         assert "Summarizing: /path/to/directory/file2.py" in captured.out
         assert "Summarizing: /path/to/directory/file3.py" in captured.out
 
