@@ -88,47 +88,52 @@ def summarize_directory(
 
         # Step 2: Process each file
         for file_path in track(files, description="Processing files"):
-            full_path = str(Path(file_path).resolve())
-            
-            # Step 2a: Check if file needs processing
-            file_stat = os.stat(file_path)
-            file_mtime = datetime.fromtimestamp(file_stat.st_mtime)
-            
-            if full_path in current_data:
-                existing_date = datetime.strptime(current_data[full_path]['date'], 
-                                               "%Y-%m-%d %H:%M:%S")
-                if file_mtime <= existing_date:
-                    if verbose:
-                        console.print(f"[blue]Skipping unchanged file: {full_path}[/blue]")
-                    continue
-
             try:
-                # Step 2b: Read file contents
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    file_contents = f.read()
-
-                # Step 2c: Summarize file
-                if verbose:
-                    console.print(f"[green]Summarizing: {full_path}[/green]")
+                full_path = str(Path(file_path).resolve())
                 
-                response = llm_invoke(
-                    prompt=prompt,
-                    input_json={'file_contents': file_contents},
-                    strength=strength,
-                    temperature=temperature,
-                    verbose=verbose,
-                    output_pydantic=FileSummary
-                )
+                # Step 2a: Check if file needs processing
+                file_stat = os.stat(file_path)
+                file_mtime = datetime.fromtimestamp(file_stat.st_mtime)
+                
+                # Check if file exists in current data and hasn't been modified
+                needs_processing = True
+                if full_path in current_data:
+                    existing_date = datetime.strptime(
+                        current_data[full_path]['date'], 
+                        "%Y-%m-%d %H:%M:%S"
+                    )
+                    if file_mtime <= existing_date:
+                        if verbose:
+                            console.print(f"[blue]Skipping unchanged file: {full_path}[/blue]")
+                        needs_processing = False
 
-                # Update tracking variables
-                total_cost += response['cost']
-                model_name = response['model_name']
+                if needs_processing:
+                    # Step 2b: Read file contents
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        file_contents = f.read()
 
-                # Step 2d: Store results
-                current_data[full_path] = {
-                    'file_summary': response['result'].file_summary,
-                    'date': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                }
+                    # Step 2c: Summarize file
+                    if verbose:
+                        console.print(f"[green]Summarizing: {full_path}[/green]")
+                    
+                    response = llm_invoke(
+                        prompt=prompt,
+                        input_json={'file_contents': file_contents},
+                        strength=strength,
+                        temperature=temperature,
+                        verbose=verbose,
+                        output_pydantic=FileSummary
+                    )
+
+                    # Update tracking variables
+                    total_cost += response['cost']
+                    model_name = response['model_name']
+
+                    # Step 2d: Store results
+                    current_data[full_path] = {
+                        'file_summary': response['result'].file_summary,
+                        'date': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }
 
             except Exception as e:
                 console.print(f"[red]Error processing file {full_path}: {str(e)}[/red]")
