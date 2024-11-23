@@ -17,25 +17,32 @@
         'total_cost' - A float representing the total cost of the LCEL runs.
         'model_name' - A string representing the name of the LLM model used.
 
-% Here is how to use the internal module llm_invoke:
-    <llm_invoke_example>
-        <include>context/llm_invoke_example.py</include>
-    </llm_invoke_example>
+% Here is how to use the internal modules:
+    <internal_modules>
+    For llm_invoke to run prompts with the LLM model:
+        <llm_invoke_example>
+            <include>context/llm_invoke_example.py</include>
+        </llm_invoke_example>
+
+    For loading prompt templates:
+            <load_prompt_template_example>
+                <include>context/load_prompt_template_example.py</include>
+            </load_prompt_template_example>
+    </internal_modules>
 
 % This program will do the following:
-    Step 1: Use $PDD_PATH environment variable to get the path to the project.
-    Step 2: Load prompt template from $PDD_PATH/prompts/summarize_file_LLM.prompt
-    Step 3: Iterate through all files in the directory specified by the 'directory_path' input.
-        Step 3a: For each file:
+    Step 1: Load prompt template summarize_file_LLM.prompt
+    Step 2: Iterate through all files in the directory specified by the 'directory_path' input.
+        Step 2a: For each file:
             - Extract the filename using os.path.basename()
             - Check if any existing entry in the CSV has a matching filename
             - Only proceed with summarization if either:
                 1. No matching filename is found in existing entries
                 2. The file is newer than the existing entry with the matching filename
             - If a match is found and the file hasn't changed, reuse the existing summary
-        Step 3b: Read each file and read the contents of the file as a string.
-        Step 3c: Summarize the files contents using llm_invoke with this parameter: {'file_contents': file_contents}
+        Step 2b: Read each file and read the contents of the file as a string.
+        Step 2c: Summarize the files contents using llm_invoke with this parameter: {'file_contents': file_contents}
             - Use a Pydantic model called FileSummary with a field named 'file_summary' for consistent naming
-        Step 3d: Store the full path of the file, the file_summary, and the date in the current data dictionary.
-    Step 4. Pretty print a message letting the user know it is running and the current progress.
-    Step 5: Return the tuple containing the updated csv output string, the total_cost and the model_name of the LLM model used.
+        Step 2d: Store the full path of the file, the file_summary, and the date in the current data dictionary.
+    Step 3. Pretty print a message letting the user know it is running and the current progress.
+    Step 4: Return the tuple containing the updated csv output string, the total_cost and the model_name of the LLM model used.
