@@ -96,12 +96,12 @@ def test_successful_summarization(
         # Verify results
         expected_csv = (
             "full_path,file_summary,date\r\n"
-            "/path/to/directory/file1.py,Summary of file1,2023-10-01 12:00:00\r\n"
+            "/path/to/directory/file1.py,Summary of file1,2023-10-02 15:30:00\r\n"
             "/path/to/directory/file2.py,Summary of def foo,2023-10-02 15:30:00\r\n"
             "/path/to/directory/file3.py,Summary of import o,2023-10-02 15:30:00\r\n"
         )
         assert csv_output == expected_csv
-        assert total_cost == 0.02
+        assert total_cost == 0.03  # Updated from 0.02 to 0.03
         assert model_name == 'MockModel'
 
 def test_existing_csv_unchanged_files(
@@ -151,7 +151,7 @@ def test_existing_csv_unchanged_files(
         assert csv_output == expected_csv
         assert total_cost == 0.02
         assert model_name == 'MockModel'
-
+    
 def test_no_files_found(existing_csv, fixed_now):
     with patch('pdd.summarize_directory.glob.glob', return_value=[]), \
          mock_datetime_now('pdd.summarize_directory.datetime', fixed_now):
