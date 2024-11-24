@@ -43,6 +43,6 @@
         Step 2b: Read each file and read the contents of the file as a string.
         Step 2c: Summarize the files contents using llm_invoke with this parameter: {'file_contents': file_contents}
             - Use a Pydantic model called FileSummary with a field named 'file_summary' for consistent naming
-        Step 2d: Store the full path of the file, the file_summary, and the date in the current data dictionary.
+        Step 2d: Store the relative path (not the full path) of the file, the file_summary, and the date in the current data dictionary.
     Step 3. Pretty print a message letting the user know it is running and the current progress.
     Step 4: Return the tuple containing the updated csv output string, the total_cost and the model_name of the LLM model used.
