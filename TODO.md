@@ -1,11 +1,16 @@
 # TODO
 
+## On Deck
+- [ ] add loop to crash command like with fix
+- [ ] auto-includes
+- [ ] Use the response to get the token counting to speed up app and make it more accurate
+- [ ] increase the number of unit tests to generate
+
 ## Features
 
 - [ ] auto reflect
 - [ ] run lint for context for better reflection
 - [ ] smart includes
-- [ ] auto-includes
 - [ ] auto split modules into another sub module
 - [ ] auto check inconsistencies between modules
 - [ ] routlellm
@@ -13,7 +18,6 @@
 - [ ] auto record which model works for each prompt
 - [ ] benchmark fix the prompt based on diffs to the code file
 - [ ] Use perplexica to automatically find context
-- [ ] increase the number of unit tests to generate
 - [ ] use context caching during fixing errors
 - [ ] auto update the utility
 - [ ] github login 
@@ -28,7 +32,6 @@
 
 ## Bugs
 
-- [ ] Use the response to get the token counting to speed up app and make it more accurate
 - [ ] Fix change command fixing
 
 ## Improvements
@@ -40,7 +43,6 @@
 - [ ] Use existing good prompt code example to generate code for the prompt
 - [ ] update prompt for makefile
 - [ ] fix warnings in the code
-- [ ] add loop to crash command like with fix
 - [ ] auto set PDD_PATH for package install
 - [ ] fix toml file
 
