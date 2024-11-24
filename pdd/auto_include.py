@@ -1,138 +1,155 @@
-import os
-from pathlib import Path
-from typing import Tuple, Union
-import logging
-from rich import print as rprint
-from rich.markdown import Markdown
+from typing import Tuple, Optional
+from pydantic import BaseModel, Field
+from rich import print
 from rich.console import Console
-from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import JsonOutputParser
+from rich.panel import Panel
+from .load_prompt_template import load_prompt_template
+from .llm_invoke import llm_invoke
 from .summarize_directory import summarize_directory
-from .llm_selector import llm_selector
+import csv
+from io import StringIO
 
 console = Console()
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
-def load_prompt_file(filename: str) -> str:
-    """Load prompt from file in PDD_PATH/prompts directory."""
-    pdd_path = os.getenv('PDD_PATH')
-    if not pdd_path:
-        raise ValueError("PDD_PATH environment variable not set")
-    
-    prompt_path = Path(pdd_path) / 'prompts' / filename
-    if not prompt_path.exists():
-        raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
-    
-    return prompt_path.read_text()
-
-def calculate_token_cost(token_count: Union[int, float, str], cost_per_million: Union[float, int]) -> float:
-    """
-    Calculate token cost with robust type handling.
-    
-    Args:
-        token_count: Number of tokens
-        cost_per_million: Cost per million tokens
-    
-    Returns:
-        Total cost of tokens
-    """
-    try:
-        # Convert to numeric, with fallback to 0
-        token_count = float(token_count) if token_count is not None else 0
-        cost_per_million = float(cost_per_million) if cost_per_million is not None else 0
-        
-        return (token_count * cost_per_million) / 1_000_000
-    except (TypeError, ValueError) as e:
-        logger.error(f"Token cost calculation error: {e}")
-        logger.error(f"token_count: {token_count}, type: {type(token_count)}")
-        logger.error(f"cost_per_million: {cost_per_million}, type: {type(cost_per_million)}")
-        return 0.0
+class AutoIncludeOutput(BaseModel):
+    string_of_includes: str = Field(description="The string of includes to be added to the prompt")
 
 def auto_include(
     input_prompt: str,
     directory_path: str,
-    csv_file: str,
+    csv_file: Optional[str] = None,
     strength: float = 0.7,
     temperature: float = 0.0,
     verbose: bool = False
 ) -> Tuple[str, str, float, str]:
     """
     Automatically find and insert proper dependencies into the prompt.
-    
-    Enhanced with more robust error handling and logging.
+
+    Args:
+        input_prompt (str): The prompt requiring includes
+        directory_path (str): Directory path pattern for dependencies
+        csv_file (Optional[str]): Existing CSV content
+        strength (float): Model strength (0-1)
+        temperature (float): Model temperature (0-1)
+        verbose (bool): Whether to print detailed output
+
+    Returns:
+        Tuple[str, str, float, str]: (output_prompt, csv_output, total_cost, model_name)
     """
     try:
-        # Step 1: Load prompt templates
-        auto_include_template = load_prompt_file('auto_include_LLM.prompt')
-        extract_template = load_prompt_file('extract_auto_include_LLM.prompt')
+        # Input validation
+        if not input_prompt or not directory_path:
+            raise ValueError("Input prompt and directory path are required")
+        if not (0 <= strength <= 1) or not (0 <= temperature <= 1):
+            raise ValueError("Strength and temperature must be between 0 and 1")
 
-        # Step 2: Get available includes from directory
-        csv_output, dir_cost, _ = summarize_directory(
+        total_cost = 0.0
+        model_name = ""
+
+        if verbose:
+            console.print(Panel("Step 1: Loading prompt templates", style="blue"))
+
+        # Load prompt templates
+        auto_include_prompt = load_prompt_template("auto_include_LLM")
+        extract_prompt = load_prompt_template("extract_auto_include_LLM")
+
+        if not auto_include_prompt or not extract_prompt:
+            raise ValueError("Failed to load prompt templates")
+
+        if verbose:
+            console.print(Panel("Step 2: Summarizing directory", style="blue"))
+
+        # Run summarize_directory
+        csv_output, summary_cost, summary_model = summarize_directory(
             directory_path=directory_path,
             strength=strength,
             temperature=temperature,
             verbose=verbose,
             csv_file=csv_file
         )
+        total_cost += summary_cost
+        model_name = summary_model
 
-        # Robust CSV parsing
+        # Parse CSV to create available_includes
         available_includes = []
-        for line in csv_output.split('\n')[1:]:  # Skip header
-            line = line.strip()
-            if line:  # Only process non-empty lines
-                parts = line.split(',', 2)
-                if len(parts) >= 2:
-                    path = parts[0]
-                    summary = parts[1] if len(parts) > 1 else ""
-                    available_includes.append(f"File: {path}\nSummary: {summary}")
+        csv_reader = csv.DictReader(StringIO(csv_output))
+        for row in csv_reader:
+            available_includes.append(f"{row['full_path']}: {row['file_summary']}")
 
-        # Step 3: Select LLM model with explicit type conversion
-        model_result = llm_selector(
-            strength=strength, 
-            temperature=temperature
+        if verbose:
+            console.print(Panel("Step 3: Running auto_include_LLM", style="blue"))
+
+        # Run auto_include_LLM prompt
+        auto_include_response = llm_invoke(
+            prompt=auto_include_prompt,
+            input_json={
+                "input_prompt": input_prompt,
+                "available_includes": "\n".join(available_includes)
+            },
+            strength=strength,
+            temperature=temperature,
+            verbose=verbose
         )
-        
-        # Safely unpack model results with type conversion
-        model, input_tokens, output_tokens, cost_per_input_million, cost_per_output_million = [
-            val if val is not None else 0 for val in model_result
-        ]
+        total_cost += auto_include_response["cost"]
+        model_name = auto_include_response["model_name"]
 
-        # Step 4: Create LangChain templates
-        auto_include_prompt = PromptTemplate(
-            template=auto_include_template,
-            input_variables=['input_prompt', 'available_includes']
+        if verbose:
+            console.print(Panel("Step 4: Running extract_auto_include_LLM", style="blue"))
+
+        # Run extract_auto_include_LLM prompt
+        extract_response = llm_invoke(
+            prompt=extract_prompt,
+            input_json={"llm_output": auto_include_response["result"]},
+            strength=strength,
+            temperature=temperature,
+            verbose=verbose,
+            output_pydantic=AutoIncludeOutput
         )
+        total_cost += extract_response["cost"]
+        model_name = extract_response["model_name"]
 
-        extract_prompt = PromptTemplate(
-            template=extract_template,
-            input_variables=['llm_output']
-        )
+        if verbose:
+            console.print(Panel("Step 5: Generating output prompt", style="blue"))
 
-        # Step 5: Invoke LLM for auto-include
-        auto_include_chain = auto_include_prompt | model
-        auto_include_result = auto_include_chain.invoke({
-            'input_prompt': input_prompt,
-            'available_includes': '\n'.join(available_includes)
-        })
+        # Create output prompt
+        string_of_includes = extract_response["result"].string_of_includes
+        output_prompt = f"{string_of_includes}\n\n{input_prompt}"
 
-        # Step 6: Invoke LLM for extracting includes
-        extract_chain = extract_prompt | model | JsonOutputParser()
-        extract_result = extract_chain.invoke({
-            'llm_output': auto_include_result
-        })
+        if verbose:
+            console.print(Panel(f"Total cost: ${total_cost:.6f}", style="green"))
+            console.print(Panel(f"Model used: {model_name}", style="green"))
 
-        # Step 7: Calculate total cost with robust type handling
-        input_cost = calculate_token_cost(input_tokens, cost_per_input_million)
-        output_cost = calculate_token_cost(output_tokens, cost_per_output_million)
-        total_cost = input_cost + output_cost + dir_cost
-
-        # Step 8: Construct output prompt
-        output_prompt = extract_result.get('string_of_includes', '') + input_prompt
-
-        return output_prompt, csv_output, total_cost, model.model_name
+        return output_prompt, csv_output, total_cost, model_name
 
     except Exception as e:
-        logger.error(f"Error in auto_include: {e}")
-        console.print(f"[bold red]Error:[/bold red] {str(e)}")
+        console.print(Panel(f"[red]Error: {str(e)}", style="red"))
         raise
+
+if __name__ == "__main__":
+    def main():
+        try:
+            # Example usage
+            input_prompt = "Write a function that sorts a list"
+            directory_path = "context/c*.py"
+            csv_file = """full_path,file_summary,date
+context/example1.py,"Contains sorting algorithms",2023-01-01"""
+
+            output_prompt, csv_output, total_cost, model_name = auto_include(
+                input_prompt=input_prompt,
+                directory_path=directory_path,
+                csv_file=csv_file,
+                strength=0.7,
+                temperature=0.0,
+                verbose=True
+            )
+
+            print("\nResults:")
+            print(f"Output Prompt:\n{output_prompt}")
+            print(f"CSV Output:\n{csv_output}")
+            print(f"Total Cost: ${total_cost:.6f}")
+            print(f"Model Used: {model_name}")
+
+        except Exception as e:
+            console.print(f"[red]Error in main: {str(e)}[/red]")
+
+    main()

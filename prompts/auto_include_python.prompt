@@ -1,4 +1,4 @@
-% You are an expert Python Software Engineer. Your goal is to write a Python function, "auto_include", that will automatically find the proper depedencies and insert them into the prompt.
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "auto_include", that will automatically find the proper dependencies and insert them into the prompt.
 
 <include>./context/python_preamble.prompt</include>
 
@@ -8,39 +8,42 @@
         'directory_path' - The directory string of the dependencies (e.g. 'context/c*.py').
         'csv_file' - A string representing the contents of the csv file.
         'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
-        'temperature' - A float that is the temperature of the LLM model to use.
-        'verbose' - Print out details of processing
-    Outputs: 
+        'temperature' - A float between 0 and 1 that is the temperature of the LLM model to use.
+        'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
+    Outputs as a tuple: 
         'output_prompt' - A string that contains the prompt with the includes inserted.
         'csv_output' - A string that contains the updated csv file.
         'total_cost' - A float that is the total cost to generate the output includes string. 
         'model_name' - A string that is the name of the selected LLM model
 
-% Here is an example of a LangChain Expression Language (LCEL) program: <lcel_example><include>context/langchain_lcel_example.py</include></lcel_example>
-
 % Here are examples of how to use internal modules:
-<internal_example_modules>
-    % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>./context/llm_selector_example.py</include></llm_selector_example>
-    % Example of scanning and summarizing the content of the files in the directory_path using summarize_directory: <summarize_directory_example><include>./context/summarize_directory_example.py</include></summarize_directory_example>
-</internal_example_modules>
+<internal_modules>
+    % Example of loading prompt templates:
+    <load_prompt_template_example>
+        <include>context/load_prompt_template_example.py</include>
+    </load_prompt_template_example>
 
-% This program will use Langchain to do the following:
-    Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/auto_include_LLM.prompt' and the '$PDD_PATH/prompts/extract_auto_include_LLM.prompt' files.
-    Step 2. Use csv_file to run summarize_directory to get the csv_output. The full_path and file_summary columns of csv_ouput becomes available_includes.
-    Step 2. Then this will create a Langchain LCEL template from the auto include prompt.
-    Step 3. This will use llm_selector for the model.
-    Step 4. This will run the inputs through the model using Langchain LCEL. 
-        4a. Be sure to pass the following string parameters to the prompt during invoke:
+    % Example of running prompts with llm_invoke:
+    <llm_invoke_example>
+        <include>context/llm_invoke_example.py</include>
+    </llm_invoke_example>
+
+    % Example of scanning and summarizing the content of the files in the directory_path using summarize_directory:
+    <summarize_directory_example>
+        <include>./context/summarize_directory_example.py</include>
+    </summarize_directory_example>
+</internal_modules>
+
+% This program will do the following:
+    Step 1. Load the 'auto_include_LLM' and 'extract_auto_include_LLM' prompt templates.
+    Step 2. Use csv_file to run summarize_directory to get the csv_output. The full_path and file_summary columns of csv_output becomes available_includes.
+    Step 3. Run the auto_include_LLM prompt through llm_invoke:
+        3a. Pass the following string parameters to the prompt during invoke:
             - 'input_prompt' - A string that contains the prompt that requires the includes to be selected.
             - 'available_includes' - A list of strings that contains the file paths and summaries of the available includes.
-        4b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
-    Step 5. This will pretty print the markdown formatting that is present in the result via the rich Markdown function. It will also pretty print the number of tokens in the result and the cost.
-    Step 6. Then this will create a Langchain LCEL template from the extract auto include prompt.
-    Step 7. This will use llm_selector for the model.
-    Step 8. This will run the output of auto_include_LLM LCEL through the model using Langchain LCEL. 
-        8a. Be sure to pass the following string parameter to the prompt during invoke:
-            - 'llm_output' - A string that contains the output of the auto_include_LLM prompt, with possible and minimum required includes. 
-        8b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
-    Step 9. The extract_auto_include_LLM LCEL will return a JSON object, which will include the key 'string_of_includes' to be access via the get() function. Concatenate the 'string_of_includes' with the 'input_prompt' to form the 'output_prompt'. 
-    Step 10. The 'total_cost' will be the sum of the cost of all the input and output tokens. 
-    Step 11. It should return 'output_prompt', 'total_cost' and 'model_name'.
+    Step 4. Run the extract_auto_include_LLM prompt through llm_invoke with the output from Step 3:
+        4a. Pass the following string parameter to the prompt during invoke:
+            - 'llm_output' - A string that contains the output of the auto_include_LLM prompt.
+        4b. The Pydantic output will include the key 'string_of_includes' to be accessed.
+    Step 5. Concatenate the 'string_of_includes' with the 'input_prompt' to form the 'output_prompt'.
+    Step 6. Return the tuple containing 'output_prompt', 'csv_output', 'total_cost', and 'model_name'.
