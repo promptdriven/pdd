@@ -1,346 +1,271 @@
-import os
+# tests/test_auto_include.py
+
 import pytest
 from unittest.mock import patch, MagicMock
-from typing import List
-
-# Import the function to be tested
 from pdd.auto_include import auto_include
+from pydantic import ValidationError
+
+# Sample data for mocking
+AUTO_INCLUDE_PROMPT = "Auto Include Prompt Template"
+EXTRACT_PROMPT = "Extract Include Prompt Template"
+CSV_OUTPUT = """full_path,file_summary,date
+context/example1.py,"Contains sorting algorithms",2023-01-01
+context/example2.py,"Contains searching algorithms",2023-01-02
+"""
+AVAILABLE_INCLUDES = [
+    "context/example1.py: Contains sorting algorithms",
+    "context/example2.py: Contains searching algorithms"
+]
+AUTO_INCLUDE_RESPONSE = {
+    "result": "Include these modules:\ncontext/example1.py\ncontext/example2.py",
+    "cost": 0.05,
+    "model_name": "model-auto-include"
+}
+EXTRACT_INCLUDE_RESPONSE = {
+    "result": {"string_of_includes": "# Includes\nimport example1\nimport example2"},
+    "cost": 0.03,
+    "model_name": "model-extract-include"
+}
 
 @pytest.fixture
-def mock_environment():
-    """Fixture to set up and tear down environment variables."""
-    with patch.dict(os.environ, {"PDD_PATH": "/fake/path"}, clear=True):
-        yield
+def valid_inputs():
+    return {
+        "input_prompt": "Write a function that sorts a list",
+        "directory_path": "context/c*.py",
+        "csv_file": CSV_OUTPUT,
+        "strength": 0.7,
+        "temperature": 0.0,
+        "verbose": False
+    }
 
-@pytest.fixture
-def mock_load_prompt_template():
-    """Fixture to mock the load_prompt_template function."""
-    with patch("pdd.auto_include.load_prompt_template") as mock_load:
-        mock_load.side_effect = lambda filename: f"Template content for {filename}"
-        yield mock_load
-
-@pytest.fixture
-def mock_llm_selector():
-    """Fixture to mock the llm_selector function."""
-    with patch("pdd.auto_include.llm_selector") as mock_selector:
-        # Mocking llm_selector to return a mock LLM and other parameters
-        mock_llm = MagicMock()
-        mock_llm.invoke.return_value = "LLM output"
-        token_counter = MagicMock(side_effect=lambda x: len(x))
-        input_cost = 0.05
-        output_cost = 0.07
-        model_name = "mock-model"
-        mock_selector.return_value = (mock_llm, token_counter, input_cost, output_cost, model_name)
-        yield mock_selector
-
-@pytest.fixture
-def mock_console_print():
-    """Fixture to mock the console.print function."""
-    with patch("pdd.auto_include.console.print") as mock_print:
-        yield mock_print
-
-def test_auto_include_success(mock_environment, mock_load_prompt_template, mock_llm_selector, mock_console_print):
-    """
-    Test the auto_include function with valid inputs.
-    """
-    input_prompt = "This is a test prompt."
-    available_includes = ["include1.py", "include2.py"]
-    strength = 0.5
-    temperature = 0.7
-
-    output_prompt, total_cost, model_name = auto_include(
-        input_prompt=input_prompt,
-        available_includes=available_includes,
-        strength=strength,
-        temperature=temperature
-    )
-
-    # Assertions
-    assert isinstance(output_prompt, str)
-    assert isinstance(total_cost, float)
-    assert isinstance(model_name, str)
-    assert model_name == "mock-model"
-    expected_total_cost = (
-        (len(f"Template content for auto_include_LLM.prompt") / 1_000_000) * 0.05 +
-        (len("LLM output") / 1_000_000) * 0.07 +
-        (len(f"Template content for extract_auto_include_LLM.prompt") / 1_000_000) * 0.05 +
-        (len("LLM output") / 1_000_000) * 0.07
-    )
-    assert total_cost == expected_total_cost
-    assert output_prompt == f"LLM output\n{input_prompt}"
-
-def test_missing_pdd_path():
-    """
-    Test the auto_include function when PDD_PATH environment variable is missing.
-    """
-    input_prompt = "This is a test prompt."
-    available_includes = ["include1.py", "include2.py"]
-    strength = 0.5
-    temperature = 0.7
-
-    with patch.dict(os.environ, {}, clear=True):
-        with pytest.raises(ValueError, match="PDD_PATH environment variable not set"):
-            auto_include(
-                input_prompt=input_prompt,
-                available_includes=available_includes,
-                strength=strength,
-                temperature=temperature
-            )
-
-def test_load_prompt_file_not_found(mock_environment, mock_load_prompt_template, mock_llm_selector, mock_console_print):
-    """
-    Test the auto_include function when prompt files are missing.
-    """
-    # Configure the mock to raise FileNotFoundError for missing prompt files
-    mock_load_prompt_template.side_effect = FileNotFoundError("Prompt file not found: /fake/path/prompts/missing.prompt")
-
-    input_prompt = "This is a test prompt."
-    available_includes = ["include1.py", "include2.py"]
-    strength = 0.5
-    temperature = 0.7
-
-    with pytest.raises(FileNotFoundError, match="Prompt file not found: .*missing.prompt"):
-        auto_include(
-            input_prompt=input_prompt,
-            available_includes=available_includes,
-            strength=strength,
-            temperature=temperature
-        )
-
-def test_invalid_strength(mock_environment, mock_load_prompt_template, mock_llm_selector, mock_console_print):
-    """
-    Test the auto_include function with invalid strength values.
-    """
-    input_prompt = "This is a test prompt."
-    available_includes = ["include1.py", "include2.py"]
-    strength = 1.5  # Invalid strength
-    temperature = 0.7
-
-    # Assuming llm_selector raises a ValueError for invalid strength
-    mock_llm_selector.side_effect = ValueError("Strength must be between 0 and 1")
-
-    with pytest.raises(ValueError, match="Strength must be between 0 and 1"):
-        auto_include(
-            input_prompt=input_prompt,
-            available_includes=available_includes,
-            strength=strength,
-            temperature=temperature
-        )
-
-def test_empty_available_includes(mock_environment, mock_load_prompt_template, mock_llm_selector, mock_console_print):
-    """
-    Test the auto_include function with an empty available_includes list.
-    """
-    input_prompt = "This is a test prompt."
-    available_includes: List[str] = []
-    strength = 0.5
-    temperature = 0.7
-
-    output_prompt, total_cost, model_name = auto_include(
-        input_prompt=input_prompt,
-        available_includes=available_includes,
-        strength=strength,
-        temperature=temperature
-    )
-
-    # Assertions
-    assert isinstance(output_prompt, str)
-    assert isinstance(total_cost, float)
-    assert isinstance(model_name, str)
-    assert model_name == "mock-model"
-    assert output_prompt == f"LLM output\n{input_prompt}"
-
-def test_empty_input_prompt(mock_environment, mock_load_prompt_template, mock_llm_selector, mock_console_print):
-    """
-    Test the auto_include function with an empty input_prompt.
-    """
-    input_prompt = ""
-    available_includes = ["include1.py", "include2.py"]
-    strength = 0.5
-    temperature = 0.7
-
-    output_prompt, total_cost, model_name = auto_include(
-        input_prompt=input_prompt,
-        available_includes=available_includes,
-        strength=strength,
-        temperature=temperature
-    )
-
-    # Assertions
-    assert isinstance(output_prompt, str)
-    assert isinstance(total_cost, float)
-    assert isinstance(model_name, str)
-    assert model_name == "mock-model"
-    assert output_prompt == f"LLM output\n"
-
-def test_llm_selector_exception(mock_environment, mock_load_prompt_template):
-    """
-    Test the auto_include function when llm_selector raises an exception.
-    """
-    with patch("pdd.auto_include.llm_selector") as mock_selector:
-        mock_selector.side_effect = Exception("LLM selector failure")
-
-        input_prompt = "This is a test prompt."
-        available_includes = ["include1.py", "include2.py"]
-        strength = 0.5
-        temperature = 0.7
-
-        with patch("pdd.auto_include.console.print") as mock_print:
-            with pytest.raises(Exception, match="LLM selector failure"):
-                auto_include(
-                    input_prompt=input_prompt,
-                    available_includes=available_includes,
-                    strength=strength,
-                    temperature=temperature
-                )
-            mock_print.assert_called_with("[bold red]Error in auto_include:[/] LLM selector failure")
-
-def test_invalid_temperature(mock_environment, mock_load_prompt_template, mock_llm_selector, mock_console_print):
-    """
-    Test the auto_include function with invalid temperature values.
-    """
-    input_prompt = "This is a test prompt."
-    available_includes = ["include1.py", "include2.py"]
-    strength = 0.5
-    temperature = -0.1  # Invalid temperature
-
-    # Assuming llm_selector raises a ValueError for invalid temperature
-    with patch("pdd.auto_include.llm_selector") as mock_selector:
-        mock_selector.side_effect = ValueError("Temperature must be non-negative")
-
-        with pytest.raises(ValueError, match="Temperature must be non-negative"):
-            auto_include(
-                input_prompt=input_prompt,
-                available_includes=available_includes,
-                strength=strength,
-                temperature=temperature
-            )
-
-def test_parse_extracted_includes_failure(mock_environment, mock_load_prompt_template, mock_llm_selector, mock_console_print):
-    """
-    Test the auto_include function when parsing extracted includes fails.
-    """
-    # Mock the first LLM invoke to return invalid JSON
-    mock_llm = mock_llm_selector.return_value[0]
-    mock_llm.invoke.return_value = "Invalid JSON"
-
-    input_prompt = "This is a test prompt."
-    available_includes = ["include1.py", "include2.py"]
-    strength = 0.5
-    temperature = 0.7
-
-    with pytest.raises(Exception, match="JSON parse error"):
-        auto_include(
-            input_prompt=input_prompt,
-            available_includes=available_includes,
-            strength=strength,
-            temperature=temperature
-        )
-
-def test_total_cost_calculation(mock_environment, mock_load_prompt_template, mock_llm_selector, mock_console_print):
-    """
-    Test the auto_include function to ensure total_cost is calculated correctly.
-    """
-    input_prompt = "Test prompt for total cost calculation."
-    available_includes = ["include1.py", "include2.py"]
-    strength = 0.8
-    temperature = 0.6
-
-    # Configure the token_counter to return specific numbers
-    with patch.object(mock_llm_selector.return_value[1], '__call__', side_effect=lambda x: 1000):
-        output_prompt, total_cost, model_name = auto_include(
-            input_prompt=input_prompt,
-            available_includes=available_includes,
-            strength=strength,
-            temperature=temperature
-        )
+@patch("pdd.auto_include.load_prompt_template")
+@patch("pdd.auto_include.summarize_directory")
+@patch("pdd.auto_include.llm_invoke")
+def test_auto_include_success(mock_llm_invoke, mock_summarize_directory, mock_load_prompt_template, valid_inputs):
+    # Mock load_prompt_template
+    mock_load_prompt_template.side_effect = [AUTO_INCLUDE_PROMPT, EXTRACT_PROMPT]
     
-    # Expected total cost:
-    # (1000 / 1_000_000) * 0.05 + (1000 / 1_000_000) * 0.07 +
-    # (1000 / 1_000_000) * 0.05 + (1000 / 1_000_000) * 0.07
-    expected_total_cost = (1000 / 1_000_000) * (0.05 + 0.07 + 0.05 + 0.07)
-    assert total_cost == pytest.approx(expected_total_cost)
+    # Mock summarize_directory
+    mock_summarize_directory.return_value = (CSV_OUTPUT, 0.02, "model-summarize")
+    
+    # Mock llm_invoke for auto_include_LLM and extract_auto_include_LLM
+    mock_llm_invoke.side_effect = [AUTO_INCLUDE_RESPONSE, EXTRACT_INCLUDE_RESPONSE]
+    
+    expected_output_prompt = "# Includes\nimport example1\nimport example2\n\nWrite a function that sorts a list"
+    expected_csv_output = CSV_OUTPUT
+    expected_total_cost = 0.02 + 0.05 + 0.03  # 0.10
+    expected_model_name = "model-extract-include"
+    
+    output_prompt, csv_output, total_cost, model_name = auto_include(**valid_inputs)
+    
+    assert output_prompt == expected_output_prompt
+    assert csv_output == expected_csv_output
+    assert total_cost == expected_total_cost
+    assert model_name == expected_model_name
+    
+    # Verify that load_prompt_template was called correctly
+    mock_load_prompt_template.assert_any_call("auto_include_LLM")
+    mock_load_prompt_template.assert_any_call("extract_auto_include_LLM")
+    
+    # Verify summarize_directory was called with correct parameters
+    mock_summarize_directory.assert_called_once_with(
+        directory_path=valid_inputs["directory_path"],
+        strength=valid_inputs["strength"],
+        temperature=valid_inputs["temperature"],
+        verbose=valid_inputs["verbose"],
+        csv_file=valid_inputs["csv_file"]
+    )
+    
+    # Verify llm_invoke was called twice with correct parameters
+    assert mock_llm_invoke.call_count == 2
+    mock_llm_invoke.assert_any_call(
+        prompt=AUTO_INCLUDE_PROMPT,
+        input_json={
+            "input_prompt": valid_inputs["input_prompt"],
+            "available_includes": "\n".join(AVAILABLE_INCLUDES)
+        },
+        strength=valid_inputs["strength"],
+        temperature=valid_inputs["temperature"],
+        verbose=valid_inputs["verbose"]
+    )
+    mock_llm_invoke.assert_any_call(
+        prompt=EXTRACT_PROMPT,
+        input_json={"llm_output": AUTO_INCLUDE_RESPONSE["result"]},
+        strength=valid_inputs["strength"],
+        temperature=valid_inputs["temperature"],
+        verbose=valid_inputs["verbose"],
+        output_pydantic=MagicMock()
+    )
 
-def test_missing_string_of_includes(mock_environment, mock_load_prompt_template, mock_llm_selector, mock_console_print):
-    """
-    Test the auto_include function when 'string_of_includes' key is missing in extracted_result.
-    """
-    # Mock the extraction to return a dict without 'string_of_includes'
-    mock_llm = mock_llm_selector.return_value[0]
-    mock_llm.invoke.return_value = '{"unexpected_key": "value"}'
-
-    input_prompt = "This is a test prompt."
-    available_includes = ["include1.py", "include2.py"]
-    strength = 0.5
-    temperature = 0.7
-
-    with pytest.raises(KeyError, match="'string_of_includes'"):
+def test_auto_include_missing_input_prompt():
+    with pytest.raises(ValueError) as exc_info:
         auto_include(
-            input_prompt=input_prompt,
-            available_includes=available_includes,
-            strength=strength,
-            temperature=temperature
+            input_prompt="",
+            directory_path="context/c*.py",
+            csv_file=CSV_OUTPUT
         )
+    assert "Input prompt and directory path are required" in str(exc_info.value)
 
-def test_non_string_available_includes(mock_environment, mock_load_prompt_template, mock_llm_selector, mock_console_print):
-    """
-    Test the auto_include function with non-string items in available_includes list.
-    """
-    input_prompt = "This is a test prompt."
-    available_includes = ["include1.py", 123, None]  # Invalid items
-    strength = 0.5
-    temperature = 0.7
+def test_auto_include_missing_directory_path():
+    with pytest.raises(ValueError) as exc_info:
+        auto_include(
+            input_prompt="Write a function",
+            directory_path="",
+            csv_file=CSV_OUTPUT
+        )
+    assert "Input prompt and directory path are required" in str(exc_info.value)
 
-    # Assuming the function handles non-string includes by converting them to strings
-    output_prompt, total_cost, model_name = auto_include(
-        input_prompt=input_prompt,
-        available_includes=available_includes,
-        strength=strength,
-        temperature=temperature
+def test_auto_include_invalid_strength():
+    with pytest.raises(ValueError) as exc_info:
+        auto_include(
+            input_prompt="Write a function",
+            directory_path="context/c*.py",
+            csv_file=CSV_OUTPUT,
+            strength=1.5
+        )
+    assert "Strength and temperature must be between 0 and 1" in str(exc_info.value)
+
+def test_auto_include_invalid_temperature():
+    with pytest.raises(ValueError) as exc_info:
+        auto_include(
+            input_prompt="Write a function",
+            directory_path="context/c*.py",
+            csv_file=CSV_OUTPUT,
+            temperature=-0.1
+        )
+    assert "Strength and temperature must be between 0 and 1" in str(exc_info.value)
+
+@patch("pdd.auto_include.load_prompt_template")
+def test_auto_include_load_prompt_failure(mock_load_prompt_template, valid_inputs):
+    # Mock load_prompt_template to return None for one of the prompts
+    mock_load_prompt_template.side_effect = [AUTO_INCLUDE_PROMPT, None]
+    
+    with pytest.raises(ValueError) as exc_info:
+        auto_include(**valid_inputs)
+    
+    assert "Failed to load prompt templates" in str(exc_info.value)
+
+@patch("pdd.auto_include.load_prompt_template")
+@patch("pdd.auto_include.summarize_directory")
+def test_auto_include_summarize_directory_failure(mock_summarize_directory, mock_load_prompt_template, valid_inputs):
+    # Mock load_prompt_template
+    mock_load_prompt_template.side_effect = [AUTO_INCLUDE_PROMPT, EXTRACT_PROMPT]
+    
+    # Mock summarize_directory to raise an exception
+    mock_summarize_directory.side_effect = Exception("Summarize directory failed")
+    
+    with pytest.raises(Exception) as exc_info:
+        auto_include(**valid_inputs)
+    
+    assert "Summarize directory failed" in str(exc_info.value)
+
+@patch("pdd.auto_include.load_prompt_template")
+@patch("pdd.auto_include.summarize_directory")
+@patch("pdd.auto_include.llm_invoke")
+def test_auto_include_llm_invoke_auto_include_failure(mock_llm_invoke, mock_summarize_directory, mock_load_prompt_template, valid_inputs):
+    # Mock load_prompt_template
+    mock_load_prompt_template.side_effect = [AUTO_INCLUDE_PROMPT, EXTRACT_PROMPT]
+    
+    # Mock summarize_directory
+    mock_summarize_directory.return_value = (CSV_OUTPUT, 0.02, "model-summarize")
+    
+    # Mock llm_invoke: first call raises exception
+    mock_llm_invoke.side_effect = Exception("LLM invoke failed at auto_include_LLM")
+    
+    with pytest.raises(Exception) as exc_info:
+        auto_include(**valid_inputs)
+    
+    assert "LLM invoke failed at auto_include_LLM" in str(exc_info.value)
+
+@patch("pdd.auto_include.load_prompt_template")
+@patch("pdd.auto_include.summarize_directory")
+@patch("pdd.auto_include.llm_invoke")
+def test_auto_include_llm_invoke_extract_failure(mock_llm_invoke, mock_summarize_directory, mock_load_prompt_template, valid_inputs):
+    # Mock load_prompt_template
+    mock_load_prompt_template.side_effect = [AUTO_INCLUDE_PROMPT, EXTRACT_PROMPT]
+    
+    # Mock summarize_directory
+    mock_summarize_directory.return_value = (CSV_OUTPUT, 0.02, "model-summarize")
+    
+    # Mock llm_invoke: first call succeeds, second call raises exception
+    mock_llm_invoke.side_effect = [AUTO_INCLUDE_RESPONSE, Exception("LLM invoke failed at extract_auto_include_LLM")]
+    
+    with pytest.raises(Exception) as exc_info:
+        auto_include(**valid_inputs)
+    
+    assert "LLM invoke failed at extract_auto_include_LLM" in str(exc_info.value)
+
+@patch("pdd.auto_include.load_prompt_template")
+@patch("pdd.auto_include.summarize_directory")
+@patch("pdd.auto_include.llm_invoke")
+def test_auto_include_empty_csv_output(mock_llm_invoke, mock_summarize_directory, mock_load_prompt_template):
+    # Mock load_prompt_template
+    mock_load_prompt_template.side_effect = [AUTO_INCLUDE_PROMPT, EXTRACT_PROMPT]
+    
+    # Mock summarize_directory to return empty CSV
+    mock_summarize_directory.return_value = ("", 0.02, "model-summarize")
+    
+    # Mock llm_invoke for auto_include_LLM and extract_auto_include_LLM
+    mock_llm_invoke.side_effect = [
+        {
+            "result": "",
+            "cost": 0.05,
+            "model_name": "model-auto-include"
+        },
+        {
+            "result": {"string_of_includes": ""},
+            "cost": 0.03,
+            "model_name": "model-extract-include"
+        }
+    ]
+    
+    output_prompt, csv_output, total_cost, model_name = auto_include(
+        input_prompt="Write a function",
+        directory_path="context/c*.py",
+        csv_file=None,
+        strength=0.5,
+        temperature=0.5,
+        verbose=False
     )
+    
+    expected_output_prompt = "\n\nWrite a function"
+    expected_csv_output = ""
+    expected_total_cost = 0.02 + 0.05 + 0.03  # 0.10
+    expected_model_name = "model-extract-include"
+    
+    assert output_prompt == expected_output_prompt
+    assert csv_output == expected_csv_output
+    assert total_cost == expected_total_cost
+    assert model_name == expected_model_name
 
-    # Assertions
-    assert output_prompt == f"LLM output\n{input_prompt}"
-
-def test_large_input_prompt(mock_environment, mock_load_prompt_template, mock_llm_selector, mock_console_print):
-    """
-    Test the auto_include function with a large input_prompt.
-    """
-    input_prompt = "A" * 10_000  # Large input
-    available_includes = ["include1.py", "include2.py"]
-    strength = 0.9
-    temperature = 0.8
-
-    output_prompt, total_cost, model_name = auto_include(
-        input_prompt=input_prompt,
-        available_includes=available_includes,
-        strength=strength,
-        temperature=temperature
+@patch("pdd.auto_include.load_prompt_template")
+@patch("pdd.auto_include.summarize_directory")
+@patch("pdd.auto_include.llm_invoke")
+def test_auto_include_no_csv_file(mock_llm_invoke, mock_summarize_directory, mock_load_prompt_template):
+    # Mock load_prompt_template
+    mock_load_prompt_template.side_effect = [AUTO_INCLUDE_PROMPT, EXTRACT_PROMPT]
+    
+    # Mock summarize_directory without csv_file
+    mock_summarize_directory.return_value = (CSV_OUTPUT, 0.02, "model-summarize")
+    
+    # Mock llm_invoke for auto_include_LLM and extract_auto_include_LLM
+    mock_llm_invoke.side_effect = [AUTO_INCLUDE_RESPONSE, EXTRACT_INCLUDE_RESPONSE]
+    
+    output_prompt, csv_output, total_cost, model_name = auto_include(
+        input_prompt="Write a function",
+        directory_path="context/c*.py",
+        csv_file=None,
+        strength=0.7,
+        temperature=0.3,
+        verbose=False
     )
-
-    # Assertions
-    assert isinstance(output_prompt, str)
-    assert len(output_prompt) == len("LLM output\n") + len(input_prompt)
-    assert isinstance(total_cost, float)
-    assert isinstance(model_name, str)
-
-def test_special_characters_in_input_prompt(mock_environment, mock_load_prompt_template, mock_llm_selector, mock_console_print):
-    """
-    Test the auto_include function with special characters in input_prompt.
-    """
-    input_prompt = "!@#$%^&*()_+-=[]{}|;':\",.<>/?`~"
-    available_includes = ["include1.py", "include2.py"]
-    strength = 0.3
-    temperature = 0.4
-
-    output_prompt, total_cost, model_name = auto_include(
-        input_prompt=input_prompt,
-        available_includes=available_includes,
-        strength=strength,
-        temperature=temperature
-    )
-
-    # Assertions
-    assert output_prompt == f"LLM output\n{input_prompt}"
-    assert isinstance(total_cost, float)
-    assert isinstance(model_name, str)
+    
+    expected_output_prompt = "# Includes\nimport example1\nimport example2\n\nWrite a function"
+    expected_csv_output = CSV_OUTPUT
+    expected_total_cost = 0.02 + 0.05 + 0.03  # 0.10
+    expected_model_name = "model-extract-include"
+    
+    assert output_prompt == expected_output_prompt
+    assert csv_output == expected_csv_output
+    assert total_cost == expected_total_cost
+    assert model_name == expected_model_name
