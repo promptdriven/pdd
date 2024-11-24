@@ -18,30 +18,21 @@ class FileSummary(BaseModel):
 def validate_csv_format(csv_content: str) -> bool:
     """Validate CSV has required columns and proper format."""
     try:
-        # Check if content is empty or just whitespace
         if not csv_content or csv_content.isspace():
             return False
-            
-        # Try parsing as CSV
         reader = csv.DictReader(StringIO(csv_content.lstrip()))
-        
-        # Check for required columns
         if not reader.fieldnames:
             return False
-            
         required_columns = {'full_path', 'file_summary', 'date'}
         if not all(col in reader.fieldnames for col in required_columns):
             return False
-            
-        # Validate at least one row can be parsed
         try:
             first_row = next(reader, None)
             if not first_row:
-                return True  # Empty CSV with valid headers is OK
+                return True
             return all(key in first_row for key in required_columns)
         except csv.Error:
             return False
-            
     except Exception:
         return False
 
@@ -61,10 +52,11 @@ def parse_existing_csv(csv_content: str, verbose: bool = False) -> dict:
     """Parse existing CSV file and return normalized data."""
     existing_data = {}
     try:
-        # Handle different line endings and remove BOM
-        cleaned_content = csv_content.lstrip('\ufeff').replace('\r\n', '\n')
-        reader = csv.DictReader(StringIO(cleaned_content))
+        # Clean the CSV content by removing leading/trailing whitespace from each line
+        cleaned_lines = [line.strip() for line in csv_content.splitlines()]
+        cleaned_content = '\n'.join(cleaned_lines)
         
+        reader = csv.DictReader(StringIO(cleaned_content))
         for row in reader:
             try:
                 normalized_path = normalize_path(row['full_path'])
@@ -107,7 +99,6 @@ def summarize_directory(
             - model_name (str): Name of the LLM model used.
     """
     try:
-        # Input Validation
         if not isinstance(directory_path, str) or not directory_path:
             raise ValueError("Invalid 'directory_path'.")
         if not (0.0 <= strength <= 1.0):
@@ -117,37 +108,40 @@ def summarize_directory(
         if not isinstance(verbose, bool):
             raise ValueError("Invalid 'verbose' value.")
 
-        # Load Prompt Template
         prompt_template = load_prompt_template("summarize_file_LLM")
         if not prompt_template:
             raise FileNotFoundError("Prompt template 'summarize_file_LLM.prompt' not found.")
 
-        # Initialize output
         csv_output = "full_path,file_summary,date\n"
         total_cost = 0.0
         model_name = "None"
-        
-        # Parse existing CSV if provided
+
         existing_data = {}
         if csv_file:
             if not validate_csv_format(csv_file):
                 raise ValueError("Invalid CSV file format.")
             existing_data = parse_existing_csv(csv_file, verbose)
 
-        # Get files
-        files = glob.glob(directory_path, recursive=True)
+        # Get list of files first to ensure consistent order
+        files = sorted(glob.glob(directory_path, recursive=True))
         if not files:
             if verbose:
                 print("[yellow]No files found.[/yellow]")
             return csv_output, total_cost, model_name
 
-        # Process files
+        # Get all modification times at once to ensure consistent order
+        file_mod_times = {f: os.path.getmtime(f) for f in files}
+
         for file_path in track(files, description="Processing files..."):
             try:
                 relative_path = os.path.relpath(file_path)
                 normalized_path = normalize_path(relative_path)
-                file_mod_time = os.path.getmtime(file_path)
+                file_mod_time = file_mod_times[file_path]
                 date_generated = datetime.now(UTC).isoformat()
+
+                if verbose:
+                    print(f"\nProcessing file: {normalized_path}")
+                    print(f"Modification time: {datetime.fromtimestamp(file_mod_time, UTC)}")
 
                 needs_summary = True
                 if normalized_path in existing_data:
@@ -156,22 +150,31 @@ def summarize_directory(
                         existing_date = parse_date(existing_entry['date'])
                         file_date = datetime.fromtimestamp(file_mod_time, UTC)
                         
-                        if file_date <= existing_date:
+                        if verbose:
+                            print(f"Existing date: {existing_date}")
+                            print(f"File date: {file_date}")
+                        
+                        # Explicitly check if file is newer
+                        if file_date > existing_date:
+                            if verbose:
+                                print(f"[blue]File modified, generating new summary[/blue]")
+                            needs_summary = True
+                        else:
                             needs_summary = False
                             file_summary = existing_entry['file_summary']
                             date_generated = existing_entry['date']
                             if verbose:
-                                print(f"[green]Reusing existing summary for: {normalized_path}[/green]")
-                        else:
-                            if verbose:
-                                print(f"[blue]File modified, generating new summary for: {normalized_path}[/blue]")
+                                print(f"[green]Reusing existing summary[/green]")
                     except Exception as e:
                         if verbose:
-                            print(f"[yellow]Warning: Error comparing dates for {normalized_path}: {str(e)}[/yellow]")
+                            print(f"[yellow]Warning: Date comparison error: {str(e)}[/yellow]")
+                        needs_summary = True
+                elif verbose:
+                    print("[blue]New file, generating summary[/blue]")
 
                 if needs_summary:
                     if verbose:
-                        print(f"[blue]Generating new summary for: {normalized_path}[/blue]")
+                        print(f"[blue]Generating summary for: {normalized_path}[/blue]")
                     with open(file_path, 'r', encoding='utf-8') as f:
                         file_contents = f.read()
 
@@ -188,7 +191,7 @@ def summarize_directory(
                     if response.get('error'):
                         file_summary = "Error in summarization."
                         if verbose:
-                            print(f"[red]Error summarizing file '{normalized_path}': {response['error']}[/red]")
+                            print(f"[red]Error summarizing file: {response['error']}[/red]")
                     else:
                         file_summary = response['result'].file_summary
                         total_cost += response.get('cost', 0.0)
@@ -198,7 +201,7 @@ def summarize_directory(
 
             except Exception as e:
                 if verbose:
-                    print(f"[red]Error processing file '{file_path}': {str(e)}[/red]")
+                    print(f"[red]Error processing file: {str(e)}[/red]")
                 date_generated = datetime.now(UTC).isoformat()
                 csv_output += f'"{relative_path}","Error processing file",{date_generated}\n'
 
