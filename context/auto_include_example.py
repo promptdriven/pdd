@@ -12,7 +12,9 @@ def main() -> None:
     # Define the parameters for the auto_include function
     input_prompt = "Please include the necessary dependencies for the following code."
     directory_path = "context/c*.py"
-    csv_file = "output.csv"
+    # read in the file
+    with open('output.csv', 'r') as file:
+        csv_file = file.read()
     strength = 0.7
     temperature = 0.5
     verbose = True
