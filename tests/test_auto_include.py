@@ -1,8 +1,6 @@
-# tests/test_auto_include.py
-
 import pytest
 from unittest.mock import patch, MagicMock
-from pdd.auto_include import auto_include
+from pdd.auto_include import auto_include, AutoIncludeOutput
 from pydantic import ValidationError
 
 # Sample data for mocking
@@ -94,7 +92,7 @@ def test_auto_include_success(mock_llm_invoke, mock_summarize_directory, mock_lo
         strength=valid_inputs["strength"],
         temperature=valid_inputs["temperature"],
         verbose=valid_inputs["verbose"],
-        output_pydantic=MagicMock()
+        output_pydantic=AutoIncludeOutput  # Changed from MagicMock to actual class
     )
 
 def test_auto_include_missing_input_prompt():
