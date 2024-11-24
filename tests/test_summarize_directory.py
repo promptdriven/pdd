@@ -155,6 +155,7 @@ def test_existing_csv_unchanged_files(
 
 def test_no_files_found(existing_csv, fixed_now):
     with patch('pdd.summarize_directory.glob.glob', return_value=[]), \
+         patch('pdd.summarize_directory.load_prompt_template', return_value="Summarize the file."), \
          mock_datetime_now('pdd.summarize_directory.datetime', fixed_now):
         
         # Call the function under test
@@ -246,6 +247,7 @@ def test_llm_invoke_exception(
 
 def test_empty_directory_no_csv():
     with patch('pdd.summarize_directory.glob.glob', return_value=[]), \
+         patch('pdd.summarize_directory.load_prompt_template', return_value="Summarize the file."), \
          mock_datetime_now('pdd.summarize_directory.datetime', datetime(2023, 10, 2, 15, 30, 00)):
         
         # Call the function under test without existing CSV
@@ -337,6 +339,7 @@ def test_verbose_flag(capsys, mock_files, mock_file_contents, existing_csv, fixe
 
 def test_csv_file_optional():
     with patch('pdd.summarize_directory.glob.glob', return_value=[]), \
+         patch('pdd.summarize_directory.load_prompt_template', return_value="Summarize the file."), \
          mock_datetime_now('pdd.summarize_directory.datetime', datetime(2023, 10, 2, 15, 30, 00)):
         
         # Call the function under test without providing csv_file
