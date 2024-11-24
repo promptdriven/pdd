@@ -111,9 +111,14 @@ def auto_include(
         if verbose:
             console.print(Panel("Step 5: Generating output prompt", style="blue"))
 
+        # Handle both Pydantic model and dict responses
+        if isinstance(extract_response["result"], dict):
+            string_of_includes = extract_response["result"]["string_of_includes"]
+        else:
+            string_of_includes = extract_response["result"].string_of_includes
+
         # Create output prompt
-        string_of_includes = extract_response["result"].string_of_includes
-        output_prompt = f"{string_of_includes}\n\n{input_prompt}"
+        output_prompt = f"{string_of_includes}\n\n{input_prompt}" if string_of_includes else f"\n\n{input_prompt}"
 
         if verbose:
             console.print(Panel(f"Total cost: ${total_cost:.6f}", style="green"))
