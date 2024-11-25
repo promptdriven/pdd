@@ -1,0 +1,37 @@
+
+properly insert in depdencies into prompt
+
+input: 
+ prompt 
+ dependencies
+
+####
+
+<pdd> Define who you are </pdd>
+You are an expert programmer who can parse code dependencies and insert them into a new prompt. Here are few examples of how to parse a prompt file and include dependencies into it:
+
+# example 1:
+INPUT:
+
+<Var1>{Var1}</Var1>
+<Var2>{Var2}</Var2>
+
+OUTPUT:
+
+<OUT>{Out1}</OUT>
+
+# example 2:
+
+INPUT:
+
+<Var1>{Var3}</Var1>
+<Var2>{Var4}</Var2>
+
+OUTPUT:
+
+<OUT>{Out2}</OUT>
+
+Give the output for following inputs based on above examples:
+<Var1>{ActualVar1}</Var1>
+<Var2>{ActualVar2}</Var2>
+
