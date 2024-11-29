@@ -20,6 +20,7 @@ from langchain_openai import OpenAI  # General language tasks
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_groq import ChatGroq
 from langchain_together import Together
+from langchain_ollama.llms import OllamaLLM
 
 from langchain.callbacks.base import BaseCallbackHandler
 from langchain.schema import LLMResult
@@ -166,6 +167,9 @@ def create_llm_instance(selected_model, temperature, handler):
                             callbacks=[handler])
     elif provider == 'google':
         llm = ChatGoogleGenerativeAI(
+            model=model_name, temperature=temperature, callbacks=[handler])
+    elif provider == 'ollama':
+        llm =  OllamaLLM(
             model=model_name, temperature=temperature, callbacks=[handler])
     elif provider == 'azure':
         llm = AzureChatOpenAI(
