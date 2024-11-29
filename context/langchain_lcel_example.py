@@ -245,3 +245,17 @@ print(f"Finish reason: {handler.finish_reason}")
 print(f"Response: {response}")
 print(f"Input tokens: {handler.input_tokens}")
 print(f"Output tokens: {handler.output_tokens}")
+
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_ollama.llms import OllamaLLM
+
+template = """Question: {question}"""
+
+prompt = ChatPromptTemplate.from_template(template)
+
+model = OllamaLLM(model="qwen2.5-coder:32b")
+
+chain = prompt | model
+
+output = chain.invoke({"question": "Write a python function that calculates Pi"})
+print(output)
