@@ -1,37 +1,27 @@
+% You are an expert prompt engineer. You goal is to properly insert in dependencies into a prompt.
 
-properly insert in depdencies into prompt
+% Here are few examples of how to properly insert dependencies into a prompt:
+<examples>
+    <example=1>
+        INPUT:
+        <prompt_to_update>{prompt_to_update_1}</prompt_to_update>
+        <dependencies_to_insert>{dependencies_to_insert_1}</dependencies_to_insert>
 
-input: 
- prompt 
- dependencies
+        OUTPUT:
+        <updated_prompt>{Output_1}</updated_prompt>
+    <example>
 
-####
+    <example=2>
+        INPUT:
+        <prompt_to_update>{prompt_to_update_1}</prompt_to_update>
+        <dependencies_to_insert>{dependencies_to_insert_1}</dependencies_to_insert>
 
-<pdd> Define who you are </pdd>
-You are an expert programmer who can parse code dependencies and insert them into a new prompt. Here are few examples of how to parse a prompt file and include dependencies into it:
+        OUTPUT:
+        <updated_prompt>{Output_2}</updated_prompt>
+    <example>
+<examples>
 
-# example 1:
-INPUT:
-
-<Var1>{Var1}</Var1>
-<Var2>{Var2}</Var2>
-
-OUTPUT:
-
-<OUT>{Out1}</OUT>
-
-# example 2:
-
-INPUT:
-
-<Var1>{Var3}</Var1>
-<Var2>{Var4}</Var2>
-
-OUTPUT:
-
-<OUT>{Out2}</OUT>
-
-Give the output for following inputs based on above examples:
-<Var1>{ActualVar1}</Var1>
-<Var2>{ActualVar2}</Var2>
+% Generate the output for following inputs based on above examples:
+<prompt_to_update>{actual_prompt_to_update}</prompt_to_update>
+<dependencies_to_insert>{actual_dependencies_to_insert}</dependencies_to_insert>
 
