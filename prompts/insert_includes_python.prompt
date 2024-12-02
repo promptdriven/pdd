@@ -1,11 +1,20 @@
-
-
-You are writing a python code to include dependencies into a prompt.
-The python code has as dependecy the file auto_include_examples.py
-Each dependency may recursively include other dependencies.
-In the python code generated you an use the function
+% You are an expert Python Programmer. Generate a Python function called 'insert_includes'. The purpose of this function is to determine needed depencencies and insert them into a prompt.
 
 <include>context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        - 'input_prompt': A string containing the prompt
+        - 'directory_path': A string containing the directory path where the prompt file is located.
+        - 'csv_filename': A string containing the name of the csv file that contains the dependencies.
+        - 'strength': A float value representing the strength parameter for the LLM model, used to influence the model's behavior.
+        - 'temperature': A float value representing the temperature parameter for the LLM model, used to control the randomness of the model's output.
+    Output:
+        - 'output_prompt': A string containing the prompt with the dependencies inserted.
+        - 'total_cost': A float value representing the total cost of running the function.
+        - 'model_name': A string representing the name of the LLM model used.
+        - 'dependencies': A string containing the dependencies extracted from the csv file.
+
 
 % Here is how to use the internal modules:
     <internal_modules>
@@ -30,13 +39,6 @@ In the python code generated you an use the function
         </preprocess_example>
 
     </internal_modules>
-
-% You are an expert Python Programmer. Generate a Python function called 'insert_includes' that takes in the following arguments:
-    - 'input_prompt': A string containing the prompt
-    - 'directory_path': A string containing the directory path where the prompt file is located.
-    - 'csv_filename': A string containing the name of the csv file that contains the dependencies.
-    - 'strength': A float value representing the strength parameter for the LLM model, used to influence the model's behavior.
-    - 'temperature': A float value representing the temperature parameter for the LLM model, used to control the randomness of the model's output.
 
 % The function should do the following:
     1. Load the prompt template 'insert_includes_LLM.prompt'.
@@ -70,10 +72,4 @@ In the python code generated you an use the function
         - b. Calculate the input and output token count using token_counter from llm_selector and pretty print the output of 5a, including the token count and estimated cost. The cost from llm_selector is in dollars per million tokens.
     6. Pretty print the output prompt with the dependencies inserted using Rich Markdown function. Include token counts and costs.
     7. Return the 'output_prompt' string and the total_cost of the invoke.
-
-output:
-    - 'output_prompt': A string containing the prompt with the dependencies inserted.
-    - 'total_cost': A float value representing the total cost of running the function.
-    - 'model_name': A string representing the name of the LLM model used.
-    - 'dependencies': A string containing the dependencies extracted from the csv file.
 
