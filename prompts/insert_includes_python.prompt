@@ -6,7 +6,7 @@
     Inputs:
         - 'input_prompt': A string containing the prompt
         - 'directory_path': A string containing the directory path where the prompt file is located.
-        - 'csv_filename': A string containing the name of the csv file that contains the dependencies.
+        - 'csv_filename': A string containing the name of the csv file that contains the dependencies. It may not exist yet, in which case it will be created.
         - 'strength': A float value representing the strength parameter for the LLM model, used to influence the model's behavior.
         - 'temperature': A float value representing the temperature parameter for the LLM model, used to control the randomness of the model's output.
     Output:
@@ -14,7 +14,6 @@
         - 'total_cost': A float value representing the total cost of running the function.
         - 'model_name': A string representing the name of the LLM model used.
         - 'dependencies': A string containing the dependencies extracted from the csv file.
-
 
 % Here is how to use the internal modules:
     <internal_modules>
@@ -28,48 +27,22 @@
                 <include>context/load_prompt_template_example.py</include>
             </load_prompt_template_example>
 
-    For auto_include function:
+    For determining and generating the proper prompt includes via the auto_include function:
         <auto_include_example>
             <include>context/auto_include_example.py</include>
         </auto_include_example>
 
-    For preprocess function:
+    For preprocess function for preprocessing the prompt template:
         <preprocess_example>
             <include>context/preprocess_example.py</include>
         </preprocess_example>
-
     </internal_modules>
 
 % The function should do the following:
     1. Load the prompt template 'insert_includes_LLM.prompt'.
-    2. Use auto_include to get the depencencies.
-    3. Add the dependencies into  
-    function to include the dependencies into the prompt.
-    3. 
-    2. Preprocess the prompt template using the preprocess function from the preprocess module.
-    3. Insert_includes should use the function auto_include from auto_include_examples.c to include the dependencies into the prompt.
-    4: Iterate through all files in the directory specified by the 'directory_path' input.
-        4a: For each file:
-            - Extract the filename using os.path.basename()
-            - Check if any existing entry in the CSV has a matching filename
-            - Only proceed with the depencency inclusion if either:
-                1. No matching filename is found in existing entries
-                2. The file is newer than the existing entry with the matching filename
-            - If a match is found and the file hasn't changed, reuse the existing summary
-        Step 2b: Read each file and read the contents of the file as a string.
-        Step 2c: Summarize the files contents using llm_invoke with this parameter: {'file_contents': file_contents}
-            - Use a Pydantic model called FileSummary with a field named 'file_summary' for consistent naming
-        Step 2d: Store the relative path (not the full path) of the file, the file_summary, and the date in the current data dictionary.
-    Step 3. Pretty print a message letting the user know it is running and the current progress.
-    Step 4: Return the tuple containing the updated csv output string, the total_cost and the model_name of the LLM model used.
-
-
-
-    3. Create a Langchain LCEL template from the processed prompt template to return a string output.
-    4. Use the llm_selector function for the LLM model and token counting.
-    5. Run the input through the model using Langchain LCEL:
-        - a. Pass the following string parameters to the prompt during invocation: 'input_prompt', 'dependencies'.
-        - b. Calculate the input and output token count using token_counter from llm_selector and pretty print the output of 5a, including the token count and estimated cost. The cost from llm_selector is in dollars per million tokens.
-    6. Pretty print the output prompt with the dependencies inserted using Rich Markdown function. Include token counts and costs.
-    7. Return the 'output_prompt' string and the total_cost of the invoke.
-
+    2. Preprocess the prompt template using the preprocess function from the preprocess module but do not recurse.
+    3. Use auto_include to get the dependencies for the input prompt.
+    4. Run with llm_invoke the output of #3 with the insert includes prompt to insert depencencies into prompt:
+        - a. Pass the following string parameters to the prompt during invocation: 'actual_prompt_to_update' and 'actual_dependencies_to_insert'.
+        - b. The Pydantic output will contain the 'output_prompt' key.
+    5. Return the 'output_prompt' string, the total_cost and the model_name of the LLM model used.

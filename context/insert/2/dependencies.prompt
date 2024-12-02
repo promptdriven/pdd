@@ -1,0 +1,4 @@
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+    % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>./context/llm_selector_example.py</include></llm_selector_example>
+</internal_example_modules>

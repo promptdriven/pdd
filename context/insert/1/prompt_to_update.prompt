@@ -14,19 +14,6 @@
         'total_cost' - A float representing the total cost of running the function.
         'model_name' - A string representing the model name used for extraction.
 
-% Here is how to use the internal modules:
-    <internal_modules>
-        For loading prompt templates:
-        <load_prompt_template_example>
-            <include>context/load_prompt_template_example.py</include>
-        </load_prompt_template_example>
-
-        For running prompts with llm_invoke:
-        <llm_invoke_example>
-            <include>context/llm_invoke_example.py</include>
-        </llm_invoke_example>
-    </internal_modules>
-
 % This function will do the following:
     Step 1. If strength is 0, use postprocess_0 function to extract code and return (extracted_code, 0.0).
     Step 2. Load the 'extract_code_LLM.prompt' template file.
