@@ -40,9 +40,10 @@
 
 % The function should do the following:
     1. Load the prompt template 'insert_includes_LLM.prompt'.
-    2. Preprocess the prompt template using the preprocess function from the preprocess module but do not recurse.
-    3. Use auto_include to get the dependencies for the input prompt.
-    4. Run with llm_invoke the output of #3 with the insert includes prompt to insert depencencies into prompt:
+    2. Read the CSV file from the 'csv_filename' parameter and store the dependencies in a string.
+    3. Preprocess the prompt template using the preprocess function from the preprocess module but do not recurse.
+    4. Use auto_include to get the dependencies for the input prompt.
+    5. Run with llm_invoke with the insert includes prompt to insert the output of #4 prompt into current prompt:
         - a. Pass the following string parameters to the prompt during invocation: 'actual_prompt_to_update' and 'actual_dependencies_to_insert'.
         - b. The Pydantic output will contain the 'output_prompt' key.
-    5. Return the 'output_prompt' string, the total_cost and the model_name of the LLM model used.
+    6. Return the 'output_prompt' string, the total_cost and the model_name of the LLM model used.
