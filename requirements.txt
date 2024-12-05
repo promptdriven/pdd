@@ -21,3 +21,4 @@ transformers==4.44.0
 build
 python-Levenshtein
 pytest-cov
+langchain_ollama
