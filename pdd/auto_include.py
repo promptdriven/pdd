@@ -6,7 +6,7 @@ from rich.panel import Panel
 from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
 from .summarize_directory import summarize_directory
-import csv
+import pandas as pd
 from io import StringIO
 
 console = Console()
@@ -27,21 +27,23 @@ def auto_include(
 
     Args:
         input_prompt (str): The prompt requiring includes
-        directory_path (str): Directory path pattern for dependencies
-        csv_file (Optional[str]): Existing CSV content
-        strength (float): Model strength (0-1)
-        temperature (float): Model temperature (0-1)
-        verbose (bool): Whether to print detailed output
+        directory_path (str): Directory path of dependencies
+        csv_file (Optional[str]): Contents of existing CSV file
+        strength (float): Strength of LLM model (0-1)
+        temperature (float): Temperature of LLM model (0-1)
+        verbose (bool): Whether to print detailed information
 
     Returns:
-        Tuple[str, str, float, str]: (output_prompt, csv_output, total_cost, model_name)
+        Tuple[str, str, float, str]: (dependencies, csv_output, total_cost, model_name)
     """
     try:
         # Input validation
-        if not input_prompt or not directory_path:
-            raise ValueError("Input prompt and directory path are required")
-        if not (0 <= strength <= 1) or not (0 <= temperature <= 1):
-            raise ValueError("Strength and temperature must be between 0 and 1")
+        if not input_prompt:
+            raise ValueError("Input prompt cannot be empty")
+        if not 0 <= strength <= 1:
+            raise ValueError("Strength must be between 0 and 1")
+        if not 0 <= temperature <= 1:
+            raise ValueError("Temperature must be between 0 and 1")
 
         total_cost = 0.0
         model_name = ""
@@ -57,7 +59,7 @@ def auto_include(
             raise ValueError("Failed to load prompt templates")
 
         if verbose:
-            console.print(Panel("Step 2: Summarizing directory", style="blue"))
+            console.print(Panel("Step 2: Running summarize_directory", style="blue"))
 
         # Run summarize_directory
         csv_output, summary_cost, summary_model = summarize_directory(
@@ -70,14 +72,15 @@ def auto_include(
         total_cost += summary_cost
         model_name = summary_model
 
-        # Parse CSV to create available_includes
-        available_includes = []
-        csv_reader = csv.DictReader(StringIO(csv_output))
-        for row in csv_reader:
-            available_includes.append(f"{row['full_path']}: {row['file_summary']}")
+        # Parse CSV to get available includes
+        df = pd.read_csv(StringIO(csv_output))
+        available_includes = df.apply(
+            lambda row: f"File: {row['full_path']}\nSummary: {row['file_summary']}", 
+            axis=1
+        ).tolist()
 
         if verbose:
-            console.print(Panel("Step 3: Running auto_include_LLM", style="blue"))
+            console.print(Panel("Step 3: Running auto_include_LLM prompt", style="blue"))
 
         # Run auto_include_LLM prompt
         auto_include_response = llm_invoke(
@@ -94,7 +97,7 @@ def auto_include(
         model_name = auto_include_response["model_name"]
 
         if verbose:
-            console.print(Panel("Step 4: Running extract_auto_include_LLM", style="blue"))
+            console.print(Panel("Step 4: Running extract_auto_include_LLM prompt", style="blue"))
 
         # Run extract_auto_include_LLM prompt
         extract_response = llm_invoke(
@@ -109,52 +112,50 @@ def auto_include(
         model_name = extract_response["model_name"]
 
         if verbose:
-            console.print(Panel("Step 5: Generating output prompt", style="blue"))
+            console.print(Panel("Step 5: Extracting dependencies", style="blue"))
 
-        # Handle both Pydantic model and dict responses
-        if isinstance(extract_response["result"], dict):
-            string_of_includes = extract_response["result"]["string_of_includes"]
-        else:
-            string_of_includes = extract_response["result"].string_of_includes
-
-        # Create output prompt
-        output_prompt = f"{string_of_includes}\n\n{input_prompt}" if string_of_includes else f"\n\n{input_prompt}"
+        # Extract dependencies
+        dependencies = extract_response["result"].string_of_includes
 
         if verbose:
-            console.print(Panel(f"Total cost: ${total_cost:.6f}", style="green"))
-            console.print(Panel(f"Model used: {model_name}", style="green"))
+            console.print(Panel(f"""
+Results:
+Dependencies: {dependencies}
+Total Cost: ${total_cost:.6f}
+Model Used: {model_name}
+            """, style="green"))
 
-        return output_prompt, csv_output, total_cost, model_name
+        return dependencies, csv_output, total_cost, model_name
 
     except Exception as e:
-        console.print(Panel(f"[red]Error: {str(e)}", style="red"))
+        console.print(f"[red]Error in auto_include: {str(e)}[/red]")
         raise
 
+def main():
+    """Example usage of auto_include function"""
+    try:
+        # Example inputs
+        input_prompt = "Write a function to process image data"
+        directory_path = "context/c*.py"
+        csv_file = """full_path,file_summary,date
+context/image_utils.py,"Image processing utilities",2023-01-01T10:00:00"""
+
+        dependencies, csv_output, total_cost, model_name = auto_include(
+            input_prompt=input_prompt,
+            directory_path=directory_path,
+            csv_file=csv_file,
+            strength=0.7,
+            temperature=0.0,
+            verbose=True
+        )
+
+        console.print("\n[blue]Final Results:[/blue]")
+        console.print(f"Dependencies: {dependencies}")
+        console.print(f"Total Cost: ${total_cost:.6f}")
+        console.print(f"Model Used: {model_name}")
+
+    except Exception as e:
+        console.print(f"[red]Error in main: {str(e)}[/red]")
+
 if __name__ == "__main__":
-    def main():
-        try:
-            # Example usage
-            input_prompt = "Write a function that sorts a list"
-            directory_path = "context/c*.py"
-            csv_file = """full_path,file_summary,date
-context/example1.py,"Contains sorting algorithms",2023-01-01"""
-
-            output_prompt, csv_output, total_cost, model_name = auto_include(
-                input_prompt=input_prompt,
-                directory_path=directory_path,
-                csv_file=csv_file,
-                strength=0.7,
-                temperature=0.0,
-                verbose=True
-            )
-
-            print("\nResults:")
-            print(f"Output Prompt:\n{output_prompt}")
-            print(f"CSV Output:\n{csv_output}")
-            print(f"Total Cost: ${total_cost:.6f}")
-            print(f"Model Used: {model_name}")
-
-        except Exception as e:
-            console.print(f"[red]Error in main: {str(e)}[/red]")
-
     main()
