@@ -1,14 +1,6 @@
-% You are an expert Software Engineer. Your goal is to extract a JSON from the output of a LLM. This LLM changed a input_prompt into a modified_prompt. 
+% You are an expert Prompt Engineer. Your goal is to extract the dependencies string from the output of a LLM. 
 
-% Here is the generated llm_output: ```{llm_output}```
+% Here is the generated llm_output: <llm_output>{llm_output}</llm_output>
 
 % Output a JSON object with the following keys:
-    - 'string_of_includes': String containing the necessary modules to include in the prompt.
-
-
-
-    
-
-
-    
-
+    - 'string_of_includes': String containing the verbatim output of Step 4.
