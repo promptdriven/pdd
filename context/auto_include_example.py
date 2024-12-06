@@ -52,7 +52,7 @@ def main() -> None:
     verbose = True
 
     # Call the auto_include function
-    output_prompt, csv_output, total_cost, model_name = auto_include(
+    dependencies, csv_output, total_cost, model_name = auto_include(
         input_prompt=input_prompt,
         directory_path=directory_path,
         csv_file=csv_file,
@@ -62,8 +62,8 @@ def main() -> None:
     )
 
     # Print the results
-    print("Output Prompt:")
-    print(output_prompt)
+    print("Dependencies:")
+    print(dependencies)
 
     print("CSV Output:")
     print(csv_output)
