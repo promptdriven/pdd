@@ -32,17 +32,17 @@
 % This program will use Langchain to do the following:
     Step 1. use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/generate_test_LLM.prompt' file.
     Step 2. Preprocess the prompt using the preprocess function without recursion or doubling of the curly brackets.
-    Step 2. Then this will create a Langchain LCEL template from the test generator prompt.
-    Step 3. This will use llm_selector for the model.
-    Step 4. This will run the inputs through the model using Langchain LCEL. 
-        4a. Be sure to pass the following string parameters to the prompt during invoke:
+    Step 3. Then this will create a Langchain LCEL template from the test generator prompt.
+    Step 4. This will use llm_selector for the model.
+    Step 5. This will run the inputs through the model using Langchain LCEL. 
+        5a. Be sure to pass the following string parameters to the prompt during invoke:
             - 'prompt_that_generated_code': preprocess the prompt using the preprocess function without recursion or doubling of the curly brackets.
             - 'code'
             - 'language'
-        4b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
-    Step 5. This will pretty print the markdown formatting that is present in the result via the rich Markdown function. It will also pretty print the number of tokens in the result and the cost.
-    Step 6. Detect if the generation is incomplete using the unfinished_prompt function (strength .7) by passing in the last 600 characters of the output of Step 4.
+        5b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+    Step 6. This will pretty print the markdown formatting that is present in the result via the rich Markdown function. It will also pretty print the number of tokens in the result and the cost.
+    Step 7. Detect if the generation is incomplete using the unfinished_prompt function (strength .7) by passing in the last 600 characters of the output of Step 5.
         - a. If incomplete, call the continue_generation function to complete the generation.
         - b. Else, if complete, postprocess the model output result using the postprocess function from the postprocess module with a strength of 0.7.
-    Step 7. Print out the total_cost including the input and output tokens and functions that incur cost (e.g. postprocessing).
-    Step 7. Return the unit_test, total_cost and model_name
+    Step 8. Print out the total_cost including the input and output tokens and functions that incur cost (e.g. postprocessing).
+    Step 9. Return the unit_test, total_cost and model_name
