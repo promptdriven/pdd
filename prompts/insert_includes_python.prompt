@@ -9,9 +9,10 @@
         - 'csv_filename': A string containing the name of the csv file that contains the dependencies. It may not exist yet, in which case it will be created.
         - 'strength': A float value representing the strength parameter for the LLM model, used to influence the model's behavior.
         - 'temperature': A float value representing the temperature parameter for the LLM model, used to control the randomness of the model's output.
+        - 'verbose': A boolean that indicates whether to print out the details of the function. Default is False.
     Output:
         - 'output_prompt': A string containing the prompt with the dependencies inserted.
-        - 'dependencies': A string containing the updated dependencies from the csv_output from the auto_include function.
+        - 'csv_output': A string containing the complete CSV output from the auto_include function, including full dependency information.
         - 'total_cost': A float value representing the total cost of running the function.
         - 'model_name': A string representing the name of the LLM model used.
 
@@ -48,4 +49,4 @@
     5. Run with llm_invoke with the insert includes prompt to insert the output of #4 prompt into current prompt:
         - a. Pass the following string parameters to the prompt during invocation: 'actual_prompt_to_update' and 'actual_dependencies_to_insert'.
         - b. The Pydantic output will contain the 'output_prompt' key.
-    6. Return the 'output_prompt', 'dependencies', the total_cost and the model_name of the LLM model used.
+    6. Return the 'output_prompt', the complete csv_output from auto_include, the total_cost and the model_name of the LLM model used.

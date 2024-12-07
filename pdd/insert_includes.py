@@ -35,7 +35,7 @@ def insert_includes(
     Returns:
         Tuple[str, str, float, str]: Tuple containing:
             - output_prompt: The prompt with dependencies inserted
-            - dependencies: Updated dependencies from auto_include
+            - csv_output: Updated dependencies from auto_include
             - total_cost: Total cost of running the function
             - model_name: Name of the LLM model used
     """
@@ -106,7 +106,7 @@ def insert_includes(
         # Step 6: Return the results
         return (
             result.output_prompt,
-            dependencies,
+            csv_output,
             total_cost,
             model_name
         )
