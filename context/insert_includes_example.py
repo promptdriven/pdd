@@ -29,7 +29,8 @@ def example_usage() -> None:
             directory_path=directory_path,
             csv_filename=csv_filename,
             strength=0.93,  # Higher strength for more focused output
-            temperature=0  # Lower temperature for more consistent results
+            temperature=0,  # Lower temperature for more consistent results
+            verbose=True
         )
 
         # Display results
