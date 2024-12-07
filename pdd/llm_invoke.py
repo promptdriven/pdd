@@ -25,6 +25,17 @@ from langchain_ollama.llms import OllamaLLM
 from langchain.callbacks.base import BaseCallbackHandler
 from langchain.schema import LLMResult
 
+# import logging
+
+# Configure logging to output to the console
+# logging.basicConfig(level=logging.DEBUG)
+
+# Get the LangSmith logger
+# langsmith_logger = logging.getLogger("langsmith")
+
+# Set its logging level to DEBUG
+# langsmith_logger.setLevel(logging.DEBUG)
+
 class CompletionStatusHandler(BaseCallbackHandler):
     def __init__(self):
         self.is_complete = False
