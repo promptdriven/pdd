@@ -12,7 +12,7 @@ from .auto_include import auto_include
 
 console = Console()
 
-class PromptOutput(BaseModel):
+class InsertIncludesOutput(BaseModel):
     output_prompt: str = Field(description="The prompt with dependencies inserted")
 
 def insert_includes(
@@ -56,7 +56,11 @@ def insert_includes(
                 file.write(csv_content)
 
         # Step 3: Preprocess the prompt template
-        processed_template = preprocess(insert_includes_prompt, recursive=False, double_curly_brackets=True)
+        processed_template = preprocess(
+            insert_includes_prompt,
+            recursive=False,
+            double_curly_brackets=False
+        )
 
         # Step 4: Use auto_include to get dependencies
         dependencies, csv_output, auto_include_cost, auto_include_model = auto_include(
@@ -69,6 +73,8 @@ def insert_includes(
         )
 
         # Step 5: Run llm_invoke with the processed template
+        console.print("\n[blue]Inserting dependencies into prompt...[/blue]")
+        
         response = llm_invoke(
             prompt=processed_template,
             input_json={
@@ -78,20 +84,26 @@ def insert_includes(
             strength=strength,
             temperature=temperature,
             verbose=True,
-            output_pydantic=PromptOutput
+            output_pydantic=InsertIncludesOutput
         )
 
-        # Extract results
-        result: PromptOutput = response['result']
-        total_cost = auto_include_cost + response['cost']
+        if not response or 'result' not in response:
+            raise ValueError("Failed to get valid response from LLM model")
+
+        result: InsertIncludesOutput = response['result']
         model_name = response['model_name']
+        invoke_cost = response['cost']
+
+        # Calculate total cost
+        total_cost = auto_include_cost + invoke_cost
 
         # Pretty print the results
-        console.print("\n[bold green]Dependencies successfully inserted![/bold green]")
-        console.print(f"[blue]Model used: {model_name}[/blue]")
-        console.print(f"[blue]Total cost: ${total_cost:.6f}[/blue]")
+        console.print("\n[green]Successfully processed prompt:[/green]")
+        console.print(Markdown(f"```python\n{result.output_prompt}\n```"))
+        console.print(f"\n[blue]Total Cost: ${total_cost:.6f}[/blue]")
+        console.print(f"[blue]Model Used: {model_name}[/blue]")
 
-        # Return the results
+        # Step 6: Return the results
         return (
             result.output_prompt,
             dependencies,
@@ -100,22 +112,23 @@ def insert_includes(
         )
 
     except Exception as e:
-        console.print(f"[bold red]Error in insert_includes:[/bold red] {str(e)}")
+        console.print(f"[red]Error in insert_includes: {str(e)}[/red]")
         raise
 
 def main():
     """Example usage of the insert_includes function."""
-    # Example inputs
-    input_prompt = """% Generate a Python function that calculates fibonacci numbers.
-    
-    <include>context/math_utils.py</include>
-    """
-    directory_path = "context/*.py"
-    csv_filename = "dependencies.csv"
-    strength = 0.7
-    temperature = 0.5
-
     try:
+        # Example inputs
+        input_prompt = """% Generate a Python function that calculates fibonacci numbers
+        
+        <include>context/math_utils.py</include>
+        """
+        directory_path = "context/*.py"
+        csv_filename = "dependencies.csv"
+        strength = 0.7
+        temperature = 0.5
+
+        # Call the function
         output_prompt, dependencies, total_cost, model_name = insert_includes(
             input_prompt=input_prompt,
             directory_path=directory_path,
@@ -124,14 +137,15 @@ def main():
             temperature=temperature
         )
 
-        console.print("\n[bold]Results:[/bold]")
-        console.print(Markdown(f"### Output Prompt\n```\n{output_prompt}\n```"))
-        console.print(Markdown(f"### Dependencies\n```\n{dependencies}\n```"))
+        # Display results
+        console.print("\n[bold green]Results:[/bold green]")
+        console.print(f"Output Prompt:\n{output_prompt}")
+        console.print(f"Dependencies:\n{dependencies}")
         console.print(f"Total Cost: ${total_cost:.6f}")
         console.print(f"Model Used: {model_name}")
 
     except Exception as e:
-        console.print(f"[bold red]Error in main:[/bold red] {str(e)}")
+        console.print(f"[red]Error in main: {str(e)}[/red]")
 
 if __name__ == "__main__":
     main()
