@@ -184,7 +184,7 @@ pdd [GLOBAL OPTIONS] example --output examples/factorial_calculator_example.py f
 
 ### 3. test
 
-Generate a unit test file for a given code file and its corresponding prompt file.
+Generate or enhance unit tests for a given code file and its corresponding prompt file.
 
 ```
 pdd [GLOBAL OPTIONS] test [OPTIONS] PROMPT_FILE CODE_FILE
@@ -197,11 +197,46 @@ Arguments:
 Options:
 - `--output LOCATION`: Specify where to save the generated test file. The default file name is `test_<basename>.<language_file_extension>`.
 - `--language`: Specify the programming language. Defaults to the language specified by the prompt file name.
+- `--coverage-report PATH`: Path to the coverage report file for existing tests. When provided, generates additional tests to improve coverage.
+- `--existing-tests PATH`: Path to the existing unit test file. Required when using --coverage-report.
+- `--target-coverage FLOAT`: Desired code coverage percentage to achieve (default is 90.0).
+- `--merge`: When used with --existing-tests, merges new tests with existing test file instead of creating a separate file.
 
-Example:
+#### Basic Examples:
+
+1. Generate initial unit tests:
 ```
 pdd [GLOBAL OPTIONS] test --output tests/test_factorial_calculator.py factorial_calculator_python.prompt src/factorial_calculator.py
 ```
+
+2. Generate additional tests to improve coverage:
+```
+pdd [GLOBAL OPTIONS] test --coverage-report coverage.xml --existing-tests tests/test_calculator.py --output tests/test_calculator_enhanced.py calculator_python.prompt src/calculator.py
+```
+
+3. Improve coverage and merge with existing tests:
+```
+pdd [GLOBAL OPTIONS] test --coverage-report coverage.xml --existing-tests tests/test_calculator.py --merge --target-coverage 95.0 calculator_python.prompt src/calculator.py
+```
+
+#### Coverage Analysis Strategy
+
+When coverage options are provided, the test command will:
+1. Analyze the coverage report to identify:
+   - Uncovered lines and branches
+   - Partially tested conditions
+   - Missing edge cases
+
+2. Generate additional test cases prioritizing:
+   - Complex uncovered code paths
+   - Error conditions
+   - Boundary values
+   - Integration points
+
+3. Maintain consistency with:
+   - Existing test style and patterns
+   - Project's testing conventions
+   - Original prompt's intentions
 
 ### 4. preprocess
 
@@ -567,6 +602,11 @@ pdd [GLOBAL OPTIONS] generate --output src/factorial_calculator.py factorial_cal
 pdd [GLOBAL OPTIONS] auto-deps --output prompts/data_pipeline_with_deps.prompt --csv project_deps.csv data_processing_pipeline_python.prompt "context/*_example.py" generate --output src/data_pipeline.py prompts/data_pipeline_with_deps.prompt
 ```
 
+9. Generate code and improve test coverage in one go:
+```
+pdd [GLOBAL OPTIONS] generate --output src/calculator.py calculator_python.prompt test --output tests/test_calculator.py calculator_python.prompt src/calculator.py test --coverage-report coverage.xml --existing-tests tests/test_calculator.py --merge --target-coverage 95.0 calculator_python.prompt src/calculator.py
+```
+
 These examples demonstrate how you can combine multiple PDD commands to create sophisticated workflows, automating complex development tasks in a single command line invocation. Remember that options always come before arguments for each command in the chain.
 
 ## Getting Help
@@ -601,7 +641,8 @@ You can set environment variables to customize PDD's behavior:
 - **`PDD_AUTO_UPDATE`**: Control automatic updates (default: true)
 - **`PDD_GENERATE_OUTPUT_PATH`**: Default path for the `generate` command.
 - **`PDD_EXAMPLE_OUTPUT_PATH`**: Default path for the `example` command.
-- **`PDD_TEST_OUTPUT_PATH`**: Default path for the `test` command.
+- **`PDD_TEST_OUTPUT_PATH`**: Default path for the unit test file.
+- **`PDD_TEST_COVERAGE_TARGET`**: Default target coverage percentage.
 - **`PDD_PREPROCESS_OUTPUT_PATH`**: Default path for the `preprocess` command.
 - **`PDD_FIX_TEST_OUTPUT_PATH`**: Default path for the fixed unit test files in the `fix` command.
 - **`PDD_FIX_CODE_OUTPUT_PATH`**: Default path for the fixed code files in the `fix` command.
