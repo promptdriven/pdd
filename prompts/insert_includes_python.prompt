@@ -5,7 +5,7 @@
 % Here are the inputs and outputs of the function:
     Inputs:
         - 'input_prompt': A string containing the prompt
-        - 'directory_path': A string containing the directory path where the prompt file is located.
+        - 'directory_path': A string containing the directory path where the possible dependencies for prompt file is located.  An example would be "context/*_example.py".
         - 'csv_filename': A string containing the name of the csv file that contains the dependencies. It may not exist yet, in which case it will be created.
         - 'strength': A float value representing the strength parameter for the LLM model, used to influence the model's behavior.
         - 'temperature': A float value representing the temperature parameter for the LLM model, used to control the randomness of the model's output.
