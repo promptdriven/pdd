@@ -12,6 +12,7 @@ To check your installed version, run:
 ```
 pdd --version
 ```
+PDD includes an auto-update feature to ensure you always have access to the latest features and security patches. You can control this behavior using an environment variable (see "Auto-Update Control" section below).
 
 ## Supported Programming Languages
 
@@ -57,6 +58,25 @@ These options can be used with any command:
 - `--quiet`: Decrease output verbosity for minimal information.
 - `--output-cost PATH_TO_CSV_FILE`: Enable cost tracking and output a CSV file with usage details.
 - `--review-examples`: Review and optionally exclude few-shot examples before command execution.
+
+## Auto-Update Control
+
+PDD automatically updates itself to ensure you have the latest features and security patches. However, you can control this behavior using the `PDD_AUTO_UPDATE` environment variable:
+
+```bash
+# Disable auto-updates
+export PDD_AUTO_UPDATE=false
+
+# Enable auto-updates (default behavior)
+export PDD_AUTO_UPDATE=true
+```
+
+For persistent settings, add this environment variable to your shell's configuration file (e.g., `.bashrc` or `.zshrc`).
+
+This is particularly useful in:
+- Production environments where version stability is crucial
+- CI/CD pipelines where consistent behavior is required
+- Version-sensitive projects that require specific PDD versions
 
 ## AI Model Information
 
@@ -573,10 +593,12 @@ PDD provides comprehensive help features:
   ```
 - **Colorized Output**: PDD provides colorized output for better readability in compatible terminals.
 
-## Environment Variables for Output Paths
 
-You can set environment variables to define default output paths for each command, reducing the need to specify output locations in the command line. The following environment variables are supported:
+## Environment Variables
 
+You can set environment variables to customize PDD's behavior:
+
+- **`PDD_AUTO_UPDATE`**: Control automatic updates (default: true)
 - **`PDD_GENERATE_OUTPUT_PATH`**: Default path for the `generate` command.
 - **`PDD_EXAMPLE_OUTPUT_PATH`**: Default path for the `example` command.
 - **`PDD_TEST_OUTPUT_PATH`**: Default path for the `test` command.
@@ -663,6 +685,11 @@ When using PDD, keep the following security considerations in mind:
 5. **Output Handling**: Treat output files with the same security considerations as you would any other code or configuration files in your project.
 
 6. **Dependency Analysis**: When using the `auto-deps` command, be cautious with untrusted dependency files and verify the generated summaries before including them in your prompts.
+
+Additionally:
+- Consider disabling auto-updates in production environments using `PDD_AUTO_UPDATE=false`
+- Implement a controlled update process for production systems
+- Review changelogs before manually updating PDD in sensitive environments
 
 ## Workflow Integration
 
