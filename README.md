@@ -636,9 +636,15 @@ PDD provides comprehensive help features:
 
 ## Environment Variables
 
-You can set environment variables to customize PDD's behavior:
+PDD uses several environment variables to customize its behavior:
 
-- **`PDD_AUTO_UPDATE`**: Control automatic updates (default: true)
+### Core Environment Variables
+
+- **`PDD_PATH`**: Points to the root directory of PDD. This is automatically set during pip installation to the directory where PDD is installed. You typically don't need to set this manually.
+- **`PDD_AUTO_UPDATE`**: Controls whether PDD automatically updates itself (default: true).
+
+### Output Path Variables
+
 - **`PDD_GENERATE_OUTPUT_PATH`**: Default path for the `generate` command.
 - **`PDD_EXAMPLE_OUTPUT_PATH`**: Default path for the `example` command.
 - **`PDD_TEST_OUTPUT_PATH`**: Default path for the unit test file.
