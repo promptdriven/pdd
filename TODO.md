@@ -5,6 +5,7 @@
 - [ ] auto-includes
 - [ ] Use the response to get the token counting to speed up app and make it more accurate
 - [ ] increase the number of unit tests to generate
+- [ ] auto update the utility
 
 ## Features
 
@@ -19,7 +20,6 @@
 - [ ] benchmark fix the prompt based on diffs to the code file
 - [ ] Use perplexica to automatically find context
 - [ ] use context caching during fixing errors
-- [ ] auto update the utility
 - [ ] github login 
 - [ ] Run on server based keys
 - [ ] create a marketplace where people can earn LLM credits for their examples or people can put up bounties for examples
@@ -45,6 +45,7 @@
 - [ ] fix warnings in the code
 - [ ] auto set PDD_PATH for package install
 - [ ] fix toml file
+- [ ] MLX support for faster local
 
 
 ## Documentation
