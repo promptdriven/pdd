@@ -47,7 +47,13 @@ def main():
         print(f"Model Used: {response['model_name']}")
         
         # Example 2: Structured Output with Pydantic Model
-        prompt_structured = "Provide a joke in JSON format with 'setup' and 'punchline' fields."
+        prompt_structured = """Generate a joke about {topic}. 
+Return it in this exact JSON format:
+{{
+    "setup": "your setup here",
+    "punchline": "your punchline here"
+}}
+Return ONLY the JSON with no additional text or explanation."""
         input_json_structured = {"topic": "data scientists"}
         output_pydantic = Joke
         
