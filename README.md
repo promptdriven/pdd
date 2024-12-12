@@ -502,11 +502,11 @@ pdd [GLOBAL OPTIONS] bug --output tests/test_factorial_calculator_bug.py factori
 Analyze a prompt file and a directory of potential dependencies to determine and insert needed dependencies into the prompt.
 
 ```
-pdd [GLOBAL OPTIONS] auto-deps [OPTIONS] INPUT_PROMPT DIRECTORY_PATH
+pdd [GLOBAL OPTIONS] auto-deps [OPTIONS] PROMPT_FILE DIRECTORY_PATH
 ```
 
 Arguments:
-- `INPUT_PROMPT`: Filename of the prompt file that needs dependencies analyzed and inserted.
+- `PROMPT_FILE`: Filename of the prompt file that needs dependencies analyzed and inserted.
 - `DIRECTORY_PATH`: Path to the directory containing potential dependency files (can include glob patterns, e.g., "context/*_example.py").
 
 Options:
