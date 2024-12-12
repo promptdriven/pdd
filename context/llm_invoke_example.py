@@ -77,7 +77,7 @@ Return ONLY the JSON with no additional text or explanation."""
         print(f"\nJoke Setup: {joke.setup}")
         print(f"Joke Punchline: {joke.punchline}")
         
-        strength += 0.02
+        strength += 0.01
         # round to 2 decimal places
         strength = round(strength, 2)
     
