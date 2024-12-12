@@ -122,8 +122,8 @@ fi
 # Define global options for pdd commands
 GLOBAL_OPTIONS=(
     "--force"                 # Overwrite existing files without confirmation
-    "--strength" "0.7"        # Example strength value
-    "--temperature" "0.3"     # Example temperature value
+    "--strength" "0.5"        # Example strength value
+    "--temperature" "0.0"     # Example temperature value
     "--verbose"               # Increase verbosity
     "--output-cost" "$COST_FILE"  # Enable cost tracking
 )

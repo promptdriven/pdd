@@ -20,3 +20,5 @@
     6. Ensure all commands use appropriate and consistent file paths and variables.
 
 % These changes will make the regression script more consistent and focused on testing the core functionality of the pdd cli.
+
+% Use a strength of 0.5 and a temperature of 0 for all commands.
