@@ -1,4 +1,4 @@
-% Here is an example prompt generate as reference:
+% Here is an example prompt generate as a reference:
 <example>
    <example_prompt><include>context/generate/6/conflicts_main_python.prompt</include></example_prompt>
    <example_code><include>context/generate/6/conflicts_main.py</include></example_code>
