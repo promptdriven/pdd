@@ -37,7 +37,6 @@ def generate_output_paths(command, output_locations, basename, language, file_ex
     for key in default_keys.get(command, []):
         if key not in output_locations:
             output_locations[key] = None
-    # output_locations = output_locations.copy() if output_locations else {}
 
     if command == 'generate':
         output_paths['output'] = get_output_path(
@@ -150,7 +149,13 @@ def get_output_path(user_path, env_var, default_filename):
     if user_path:
         # Check if user_path is a directory
         try:
-            is_dir = user_path.endswith(os.sep) or (os.path.exists(user_path) and os.path.isdir(user_path))
+            # A path is considered a directory if:
+            # 1. It ends with a separator
+            # 2. It exists and is a directory
+            # 3. It doesn't contain a file extension
+            is_dir = (user_path.endswith(os.sep) or 
+                     (os.path.exists(user_path) and os.path.isdir(user_path)) or
+                     not os.path.splitext(user_path)[1])
         except (TypeError, ValueError):
             is_dir = user_path.endswith(os.sep)
             
