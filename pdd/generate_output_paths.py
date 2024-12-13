@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 def generate_output_paths(command, output_locations, basename, language, file_extension):
     """
@@ -14,7 +15,6 @@ def generate_output_paths(command, output_locations, basename, language, file_ex
     Returns:
         dict: A dictionary containing the generated output filenames with full paths.
     """
-
     output_paths = {}
     default_keys = {
         'generate': ['output'],
@@ -37,6 +37,7 @@ def generate_output_paths(command, output_locations, basename, language, file_ex
     for key in default_keys.get(command, []):
         if key not in output_locations:
             output_locations[key] = None
+    # output_locations = output_locations.copy() if output_locations else {}
 
     if command == 'generate':
         output_paths['output'] = get_output_path(
@@ -102,33 +103,22 @@ def generate_output_paths(command, output_locations, basename, language, file_ex
             f"modified_{basename}.prompt"
         )
     elif command == 'detect':
-        # Assuming change_file_basename is provided in output_locations for 'detect'
-        change_file_basename = os.path.splitext(os.path.basename(output_locations.get('change_file')))[0]
         output_paths['output'] = get_output_path(
             output_locations.get('output'),
             'PDD_DETECT_OUTPUT_PATH',
-            f"{change_file_basename}_detect.csv"
+            f"{basename}_detect.csv"
         )
     elif command == 'conflicts':
-        # Assuming prompt1_basename and prompt2_basename are provided in output_locations for 'conflicts'
-        prompt1_basename = os.path.splitext(os.path.basename(output_locations.get('prompt1')))[0]
-        prompt2_basename = os.path.splitext(os.path.basename(output_locations.get('prompt2')))[0]
         output_paths['output'] = get_output_path(
             output_locations.get('output'),
             'PDD_CONFLICTS_OUTPUT_PATH',
-            f"{prompt1_basename}_{prompt2_basename}_conflict.csv"
+            f"{basename}_conflict.csv"
         )
     elif command == 'crash':
         output_paths['output'] = get_output_path(
             output_locations.get('output'),
             'PDD_CRASH_OUTPUT_PATH',
             f"{basename}_fixed{file_extension}"
-        )
-        program_basename = os.path.splitext(os.path.basename(output_locations.get('program_file')))[0]
-        output_paths['output_program'] = get_output_path(
-            output_locations.get('output_program'),
-            'PDD_CRASH_PROGRAM_OUTPUT_PATH',
-            f"{program_basename}_fixed{file_extension}"
         )
     elif command == 'trace':
         output_paths['output'] = get_output_path(
@@ -153,31 +143,42 @@ def generate_output_paths(command, output_locations, basename, language, file_ex
 
     return output_paths
 
-
 def get_output_path(user_path, env_var, default_filename):
     """
     Determines the output path based on user input, environment variables, and default behavior.
-
-    Args:
-        user_path (str): The output path specified by the user.
-        env_var (str): The name of the environment variable to check.
-        default_filename (str): The default filename to use if no other path is specified.
-
-    Returns:
-        str: The determined output path.
     """
     if user_path:
-        if user_path.endswith(os.sep) or os.path.isdir(user_path):
-            # User provided a directory
-            return os.path.join(user_path, default_filename)
+        # Check if user_path is a directory
+        try:
+            is_dir = user_path.endswith(os.sep) or (os.path.exists(user_path) and os.path.isdir(user_path))
+        except (TypeError, ValueError):
+            is_dir = user_path.endswith(os.sep)
+            
+        # If it's a directory, join with default filename
+        if is_dir:
+            path = os.path.join(user_path.rstrip(os.sep), default_filename)
         else:
-            # User provided a filename
-            return user_path
+            path = user_path
+            
+        # Create parent directory if needed
+        try:
+            parent_dir = os.path.dirname(path)
+            if parent_dir:
+                Path(parent_dir).mkdir(parents=True, exist_ok=True)
+        except (OSError, PermissionError):
+            # If we can't create the directory, just return the path
+            pass
+        return path
     else:
         env_path = os.environ.get(env_var)
         if env_path:
-            # Environment variable is set
-            return os.path.join(env_path, default_filename)
+            path = os.path.join(env_path, default_filename)
+            try:
+                # Create parent directory if needed
+                Path(env_path).mkdir(parents=True, exist_ok=True)
+            except (OSError, PermissionError):
+                # If we can't create the directory, just return the path
+                pass
+            return path
         else:
-            # Default behavior: use default filename in the current working directory
             return default_filename
