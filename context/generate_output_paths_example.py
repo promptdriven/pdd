@@ -4,7 +4,7 @@ from pdd.generate_output_paths import generate_output_paths
 
 # Set up example inputs
 command = "generate"
-output_locations = {}#{"output": "/path/to/output/"}
+output_locations = {"output": "/path/to/output/"}
 basename = "my_project"
 language = "python"
 file_extension = ".py"
