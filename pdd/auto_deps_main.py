@@ -1,8 +1,8 @@
 import sys
+from pathlib import Path
 from typing import Tuple, Optional
 import click
 from rich import print as rprint
-from pathlib import Path
 
 from .construct_paths import construct_paths
 from .insert_includes import insert_includes
@@ -24,7 +24,7 @@ def auto_deps_main(
         directory_path: Path to directory containing potential dependency files.
         auto_deps_csv_path: Path to CSV file containing auto-dependency information.
         output: Optional path to save the modified prompt file.
-        force_scan: Flag to force a rescan of the directory.
+        force_scan: Flag to force rescan of directory by deleting CSV file.
 
     Returns:
         Tuple containing:
@@ -50,36 +50,36 @@ def auto_deps_main(
             command_options=command_options
         )
 
-        # Get the input prompt content
-        prompt_content = input_strings["prompt_file"]
+        # Get the CSV file path
+        csv_path = output_file_paths.get("csv", "project_dependencies.csv")
+
+        # Handle force_scan option
+        if force_scan and Path(csv_path).exists():
+            if not ctx.params.get('quiet', False):
+                rprint(f"[yellow]Removing existing CSV file due to --force-scan option: {csv_path}[/yellow]")
+            Path(csv_path).unlink()
 
         # Get strength and temperature from context
         strength = ctx.obj.get('strength', 0.9)
         temperature = ctx.obj.get('temperature', 0)
 
-        # If no CSV path specified, use default
-        if not auto_deps_csv_path:
-            auto_deps_csv_path = "project_dependencies.csv"
-
-        # Call insert_includes to analyze and insert dependencies
+        # Call insert_includes with the prompt content and directory path
         modified_prompt, csv_output, total_cost, model_name = insert_includes(
-            input_prompt=prompt_content,
+            input_prompt=input_strings["prompt_file"],
             directory_path=directory_path,
-            csv_filename=auto_deps_csv_path,
+            csv_filename=csv_path,
             strength=strength,
             temperature=temperature,
-            force_scan=force_scan or False,
             verbose=not ctx.params.get('quiet', False)
         )
 
-        # Save the modified prompt
-        output_path = Path(output_file_paths["output"])
-        output_path.write_text(modified_prompt)
+        # Save the modified prompt to the output file
+        output_path = output_file_paths["output"]
+        Path(output_path).write_text(modified_prompt)
 
-        # Save the CSV output if it was modified
+        # Save the CSV output if it was generated
         if csv_output:
-            csv_path = Path(output_file_paths.get("csv", auto_deps_csv_path))
-            csv_path.write_text(csv_output)
+            Path(csv_path).write_text(csv_output)
 
         # Provide user feedback
         if not ctx.params.get('quiet', False):
@@ -87,8 +87,7 @@ def auto_deps_main(
             rprint(f"[bold]Model used:[/bold] {model_name}")
             rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
             rprint(f"[bold]Modified prompt saved to:[/bold] {output_path}")
-            if csv_output:
-                rprint(f"[bold]Updated dependency information saved to:[/bold] {csv_path}")
+            rprint(f"[bold]Dependency information saved to:[/bold] {csv_path}")
 
         return modified_prompt, total_cost, model_name
 
