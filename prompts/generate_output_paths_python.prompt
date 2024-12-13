@@ -18,7 +18,7 @@
 
 % Here is a detailed description of the program functionality and the many ways output file names can be constructed: <program_description><include>README.md</include></program_description>
 
-% Implement the function to handle all these cases efficiently and return the appropriate filename as a string, accordingly.
+% Implement the function to handle all these cases efficiently and return the appropriate filename as a string, accordingly. If the output_location key has a '/' at the end or is the name of a directory, this means it a directory and the basename should be appended to the end of the directory according to the default naming conventions.
 
 % Ensure the function handles all cases correctly and returns the appropriate filename string, language, and file extension. The function should be robust and able to handle various edge cases, such as missing file extensions or languages.
 
