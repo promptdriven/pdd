@@ -35,6 +35,11 @@
     % Examples of using internal modules:
 
     <internal_example_modules>
+        - The 'auto_update' function will be used to check if pdd is up to date. Here is an example of how to use the 'auto_update' function:
+        <auto_update_example>
+        <include>context/auto_update_example.py</include>
+        </auto_update_example>
+
         - The `track_cost` decorator has already been defined in another module. Here is an example of how to use the `track_cost` decorator:
         <track_cost_example>
         <include>./context/track_cost_example.py</include>

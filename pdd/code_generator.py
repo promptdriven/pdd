@@ -99,7 +99,7 @@ def code_generator(
         runnable_code, postprocess_cost, _ = postprocess(
             llm_output=final_output,
             language=language,
-            strength=0.7,
+            strength=0.5,
             temperature=0.0
         )
         total_cost += postprocess_cost
