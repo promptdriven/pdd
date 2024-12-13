@@ -28,5 +28,6 @@
     Step 3. List out all the environment variables that can be used to override the default naming conventions.
     Step 4. Identify potential error cases that need to be handled.
     Step 5. Write the code that implements the function to implement all these situations efficiently from the above steps.
+    Step 6. Make sure the output dictionary has all the necessary default keys even if they are not specified by the user for the output_locations dictionary.
 
 % Note: For commands like 'fix' and 'split' that have multiple output, use underscores in the keys of the `output_locations` dictionary (e.g., 'output_test', 'output_code', 'output_sub', 'output_modified') instead of hyphens.
