@@ -15,7 +15,7 @@
     - `directory_path` (`str`): Path to the directory containing potential dependency files (can include glob patterns, e.g., "context/*_example.py").
     - `auto_deps_csv_path` (`Optional[str]`): Path to the CSV file containing auto-dependency information.
     - `output` (`Optional[str]`): File path to save the modified prompt file with auto-dependencies.
-    - 'force_scan' (`Optional[bool]`): Flag to force a rescan of the directory.
+    - 'force_scan' (`Optional[bool]`): Flag to force a rescan of the directory. This is done by deleting the auto_deps_csv_path file if it exists.
 
     Outputs:
     - Returns a tuple containing (`str`, `float`, `str`):
