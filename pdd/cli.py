@@ -27,6 +27,7 @@ from .fix_code_module_errors import fix_code_module_errors
 from .trace_main import trace_main
 from .bug_to_unit_test import bug_to_unit_test
 from .track_cost import track_cost
+from .auto_update import auto_update
 
 console = Console()
 
@@ -663,4 +664,5 @@ def trace(ctx, prompt_file: str, code_file: str, code_line: int, output: Optiona
     return trace_main(ctx, prompt_file, code_file, code_line, output) 
 
 if __name__ == '__main__':
+    auto_update()
     cli()
