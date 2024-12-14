@@ -1,198 +1,656 @@
+# test_construct_paths.py
+
 import pytest
 from pathlib import Path
+from unittest import mock
+from unittest.mock import patch, MagicMock
+import sys
 import os
-import click
-from pdd.construct_paths import construct_paths, extract_basename, extract_language
 
-# Mock the generate_output_paths function
-@pytest.fixture
-def mock_generate_output_paths(monkeypatch, temp_directory):
-    def mock_func(command, output_locations, basename, language, file_extension):
-        return {
-            'output': str(temp_directory / f'{basename}.{file_extension}'),
-            'test_output': str(temp_directory / f'{basename}_test.{file_extension}')
-        }
-    monkeypatch.setattr('pdd.construct_paths.generate_output_paths', mock_func)
+# Add the parent directory to sys.path to import pdd modules
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# Mock the get_extension function
-@pytest.fixture
-def mock_get_extension(monkeypatch):
-    def mock_func(language):
-        return 'py' if language == 'python' else 'txt'
-    monkeypatch.setattr('pdd.construct_paths.get_extension', mock_func)
+from pdd.construct_paths import construct_paths
 
-# Mock the get_language function
-@pytest.fixture
-def mock_get_language(monkeypatch):
-    def mock_func(extension):
-        return 'python' if extension == '.py' else 'txt'
-    monkeypatch.setattr('pdd.construct_paths.get_language', mock_func)
+def test_construct_paths_load_input_files(tmpdir):
+    """
+    Test that construct_paths properly loads input files into input_strings,
+    creates error_file if it doesn't exist, and handles missing input files.
+    """
 
-@pytest.fixture
-def temp_directory(tmp_path):
-    return tmp_path
+    # Create temporary input files
+    prompt_file = tmpdir.join('my_project_python.prompt')
+    prompt_file.write('Prompt content')
 
-def test_extract_basename():
-    assert extract_basename('/path/to/file_python.prompt', 'generate') == 'file'
-    assert extract_basename('/path/to/file_bash.prompt', 'detect') == 'file_bash'
-    assert extract_basename('/path/to/complex_file_name_prompt.prompt', 'example') == 'complex_file_name'
+    code_file = tmpdir.join('my_project.py')
+    code_file.write('print("Hello World")')
 
-def test_extract_language():
-    assert extract_language('/path/to/file_python.prompt', {}) == 'python'
-    assert extract_language('/path/to/file.py', {}) == 'python'
-    assert extract_language('/path/to/file.txt', {'language': 'java'}) == 'java'
+    # Do not create error_file to test that it gets created
+    error_file = tmpdir.join('errors.log')
 
-def test_construct_paths_basic(temp_directory, mock_generate_output_paths, mock_get_extension, mock_get_language):
-    input_file = temp_directory / 'input_python.prompt'
-    input_file.write_text('Sample input')
-    
-    input_file_paths = {'prompt_file': str(input_file)}
-    force = False
-    quiet = True
-    command = 'generate'
-    command_options = {'output': str(temp_directory / 'output.py')}
-
-    input_strings, output_file_paths, language = construct_paths(
-        input_file_paths, force, quiet, command, command_options, test_mode=True
-    )
-
-    assert input_strings == {'prompt_file': 'Sample input'}
-    assert output_file_paths == {
-        'output': str(temp_directory / 'input.py'),
-        'test_output': str(temp_directory / 'input_test.py')
+    input_file_paths = {
+        'prompt_file': str(prompt_file),
+        'code_file': str(code_file),
+        'error_file': str(error_file),
     }
-    assert language == 'python'
-
-def test_construct_paths_error_file(temp_directory, mock_generate_output_paths, mock_get_extension, mock_get_language):
-    input_file = temp_directory / 'input.py'
-    input_file.write_text('Sample input')
-    error_file = temp_directory / 'error.txt'
-    
-    input_file_paths = {'code_file': str(input_file), 'error_file': str(error_file)}
-    force = False
-    quiet = True
-    command = 'example'
-    command_options = {}
-
-    input_strings, output_file_paths, language = construct_paths(
-        input_file_paths, force, quiet, command, command_options, test_mode=True
-    )
-
-    assert 'code_file' in input_strings
-    assert 'error_file' in input_strings
-    assert input_strings['error_file'] == ''
-    assert os.path.exists(error_file)
-
-def test_construct_paths_force_overwrite(temp_directory, mock_generate_output_paths, mock_get_extension, mock_get_language, monkeypatch):
-    input_file = temp_directory / 'input.py'
-    input_file.write_text('Sample input')
-    output_file = temp_directory / 'output.py'
-    output_file.write_text('Existing output')
-    
-    input_file_paths = {'code_file': str(input_file)}
     force = True
     quiet = True
-    command = 'example'
-    command_options = {'output': str(output_file)}
+    command = 'generate'
+    command_options = {}
 
-    input_strings, output_file_paths, language = construct_paths(
-        input_file_paths, force, quiet, command, command_options, test_mode=True
-    )
+    # Mock get_extension and get_language to return expected values
+    with patch('pdd.construct_paths.get_extension', return_value='.py'), \
+         patch('pdd.construct_paths.get_language', return_value='python'), \
+         patch('pdd.construct_paths.generate_output_paths', return_value={'output': str(tmpdir.join('output.py'))}):
 
-    assert 'code_file' in input_strings
-    assert output_file_paths['output'] == str(temp_directory / 'input.py')
-    assert language == 'python'
-
-def test_construct_paths_user_confirmation(temp_directory, mock_generate_output_paths, mock_get_extension, mock_get_language, monkeypatch):
-    input_file = temp_directory / 'input.py'
-    input_file.write_text('Sample input')
-    output_file = temp_directory / 'output.py'
-    output_file.write_text('Existing output')
-    
-    input_file_paths = {'code_file': str(input_file)}
-    force = False
-    quiet = False
-    command = 'example'
-    command_options = {'output': str(output_file)}
-
-    # Mock user input to confirm overwrite
-    monkeypatch.setattr('click.confirm', lambda message, default: True)
-
-    input_strings, output_file_paths, language = construct_paths(
-        input_file_paths, force, quiet, command, command_options, test_mode=True
-    )
-
-    assert 'code_file' in input_strings
-    assert output_file_paths['output'] == str(temp_directory / 'input.py')
-    assert language == 'python'
-
-def test_construct_paths_user_cancellation(temp_directory, mock_generate_output_paths, mock_get_extension, mock_get_language, monkeypatch):
-    input_file = temp_directory / 'input.py'
-    input_file.write_text('Sample input')
-    output_file = temp_directory / 'input.py'  # Match the basename from input_file
-    output_file.write_text('Existing output')
-    
-    input_file_paths = {'code_file': str(input_file)}
-    force = False
-    quiet = False
-    command = 'example'
-    command_options = {'output': str(output_file)}
-
-    # Test with user cancellation in test mode
-    with pytest.raises(click.Abort):
-        construct_paths(
-            input_file_paths, force, quiet, command, command_options,
-            test_mode=True, test_user_input=False
-        )
-
-    # Test with user cancellation not in test mode
-    monkeypatch.setattr('click.confirm', lambda message, default: False)
-    with pytest.raises(click.Abort):
-        construct_paths(
+        input_strings, output_file_paths, language = construct_paths(
             input_file_paths, force, quiet, command, command_options
         )
 
-    # Test with user confirmation in test mode
-    result = construct_paths(
-        input_file_paths, force, quiet, command, command_options,
-        test_mode=True, test_user_input=True
-    )
-    assert result is not None  # The function should complete without raising an exception
+    # Assert input_strings contains the contents of the input files
+    assert input_strings['prompt_file'] == 'Prompt content'
+    assert input_strings['code_file'] == 'print("Hello World")'
 
-    # Test with user confirmation not in test mode
-    monkeypatch.setattr('click.confirm', lambda message, default: True)
-    result = construct_paths(
-        input_file_paths, force, quiet, command, command_options
-    )
-    assert result is not None  # The function should complete without raising an exception
+    # The error_file should have been created
+    assert Path(error_file).exists()
 
-def test_construct_paths_input_file_not_found(temp_directory):
-    input_file_paths = {'prompt_file': str(temp_directory / 'non_existent_file.txt')}
+    # Assert the language is 'python'
+    assert language == 'python'
+
+def test_construct_paths_missing_input_file(tmpdir):
+    """
+    Test that construct_paths raises FileNotFoundError when a required input file is missing.
+    """
+
+    # Create only the prompt_file
+    prompt_file = tmpdir.join('my_project_python.prompt')
+    prompt_file.write('Prompt content')
+
+    # code_file does not exist
+    code_file = tmpdir.join('my_project.py')
+
+    error_file = tmpdir.join('errors.log')
+
+    input_file_paths = {
+        'prompt_file': str(prompt_file),
+        'code_file': str(code_file),
+        'error_file': str(error_file),
+    }
+    force = True
+    quiet = True
+    command = 'generate'
+    command_options = {}
+
+    with pytest.raises(FileNotFoundError) as excinfo:
+        # Mock get_extension and get_language
+        with patch('pdd.construct_paths.get_extension', return_value='.py'), \
+             patch('pdd.construct_paths.get_language', return_value='python'), \
+             patch('pdd.construct_paths.generate_output_paths', return_value={'output': str(tmpdir.join('output.py'))}):
+
+            input_strings, output_file_paths, language = construct_paths(
+                input_file_paths, force, quiet, command, command_options
+            )
+
+    assert "Input file" in str(excinfo.value)
+
+def test_construct_paths_error_file_creation(tmpdir):
+    """
+    Test that construct_paths creates the error_file if it does not exist.
+    """
+
+    # Create the required input files
+    prompt_file = tmpdir.join('my_project_python.prompt')
+    prompt_file.write('Prompt content')
+
+    code_file = tmpdir.join('my_project.py')
+    code_file.write('print("Hello World")')
+
+    # error_file does not exist
+    error_file = tmpdir.join('errors.log')
+
+    input_file_paths = {
+        'prompt_file': str(prompt_file),
+        'code_file': str(code_file),
+        'error_file': str(error_file),
+    }
+    force = True
+    quiet = False  # To see the warning message
+    command = 'generate'
+    command_options = {}
+
+    with patch('pdd.construct_paths.get_extension', return_value='.py'), \
+         patch('pdd.construct_paths.get_language', return_value='python'), \
+         patch('pdd.construct_paths.generate_output_paths', return_value={'output': str(tmpdir.join('output.py'))}), \
+         patch('builtins.print') as mock_print:
+
+        input_strings, output_file_paths, language = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+
+        # Check that warning message is printed
+        mock_print.assert_any_call("[yellow]Warning: Error file '{}' does not exist. Creating an empty file.[/yellow]".format(error_file))
+
+    # The error_file should have been created
+    assert Path(error_file).exists()
+
+def test_construct_paths_basename_extraction(tmpdir):
+    """
+    Test that construct_paths correctly extracts basename from input prompt files for different commands.
+    """
+
+    test_cases = [
+        ('generate', 'my_project_python.prompt', 'my_project'),
+        ('generate', 'my_project.prompt', 'my_project'),
+        ('test', 'my_module_python.prompt', 'my_module'),
+        ('split', 'large_project.prompt', 'large_project'),
+        ('change', 'original_prompt_java.prompt', 'original_prompt'),
+        ('detect', 'update_description.prompt', 'update_description'),
+        ('conflicts', ('module1_python.prompt', 'module2_python.prompt'), 'module1_module2'),
+        ('trace', 'trace_this_python.prompt', 'trace_this'),
+    ]
+
+    for case in test_cases:
+        command = case[0]
+        force = True
+        quiet = True
+        command_options = {}
+
+        # Prepare input_file_paths based on command
+        if command != 'conflicts':
+            prompt_file_name = case[1]
+            expected_basename = case[2]
+
+            prompt_file = tmpdir.join(prompt_file_name)
+            prompt_file.write('Prompt content')
+
+            if command == 'split':
+                input_file_paths = {'input_prompt': str(prompt_file)}
+            elif command == 'change':
+                input_file_paths = {'input_prompt_file': str(prompt_file)}
+                command_options['csv'] = False
+            elif command == 'detect':
+                input_file_paths = {'change_file': str(prompt_file)}
+            else:
+                input_file_paths = {'prompt_file': str(prompt_file)}
+        else:
+            prompt_file_name1, prompt_file_name2 = case[1]
+            expected_basename = case[2]
+
+            prompt_file1 = tmpdir.join(prompt_file_name1)
+            prompt_file1.write('Prompt content 1')
+
+            prompt_file2 = tmpdir.join(prompt_file_name2)
+            prompt_file2.write('Prompt content 2')
+
+            input_file_paths = {
+                'prompt1': str(prompt_file1),
+                'prompt2': str(prompt_file2),
+            }
+
+        with patch('pdd.construct_paths.get_extension', return_value='.py'), \
+             patch('pdd.construct_paths.get_language', return_value='python'), \
+             patch('pdd.construct_paths.generate_output_paths') as mock_generate_output_paths:
+
+            mock_generate_output_paths.return_value = {}
+            input_strings, output_file_paths, language = construct_paths(
+                input_file_paths, force, quiet, command, command_options
+            )
+
+            # Since we cannot access the internal 'basename' variable directly,
+            # we can check that generate_output_paths was called with the expected basename
+            mock_generate_output_paths.assert_called_with(
+                command,
+                {},
+                expected_basename,
+                mock.ANY,
+                mock.ANY
+            )
+
+def test_construct_paths_language_extraction(tmpdir):
+    """
+    Test that construct_paths correctly extracts language from input prompt files and command options.
+    """
+
+    # Case when language is in prompt file name
+    prompt_file = tmpdir.join('my_project_python.prompt')
+    prompt_file.write('Prompt content')
+
+    input_file_paths = {'prompt_file': str(prompt_file)}
+    force = True
+    quiet = True
+    command = 'generate'
+    command_options = {}
+
+    with patch('pdd.construct_paths.get_extension', return_value='.py'), \
+         patch('pdd.construct_paths.get_language', return_value='python'), \
+         patch('pdd.construct_paths.generate_output_paths') as mock_generate_output_paths:
+
+        input_strings, output_file_paths, language = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+
+        assert language == 'python'
+
+    # Case when language is in command_options
+    prompt_file2 = tmpdir.join('my_project.prompt')
+    prompt_file2.write('Prompt content')
+
+    input_file_paths = {'prompt_file': str(prompt_file2)}
+    command_options = {'language': 'javascript'}
+
+    with patch('pdd.construct_paths.get_extension', return_value='.js'), \
+         patch('pdd.construct_paths.get_language', return_value='javascript'), \
+         patch('pdd.construct_paths.generate_output_paths') as mock_generate_output_paths:
+
+        input_strings, output_file_paths, language = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+
+        assert language == 'javascript'
+
+    # Case when language is inferred from code_file extension
+    code_file = tmpdir.join('my_project.js')
+    code_file.write('console.log("Hello World");')
+
+    input_file_paths = {
+        'prompt_file': str(prompt_file2),
+        'code_file': str(code_file)
+    }
+    command_options = {}
+
+    with patch('pdd.construct_paths.get_extension', return_value='.js'), \
+         patch('pdd.construct_paths.get_language', return_value='javascript'), \
+         patch('pdd.construct_paths.generate_output_paths') as mock_generate_output_paths:
+
+        input_strings, output_file_paths, language = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+
+        assert language == 'javascript'
+
+    # Case when language cannot be determined
+    input_file_paths = {'prompt_file': str(prompt_file2)}
+    command_options = {}
+
+    with patch('pdd.construct_paths.get_extension', return_value=None), \
+         patch('pdd.construct_paths.get_language', return_value=None):
+
+        with pytest.raises(ValueError) as excinfo:
+            input_strings, output_file_paths, language = construct_paths(
+                input_file_paths, force, quiet, command, command_options
+            )
+
+        assert "Could not determine language" in str(excinfo.value)
+
+def test_construct_paths_output_file_exists(tmpdir):
+    """
+    Test that construct_paths prompts the user when output files exist and 'force' is False.
+    """
+
+    # Create input files
+    prompt_file = tmpdir.join('my_project_python.prompt')
+    prompt_file.write('Prompt content')
+
+    code_file = tmpdir.join('my_project.py')
+    code_file.write('print("Hello World")')
+
+    error_file = tmpdir.join('errors.log')
+    error_file.write('Error log')
+
+    # Create an output file that already exists
+    output_file = tmpdir.join('output.py')
+    output_file.write('Existing output')
+
+    input_file_paths = {
+        'prompt_file': str(prompt_file),
+        'code_file': str(code_file),
+        'error_file': str(error_file),
+    }
     force = False
     quiet = True
     command = 'generate'
     command_options = {}
 
-    with pytest.raises(click.ClickException, match="Input file not found"):
-        construct_paths(input_file_paths, force, quiet, command, command_options, test_mode=True)
+    with patch('pdd.construct_paths.get_extension', return_value='.py'), \
+         patch('pdd.construct_paths.get_language', return_value='python'), \
+         patch('pdd.construct_paths.generate_output_paths', return_value={'output': str(output_file)}), \
+         patch('rich.prompt.Confirm.ask', return_value=False) as mock_confirm, \
+         patch('builtins.print'):
 
-def test_construct_paths_detect_command(temp_directory, mock_generate_output_paths, mock_get_extension, mock_get_language):
-    change_file = temp_directory / 'changes.txt'
-    change_file.write_text('Sample changes')
-    
-    input_file_paths = {'change_file': str(change_file)}
-    force = False
-    quiet = True
-    command = 'detect'
+        with pytest.raises(SystemExit):
+            input_strings, output_file_paths, language = construct_paths(
+                input_file_paths, force, quiet, command, command_options
+            )
+
+        mock_confirm.assert_called_once()
+
+    # Now test when user confirms overwrite
+    with patch('pdd.construct_paths.get_extension', return_value='.py'), \
+         patch('pdd.construct_paths.get_language', return_value='python'), \
+         patch('pdd.construct_paths.generate_output_paths', return_value={'output': str(output_file)}), \
+         patch('rich.prompt.Confirm.ask', return_value=True) as mock_confirm, \
+         patch('builtins.print'):
+
+        input_strings, output_file_paths, language = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+
+        mock_confirm.assert_called_once()
+        assert output_file_paths['output'] == str(output_file)
+
+def test_construct_paths_quiet_flag(tmpdir, capsys):
+    """
+    Test that construct_paths prints input and output file paths when 'quiet' is False,
+    and does not print when 'quiet' is True.
+    """
+
+    # Create input files
+    prompt_file = tmpdir.join('my_project_python.prompt')
+    prompt_file.write('Prompt content')
+
+    code_file = tmpdir.join('my_project.py')
+    code_file.write('print("Hello World")')
+
+    error_file = tmpdir.join('errors.log')
+    error_file.write('Error log')
+
+    input_file_paths = {
+        'prompt_file': str(prompt_file),
+        'code_file': str(code_file),
+        'error_file': str(error_file),
+    }
+    force = True
+    command = 'generate'
     command_options = {}
 
-    input_strings, output_file_paths, language = construct_paths(
-        input_file_paths, force, quiet, command, command_options, test_mode=True
-    )
+    # Test with quiet=False
+    quiet = False
 
-    assert input_strings == {'change_file': 'Sample changes'}
-    assert output_file_paths == {
-        'output': str(temp_directory / 'changes.txt'),
-        'test_output': str(temp_directory / 'changes_test.txt')
+    with patch('pdd.construct_paths.get_extension', return_value='.py'), \
+         patch('pdd.construct_paths.get_language', return_value='python'), \
+         patch('pdd.construct_paths.generate_output_paths', return_value={'output': str(tmpdir.join('output.py'))}):
+
+        input_strings, output_file_paths, language = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+
+        captured = capsys.readouterr()
+        assert "Input file paths:" in captured.out
+        assert "Output file paths:" in captured.out
+
+    # Test with quiet=True
+    quiet = True
+
+    with patch('pdd.construct_paths.get_extension', return_value='.py'), \
+         patch('pdd.construct_paths.get_language', return_value='python'), \
+         patch('pdd.construct_paths.generate_output_paths', return_value={'output': str(tmpdir.join('output.py'))}):
+
+        input_strings, output_file_paths, language = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+
+        captured = capsys.readouterr()
+        # No output should be printed
+        assert captured.out == ''
+        
+
+def test_construct_paths_invalid_command(tmpdir):
+    """
+    Test that construct_paths raises a ValueError when an invalid command is provided.
+    """
+
+    # Create input files
+    prompt_file = tmpdir.join('my_project_python.prompt')
+    prompt_file.write('Prompt content')
+
+    input_file_paths = {'prompt_file': str(prompt_file)}
+    force = True
+    quiet = True
+    command = 'invalid_command'
+    command_options = {}
+
+    with pytest.raises(ValueError) as excinfo:
+        with patch('pdd.construct_paths.get_extension', return_value='.py'), \
+             patch('pdd.construct_paths.get_language', return_value='python'):
+            construct_paths(
+                input_file_paths, force, quiet, command, command_options
+            )
+    assert "Invalid command" in str(excinfo.value)
+
+
+def test_construct_paths_missing_command_options(tmpdir):
+    """
+    Test that construct_paths handles missing command options gracefully.
+    """
+
+    # Create input files
+    prompt_file = tmpdir.join('my_project_python.prompt')
+    prompt_file.write('Prompt content')
+
+    input_file_paths = {'prompt_file': str(prompt_file)}
+    force = True
+    quiet = True
+    command = 'generate'
+    command_options = None  # Missing command options
+
+    with patch('pdd.construct_paths.get_extension', return_value='.py'), \
+         patch('pdd.construct_paths.get_language', return_value='python'), \
+         patch('pdd.construct_paths.generate_output_paths', return_value={'output': str(tmpdir.join('output.py'))}):
+        input_strings, output_file_paths, language = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+        # Check that defaults are used and no exception is raised
+        assert input_strings['prompt_file'] == 'Prompt content'
+        assert language == 'python'
+
+
+def test_construct_paths_unsupported_extension(tmpdir):
+    """
+    Test that construct_paths raises an error when the file extension is unsupported.
+    """
+
+    # Create input files with unsupported extension
+    prompt_file = tmpdir.join('my_project.unsupported')
+    prompt_file.write('Prompt content')
+
+    input_file_paths = {'prompt_file': str(prompt_file)}
+    force = True
+    quiet = True
+    command = 'generate'
+    command_options = {}
+
+    with patch('pdd.construct_paths.get_extension', return_value='.unsupported'), \
+         patch('pdd.construct_paths.get_language', return_value=None):
+        with pytest.raises(ValueError) as excinfo:
+            construct_paths(
+                input_file_paths, force, quiet, command, command_options
+            )
+        assert "Unsupported file extension" in str(excinfo.value)
+
+
+def test_construct_paths_special_characters_in_filenames(tmpdir):
+    """
+    Test that construct_paths properly handles filenames with special characters.
+    """
+
+    # Create input files with special characters
+    prompt_file = tmpdir.join('my_project @123!.prompt')
+    prompt_file.write('Prompt content')
+
+    input_file_paths = {'prompt_file': str(prompt_file)}
+    force = True
+    quiet = True
+    command = 'generate'
+    command_options = {}
+
+    with patch('pdd.construct_paths.get_extension', return_value='.py'), \
+         patch('pdd.construct_paths.get_language', return_value='python'), \
+         patch('pdd.construct_paths.generate_output_paths') as mock_generate_output_paths:
+        mock_generate_output_paths.return_value = {'output': str(tmpdir.join('output.py'))}
+
+        input_strings, output_file_paths, language = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+
+        # Check that the special characters are handled without errors
+        assert input_strings['prompt_file'] == 'Prompt content'
+        assert language == 'python'
+
+
+def test_construct_paths_no_input_files(tmpdir):
+    """
+    Test that construct_paths raises an error when no input files are provided.
+    """
+
+    input_file_paths = {}
+    force = True
+    quiet = True
+    command = 'generate'
+    command_options = {}
+
+    with pytest.raises(ValueError) as excinfo:
+        construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+    assert "No input files provided" in str(excinfo.value)
+
+
+def test_construct_paths_conflicting_language_specification(tmpdir):
+    """
+    Test that construct_paths handles conflicting language specifications between filenames and command options.
+    """
+
+    # Language in filename is 'python'
+    prompt_file = tmpdir.join('my_project_python.prompt')
+    prompt_file.write('Prompt content')
+
+    input_file_paths = {'prompt_file': str(prompt_file)}
+    force = True
+    quiet = True
+    command = 'generate'
+    # Language specified in command options is 'javascript'
+    command_options = {'language': 'javascript'}
+
+    with patch('pdd.construct_paths.get_extension', return_value='.py'), \
+         patch('pdd.construct_paths.get_language') as mock_get_language, \
+         patch('pdd.construct_paths.generate_output_paths', return_value={'output': str(tmpdir.join('output.js'))}):
+        mock_get_language.return_value = 'javascript'
+
+        input_strings, output_file_paths, language = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+
+        # Command option should take precedence
+        assert language == 'javascript'
+        assert output_file_paths['output'].endswith('.js')
+
+
+def test_construct_paths_missing_error_file(tmpdir):
+    """
+    Test that construct_paths handles a missing error_file path correctly.
+    """
+
+    # Create input files
+    prompt_file = tmpdir.join('my_project_python.prompt')
+    prompt_file.write('Prompt content')
+    code_file = tmpdir.join('my_project.py')
+    code_file.write('print("Hello World")')
+
+    # error_file path not provided
+    input_file_paths = {
+        'prompt_file': str(prompt_file),
+        'code_file': str(code_file),
     }
-    assert language == 'txt'
+    force = True
+    quiet = True
+    command = 'generate'
+    command_options = {}
+
+    with patch('pdd.construct_paths.get_extension', return_value='.py'), \
+         patch('pdd.construct_paths.get_language', return_value='python'), \
+         patch('pdd.construct_paths.generate_output_paths', return_value={'output': str(tmpdir.join('output.py'))}):
+        input_strings, output_file_paths, language = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+        # Check that construct_paths does not fail and handles missing error_file
+        assert 'error_file' not in input_file_paths
+
+
+def test_construct_paths_nonexistent_directory(tmpdir):
+    """
+    Test that construct_paths raises an error when provided file paths point to a nonexistent directory.
+    """
+
+    # Create a path that does not exist
+    nonexistent_dir = tmpdir.join('nonexistent')
+    prompt_file = nonexistent_dir.join('my_project_python.prompt')
+
+    input_file_paths = {'prompt_file': str(prompt_file)}
+    force = True
+    quiet = True
+    command = 'generate'
+    command_options = {}
+
+    with pytest.raises(FileNotFoundError) as excinfo:
+        construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+    assert "does not exist" in str(excinfo.value)
+
+
+def test_construct_paths_relative_paths(tmpdir):
+    """
+    Test that construct_paths correctly handles relative file paths.
+    """
+
+    # Change the working directory to tmpdir
+    with tmpdir.as_cwd():
+        # Create input files with relative paths
+        prompt_file = Path('my_project_python.prompt')
+        prompt_file.write_text('Prompt content')
+
+        input_file_paths = {'prompt_file': str(prompt_file)}
+        force = True
+        quiet = True
+        command = 'generate'
+        command_options = {}
+
+        with patch('pdd.construct_paths.get_extension', return_value='.py'), \
+             patch('pdd.construct_paths.get_language', return_value='python'), \
+             patch('pdd.construct_paths.generate_output_paths', return_value={'output': str(tmpdir.join('output.py'))}):
+            input_strings, output_file_paths, language = construct_paths(
+                input_file_paths, force, quiet, command, command_options
+            )
+            # Check that files are correctly found and read
+            assert input_strings['prompt_file'] == 'Prompt content'
+            assert language == 'python'
+
+
+def test_construct_paths_symbolic_links(tmpdir):
+    """
+    Test that construct_paths correctly resolves symbolic links in file paths.
+    """
+
+    # Create actual file
+    real_prompt_file = tmpdir.join('real_my_project.prompt')
+    real_prompt_file.write('Prompt content')
+
+    # Create a symbolic link
+    symlink_prompt_file = tmpdir.join('my_project.prompt')
+    symlink_prompt_file.mksymlinkto(real_prompt_file)
+
+    input_file_paths = {'prompt_file': str(symlink_prompt_file)}
+    force = True
+    quiet = True
+    command = 'generate'
+    command_options = {}
+
+    with patch('pdd.construct_paths.get_extension', return_value='.py'), \
+         patch('pdd.construct_paths.get_language', return_value='python'), \
+         patch('pdd.construct_paths.generate_output_paths', return_value={'output': str(tmpdir.join('output.py'))}):
+        input_strings, output_file_paths, language = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+        # Check that the symlink is correctly resolved
+        assert input_strings['prompt_file'] == 'Prompt content'
+        assert language == 'python'
