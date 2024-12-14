@@ -1,62 +1,56 @@
-import os
-from rich.console import Console
+from typing import Tuple, Optional
+from rich import print
 from rich.markdown import Markdown
-from langchain_core.prompts import PromptTemplate
-from langchain_core.outputs import Generation
-from . import preprocess, llm_selector, unfinished_prompt, continue_generation, postprocess
+from rich.console import Console
+from .load_prompt_template import load_prompt_template
+from .llm_invoke import llm_invoke
+from .unfinished_prompt import unfinished_prompt
+from .continue_generation import continue_generation
+from .postprocess import postprocess
+from .preprocess import preprocess
 
 console = Console()
 
-def bug_to_unit_test(current_output: str, desired_output: str, prompt_used_to_generate_the_code: str, 
-                     code_under_test: str, program_used_to_run_code_under_test: str, 
-                     strength: float, temperature: float, language: str) -> tuple:
+def bug_to_unit_test(
+    current_output: str,
+    desired_output: str,
+    prompt_used_to_generate_the_code: str,
+    code_under_test: str,
+    program_used_to_run_code_under_test: str,
+    strength: float = 0.89,
+    temperature: float = 0.0,
+    language: str = "python"
+) -> Tuple[str, float, str]:
     """
-    Generate a unit test from a code file using LangChain and various processing steps.
+    Generate a unit test from a code file with bug information.
 
     Args:
-        current_output (str): The current output of the code.
-        desired_output (str): The desired output of the code.
-        prompt_used_to_generate_the_code (str): The prompt used to generate the code.
-        code_under_test (str): The code being tested.
-        program_used_to_run_code_under_test (str): The program used to run the code under test.
-        strength (float): The strength of the LLM model to use (0 to 1).
-        temperature (float): The temperature of the LLM model to use.
-        language (str): The programming language of the unit test to be generated.
+        current_output (str): Current output of the code
+        desired_output (str): Desired output of the code
+        prompt_used_to_generate_the_code (str): Original prompt used to generate the code
+        code_under_test (str): Code to be tested
+        program_used_to_run_code_under_test (str): Program used to run the code
+        strength (float, optional): Strength of the LLM model. Defaults to 0.89.
+        temperature (float, optional): Temperature of the LLM model. Defaults to 0.0.
+        language (str, optional): Programming language. Defaults to "python".
 
     Returns:
-        tuple: A tuple containing:
-            - unit_test (str): The generated unit test code.
-            - total_cost (float): The total cost to generate the unit test code.
-            - model_name (str): The name of the selected LLM model.
+        Tuple[str, float, str]: Generated unit test, total cost, and model name
     """
+    total_cost = 0.0
+    final_model_name = ""
+
     try:
-        # Step 1: Load the prompt file
-        pdd_path = os.getenv('PDD_PATH')
-        if not pdd_path:
-            raise ValueError("PDD_PATH environment variable is not set")
+        # Step 1: Load the prompt template
+        prompt_template = load_prompt_template("bug_to_unit_test_LLM")
+        if not prompt_template:
+            raise ValueError("Failed to load prompt template")
+
+        # Step 2: Prepare input and run through LLM
+        preprocessed_prompt = preprocess(prompt_used_to_generate_the_code)
         
-        prompt_file_path = os.path.join(pdd_path, 'prompts', 'bug_to_unit_test_LLM.prompt')
-        with open(prompt_file_path, 'r') as file:
-            prompt_template = file.read()
-
-        # Step 2: Preprocess the prompt
-        processed_prompt = preprocess.preprocess(prompt_template, recursive=False, double_curly_brackets=False)
-
-        # Create a LangChain LCEL template
-        prompt = PromptTemplate.from_template(processed_prompt)
-
-        # Step 3: Use llm_selector for the model
-        llm, token_counter, input_cost, output_cost, model_name = llm_selector.llm_selector(strength, temperature)
-
-        # Step 4: Run the inputs through the model using LangChain LCEL
-        chain = prompt | llm
-
-        # Preprocess the prompt_used_to_generate_the_code
-        processed_prompt_used = preprocess.preprocess(prompt_used_to_generate_the_code, recursive=False, double_curly_brackets=False)
-
-        # Prepare the input for the model
-        model_input = {
-            "prompt_that_generated_code": processed_prompt_used,
+        input_json = {
+            "prompt_that_generated_code": preprocessed_prompt,
             "current_output": current_output,
             "desired_output": desired_output,
             "code_under_test": code_under_test,
@@ -64,69 +58,95 @@ def bug_to_unit_test(current_output: str, desired_output: str, prompt_used_to_ge
             "language": language
         }
 
-        # Count input tokens
-        input_tokens = sum(token_counter(str(value)) for value in model_input.values())
-        console.print(f"[bold]Running the model with {input_tokens} input tokens.[/bold]")
-        console.print(f"[bold]Input tokens: {input_tokens}, cost: ${input_tokens * input_cost / 1_000_000:.6f}[/bold]")
+        console.print("[bold blue]Generating unit test...[/bold blue]")
+        response = llm_invoke(
+            prompt=prompt_template,
+            input_json=input_json,
+            strength=strength,
+            temperature=temperature,
+            verbose=True
+        )
 
-        # Invoke the chain
-        result = chain.invoke(model_input)
+        total_cost += response['cost']
+        final_model_name = response['model_name']
 
-        # Extract text from the result
-        if isinstance(result, list) and len(result) > 0 and isinstance(result[0], Generation):
-            result_text = result[0].text
-        else:
-            result_text = str(result)
+        # Step 3: Print markdown formatting
+        console.print(Markdown(response['result']))
 
-        # Debug logging
-        console.print(f"[bold]LLM output type: {type(result)}[/bold]")
-        console.print(f"[bold]LLM output content: {result}[/bold]")
-        console.print(f"[bold]Extracted text: {result_text}[/bold]")
+        # Step 4: Check if generation is complete
+        last_600_chars = response['result'][-600:] if len(response['result']) > 600 else response['result']
+        
+        reasoning, is_finished, unfinished_cost, unfinished_model = unfinished_prompt(
+            prompt_text=last_600_chars,
+            strength=0.89,
+            temperature=temperature,
+            verbose=False
+        )
+        
+        total_cost += unfinished_cost
 
-        # Step 5: Pretty print the result
-        console.print(Markdown(result_text))
-
-        # Count output tokens
-        output_tokens = token_counter(result_text)
-        console.print(f"[bold]Output tokens: {output_tokens}, cost: ${output_tokens * output_cost / 1_000_000:.6f}[/bold]")
-
-        # Calculate base cost
-        base_cost = (input_tokens * input_cost + output_tokens * output_cost) / 1_000_000
-        console.print(f"[bold]Base cost: ${base_cost:.6f}[/bold]")
-
-        # Step 6: Detect if the generation is incomplete
-        last_600_chars = result_text[-600:]
-        reasoning, is_finished, unfinished_cost, _ = unfinished_prompt.unfinished_prompt(last_600_chars, strength=0.7, temperature=temperature)
-        console.print(f"[bold]Unfinished cost: ${unfinished_cost:.6f}[/bold]")
-
-        additional_cost = unfinished_cost
         if not is_finished:
-            # Step 6a: Continue the generation if incomplete
-            final_result, continue_cost, _ = continue_generation.continue_generation(processed_prompt, result_text, strength, temperature)
-            additional_cost += continue_cost
+            console.print("[yellow]Generation incomplete. Continuing...[/yellow]")
+            continued_output, continued_cost, continued_model = continue_generation(
+                formatted_input_prompt=prompt_template,
+                llm_output=response['result'],
+                strength=strength,
+                temperature=temperature,
+                verbose=True
+            )
+            total_cost += continued_cost
+            final_model_name = continued_model
+            result = continued_output
         else:
-            # Step 6b: Postprocess the result if complete
-            final_result, postprocess_cost = postprocess.postprocess(result_text, language, strength=0.7, temperature=temperature)
-            additional_cost += postprocess_cost
+            result = response['result']
 
-        console.print(f"[bold]Additional costs: ${additional_cost:.6f}[/bold]")
+        # Post-process the result
+        final_code, postprocess_cost, postprocess_model = postprocess(
+            result,
+            language,
+            strength=0.89,
+            temperature=temperature,
+            verbose=True
+        )
+        total_cost += postprocess_cost
 
-        # Calculate total cost
-        total_cost = base_cost + additional_cost
+        # Step 5: Print total cost
+        console.print(f"[bold green]Total Cost: ${total_cost:.6f}[/bold green]")
 
-        # Round the total cost to 6 decimal places
-        total_cost = round(total_cost, 6)
+        return final_code, total_cost, final_model_name
 
-        console.print(f"[bold green]Total cost: ${total_cost:.6f}[/bold green]")
-
-        return final_result, total_cost, model_name
-
-    except FileNotFoundError as e:
-        console.print(f"[bold red]Error: {e}")
-        raise
-    except ValueError as e:
-        console.print(f"[bold red]Error: {e}")
-        raise
     except Exception as e:
-        console.print(f"[bold red]An unexpected error occurred: {e}")
-        raise
+        console.print(f"[bold red]Error: {str(e)}[/bold red]")
+        return "", 0.0, ""
+
+def main():
+    """Example usage of the bug_to_unit_test function"""
+    try:
+        current_output = "3"
+        desired_output = "5"
+        prompt = "create a function that adds two numbers in python"
+        code = """
+def add_numbers(a, b):
+    return a + 1
+        """
+        program = "python"
+
+        unit_test, cost, model = bug_to_unit_test(
+            current_output=current_output,
+            desired_output=desired_output,
+            prompt_used_to_generate_the_code=prompt,
+            code_under_test=code,
+            program_used_to_run_code_under_test=program
+        )
+
+        if unit_test:
+            console.print("[bold green]Generated Unit Test:[/bold green]")
+            console.print(unit_test)
+            console.print(f"[bold blue]Total Cost: ${cost:.6f}[/bold blue]")
+            console.print(f"[bold blue]Model Used: {model}[/bold blue]")
+
+    except Exception as e:
+        console.print(f"[bold red]Error in main: {str(e)}[/bold red]")
+
+if __name__ == "__main__":
+    main()
