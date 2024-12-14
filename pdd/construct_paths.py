@@ -34,7 +34,8 @@ def construct_paths(
         if not path.exists():
             if key == "error_file":
                 if not quiet:
-                    print(f"[yellow]Warning: Error file '{path}' does not exist. Creating an empty file.[/yellow]")
+                    # Use exact format expected by test
+                    print("[yellow]Warning: Error file '{}' does not exist. Creating an empty file.[/yellow]".format(path))
                 path.touch()
             else:
                 if not path.parent.exists():
@@ -50,13 +51,40 @@ def construct_paths(
                 print(f"[bold red]Error: Failed to read input file '{path}': {e}[/bold red]")
                 raise
 
-    # Step 2: Extract basename
     def extract_basename(filename: str) -> str:
         """Extract basename from filename, handling special characters and language suffix."""
-        # Match everything up to optional _language before .prompt
-        match = re.match(r'^(.+?)(?:_[a-zA-Z]+)?\.prompt$', filename)
-        return match.group(1) if match else Path(filename).stem
+        name = Path(filename).name
+        # Match everything before .prompt, optionally excluding _language suffix
+        # Use non-greedy match and handle special characters
+        match = re.match(r'^(.+?)(?:_[a-zA-Z]+)?\.prompt$', name)
+        if match:
+            return match.group(1)
+        return Path(filename).stem
 
+    def determine_language(filename: str, cmd_options: Dict[str, str], code_file: str = None) -> str:
+        """Determine language from various sources."""
+        # First check command options
+        if "language" in cmd_options and cmd_options["language"] is not None:
+            return cmd_options["language"]
+
+        # Then check filename for language suffix
+        match = re.search(r'_([a-zA-Z]+)\.prompt$', filename)
+        if match:
+            return match.group(1)
+
+        # Finally try code file extension
+        if code_file:
+            extension = Path(code_file).suffix
+            if not extension:
+                raise ValueError("Unsupported file extension: empty extension")
+            lang = get_language(extension)
+            if not lang:
+                raise ValueError(f"Unsupported file extension: {extension}")
+            return lang
+
+        return get_language('.py')  # Default to Python if no other language found
+
+    # Extract basename based on command
     if command in [
         "generate", "example", "test", "preprocess", "fix",
         "update", "bug", "auto-deps", "crash", "trace"
@@ -78,37 +106,39 @@ def construct_paths(
     else:
         raise ValueError(f"Invalid command: {command}")
 
-    # Step 3: Determine language
+    # Determine language
     language = None
-
-    # First check command options
-    if "language" in command_options and command_options["language"] is not None:
-        language = command_options["language"]
-
-    # Then check filename if no language found
-    if not language and command in [
+    if command in [
         "generate", "example", "test", "preprocess", "fix",
         "update", "bug", "auto-deps", "crash", "trace"
     ]:
-        prompt_path = Path(input_file_paths["prompt_file"])
-        # Match language suffix before .prompt
-        match = re.match(r'^.+?_([a-zA-Z]+)\.prompt$', prompt_path.name)
-        if match:
-            language = match.group(1)
-
-    # Finally try code file extension
-    if not language and "code_file" in input_file_paths:
-        code_file_extension = Path(input_file_paths["code_file"]).suffix
-        language = get_language(code_file_extension)
-        if not language:
-            raise ValueError(f"Unsupported file extension: {code_file_extension}")
+        language = determine_language(
+            Path(input_file_paths["prompt_file"]).name,
+            command_options,
+            input_file_paths.get("code_file")
+        )
+    elif command == "split":
+        language = determine_language(
+            Path(input_file_paths["input_prompt"]).name,
+            command_options
+        )
+    elif command == "change" and "input_prompt_file" in input_file_paths:
+        language = determine_language(
+            Path(input_file_paths["input_prompt_file"]).name,
+            command_options
+        )
 
     # For commands that require language
     if not language and command in [
         "generate", "example", "test", "preprocess", "fix",
         "update", "bug", "auto-deps", "crash", "trace"
     ]:
-        raise ValueError(f"Unsupported file extension or missing language specification")
+        if "code_file" in input_file_paths:
+            extension = Path(input_file_paths["code_file"]).suffix
+            if not extension:
+                raise ValueError("Unsupported file extension: empty extension")
+            raise ValueError(f"Unsupported file extension: {extension}")
+        raise ValueError("Unsupported file extension or missing language specification")
 
     file_extension = get_extension(language) if language else None
 
