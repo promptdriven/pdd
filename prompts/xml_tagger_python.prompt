@@ -29,7 +29,7 @@
         4b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens. 
         4c. The string output of the LCEL will be 'xml_generated_analysis' that contains the tagged prompt.
         4d. Print the 'xml_generated_analysis' to provide visibility into the intermediate result.
-    Step 5. The code result of the model will contain a mix of text and XML separated by triple backticks. Create a Langchain LCEL template but with a llm_selector with strength .8 from the extract_xml prompt that has a JSON output.
+    Step 5. The code result of the model will contain a mix of text and XML separated by triple backticks. Create a Langchain LCEL template but with a llm_selector with strength .89 from the extract_xml prompt that has a JSON output.
         5a. Pass the following string parameters to the prompt during invoke:
             - 'xml_generated_analysis'
         5b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
