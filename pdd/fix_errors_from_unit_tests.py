@@ -1,15 +1,35 @@
 import os
+from datetime import datetime
+from typing import Tuple, Optional
+from pydantic import BaseModel, Field
 from rich import print as rprint
 from rich.markdown import Markdown
-from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
-from langchain_community.cache import SQLiteCache
-from langchain.globals import set_llm_cache
-from .llm_selector import llm_selector
-from .preprocess import preprocess
+from rich.console import Console
+from rich.panel import Panel
 
-# Setup cache to save money and increase speeds
-set_llm_cache(SQLiteCache(database_path=".langchain.db"))
+from .preprocess import preprocess
+from .load_prompt_template import load_prompt_template
+from .llm_invoke import llm_invoke
+
+console = Console()
+
+class CodeFix(BaseModel):
+    update_unit_test: bool = Field(description="Whether the unit test needs to be updated")
+    update_code: bool = Field(description="Whether the code needs to be updated")
+    fixed_unit_test: str = Field(description="The fixed unit test code")
+    fixed_code: str = Field(description="The fixed code under test")
+
+def write_to_error_file(file_path: str, content: str) -> None:
+    """Write content to error file with timestamp and separator."""
+    try:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        separator = f"\n{'='*80}\n{timestamp}\n{'='*80}\n"
+        
+        with open(file_path, 'a', encoding='utf-8') as f:
+            f.write(f"{separator}{content}\n")
+    except Exception as e:
+        console.print(f"[red]Error writing to error file: {str(e)}[/red]")
+
 
 def fix_errors_from_unit_tests(
     unit_test: str,
@@ -18,133 +38,126 @@ def fix_errors_from_unit_tests(
     error: str,
     error_file: str,
     strength: float,
-    temperature: float
-) -> tuple:
+    temperature: float,
+    verbose: bool = False
+) -> Tuple[bool, bool, str, str, float, str]:
     """
-    Fix errors in unit tests using LLM models.
+    Fix errors in unit tests using LLM models and log the process.
 
-    :param unit_test: The unit test code as a string.
-    :param code: The code to be tested as a string.
-    :param prompt: The prompt that generated the code under test.
-    :param error: The error message from the unit test.
-    :param error_file: Path to the file where error logs will be appended.
-    :param strength: The strength parameter for LLM selection.
-    :param temperature: The temperature parameter for LLM selection.
-    :return: A tuple containing flags for updates, the fixed code and unit test, and total cost.
+    Args:
+        unit_test (str): The unit test code
+        code (str): The code under test
+        prompt (str): The prompt that generated the code
+        error (str): The error message
+        error_file (str): Path to error log file
+        strength (float): LLM model strength (0-1)
+        temperature (float): LLM temperature (0-1)
+        verbose (bool): Whether to print detailed output
+
+    Returns:
+        Tuple containing update flags, fixed code/tests, total cost, and model name
     """
+    total_cost = 0.0
+    model_name = ""
+
     try:
-        # Step 1: Load prompt files
-        pdd_path = os.getenv('PDD_PATH')
-        if not pdd_path:
-            raise ValueError("PDD_PATH environment variable is not set")
+        # Step 1: Load prompt templates
+        fix_errors_prompt = load_prompt_template("fix_errors_from_unit_tests_LLM")
+        extract_fix_prompt = load_prompt_template("extract_unit_code_fix_LLM")
+        
+        if not fix_errors_prompt or not extract_fix_prompt:
+            raise ValueError("Failed to load prompt templates")
 
-        with open(os.path.join(pdd_path, 'prompts', 'fix_errors_from_unit_tests_LLM.prompt'), 'r') as file:
-            fix_errors_prompt = file.read()
-
-        with open(os.path.join(pdd_path, 'prompts', 'extract_unit_code_fix_LLM.prompt'), 'r') as file:
-            extract_fix_prompt = file.read()
-
-        # Step 2: Read contents of error_file
+        # Step 2: Read error file content
+        existing_errors = ""
         try:
-            with open(error_file, 'r') as file:
-                existing_errors = file.read()
-        except FileNotFoundError:
-            existing_errors = ""
-        except IOError as e:
-            rprint(f"[bold red]Error reading error file: {e}[/bold red]")
-            existing_errors = ""
+            if os.path.exists(error_file):
+                with open(error_file, 'r', encoding='utf-8') as f:
+                    existing_errors = f.read()
+        except Exception as e:
+            if verbose:
+                console.print(f"[yellow]Warning: Could not read error file: {str(e)}[/yellow]")
 
-        # Step 3: Create Langchain LCEL template for fix_errors_from_unit_tests
-        fix_errors_template = PromptTemplate.from_template(fix_errors_prompt)
+        # Step 3: Run first prompt through llm_invoke
+        processed_prompt = preprocess(
+            prompt,
+            recursive=False,
+            double_curly_brackets=True,
+            exclude_keys=['unit_test', 'code', 'unit_test_fix']
+        )
 
-        # Step 4: Use llm_selector with provided strength and temperature
-        llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
+        if verbose:
+            console.print(Panel("[bold green]Running fix_errors_from_unit_tests...[/bold green]"))
 
-        # Step 5: Run the code through the model using Langchain LCEL
-        chain = fix_errors_template | llm | StrOutputParser()
-        processed_prompt = preprocess(prompt, recursive=False, double_curly_brackets=True, exclude_keys=['unit_test', 'code', 'unit_test_fix'])
-        input_data = {
-            "unit_test": unit_test,
-            "code": code,
-            "prompt": processed_prompt,
-            "errors": error
-        }
-        prompt_tokens = token_counter(str(input_data))
-        cost_run_1 = (prompt_tokens / 1_000_000) * input_cost
+        response1 = llm_invoke(
+            prompt=fix_errors_prompt,
+            input_json={
+                "unit_test": unit_test,
+                "code": code,
+                "prompt": processed_prompt,
+                "errors": error
+            },
+            strength=strength,
+            temperature=temperature,
+            verbose=verbose
+        )
 
-        # 5b: Pretty print running message
-        rprint(f"[bold green]Running fix_errors_from_unit_tests...[/bold green]")
-        rprint(f"Prompt tokens: {prompt_tokens}, Cost: ${cost_run_1:.6f}")
+        total_cost += response1['cost']
+        model_name = response1['model_name']
+        result1 = response1['result']
 
-        # Invoke the chain
-        result_1 = chain.invoke(input_data)
+        # Step 4: Pretty print results and log to error file
+        if verbose:
+            console.print(Markdown(result1))
+            console.print(f"Cost of first run: ${response1['cost']:.6f}")
 
-        # 5c: Append output to error_file
-        try:
-            with open(error_file, 'a') as file:
-                file.write("\n\n" + "="*50 + "\n")
-                file.write("Fix Errors From Unit Tests Output:\n")
-                file.write(result_1)
-        except IOError as e:
-            rprint(f"[bold red]Error writing to error file: {e}[/bold red]")
+        write_to_error_file(error_file, f"Model: {model_name}\nResult:\n{result1}")
 
-        # Step 6: Pretty print the markdown formatting and cost
-        markdown_output = Markdown(result_1)
-        rprint(markdown_output)
-        result_tokens = token_counter(result_1)
-        cost_result_1 = (result_tokens / 1_000_000) * output_cost
-        rprint(f"Result tokens: {result_tokens}, Cost: ${cost_result_1:.6f}")
+        # Step 5: Preprocess extract_fix prompt
+        processed_extract_prompt = preprocess(
+            extract_fix_prompt,
+            recursive=False,
+            double_curly_brackets=True,
+            exclude_keys=['unit_test', 'code', 'unit_test_fix']
+        )
 
-        # Append markdown output to error_file
-        try:
-            with open(error_file, 'a') as file:
-                file.write(f"\nResult tokens: {result_tokens}, Cost: ${cost_result_1:.6f}\n")
-        except IOError as e:
-            rprint(f"[bold red]Error writing markdown output to error file: {e}[/bold red]")
+        # Step 6: Run second prompt through llm_invoke
+        if verbose:
+            console.print(Panel("[bold green]Running extract_unit_code_fix...[/bold green]"))
 
-        # Step 7: Create a second Langchain LCEL template for extract_unit_code_fix
-        extract_processed_prompt = preprocess(extract_fix_prompt, recursive=False, double_curly_brackets=True, exclude_keys=['unit_test', 'code', 'unit_test_fix'])
-        extract_fix_template = PromptTemplate.from_template(extract_processed_prompt)
+        response2 = llm_invoke(
+            prompt=processed_extract_prompt,
+            input_json={
+                "unit_test_fix": result1,
+                "unit_test": unit_test,
+                "code": code
+            },
+            strength=0.895,
+            temperature=temperature,
+            output_pydantic=CodeFix,
+            verbose=verbose
+        )
 
-        # Step 8: Use llm_selector with strength 0.5 and provided temperature
-        llm, token_counter, input_cost, output_cost, _ = llm_selector(0.895, temperature)
-        parser = JsonOutputParser()
+        total_cost += response2['cost']
+        result2: CodeFix = response2['result']
 
-        # Step 9: Run the code through the model using Langchain LCEL
-        chain = extract_fix_template | llm | parser
-        input_data_2 = {
-            "unit_test_fix": result_1,
-            "unit_test": unit_test,
-            "code": code
-        }
-        prompt_tokens_2 = token_counter(str(input_data_2))
-        cost_run_2 = (prompt_tokens_2 / 1_000_000) * input_cost
+        if verbose:
+            console.print(f"Total cost: ${total_cost:.6f}")
+            console.print(f"Model used: {model_name}")
 
-        # 9b: Pretty print running message
-        rprint(f"[bold green]Running extract_unit_code_fix...[/bold green]")
-        rprint(f"Prompt tokens: {prompt_tokens_2}, Cost: ${cost_run_2:.6f}")
-
-        # Invoke the chain
-        result_2 = chain.invoke(input_data_2)
-
-        result_tokens_2 = token_counter(str(result_2))
-        cost_result_2 = (result_tokens_2 / 1_000_000) * output_cost
-
-        # Step 10: Calculate the total cost
-        total_cost = cost_run_1 + cost_result_1 + cost_run_2 + cost_result_2
-
-        # Step 11: Print the total cost and return results
-        rprint(f"Total cost of both runs: ${total_cost:.6f}")
-
+        # Step 7: Return results
         return (
-            result_2.get('update_unit_test', False),
-            result_2.get('update_code', False),
-            result_2.get('fixed_unit_test', ''),
-            result_2.get('fixed_code', ''),
+            result2.update_unit_test,
+            result2.update_code,
+            result2.fixed_unit_test,
+            result2.fixed_code,
             total_cost,
             model_name
         )
 
     except Exception as e:
-        rprint(f"[bold red]An error occurred: {e}[/bold red]")
-        return False, False, '', '', 0.0, ''
+        error_msg = f"Error in fix_errors_from_unit_tests: {str(e)}"
+        if verbose:
+            console.print(f"[bold red]{error_msg}[/bold red]")
+        write_to_error_file(error_file, error_msg)
+        return False, False, "", "", 0.0, ""
