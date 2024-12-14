@@ -37,11 +37,11 @@ def construct_paths(
     def determine_language(filename: str, cmd_options: Dict[str, str], code_file: str = None) -> str:
         """Determine language from various sources."""
         # First check command options
-        if cmd_options.get("language"):
+        if cmd_options and "language" in cmd_options:
             return cmd_options["language"]
 
         # Then check filename for language suffix
-        match = re.search(r'_([a-zA-Z]+)\.prompt$', filename)
+        match = re.search(r'_([a-zA-Z]+)(?:\.prompt)?$', filename)
         if match:
             return match.group(1).lower()
 
@@ -61,6 +61,7 @@ def construct_paths(
         if not path.exists():
             if key == "error_file":
                 if not quiet:
+                    # Use standard print for error file warning
                     print("[yellow]Warning: Error file '{}' does not exist. Creating an empty file.[/yellow]".format(str(path)))
                 path.touch()
             else:
@@ -102,13 +103,14 @@ def construct_paths(
         "split": "input_prompt",
         "change": "input_prompt_file" if "input_prompt_file" in input_file_paths else "change_file",
         "detect": "change_file",
+        "conflicts": "prompt1",
     }.get(command, "prompt_file")
 
     language = None
     if prompt_key in input_file_paths:
         prompt_path = Path(input_file_paths[prompt_key]).resolve()
         language = determine_language(
-            prompt_path.name,
+            str(prompt_path),  # Pass full path string for proper language detection
             command_options,
             input_file_paths.get("code_file")
         )
@@ -137,7 +139,7 @@ def construct_paths(
         output_file_paths = generate_output_paths(
             command,
             output_locations,
-            basename,
+            basename,  # Pass basename as a single argument
             language,
             file_extension
         )
