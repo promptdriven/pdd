@@ -94,8 +94,8 @@ def test_generate_test_different_languages():
         result = generate_test(
             prompt='Write a hello world function',
             code='print("Hello, World!")',
-            strength=0.7,
-            temperature=0.5,
+            strength=0.5,
+            temperature=0.0,
             language=lang
         )
         assert isinstance(result, tuple)
