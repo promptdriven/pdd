@@ -13,7 +13,7 @@ MOCK_UNFINISHED_RESPONSE_COMPLETE = ( "Reasoning complete", True, 0.01, "model_v
 MOCK_UNFINISHED_RESPONSE_INCOMPLETE = ( "Reasoning incomplete", False, 0.01, "model_v1" )
 MOCK_FINAL_OUTPUT = "completed LLM output"
 MOCK_CONTINUE_RESPONSE = ("completed LLM output", 0.05, "model_v2")
-MOCK_POSTPROCESS_RESPONSE = ("runnable_code_here", 0.02)
+MOCK_POSTPROCESS_RESPONSE = ("runnable_code_here", 0.02, "model_v1")
 
 @pytest.fixture
 def mock_preprocess():
