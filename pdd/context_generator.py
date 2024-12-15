@@ -100,11 +100,12 @@ def context_generator(
             if verbose:
                 print("[blue]Post-processing complete generation...[/blue]")
             
-            final_output, postprocess_cost, _ = postprocess(
+            final_output, postprocess_cost, model_name = postprocess(
                 initial_output,
                 language,
-                strength=0.8,
-                temperature=temperature
+                strength=0.895,
+                temperature=temperature,
+                verbose=verbose
             )
             total_cost += postprocess_cost
 

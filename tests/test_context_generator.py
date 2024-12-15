@@ -1,7 +1,7 @@
 # tests/test_context_generator.py
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, call  # Added call import
 from pdd.context_generator import context_generator
 
 # Define sample inputs and outputs for mocking
@@ -33,8 +33,7 @@ MOCK_UNFINISHED_PROMPT_RESPONSE_UNFINISHED = ("Incomplete reasoning.", False, 0.
 MOCK_CONTINUE_GENERATION_RESPONSE = ("Completed example code.", 0.015, "model_continue")
 
 # Mock responses for postprocess
-MOCK_POSTPROCESS_RESPONSE = ("Postprocessed example code.", 0.02)
-
+MOCK_POSTPROCESS_RESPONSE = ("Postprocessed example code.", 0.02, "model_postprocess")
 
 @pytest.fixture
 def valid_inputs():
@@ -78,7 +77,7 @@ def test_context_generator_complete_generation(
     assert total_cost == MOCK_LLM_INVOKE_RESPONSE_COMPLETE['cost'] + \
         MOCK_UNFINISHED_PROMPT_RESPONSE_FINISHED[2] + \
         MOCK_POSTPROCESS_RESPONSE[1]
-    assert model_name == MOCK_LLM_INVOKE_RESPONSE_COMPLETE['model_name']
+    assert model_name == MOCK_POSTPROCESS_RESPONSE[2]
 
     # Verify mocks called correctly
     mock_load_prompt_template.assert_called_once_with("example_generator_LLM")
@@ -353,13 +352,13 @@ def test_context_generator_verbose_output(
             assert total_cost == MOCK_LLM_INVOKE_RESPONSE_COMPLETE['cost'] + \
                 MOCK_UNFINISHED_PROMPT_RESPONSE_FINISHED[2] + \
                 MOCK_POSTPROCESS_RESPONSE[1]
-            assert model_name == MOCK_LLM_INVOKE_RESPONSE_COMPLETE['model_name']
+            assert model_name == MOCK_POSTPROCESS_RESPONSE[2]
 
             # Verify print was called with verbose messages
             expected_calls = [
-                patch.call("[blue]Generating example using prompt template...[/blue]"),
-                patch.call(f"[yellow]Completion check: {MOCK_UNFINISHED_PROMPT_RESPONSE_FINISHED[1]}[/yellow]"),
-                patch.call(f"[yellow]Reasoning: {MOCK_UNFINISHED_PROMPT_RESPONSE_FINISHED[0]}[/yellow]"),
-                patch.call("[blue]Post-processing complete generation...[/blue]")
+                call("[blue]Generating example using prompt template...[/blue]"),
+                call(f"[yellow]Completion check: {MOCK_UNFINISHED_PROMPT_RESPONSE_FINISHED[1]}[/yellow]"),
+                call(f"[yellow]Reasoning: {MOCK_UNFINISHED_PROMPT_RESPONSE_FINISHED[0]}[/yellow]"),
+                call("[blue]Post-processing complete generation...[/blue]")
             ]
             mock_print.assert_has_calls(expected_calls, any_order=False)
