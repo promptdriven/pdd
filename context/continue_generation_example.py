@@ -15,7 +15,7 @@ def main() -> None:
     # load context/unfinished_prompt.txt into llm_output
     with open("context/llm_output_fragment.txt", "r") as file:
         llm_output = file.read()
-    strength: float = .92  # Strength parameter for the LLM model
+    strength: float = .915  # Strength parameter for the LLM model
     temperature: float = 0  # Temperature parameter for the LLM model
 
     try:

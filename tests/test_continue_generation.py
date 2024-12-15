@@ -134,22 +134,5 @@ def test_empty_llm_output(basic_inputs):
     """Test handling of empty LLM output"""
     empty_inputs = {**basic_inputs, 'llm_output': ''}
     
-    with patch('pdd.continue_generation.load_prompt_template') as mock_load_prompt, \
-         patch('pdd.continue_generation.preprocess') as mock_preprocess, \
-         patch('pdd.continue_generation.llm_invoke') as mock_llm_invoke, \
-         patch('pdd.continue_generation.unfinished_prompt') as mock_unfinished:
-        
-        mock_load_prompt.return_value = "Mock prompt template"
-        mock_preprocess.return_value = "Processed prompt"
-        mock_llm_invoke.side_effect = [
-            mock_llm_responses['trim_start'],
-            mock_llm_responses['continue'],
-            mock_llm_responses['trim']
-        ]
-        mock_unfinished.return_value = ("Complete", True, 0.001, "gpt-3.5-turbo")
-
-        result, cost, model = continue_generation(**empty_inputs)
-        
-        assert result  # Verify that we get a non-empty result
-        assert cost > 0
-        assert model
+    with pytest.raises(ValueError, match="LLM output cannot be empty"):
+        continue_generation(**empty_inputs)
