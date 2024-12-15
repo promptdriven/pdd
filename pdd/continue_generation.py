@@ -36,6 +36,14 @@ def continue_generation(
         Tuple[str, float, str]: Final LLM output, total cost, and model name.
     """
     try:
+        # Validate inputs
+        if not 0 <= strength <= 1:
+            raise ValueError("Strength parameter must be between 0 and 1")
+        if not 0 <= temperature <= 1:
+            raise ValueError("Temperature parameter must be between 0 and 1")
+        if not llm_output:
+            raise ValueError("LLM output cannot be empty")
+
         # Step 1: Load prompt templates
         prompts = {
             'continue': load_prompt_template('continue_generation_LLM'),

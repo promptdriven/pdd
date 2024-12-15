@@ -366,8 +366,8 @@ def change(ctx, input_prompt, input_code, change_prompt, output):
         
         if not ctx.obj['QUIET']:
             console.print(f"Modified prompt saved to {output_file_paths['output']}")
-            console.print(f"Total Cost: ${total_cost:.6f}")
             console.print(f"Model Used: {model_name}")
+            console.print(f"Total Cost: ${total_cost:.6f}")
     
     except Exception as e:
         console.print(f"[bold red]An error occurred: {e}[/bold red]")
@@ -405,56 +405,82 @@ def update(ctx, input_prompt, input_code, modified_code, output):
         
         if not ctx.obj['QUIET']:
             console.print(f"Updated prompt saved to {output_file_paths['output']}")
-            console.print(f"Total Cost: ${total_cost:.6f}")
             console.print(f"Model Used: {model_name}")
+            console.print(f"Total Cost: ${total_cost:.6f}")
     
     except Exception as e:
         console.print(f"[bold red]An error occurred: {e}[/bold red]")
 
-def get_shell_rc_file() -> Tuple[str, str]:
-    """
-    Determine the correct RC file and shell for the user's environment.
-    
-    Returns:
-    Tuple[str,A tuple containing the path to the RC file and the shell name.
-    """
-    shell = os.environ.get('SHELL', '')
-    home = os.path.expanduser('~')
-
-    if 'zsh' in shell:
-        return os.path.join(home, '.zshrc'), 'zsh'
-    elif 'bash' in shell:
-        return os.path.join(home, '.bashrc'), 'bash'
-    elif 'fish' in shell:
-        return os.path.join(home, '.config', 'fish', 'config.fish'), 'fish'
-    else:
-        return os.path.join(home, '.profile'), 'sh'
-
 @cli.command()
 def install_completion():
-    """Install shell completion for PDD CLI."""
-    rc_file, shell = get_shell_rc_file()
-
-    if shell == 'fish':
-        completion_command = 'eval (pdd --completion-script-fish | source)'
-    else:
-        completion_command = 'eval "$(_PDD_COMPLETE=source_bash pdd)"'
-
+    """Install shell completion for the PDD CLI."""
+    shell = os.environ.get('SHELL', '').split('/')[-1]
+    home = os.path.expanduser('~')
+    
+    shell_configs = {
+        'bash': f'{home}/.bashrc',
+        'zsh': f'{home}/.zshrc',
+        'fish': f'{home}/.config/fish/config.fish'
+    }
+    
+    if shell not in shell_configs:
+        console.print(f"[bold red]Unsupported shell: {shell}[/bold red]")
+        return
+    
+    rc_file = shell_configs[shell]
+    completion_command = f'eval "$(_PDD_COMPLETE={shell}_source pdd)"'
+    
     try:
-        with open(rc_file, 'r+') as f:
-            content = f.read()
-            if completion_command not in content:
-                f.seek(0, 2)  # Move to the end of the file
-                f.write(f'\n# PDD CLI completion\n{completion_command}\n')
-                console.print(f"[green]PDD CLI completion installed in {rc_file}[/green]")
-            else:
-                console.print(f"[yellow]PDD CLI completion already installed in {rc_file}[/yellow]")
+        # Check if completion is already installed
+        with open(rc_file, 'r') as f:
+            if completion_command in f.read():
+                console.print("[yellow]Completion is already installed.[/yellow]")
+                return
+        
+        # Add completion command to RC file
+        with open(rc_file, 'a') as f:
+            f.write(f'\n# PDD CLI completion\n{completion_command}\n')
+        
+        console.print(f"[green]Successfully installed completion for {shell}[/green]")
+        console.print("Please restart your shell or source your RC file to enable completion.")
+    
+    except Exception as e:
+        console.print(f"[bold red]Failed to install completion: {e}[/bold red]")
 
-        console.print(f"[bold]Please restart your shell or run 'source {rc_file}' to enable completion.[/bold]")
-    except IOError as e:
-        console.print(f"[bold red]Error writing to {rc_file}: {e}[/bold red]")
-        console.print(f"[yellow]Please add the following line to your shell's RC file manually:[/yellow]")
-        console.print(f"[cyan]{completion_command}[/cyan]")
+if __name__ == '__main__':
+    cli()@cli.command()
+def version():
+    """Display the version of PDD CLI."""
+    version = "1.0.0"  # This should be imported from a version file
+    console.print(f"PDD CLI version {version}")
+
+def track_cost(cost: float, command: str, input_files: List[str], output_files: List[str], output_cost_path: Optional[str]):
+    """Track the cost of operations in a CSV file."""
+    if not output_cost_path:
+        return
+    
+    import csv
+    from datetime import datetime
+    
+    # Create directory if it doesn't exist
+    os.makedirs(os.path.dirname(output_cost_path), exist_ok=True)
+    
+    # Determine if we need to write headers (new file)
+    write_headers = not os.path.exists(output_cost_path)
+    
+    with open(output_cost_path, 'a', newline='') as f:
+        writer = csv.writer(f)
+        if write_headers:
+            writer.writerow(['timestamp', 'model', 'command', 'cost', 'input_files', 'output_files'])
+        
+        writer.writerow([
+            datetime.now().isoformat(),
+            'gpt-4',  # This should be dynamic based on the model used
+            command,
+            f"{cost:.6f}",
+            ','.join(input_files),
+            ','.join(output_files)
+        ])
 
 if __name__ == '__main__':
     cli()
