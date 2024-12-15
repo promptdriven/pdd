@@ -76,7 +76,7 @@ def generate_test(
         last_600_chars = result[-600:] if len(result) > 600 else result
         reasoning, is_finished, check_cost, check_model = unfinished_prompt(
             prompt_text=last_600_chars,
-            strength=0.7,
+            strength=0.895,
             temperature=temperature,
             verbose=verbose
         )
@@ -101,7 +101,7 @@ def generate_test(
         processed_result, post_cost, post_model = postprocess(
             result,
             language=language,
-            strength=0.7,
+            strength=0.895,
             temperature=temperature,
             verbose=verbose
         )
