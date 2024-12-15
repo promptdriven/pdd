@@ -1,126 +1,155 @@
 import pytest
-from unittest.mock import patch, mock_open
+from unittest.mock import patch, MagicMock
 from pdd.continue_generation import continue_generation
 from rich.console import Console
-from rich.markdown import Markdown
+
+# Test fixtures
+@pytest.fixture
+def mock_console():
+    return Console()
 
 @pytest.fixture
-def mock_environment(monkeypatch):
-    monkeypatch.setenv('PDD_PATH', '/mock/path')
-
-@pytest.fixture
-def mock_prompts():
+def basic_inputs():
     return {
-        'continue_generation_LLM': 'Continue generation prompt',
-        'trim_results_start_LLM': 'Trim results start prompt',
-        'trim_results_LLM': 'Trim results prompt'
+        'formatted_input_prompt': 'Test prompt',
+        'llm_output': 'Initial output',
+        'strength': 0.5,
+        'temperature': 0.0,
+        'verbose': False
     }
 
+# Mock responses for different LLM calls
 @pytest.fixture
-def mock_llm_selector():
-    call_count = 0
-    def mock_llm(prompt):
-        nonlocal call_count
-        call_count += 1
-        if "trim_results_start" in prompt:
-            return '{"code_block": "def example(): pass"}'
-        elif "trim_results" in prompt:
-            return '{"trimmed_continued_generation": "def example_continued(): pass"}'
-        else:
-            responses = [
-                "This is the first mock LLM response",
-                "def example(): pass",
-                "This is the third mock LLM response"
-            ]
-            return responses[min(call_count - 1, len(responses) - 1)]
+def mock_llm_responses():
+    return {
+        'trim_start': {
+            'result': MagicMock(code_block='Trimmed initial output'),
+            'cost': 0.001,
+            'model_name': 'gpt-3.5-turbo'
+        },
+        'continue': {
+            'result': 'Continued generation',
+            'cost': 0.002,
+            'model_name': 'gpt-4'
+        },
+        'trim': {
+            'result': MagicMock(trimmed_continued_generation='Final trimmed part'),
+            'cost': 0.001,
+            'model_name': 'gpt-3.5-turbo'
+        }
+    }
 
-    return lambda *args: (
-        mock_llm,  # mock LLM
-        lambda x: len(x.split()),  # mock token counter
-        0.00001,  # mock input cost
-        0.00002,  # mock output cost
-        'mock_model'  # mock model name
-    )
+def test_successful_generation(basic_inputs, mock_llm_responses):
+    """Test successful prompt generation with all steps completing normally"""
+    with patch('pdd.continue_generation.load_prompt_template') as mock_load_prompt, \
+         patch('pdd.continue_generation.preprocess') as mock_preprocess, \
+         patch('pdd.continue_generation.llm_invoke') as mock_llm_invoke, \
+         patch('pdd.continue_generation.unfinished_prompt') as mock_unfinished:
+        
+        # Setup mocks
+        mock_load_prompt.return_value = "Mock prompt template"
+        mock_preprocess.return_value = "Processed prompt"
+        mock_llm_invoke.side_effect = [
+            mock_llm_responses['trim_start'],
+            mock_llm_responses['continue'],
+            mock_llm_responses['trim']
+        ]
+        mock_unfinished.return_value = ("Complete", True, 0.001, "gpt-3.5-turbo")
 
-@pytest.fixture
-def mock_unfinished_prompt():
-    call_count = 0
-    def mock_unfinished(prompt, strength, temperature):
-        nonlocal call_count
-        call_count += 1
-        if call_count < 3:
-            return ('Not finished', False, 0.0001, 'mock_model')
-        else:
-            return ('Finished', True, 0.0001, 'mock_model')
-    return mock_unfinished
+        # Execute function
+        result, cost, model = continue_generation(**basic_inputs)
 
-def test_continue_generation_success(mock_environment, mock_prompts, mock_llm_selector, mock_unfinished_prompt):
-    with patch('builtins.open', mock_open(read_data='Mock prompt content')):
-        with patch('pdd.continue_generation.preprocess', lambda x, **kwargs: x):
-            with patch('pdd.continue_generation.llm_selector', mock_llm_selector):
-                with patch('pdd.continue_generation.unfinished_prompt', mock_unfinished_prompt):
-                    with patch('rich.console.Console.print') as mock_print:
-                        result, total_cost, model_name = continue_generation(
-                            'Test input prompt',
-                            'Test LLM output',
-                            0.5,
-                            0.0,
-                            unfinished_prompt_func=mock_unfinished_prompt
-                        )
+        # Verify results
+        assert isinstance(result, str)
+        assert isinstance(cost, float)
+        assert isinstance(model, str)
+        assert model == "gpt-4"
+        assert cost > 0
 
-                        assert isinstance(result, str)
-                        assert "def example(): pass" in result
-                        assert isinstance(total_cost, float)
-                        assert model_name == 'mock_model'
-                        mock_print.assert_called()
+def test_missing_prompt_template(basic_inputs):
+    """Test handling of missing prompt template"""
+    with patch('pdd.continue_generation.load_prompt_template') as mock_load:
+        mock_load.return_value = None
+        
+        with pytest.raises(ValueError, match="Failed to load one or more prompt templates"):
+            continue_generation(**basic_inputs)
 
-def test_continue_generation_missing_env_variable(monkeypatch):
-    monkeypatch.delenv('PDD_PATH', raising=False)
-    with pytest.raises(ValueError, match="PDD_PATH environment variable is not set"):
-        continue_generation('Test input', 'Test output', 0.5, 0.0)
+def test_multiple_generation_loops(basic_inputs, mock_llm_responses):
+    """Test multiple generation loops before completion"""
+    with patch('pdd.continue_generation.load_prompt_template') as mock_load_prompt, \
+         patch('pdd.continue_generation.preprocess') as mock_preprocess, \
+         patch('pdd.continue_generation.llm_invoke') as mock_llm_invoke, \
+         patch('pdd.continue_generation.unfinished_prompt') as mock_unfinished:
+        
+        mock_load_prompt.return_value = "Mock prompt template"
+        mock_preprocess.return_value = "Processed prompt"
+        mock_llm_invoke.side_effect = [
+            mock_llm_responses['trim_start'],
+            mock_llm_responses['continue'],
+            mock_llm_responses['continue'],
+            mock_llm_responses['trim']
+        ]
+        # First check returns not finished, second check returns finished
+        mock_unfinished.side_effect = [
+            ("Incomplete", False, 0.001, "gpt-3.5-turbo"),
+            ("Complete", True, 0.001, "gpt-3.5-turbo")
+        ]
 
-def test_continue_generation_file_not_found(mock_environment):
-    with patch('builtins.open', side_effect=FileNotFoundError):
-        with pytest.raises(FileNotFoundError):
-            continue_generation('Test input', 'Test output', 0.5, 0.0)
+        result, cost, model = continue_generation(**basic_inputs)
+        
+        assert mock_llm_invoke.call_count == 4  # trim_start + 2 continues + final trim
+        assert cost > mock_llm_responses['trim_start']['cost'] * 2  # Should include multiple generation costs
 
-def test_continue_generation_multiple_iterations(mock_environment, mock_prompts, mock_llm_selector, mock_unfinished_prompt):
-    with patch('builtins.open', mock_open(read_data='Mock prompt content')):
-        with patch('pdd.continue_generation.preprocess', lambda x, **kwargs: x):
-            with patch('pdd.continue_generation.llm_selector', mock_llm_selector):
-                with patch('rich.console.Console.print') as mock_print:
-                    result, total_cost, model_name = continue_generation(
-                        'Test input prompt',
-                        'Test LLM output',
-                        0.5,
-                        0.0,
-                        unfinished_prompt_func=mock_unfinished_prompt
-                    )
+def test_verbose_output(basic_inputs, mock_llm_responses):
+    """Test verbose output functionality"""
+    verbose_inputs = {**basic_inputs, 'verbose': True}
+    
+    with patch('pdd.continue_generation.load_prompt_template') as mock_load_prompt, \
+         patch('pdd.continue_generation.preprocess') as mock_preprocess, \
+         patch('pdd.continue_generation.llm_invoke') as mock_llm_invoke, \
+         patch('pdd.continue_generation.unfinished_prompt') as mock_unfinished, \
+         patch('pdd.continue_generation.console.print') as mock_print:
+        
+        mock_load_prompt.return_value = "Mock prompt template"
+        mock_preprocess.return_value = "Processed prompt"
+        mock_llm_invoke.side_effect = [
+            mock_llm_responses['trim_start'],
+            mock_llm_responses['continue'],
+            mock_llm_responses['trim']
+        ]
+        mock_unfinished.return_value = ("Complete", True, 0.001, "gpt-3.5-turbo")
 
-                    assert isinstance(result, str)
-                    assert "def example(): pass" in result
-                    assert "Test LLM output" in result
-                    assert "This is the third mock LLM response" in result
-                    assert isinstance(total_cost, float)
-                    assert model_name == 'mock_model'
-                    assert mock_print.call_count > 3  # Ensure multiple iterations
+        continue_generation(**verbose_inputs)
+        
+        mock_print.assert_called()  # Verify that console.print was called
 
-                    # Check the order of responses
-                    assert result.index("Test LLM output") < result.index("def example(): pass")
-                    assert result.index("def example(): pass") < result.index("This is the third mock LLM response")
+def test_invalid_strength_parameter(basic_inputs):
+    """Test handling of invalid strength parameter"""
+    invalid_inputs = {**basic_inputs, 'strength': 1.5}
+    
+    with pytest.raises(Exception):
+        continue_generation(**invalid_inputs)
 
-def test_continue_generation_cost_calculation(mock_environment, mock_prompts, mock_llm_selector, mock_unfinished_prompt):
-    with patch('builtins.open', mock_open(read_data='Mock prompt content')):
-        with patch('pdd.continue_generation.preprocess', lambda x, **kwargs: x):
-            with patch('pdd.continue_generation.llm_selector', mock_llm_selector):
-                with patch('rich.console.Console.print'):
-                    _, total_cost, _ = continue_generation(
-                        'Test input prompt',
-                        'Test LLM output',
-                        0.5,
-                        0.0,
-                        unfinished_prompt_func=mock_unfinished_prompt
-                    )
+def test_empty_llm_output(basic_inputs):
+    """Test handling of empty LLM output"""
+    empty_inputs = {**basic_inputs, 'llm_output': ''}
+    
+    with patch('pdd.continue_generation.load_prompt_template') as mock_load_prompt, \
+         patch('pdd.continue_generation.preprocess') as mock_preprocess, \
+         patch('pdd.continue_generation.llm_invoke') as mock_llm_invoke, \
+         patch('pdd.continue_generation.unfinished_prompt') as mock_unfinished:
+        
+        mock_load_prompt.return_value = "Mock prompt template"
+        mock_preprocess.return_value = "Processed prompt"
+        mock_llm_invoke.side_effect = [
+            mock_llm_responses['trim_start'],
+            mock_llm_responses['continue'],
+            mock_llm_responses['trim']
+        ]
+        mock_unfinished.return_value = ("Complete", True, 0.001, "gpt-3.5-turbo")
 
-                    assert total_cost > 0
-                    assert isinstance(total_cost, float)
+        result, cost, model = continue_generation(**empty_inputs)
+        
+        assert result  # Verify that we get a non-empty result
+        assert cost > 0
+        assert model
