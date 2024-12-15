@@ -17,18 +17,18 @@
 ```<./prompts/xml/change_example_partial_processed.prompt>```
 
 <context>
-    Here is the input_prompt to change: ```{input_prompt}```
-    Here is the input_code: ```{input_code}```
-    Here is the change_prompt to implement: ```{change_prompt}```
+    Here is the input_prompt to change: <input_prompt>{input_prompt}</input_prompt>
+    Here is the input_code generated from the input_prompt: <input_code>{input_code}</input_code>
+    Here is the change_prompt to implement: <change_prompt>{change_prompt}</change_prompt>
 </context>
 
 <instructions>
     Follow these instructions:
     Step 1. Explain in detail step by step the ramifications of the change_prompt on the input_prompt.
     Step 2. Explain in detail step by step what changes need to be made to the input_prompt to generate the modified_prompt based on Step 1.
-    Step 3. Generate the modified_prompt based on Step 2. Except for the change, the rest of the existing functionality of the input_prompt should remain. Structure the prompt similar to the example prompts more esp. including the descriptions of the inputs and outputs.
+    Step 3. Generate the modified_prompt based on Step 2. Except for the change, the rest of the existing functionality of the input_prompt should remain. Structure the prompt similar to the example prompts, especially including the descriptions of the inputs and outputs.
 </instructions>
 
 <important_notes>
-    Never ask if you should proceed with generating the modified_prompt. Always assume that the change_prompt is correct and proceed with generating the modified_prompt.
+    Never ask if you should proceed with generating the modified_prompt as this prompt has no human monitoring. Always assume that the change_prompt is correct and proceed with generating the modified_prompt.
 </important_notes>

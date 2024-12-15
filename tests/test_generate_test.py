@@ -1,106 +1,102 @@
 import pytest
-import os
-from unittest.mock import patch, mock_open
-from pdd.generate_test import generate_test
 from rich.console import Console
-from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import StrOutputParser
+from pdd.generate_test import generate_test, _validate_inputs
 
-class MockPromptTemplate:
-    def __init__(self, template):
-        self.template = template
-
-    def __or__(self, other):
-        return self
-
-    def invoke(self, *args, **kwargs):
-        return self.template
+# Test fixtures
+@pytest.fixture
+def valid_inputs():
+    return {
+        'prompt': 'Write a function to calculate factorial',
+        'code': 'def factorial(n):\n    return 1 if n <= 1 else n * factorial(n-1)',
+        'strength': 0.5,
+        'temperature': 0.5,
+        'language': 'python'
+    }
 
 @pytest.fixture
-def mock_environment():
-    with patch.dict(os.environ, {'PDD_PATH': '/mock/path'}):
-        yield
+def mock_console():
+    return Console()
 
-@pytest.fixture
-def mock_file_content():
-    return "Mock prompt content"
+# Test successful generation
+def test_generate_test_successful(valid_inputs):
+    result = generate_test(**valid_inputs)
+    assert isinstance(result, tuple)
+    assert len(result) == 3
+    unit_test, total_cost, model_name = result
+    assert isinstance(unit_test, str)
+    assert isinstance(total_cost, float)
+    assert isinstance(model_name, str)
+    assert total_cost >= 0
+    assert len(model_name) > 0
 
-@pytest.fixture
-def mock_llm_selector():
-    return (
-        lambda *args: (
-            lambda x: "Generated test content",
-            lambda x: 100,
-            0.001,
-            0.002,
-            "mock_model"
+# Test verbose output
+def test_generate_test_verbose(valid_inputs):
+    valid_inputs['verbose'] = True
+    result = generate_test(**valid_inputs)
+    assert isinstance(result, tuple)
+    assert len(result) == 3
+
+# Test input validation
+def test_validate_inputs_empty_prompt():
+    with pytest.raises(ValueError, match="Prompt must be a non-empty string"):
+        _validate_inputs("", "code", 0.7, 0.5, "python")
+
+
+def test_validate_inputs_none_code():
+    with pytest.raises(ValueError, match="Code must be a non-empty string"):
+        _validate_inputs("prompt", None, 0.7, 0.5, "python")
+
+
+def test_validate_inputs_invalid_strength():
+    with pytest.raises(ValueError, match="Strength must be a float between 0 and 1"):
+        _validate_inputs("prompt", "code", 1.5, 0.5, "python")
+
+
+def test_validate_inputs_invalid_temperature():
+    with pytest.raises(ValueError, match="Temperature must be a float"):
+        _validate_inputs("prompt", "code", 0.7, "invalid", "python")
+
+
+def test_validate_inputs_empty_language():
+    with pytest.raises(ValueError, match="Language must be a non-empty string"):
+        _validate_inputs("prompt", "code", 0.7, 0.5, "")
+
+# Test error handling
+def test_generate_test_invalid_template(valid_inputs, monkeypatch):
+    def mock_load_template(name):
+        return None
+    
+    monkeypatch.setattr("pdd.generate_test.load_prompt_template", mock_load_template)
+    
+    with pytest.raises(ValueError, match="Failed to load generate_test_LLM prompt template"):
+        generate_test(**valid_inputs)
+
+# Test edge cases
+def test_generate_test_minimum_values(valid_inputs):
+    valid_inputs['strength'] = 0.0
+    valid_inputs['temperature'] = 0.0
+    result = generate_test(**valid_inputs)
+    assert isinstance(result, tuple)
+    assert len(result) == 3
+
+
+def test_generate_test_maximum_values(valid_inputs):
+    valid_inputs['strength'] = 1.0
+    valid_inputs['temperature'] = 1.0
+    result = generate_test(**valid_inputs)
+    assert isinstance(result, tuple)
+    assert len(result) == 3
+
+# Test different languages
+def test_generate_test_different_languages():
+    languages = ['python', 'javascript', 'java', 'cpp']
+    for lang in languages:
+        result = generate_test(
+            prompt='Write a hello world function',
+            code='print("Hello, World!")',
+            strength=0.7,
+            temperature=0.5,
+            language=lang
         )
-    )
-
-@pytest.fixture
-def mock_preprocess():
-    return lambda *args, **kwargs: "Preprocessed prompt"
-
-@pytest.fixture
-def mock_unfinished_prompt():
-    return lambda *args: (None, True, 0.001, None)
-
-@pytest.fixture
-def mock_postprocess():
-    return lambda *args: ("Postprocessed result", 0.001)
-
-def test_generate_test_success(mock_environment, mock_file_content, mock_llm_selector, mock_preprocess, mock_unfinished_prompt, mock_postprocess):
-    with patch('builtins.open', mock_open(read_data=mock_file_content)):
-        with patch('pdd.generate_test.llm_selector', mock_llm_selector):
-            with patch('pdd.generate_test.preprocess', mock_preprocess):
-                with patch('pdd.generate_test.unfinished_prompt', mock_unfinished_prompt):
-                    with patch('pdd.generate_test.postprocess', mock_postprocess):
-                        with patch('pdd.generate_test.PromptTemplate.from_template') as mock_prompt_template:
-                            mock_prompt_template.return_value = MockPromptTemplate("Mock template")
-                            
-                            result, cost, model = generate_test("Test prompt", "Test code", 0.5, 0.7, "python")
-                            
-                            assert isinstance(result, str)
-                            assert result == "Postprocessed result"
-                            assert isinstance(cost, float)
-                            assert model == "mock_model"
-
-def test_generate_test_file_not_found(mock_environment):
-    with patch('builtins.open', side_effect=FileNotFoundError):
-        with pytest.raises(FileNotFoundError):
-            generate_test("Test prompt", "Test code", 0.5, 0.7, "python")
-
-def test_generate_test_value_error():
-    with patch.dict(os.environ, clear=True):
-        with pytest.raises(ValueError, match="PDD_PATH environment variable is not set"):
-            generate_test("Test prompt", "Test code", 0.5, 0.7, "python")
-
-def test_generate_test_unexpected_error(mock_environment, mock_file_content):
-    with patch('builtins.open', mock_open(read_data=mock_file_content)):
-        with patch('pdd.generate_test.llm_selector', side_effect=Exception("Unexpected error")):
-            with pytest.raises(Exception, match="Unexpected error"):
-                generate_test("Test prompt", "Test code", 0.5, 0.7, "python")
-
-def test_generate_test_incomplete_generation(mock_environment, mock_file_content, mock_llm_selector, mock_preprocess):
-    with patch('builtins.open', mock_open(read_data=mock_file_content)):
-        with patch('pdd.generate_test.llm_selector', mock_llm_selector):
-            with patch('pdd.generate_test.preprocess', mock_preprocess):
-                with patch('pdd.generate_test.unfinished_prompt', return_value=(None, False, 0.001, None)):
-                    with patch('pdd.generate_test.continue_generation', return_value=("Continued result", 0.002, None)):
-                        with patch('pdd.generate_test.PromptTemplate.from_template') as mock_prompt_template:
-                            mock_prompt_template.return_value = MockPromptTemplate("Mock template")
-                            
-                            result, cost, model = generate_test("Test prompt", "Test code", 0.5, 0.7, "python")
-                            
-                            assert isinstance(result, str)
-                            assert result == "Continued result"
-                            assert isinstance(cost, float)
-                            assert model == "mock_model"
-
-def test_generate_test_input_validation():
-    with pytest.raises(ValueError, match="Strength must be between 0 and 1"):
-        generate_test("Test prompt", "Test code", 1.5, 0.7, "python")
-    with pytest.raises(ValueError, match="Temperature must be between 0 and 1"):
-        generate_test("Test prompt", "Test code", 0.5, 1.5, "python")
-    with pytest.raises(ValueError, match="Language cannot be empty"):
-        generate_test("Test prompt", "Test code", 0.5, 0.7, "")
+        assert isinstance(result, tuple)
+        assert len(result) == 3
