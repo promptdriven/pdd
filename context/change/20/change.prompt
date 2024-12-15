@@ -1,0 +1,34 @@
+% llm_invoke and load_prompt_template has replaced the current method. Change the input_prompt accordingly.
+
+% Here are examples of the change:
+<examples>
+    <example id="1">
+        <before_example>
+            <include>context/change/17/unfinished_prompt_python.prompt</include>
+        </before_example>
+
+        <after_example>
+            <include>context/change/17/updated_unfinished_prompt_python.prompt</include>
+        </after_example>
+    </example>
+
+    <example id="2">
+        <before_example>
+            <include>context/change/19/context_generator_python.prompt</include>
+        </before_example>
+
+        <after_example>
+            <include>context/change/19/updated_context_generator_python.prompt</include>
+        </after_example>
+    </example>
+
+    <example id="3">
+        <before_example>
+            <include>context/change/18/code_generator_python.prompt</include>
+        </before_example>
+
+        <after_example>
+            <include>context/change/18/updated_code_generator_python.prompt</include>
+        </after_example>
+    </example>
+</examples>
