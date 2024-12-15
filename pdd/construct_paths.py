@@ -71,7 +71,11 @@ def construct_paths(
             if lang:
                 return lang
 
-        # If language cannot be determined, default to 'python'
+        # Check if we can determine language from extension
+        if get_extension(None) is None:
+            raise ValueError("Could not determine language from command options, filename, or code file extension")
+
+        # Default to python only if extension can be determined
         return 'python'
 
     # Step 1: Load input files and handle 'error_file'
@@ -114,15 +118,16 @@ def construct_paths(
         "conflicts": "prompt1",
     }
 
+    if command not in basename_files:
+        raise ValueError(f"Invalid command: {command}")
+
     if command == "conflicts":
         basename1 = extract_basename(Path(input_file_paths['prompt1']).name)
         basename2 = extract_basename(Path(input_file_paths['prompt2']).name)
         basename = f"{basename1}_{basename2}"
-    elif command in basename_files:
+    else:
         basename_file_key = basename_files[command]
         basename = extract_basename(Path(input_file_paths[basename_file_key]).name)
-    else:
-        raise ValueError(f"Invalid command: {command}")
 
     # Step 3: Determine language
     language = determine_language(
@@ -131,6 +136,7 @@ def construct_paths(
         input_file_paths.get("code_file")
     )
 
+    # Step 4: Validate file extension
     file_extension = get_extension(language)
     if file_extension == '.unsupported':
         raise ValueError(f"Unsupported file extension for language: {language}")
@@ -142,7 +148,7 @@ def construct_paths(
     ]
     output_locations = {k: v for k, v in command_options.items() if k in output_keys}
 
-    # Step 4: Construct output file paths
+    # Step 5: Construct output file paths
     if basename:
         output_file_paths = generate_output_paths(
             command,
@@ -163,7 +169,7 @@ def construct_paths(
                         rich_print("[bold red]Cancelled by user. Exiting.[/bold red]")
                         raise SystemExit(1)
 
-    # Step 5: Return the results
+    # Step 6: Return the results
     if not quiet:
         rich_print("[bold blue]Input file paths:[/bold blue]")
         for key, path in input_file_paths.items():
