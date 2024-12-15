@@ -80,7 +80,7 @@ def construct_paths(
         if not path.exists():
             if key == "error_file":
                 if not quiet:
-                    print(f"[yellow]Warning: Error file '{path}' does not exist. Creating an empty file.[/yellow]")
+                    rich_print(f"[yellow]Warning: Error file '{path}' does not exist. Creating an empty file.[/yellow]")
                 path.touch()
             else:
                 if not path.parent.exists():
@@ -103,7 +103,7 @@ def construct_paths(
         "test": "prompt_file",
         "preprocess": "prompt_file",
         "fix": "prompt_file",
-        "update": "prompt_file",
+        "update": "input_prompt_file" if "input_prompt_file" in input_file_paths else "prompt_file",
         "bug": "prompt_file",
         "auto-deps": "prompt_file",
         "crash": "prompt_file",

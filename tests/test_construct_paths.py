@@ -118,17 +118,18 @@ def test_construct_paths_error_file_creation(tmpdir):
     command = 'generate'
     command_options = {}
 
-    with patch('pdd.construct_paths.get_extension', return_value='.py'), \
+    with patch('pdd.construct_paths.rich_print') as mock_print, \
+         patch('pdd.construct_paths.get_extension', return_value='.py'), \
          patch('pdd.construct_paths.get_language', return_value='python'), \
-         patch('pdd.construct_paths.generate_output_paths', return_value={'output': str(tmpdir.join('output.py'))}), \
-         patch('builtins.print') as mock_print:
+         patch('pdd.construct_paths.generate_output_paths', return_value={'output': str(tmpdir.join('output.py'))}):
 
         input_strings, output_file_paths, language = construct_paths(
             input_file_paths, force, quiet, command, command_options
         )
 
         # Check that warning message is printed
-        mock_print.assert_any_call("[yellow]Warning: Error file '{}' does not exist. Creating an empty file.[/yellow]".format(error_file))
+        expected_warning = f"[yellow]Warning: Error file '{Path(error_file).resolve()}' does not exist. Creating an empty file.[/yellow]"
+        mock_print.assert_any_call(expected_warning)
 
     # The error_file should have been created
     assert Path(error_file).exists()
