@@ -1,115 +1,140 @@
-import os
-from typing import Tuple
+from typing import Tuple, Optional
 from rich import print
 from rich.markdown import Markdown
 from rich.console import Console
-from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-
+from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
-from .llm_selector import llm_selector
+from .llm_invoke import llm_invoke
 from .unfinished_prompt import unfinished_prompt
 from .continue_generation import continue_generation
 from .postprocess import postprocess
 
 console = Console()
 
-def generate_test(prompt: str, code: str, strength: float, temperature: float, language: str) -> Tuple[str, float, str]:
+def generate_test(
+    prompt: str,
+    code: str,
+    strength: float,
+    temperature: float,
+    language: str,
+    verbose: bool = False
+) -> Tuple[str, float, str]:
     """
-    Generate a unit test from a code file using Langchain and LLMs.
+    Generate a unit test from a code file using LLM.
 
     Args:
-        prompt (str): The prompt that generated the code file to be processed.
+        prompt (str): The prompt that generated the code file.
         code (str): The code to generate a unit test from.
-        strength (float): The strength of the LLM model to use (between 0 and 1).
-        temperature (float): The temperature of the LLM model to use.
-        language (str): The language of the unit test to be generated.
+        strength (float): The strength of the LLM model (0-1).
+        temperature (float): The temperature of the LLM model.
+        language (str): The programming language for the unit test.
+        verbose (bool): Whether to print detailed information.
 
     Returns:
-        Tuple[str, float, str]: A tuple containing the generated unit test code,
-                                the total cost, and the name of the selected LLM model.
+        Tuple[str, float, str]: (unit_test, total_cost, model_name)
     """
+    total_cost = 0.0
+    model_name = ""
+
     try:
-        # Input validation
-        if not 0 <= strength <= 1:
-            raise ValueError("Strength must be between 0 and 1")
-        if not 0 <= temperature <= 1:
-            raise ValueError("Temperature must be between 0 and 1")
-        if not language:
-            raise ValueError("Language cannot be empty")
+        # Step 1: Load prompt template
+        template = load_prompt_template("generate_test_LLM")
+        if not template:
+            raise ValueError("Failed to load generate_test_LLM prompt template")
 
-        # Step 1: Load the prompt file
-        pdd_path = os.getenv('PDD_PATH')
-        if not pdd_path:
-            raise ValueError("PDD_PATH environment variable is not set")
+        # Step 2: Preprocess template
+        processed_template = preprocess(template, recursive=False, double_curly_brackets=False)
+        processed_prompt = preprocess(prompt, recursive=False, double_curly_brackets=False)
 
-        prompt_file_path = os.path.join(pdd_path, 'prompts', 'generate_test_LLM.prompt')
-        with open(prompt_file_path, 'r') as file:
-            test_generator_prompt = file.read()
-
-        # Step 2: Preprocess the prompt
-        processed_prompt = preprocess(test_generator_prompt, recursive=False, double_curly_brackets=False)
-
-        # Create Langchain LCEL template
-        prompt_template = PromptTemplate.from_template(processed_prompt)
-
-        # Step 3: Use llm_selector for the model
-        llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
-
-        # Step 4: Run inputs through the model using Langchain LCEL
-        chain = prompt_template | llm | StrOutputParser()
-
-        # Calculate and display token count and cost
-        input_tokens = token_counter(processed_prompt + prompt + code + language)
-        input_cost_estimate = (input_cost / 1_000_000) * input_tokens
-
-        console.print(f"[bold]Running test generation...[/bold]")
-        console.print(f"Input tokens: {input_tokens}")
-        console.print(f"Estimated input cost: ${input_cost_estimate:.6f}")
-
-        # Invoke the chain
-        result = chain.invoke({
-            "prompt_that_generated_code": preprocess(prompt, recursive=False, double_curly_brackets=False),
+        # Step 3: Run through LLM
+        input_json = {
+            "prompt_that_generated_code": processed_prompt,
             "code": code,
             "language": language
-        })
+        }
 
-        # Step 5: Pretty print the result
-        console.print(Markdown(result))
+        if verbose:
+            console.print("[bold blue]Generating unit test...[/bold blue]")
 
-        output_tokens = token_counter(result)
-        output_cost_estimate = (output_cost / 1_000_000) * output_tokens
-        console.print(f"Output tokens: {output_tokens}")
-        console.print(f"Estimated output cost: ${output_cost_estimate:.6f}")
+        response = llm_invoke(
+            prompt=processed_template,
+            input_json=input_json,
+            strength=strength,
+            temperature=temperature,
+            verbose=verbose
+        )
 
-        # Step 6: Detect if the generation is incomplete
-        last_200_chars = result[-600:]
-        _, is_finished, unfinished_cost, _ = unfinished_prompt(last_200_chars, 0.7, temperature)
+        total_cost += response['cost']
+        model_name = response['model_name']
+        result = response['result']
+
+        if verbose:
+            console.print(Markdown(result))
+            console.print(f"[bold green]Initial generation cost: ${total_cost:.6f}[/bold green]")
+
+        # Step 4: Check if generation is complete
+        last_600_chars = result[-600:] if len(result) > 600 else result
+        reasoning, is_finished, check_cost, check_model = unfinished_prompt(
+            prompt_text=last_600_chars,
+            strength=0.7,
+            temperature=temperature,
+            verbose=verbose
+        )
+        total_cost += check_cost
 
         if not is_finished:
-            console.print("[bold yellow]Generation incomplete. Continuing...[/bold yellow]")
-            final_result, continue_cost, _ = continue_generation(processed_prompt, result, strength, temperature)
-        else:
-            console.print("[bold green]Generation complete. Postprocessing...[/bold green]")
-            final_result, postprocess_cost, _ = postprocess(result, language, 0.7, temperature)
-
-        # Step 7: Calculate and print total cost
-        total_cost = input_cost_estimate + output_cost_estimate
-        if not is_finished:
+            if verbose:
+                console.print("[bold yellow]Generation incomplete. Continuing...[/bold yellow]")
+            
+            continued_result, continue_cost, continue_model = continue_generation(
+                formatted_input_prompt=processed_template,
+                llm_output=result,
+                strength=strength,
+                temperature=temperature,
+                verbose=verbose
+            )
             total_cost += continue_cost
-        else:
-            total_cost += unfinished_cost + postprocess_cost
+            result = continued_result
+            model_name = continue_model
 
-        console.print(f"[bold]Total cost: ${total_cost:.6f}[/bold]")
+        # Process the final result
+        processed_result, post_cost, post_model = postprocess(
+            result,
+            language=language,
+            strength=0.7,
+            temperature=temperature,
+            verbose=verbose
+        )
+        total_cost += post_cost
 
-        return final_result, total_cost, model_name
+        # Step 5: Print total cost if verbose
+        if verbose:
+            console.print(f"[bold green]Total cost: ${total_cost:.6f}[/bold green]")
+            console.print(f"[bold blue]Final model used: {model_name}[/bold blue]")
 
-    except FileNotFoundError as e:
-        console.print(f"[bold red]Error: {e}[/bold red]")
-        raise
-    except ValueError as e:
-        console.print(f"[bold red]Error: {e}[/bold red]")
-        raise
+        # Step 6: Return results
+        return processed_result, total_cost, model_name
+
     except Exception as e:
-        console.print(f"[bold red]An unexpected error occurred: {e}[/bold red]")
+        console.print(f"[bold red]Error: {str(e)}[/bold red]")
         raise
+
+
+def _validate_inputs(
+    prompt: str,
+    code: str,
+    strength: float,
+    temperature: float,
+    language: str
+) -> None:
+    """Validate input parameters."""
+    if not prompt or not isinstance(prompt, str):
+        raise ValueError("Prompt must be a non-empty string")
+    if not code or not isinstance(code, str):
+        raise ValueError("Code must be a non-empty string")
+    if not isinstance(strength, float) or not 0 <= strength <= 1:
+        raise ValueError("Strength must be a float between 0 and 1")
+    if not isinstance(temperature, float):
+        raise ValueError("Temperature must be a float")
+    if not language or not isinstance(language, str):
+        raise ValueError("Language must be a non-empty string")
