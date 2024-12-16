@@ -99,7 +99,7 @@ def code_generator(
         runnable_code, postprocess_cost, model_name_post = postprocess(
             llm_output=final_output,
             language=language,
-            strength=0.7,  # Changed from 0.5 to 0.7 to match prompt requirement
+            strength=0.895,
             temperature=0.0
         )
         total_cost += postprocess_cost
