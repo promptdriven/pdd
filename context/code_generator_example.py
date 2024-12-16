@@ -13,7 +13,7 @@ def main() -> None:
         prompt = file.read()
     language: str = "python"
     strength: float = 0.5  # Strength of the LLM model (0.0 to 1.0)
-    temperature: float = 0.5  # Temperature for the LLM model (0.0 to 1.0)
+    temperature: float = 0.0  # Temperature for the LLM model (0.0 to 1.0)
     verbose: bool = True  # Whether to print detailed information
 
     try:
