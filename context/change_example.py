@@ -22,8 +22,8 @@ def factorial(n):
         return n * factorial(n-1)
     """
     change_prompt = "Modify the function to take the square root of the factorial output."
-    strength = 0.7  # Strength parameter for the LLM (0.0 to 1.0)
-    temperature = 0.5  # Temperature parameter for the LLM (0.0 to 1.0)
+    strength = 0.5  # Strength parameter for the LLM (0.0 to 1.0)
+    temperature = 0.0  # Temperature parameter for the LLM (0.0 to 1.0)
 
     try:
         # Call the change function
