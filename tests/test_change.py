@@ -1,108 +1,135 @@
 import pytest
-from unittest.mock import patch, mock_open, MagicMock
-from pdd.change import change
 from rich.console import Console
+from rich.markdown import Markdown
+from pdd.change import change, ExtractedPrompt
+from unittest.mock import patch, MagicMock
 
-# Mock data
-mock_input_prompt = "Write a function to calculate factorial"
-mock_input_code = "def factorial(n):\n    pass"
-mock_change_prompt = "Add error handling for negative inputs"
-mock_strength = 0.7
-mock_temperature = 0.5
-
-mock_change_llm_prompt = "Change LLM prompt content"
-mock_extract_prompt = "Extract prompt content"
-mock_processed_change_llm = "Processed Change LLM prompt"
-mock_change_result = "Changed LLM output"
-mock_extract_result = {"modified_prompt": "Modified prompt content"}  # Ensure this key exists
+# Setup fixtures
+@pytest.fixture
+def valid_inputs():
+    return {
+        'input_prompt': "Write a function that adds two numbers",
+        'input_code': "def add(a, b):\n    return a + b",
+        'change_prompt': "Make the function handle negative numbers explicitly",
+        'strength': 0.7,
+        'temperature': 0.7,
+        'verbose': False
+    }
 
 @pytest.fixture
-def mock_environment(monkeypatch):
-    monkeypatch.setenv('PDD_PATH', '/mock/path')
+def mock_llm_response():
+    return {
+        'result': "Modified prompt content",
+        'cost': 0.001,
+        'model_name': "test-model"
+    }
 
 @pytest.fixture
-def mock_file_reads(mock_environment):
-    with patch("builtins.open", mock_open(read_data="mock content")) as mock_file:
-        yield mock_file
+def mock_extract_response():
+    return {
+        'result': ExtractedPrompt(modified_prompt="Modified prompt content"),
+        'cost': 0.001,
+        'model_name': "test-model"
+    }
 
-@pytest.fixture
-def mock_dependencies():
-    with patch("pdd.change.preprocess") as mock_preprocess, \
-         patch("pdd.change.llm_selector") as mock_llm_selector, \
-         patch("pdd.change.PromptTemplate") as mock_prompt_template, \
-         patch("pdd.change.StrOutputParser") as mock_str_output_parser, \
-         patch("pdd.change.JsonOutputParser") as mock_json_output_parser, \
-         patch("pdd.change.Console") as mock_console:
+# Test successful execution
+def test_change_successful_execution(valid_inputs, mock_llm_response, mock_extract_response):
+    with patch('pdd.change.load_prompt_template') as mock_load_prompt:
+        with patch('pdd.change.preprocess') as mock_preprocess:
+            with patch('pdd.change.llm_invoke') as mock_llm_invoke:
+                # Setup mocks
+                mock_load_prompt.return_value = "test prompt template"
+                mock_preprocess.return_value = "processed prompt"
+                mock_llm_invoke.side_effect = [mock_llm_response, mock_extract_response]
 
-        mock_preprocess.return_value = mock_processed_change_llm
-        mock_llm_selector.return_value = (
-            lambda x: x,  # mock LLM function
-            lambda x: len(x),  # mock token counter
-            0.00001,  # mock input cost
-            0.00002,  # mock output cost
-            "gpt-3.5-turbo"  # mock model name
-        )
-        mock_prompt_template.from_template.return_value.invoke.return_value = mock_change_result
-        mock_str_output_parser.return_value = lambda x: x
-        
-        # Ensure the JSON parser returns the expected result
-        mock_json_parser = MagicMock()
-        mock_json_parser.invoke.return_value = {"modified_prompt": "Modified prompt content"}
-        mock_json_output_parser.return_value = mock_json_parser
+                # Execute function
+                result = change(**valid_inputs)
 
-        yield
+                # Verify results
+                assert isinstance(result, tuple)
+                assert len(result) == 3
+                assert isinstance(result[0], str)  # modified_prompt
+                assert isinstance(result[1], float)  # total_cost
+                assert isinstance(result[2], str)  # model_name
 
-def test_change_successful(mock_file_reads, mock_dependencies):
-    with patch("pdd.change.llm_selector") as mock_llm_selector:
-        mock_llm = MagicMock()
-        mock_llm_selector.return_value = (
-            mock_llm,
-            lambda x: len(x),  # mock token counter
-            0.00001,  # mock input cost
-            0.00002,  # mock output cost
-            "gpt-3.5-turbo"  # mock model name
-        )
-
-        def mock_change_chain_creator(llm, template):
-            mock_chain = MagicMock()
-            mock_chain.invoke.return_value = "Mocked change result"
-            return mock_chain
-
-        def mock_extract_chain_creator(llm, template):
-            mock_chain = MagicMock()
-            mock_chain.invoke.return_value = {"modified_prompt": "Modified prompt content"}
-            return mock_chain
-
-        result = change(
-            mock_input_prompt, mock_input_code, mock_change_prompt, mock_strength, mock_temperature,
-            change_chain_creator=mock_change_chain_creator,
-            extract_chain_creator=mock_extract_chain_creator
-        )
+# Test input validation
+@pytest.mark.parametrize("missing_param", ["input_prompt", "input_code", "change_prompt"])
+def test_change_missing_required_params(valid_inputs, missing_param):
+    inputs = valid_inputs.copy()
+    inputs[missing_param] = ""
     
-        assert isinstance(result, tuple)
-        assert len(result) == 3
-        assert result[0] == "Modified prompt content"
-        assert isinstance(result[1], float)
-        assert result[2] == "gpt-3.5-turbo"
+    with pytest.raises(ValueError, match="Missing required input parameters"):
+        change(**inputs)
 
-@pytest.mark.parametrize("missing_file", ['/prompts/xml/change_LLM.prompt', '/prompts/extract_prompt_change_LLM.prompt'])
-def test_change_file_not_found(mock_environment, missing_file):
-    with patch("builtins.open") as mock_open:
-        mock_open.side_effect = FileNotFoundError(f"No such file: {missing_file}")
-        
-        with pytest.raises(Exception) as exc_info:
-            change(mock_input_prompt, mock_input_code, mock_change_prompt, mock_strength, mock_temperature)
-        
-        assert "Error: Prompt file not found." in str(exc_info.value)
+def test_change_invalid_strength(valid_inputs):
+    inputs = valid_inputs.copy()
+    inputs['strength'] = 1.5
+    
+    with pytest.raises(ValueError, match="Strength must be between 0 and 1"):
+        change(**inputs)
 
+# Test template loading failure
+def test_change_template_loading_failure(valid_inputs):
+    with patch('pdd.change.load_prompt_template', return_value=None):
+        with pytest.raises(ValueError, match="Failed to load prompt templates"):
+            change(**valid_inputs)
 
-def test_change_missing_json_key(mock_file_reads, mock_dependencies):
-    with patch("pdd.change.JsonOutputParser") as mock_json_output_parser:
-        mock_json_parser = MagicMock()
-        mock_json_parser.invoke.return_value = {}  # Return empty dict to simulate missing key
-        mock_json_output_parser.return_value = mock_json_parser
-        
-        with pytest.raises(KeyError) as exc_info:
-            change(mock_input_prompt, mock_input_code, mock_change_prompt, mock_strength, mock_temperature)
-        
-        assert "'modified_prompt' key is missing from the extracted result" in str(exc_info.value)
+# Test LLM invocation
+def test_change_llm_invoke_called_correctly(valid_inputs, mock_llm_response, mock_extract_response):
+    with patch('pdd.change.load_prompt_template') as mock_load_prompt:
+        with patch('pdd.change.preprocess') as mock_preprocess:
+            with patch('pdd.change.llm_invoke') as mock_llm_invoke:
+                # Setup mocks
+                mock_load_prompt.return_value = "test prompt template"
+                mock_preprocess.return_value = "processed prompt"
+                mock_llm_invoke.side_effect = [mock_llm_response, mock_extract_response]
+
+                # Execute function
+                change(**valid_inputs)
+
+                # Verify llm_invoke calls
+                assert mock_llm_invoke.call_count == 2
+                
+                # Verify first call (change prompt)
+                first_call_kwargs = mock_llm_invoke.call_args_list[0][1]
+                assert 'input_prompt' in first_call_kwargs['input_json']
+                assert 'input_code' in first_call_kwargs['input_json']
+                assert 'change_prompt' in first_call_kwargs['input_json']
+                
+                # Verify second call (extract prompt)
+                second_call_kwargs = mock_llm_invoke.call_args_list[1][1]
+                assert 'llm_output' in second_call_kwargs['input_json']
+                assert second_call_kwargs['strength'] == 0.89  # Fixed strength for extract
+
+# Test verbose output
+def test_change_verbose_output(valid_inputs, mock_llm_response, mock_extract_response):
+    inputs = valid_inputs.copy()
+    inputs['verbose'] = True
+    
+    with patch('pdd.change.load_prompt_template') as mock_load_prompt:
+        with patch('pdd.change.preprocess') as mock_preprocess:
+            with patch('pdd.change.llm_invoke') as mock_llm_invoke:
+                with patch('rich.console.Console.print') as mock_console_print:
+                    # Setup mocks
+                    mock_load_prompt.return_value = "test prompt template"
+                    mock_preprocess.return_value = "processed prompt"
+                    mock_llm_invoke.side_effect = [mock_llm_response, mock_extract_response]
+
+                    # Execute function
+                    change(**inputs)
+
+                    # Verify console output was called
+                    assert mock_console_print.call_count > 0
+
+# Test error handling
+def test_change_handles_llm_invoke_error(valid_inputs):
+    with patch('pdd.change.load_prompt_template') as mock_load_prompt:
+        with patch('pdd.change.preprocess') as mock_preprocess:
+            with patch('pdd.change.llm_invoke', side_effect=Exception("LLM Error")):
+                # Setup mocks
+                mock_load_prompt.return_value = "test prompt template"
+                mock_preprocess.return_value = "processed prompt"
+
+                # Verify error handling
+                with pytest.raises(Exception, match="LLM Error"):
+                    change(**valid_inputs)
