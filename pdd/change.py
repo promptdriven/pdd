@@ -43,7 +43,8 @@ def change(
             raise ValueError("Failed to load prompt templates")
 
         # Step 2: Preprocess the change_LLM prompt
-        processed_change_prompt = preprocess(change_llm_prompt, recursive=False, double_curly_brackets=False)
+        processed_change_llm = preprocess(change_llm_prompt, recursive=False, double_curly_brackets=False)
+        processed_change_prompt = preprocess(change_prompt, recursive=False, double_curly_brackets=False)
 
         # Input validation
         if not all([input_prompt, input_code, change_prompt]):
@@ -59,11 +60,11 @@ def change(
             console.print(Panel("Running change prompt through LLM...", style="blue"))
 
         change_response = llm_invoke(
-            prompt=processed_change_prompt,
+            prompt=processed_change_llm,
             input_json={
                 "input_prompt": input_prompt,
                 "input_code": input_code,
-                "change_prompt": change_prompt
+                "change_prompt": processed_change_prompt
             },
             strength=strength,
             temperature=temperature,
