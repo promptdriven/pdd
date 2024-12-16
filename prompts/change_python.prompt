@@ -40,7 +40,7 @@
         3a. Pass the following string parameters to the prompt during invoke:
             - 'input_prompt'
             - 'input_code'
-            - 'change_prompt'
+            - 'change_prompt' (preprocess with recursive and double_curly_brackets set to false)
         3b. If verbose is True, pretty print a message letting the user know it is running and the cost information.
     Step 4. If verbose is True, pretty print the markdown formatting that is present in the result via the rich Markdown function.
     Step 5. Run the extract prompt through llm_invoke with a strength of 0.89.
