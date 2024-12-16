@@ -14,8 +14,8 @@ def factorial(n):
     else:
         return n * factorial(n-1)
 """
-strength = 0.7
-temperature = 0.5
+strength = 0.5
+temperature = 0.0
 language = "python"
 
 # Call the generate_test function
