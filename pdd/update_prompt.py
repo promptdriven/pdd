@@ -1,91 +1,115 @@
-import os
 from typing import Tuple
 from rich.console import Console
 from rich.markdown import Markdown
+from pydantic import BaseModel, Field
+from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
-from .llm_selector import llm_selector
-from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
+from .llm_invoke import llm_invoke
 
-console = Console()
+class PromptUpdate(BaseModel):
+    modified_prompt: str = Field(description="The updated prompt that will generate the modified code")
 
-def update_prompt(input_prompt: str, input_code: str, modified_code: str, strength: float, temperature: float) -> Tuple[str, float, str]:
+def update_prompt(
+    input_prompt: str,
+    input_code: str,
+    modified_code: str,
+    strength: float,
+    temperature: float,
+    verbose: bool = False
+) -> Tuple[str, float, str]:
     """
-    Updates a given prompt using a language model and calculates the cost of the operation.
+    Update a prompt based on the original and modified code.
 
     Args:
-        input_prompt (str): The initial prompt to be processed.
-        input_code (str): The original code associated with the prompt.
-        modified_code (str): The modified version of the code.
-        strength (float): The strength parameter for the LLM.
-        temperature (float): The temperature parameter for the LLM.
+        input_prompt (str): The original prompt that generated the code
+        input_code (str): The original generated code
+        modified_code (str): The modified code
+        strength (float): The strength parameter for the LLM model (0-1)
+        temperature (float): The temperature parameter for the LLM model (0-1)
+        verbose (bool, optional): Whether to print detailed output. Defaults to False.
 
     Returns:
-        Tuple[str, float, str]: A tuple containing the modified prompt, total cost, and model name.
+        Tuple[str, float, str]: (modified_prompt, total_cost, model_name)
+
+    Raises:
+        ValueError: If input parameters are invalid
+        RuntimeError: If there's an error in LLM processing
     """
+    console = Console()
+
+    # Input validation
+    if not all([input_prompt, input_code, modified_code]):
+        raise ValueError("All input strings (prompt, code, modified code) must be non-empty")
+    
+    if not (0 <= strength <= 1 and 0 <= temperature <= 1):
+        raise ValueError("Strength and temperature must be between 0 and 1")
+
     try:
-        # Step 1: Load prompts
-        pdd_path = os.getenv('PDD_PATH', '')
-        with open(f'{pdd_path}/prompts/update_prompt_LLM.prompt', 'r') as file:
-            update_prompt_llm = file.read()
-        with open(f'{pdd_path}/prompts/extract_prompt_update_LLM.prompt', 'r') as file:
-            extract_prompt_update_llm = file.read()
+        # Step 1: Load and preprocess prompt templates
+        update_prompt_template = load_prompt_template("update_prompt_LLM")
+        extract_prompt_template = load_prompt_template("extract_prompt_update_LLM")
 
-        # Step 2: Preprocess update_prompt_LLM
-        processed_update_prompt = preprocess(update_prompt_llm, recursive=False, double_curly_brackets=False)
-        
-        print(processed_update_prompt)
+        if not update_prompt_template or not extract_prompt_template:
+            raise RuntimeError("Failed to load prompt templates")
 
-        # Step 3: Create Langchain LCEL template for update_prompt_LLM
-        update_prompt_template = PromptTemplate.from_template(processed_update_prompt)
+        update_prompt_processed = preprocess(update_prompt_template, False, False)
+        extract_prompt_processed = preprocess(extract_prompt_template, False, False)
 
-        # Step 4: Use llm_selector for LLM model and token counting
-        llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
+        # Step 2: First LLM invocation
+        if verbose:
+            console.print("[bold blue]Running first LLM invocation...[/bold blue]")
 
-        # Step 5: Run input_prompt through the model
-        update_chain = update_prompt_template | llm | StrOutputParser()
-        update_result = update_chain.invoke({
-            "input_prompt": input_prompt,
-            "input_code": input_code,
-            "modified_code": modified_code
-        })
+        first_response = llm_invoke(
+            prompt=update_prompt_processed,
+            input_json={
+                "input_prompt": input_prompt,
+                "input_code": input_code,
+                "modified_code": modified_code
+            },
+            strength=strength,
+            temperature=temperature,
+            verbose=verbose
+        )
 
-        # Calculate and print token count and cost
-        input_tokens = token_counter(processed_update_prompt)
-        output_tokens = token_counter(update_result)
-        update_cost = (input_tokens * input_cost + output_tokens * output_cost) / 1_000_000
+        if not first_response or 'result' not in first_response:
+            raise RuntimeError("First LLM invocation failed")
 
-        console.print(f"[bold]Update Prompt Output:[/bold]")
-        console.print(update_result)
-        console.print(f"Input tokens: {input_tokens}, Output tokens: {output_tokens}")
-        console.print(f"Estimated cost: ${update_cost:.6f}")
+        # Step 3: Second LLM invocation
+        if verbose:
+            console.print("[bold blue]Running second LLM invocation...[/bold blue]")
 
-        # Step 6: Create Langchain LCEL template for extract_prompt_update_LLM
-        llm, token_counter, input_cost, output_cost, _ = llm_selector(.5, temperature)
-        extract_prompt_template = PromptTemplate.from_template(extract_prompt_update_llm)
-        extract_chain = extract_prompt_template | llm | JsonOutputParser()
+        second_response = llm_invoke(
+            prompt=extract_prompt_processed,
+            input_json={"llm_output": first_response['result']},
+            strength=0.5,  # Fixed strength as specified
+            temperature=temperature,
+            output_pydantic=PromptUpdate,
+            verbose=verbose
+        )
 
-        # Run extraction
-        extract_result = extract_chain.invoke({"llm_output": update_result})
+        if not second_response or 'result' not in second_response:
+            raise RuntimeError("Second LLM invocation failed")
 
-        # Calculate and print token count and cost for extraction
-        extract_input_tokens = token_counter(extract_prompt_update_llm + update_result)
-        extract_output_tokens = token_counter(str(extract_result))
-        extract_cost = (extract_input_tokens * input_cost + extract_output_tokens * output_cost) / 1_000_000
+        # Step 4: Print modified prompt if verbose
+        if verbose:
+            console.print("\n[bold green]Modified Prompt:[/bold green]")
+            console.print(Markdown(second_response['result'].modified_prompt))
 
-        console.print(f"[bold]Extraction Output:[/bold]")
-        console.print(extract_result)
-        console.print(f"Input tokens: {extract_input_tokens}, Output tokens: {extract_output_tokens}")
-        console.print(f"Estimated cost: ${extract_cost:.6f}")
+        # Step 5: Calculate total cost
+        total_cost = first_response['cost'] + second_response['cost']
 
-        # Step 7: Extract modified_prompt and print using Rich Markdown
-        modified_prompt = extract_result.get('modified_prompt', '')
-        console.print(Markdown(f"# Modified Prompt\n\n{modified_prompt}"))
+        if verbose:
+            console.print(f"\n[bold yellow]Total Cost: ${total_cost:.6f}[/bold yellow]")
+            console.print(f"[bold cyan]Model Used: {first_response['model_name']}[/bold cyan]")
 
-        # Calculate total cost
-        total_cost = update_cost + extract_cost
-
-        return modified_prompt, total_cost, model_name
+        # Step 6: Return results
+        return (
+            second_response['result'].modified_prompt,
+            total_cost,
+            first_response['model_name']
+        )
 
     except Exception as e:
-        console.print(f"[bold red]Error:[/bold red] {str(e)}")
+        error_msg = f"Error in update_prompt: {str(e)}"
+        console.print(f"[bold red]{error_msg}[/bold red]")
+        raise RuntimeError(error_msg)
