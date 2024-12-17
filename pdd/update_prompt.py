@@ -71,7 +71,7 @@ def update_prompt(
             verbose=verbose
         )
 
-        if not first_response or 'result' not in first_response:
+        if not first_response or not isinstance(first_response, dict) or 'result' not in first_response:
             raise RuntimeError("First LLM invocation failed")
 
         # Step 3: Second LLM invocation
@@ -81,13 +81,13 @@ def update_prompt(
         second_response = llm_invoke(
             prompt=extract_prompt_processed,
             input_json={"llm_output": first_response['result']},
-            strength=0.5,  # Fixed strength as specified
+            strength=0.5,
             temperature=temperature,
             output_pydantic=PromptUpdate,
             verbose=verbose
         )
 
-        if not second_response or 'result' not in second_response:
+        if not second_response or not isinstance(second_response, dict) or 'result' not in second_response:
             raise RuntimeError("Second LLM invocation failed")
 
         # Step 4: Print modified prompt if verbose

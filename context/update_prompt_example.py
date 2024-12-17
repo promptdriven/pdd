@@ -1,5 +1,6 @@
 import os
-from update_prompt import update_prompt
+from tabnanny import verbose
+from pdd.update_prompt import update_prompt
 
 def main() -> None:
     """
@@ -19,7 +20,8 @@ def main() -> None:
             input_code=input_code,
             modified_code=modified_code,
             strength=strength,
-            temperature=temperature
+            temperature=temperature,
+            verbose=True
         )
 
         # Check the results
