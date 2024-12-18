@@ -105,7 +105,7 @@ def fix_code_module_errors(
     console.print(f"Output cost: ${result_cost:.4f}")
 
     # Step 6 & 7: Create second LCEL template with Pydantic parser
-    extract_llm, token_counter, extract_input_cost, extract_output_cost, _ = llm_selector(0.8, temperature)
+    extract_llm, token_counter, extract_input_cost, extract_output_cost, _ = llm_selector(0.89, temperature)
 
     pydantic_parser = PydanticOutputParser(pydantic_object=FixOutput)
 
