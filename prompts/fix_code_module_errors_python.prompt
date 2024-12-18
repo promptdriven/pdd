@@ -40,7 +40,7 @@
         4b. Pretty print a message letting the user know it is running and how many tokens are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
     Step 5. Pretty print the markdown formatting that is present in the result via the rich Markdown function. Also print the number of tokens in the result and the cost.
     Step 6. Then this will create a second Langchain LCEL template from the extract_program_code_fix prompt.
-    Step 7. This will use llm_selector with a strength setting of 0.8 and the provided temperature for the llm model. However, instead of using String output, it will use the JSON output parser to use the 'get' function to extract the value of these keys: 'update_program', 'update_code', 'fixed_program' and 'fixed_code'.
+    Step 7. This will use llm_selector with a strength setting of 0.89 and the provided temperature for the llm model. However, instead of using String output, it will use the JSON output parser to use the 'get' function to extract the value of these keys: 'update_program', 'update_code', 'fixed_program' and 'fixed_code'.
     Step 8. This will run the code through the model using Langchain LCEL from Step 7. 
         8a. Be sure to pass the following string parameters to the prompt during invoke:
             - 'program_code_fix': This is the result of the Langchain LCEL from Step 5.
