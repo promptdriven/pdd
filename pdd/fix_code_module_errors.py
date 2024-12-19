@@ -1,15 +1,33 @@
 from typing import Tuple
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from rich import print
 from rich.markdown import Markdown
 from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
+import json
 
 class CodeFix(BaseModel):
     update_program: bool = Field(description="Indicates if the program needs updating")
     update_code: bool = Field(description="Indicates if the code module needs updating")
     fixed_program: str = Field(description="The fixed program code")
     fixed_code: str = Field(description="The fixed code module")
+
+def validate_inputs(
+    program: str,
+    prompt: str,
+    code: str,
+    errors: str,
+    strength: float
+) -> None:
+    """Validate input parameters."""
+    if not all([program, prompt, code, errors]):
+        raise ValueError("All string inputs (program, prompt, code, errors) must be non-empty")
+    
+    if not isinstance(strength, (int, float)):
+        raise ValueError("Strength must be a number")
+    
+    if not 0 <= strength <= 1:
+        raise ValueError("Strength must be between 0 and 1")
 
 def fix_code_module_errors(
     program: str,
@@ -22,20 +40,11 @@ def fix_code_module_errors(
 ) -> Tuple[bool, bool, str, str, float, str]:
     """
     Fix errors in a code module that caused a program to crash and/or have errors.
-
-    Args:
-        program (str): The program code that was running the code module
-        prompt (str): The prompt that generated the code module
-        code (str): The code module that caused the crash
-        errors (str): The errors from the program run
-        strength (float): The strength of the LLM model to use (0-1)
-        temperature (float, optional): The temperature of the LLM model. Defaults to 0.
-        verbose (bool, optional): Whether to print detailed information. Defaults to False.
-
-    Returns:
-        Tuple[bool, bool, str, str, float, str]: Returns update flags, fixed code, cost, and model name
     """
     try:
+        # Validate inputs
+        validate_inputs(program, prompt, code, errors, strength)
+
         # Step 1: Load prompt templates
         fix_prompt = load_prompt_template("fix_code_module_errors_LLM")
         extract_prompt = load_prompt_template("extract_program_code_fix_LLM")
@@ -65,8 +74,8 @@ def fix_code_module_errors(
             verbose=verbose
         )
 
-        total_cost += first_response['cost']
-        model_name = first_response['model_name']
+        total_cost += first_response.get('cost', 0)
+        model_name = first_response.get('model_name', '')
 
         if verbose:
             print("[green]Error analysis complete[/green]")
@@ -92,11 +101,22 @@ def fix_code_module_errors(
             output_pydantic=CodeFix
         )
 
-        total_cost += second_response['cost']
+        total_cost += second_response.get('cost', 0)
 
         # Step 5: Extract values from Pydantic result
-        result: CodeFix = second_response['result']
-        
+        result = second_response['result']
+
+        if isinstance(result, str):
+            try:
+                result_dict = json.loads(result)
+            except json.JSONDecodeError:
+                result_dict = {"result": result}
+            result = CodeFix.model_validate(result_dict)
+        elif isinstance(result, dict):
+            result = CodeFix.model_validate(result)
+        elif not isinstance(result, CodeFix):
+            result = CodeFix.model_validate({"result": str(result)})
+
         if verbose:
             print("[green]Code extraction complete[/green]")
             print(f"[yellow]Total cost: ${total_cost:.6f}[/yellow]")
@@ -115,23 +135,9 @@ def fix_code_module_errors(
     except ValueError as ve:
         print(f"[red]Value Error: {str(ve)}[/red]")
         raise
+    except ValidationError:
+        print("[red]Validation Error: Invalid result format[/red]")
+        raise
     except Exception as e:
         print(f"[red]Unexpected error: {str(e)}[/red]")
         raise
-
-def validate_inputs(
-    program: str,
-    prompt: str,
-    code: str,
-    errors: str,
-    strength: float
-) -> None:
-    """Validate input parameters."""
-    if not all([program, prompt, code, errors]):
-        raise ValueError("All string inputs (program, prompt, code, errors) must be non-empty")
-    
-    if not isinstance(strength, (int, float)):
-        raise ValueError("Strength must be a number")
-    
-    if not 0 <= strength <= 1:
-        raise ValueError("Strength must be between 0 and 1")
