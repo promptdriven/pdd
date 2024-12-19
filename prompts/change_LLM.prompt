@@ -25,10 +25,10 @@
 <instructions>
     Follow these instructions:
     Step 1. Explain in detail step by step the ramifications of the change_prompt on the input_prompt.
-    Step 2. Explain in detail step by step what changes need to be made to the input_prompt to generate the modified_prompt based on Step 1.
+    Step 2. Explain in detail step by step what changes need to be made to the input_prompt to generate the modified_prompt based on Step 1. This step describes how to modify the input_prompt to generate the modified_prompt.
     Step 3. Generate the modified_prompt based on Step 2. Except for the change, the rest of the existing functionality of the input_prompt should remain. Structure the prompt similar to the example prompts, especially including the descriptions of the inputs and outputs.
 </instructions>
 
 <important_notes>
-    Never ask if you should proceed with generating the modified_prompt as this prompt has no human monitoring. Always assume that the change_prompt is correct and proceed with generating the modified_prompt.
+    Never ask if you should proceed with generating the modified_prompt as this prompt has no human monitoring. Always assume that the change_prompt is correct and proceed with generating the modified_prompt. Also, for step 3, output the modified prompt not just how to modify the prompt. 
 </important_notes>

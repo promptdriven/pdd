@@ -1,27 +1,15 @@
-import os
-from pathlib import Path
-from typing import Tuple, Any
-from rich.console import Console
+from typing import Tuple
+from pydantic import BaseModel, Field
+from rich import print
 from rich.markdown import Markdown
-from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import PydanticOutputParser
-from langchain_core.output_parsers import StrOutputParser
-from pydantic import BaseModel, ConfigDict
-from .llm_selector import llm_selector
+from .load_prompt_template import load_prompt_template
+from .llm_invoke import llm_invoke
 
-console = Console()
-
-class FixOutput(BaseModel):
-    update_program: bool = False
-    update_code: bool = False
-    fixed_program: str = ""
-    fixed_code: str = ""
-
-    model_config = ConfigDict()
-
-def ensure_string(value: Any) -> str:
-    """Ensure a value is a string."""
-    return str(value)
+class CodeFix(BaseModel):
+    update_program: bool = Field(description="Indicates if the program needs updating")
+    update_code: bool = Field(description="Indicates if the code module needs updating")
+    fixed_program: str = Field(description="The fixed program code")
+    fixed_code: str = Field(description="The fixed code module")
 
 def fix_code_module_errors(
     program: str,
@@ -29,118 +17,121 @@ def fix_code_module_errors(
     code: str,
     errors: str,
     strength: float,
-    temperature: float = 0.0
+    temperature: float = 0,
+    verbose: bool = False
 ) -> Tuple[bool, bool, str, str, float, str]:
     """
-    Fix errors in a code module using LLMs.
+    Fix errors in a code module that caused a program to crash and/or have errors.
 
     Args:
-        program (str): The program code that was running the module
+        program (str): The program code that was running the code module
         prompt (str): The prompt that generated the code module
         code (str): The code module that caused the crash
         errors (str): The errors from the program run
-        strength (float): The strength of the LLM model (0-1)
-        temperature (float): The temperature of the LLM model
+        strength (float): The strength of the LLM model to use (0-1)
+        temperature (float, optional): The temperature of the LLM model. Defaults to 0.
+        verbose (bool, optional): Whether to print detailed information. Defaults to False.
 
     Returns:
-        Tuple containing:
-        - update_program (bool): Whether the program needs updating
-        - update_code (bool): Whether the code module needs updating
-        - fixed_program (str): The fixed program code
-        - fixed_code (str): The fixed code module
-        - total_cost (float): Total cost of the LLM runs
-        - model_name (str): Name of the selected model
+        Tuple[bool, bool, str, str, float, str]: Returns update flags, fixed code, cost, and model name
     """
+    try:
+        # Step 1: Load prompt templates
+        fix_prompt = load_prompt_template("fix_code_module_errors_LLM")
+        extract_prompt = load_prompt_template("extract_program_code_fix_LLM")
+        
+        if not all([fix_prompt, extract_prompt]):
+            raise ValueError("Failed to load one or more prompt templates")
 
-    # Validate inputs
-    if not (0 <= strength <= 1):
+        total_cost = 0
+        model_name = ""
+
+        # Step 2: First LLM invoke for error analysis
+        input_json = {
+            "program": program,
+            "prompt": prompt,
+            "code": code,
+            "errors": errors
+        }
+
+        if verbose:
+            print("[blue]Running initial error analysis...[/blue]")
+
+        first_response = llm_invoke(
+            prompt=fix_prompt,
+            input_json=input_json,
+            strength=strength,
+            temperature=temperature,
+            verbose=verbose
+        )
+
+        total_cost += first_response['cost']
+        model_name = first_response['model_name']
+
+        if verbose:
+            print("[green]Error analysis complete[/green]")
+            print(Markdown(first_response['result']))
+            print(f"[yellow]Current cost: ${total_cost:.6f}[/yellow]")
+
+        # Step 4: Second LLM invoke for code extraction
+        extract_input = {
+            "program_code_fix": first_response['result'],
+            "program": program,
+            "code": code
+        }
+
+        if verbose:
+            print("[blue]Extracting code fixes...[/blue]")
+
+        second_response = llm_invoke(
+            prompt=extract_prompt,
+            input_json=extract_input,
+            strength=0.89,  # Fixed strength as specified
+            temperature=temperature,
+            verbose=verbose,
+            output_pydantic=CodeFix
+        )
+
+        total_cost += second_response['cost']
+
+        # Step 5: Extract values from Pydantic result
+        result: CodeFix = second_response['result']
+        
+        if verbose:
+            print("[green]Code extraction complete[/green]")
+            print(f"[yellow]Total cost: ${total_cost:.6f}[/yellow]")
+            print(f"[blue]Model used: {model_name}[/blue]")
+
+        # Step 7: Return results
+        return (
+            result.update_program,
+            result.update_code,
+            result.fixed_program,
+            result.fixed_code,
+            total_cost,
+            model_name
+        )
+
+    except ValueError as ve:
+        print(f"[red]Value Error: {str(ve)}[/red]")
+        raise
+    except Exception as e:
+        print(f"[red]Unexpected error: {str(e)}[/red]")
+        raise
+
+def validate_inputs(
+    program: str,
+    prompt: str,
+    code: str,
+    errors: str,
+    strength: float
+) -> None:
+    """Validate input parameters."""
+    if not all([program, prompt, code, errors]):
+        raise ValueError("All string inputs (program, prompt, code, errors) must be non-empty")
+    
+    if not isinstance(strength, (int, float)):
+        raise ValueError("Strength must be a number")
+    
+    if not 0 <= strength <= 1:
         raise ValueError("Strength must be between 0 and 1")
-    if not (0 <= temperature <= 1):
-        raise ValueError("Temperature must be between 0 and 1")
-
-    # Step 1: Load prompts
-    pdd_path = os.getenv('PDD_PATH')
-    if not pdd_path:
-        raise ValueError("PDD_PATH environment variable not set")
-
-    prompts_dir = Path(pdd_path) / "prompts"
-
-    with open(prompts_dir / "fix_code_module_errors_LLM.prompt") as f:
-        fix_prompt_template = f.read()
-
-    with open(prompts_dir / "extract_program_code_fix_LLM.prompt") as f:
-        extract_prompt_template = f.read()
-
-    # Step 2 & 3: Create first LCEL template and get LLM
-    llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
-
-    fix_prompt = PromptTemplate.from_template(fix_prompt_template)
-    fix_chain = fix_prompt | llm | StrOutputParser()
-
-    # Step 4: Run first chain
-    input_vars = {
-        "program": program,
-        "prompt": prompt,
-        "code": code,
-        "errors": errors
-    }
-
-    prompt_tokens = token_counter(fix_prompt.format(**input_vars))
-    prompt_cost = (prompt_tokens / 1_000_000) * input_cost
-
-    console.print(f"[bold blue]Running fix analysis...[/bold blue]")
-    console.print(f"Input tokens: {prompt_tokens}")
-    console.print(f"Estimated input cost: ${prompt_cost:.4f}")
-
-    fix_result = fix_chain.invoke(input_vars)
-    fix_result = ensure_string(fix_result)
-
-    # Step 5: Print results
-    result_tokens = token_counter(fix_result)
-    result_cost = (result_tokens / 1_000_000) * output_cost
-
-    console.print("[bold green]Fix Analysis Results:[/bold green]")
-    console.print(Markdown(fix_result))
-    console.print(f"Output tokens: {result_tokens}")
-    console.print(f"Output cost: ${result_cost:.4f}")
-
-    # Step 6 & 7: Create second LCEL template with Pydantic parser
-    extract_llm, token_counter, extract_input_cost, extract_output_cost, _ = llm_selector(0.89, temperature)
-
-    pydantic_parser = PydanticOutputParser(pydantic_object=FixOutput)
-
-    extract_prompt = PromptTemplate(
-        template=extract_prompt_template,
-        partial_variables={"format_instructions": pydantic_parser.get_format_instructions()}
-    )
-
-    extract_chain = extract_prompt | extract_llm | pydantic_parser
-
-    # Step 8: Run second chain
-    extract_input = {
-        "program_code_fix": fix_result,
-        "program": program,
-        "code": code
-    }
-
-    extract_prompt_tokens = token_counter(extract_prompt.format(**extract_input))
-    extract_prompt_cost = (extract_prompt_tokens / 1_000_000) * extract_input_cost
-
-    console.print(f"[bold blue]Extracting fixes...[/bold blue]")
-    console.print(f"Input tokens: {extract_prompt_tokens}")
-    console.print(f"Estimated input cost: ${extract_prompt_cost:.4f}")
-
-    extract_result = extract_chain.invoke(extract_input)
-
-    # Step 9: Calculate total cost
-    total_cost = prompt_cost + result_cost + extract_prompt_cost
-
-    # Step 10: Return results directly
-    return (
-        extract_result.update_program,
-        extract_result.update_code,
-        extract_result.fixed_program,
-        extract_result.fixed_code,
-        total_cost,
-        model_name
-    )
