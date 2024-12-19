@@ -1,202 +1,209 @@
 # tests/test_fix_code_module_errors.py
 
 import pytest
-from unittest.mock import patch, mock_open
-import json
-
-# Import the function to test
+from unittest.mock import patch, MagicMock
 from pdd.fix_code_module_errors import fix_code_module_errors
-from langchain_community.llms.fake import FakeListLLM
-from langchain.schema import OutputParserException
+from pydantic import ValidationError
 
-# Define sample data for testing
-SAMPLE_PROGRAM = "print('Hello, World!')"
-SAMPLE_PROMPT = "Generate a simple Python program."
-SAMPLE_CODE = "def greet():\n    print('Hello')"
-SAMPLE_ERRORS = "NameError: name 'greet' is not defined"
-SAMPLE_FIX_RESULT = "print('Fixed Code')"
-SAMPLE_EXTRACT_RESULT = {
-    "update_program": True,
-    "update_code": True,
-    "fixed_program": "print('Hello, World!')",
-    "fixed_code": "def greet():\n    print('Hello, World!')"
+# Sample data to be used across multiple tests
+VALID_PROGRAM = "print('Hello, World!')"
+VALID_PROMPT = "Generate code to print Hello World"
+VALID_CODE = "def greet():\n    print('Hello, World!')"
+VALID_ERRORS = "SyntaxError: invalid syntax"
+VALID_STRENGTH = 0.5
+VALID_TEMPERATURE = 0.7
+VALID_VERBOSE = True
+
+FIX_PROMPT = "fix_code_module_errors_LLM template"
+EXTRACT_PROMPT = "extract_program_code_fix_LLM template"
+
+# Mock responses for llm_invoke
+FIRST_INVOKE_RESPONSE = {
+    'result': "Error analysis result",
+    'cost': 0.01,
+    'model_name': "gpt-3.5-turbo"
 }
-TOTAL_COST = 0.00007  # Adjusted total cost based on calculations
-MODEL_NAME = "mock-model"
+
+SECOND_INVOKE_RESPONSE = {
+    'result': {
+        'update_program': True,
+        'update_code': True,
+        'fixed_program': "print('Hello, Universe!')",
+        'fixed_code': "def greet():\n    print('Hello, Universe!')"
+    },
+    'cost': 0.02,
+    'model_name': "gpt-3.5-turbo"
+}
 
 @pytest.fixture
-def mock_llm_selector():
-    with patch("pdd.fix_code_module_errors.llm_selector") as mock_selector:
-        fake_llm = FakeListLLM(responses=[
-            SAMPLE_FIX_RESULT,               # First LLM response
-            json.dumps(SAMPLE_EXTRACT_RESULT)  # Second LLM response
-        ])
-        mock_selector.return_value = (fake_llm, lambda x: 1000, 0.02, 0.03, MODEL_NAME)
-        yield mock_selector
+def mock_load_prompt_template_success():
+    with patch('pdd.fix_code_module_errors.load_prompt_template') as mock_load:
+        mock_load.side_effect = lambda name: FIX_PROMPT if name == "fix_code_module_errors_LLM" else EXTRACT_PROMPT
+        yield mock_load
 
 @pytest.fixture
-def mock_open_files():
-    prompt_content = "Fix the following code:\n{program}\n{prompt}\n{code}\n{errors}"
-    extract_prompt_content = "Extract the fix results."
+def mock_llm_invoke_success():
+    with patch('pdd.fix_code_module_errors.llm_invoke') as mock_invoke:
+        # The first call returns FIRST_INVOKE_RESPONSE
+        # The second call returns SECOND_INVOKE_RESPONSE
+        mock_invoke.side_effect = [
+            FIRST_INVOKE_RESPONSE,
+            SECOND_INVOKE_RESPONSE
+        ]
+        yield mock_invoke
 
-    m = mock_open()
-    m.side_effect = [
-        mock_open(read_data=prompt_content).return_value,
-        mock_open(read_data=extract_prompt_content).return_value
-    ]
-    with patch("builtins.open", m):
-        yield m
+def test_fix_code_module_errors_success(mock_load_prompt_template_success, mock_llm_invoke_success):
+    """
+    Test the successful execution of fix_code_module_errors with valid inputs.
+    """
+    update_program, update_code, fixed_program, fixed_code, total_cost, model_name = fix_code_module_errors(
+        program=VALID_PROGRAM,
+        prompt=VALID_PROMPT,
+        code=VALID_CODE,
+        errors=VALID_ERRORS,
+        strength=VALID_STRENGTH,
+        temperature=VALID_TEMPERATURE,
+        verbose=VALID_VERBOSE
+    )
 
-def test_fix_code_module_errors_valid_inputs(mock_llm_selector, mock_open_files):
-    with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"):
-        update_program, update_code, fixed_program, fixed_code, total_cost, model_name = fix_code_module_errors(
-            program=SAMPLE_PROGRAM,
-            prompt=SAMPLE_PROMPT,
-            code=SAMPLE_CODE,
-            errors=SAMPLE_ERRORS,
-            strength=0.5,
-            temperature=0.7
-        )
     assert update_program is True
     assert update_code is True
-    assert fixed_program == "print('Hello, World!')"
-    assert fixed_code == "def greet():\n    print('Hello, World!')"
-    assert total_cost == pytest.approx(TOTAL_COST)
-    assert model_name == MODEL_NAME
+    assert fixed_program == "print('Hello, Universe!')"
+    assert fixed_code == "def greet():\n    print('Hello, Universe!')"
+    assert total_cost == 0.03  # Sum of both costs
+    assert model_name == "gpt-3.5-turbo"
 
-def test_fix_code_module_errors_invalid_strength(mock_open_files):
-    with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"):
-        with pytest.raises(ValueError, match="Strength must be between 0 and 1"):
-            fix_code_module_errors(
-                program=SAMPLE_PROGRAM,
-                prompt=SAMPLE_PROMPT,
-                code=SAMPLE_CODE,
-                errors=SAMPLE_ERRORS,
-                strength=1.5,  # Invalid strength
-                temperature=0.5
-            )
+    # Verify that load_prompt_template was called correctly
+    mock_load_prompt_template_success.assert_any_call("fix_code_module_errors_LLM")
+    mock_load_prompt_template_success.assert_any_call("extract_program_code_fix_LLM")
 
-def test_fix_code_module_errors_invalid_temperature(mock_open_files):
-    with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"):
-        with pytest.raises(ValueError, match="Temperature must be between 0 and 1"):
-            fix_code_module_errors(
-                program=SAMPLE_PROGRAM,
-                prompt=SAMPLE_PROMPT,
-                code=SAMPLE_CODE,
-                errors=SAMPLE_ERRORS,
-                strength=0.5,
-                temperature=1.5  # Invalid temperature
-            )
+    # Verify that llm_invoke was called twice
+    assert mock_llm_invoke_success.call_count == 2
 
-def test_fix_code_module_errors_missing_pdd_path(mock_llm_selector, mock_open_files):
-    with patch("pdd.fix_code_module_errors.os.getenv", return_value=None):
-        with pytest.raises(ValueError, match="PDD_PATH environment variable not set"):
-            fix_code_module_errors(
-                program=SAMPLE_PROGRAM,
-                prompt=SAMPLE_PROMPT,
-                code=SAMPLE_CODE,
-                errors=SAMPLE_ERRORS,
-                strength=0.5,
-                temperature=0.5
-            )
+def test_fix_code_module_errors_missing_prompts(mock_load_prompt_template_success):
+    """
+    Test the scenario where one or both prompt templates fail to load.
+    """
+    # Modify the mock to return None for one of the prompts
+    mock_load_prompt_template_success.side_effect = lambda name: FIX_PROMPT if name == "fix_code_module_errors_LLM" else None
 
-def test_fix_code_module_errors_missing_fix_prompt(mock_llm_selector):
-    # Simulate FileNotFoundError when opening fix prompt
-    with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"), \
-         patch("builtins.open", side_effect=FileNotFoundError("fix_code_module_errors_LLM.prompt not found")):
-        with pytest.raises(FileNotFoundError, match="fix_code_module_errors_LLM.prompt not found"):
-            fix_code_module_errors(
-                program=SAMPLE_PROGRAM,
-                prompt=SAMPLE_PROMPT,
-                code=SAMPLE_CODE,
-                errors=SAMPLE_ERRORS,
-                strength=0.5,
-                temperature=0.5
-            )
-
-def test_fix_code_module_errors_llm_selector_exception(mock_open_files):
-    with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"), \
-         patch("pdd.fix_code_module_errors.llm_selector", side_effect=ValueError("Invalid strength")):
-        with pytest.raises(ValueError, match="Invalid strength"):
-            fix_code_module_errors(
-                program=SAMPLE_PROGRAM,
-                prompt=SAMPLE_PROMPT,
-                code=SAMPLE_CODE,
-                errors=SAMPLE_ERRORS,
-                strength=0.5,
-                temperature=0.5
-            )
-
-def test_fix_code_module_errors_incomplete_extract_result(mock_llm_selector, mock_open_files):
-    incomplete_extract_result = {
-        "update_program": True,
-        # "update_code" is missing
-        "fixed_program": "print('Hello, World!')"
-        # "fixed_code" is missing
-    }
-
-    mock_llm_selector.return_value[0].responses = [
-        SAMPLE_FIX_RESULT,
-        json.dumps(incomplete_extract_result)
-    ]
-
-    with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"):
-        update_program, update_code, fixed_program, fixed_code, total_cost, model_name = fix_code_module_errors(
-            program=SAMPLE_PROGRAM,
-            prompt=SAMPLE_PROMPT,
-            code=SAMPLE_CODE,
-            errors=SAMPLE_ERRORS,
-            strength=0.5,
-            temperature=0.7
+    with pytest.raises(ValueError) as exc_info:
+        fix_code_module_errors(
+            program=VALID_PROGRAM,
+            prompt=VALID_PROMPT,
+            code=VALID_CODE,
+            errors=VALID_ERRORS,
+            strength=VALID_STRENGTH
         )
+    
+    assert "Failed to load one or more prompt templates" in str(exc_info.value)
 
-    assert update_program is True
-    assert update_code is False  # Default value
-    assert fixed_program == "print('Hello, World!')"
-    assert fixed_code == ""  # Default value
-    assert total_cost == pytest.approx(TOTAL_COST)
-    assert model_name == MODEL_NAME
-
-def test_fix_code_module_errors_invalid_json_output(mock_llm_selector, mock_open_files):
-    # Simulate invalid JSON output that doesn't conform to FixOutput
-    invalid_extract_result = {
-        "update_program": "not a boolean",  # Should be bool
-        "update_code": {"not": "a boolean"},      # Should be bool
-        "fixed_program": ["not", "a", "string"],  # Should be str
-        "fixed_code": None        # Should be str
-    }
-    # Update the LLM responses to return invalid JSON output
-    mock_llm_selector.return_value[0].responses = [
-        SAMPLE_FIX_RESULT,
-        json.dumps(invalid_extract_result)
-    ]
-    with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"):
-        with pytest.raises(OutputParserException):
-            fix_code_module_errors(
-                program=SAMPLE_PROGRAM,
-                prompt=SAMPLE_PROMPT,
-                code=SAMPLE_CODE,
-                errors=SAMPLE_ERRORS,
-                strength=0.5,
-                temperature=0.7
-            )
-
-def test_fix_code_module_errors_empty_errors(mock_llm_selector, mock_open_files):
-    with patch("pdd.fix_code_module_errors.os.getenv", return_value="/path/to/project"):
-        update_program, update_code, fixed_program, fixed_code, total_cost, model_name = fix_code_module_errors(
-            program=SAMPLE_PROGRAM,
-            prompt=SAMPLE_PROMPT,
-            code=SAMPLE_CODE,
-            errors="",  # Empty errors
-            strength=0.5,
-            temperature=0.7
+def test_fix_code_module_errors_invalid_strength():
+    """
+    Test the function with invalid strength values.
+    """
+    # Strength less than 0
+    with pytest.raises(ValueError) as exc_info:
+        fix_code_module_errors(
+            program=VALID_PROGRAM,
+            prompt=VALID_PROMPT,
+            code=VALID_CODE,
+            errors=VALID_ERRORS,
+            strength=-0.1
         )
+    assert "Strength must be between 0 and 1" in str(exc_info.value)
 
-    # Assuming the function can handle empty errors appropriately
-    assert update_program is True
-    assert update_code is True
-    assert fixed_program == "print('Hello, World!')"
-    assert fixed_code == "def greet():\n    print('Hello, World!')"
-    assert total_cost == pytest.approx(TOTAL_COST)
-    assert model_name == MODEL_NAME
+    # Strength greater than 1
+    with pytest.raises(ValueError) as exc_info:
+        fix_code_module_errors(
+            program=VALID_PROGRAM,
+            prompt=VALID_PROMPT,
+            code=VALID_CODE,
+            errors=VALID_ERRORS,
+            strength=1.5
+        )
+    assert "Strength must be between 0 and 1" in str(exc_info.value)
 
+def test_fix_code_module_errors_missing_inputs(mock_load_prompt_template_success, mock_llm_invoke_success):
+    """
+    Test the function with missing input parameters.
+    """
+    # Missing 'program'
+    with pytest.raises(ValueError) as exc_info:
+        fix_code_module_errors(
+            program="",
+            prompt=VALID_PROMPT,
+            code=VALID_CODE,
+            errors=VALID_ERRORS,
+            strength=VALID_STRENGTH
+        )
+    assert "All string inputs (program, prompt, code, errors) must be non-empty" in str(exc_info.value)
+
+    # Missing 'prompt'
+    with pytest.raises(ValueError) as exc_info:
+        fix_code_module_errors(
+            program=VALID_PROGRAM,
+            prompt="",
+            code=VALID_CODE,
+            errors=VALID_ERRORS,
+            strength=VALID_STRENGTH
+        )
+    assert "All string inputs (program, prompt, code, errors) must be non-empty" in str(exc_info.value)
+
+    # Missing 'code'
+    with pytest.raises(ValueError) as exc_info:
+        fix_code_module_errors(
+            program=VALID_PROGRAM,
+            prompt=VALID_PROMPT,
+            code="",
+            errors=VALID_ERRORS,
+            strength=VALID_STRENGTH
+        )
+    assert "All string inputs (program, prompt, code, errors) must be non-empty" in str(exc_info.value)
+
+    # Missing 'errors'
+    with pytest.raises(ValueError) as exc_info:
+        fix_code_module_errors(
+            program=VALID_PROGRAM,
+            prompt=VALID_PROMPT,
+            code=VALID_CODE,
+            errors="",
+            strength=VALID_STRENGTH
+        )
+    assert "All string inputs (program, prompt, code, errors) must be non-empty" in str(exc_info.value)
+
+def test_fix_code_module_errors_llm_invoke_failure(mock_load_prompt_template_success):
+    """
+    Test the function's behavior when llm_invoke raises an exception.
+    """
+    with patch('pdd.fix_code_module_errors.llm_invoke', side_effect=Exception("LLM service error")):
+        with pytest.raises(Exception) as exc_info:
+            fix_code_module_errors(
+                program=VALID_PROGRAM,
+                prompt=VALID_PROMPT,
+                code=VALID_CODE,
+                errors=VALID_ERRORS,
+                strength=VALID_STRENGTH
+            )
+        assert "LLM service error" in str(exc_info.value)
+
+def test_fix_code_module_errors_validation_error():
+    """
+    Test the function's behavior when the second llm_invoke returns invalid data that doesn't conform to CodeFix model.
+    """
+    with patch('pdd.fix_code_module_errors.load_prompt_template') as mock_load:
+        mock_load.side_effect = lambda name: FIX_PROMPT if name == "fix_code_module_errors_LLM" else EXTRACT_PROMPT
+        with patch('pdd.fix_code_module_errors.llm_invoke') as mock_invoke:
+            # First call is successful
+            mock_invoke.side_effect = [
+                FIRST_INVOKE_RESPONSE,
+                {'result': "invalid result"}  # This should fail validation
+            ]
+            with pytest.raises(ValidationError):
+                fix_code_module_errors(
+                    program=VALID_PROGRAM,
+                    prompt=VALID_PROMPT,
+                    code=VALID_CODE,
+                    errors=VALID_ERRORS,
+                    strength=VALID_STRENGTH
+                )
