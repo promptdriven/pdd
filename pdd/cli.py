@@ -159,7 +159,8 @@ def test(ctx, prompt_file: str, code_file: str, output: Optional[str], language:
             input_strings['code_file'],
             ctx.obj['strength'],
             ctx.obj['temperature'],
-            language
+            language,
+            ctx.obj['verbose']
         )
         
         with open(output_file_paths['output'], 'w') as f:

@@ -9,7 +9,7 @@ Fireworks,"accounts/fireworks/models/llama-v3p3-70b-instruct",3,3,1280,,,,,16384
 Fireworks,"accounts/fireworks/models/qwen2p5-coder-32b-instruct",.9,.9,1226,,,,,2048,,False
 OpenAI,"gpt-4o-mini",0.15,0.60,1246,,,tiktoken,o200k_base,16384,,True
 OpenAI,"gpt-4o-2024-11-20",2.5,10,1306,,,tiktoken,o200k_base,16384,,True
-OpenAI,"o1-preview-2024-09-12",15,60,1311,,,tiktoken,o200k_base,,32768,False
+OpenAI,"o1-2024-12-17",15,60,1311,,,tiktoken,o200k_base,,32768,False
 OpenAI,"grok-beta",5,15,1255,"https://api.x.ai/v1","XAI_API_KEY",tiktoken,o200k_base,4096,,False
 Google,"gemini-exp-1206",0.15,0.60,1321,,,,,8192,,False
 Anthropic,"claude-3-5-haiku-20241022",1,5,1265,,,anthropic,claude-3-sonnet-20240229,8192,,False
