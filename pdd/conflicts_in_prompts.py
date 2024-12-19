@@ -55,7 +55,7 @@ def conflicts_in_prompts(prompt1: str, prompt2: str, strength: float = 0.5, temp
         rprint(conflict_output)
 
         # Step 6: Create Langchain LCEL template for change extraction
-        extract_llm, extract_token_counter, extract_input_cost, extract_output_cost, _ = llm_selector(0.8, temperature)
+        extract_llm, extract_token_counter, extract_input_cost, extract_output_cost, _ = llm_selector(0.89, temperature)
         extract_prompt = PromptTemplate.from_template(extract_prompt_template)
         
         # Step 6a and 6b: Calculate and print token count and cost for extraction
