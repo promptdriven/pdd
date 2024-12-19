@@ -113,7 +113,7 @@ The complete code for `auth_helpers.py`, ready to be integrated into the PDD Clo
 **Note**: The `User` class should be designed to ensure consistency across the backend and simplify database operations. By centralizing the user data structure, it enhances code maintainability and readability."""
 
     # Set strength and temperature for the LLM
-    strength: float = .9  # Adjust between 0 and 1 for different model strengths
+    strength: float = .89  # Adjust between 0 and 1 for different model strengths
     temperature: float = 0  # Adjust between 0 and 1 for output randomness
 
     # Call the conflicts_in_prompts function
