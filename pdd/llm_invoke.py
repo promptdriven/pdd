@@ -288,7 +288,10 @@ def llm_invoke(prompt, input_json, strength, temperature, verbose=False, output_
         rprint(f"Cost of invoke run: ${cost}")
         rprint(f"Strength used: {strength}")
         rprint(f"Temperature used: {temperature}")
-        rprint(f"Input JSON: {input_json}")
+        try:
+            rprint(f"Input JSON: {input_json}")
+        except:
+            print(f"Input JSON: {input_json}")
         if output_pydantic:
             rprint(f"Output Pydantic: {output_pydantic}")
         rprint(f"Result: {result}")
