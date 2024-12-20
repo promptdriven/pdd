@@ -1,3 +1,4 @@
+from tabnanny import verbose
 from pdd.conflicts_in_prompts import conflicts_in_prompts
 from rich import print as rprint
 
@@ -115,9 +116,10 @@ The complete code for `auth_helpers.py`, ready to be integrated into the PDD Clo
     # Set strength and temperature for the LLM
     strength: float = .89  # Adjust between 0 and 1 for different model strengths
     temperature: float = 0  # Adjust between 0 and 1 for output randomness
+    verbose: bool = True  # Set to True for verbose output
 
     # Call the conflicts_in_prompts function
-    changes, total_cost, model_name = conflicts_in_prompts(prompt1, prompt2, strength, temperature)
+    changes, total_cost, model_name = conflicts_in_prompts(prompt1, prompt2, strength, temperature, verbose)
 
     # Print the results
     rprint("[bold]Conflict Detection Results:[/bold]")
