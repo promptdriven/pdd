@@ -40,6 +40,6 @@ Be sure to use the correct imports as shown in the above example.
     - The cost of the invoke run.
     - The strength used.
     - The temperature used.
-    - The input JSON.
+    - The input JSON (use try-except to handle rich printing failures, falling back to standard print).
     - The optional Pydantic output format.
     - The result using rprint.
