@@ -34,3 +34,11 @@
             - 'PROMPT_TEXT'
         2c. The Pydantic output of the invoke will have the keys 'reasoning' and 'is_finished'.
     Step 3. Return the 'reasoning' string and 'is_finished' boolean from the output, and the 'total_cost' float, and 'model_name' string.
+
+% Additional requirements:
+    1. Import 'print' from rich as 'rprint' to distinguish it from regular print
+    2. Use 'rprint' for all rich-formatted console output
+    3. Implement a fallback mechanism for displaying input text:
+        - Try using rprint first
+        - If rich printing fails, fall back to regular print
+    4. Ensure all error messages and status updates use rich formatting through rprint
