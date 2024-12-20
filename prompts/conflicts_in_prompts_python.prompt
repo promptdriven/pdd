@@ -6,32 +6,38 @@
     Inputs: 
         'prompt1' - First prompt in the pair of prompts we are comparing.
         'prompt2' - Second prompt in the pair of prompts we are comparing.
-        'strength' - A float that is the strength of the LLM model to use. Default is 0.5.
-        'temperature' - A float that is the temperature of the LLM model to use. Default is 0.
-    Outputs:
+        'strength' - A float that is the strength of the LLM model to use. Default is 0.5. Range is between 0 and 1.
+        'temperature' - A float that is the temperature of the LLM model to use. Default is 0. Range is between 0 and 1.
+        'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
+    Outputs as a tuple:
         'changes_list' - A list of JSON objects, each containing the name of a prompt that needs to be changed and detailed instructions on how to change it.
-        'total_cost' - A float that is the total cost of the model run
-        'model_name' - A string that is the name of the selected LLM model
+        'total_cost' - A float that is the total cost of the model run.
+        'model_name' - A string that is the name of the selected LLM model.
 
-% Here is an example of a LangChain Expression Language (LCEL) program: <lcel_example><include>context/langchain_lcel_example.py</include></lcel_example>
+% Here is how to use the internal modules:
+    <internal_modules>
+        For loading prompt templates:
+        <load_prompt_template_example>
+            <include>context/load_prompt_template_example.py</include>
+        </load_prompt_template_example>
 
-% Here are examples of how to use internal modules:
-<internal_example_modules>
-    % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>./context/llm_selector_example.py</include></llm_selector_example>
-</internal_example_modules>
+        For running prompts with llm_invoke:
+        <llm_invoke_example>
+            <include>context/llm_invoke_example.py</include>
+        </llm_invoke_example>
+    </internal_modules>
 
-% This function will use Langchain to do the following:
-    Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/conflict_LLM.prompt' and '$PDD_PATH/prompts/extract_conflicts_LLM.prompt' files.
-    Step 2. Then this will create a Langchain LCEL template from the conflict_LLM prompt.
-    Step 3. This will use llm_selector for the model, imported from a relative path.
-    Step 4. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
-    Step 5. Run the prompts through the model using Langchain LCEL with string output.
-        5a. Pass the following string parameters to the prompt during invoke:
+% This function will do the following:
+    Step 1. Load the 'conflict_LLM' and 'extract_conflict_LLM' prompt templates.
+    Step 2. Run the prompts through the model using llm_invoke with the provided strength and temperature. 
+        2a. Pass the following string parameters to the prompt during invoke:
             - 'PROMPT1'
             - 'PROMPT2'
-        5b.  Pretty print the output of 5a which will be in Markdown format.
-    Step 6. Create a Langchain LCEL template using a .8 strength llm_selector and token counter from the extract_conflicts_LLM prompt that outputs JSON:
-        6a. Pass the following string parameters to the prompt during invocation: 'llm_output' (this string is from Step 5a).
-        6b. Calculate input and output token count using token_counter from llm_selector and pretty print the running message with the token count and cost.
-        6c. Use 'get' function to extract 'changes_list' list values using from the dictionary output.
-    Step 7. Return the changes_list, total_cost and model_name.
+        2b. If verbose is True, pretty print the output which will be in Markdown format.
+    Step 3. Create a second llm_invoke call using a .89 strength that outputs a Pydantic object:
+        3a. Pass the following string parameters to the prompt during invocation: 'llm_output' (this string is from Step 2).
+        3b. If verbose is True, pretty print a message letting the user know it is running and how many tokens are in the prompt and the cost.
+        3c. Extract 'changes_list' list values from the Pydantic output.
+    Step 4. Return the changes_list, total_cost and model_name.
+
+% Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses.
