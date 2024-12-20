@@ -32,18 +32,18 @@ def conflicts_in_prompts(
     Returns:
         Tuple[List[dict], float, str]: (changes list, total cost, model name)
     """
+    # Input validation - let these raise ValueError directly
+    if not prompt1 or not prompt2:
+        raise ValueError("Both prompts must be provided")
+    if not (0 <= strength <= 1):
+        raise ValueError("Strength must be between 0 and 1")
+    if not (0 <= temperature <= 1):
+        raise ValueError("Temperature must be between 0 and 1")
+
+    total_cost = 0.0
+    model_name = ""
+
     try:
-        # Input validation
-        if not prompt1 or not prompt2:
-            raise ValueError("Both prompts must be provided")
-        if not (0 <= strength <= 1):
-            raise ValueError("Strength must be between 0 and 1")
-        if not (0 <= temperature <= 1):
-            raise ValueError("Temperature must be between 0 and 1")
-
-        total_cost = 0.0
-        model_name = ""
-
         # Step 1: Load prompt templates
         conflict_prompt = load_prompt_template("conflict_LLM")
         extract_prompt = load_prompt_template("extract_conflict_LLM")
@@ -106,6 +106,8 @@ def conflicts_in_prompts(
         error_msg = f"Error in conflicts_in_prompts: {str(e)}"
         if verbose:
             rprint(f"[red]{error_msg}[/red]")
+        if isinstance(e, ValueError):
+            raise e
         raise RuntimeError(error_msg)
 
 def main():
