@@ -1,6 +1,6 @@
 from typing import Tuple
 from pydantic import BaseModel, Field
-from rich import print
+from rich import print as rprint
 from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
 
@@ -47,7 +47,7 @@ def unfinished_prompt(
 
         # Step 1: Load the prompt template
         if verbose:
-            print("[blue]Loading prompt template...[/blue]")
+           rprint("[blue]Loading prompt template...[/blue]")
         
         prompt_template = load_prompt_template("unfinished_prompt_LLM")
         if not prompt_template:
@@ -57,10 +57,13 @@ def unfinished_prompt(
         input_json = {"PROMPT_TEXT": prompt_text}
         
         if verbose:
-            print("[blue]Invoking LLM model...[/blue]")
-            print(f"Input text: {prompt_text}")
-            print(f"Model strength: {strength}")
-            print(f"Temperature: {temperature}")
+            rprint("[blue]Invoking LLM model...[/blue]")
+            try:
+                rprint(f"Input text: {prompt_text}")
+            except:
+                print(f"Input text: {prompt_text}")
+            rprint(f"Model strength: {strength}")
+            rprint(f"Temperature: {temperature}")
 
         response = llm_invoke(
             prompt=prompt_template,
@@ -77,11 +80,11 @@ def unfinished_prompt(
         model_name = response['model_name']
 
         if verbose:
-            print("[green]Analysis complete![/green]")
-            print(f"Reasoning: {result.reasoning}")
-            print(f"Is finished: {result.is_finished}")
-            print(f"Total cost: ${total_cost:.6f}")
-            print(f"Model used: {model_name}")
+           rprint("[green]Analysis complete![/green]")
+           rprint(f"Reasoning: {result.reasoning}")
+           rprint(f"Is finished: {result.is_finished}")
+           rprint(f"Total cost: ${total_cost:.6f}")
+           rprint(f"Model used: {model_name}")
 
         return (
             result.reasoning,
@@ -91,7 +94,7 @@ def unfinished_prompt(
         )
 
     except Exception as e:
-        print("[red]Error in unfinished_prompt:[/red]", str(e))
+        rprint("[red]Error in unfinished_prompt:[/red]", str(e))
         raise
 
 # Example usage
@@ -102,10 +105,10 @@ if __name__ == "__main__":
             prompt_text=sample_prompt,
             verbose=True
         )
-        print("\n[blue]Results:[/blue]")
-        print(f"Complete? {'Yes' if is_finished else 'No'}")
-        print(f"Reasoning: {reasoning}")
-        print(f"Cost: ${cost:.6f}")
-        print(f"Model: {model}")
+        rprint("\n[blue]Results:[/blue]")
+        rprint(f"Complete? {'Yes' if is_finished else 'No'}")
+        rprint(f"Reasoning: {reasoning}")
+        rprint(f"Cost: ${cost:.6f}")
+        rprint(f"Model: {model}")
     except Exception as e:
-        print("[red]Error in example:[/red]", str(e))
+        rprint("[red]Error in example:[/red]", str(e))
