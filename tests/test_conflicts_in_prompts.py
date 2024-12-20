@@ -1,171 +1,129 @@
-import os
 import pytest
-from unittest.mock import patch, mock_open, MagicMock
-from typing import List, Dict, Any, Tuple
-
-# Assuming the module structure is pdd.conflicts_in_prompts
 from pdd.conflicts_in_prompts import conflicts_in_prompts
+from unittest.mock import patch, MagicMock
+
+# Test data
+VALID_PROMPT1 = "Write a formal business email in a serious tone."
+VALID_PROMPT2 = "Write a casual, funny email with jokes."
+MOCK_TEMPLATE = "Mock template content"
+MOCK_LLM_RESPONSE = {
+    'result': "Mock LLM output",
+    'cost': 0.001,
+    'model_name': "test-model"
+}
+MOCK_STRUCTURED_RESPONSE = {
+    'result': MagicMock(
+        changes_list=[
+            MagicMock(
+                dict=lambda: {
+                    'prompt_name': 'prompt1',
+                    'change_instructions': 'Make less formal'
+                }
+            )
+        ]
+    ),
+    'cost': 0.002,
+    'model_name': "test-model"
+}
 
 @pytest.fixture
-def mock_llm_selector():
-    with patch('pdd.conflicts_in_prompts.llm_selector') as mock_selector:
-        # Mock return values for llm_selector
-        mock_llm = MagicMock()
-        mock_token_counter = MagicMock(return_value=1000)
-        mock_selector.return_value = (mock_llm, mock_token_counter, 0.02, 0.03, "mock_model")
-        yield mock_selector
+def mock_dependencies():
+    """Fixture to mock dependencies"""
+    with patch('pdd.conflicts_in_prompts.load_prompt_template') as mock_load_template:
+        with patch('pdd.conflicts_in_prompts.llm_invoke') as mock_llm_invoke:
+            mock_load_template.return_value = MOCK_TEMPLATE
+            mock_llm_invoke.side_effect = [MOCK_LLM_RESPONSE, MOCK_STRUCTURED_RESPONSE]
+            yield {
+                'load_template': mock_load_template,
+                'llm_invoke': mock_llm_invoke
+            }
 
-@pytest.fixture
-def mock_open_files():
-    mock_conflict_prompts = "Conflict prompt template {PROMPT1} {PROMPT2}"
-    mock_extract_prompts = "Extract prompt template {llm_output}"
-    m = mock_open()
-    m.side_effect = [
-        mock_open(read_data=mock_conflict_prompts).return_value,
-        mock_open(read_data=mock_extract_prompts).return_value
-    ]
-    with patch('builtins.open', m):
-        yield m
+def test_successful_conflict_analysis(mock_dependencies):
+    """Test successful execution with valid inputs"""
+    changes_list, total_cost, model_name = conflicts_in_prompts(
+        VALID_PROMPT1,
+        VALID_PROMPT2,
+        strength=0.5,
+        temperature=0,
+        verbose=False
+    )
 
-@pytest.fixture
-def mock_env_pdd_path():
-    with patch.dict(os.environ, {"PDD_PATH": "/fake/path"}):
-        yield
+    assert isinstance(changes_list, list)
+    assert isinstance(total_cost, float)
+    assert isinstance(model_name, str)
+    assert total_cost == 0.003  # Sum of both LLM calls
+    assert model_name == "test-model"
+    assert len(changes_list) == 1
+    assert changes_list[0]['prompt_name'] == 'prompt1'
 
-def test_conflicts_in_prompts_success(mock_env_pdd_path, mock_open_files, mock_llm_selector):
-    # Mock the PromptTemplate, JsonOutputParser, and StrOutputParser classes with autospec
-    with patch('pdd.conflicts_in_prompts.PromptTemplate', autospec=True) as mock_prompt_template_class, \
-         patch('pdd.conflicts_in_prompts.JsonOutputParser', autospec=True) as mock_json_parser_class, \
-         patch('pdd.conflicts_in_prompts.StrOutputParser', autospec=True) as mock_str_parser_class:
-        
-        # Create separate mock instances for conflict and extraction chains
-        mock_conflict_prompt_instance = MagicMock()
-        mock_conflict_chain = MagicMock()
-        mock_conflict_chain.invoke.return_value = "Conflict detected between prompts."
-        
-        mock_extract_prompt_instance = MagicMock()
-        mock_extract_chain = MagicMock()
-        mock_extract_chain.invoke.return_value = {"changes_list": [{"name": "prompt1", "instruction": "Change X"}]}
-        
-        # Configure PromptTemplate.from_template to return different mocks per call
-        mock_prompt_template_class.from_template.side_effect = [mock_conflict_prompt_instance, mock_extract_prompt_instance]
-        
-        # Configure the chaining (| operator)
-        mock_conflict_prompt_instance.__or__.return_value = mock_conflict_chain
-        mock_conflict_chain.__or__.return_value = mock_conflict_chain  # Prevent further chaining
-        
-        mock_extract_prompt_instance.__or__.return_value = mock_extract_chain
-        mock_extract_chain.__or__.return_value = mock_extract_chain  # Prevent further chaining
-        
-        # Configure JsonOutputParser to return the extraction chain when chained
-        mock_json_parser = MagicMock()
-        mock_json_parser.__or__.return_value = mock_extract_chain
-        mock_json_parser_class.return_value = mock_json_parser
-        
-        # Now, invoke the function under test
-        changes_list, total_cost, model_name = conflicts_in_prompts("Prompt A", "Prompt B")
-        
-        # Assertions
-        assert changes_list == [{"name": "prompt1", "instruction": "Change X"}]
-        assert total_cost == (1000 / 1_000_000) * (0.02 + 0.03) * 2  # Conflict and extract costs
-        assert model_name == "mock_model"
+def test_empty_prompts():
+    """Test handling of empty prompt inputs"""
+    with pytest.raises(ValueError, match="Both prompts must be provided"):
+        conflicts_in_prompts("", VALID_PROMPT2)
+    
+    with pytest.raises(ValueError, match="Both prompts must be provided"):
+        conflicts_in_prompts(VALID_PROMPT1, "")
 
-def test_conflicts_in_prompts_no_conflicts(mock_env_pdd_path, mock_open_files, mock_llm_selector):
-    # Mock the PromptTemplate, JsonOutputParser, and StrOutputParser classes with autospec
-    with patch('pdd.conflicts_in_prompts.PromptTemplate', autospec=True) as mock_prompt_template_class, \
-         patch('pdd.conflicts_in_prompts.JsonOutputParser', autospec=True) as mock_json_parser_class, \
-         patch('pdd.conflicts_in_prompts.StrOutputParser', autospec=True) as mock_str_parser_class:
-        
-        # Create separate mock instances for conflict and extraction chains
-        mock_conflict_prompt_instance = MagicMock()
-        mock_conflict_chain = MagicMock()
-        mock_conflict_chain.invoke.return_value = "No conflicts found."
-        
-        mock_extract_prompt_instance = MagicMock()
-        mock_extract_chain = MagicMock()
-        mock_extract_chain.invoke.return_value = {"changes_list": []}
-        
-        # Configure PromptTemplate.from_template to return different mocks per call
-        mock_prompt_template_class.from_template.side_effect = [mock_conflict_prompt_instance, mock_extract_prompt_instance]
-        
-        # Configure the chaining (| operator)
-        mock_conflict_prompt_instance.__or__.return_value = mock_conflict_chain
-        mock_conflict_chain.__or__.return_value = mock_conflict_chain  # Prevent further chaining
-        
-        mock_extract_prompt_instance.__or__.return_value = mock_extract_chain
-        mock_extract_chain.__or__.return_value = mock_extract_chain  # Prevent further chaining
-        
-        # Configure JsonOutputParser to return the extraction chain when chained
-        mock_json_parser = MagicMock()
-        mock_json_parser.__or__.return_value = mock_extract_chain
-        mock_json_parser_class.return_value = mock_json_parser
-        
-        # Now, invoke the function under test
-        changes_list, total_cost, model_name = conflicts_in_prompts("Prompt A", "Prompt B")
-        
-        # Assertions
-        assert changes_list == []
-        assert total_cost == (1000 / 1_000_000) * (0.02 + 0.03) * 2  # Conflict and extract costs
-        assert model_name == "mock_model"
+def test_invalid_strength():
+    """Test handling of invalid strength parameter"""
+    with pytest.raises(ValueError, match="Strength must be between 0 and 1"):
+        conflicts_in_prompts(VALID_PROMPT1, VALID_PROMPT2, strength=1.5)
+    
+    with pytest.raises(ValueError, match="Strength must be between 0 and 1"):
+        conflicts_in_prompts(VALID_PROMPT1, VALID_PROMPT2, strength=-0.1)
 
-def test_conflicts_in_prompts_missing_pdd_path(mock_open_files, mock_llm_selector):
-    # Remove PDD_PATH
-    with patch.dict(os.environ, {}, clear=True):
-        changes_list, total_cost, model_name = conflicts_in_prompts("Prompt A", "Prompt B")
-        assert changes_list == []
-        assert total_cost == 0.0
-        assert model_name == ""
+def test_invalid_temperature():
+    """Test handling of invalid temperature parameter"""
+    with pytest.raises(ValueError, match="Temperature must be between 0 and 1"):
+        conflicts_in_prompts(VALID_PROMPT1, VALID_PROMPT2, temperature=1.5)
+    
+    with pytest.raises(ValueError, match="Temperature must be between 0 and 1"):
+        conflicts_in_prompts(VALID_PROMPT1, VALID_PROMPT2, temperature=-0.1)
 
-def test_conflicts_in_prompts_missing_prompt_files(mock_env_pdd_path, mock_llm_selector):
-    # Mock open to raise FileNotFoundError for any file access
-    with patch('builtins.open', side_effect=FileNotFoundError("File not found")):
-        changes_list, total_cost, model_name = conflicts_in_prompts("Prompt A", "Prompt B")
-        assert changes_list == []
-        assert total_cost == 0.0
-        assert model_name == ""
+def test_template_loading_failure(mock_dependencies):
+    """Test handling of template loading failure"""
+    mock_dependencies['load_template'].return_value = None
+    
+    with pytest.raises(ValueError, match="Failed to load prompt templates"):
+        conflicts_in_prompts(VALID_PROMPT1, VALID_PROMPT2)
 
-def test_conflicts_in_prompts_empty_prompts(mock_env_pdd_path, mock_open_files, mock_llm_selector):
-    # Mock the PromptTemplate, JsonOutputParser, and StrOutputParser classes with autospec
-    with patch('pdd.conflicts_in_prompts.PromptTemplate', autospec=True) as mock_prompt_template_class, \
-         patch('pdd.conflicts_in_prompts.JsonOutputParser', autospec=True) as mock_json_parser_class, \
-         patch('pdd.conflicts_in_prompts.StrOutputParser', autospec=True) as mock_str_parser_class:
-        
-        # Create separate mock instances for conflict and extraction chains
-        mock_conflict_prompt_instance = MagicMock()
-        mock_conflict_chain = MagicMock()
-        mock_conflict_chain.invoke.return_value = "No conflicts found."
-        
-        mock_extract_prompt_instance = MagicMock()
-        mock_extract_chain = MagicMock()
-        mock_extract_chain.invoke.return_value = {"changes_list": []}
-        
-        # Configure PromptTemplate.from_template to return different mocks per call
-        mock_prompt_template_class.from_template.side_effect = [mock_conflict_prompt_instance, mock_extract_prompt_instance]
-        
-        # Configure the chaining (| operator)
-        mock_conflict_prompt_instance.__or__.return_value = mock_conflict_chain
-        mock_conflict_chain.__or__.return_value = mock_conflict_chain  # Prevent further chaining
-        
-        mock_extract_prompt_instance.__or__.return_value = mock_extract_chain
-        mock_extract_chain.__or__.return_value = mock_extract_chain  # Prevent further chaining
-        
-        # Configure JsonOutputParser to return the extraction chain when chained
-        mock_json_parser = MagicMock()
-        mock_json_parser.__or__.return_value = mock_extract_chain
-        mock_json_parser_class.return_value = mock_json_parser
-        
-        # Now, invoke the function under test with empty prompts
-        changes_list, total_cost, model_name = conflicts_in_prompts("", "")
-        
-        # Assertions
-        assert changes_list == []
-        assert total_cost == (1000 / 1_000_000) * (0.02 + 0.03) * 2  # Conflict and extract costs
-        assert model_name == "mock_model"
+def test_llm_invoke_failure(mock_dependencies):
+    """Test handling of LLM invocation failure"""
+    mock_dependencies['llm_invoke'].side_effect = Exception("LLM error")
+    
+    with pytest.raises(RuntimeError, match="Error in conflicts_in_prompts: LLM error"):
+        conflicts_in_prompts(VALID_PROMPT1, VALID_PROMPT2)
 
-def test_conflicts_in_prompts_exception(mock_env_pdd_path, mock_open_files, mock_llm_selector):
-    # Mock PromptTemplate.from_template to raise an unexpected exception
-    with patch('pdd.conflicts_in_prompts.PromptTemplate.from_template', side_effect=Exception("Unexpected error")):
-        changes_list, total_cost, model_name = conflicts_in_prompts("Prompt A", "Prompt B")
-        assert changes_list == []
-        assert total_cost == 0.0
-        assert model_name == ""
+def test_verbose_output(mock_dependencies, capsys):
+    """Test verbose output functionality"""
+    conflicts_in_prompts(
+        VALID_PROMPT1,
+        VALID_PROMPT2,
+        verbose=True
+    )
+    
+    captured = capsys.readouterr()
+    assert "Analyzing prompts for conflicts" in captured.out
+    assert "Extracting structured conflict information" in captured.out
+
+def test_correct_llm_parameters(mock_dependencies):
+    """Test that LLM is called with correct parameters"""
+    strength = 0.5
+    temperature = 0.3
+    
+    conflicts_in_prompts(
+        VALID_PROMPT1,
+        VALID_PROMPT2,
+        strength=strength,
+        temperature=temperature
+    )
+    
+    # Check first LLM call
+    first_call = mock_dependencies['llm_invoke'].call_args_list[0][1]
+    assert first_call['strength'] == strength
+    assert first_call['temperature'] == temperature
+    
+    # Check second LLM call
+    second_call = mock_dependencies['llm_invoke'].call_args_list[1][1]
+    assert second_call['strength'] == 0.89  # Fixed strength for second call
+    assert second_call['temperature'] == temperature
