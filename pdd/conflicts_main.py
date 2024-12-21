@@ -7,7 +7,7 @@ from rich import print as rprint
 from .construct_paths import construct_paths
 from .conflicts_in_prompts import conflicts_in_prompts
 
-def conflicts_main(ctx: click.Context, prompt1: str, prompt2: str, output: Optional[str]) -> Tuple[List[Dict], float, str]:
+def conflicts_main(ctx: click.Context, prompt1: str, prompt2: str, output: Optional[str], verbose: bool = False) -> Tuple[List[Dict], float, str]:
     """
     Main function to analyze conflicts between two prompts.
 
@@ -41,7 +41,7 @@ def conflicts_main(ctx: click.Context, prompt1: str, prompt2: str, output: Optio
         # Analyze conflicts
         strength = ctx.obj.get('strength', 0.9)
         temperature = ctx.obj.get('temperature', 0)
-        conflicts, total_cost, model_name = conflicts_in_prompts(prompt1_content, prompt2_content, strength, temperature)
+        conflicts, total_cost, model_name = conflicts_in_prompts(prompt1_content, prompt2_content, strength, temperature, verbose=verbose)
 
         # Replace prompt1 and prompt2 with actual file paths
         for conflict in conflicts:
