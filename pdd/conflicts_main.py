@@ -15,6 +15,7 @@ def conflicts_main(ctx: click.Context, prompt1: str, prompt2: str, output: Optio
     :param prompt1: Path to the first prompt file.
     :param prompt2: Path to the second prompt file.
     :param output: Optional path to save the output CSV file.
+    :param verbose: Optional parameter to control verbosity (default: False).
     :return: A tuple containing the list of conflicts, total cost, and model name used.
     """
     try:
@@ -41,7 +42,12 @@ def conflicts_main(ctx: click.Context, prompt1: str, prompt2: str, output: Optio
         # Analyze conflicts
         strength = ctx.obj.get('strength', 0.9)
         temperature = ctx.obj.get('temperature', 0)
-        conflicts, total_cost, model_name = conflicts_in_prompts(prompt1_content, prompt2_content, strength, temperature, verbose=verbose)
+        conflicts, total_cost, model_name = conflicts_in_prompts(
+            prompt1_content,
+            prompt2_content,
+            strength,
+            temperature
+        )
 
         # Replace prompt1 and prompt2 with actual file paths
         for conflict in conflicts:
