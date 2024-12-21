@@ -8,6 +8,7 @@
     - 'prompt1' (str): Path to the first prompt file.
     - 'prompt2' (str): Path to the second prompt file.
     - 'output' (Optional[str]): Path to save the CSV file containing the conflict analysis results.
+    - 'verbose' (bool): Optional parameter to control verbosity of the conflict analysis (defaults to False).
     Outputs:
     - Returns a tuple containing (List[dict], float, str):
       - List[dict]: A list of dictionaries containing conflict analysis results.
@@ -43,9 +44,10 @@
       - Read the contents of `prompt1` and `prompt2`.
 
    3. **Analyze Conflicts**:
-      - Call the `conflicts_in_prompts` function with the contents of the prompt files, along with the necessary parameters (e.g., strength, temperature).
+      - Call the `conflicts_in_prompts` function with the contents of the prompt files, along with the necessary parameters (e.g., strength, temperature, verbose).
       - Capture the returned conflicts list, total cost, and model name.
       - Important: Use `ctx.obj.get('strength', 0.9)` and `ctx.obj.get('temperature', 0)` to get the strength and temperature values.
+      - Pass the verbose parameter to control detailed output during analysis.
 
    4. **Replace prompt1 and prompt2 with the actual file paths**:
       - Replace the `prompt_1` and `prompt_2` strings with the actual file paths in the conflicts list for the 'prompt_name' column.
