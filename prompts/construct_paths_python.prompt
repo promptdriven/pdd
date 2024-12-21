@@ -25,7 +25,7 @@
     % Here is how to generate the output paths: <generate_output_paths_example><include>context/generate_output_paths_example.py</include></generate_output_paths_example>    
 </internal_example_modules>
 
-% Use get_extension to get the file extension for the language. The file extension and language is used for the subsequent functionality below.
+% Use get_extension to get the file extension for the language. When checking if an extension can be determined, pass an empty string ("") instead of None to the get_extension function. The file extension and language is used for the subsequent functionality below.
 
 % Unless quiet is True, print out the input and output file paths that are being used and the steps being done below.
 
