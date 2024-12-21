@@ -22,7 +22,7 @@ strength = 1  # Range: 0.0 to 1.0, higher values use stronger (and typically mor
 temperature = 0  # Range: 0.0 to 1.0, higher values increase randomness in the output
 
 try:
-    changes_list, total_cost, model_name = detect_change(prompt_files, change_description, strength, temperature)
+    changes_list, total_cost, model_name = detect_change(prompt_files, change_description, strength, temperature, verbose=True)
 
     console.print("[bold green]Changes detected:[/bold green]")
     for change in changes_list:
