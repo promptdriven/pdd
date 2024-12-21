@@ -8,39 +8,63 @@
         - 'change_description' - A string that describes the changes that need to be analyzed and potentially applied to the prompts.
         - 'strength': A float value representing the strength parameter for the LLM model, used to influence the model's behavior.
         - 'temperature': A float value representing the temperature parameter for the LLM model, used to control the randomness of the model's output.
+        - 'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
     Outputs:
         - 'changes_list' - A list of JSON objects, each containing the name of a prompt that needs to be changed and detailed instructions on how to change it.
         - 'total_cost': A float value representing the total cost of running the function.
         - 'model_name': A string representing the name of the selected LLM model.
 
-% Here is an example of a LangChain Expression Language (LCEL) program: <lcel_example><include>context/langchain_lcel_example.py</include></lcel_example>
+% Here is how to use the internal modules:
+    <internal_modules>
+        % Here is an example how to preprocess the prompt from a file: <preprocess_example><include>context/preprocess_example.py</include></preprocess_example>
+        
+        % For loading prompt templates:
+        <load_prompt_template_example>
+            <include>context/load_prompt_template_example.py</include>
+        </load_prompt_template_example>
 
-% Here are examples of how to use internal modules:
-<internal_example_modules>
-    % Here is an example how to preprocess the prompt from a file: <preprocess_example><include>context/preprocess_example.py</include></preprocess_example>
+        % For running prompts with llm_invoke:
+        <llm_invoke_example>
+            <include>context/llm_invoke_example.py</include>
+        </llm_invoke_example>
 
-    % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>context/llm_selector_example.py</include></llm_selector_example>
+        % For handling unfinished prompts:
+        <unfinished_prompt_example>
+            <include>context/unfinished_prompt_example.py</include>
+        </unfinished_prompt_example>
 
-    % Example usage of the unfinished_prompt function: <unfinished_prompt_example><include>context/unfinished_prompt_example.py</include></unfinished_prompt_example>
+        % For continuing generation:
+        <continue_generation_example>
+            <include>context/continue_generation_example.py</include>
+        </continue_generation_example>
 
-    % Here is an example how to continue the generation of a model output: <continue_generation_example><include>context/continue_generation_example.py</include></continue_generation_example>
-
-    % Here is an example how to postprocess the model output result: <postprocess_example><include>context/postprocess_example.py</include></postprocess_example>
-</internal_example_modules> 
+        % For postprocessing results:
+        <postprocess_example>
+            <include>context/postprocess_example.py</include>
+        </postprocess_example>
+    </internal_modules>
 
 % Steps to be followed by the function:
-    Step 1. Load the '$PDD_PATH/prompts/detect_change_LLM.prompt' and '$PDD_PATH/prompts/extract_detect_change_LLM.prompt' files.
-    Step 2. Preprocess the detect_change_LLM prompt using the preprocess function from the preprocess module and set double_curly_brackets to true, excluding keys 'PROMPT_LIST' and 'CHANGE_DESCRIPTION'.
-    Step 3. Create a Langchain LCEL template from the processed detect_change_LLM prompt to return a string output.    
-    Step 4. Use the llm_selector function for the LLM model and token counting.
-    Step 5. Run the prompt_files and change_description through the model using Langchain LCEL:
-        - a. Pass the following string parameters to the prompt during invocation:             
-            * 'PROMPT_LIST' (load the prompt files and create a list of JSON with these keys: 'PROMPT_NAME' and 'PROMPT_DESCRIPTION')
-            * 'CHANGE_DESCRIPTION' (preprocess this with double_curly_brackets set to false)
-        - b. Calculate the input and output token count using token_counter from llm_selector and pretty print the output of 5a, including the token count and estimated cost. The cost from llm_selector is in dollars per million tokens.
-    Step 6. Create a Langchain LCEL template with strength of .8 and temperature of 0 for another llm_selection and token counting functions from the extract_detect_change_LLM prompt that outputs JSON:
-        - a. Pass the following string parameters to the prompt during invocation: 'llm_output' (this string is from Step 5).
-        - b. Calculate input and output token count using token_counter from llm_selector and pretty print the running message with the token count and cost.
-        - c. Use 'get' function to extract 'changes_list' key values using from the dictionary output.
-    Step 7. Pretty print the extracted changes_list using Rich Markdown function. Include token counts and costs. The list will contain a dictionary with the following keys "prompt_name" and "change_instructions".
-    Step 8. Return the 'changes_list', the total_cost of both invokes, and model_name used for the detect_change_LLM prompt.
+    Step 1. Load the 'detect_change_LLM' and 'extract_detect_change_LLM' prompt templates using the `load_prompt_template` function. For 'detect_change_LLM' preprocess and set double_curly_brackets to true, excluding keys 'PROMPT_LIST' and 'CHANGE_DESCRIPTION'.
+    Step 2. Run the prompt_files and change_description through the model using `llm_invoke`:
+        - a. Pass the following parameters to `llm_invoke`:
+            * 'prompt_template': The preprocessed 'detect_change_LLM' prompt template.
+            * 'strength': The provided strength parameter.
+            * 'temperature' The provided temperature parameter.
+            * 'verbose': The provided verbose parameter.
+            * 'input_data': A dictionary containing:
+                * 'PROMPT_LIST' (load the prompt files and create a list of JSON with these keys: 'PROMPT_NAME' and 'PROMPT_DESCRIPTION').
+                * 'CHANGE_DESCRIPTION' (preprocess this with double_curly_brackets set to false using the `preprocess` function).
+        - b. If verbose is True, pretty print the output of 2a, including the token count and estimated cost.
+    Step 3. Run the output from Step 2 through the 'extract_detect_change_LLM' prompt using `llm_invoke` with a strength of .89 and temperature of 0.
+        - a. Pass the following parameters to `llm_invoke`:
+            * 'prompt_template': The loaded 'extract_detect_change_LLM' prompt template.
+            * 'verbose': The provided verbose parameter.
+            * 'input_data': A dictionary containing:
+                * 'llm_output': The output string from Step 2.
+        - b. If verbose is True, pretty print the running message with the token count and cost.
+        - c. Extract 'changes_list' key values from the Pydantic output.
+    Step 4. If verbose is True, pretty print the extracted changes_list using Rich Markdown function. Include token counts and costs. The list will contain a dictionary with the following keys "prompt_name" and "change_instructions".
+    Step 5. Return the 'changes_list', the 'total_cost' from both `llm_invoke` calls, and 'model_name' used for the detect_change_LLM prompt.
+
+% Ensure that the function handles potential errors gracefully, such as missing files or invalid input.

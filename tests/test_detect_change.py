@@ -1,150 +1,149 @@
 import pytest
+from pathlib import Path
 from unittest.mock import patch, mock_open, MagicMock
-from pdd.detect_change import detect_change, custom_chain_executor
-import json
-from rich.console import Console
+from pdd.detect_change import detect_change, ChangesList, ChangeInstruction
 
-class MockPromptTemplate:
-    def __init__(self, template):
-        self.template = template
-
-    def invoke(self, kwargs):
-        return self.template.format(**kwargs)
-
-class MockLLM:
-    def __init__(self, output):
-        self.output = output
-
-    def invoke(self, prompt):
-        return self.output
-
-class MockOutputParser:
-    def __init__(self, output):
-        self.output = output
-
-    def invoke(self, text):
-        return self.output
+# Test data
+MOCK_PROMPT_FILES = ["test1.prompt", "test2.prompt"]
+MOCK_CHANGE_DESCRIPTION = "Update error handling in prompts"
+MOCK_PROMPT_CONTENT = "This is a test prompt content"
 
 @pytest.fixture
-def mock_environment():
-    """Mock the environment variable for PDD_PATH."""
-    with patch.dict('os.environ', {'PDD_PATH': '/mock/path'}):
-        yield
-
-@pytest.fixture
-def mock_file_contents():
-    """Provide mock file contents for testing."""
-    detect_change_prompt = "Mock detect_change_LLM prompt"
-    extract_detect_change_prompt = "Mock extract_detect_change_LLM prompt"
-    prompt_file_content = "Mock prompt file content"
-    return detect_change_prompt, extract_detect_change_prompt, prompt_file_content
-
-@pytest.fixture
-def mock_llm_selector():
-    """Mock the LLM selector function."""
-    return (
-        lambda x, y: (
-            MockLLM("Mock LLM output"),
-            lambda x: 100,
-            0.00002,
-            0.00002,
-            "mock_model"
+def mock_llm_responses():
+    """Fixture to provide mock LLM responses."""
+    detect_response = {
+        'result': 'Analysis results',
+        'cost': 0.05,
+        'token_count': 100,
+        'model_name': 'gpt-3.5-turbo'
+    }
+    
+    changes_list = ChangesList(changes_list=[
+        ChangeInstruction(
+            prompt_name="test1.prompt",
+            change_instructions="Add better error handling"
         )
-    )
+    ])
+    
+    extract_response = {
+        'result': changes_list,
+        'cost': 0.03,
+        'token_count': 50,
+        'model_name': 'gpt-3.5-turbo'
+    }
+    
+    return detect_response, extract_response
 
 @pytest.fixture
-def mock_preprocess():
-    """Mock the preprocess function."""
-    return lambda x, **kwargs: x
+def mock_templates():
+    """Fixture to provide mock templates."""
+    return "Mock detect template", "Mock extract template"
 
-def test_detect_change_success(mock_environment, mock_file_contents, mock_llm_selector, mock_preprocess):
-    """Test successful execution of detect_change function."""
-    detect_change_prompt, extract_detect_change_prompt, prompt_file_content = mock_file_contents
+def test_successful_detection(mock_llm_responses, mock_templates):
+    """Test successful detection of changes."""
+    detect_response, extract_response = mock_llm_responses
     
-    with patch('builtins.open', mock_open(read_data=prompt_file_content)):
-        with patch('pdd.detect_change.llm_selector', mock_llm_selector):
-            with patch('pdd.detect_change.preprocess', mock_preprocess):
-                with patch('pdd.detect_change.PromptTemplate.from_template') as mock_prompt_template:
-                    mock_prompt_template.return_value = MockPromptTemplate("Mock template output")
-                    
-                    with patch('pdd.detect_change.JsonOutputParser') as mock_json_parser:
-                        mock_json_parser.return_value = MockOutputParser({"changes_list": [{"prompt_name": "test.prompt", "change_instructions": "Test instructions"}]})
-                        
-                        with patch('pdd.detect_change.custom_chain_executor', side_effect=[
-                            "Mock LLM output",
-                            {"changes_list": [{"prompt_name": "test.prompt", "change_instructions": "Test instructions"}]}
-                        ]):
-                            result, total_cost, model_name = detect_change(
-                                prompt_files=["test.prompt"],
-                                change_description="Test change",
-                                strength=0.5,
-                                temperature=0.7
-                            )
-    
-    assert isinstance(result, list)
-    assert len(result) == 1
-    assert result[0]["prompt_name"] == "test.prompt"
-    assert result[0]["change_instructions"] == "Test instructions"
-    assert isinstance(total_cost, float)
-    assert model_name == "mock_model"
-
-def test_detect_change_file_not_found(mock_environment):
-    """Test detect_change function when file is not found."""
-    with patch('builtins.open', side_effect=FileNotFoundError):
-        result, total_cost, model_name = detect_change(
-            prompt_files=["nonexistent.prompt"],
-            change_description="Test change",
-            strength=0.5,
-            temperature=0.7
+    with patch('pdd.detect_change.load_prompt_template') as mock_load_template, \
+         patch('pdd.detect_change.preprocess') as mock_preprocess, \
+         patch('pdd.detect_change.llm_invoke') as mock_llm_invoke, \
+         patch('builtins.open', mock_open(read_data=MOCK_PROMPT_CONTENT)):
+        
+        # Configure mocks
+        mock_load_template.side_effect = mock_templates
+        mock_preprocess.return_value = "Processed template"
+        mock_llm_invoke.side_effect = [detect_response, extract_response]
+        
+        # Execute function
+        changes_list, total_cost, model_name = detect_change(
+            MOCK_PROMPT_FILES,
+            MOCK_CHANGE_DESCRIPTION,
+            strength=0.7,
+            temperature=0.0,
+            verbose=False
         )
-    
-    assert result == []
-    assert total_cost == 0.0
-    assert model_name == ""
+        
+        # Verify results
+        assert len(changes_list) == 1
+        assert changes_list[0]["prompt_name"] == "test1.prompt"
+        assert changes_list[0]["change_instructions"] == "Add better error handling"
+        assert total_cost == 0.08  # 0.05 + 0.03
+        assert model_name == "gpt-3.5-turbo"
 
-def test_detect_change_json_decode_error(mock_environment, mock_file_contents, mock_llm_selector, mock_preprocess):
-    """Test detect_change function when JSON decode error occurs."""
-    detect_change_prompt, extract_detect_change_prompt, prompt_file_content = mock_file_contents
-    
-    with patch('builtins.open', mock_open(read_data=prompt_file_content)):
-        with patch('pdd.detect_change.llm_selector', mock_llm_selector):
-            with patch('pdd.detect_change.preprocess', mock_preprocess):
-                with patch('pdd.detect_change.PromptTemplate.from_template') as mock_prompt_template:
-                    mock_prompt_template.return_value = MockPromptTemplate("Mock template output")
-                    
-                    with patch('pdd.detect_change.JsonOutputParser') as mock_json_parser:
-                        mock_json_parser.return_value = MockOutputParser(json.JSONDecodeError("Test error", "", 0))
-                        
-                        with patch('pdd.detect_change.custom_chain_executor', side_effect=[
-                            "Mock LLM output",
-                            json.JSONDecodeError("Test error", "", 0)
-                        ]):
-                            result, total_cost, model_name = detect_change(
-                                prompt_files=["test.prompt"],
-                                change_description="Test change",
-                                strength=0.5,
-                                temperature=0.7
-                            )
-    
-    assert result == []
-    assert total_cost == 0.0
-    assert model_name == ""
+def test_missing_prompt_template():
+    """Test handling of missing prompt template."""
+    with patch('pdd.detect_change.load_prompt_template', return_value=None):
+        with pytest.raises(ValueError, match="Failed to load detect_change_LLM prompt template"):
+            detect_change(
+                MOCK_PROMPT_FILES,
+                MOCK_CHANGE_DESCRIPTION,
+                strength=0.7,
+                temperature=0.0
+            )
 
-def test_detect_change_unexpected_error(mock_environment, mock_file_contents, mock_llm_selector, mock_preprocess):
-    """Test detect_change function when an unexpected error occurs."""
-    detect_change_prompt, extract_detect_change_prompt, prompt_file_content = mock_file_contents
+def test_missing_prompt_files(mock_llm_responses, mock_templates):
+    """Test handling of missing prompt files."""
+    detect_response, extract_response = mock_llm_responses
     
-    with patch('builtins.open', mock_open(read_data=prompt_file_content)):
-        with patch('pdd.detect_change.llm_selector', mock_llm_selector):
-            with patch('pdd.detect_change.preprocess', mock_preprocess):
-                with patch('pdd.detect_change.PromptTemplate.from_template', side_effect=Exception("Unexpected error")):
-                    result, total_cost, model_name = detect_change(
-                        prompt_files=["test.prompt"],
-                        change_description="Test change",
-                        strength=0.5,
-                        temperature=0.7
-                    )
+    with patch('pdd.detect_change.load_prompt_template') as mock_load_template, \
+         patch('pdd.detect_change.preprocess') as mock_preprocess, \
+         patch('pdd.detect_change.llm_invoke') as mock_llm_invoke, \
+         patch('builtins.open') as mock_file:
+        
+        # Configure mocks
+        mock_load_template.side_effect = mock_templates
+        mock_preprocess.return_value = "Processed template"
+        mock_llm_invoke.side_effect = [detect_response, extract_response]
+        mock_file.side_effect = FileNotFoundError()
+        
+        # Execute function with non-existent files
+        changes_list, total_cost, model_name = detect_change(
+            ["nonexistent.prompt"],
+            MOCK_CHANGE_DESCRIPTION,
+            strength=0.7,
+            temperature=0.0,
+            verbose=True
+        )
+        
+        # Verify empty results due to missing files
+        assert len(changes_list) == 1  # Still returns the mocked response
+        assert total_cost == 0.08
+
+def test_verbose_output(mock_llm_responses, mock_templates, capsys):
+    """Test verbose output functionality."""
+    detect_response, extract_response = mock_llm_responses
     
-    assert result == []
-    assert total_cost == 0.0
-    assert model_name == ""
+    with patch('pdd.detect_change.load_prompt_template') as mock_load_template, \
+         patch('pdd.detect_change.preprocess') as mock_preprocess, \
+         patch('pdd.detect_change.llm_invoke') as mock_llm_invoke, \
+         patch('builtins.open', mock_open(read_data=MOCK_PROMPT_CONTENT)):
+        
+        # Configure mocks
+        mock_load_template.side_effect = mock_templates
+        mock_preprocess.return_value = "Processed template"
+        mock_llm_invoke.side_effect = [detect_response, extract_response]
+        
+        # Execute function with verbose=True
+        detect_change(
+            MOCK_PROMPT_FILES,
+            MOCK_CHANGE_DESCRIPTION,
+            strength=0.7,
+            temperature=0.0,
+            verbose=True
+        )
+        
+        # Capture and verify console output
+        captured = capsys.readouterr()
+        assert "Initial Analysis Results" in captured.out
+        assert "Extraction Results" in captured.out
+        assert "Detected Changes" in captured.out
+
+def test_general_exception_handling():
+    """Test general exception handling."""
+    with patch('pdd.detect_change.load_prompt_template', side_effect=Exception("Unexpected error")):
+        with pytest.raises(Exception, match="Unexpected error"):
+            detect_change(
+                MOCK_PROMPT_FILES,
+                MOCK_CHANGE_DESCRIPTION,
+                strength=0.7,
+                temperature=0.0
+            )
