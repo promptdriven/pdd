@@ -72,7 +72,7 @@ def construct_paths(
                 return lang
 
         # Check if we can determine language from extension
-        if get_extension(None) is None:
+        if get_extension("") is None:
             raise ValueError("Could not determine language from command options, filename, or code file extension")
 
         # Default to python only if extension can be determined
