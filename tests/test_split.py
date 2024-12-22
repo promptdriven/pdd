@@ -32,7 +32,7 @@ def mock_dependencies():
          patch('pdd.split.preprocess') as mock_preprocess, \
          patch('pdd.split.llm_invoke') as mock_invoke:
         
-        # Configure mocks
+        # Configure mocks by default to return valid templates/responses
         mock_load.side_effect = [MOCK_SPLIT_TEMPLATE, MOCK_EXTRACT_TEMPLATE]
         mock_preprocess.return_value = "processed template"
         mock_invoke.side_effect = [MOCK_SPLIT_RESPONSE, MOCK_EXTRACT_RESPONSE]
@@ -74,7 +74,8 @@ def test_invalid_temperature():
 
 def test_template_loading_failure(mock_dependencies):
     """Test handling of template loading failure"""
-    mock_dependencies['load_prompt_template'].return_value = None
+    # Force both template loads to return None
+    mock_dependencies['load_prompt_template'].side_effect = [None, None]
     
     with pytest.raises(ValueError, match="Failed to load prompt templates"):
         split(VALID_INPUT_PROMPT, VALID_INPUT_CODE, VALID_EXAMPLE_CODE, 
