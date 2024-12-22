@@ -28,7 +28,7 @@ def factorial(n):
 result = factorial(5)
 print(f"Factorial of 5 is: {result}")
     """
-        strength: float = 0.5  # Float value between 0 and 1
+        strength: float = .5  # Float value between 0 and 1
         temperature: float = 0.0  # Float value between 0 and 1
 
         # Call the split function
@@ -37,7 +37,8 @@ print(f"Factorial of 5 is: {result}")
             input_code=input_code,
             example_code=example_code,
             strength=strength,
-            temperature=temperature
+            temperature=temperature,
+            verbose=True
         )
 
         # Print the results
