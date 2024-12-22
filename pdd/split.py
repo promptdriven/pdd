@@ -112,4 +112,4 @@ def split(
 
     except Exception as e:
         rprint(f"[bold red]Error in split function: {str(e)}[/bold red]")
-        raise
+        raise Exception(f"Error in split function: {str(e)}") from e
