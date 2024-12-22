@@ -7,36 +7,46 @@
         - 'input_prompt': A string containing the prompt that will be split into a sub_prompt and modified_prompt.
         - 'input_code': A string containing the code that was generated from the input_prompt.
         - 'example_code': A string containing the code example of how the code generated from the sub_prompt would be used by the code generated from the modified_prompt.
-        - 'strength': A float value representing the strength parameter for the LLM model, used to influence the model's behavior.
-        - 'temperature': A float value representing the temperature parameter for the LLM model, used to control the randomness of the model's output.
-    Outputs:
+        - 'strength': A float value representing the strength parameter for the LLM model, used to influence the model's behavior. Range is between 0 and 1.
+        - 'temperature': A float value representing the temperature parameter for the LLM model, used to control the randomness of the model's output. Range is between 0 and 1.
+        - 'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
+    Outputs as a tuple:
         - 'sub_prompt': A string containing the sub_prompt that was split from the input_prompt.
         - 'modified_prompt': A string containing the modified prompt from input_prompt split from the sub_prompt.
         - 'total_cost': A float value representing the total cost of running the function.
 
-% Here is an example of a LangChain Expression Language (LCEL) program: <lcel_example><include>context/langchain_lcel_example.py</include></lcel_example>
+% Here is how to use the internal modules:
+    <internal_modules>
+        For loading prompt templates:
+        <load_prompt_template_example>
+            <include>context/load_prompt_template_example.py</include>
+        </load_prompt_template_example>
 
-% Here are examples of how to use internal modules:
-<internal_example_modules>
-    % Here is an example how to preprocess the prompt from a file: <preprocess_example><include>context/preprocess_example.py</include></preprocess_example>
+        For running prompts with llm_invoke:
+        <llm_invoke_example>
+            <include>context/llm_invoke_example.py</include>
+        </llm_invoke_example>
 
-    % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>context/llm_selector_example.py</include></llm_selector_example>
-</internal_example_modules>
+        For preprocessing prompts:
+        <preprocess_example>
+            <include>context/preprocess_example.py</include>
+        </preprocess_example>
+    </internal_modules>
 
 % Steps to be followed by the function:
-    1. Load the '$PDD_PATH/prompts/split_LLM.prompt' and '$PDD_PATH/prompts/extract_prompt_split_LLM.prompt' files.
+    1. Load the 'split_LLM' and 'extract_prompt_split_LLM' prompt templates using load_prompt_template.
     2. Preprocessing:
         a. Preprocess the split_LLM prompt using the preprocess function from the preprocess module and double the curly brackets but be sure to exclude 'input_prompt', 'input_code' and 'example_code' from doubling.
         b. Preprocess the extract_prompt_split_LLM prompt using the preprocess function from the preprocess module without doubling the curly brackets.
-    3. Create a Langchain LCEL template from the processed split_LLM prompt to return a string output.
-    4. Use the llm_selector function for the LLM model and token counting.
-    5. Run the input through the model using Langchain LCEL:
+    3. Run the input through the model using llm_invoke with the processed split_LLM prompt:
         - a. Pass the following string parameters to the prompt during invocation: 'input_prompt', 'input_code', 'example_code'.
-        - b. Calculate the input and output token count using token_counter from llm_selector and pretty print the output of 5a, including the token count and estimated cost. The cost from llm_selector is in dollars per million tokens.
-    6. Create a Langchain LCEL template from the preprocessed extract_prompt_split_LLM prompt that outputs JSON:
-        - a. Use a separate llm_selector call with a fixed strength of 0.8 for the JSON extraction step.
-        - b. Pass the following string parameters to the prompt during invocation: 'llm_output' (this string is from Step 5).
-        - c. Calculate input and output token count using token_counter from llm_selector and pretty print the running message with the token count and cost.
-        - d. Use 'get' function to extract 'sub_prompt' and 'modified_prompt' key values using from the dictionary output.
-    7. Pretty print the extracted sub_prompt and modified_prompt using Rich Markdown function. Include token counts and costs.
-    8. Return the 'sub_prompt' and 'modified_prompt' strings and the total_cost of both invokes.
+        - b. If verbose is True, pretty print the output of 3a, including the token count and estimated cost.
+    4. Run the output from Step 3 through llm_invoke with the preprocessed extract_prompt_split_LLM prompt:
+        - a. Use a separate llm_invoke call with a fixed strength of 0.89 for the JSON extraction step.
+        - b. Pass the following string parameters to the prompt during invocation: 'llm_output' (this string is from Step 3).
+        - c. If verbose is True, pretty print the running message with the token count and cost.
+        - d. Extract 'sub_prompt' and 'modified_prompt' key values from the Pydantic output.
+    5. If verbose is True, pretty print the extracted sub_prompt and modified_prompt using Rich Markdown function. Include token counts and costs.
+    6. Return the 'sub_prompt', 'modified_prompt', and the total_cost of both invokes as a tuple.
+
+% Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses.
