@@ -7,7 +7,8 @@ def main() -> None:
     Example usage of the auto_include function.
     """
     # load output.csv
-    csv_file = pd.read_csv("output.csv")
+    with open("project_dependencies.csv", 'r') as file:
+        csv_file = file.read()
 
     # Define the parameters for the auto_include function
     input_prompt = """% You are an expert Python Software Engineer. Your goal is to write a Python function, "generate_test", that will create a unit test from a code file.
@@ -45,7 +46,7 @@ def main() -> None:
     Step 8. Return the unit_test, total_cost and model_name"""
     directory_path = "context/c*.py"
     # read in the file
-    with open('output.csv', 'r') as file:
+    with open('project_dependencies.csv', 'r') as file:
         csv_file = file.read()
     strength = 0.7
     temperature = 0.5

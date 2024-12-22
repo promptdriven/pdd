@@ -1,128 +1,115 @@
-import os
-from rich.console import Console
+from typing import Tuple
+from rich import print as rprint
 from rich.markdown import Markdown
+from pydantic import BaseModel, Field
+from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
-from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import JsonOutputParser
-from langchain_core.output_parsers import StrOutputParser
-from langchain_community.cache import SQLiteCache
-from langchain.globals import set_llm_cache
-from .llm_selector import llm_selector
-from langchain.globals import set_debug
-import json
+from .llm_invoke import llm_invoke
 
-set_debug(False)
+class PromptSplit(BaseModel):
+    sub_prompt: str = Field(description="The extracted sub-prompt")
+    modified_prompt: str = Field(description="The modified original prompt")
 
-# Set up the Rich console for pretty printing
-console = Console()
-
-# Set up cache to save money and increase speeds
-set_llm_cache(SQLiteCache(database_path=".langchain.db"))
-
-def split(input_prompt: str, input_code: str, example_code: str, strength: float, temperature: float):
+def split(
+    input_prompt: str,
+    input_code: str,
+    example_code: str,
+    strength: float,
+    temperature: float,
+    verbose: bool = False
+) -> Tuple[str, str, float]:
     """
-    Splits the input code using a language model and extracts sub-prompts.
+    Split a prompt into a sub_prompt and modified_prompt.
 
-    :param input_prompt: The initial prompt to be processed.
-    :param input_code: The code to be split by the LLM.
-    :param example_code: Example code to guide the LLM.
-    :param strength: The strength parameter for LLM selection.
-    :param temperature: The temperature parameter for LLM selection.
-    :return: A tuple containing the sub-prompt, modified prompt, and total cost.
+    Args:
+        input_prompt (str): The prompt to split
+        input_code (str): The code generated from the input_prompt
+        example_code (str): Example code showing usage
+        strength (float): LLM strength parameter (0-1)
+        temperature (float): LLM temperature parameter (0-1)
+        verbose (bool): Whether to print detailed information
+
+    Returns:
+        Tuple[str, str, float]: (sub_prompt, modified_prompt, total_cost)
     """
     total_cost = 0.0
-    sub_prompt = ""
-    modified_prompt = ""
+
+    # Input validation
+    if not all([input_prompt, input_code, example_code]):
+        raise ValueError("All input parameters (input_prompt, input_code, example_code) must be provided")
     
+    if not 0 <= strength <= 1 or not 0 <= temperature <= 1:
+        raise ValueError("Strength and temperature must be between 0 and 1")
+
     try:
-        # Step 1: Load the prompt files
-        pdd_path = os.getenv('PDD_PATH', '.')
-        with open(f'{pdd_path}/prompts/split_LLM.prompt', 'r') as file:
-            split_llm_prompt = file.read()
-        with open(f'{pdd_path}/prompts/extract_prompt_split_LLM.prompt', 'r') as file:
-            extract_prompt_split_llm = file.read()
+        # 1. Load prompt templates
+        split_prompt = load_prompt_template("split_LLM")
+        extract_prompt = load_prompt_template("extract_prompt_split_LLM")
+        
+        if not split_prompt or not extract_prompt:
+            raise ValueError("Failed to load prompt templates")
 
-        # Step 2: Preprocess the split_LLM prompt
-        processed_split_llm_prompt = preprocess(split_llm_prompt, recursive=False, double_curly_brackets=True, exclude_keys=['input_prompt', 'input_code', 'example_code'])
+        # 2. Preprocess prompts
+        processed_split_prompt = preprocess(
+            split_prompt,
+            recursive=False,
+            double_curly_brackets=True, exclude_keys=['input_prompt', 'input_code', 'example_code']
+        )
+        
+        processed_extract_prompt = preprocess(
+            extract_prompt,
+            recursive=False,
+            double_curly_brackets=False
+        )
 
-        # Step 3: Create a Langchain LCEL template
-        prompt_template = PromptTemplate.from_template(processed_split_llm_prompt)
+        # 3. First LLM invocation
+        if verbose:
+            rprint("[bold blue]Running initial prompt split...[/bold blue]")
 
-        # Step 4: Use the llm_selector function
-        try:
-            llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
-        except ValueError as e:
-            console.print(f"[bold red]Error in llm_selector:[/bold red] {e}")
-            raise
+        split_response = llm_invoke(
+            prompt=processed_split_prompt,
+            input_json={
+                "input_prompt": input_prompt,
+                "input_code": input_code,
+                "example_code": example_code
+            },
+            strength=strength,
+            temperature=temperature,
+            verbose=verbose
+        )
+        
+        total_cost += split_response["cost"]
 
-        # Step 4a: Run the input through the model
-        chain = prompt_template | llm | StrOutputParser()
-        llm_output = chain.invoke({
-            "input_prompt": input_prompt,
-            "input_code": input_code,
-            "example_code": example_code
-        })
+        # 4. Extract JSON with second LLM invocation
+        if verbose:
+            rprint("[bold blue]Extracting split prompts...[/bold blue]")
 
-        # Calculate token counts and costs
-        input_tokens = token_counter(input_prompt + input_code + example_code)
-        output_tokens = token_counter(llm_output)
-        total_cost = (input_tokens * input_cost + output_tokens * output_cost) / 1_000_000
+        extract_response = llm_invoke(
+            prompt=processed_extract_prompt,
+            input_json={"llm_output": split_response["result"]},
+            strength=0.89,  # Fixed strength for extraction
+            temperature=temperature,
+            output_pydantic=PromptSplit,
+            verbose=verbose
+        )
+        
+        total_cost += extract_response["cost"]
 
-        # Pretty print the output
-        console.print(Markdown(f"**LLM Output:**\n{llm_output}"))
-        console.print(f"Input Tokens: {input_tokens}, Output Tokens: {output_tokens}, Estimated Cost: ${total_cost:.6f}")
+        # Extract results
+        result: PromptSplit = extract_response["result"]
+        sub_prompt = result.sub_prompt
+        modified_prompt = result.modified_prompt
 
-        # Step 5: Create a Langchain LCEL template for JSON output
-        processed_extract_prompt = preprocess(extract_prompt_split_llm, recursive=False, double_curly_brackets=False)
-        json_parser = JsonOutputParser()
-        json_prompt_template = PromptTemplate.from_template(processed_extract_prompt)
+        # 5. Print verbose output if requested
+        if verbose:
+            rprint("\n[bold green]Final Results:[/bold green]")
+            rprint(Markdown(f"### Sub Prompt\n{sub_prompt}"))
+            rprint(Markdown(f"### Modified Prompt\n{modified_prompt}"))
+            rprint(f"[bold cyan]Total Cost: ${total_cost:.6f}[/bold cyan]")
 
-        try:
-            llm_extract, token_counter_extract, input_cost_extract, output_cost_extract, model_name = llm_selector(.89, temperature)
-        except ValueError as e:
-            console.print(f"[bold red]Error in llm_selector:[/bold red] {e}")
-            raise
-
-        # Step 5a: Run the JSON extraction
-        json_chain = json_prompt_template | llm_extract | json_parser
-        try:
-            json_output = json_chain.invoke({"llm_output": llm_output})
-            
-            # Print raw JSON output for debugging
-            console.print(f"Raw JSON output: {json_output}")
-            
-            # Extract sub_prompt and modified_prompt
-            if isinstance(json_output, dict):
-                sub_prompt = json_output.get('sub_prompt', '')
-                modified_prompt = json_output.get('modified_prompt', '')
-                if not sub_prompt or not modified_prompt:
-                    console.print("[bold yellow]Warning:[/bold yellow] sub_prompt or modified_prompt is empty in JSON output.")
-            else:
-                raise ValueError(f"JSON output is not a dictionary. Type: {type(json_output)}, Value: {json_output}")
-        except Exception as e:
-            console.print(f"[bold red]Error in JSON parsing:[/bold red] {e}")
-            raise
-
-        # Pretty print the extracted prompts
-        console.print(Markdown(f"**Sub Prompt:**\n{sub_prompt}"))
-        console.print(Markdown(f"**Modified Prompt:**\n{modified_prompt}"))
+        # 6. Return results
+        return sub_prompt, modified_prompt, total_cost
 
     except Exception as e:
-        console.print(f"[bold red]An error occurred:[/bold red] {e}")
+        rprint(f"[bold red]Error in split function: {str(e)}[/bold red]")
         raise
-
-    # Return the results
-    return sub_prompt, modified_prompt, total_cost
-
-# Example usage
-if __name__ == "__main__":
-    sub_prompt, modified_prompt, total_cost = split(
-        input_prompt="Your input prompt here",
-        input_code="Generated code here",
-        example_code="Example code here",
-        strength=0.5,
-        temperature=0.5
-    )
-    console.print(f"Sub Prompt: {sub_prompt}")
-    console.print(f"Modified Prompt: {modified_prompt}")
-    console.print(f"Total Cost: ${total_cost:.6f}")
