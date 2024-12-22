@@ -28,8 +28,8 @@ def factorial(n):
 result = factorial(5)
 print(f"Factorial of 5 is: {result}")
     """
-        strength: float = 0.7  # Float value between 0 and 1
-        temperature: float = 0.5  # Float value between 0 and 1
+        strength: float = 0.5  # Float value between 0 and 1
+        temperature: float = 0.0  # Float value between 0 and 1
 
         # Call the split function
         sub_prompt, modified_prompt, total_cost = split(

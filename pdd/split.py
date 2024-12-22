@@ -78,7 +78,7 @@ def split(input_prompt: str, input_code: str, example_code: str, strength: float
         json_prompt_template = PromptTemplate.from_template(processed_extract_prompt)
 
         try:
-            llm_extract, token_counter_extract, input_cost_extract, output_cost_extract, model_name = llm_selector(.8, temperature)
+            llm_extract, token_counter_extract, input_cost_extract, output_cost_extract, model_name = llm_selector(.89, temperature)
         except ValueError as e:
             console.print(f"[bold red]Error in llm_selector:[/bold red] {e}")
             raise
@@ -120,7 +120,7 @@ if __name__ == "__main__":
         input_prompt="Your input prompt here",
         input_code="Generated code here",
         example_code="Example code here",
-        strength=0.7,
+        strength=0.5,
         temperature=0.5
     )
     console.print(f"Sub Prompt: {sub_prompt}")
