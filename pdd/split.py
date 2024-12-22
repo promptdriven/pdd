@@ -53,7 +53,8 @@ def split(
         processed_split_prompt = preprocess(
             split_prompt,
             recursive=False,
-            double_curly_brackets=True, exclude_keys=['input_prompt', 'input_code', 'example_code']
+            double_curly_brackets=True,
+            exclude_keys=['input_prompt', 'input_code', 'example_code']
         )
         
         processed_extract_prompt = preprocess(
@@ -111,5 +112,8 @@ def split(
         return sub_prompt, modified_prompt, total_cost
 
     except Exception as e:
+        # Print an error message, then raise an exception that includes
+        # the prefix “Error in split function: …” in its final message.
         rprint(f"[bold red]Error in split function: {str(e)}[/bold red]")
-        raise Exception(f"Error in split function: {str(e)}") from e
+        # Re-raise using the same exception type but with a modified message.
+        raise type(e)(f"Error in split function: {str(e)}") from e
