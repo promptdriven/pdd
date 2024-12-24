@@ -100,9 +100,25 @@ def trace(
         best_match = None
         highest_ratio = 0
 
+        if verbose:
+            console.print(f"Searching for line: {prompt_line_str}")
+
+        normalized_search = prompt_line_str.strip()
+
         for i, line in enumerate(prompt_lines, 1):
-            ratio = difflib.SequenceMatcher(None, prompt_line_str.strip(), line.strip()).ratio()
-            if ratio > highest_ratio and ratio > 0.8:  # 0.8 threshold for matching
+            normalized_line = line.strip()
+            ratio = difflib.SequenceMatcher(None, normalized_search, normalized_line).ratio()
+
+            if verbose:
+                console.print(f"Line {i}: '{line}' - Match ratio: {ratio}")
+
+            # Increase threshold to 0.9 for more precise matching
+            if ratio > highest_ratio and ratio > 0.9:
+                # Additional check for exact content match after normalization
+                if normalized_search == normalized_line:
+                    highest_ratio = ratio
+                    best_match = i
+                    break  # Exit on exact match
                 highest_ratio = ratio
                 best_match = i
 
