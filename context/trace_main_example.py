@@ -33,7 +33,7 @@ with open("code2.py", "w") as f:
 @click.command()
 @click.option("--prompt-file", default="prompt.txt", help="Path to the prompt file")
 @click.option("--code-file", default="code2.py", help="Path to the generated code file")
-@click.option("--code-line", default=2, help="Line number in the code file to trace")
+@click.option("--code-line", default=4, help="Line number in the code file to trace")
 @click.option("--output", default="trace_output.txt", help="Path to save trace analysis results")
 @click.option("--force", is_flag=True, help="Overwrite existing output file")
 @click.option("--quiet", is_flag=True, help="Suppress console output")
