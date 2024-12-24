@@ -34,6 +34,13 @@ def mock_prompt_templates():
     return "Test prompt template"
 
 def test_successful_trace(mock_llm_responses, mock_prompt_templates):
+    """
+    Test successful trace operation.
+    Expected line mapping:
+    SAMPLE_CODE line 2: print("Hello, World!")
+    maps to
+    SAMPLE_PROMPT line 4: print("Hello, World!")
+    """
     with patch('pdd.trace.load_prompt_template', return_value=mock_prompt_templates), \
          patch('pdd.trace.llm_invoke', side_effect=mock_llm_responses):
         
@@ -46,7 +53,7 @@ def test_successful_trace(mock_llm_responses, mock_prompt_templates):
             verbose=False
         )
         
-        assert result == 3  # Line number in SAMPLE_PROMPT
+        assert result == 4  # Line number in SAMPLE_PROMPT (print statement)
         assert cost == 0.002  # Sum of both LLM calls
         assert model == 'gpt-3.5-turbo'
 
