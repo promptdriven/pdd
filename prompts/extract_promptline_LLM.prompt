@@ -7,5 +7,5 @@
     - Should be a a substring that closely matches code_str in content.
 
 % Output a JSON object with the following keys:
-    - 'explanation': String explanation of why this prompt_line matches the code_line and explain any errors detected in the code.
-    - 'prompt_line': String containing the closest matching substring of the prompt_file that matches code_str in content.
+    - 'explanation': String explanation of why this prompt_line matches the code_str and explain any errors detected in the code.
+    - 'prompt_line': String containing the closest matching verbatim substring of the prompt_file that matches code_str in content. This is not the line number.

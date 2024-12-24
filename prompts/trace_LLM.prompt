@@ -6,7 +6,7 @@
         `code_str` (str) - A substring of code_file that represents the line that the debugger is on in the code_file.
         `prompt_file` (str) - A string that contains the text of the .prompt file.
     Output:
-        `prompt_line` (int) - An integer that represents the equivalent line number in the .prompt file that matches with the line number in the code file.
+        `prompt_line` (str) - An string that represents the equivalent line in the .prompt file that matches with the code_str line in the code file.
 
 % Here is the code_file to reference: 
 

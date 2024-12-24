@@ -1,127 +1,119 @@
-import os
-from typing import Tuple
+from typing import Tuple, Optional
+from rich import print
 from rich.console import Console
-from rich.panel import Panel
-from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import JsonOutputParser
 from pydantic import BaseModel, Field
+import difflib
+from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
-from .llm_selector import llm_selector
-from fuzzywuzzy import process
-import json
+from .llm_invoke import llm_invoke
 
 console = Console()
 
-class TraceOutput(BaseModel):
-    prompt_line: str = Field(description="The equivalent line in the prompt file")
+class PromptLineOutput(BaseModel):
+    prompt_line: str = Field(description="The line from the prompt file that matches the code")
 
-def trace(code_file: str, code_line: int, prompt_file: str, strength: float = 0.5, temperature: float = 0) -> Tuple[int, float, str]:
+def trace(
+    code_file: str,
+    code_line: int,
+    prompt_file: str,
+    strength: float = 0.5,
+    temperature: float = 0,
+    verbose: bool = False
+) -> Tuple[Optional[int], float, str]:
     """
-    Trace the line number in the prompt file corresponding to the code line in the code file.
+    Trace a line of code back to its corresponding line in the prompt file.
 
     Args:
-    code_file (str): The text of the code file.
-    code_line (int): The line number in the code file.
-    prompt_file (str): The text of the .prompt file.
-    strength (float): The strength of the LLM model to use. Default is 0.5.
-    temperature (float): The temperature of the LLM model to use. Default is 0.
+        code_file (str): Content of the code file
+        code_line (int): Line number in the code file
+        prompt_file (str): Content of the prompt file
+        strength (float, optional): Model strength. Defaults to 0.5
+        temperature (float, optional): Model temperature. Defaults to 0
+        verbose (bool, optional): Whether to print detailed information. Defaults to False
 
     Returns:
-    Tuple[int, float, str]: A tuple containing the prompt line number, total cost, and model name.
+        Tuple[Optional[int], float, str]: (prompt line number, total cost, model name)
     """
     try:
-        # Step 1: Load prompt files
-        pdd_path = os.getenv('PDD_PATH')
-        if not pdd_path:
-            raise ValueError("PDD_PATH environment variable is not set")
+        # Input validation
+        if not all([code_file, prompt_file]) or not isinstance(code_line, int):
+            raise ValueError("Invalid input parameters")
 
-        trace_prompt_path = f"{pdd_path}/prompts/trace_LLM.prompt"
-        extract_prompt_path = f"{pdd_path}/prompts/extract_promptline_LLM.prompt"
+        total_cost = 0
+        model_name = ""
 
-        try:
-            with open(trace_prompt_path, "r") as f:
-                trace_prompt = f.read()
-        except FileNotFoundError:
-            raise FileNotFoundError(f"No such file: {trace_prompt_path}")
-
-        try:
-            with open(extract_prompt_path, "r") as f:
-                extract_prompt = f.read()
-        except FileNotFoundError:
-            raise FileNotFoundError(f"No such file: {extract_prompt_path}")
-
-        # Step 2: Find the substring of the code_file that matches the code_line
+        # Step 1: Extract the code line string
         code_lines = code_file.splitlines()
         if code_line < 1 or code_line > len(code_lines):
-            raise ValueError(f"Invalid code_line: {code_line}. File has {len(code_lines)} lines.")
+            raise ValueError(f"Code line number {code_line} is out of range")
         code_str = code_lines[code_line - 1]
 
-        # Step 3-6: Process trace_LLM prompt and invoke the model
-        preprocessed_trace_prompt = preprocess(trace_prompt, recursive=False, double_curly_brackets=False)
-        trace_template = PromptTemplate.from_template(preprocessed_trace_prompt)
-        llm, token_counter, input_cost, output_cost, model_name = llm_selector(strength, temperature)
+        # Step 2 & 3: Load and preprocess trace_LLM prompt
+        trace_prompt = load_prompt_template("trace_LLM")
+        if not trace_prompt:
+            raise ValueError("Failed to load trace_LLM prompt template")
+        trace_prompt = preprocess(trace_prompt, recursive=False, double_curly_brackets=False)
 
-        trace_chain = trace_template | llm
+        # Step 4: First LLM invocation
+        if verbose:
+            console.print("[bold blue]Running trace analysis...[/bold blue]")
 
-        trace_input = {
-            "CODE_FILE": code_file,
-            "CODE_STR": code_str,
-            "PROMPT_FILE": prompt_file
-        }
+        trace_response = llm_invoke(
+            prompt=trace_prompt,
+            input_json={
+                "CODE_FILE": code_file,
+                "CODE_STR": code_str,
+                "PROMPT_FILE": prompt_file
+            },
+            strength=strength,
+            temperature=temperature,
+            verbose=verbose
+        )
 
-        token_count = token_counter(str(trace_input))
-        estimated_cost = (input_cost + output_cost) * token_count / 1_000_000
+        total_cost += trace_response['cost']
+        model_name = trace_response['model_name']
 
-        console.print(Panel(f"Running trace LLM with {token_count} tokens. Estimated cost: ${estimated_cost:.6f}"))
+        # Step 5: Load and preprocess extract_promptline_LLM prompt
+        extract_prompt = load_prompt_template("extract_promptline_LLM")
+        if not extract_prompt:
+            raise ValueError("Failed to load extract_promptline_LLM prompt template")
+        extract_prompt = preprocess(extract_prompt, recursive=False, double_curly_brackets=False)
 
-        llm_output = trace_chain.invoke(trace_input)
+        # Step 6: Second LLM invocation
+        if verbose:
+            console.print("[bold blue]Extracting prompt line...[/bold blue]")
 
-        # Step 7-10: Process extract_promptline_LLM prompt and invoke the model
-        preprocessed_extract_prompt = preprocess(extract_prompt, recursive=False, double_curly_brackets=False)
-        extract_template = PromptTemplate.from_template(preprocessed_extract_prompt)
-        # llm, token_counter, input_cost, output_cost, _ = llm_selector(.5, temperature)
-        parser = JsonOutputParser(pydantic_object=TraceOutput)
-        extract_chain = extract_template | llm | parser
+        extract_response = llm_invoke(
+            prompt=extract_prompt,
+            input_json={"llm_output": trace_response['result']},
+            strength=strength,
+            temperature=temperature,
+            verbose=verbose,
+            output_pydantic=PromptLineOutput
+        )
 
-        extract_input = {"llm_output": llm_output}
+        total_cost += extract_response['cost']
+        prompt_line_str = extract_response['result'].prompt_line
 
-        token_count = token_counter(str(extract_input))
-        estimated_cost += (input_cost + output_cost) * token_count / 1_000_000
-
-        console.print(Panel(f"Running extract LLM with {token_count} tokens. Estimated cost: ${estimated_cost:.6f}"))
-
-        try:
-            result = extract_chain.invoke(extract_input)
-            console.print(f"LLM output: {result}")
-            if isinstance(result, str):
-                result_dict = json.loads(result)
-                result = TraceOutput(**result_dict)
-        except json.JSONDecodeError as e:
-            console.print(f"[bold red]Error: Failed to parse JSON - {e}[/bold red]")
-            raise
-        except Exception as e:
-            console.print(f"[bold red]Error: Failed to create TraceOutput object - {e}[/bold red]")
-            raise
-
-        # Step 11: Find the line of the prompt_file that matches the prompt_line
+        # Step 7: Find matching line in prompt file using fuzzy matching
         prompt_lines = prompt_file.splitlines()
-        best_match = process.extractOne(result['prompt_line'], prompt_lines)
-        if best_match is None:
-            raise ValueError("Could not find a matching line in the prompt file")
-        prompt_line = prompt_lines.index(best_match[0]) + 1
+        best_match = None
+        highest_ratio = 0
 
-        # Step 12: Return the results
-        return prompt_line, estimated_cost, model_name
+        for i, line in enumerate(prompt_lines, 1):
+            ratio = difflib.SequenceMatcher(None, prompt_line_str.strip(), line.strip()).ratio()
+            if ratio > highest_ratio and ratio > 0.8:  # 0.8 threshold for matching
+                highest_ratio = ratio
+                best_match = i
 
-    except FileNotFoundError as e:
-        console.print(f"[bold red]Error: File not found - {e}[/bold red]")
-        raise
-    except ValueError as e:
-        console.print(f"[bold red]Error: {e}[/bold red]")
-        raise
-    except json.JSONDecodeError as e:
-        console.print(f"[bold red]Error: Failed to parse JSON - {e}[/bold red]")
-        raise
+        # Step 8: Return results
+        if verbose:
+            console.print(f"[green]Found matching line: {best_match}[/green]")
+            console.print(f"[green]Total cost: ${total_cost:.6f}[/green]")
+            console.print(f"[green]Model used: {model_name}[/green]")
+
+        return best_match, total_cost, model_name
+
     except Exception as e:
-        console.print(f"[bold red]An unexpected error occurred: {e}[/bold red]")
-        raise
+        console.print(f"[bold red]Error in trace function: {str(e)}[/bold red]")
+        return None, 0.0, ""
