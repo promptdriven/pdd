@@ -1,85 +1,111 @@
-from unittest.mock import patch, mock_open, MagicMock
 import pytest
+from rich.markdown import Markdown
+from pydantic import BaseModel
 from pdd.xml_tagger import xml_tagger
 
-@pytest.fixture
-def mock_environment():
-    """Mock the environment variable PDD_PATH."""
-    with patch.dict('os.environ', {'PDD_PATH': '/mock/path'}):
-        yield
+# Mock classes and functions
+class MockXMLOutput(BaseModel):
+    xml_tagged: str
 
-@pytest.fixture
-def mock_file_contents():
-    """Mock the contents of the files used by xml_tagger."""
-    xml_convertor_content = "XML Convertor Prompt"
-    extract_xml_content = "Extract XML Prompt"
-    mock_files = {
-        '/mock/path/prompts/xml_convertor_LLM.prompt': xml_convertor_content,
-        '/mock/path/prompts/extract_xml_LLM.prompt': extract_xml_content
+def mock_load_prompt_template(template_name):
+    return "mock_template"
+
+def mock_llm_invoke(**kwargs):
+    if kwargs.get('output_pydantic'):
+        return {
+            'result': MockXMLOutput(xml_tagged="<xml>mock tagged content</xml>"),
+            'cost': 0.001,
+            'model_name': 'mock-model'
+        }
+    return {
+        'result': "<xml>mock analysis</xml>",
+        'cost': 0.001,
+        'model_name': 'mock-model'
     }
-    with patch('builtins.open', mock_open(read_data="")) as mock_file:
-        mock_file.side_effect = lambda filename, *args, **kwargs: mock_open(read_data=mock_files[filename])()
-        yield
 
+# Fixtures
 @pytest.fixture
-def mock_llm_selector():
-    """Mock the LLM selector function."""
-    with patch('pdd.xml_tagger.llm_selector') as mock:
-        mock.return_value = (
-            lambda x: "Mocked LLM Output",  # mocked LLM
-            lambda x: 100,  # mocked token counter
-            0.01,  # mocked input cost
-            0.02,  # mocked output cost
-            "MockedModel"  # mocked model name
-        )
-        yield mock
+def mock_dependencies(monkeypatch):
+    monkeypatch.setattr('pdd.xml_tagger.load_prompt_template', mock_load_prompt_template)
+    monkeypatch.setattr('pdd.xml_tagger.llm_invoke', mock_llm_invoke)
 
-@pytest.fixture
-def mock_rich_print():
-    """Mock the rich print function."""
-    with patch('pdd.xml_tagger.rprint') as mock:
-        yield mock
-
-@patch('pdd.xml_tagger.llm_selector')
-def test_xml_tagger_success(mock_llm_selector, mock_environment, mock_file_contents, mock_rich_print):
-    """Test successful execution of xml_tagger."""
-    mock_llm_selector.return_value = (MagicMock(), MagicMock(), 0.01, 0.02, "MockedModel")
+# Test cases
+def test_successful_xml_tagging(mock_dependencies):
+    """Test successful XML tagging with valid inputs"""
     raw_prompt = "Test prompt"
-    strength = 0.7
-    temperature = 0.5
+    result = xml_tagger(raw_prompt, strength=0.7, temperature=0.8)
+    
+    assert isinstance(result, tuple)
+    assert len(result) == 3
+    assert isinstance(result[0], str)
+    assert isinstance(result[1], float)
+    assert isinstance(result[2], str)
+    assert result[0] == "<xml>mock tagged content</xml>"
+    assert result[1] > 0  # Total cost should be positive
+    assert result[2] == "mock-model"
 
-    result, total_cost, model_name = xml_tagger(raw_prompt, strength, temperature)
+def test_verbose_output(mock_dependencies, capsys):
+    """Test verbose output functionality"""
+    raw_prompt = "Test prompt"
+    xml_tagger(raw_prompt, strength=0.7, temperature=0.8, verbose=True)
+    
+    captured = capsys.readouterr()
+    assert "Running XML conversion" in captured.out
+    assert "Extracting final XML structure" in captured.out
 
-    assert isinstance(result, str)
-    assert isinstance(total_cost, float)
-    assert model_name == "MockedModel"
-    mock_llm_selector.assert_called_once_with(strength, temperature)
+def test_empty_prompt(mock_dependencies):
+    """Test handling of empty prompt"""
+    with pytest.raises(ValueError) as exc_info:
+        xml_tagger("", strength=0.7, temperature=0.8)
+    assert "raw_prompt must be a non-empty string" in str(exc_info.value)
 
-@patch('builtins.open')
-@patch('pdd.xml_tagger.llm_selector')
-def test_xml_tagger_file_not_found(mock_llm_selector, mock_open, mock_environment, mock_rich_print):
-    """Test xml_tagger behavior when a required file is not found."""
-    mock_llm_selector.return_value = (None, None, None, None, "MockedModel")
-    mock_open.side_effect = FileNotFoundError("File not found")
+def test_invalid_prompt_type(mock_dependencies):
+    """Test handling of invalid prompt type"""
+    with pytest.raises(ValueError) as exc_info:
+        xml_tagger(None, strength=0.7, temperature=0.8)
+    assert "raw_prompt must be a non-empty string" in str(exc_info.value)
 
-    result, total_cost, model_name = xml_tagger("Test", 0.7, 0.5)
+def test_invalid_strength(mock_dependencies):
+    """Test handling of invalid strength parameter"""
+    with pytest.raises(ValueError) as exc_info:
+        xml_tagger("Test prompt", strength=1.5, temperature=0.8)
+    assert "strength must be between 0 and 1" in str(exc_info.value)
 
-    assert result == ""
-    assert total_cost == 0.0
-    assert model_name == "MockedModel"
-    mock_rich_print.assert_called_with("[bold red]Error:[/bold red] File not found")
+def test_invalid_temperature(mock_dependencies):
+    """Test handling of invalid temperature parameter"""
+    with pytest.raises(ValueError) as exc_info:
+        xml_tagger("Test prompt", strength=0.7, temperature=-0.1)
+    assert "temperature must be between 0 and 1" in str(exc_info.value)
 
-@patch('builtins.open', new_callable=mock_open, read_data="placeholder")
-@patch('pdd.xml_tagger.PromptTemplate')
-@patch('pdd.xml_tagger.llm_selector')
-def test_xml_tagger_unexpected_error(mock_llm_selector, mock_prompt, mock_file, mock_environment, mock_file_contents, mock_rich_print):
-    """Test xml_tagger behavior when an unexpected error occurs."""
-    mock_llm_selector.return_value = (None, None, None, None, "MockedModel")
-    mock_prompt.from_template.side_effect = Exception("Unexpected error")
+def test_boundary_values(mock_dependencies):
+    """Test boundary values for strength and temperature"""
+    # Test minimum values
+    result_min = xml_tagger("Test prompt", strength=0.0, temperature=0.0)
+    assert isinstance(result_min, tuple)
+    
+    # Test maximum values
+    result_max = xml_tagger("Test prompt", strength=1.0, temperature=1.0)
+    assert isinstance(result_max, tuple)
 
-    result, total_cost, model_name = xml_tagger("Test", 0.7, 0.5)
+@pytest.mark.parametrize("strength,temperature", [
+    (0.3, 0.3),
+    (0.5, 0.5),
+    (0.7, 0.7),
+])
+def test_various_parameter_combinations(mock_dependencies, strength, temperature):
+    """Test different combinations of valid strength and temperature values"""
+    result = xml_tagger("Test prompt", strength=strength, temperature=temperature)
+    assert isinstance(result, tuple)
+    assert len(result) == 3
+    assert result[1] > 0
 
-    assert result == ""
-    assert total_cost == 0.0
-    assert model_name == "MockedModel"
-    mock_rich_print.assert_called_with("[bold red]An unexpected error occurred:[/bold red] Unexpected error")
+def test_failed_template_loading(monkeypatch):
+    """Test handling of failed template loading"""
+    def mock_failed_template_load(template_name):
+        return None
+    
+    monkeypatch.setattr('pdd.xml_tagger.load_prompt_template', mock_failed_template_load)
+    
+    with pytest.raises(ValueError) as exc_info:
+        xml_tagger("Test prompt", strength=0.7, temperature=0.8)
+    assert "Failed to load prompt templates" in str(exc_info.value)
