@@ -1,0 +1,49 @@
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "auto_include", that will automatically find and generate the proper dependencies.
+
+<include>./context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs: 
+        'input_prompt' - A string that contains the prompt that requires the includes to be selected.
+        'directory_path' - The directory string of the dependencies (e.g. 'context/c*.py').
+        'csv_file' - A string representing the contents of the csv file.
+        'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
+        'temperature' - A float between 0 and 1 that is the temperature of the LLM model to use.
+        'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
+    Outputs as a tuple: 
+        'dependencies' - A string that contains the dependencies.
+        'csv_output' - A string that contains the updated csv file.
+        'total_cost' - A float that is the total cost to generate the output includes string. 
+        'model_name' - A string that is the name of the selected LLM model
+
+% Here are examples of how to use internal modules:
+<internal_modules>
+    % Example of loading prompt templates:
+    <load_prompt_template_example>
+        <include>context/load_prompt_template_example.py</include>
+    </load_prompt_template_example>
+
+    % Example of running prompts with llm_invoke:
+    <llm_invoke_example>
+        <include>context/llm_invoke_example.py</include>
+    </llm_invoke_example>
+
+    % Example of scanning and summarizing the content of the files in the directory_path using summarize_directory:
+    <summarize_directory_example>
+        <include>./context/summarize_directory_example.py</include>
+    </summarize_directory_example>
+</internal_modules>
+
+% This program will do the following:
+    Step 1. Load the 'auto_include_LLM' and 'extract_auto_include_LLM' prompt templates.
+    Step 2. Use csv_file to run summarize_directory to get the csv_output. The full_path and file_summary columns of csv_output becomes available_includes.
+    Step 3. Run the auto_include_LLM prompt through llm_invoke:
+        3a. Pass the following string parameters to the prompt during invoke:
+            - 'input_prompt' - A string that contains the prompt that requires the includes to be selected.
+            - 'available_includes' - A list of strings that contains the file paths and summaries of the available includes.
+    Step 4. Run the extract_auto_include_LLM prompt through llm_invoke with the output from Step 3:
+        4a. Pass the following string parameter to the prompt during invoke:
+            - 'llm_output' - A string that contains the output of the auto_include_LLM prompt.
+        4b. The Pydantic output will include the key 'string_of_includes' to be accessed.
+    Step 5. Assign the value of key 'string_of_includes' to form the 'dependencies'.
+    Step 6. Return the tuple containing 'dependencies', 'csv_output', 'total_cost', and 'model_name'.
