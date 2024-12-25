@@ -3,9 +3,9 @@
 ## On Deck
 - [ ] add loop to crash command like with fix
 - [ ] auto-includes
-- [ ] Use the response to get the token counting to speed up app and make it more accurate
 - [ ] increase the number of unit tests to generate
 - [ ] auto update the utility
+- [ ] auto set PDD_PATH for package install
 
 ## Features
 
@@ -43,7 +43,6 @@
 - [ ] Use existing good prompt code example to generate code for the prompt
 - [ ] update prompt for makefile
 - [ ] fix warnings in the code
-- [ ] auto set PDD_PATH for package install
 - [ ] fix toml file
 - [ ] MLX support for faster local
 
