@@ -6,14 +6,17 @@ prompt = """
     <include>Makefile</include>
     <shell>echo Hello World</shell>
     <pdd>This is a comment</pdd>
+    {test}
+    {test2}
     ```<TODO.md>```
 </prompt>
 """
 
 recursive = False
 double_curly_brackets = True
+exclude_keys = ["test2"] # exclude test2 from being doubled
 
-processed = preprocess(prompt, recursive, double_curly_brackets)
+processed = preprocess(prompt, recursive, double_curly_brackets, exclude_keys=exclude_keys)
 console.print("[bold white]Processed Prompt:[/bold white]")
 console.print(processed)
 
@@ -47,6 +50,7 @@ prompt = """    mock_db = {
         "1": {"id": "1", "name": "Resource One"},
         "2": {"id": "2", "name": "Resource Two"}
     }"""
+
 processed = preprocess(prompt, recursive, True)
 console.print("[bold white]Processed change_LLM Prompt:[/bold white]")
 console.print(processed)

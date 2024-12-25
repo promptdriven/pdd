@@ -70,15 +70,15 @@
         <include>context/generate_test_example.py</include>
         </generate_test_example>
 
-        - `preprocess` command: To preprocess a prompt from a prompt file, use `preprocess_func`. Here is an example of how to preprocess the prompt from a file:
-        <preprocess_example>
-        <include>context/preprocess_example.py</include>
-        </preprocess_example>
+        - `test --coverage_report` sub-command: To generate more tests to increase test coverage for the unit tests, use the `increase_tests` function. Here is an example of how to increase coverage for the unit tests:
+        <increase_tests_example>
+        <include>context/increase_tests_example.py</include>
+        </increase_tests_example>
 
-        - `preprocess --xml` sub-command: To preprocess a prompt from a prompt file and output the result in XML format, use `xml_tagger`. Here is an example of how to preprocess the prompt from a file and output the result in XML format:
-        <xml_tagger_example>
-        <include>context/xml_tagger_example.py</include>
-        </xml_tagger_example>
+        - `preprocess` command: The core logic is implemented in the `preprocess_main` function, defined in a separate module. Here's how to use `preprocess_main`:
+        <preprocess_main_example>
+        <include>context/auto_deps_main_example.py</include>
+        </preprocess_main_example>
 
         - `fix` command: To fix errors in code and unit tests based on error messages, use `fix_errors_from_unit_tests`. Be sure to load the required files for this function and only save the output files if there is an update. Note that the `error_file` argument does not need to exist beforehand. Here is an example of how to fix errors in code and unit tests based on error messages:
         <fix_errors_from_unit_tests_example>
@@ -120,6 +120,11 @@
         <include>context/fix_code_module_errors_example.py</include>
         </fix_code_module_errors_example>
 
+        - `crash --loop` sub-command: To loop on the above fix errors in a code module that caused a program to crash, use the `fix_code_module_errors_loop` function. Here is an example of how to loop on the above fix errors in a code module that caused a program to crash:
+        <fix_code_module_errors_loop_example>
+        <include>context/fix_code_loop_example.py</include>
+        </fix_code_module_errors_loop_example>
+
         - `trace` command: The core logic is implemented in the `trace_main` function, which is defined in a separate module. Here is an example of how to use the `trace_main` function:
         <trace_main_example>
         <include>context/trace_main_example.py</include>
@@ -130,6 +135,11 @@
         <include>context/bug_to_unit_test_example.py</include>
         </bug_to_unit_test_example>
 
+        - `auto-deps` command: The core logic is implemented in the `auto_deps_main` function, defined in a separate module. Here's how to use `auto_deps_main`:
+        <auto_deps_main_example>
+        <include>context/auto_deps_main_example.py</include>
+        </auto_deps_main_example>
+ 
     </internal_example_modules>
 
     % For the `trace` command in the `cli` function:
