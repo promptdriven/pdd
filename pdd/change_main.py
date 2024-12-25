@@ -191,7 +191,8 @@ def change_main(
                     input_code=input_code_content,
                     change_prompt=change_prompt_content,
                     strength=strength,
-                    temperature=temperature
+                    temperature=temperature,
+                    verbose=ctx.params.get('verbose', False),
                 )
                 logger.debug("change_func completed")
             except Exception as e:
