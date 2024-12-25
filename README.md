@@ -251,7 +251,10 @@ Arguments:
 
 Options:
 - `--output LOCATION`: Specify where to save the preprocessed prompt file. The default file name is `<basename>_<language>_preprocessed.prompt`.
-- `--xml`: Automatically insert XML delimiters for long and complex prompt files to structure the content better.
+- `--xml`: Automatically insert XML delimiters for long and complex prompt files to structure the content better. With this option prompts are not preprocessed.
+- `--recursive`: Recursively preprocess all prompt files in the prompt file.
+- `--double`: Curly brackets will be doubled.
+- `--exclude`: List of keys to exclude from curly bracket doubling.
 
 Example:
 ```
