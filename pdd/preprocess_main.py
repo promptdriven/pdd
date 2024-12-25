@@ -1,23 +1,15 @@
 import csv
 import sys
-from pathlib import Path
 from typing import Tuple, Optional
 import click
 from rich import print as rprint
 
-from .config_resolution import resolve_effective_config
 from .construct_paths import construct_paths
 from .preprocess import preprocess
 from .xml_tagger import xml_tagger
-from .architecture_sync import (
-    get_architecture_entry_for_prompt,
-    generate_tags_from_architecture,
-    has_pdd_tags,
-)
-
 
 def preprocess_main(
-    ctx: click.Context, prompt_file: str, output: Optional[str], xml: bool, recursive: bool, double: bool, exclude: list, pdd_tags: bool = False
+    ctx: click.Context, prompt_file: str, output: Optional[str], xml: bool, recursive: bool, double: bool, exclude: list
 ) -> Tuple[str, float, str]:
     """
     CLI wrapper for preprocessing prompts.
@@ -30,60 +22,28 @@ def preprocess_main(
     :param double: If True, curly brackets will be doubled.
     :param exclude: List of keys to exclude from curly bracket doubling.
     :return: Tuple containing the preprocessed prompt, total cost, and model name used.
-    :param pdd_tags: If True, inject PDD metadata tags from architecture.json.
     """
     try:
         # Construct file paths
         input_file_paths = {"prompt_file": prompt_file}
         command_options = {"output": output}
-        resolved_config, input_strings, output_file_paths, _ = construct_paths(
+        input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
-            force=ctx.obj.get("force", False),
-            quiet=ctx.obj.get("quiet", False),
+            force=ctx.params.get("force", False),
+            quiet=ctx.params.get("quiet", False),
             command="preprocess",
             command_options=command_options,
-            context_override=ctx.obj.get('context')
         )
 
         # Load prompt file
         prompt = input_strings["prompt_file"]
 
-        # Inject PDD metadata tags from architecture.json if requested
-        pdd_tags_injected = False
-        if pdd_tags:
-            prompt_filename = Path(prompt_file).name
-            arch_entry = get_architecture_entry_for_prompt(prompt_filename)
-
-            if arch_entry:
-                if has_pdd_tags(prompt):
-                    if not ctx.obj.get("quiet", False):
-                        rprint(f"[yellow]Prompt already has PDD tags, skipping injection.[/yellow]")
-                else:
-                    generated_tags = generate_tags_from_architecture(arch_entry)
-                    if generated_tags:
-                        prompt = generated_tags + '\n\n' + prompt
-                        pdd_tags_injected = True
-                        if not ctx.obj.get("quiet", False):
-                            rprint(f"[green]Injected PDD tags from architecture.json[/green]")
-            else:
-                if not ctx.obj.get("quiet", False):
-                    rprint(f"[yellow]No architecture entry found for '{prompt_filename}', skipping PDD tags.[/yellow]")
-
         if xml:
             # Use xml_tagger to add XML delimiters
-            # Use centralized config resolution with proper priority: CLI > pddrc > defaults
-            effective_config = resolve_effective_config(ctx, resolved_config)
-            strength = effective_config["strength"]
-            temperature = effective_config["temperature"]
-            time = effective_config["time"]
+            strength = ctx.obj.get("strength", 0.5)
+            temperature = ctx.obj.get("temperature", 0.0)
             verbose = ctx.obj.get("verbose", False)
-            xml_tagged, total_cost, model_name = xml_tagger(
-                prompt,
-                strength,
-                temperature,
-                verbose,
-                time=time
-            )
+            xml_tagged, total_cost, model_name = xml_tagger(prompt, strength, temperature, verbose)
             processed_prompt = xml_tagged
         else:
             # Preprocess the prompt
@@ -95,10 +55,8 @@ def preprocess_main(
             f.write(processed_prompt)
 
         # Provide user feedback
-        if not ctx.obj.get("quiet", False):
+        if not ctx.params.get("quiet", False):
             rprint("[bold green]Prompt preprocessing completed successfully.[/bold green]")
-            if pdd_tags_injected:
-                rprint("[bold]PDD metadata tags: injected from architecture.json[/bold]")
             if xml:
                 rprint(f"[bold]XML Tagging used: {model_name}[/bold]")
             else:
@@ -109,6 +67,6 @@ def preprocess_main(
         return processed_prompt, total_cost, model_name
 
     except Exception as e:
-        if not ctx.obj.get("quiet", False):
+        if not ctx.params.get("quiet", False):
             rprint(f"[bold red]Error during preprocessing:[/bold red] {e}")
         sys.exit(1)
