@@ -33,6 +33,7 @@ Be sure to use the correct imports as shown in the above example.
     - When max_completion_tokens is available, set it in model_kwargs
     - Otherwise, use max_tokens if available
     - For OpenAI models with a base_url, set it during model initialization
+    - For OpenAI models starting with 'o', set model_kwargs={'reasoning_effort':'high'}
 
 % If verbose is set to True, print the following information:
     - The selected model.
