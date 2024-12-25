@@ -170,8 +170,13 @@ def create_llm_instance(selected_model, temperature, handler):
         if base_url:
             llm = ChatOpenAI(model=model_name, temperature=temperature,
                                 openai_api_key=api_key, callbacks=[handler], openai_api_base = base_url)
-        else: 
-            llm = ChatOpenAI(model=model_name, temperature=temperature,
+        else:
+            if model_name[0] == 'o':
+                llm = ChatOpenAI(model=model_name, temperature=temperature,
+                    openai_api_key=api_key, callbacks=[handler], 
+                    model_kwargs = {'reasoning_effort':'high'})
+            else:
+                llm = ChatOpenAI(model=model_name, temperature=temperature,
                                 openai_api_key=api_key, callbacks=[handler])
     elif provider == 'anthropic':
         llm = ChatAnthropic(model=model_name, temperature=temperature,
