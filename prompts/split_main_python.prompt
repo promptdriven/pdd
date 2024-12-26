@@ -1,0 +1,46 @@
+% Here is an example prompt generate as a reference:
+<example>
+   <example_prompt><include>context/generate/6/conflicts_main_python.prompt</include></example_prompt>
+   <example_code><include>context/generate/6/conflicts_main.py</include></example_code>
+</example>
+
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "split_main", that will be the CLI wrapper for splitting a prompt into a sub_prompt and modified_prompt. This function will handle reading the input files, calling the split function, and managing the output locations.
+
+<include>context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        - `ctx` (`click.Context`): The Click context object containing CLI options and parameters.
+        - 'input_prompt_file' (`str`): Path to the input prompt file to be split.
+        - 'input_code_file' (`str`): Path to the code file generated from the input prompt.
+        - 'example_code_file' (`str`): Path to the example code file showing usage.
+        - 'output_sub' (`Optional[str]`): Path where to save the sub-prompt. If None, uses default naming convention.
+        - 'output_modified' (`Optional[str]`): Path where to save the modified prompt. If None, uses default naming convention.
+    Outputs:
+        - Returns a tuple containing (`str`, `str`, `float`):
+            - `str`: The sub-prompt content
+            - `str`: The modified prompt content
+            - `float`: The total cost of the operation
+
+% Example for using the Python Click library:
+        <click_example>
+            <include>context/click_example.py</include>
+        </click_example>
+
+% Here is how to use the internal modules:
+    <internal_modules>
+        For spltting prompts:
+        <split_example>
+            <include>context/split_example.py</include>
+        </split_example>
+
+        For constructing output paths:
+        <construct_paths_example>
+            <include>context/construct_paths_example.py</include>
+        </construct_paths_example>
+    </internal_modules>
+
+% Here is the README for the cli command that has details of how the 'split' command works:
+   <cli_command_readme>
+   <include>./README.md</include>
+   </cli_command_readme>
