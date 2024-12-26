@@ -92,7 +92,8 @@ def construct_paths(
                     raise FileNotFoundError(f"Directory '{path.parent}' does not exist.")
                 rich_print(f"[bold red]Error: Input file '{path}' not found.[/bold red]")
                 raise FileNotFoundError(f"Input file '{path}' not found.")
-        if key != "error_file":
+        # if key != "error_file":
+        else:
             try:
                 with open(path, "r") as f:
                     input_strings[key] = f.read()
