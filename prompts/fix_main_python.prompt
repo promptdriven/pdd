@@ -33,6 +33,13 @@
             - `float`: Total cost of the operation
             - `str`: Name of the model used
 
+% Important Implementation Notes:
+- When calling fix_error_loop, pass the original file paths (code_file and unit_test_file) directly rather than using processed input_strings
+- When calling fix_errors_from_unit_tests, use the processed input_strings from construct_paths
+- Handle both fixing approaches appropriately based on the --loop parameter
+- Implement proper error handling and user feedback using rich.print
+- Save output files and provide detailed success/failure information
+
 <examples>
    % Here is how to use the Python Click library to create a command line program:
    <click_example>
@@ -59,6 +66,6 @@
 </examples>
 
 % Here is the pdd README for the 'fix' command that describes how it should work:
-   <cli_command_readme>
+<cli_command_readme>
    <include>./README.md</include>
-   </cli_command_readme>
+</cli_command_readme>

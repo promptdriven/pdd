@@ -83,8 +83,8 @@ def fix_main(
                 raise click.UsageError("--verification-program is required when using --loop")
 
             success, fixed_unit_test, fixed_code, attempts, total_cost, model_name = fix_error_loop(
-                unit_test_file=input_strings["unit_test_file"],
-                code_file=input_strings["code_file"],
+                unit_test_file=unit_test_file,
+                code_file=code_file,
                 prompt=input_strings["prompt_file"],
                 verification_program=verification_program,
                 strength=strength,
