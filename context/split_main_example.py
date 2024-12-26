@@ -34,9 +34,8 @@ def split_cli(ctx, input_prompt_file: str, input_code_file: str, example_code_fi
     }
 
     try:
-        # Pass CLI parameters to split_main with the standardized return order
-        # Returns (result_data, total_cost, model_name)
-        result_data, total_cost, model_name = split_main(
+        # Pass CLI parameters to split_main
+        sub_prompt, modified_prompt, total_cost = split_main(
             ctx,
             input_prompt_file=input_prompt_file,
             input_code_file=input_code_file,
@@ -47,12 +46,8 @@ def split_cli(ctx, input_prompt_file: str, input_code_file: str, example_code_fi
 
         # Optionally, post-process or display the results here
         if not quiet:
-            # Access the content from the result dictionary
-            click.echo(f"Sub-prompt content returned:\n{result_data['sub_prompt_content']}")
-            click.echo(f"Modified prompt content returned:\n{result_data['modified_prompt_content']}")
-            click.echo(f"Sub-prompt saved to: {result_data['output_sub']}")
-            click.echo(f"Modified prompt saved to: {result_data['output_modified']}")
-            click.echo(f"Model used: {model_name}")
+            click.echo(f"Sub-prompt returned:\n{sub_prompt}")
+            click.echo(f"Modified prompt returned:\n{modified_prompt}")
             click.echo(f"Total cost of operation: ${total_cost:.6f}")
     except Exception as e:
         click.echo(f"An error occurred: {e}", err=True)

@@ -31,7 +31,7 @@ def test_split_main_success(mock_ctx, quiet_mode, capsys):
     and returns the expected values.
     """
     # Arrange
-    mock_ctx.obj["quiet"] = quiet_mode
+    mock_ctx.params["quiet"] = quiet_mode
 
     # Prepare mock return values for construct_paths and split
     mock_input_strings = {
@@ -45,22 +45,20 @@ def test_split_main_success(mock_ctx, quiet_mode, capsys):
     }
     mock_language = "python"
 
-    extracted_functionality_result = "sub prompt result"
-    remaining_prompt_result = "modified prompt result"
+    sub_prompt_result = "sub prompt result"
+    modified_prompt_result = "modified prompt result"
     total_cost_result = 0.123456
-    mock_model_name = "mock_model" # Added mock model name
 
     with patch("pdd.split_main.construct_paths") as mock_construct_paths, \
          patch("pdd.split_main.split") as mock_split, \
          patch("builtins.open", mock_open()) as m_file:
 
         # Set up our patched functions
-        mock_construct_paths.return_value = ({}, mock_input_strings, mock_output_paths, mock_language)
-        # Use standardized return order (result_data, cost, model_name)
-        mock_split.return_value = ((extracted_functionality_result, remaining_prompt_result), total_cost_result, mock_model_name)
+        mock_construct_paths.return_value = (mock_input_strings, mock_output_paths, mock_language)
+        mock_split.return_value = (sub_prompt_result, modified_prompt_result, total_cost_result)
 
         # Act
-        result_data, total_cost, model_name = split_main(
+        sub_prompt, modified_prompt, total_cost = split_main(
             mock_ctx,
             "input_prompt_file.prompt",
             "input_code_file.py",
@@ -69,16 +67,10 @@ def test_split_main_success(mock_ctx, quiet_mode, capsys):
             None
         )
 
-        # Assert that we get the expected dictionary with file paths and content
-        assert "sub_prompt_content" in result_data
-        assert "modified_prompt_content" in result_data
-        assert "output_sub" in result_data
-        assert "output_modified" in result_data
-        assert result_data["sub_prompt_content"] == extracted_functionality_result
-        assert result_data["modified_prompt_content"] == remaining_prompt_result
+        # Assert
+        assert sub_prompt == sub_prompt_result
+        assert modified_prompt == modified_prompt_result
         assert total_cost == total_cost_result
-        assert model_name == mock_model_name
-
 
         # Check that construct_paths was called with correct arguments
         mock_construct_paths.assert_called_once()
@@ -103,7 +95,7 @@ def test_split_main_success(mock_ctx, quiet_mode, capsys):
         if quiet_mode:
             # No success message should appear in quiet mode
             assert "Successfully split the prompt!" not in captured.out
-            assert "Extracted functionality saved to:" not in captured.out
+            assert "Sub-prompt saved to:" not in captured.out
         else:
             # Success messages should appear
             assert "Successfully split the prompt!" in captured.out
@@ -149,16 +141,14 @@ def test_split_main_io_error_during_write(mock_ctx, capsys):
         "output_modified": "/fake_dir/modified_prompt.prompt"
     }
     mock_language = "python"
-    mock_model_name = "mock_model"
 
     with patch("pdd.split_main.construct_paths") as mock_construct_paths, \
          patch("pdd.split_main.split") as mock_split, \
          patch("builtins.open", side_effect=IOError("Disk full")), \
          pytest.raises(SystemExit) as exc_info:
 
-        mock_construct_paths.return_value = ({}, mock_input_strings, mock_output_paths, mock_language)
-        # Use standardized return order (result_data, cost, model_name)
-        mock_split.return_value = (("extracted functionality", "remaining prompt"), 0.5, mock_model_name)
+        mock_construct_paths.return_value = (mock_input_strings, mock_output_paths, mock_language)
+        mock_split.return_value = ("sub prompt", "modified prompt", 0.5)
 
         split_main(
             mock_ctx,
@@ -172,7 +162,7 @@ def test_split_main_io_error_during_write(mock_ctx, capsys):
     captured = capsys.readouterr()
     assert exc_info.value.code == 1
     assert "Error:" in captured.out
-    assert "Failed to save output files: Disk full" in captured.out  # Corrected assertion
+    assert "Disk full" in captured.out
     assert "Hint: Check file permissions and disk space." in captured.out
 
 def test_split_main_value_error(mock_ctx, capsys):
@@ -184,7 +174,6 @@ def test_split_main_value_error(mock_ctx, capsys):
          pytest.raises(SystemExit) as exc_info:
 
         mock_construct_paths.return_value = (
-            {},  # resolved_config
             {
                 "input_prompt": "prompt content",
                 "input_code": "code content",
@@ -217,7 +206,7 @@ def test_split_main_quiet_mode(mock_ctx, capsys):
     Test that no user feedback is printed in quiet mode except for errors.
     In normal operation, it should return without printing anything.
     """
-    mock_ctx.obj["quiet"] = True
+    mock_ctx.params["quiet"] = True
 
     mock_input_strings = {
         "input_prompt": "prompt content",
@@ -228,14 +217,12 @@ def test_split_main_quiet_mode(mock_ctx, capsys):
         "output_sub": "/fake_dir/sub_prompt.prompt",
         "output_modified": "/fake_dir/modified_prompt.prompt"
     }
-    mock_model_name = "mock_model"
 
     with patch("pdd.split_main.construct_paths") as mock_construct_paths, \
          patch("pdd.split_main.split") as mock_split, \
          patch("builtins.open", mock_open()):
-        mock_construct_paths.return_value = ({}, mock_input_strings, mock_output_paths, None)
-        # Use standardized return order (result_data, cost, model_name)
-        mock_split.return_value = (("extracted functionality", "remaining prompt"), 1.234, mock_model_name)
+        mock_construct_paths.return_value = (mock_input_strings, mock_output_paths, None)
+        mock_split.return_value = ("sub prompt", "modified prompt", 1.234)
 
         # Call function
         split_main(
@@ -251,4 +238,4 @@ def test_split_main_quiet_mode(mock_ctx, capsys):
         captured = capsys.readouterr()
         assert "Successfully split the prompt!" not in captured.out
         assert "Total cost:" not in captured.out
-        assert mock_ctx.obj["quiet"] is True
+        assert mock_ctx.params["quiet"] is True
