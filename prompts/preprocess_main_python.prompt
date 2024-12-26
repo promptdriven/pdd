@@ -45,7 +45,7 @@
    </internal_example_modules>
 </examples>
 
-% Here is the README for the cli command that has details of how the 'preprocess' command and '--xml' sub command works. Be sure to support the necesssary global options like verbose for the xml_tagger function.
+% Here is the README for the cli command that has details of how the 'preprocess' command and '--xml' sub command work. Be sure to support the necesssary global options like verbose for the xml_tagger function.
    <cli_command_readme>
    <include>./README.md</include>
    </cli_command_readme>
