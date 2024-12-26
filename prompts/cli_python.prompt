@@ -30,7 +30,7 @@
 </examples>
 
 <instructions>
-    % To avoid name conflicts, import functions with aliases (e.g., `from .preprocess import preprocess as preprocess_func`). Ensure module names match imported function names.
+    % To avoid name conflicts, import functions with aliases. Ensure module names match imported function names.
 
     % Examples of using internal modules:
 
@@ -91,9 +91,9 @@
         </fix_error_loop_example>
 
         - `split` command: To split a prompt file into multiple prompt files, use the `split` function. Here is an example of how to split a prompt file into multiple prompt files:
-        <split_example>
-        <include>context/split_example.py</include>
-        </split_example>
+        <split_main_example>
+        <include>context/split_main_example.py</include>
+        </split_main_example>
 
         - `update` command: To update the prompt file, use the `update_prompt` function. Here is an example of how to update the prompt file:
         <update_prompt_example>

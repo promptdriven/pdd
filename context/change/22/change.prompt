@@ -1,0 +1,41 @@
+% To reduce the amount of complexity in the main CLI program, create the wrapper prompt (i.e. *_main) so the the CLI can just call this in one line of code. Create only the _main wrapper prompt since the input prommpt is in a separate file.
+
+% Here are some examples:
+<examples>
+    <example id="1">
+        <before_example>
+            <prompt>
+            <include>context/change/21/auto_include_python.prompt</include>
+            </prompt>
+
+            <code_from_prompt>
+            <include>context/change/21/auto_include.py</include>
+            </code_from_prompt>
+        </before_example>
+
+        <after_example>
+            <include>context/change/21/auto_deps_main_python.prompt</include>
+        </after_example>
+    </example>
+
+    <example id="2">
+        <before_example>
+            <prompt>
+            <include>context/change/22/preprocess_python.prompt</include>
+            </prompt>
+
+            <code_from_prompt>
+            <include>context/change/22/preprocess.py</include>
+            </code_from_prompt>
+        </before_example>
+
+        <after_example>
+            <include>context/change/22/preprocess_main_python.prompt</include>
+        </after_example>
+    </example>
+</examples>
+
+% Here is the README for the cli command that has details of how the command for the prompt works:
+   <cli_command_readme>
+   <include>./README.md</include>
+   </cli_command_readme>
