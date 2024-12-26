@@ -1,10 +1,10 @@
-<pdd>
+
 <example_generation>
 % Here an example of a prompt and generated code from a prior version of the below prompt:
-    <prior_prompt><include>context/generate/4/cli_python_preprocessed.prompt</include></prior_prompt>
+    <prior_prompt><include>context/generate/4/cli_python.prompt</include></prior_prompt>
     <prior_code><include>context/generate/4/cli.py</include></prior_code>
 </example_generation>
-</pdd>
+
 <context>
 % You are an expert Python engineer. Your goal is to write a Python command-line program, `pdd`. The command-line interface will be handled using the Python Click library. It will contain the `cli` function.
 </context>
@@ -80,17 +80,12 @@
         <include>context/auto_deps_main_example.py</include>
         </preprocess_main_example>
 
-        - `fix` command: To fix errors in code and unit tests based on error messages, use `fix_errors_from_unit_tests`. Be sure to load the required files for this function and only save the output files if there is an update. Note that the `error_file` argument does not need to exist beforehand. Here is an example of how to fix errors in code and unit tests based on error messages:
+        - `fix` command: To fix errors in code and unit tests, use `fix_main`. Here is an example of how to fix errors in code and unit tests:
         <fix_errors_from_unit_tests_example>
-        <include>context/fix_errors_from_unit_tests_example.py</include>
+        <include>context/fix_main_example.py</include>
         </fix_errors_from_unit_tests_example>
 
-        - `fix --loop` sub-command: To loop on the above fix errors in code and unit tests, use the `fix_error_loop` function. Be sure to load the `prompt_file` as the function expects the prompt string and not the prompt filepath. Here is an example of how to loop on the above fix errors in code and unit tests:
-        <fix_error_loop_example>
-        <include>context/fix_error_loop_example.py</include>
-        </fix_error_loop_example>
-
-        - `split` command: To split a prompt file into multiple prompt files, use the `split` function. Here is an example of how to split a prompt file into multiple prompt files:
+        - `split` command: To split a prompt file into multiple prompt files, use the `split_main` function. Here is an example of how to split a prompt file into multiple prompt files:
         <split_main_example>
         <include>context/split_main_example.py</include>
         </split_main_example>
