@@ -1,0 +1,71 @@
+% You are an expert Python engineer. Your goal is to write a Python function, 'cmd_test_main', that will be the CLI wrapper for generating or enhancing unit tests. This function will read a prompt file and a code file, generate unit tests using the `generate_test` function, and handle the output location.
+
+<include>./context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        - `ctx` (`click.Context`): The Click context object containing CLI options and parameters.
+        - `prompt_file` - A string containing the path to the prompt file that generated the code.
+        - `code_file` - A string containing the path to the code file to be tested.
+        - `output` - An optional string containing the path where to save the generated test file. If None, uses default naming convention.
+        - `language` - An optional string specifying the programming language. Defaults to the language specified by the prompt file name.
+    Outputs:
+        - Returns a tuple containing (`str`, `float`, `str`):
+            - `str`: The generated unit test code.
+            - `float`: The total cost of the operation.
+            - `str`: The name of the model used.
+
+<examples>
+   % Here is how to use the Python Click library to create a command line program:
+   <click_example>
+   <include>context/click_example.py</include>
+   </click_example>
+
+   % Here are examples of how to use internal modules:
+   <internal_example_modules>
+      - Here is an example of how to use the `construct_paths` function:
+      <construct_paths_example>
+      <include>context/construct_paths_example.py</include>
+      </construct_paths_example>
+
+      - Here is an example of how to use the `generate_test` function:
+      <generate_test_example>
+      <include>context/generate_test_example.py</include>
+      </generate_test_example>
+   </internal_example_modules>
+</examples>
+
+% Here is the README for the cli command that has details of how the 'test' command works. Be sure to support the necessary global options like verbose and strength for the `generate_test` function.
+   <cli_command_readme>
+   <include>./README.md</include>
+   </cli_command_readme>
+
+% Additional Requirements:
+1. The function should handle the following CLI options:
+   - `--output`: Specify where to save the generated test file. The default file name is `test_<basename>.<language_file_extension>`.
+   - `--language`: Specify the programming language. Defaults to the language specified by the prompt file name.
+2. The function should use the `construct_paths` function to handle input and output file paths.
+3. The function should use the `generate_test` function to generate the unit tests.
+4. The function should support the global options like `--verbose`, `--strength`, and `--temperature` passed through the `ctx` object.
+5. The function should handle errors gracefully and print appropriate error messages using the `rprint` function from the `rich` library.
+6. The function should return the generated unit test code, the total cost of the operation, and the name of the model used.
+
+% Example Usage:
+```python
+# Generate initial unit tests
+cmd_test_main(ctx, "factorial_calculator_python.prompt", "src/factorial_calculator.py", output="tests/test_factorial_calculator.py", language="python")
+```
+
+% Example Output:
+```python
+# Generated unit test code
+def test_factorial():
+    assert factorial(5) == 120
+    assert factorial(0) == 1
+    assert factorial(1) == 1
+```
+
+% Error Handling:
+- If the prompt file or code file does not exist, the function should print an error message and exit with a non-zero status code.
+- If the `generate_test` function fails, the function should print an error message and exit with a non-zero status code.
+- If the output file cannot be written, the function should print an error message and exit with a non-zero status code.
