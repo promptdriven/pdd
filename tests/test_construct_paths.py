@@ -667,7 +667,7 @@ def setup_test_files(tmp_path_factory):
 
     # Create prompt files
     (test_dir / "unfinished_prompt_python.prompt").write_text("Test prompt content")
-    (test_dir / "main_gen_LLM.prompt").write_text("Test prompt content")
+    (test_dir / "main_gen_prompt.prompt").write_text("Test prompt content")
 
     # Create code files
     (test_dir / "unfinished_prompt.py").write_text("def test_function():\n    pass")
@@ -704,7 +704,7 @@ def test_construct_paths_generate_command(setup_test_files):
     Verifies that the output file path and language are correctly generated.
     """
     input_file_paths = {
-        "prompt_file": str(setup_test_files / "main_gen_LLM.prompt")
+        "prompt_file": str(setup_test_files / "main_gen_prompt.prompt")
     }
     command_options = {
         "output": str(setup_test_files)
@@ -728,7 +728,7 @@ def test_construct_paths_detects_incorrect_output_path(setup_test_files):
     but the current code incorrectly produces 'main_gen_LLM_.py'.
     """
     input_file_paths = {
-        "prompt_file": str(setup_test_files / "main_gen_LLM.prompt")
+        "prompt_file": str(setup_test_files / "main_gen_prompt.prompt")
     }
     command_options = {
         "output": str(setup_test_files)
@@ -743,5 +743,5 @@ def test_construct_paths_detects_incorrect_output_path(setup_test_files):
     )
 
     # The desired output path should not have an extra underscore
-    desired_output_path = str(setup_test_files / "main_gen_LLM.py")
+    desired_output_path = str(setup_test_files / "main_gen.prompt")
     assert output_file_paths["output"] == desired_output_path, f"Expected {desired_output_path}, but got {output_file_paths['output']}"
