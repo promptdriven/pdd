@@ -655,3 +655,93 @@ def test_construct_paths_symbolic_links(tmpdir):
         # Check that the symlink is correctly resolved
         assert input_strings['prompt_file'] == 'Prompt content'
         assert language == 'python'
+
+# Create dummy files for testing
+@pytest.fixture(scope="module")
+def setup_test_files(tmp_path_factory):
+    """
+    Fixture to set up test files for the tests.
+    Creates temporary files and directories for testing purposes.
+    """
+    test_dir = tmp_path_factory.mktemp("test_files")
+
+    # Create prompt files
+    (test_dir / "unfinished_prompt_python.prompt").write_text("Test prompt content")
+    (test_dir / "main_gen_LLM.prompt").write_text("Test prompt content")
+
+    # Create code files
+    (test_dir / "unfinished_prompt.py").write_text("def test_function():\n    pass")
+
+    return test_dir
+
+def test_construct_paths_example_command(setup_test_files):
+    """
+    Test the 'example' command of the construct_paths function.
+    Verifies that the output file path and language are correctly generated.
+    """
+    input_file_paths = {
+        "code_file": str(setup_test_files / "unfinished_prompt.py"),
+        "prompt_file": str(setup_test_files / "unfinished_prompt_python.prompt")
+    }
+    command_options = {
+        "output": None
+    }
+
+    input_strings, output_file_paths, language = construct_paths(
+        input_file_paths=input_file_paths,
+        force=True,
+        quiet=True,
+        command="example",
+        command_options=command_options
+    )
+
+    assert language == "python"
+    assert output_file_paths["output"] == str( "unfinished_prompt_example.py")
+
+def test_construct_paths_generate_command(setup_test_files):
+    """
+    Test the 'generate' command of the construct_paths function.
+    Verifies that the output file path and language are correctly generated.
+    """
+    input_file_paths = {
+        "prompt_file": str(setup_test_files / "main_gen_LLM.prompt")
+    }
+    command_options = {
+        "output": str(setup_test_files)
+    }
+
+    input_strings, output_file_paths, language = construct_paths(
+        input_file_paths=input_file_paths,
+        force=True,
+        quiet=True,
+        command="generate",
+        command_options=command_options
+    )
+
+    assert language == "prompt"
+    assert output_file_paths["output"] == str(setup_test_files / "main_gen.prompt")
+
+def test_construct_paths_detects_incorrect_output_path(setup_test_files):
+    """
+    Test to identify the issue where an incorrect output path is generated for the 'generate' command.
+    The desired output path should be 'main_gen_LLM.py' within the specified directory,
+    but the current code incorrectly produces 'main_gen_LLM_.py'.
+    """
+    input_file_paths = {
+        "prompt_file": str(setup_test_files / "main_gen_LLM.prompt")
+    }
+    command_options = {
+        "output": str(setup_test_files)
+    }
+
+    _, output_file_paths, _ = construct_paths(
+        input_file_paths=input_file_paths,
+        force=True,
+        quiet=True,
+        command="generate",
+        command_options=command_options
+    )
+
+    # The desired output path should not have an extra underscore
+    desired_output_path = str(setup_test_files / "main_gen_LLM.py")
+    assert output_file_paths["output"] == desired_output_path, f"Expected {desired_output_path}, but got {output_file_paths['output']}"
