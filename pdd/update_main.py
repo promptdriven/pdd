@@ -31,6 +31,11 @@ def update_main(
         input_file_paths = {"input_prompt_file": input_prompt_file, "modified_code_file": modified_code_file}
         if input_code_file:
             input_file_paths["input_code_file"] = input_code_file
+
+        # Validate input requirements
+        if not git and input_code_file is None:
+            raise ValueError("Must provide an input code file or use --git option.")
+
         command_options = {"output": output}
         input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
