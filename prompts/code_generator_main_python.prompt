@@ -1,0 +1,92 @@
+% You are an expert Python engineer. Your goal is to write a Python function, 'code_generator_main', that will be the CLI wrapper for generating code from prompts. This function will read a prompt file, generate code using the code_generator function, and handle the output location.
+
+<include>./context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        - `ctx` (`click.Context`): The Click context object containing CLI options and parameters.
+        - 'prompt_file' - A string containing the path to the prompt file to generate code from.
+        - 'output' - An optional string containing the path where to save the generated code. If None, uses default naming convention.
+    Outputs:
+        - Returns a tuple containing (`str`, `float`, `str`):
+            - `str`: The generated code.
+            - `float`: The total cost of the operation.
+            - `str`: The name of the model used.
+
+% The function should:
+1. Use construct_paths to handle input/output file paths and get the language from the prompt filename
+2. Call code_generator with the prompt content, language, and necessary parameters from ctx.obj
+3. Save the generated code to the output location
+4. Handle errors appropriately with informative messages
+5. Support the global options like strength, temperature, and verbose
+6. Follow the output path specification rules from the CLI documentation
+
+<examples>
+   % Here is how to use the Python Click library to create a command line program:
+   <click_example>
+   <include>context/click_example.py</include>
+   </click_example>
+
+   % Here are examples of how to use internal modules:
+   <internal_example_modules>
+      - Here is an example of how to use the `construct_paths` function:
+      <construct_paths_example>
+      <include>context/construct_paths_example.py</include>
+      </construct_paths_example>
+
+      - Here is an example of how to use the `code_generator` function:
+      <code_generator_example>
+      <include>context/code_generator_example.py</include>
+      </code_generator_example>
+   </internal_example_modules>
+</examples>
+
+% Here is the README section for the 'generate' command that describes its behavior:
+<generate_command_docs>
+### 1. generate
+
+Create runnable code from a prompt file.
+
+```
+pdd [GLOBAL OPTIONS] generate [OPTIONS] PROMPT_FILE
+```
+
+Arguments:
+- `PROMPT_FILE`: The filename of the prompt file used to generate the code.
+
+Options:
+- `--output LOCATION`: Specify where to save the generated code. The default file name is `<basename>.<language_file_extension>`. If an environment variable `PDD_GENERATE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+
+Example:
+```
+pdd [GLOBAL OPTIONS] generate --output src/factorial_calculator.py factorial_calculator_python.prompt 
+```
+</generate_command_docs>
+
+% Here are the global options that need to be supported:
+<global_options>
+## Global Options
+
+These options can be used with any command:
+
+- `--force`: Overwrite existing files without asking for confirmation.
+- `--strength FLOAT`: Set the strength of the AI model (0.0 to 1.0, default is 0.5).
+- `--temperature FLOAT`: Set the temperature of the AI model (default is 0.0).
+- `--verbose`: Increase output verbosity for more detailed information.
+- `--quiet`: Decrease output verbosity for minimal information.
+- `--output-cost PATH_TO_CSV_FILE`: Enable cost tracking and output a CSV file with usage details.
+- `--review-examples`: Review and optionally exclude few-shot examples before command execution.
+</global_options>
+
+% Here is the output location specification section that describes how output paths should be handled:
+<output_location_docs>
+## Output Location Specification
+
+For all commands that generate or modify files, the `--output` option (or its variant, such as `--output-sub` or `--output-modified` for the `split` command) allows flexible specification of the output location:
+
+1. **Filename only**: If you provide just a filename (e.g., `--output result.py`), the file will be created in the current working directory.
+2. **Full path**: If you provide a full path (e.g., `--output /home/user/projects/result.py`), the file will be created at that exact location.
+3. **Directory**: If you provide a directory name (e.g., `--output ./generated/`), a file with an automatically generated name will be created in that directory.
+4. **Environment Variable**: If the `--output` option is not provided, and an environment variable specific to the command is set, PDD will use the path specified by this variable. Otherwise, it will use default naming conventions and save the file in the current working directory.
+5. **No Output Location**: If no output location is specified and no environment variable is set, the file will be saved in the current working directory with a default name given the command.
+</output_location_docs>
