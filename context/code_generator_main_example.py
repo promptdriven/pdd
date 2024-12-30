@@ -13,7 +13,7 @@ ctx.params = {
 
 # Set Click context object attributes (e.g., strength and temperature)
 ctx.obj = {
-    'strength': 0.7,  # Strength of the AI model (0.0 to 1.0)
+    'strength': 0.5,  # Strength of the AI model (0.0 to 1.0)
     'temperature': 0.2,  # Temperature for randomness (0.0 to 1.0)
 }
 
