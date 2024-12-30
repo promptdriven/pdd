@@ -85,15 +85,10 @@
         <include>context/split_main_example.py</include>
         </split_main_example>
 
-        - `update` command: To update the prompt file, use the `update_prompt` function. Here is an example of how to update the prompt file:
+        - `update` command and related sub-commands: To update the prompt file, use the `update_main` function. Here is an example of how to update the prompt file:
         <update_prompt_example>
-        <include>context/update_prompt_example.py</include>
+        <include>context/update_main_example.py</include>
         </update_prompt_example>
-
-        - `update --git` sub-command: To update the prompt file like above but without having to have the original code file, use the `git_update` function. Here is an example of how to update the prompt file by retrieving the original code file from a git repository:
-        <git_update_example>
-        <include>context/git_update_example.py</include>
-        </git_update_example>
 
         - `detect` command: To analyze a list of prompt files and a change description to determine which prompts need to be changed, use the `detect_change` function. Here is an example of how to detect prompts that need changes:
         <detect_change_example>
