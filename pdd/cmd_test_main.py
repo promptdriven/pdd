@@ -128,13 +128,11 @@ def cmd_test_main(
     if not output_file:
         print("[bold red]Error: Output file path could not be determined.[/bold red]")
         ctx.exit(1)
-
     try:
-        os.makedirs(os.path.dirname(output_file), exist_ok=True)
         with open(output_file, "w") as f:
             f.write(unit_test)
         print(
-            f"[bold green]Unit tests saved to:[/bold green] [link file://{output_file}]{output_file}[/link]"
+            f"[bold green]Unit tests saved to:[/bold green] {output_file}"
         )
     except Exception as e:
         print(f"[bold red]Error saving tests to file: {e}[/bold red]")
