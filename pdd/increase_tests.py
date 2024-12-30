@@ -76,7 +76,7 @@ def increase_tests(
         increase_test_function, total_cost, model_name = postprocess(
             llm_response['result'], 
             language, 
-            0.83,  # Same strength as LLM invoke
+            0.89,  # Same strength as LLM invoke
             temperature, 
             verbose
         )

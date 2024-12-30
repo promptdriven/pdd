@@ -86,14 +86,13 @@ def cmd_test_main(
     # Generate or enhance unit tests
     if not coverage_report:
         try:
-            for step in track(range(1), description="Generating unit tests..."):
-                unit_test, total_cost, model_name = generate_test(
-                    input_strings["prompt_file"],
-                    input_strings["code_file"],
-                    strength,
-                    temperature,
-                    language,
-                )
+            unit_test, total_cost, model_name = generate_test(
+                input_strings["prompt_file"],
+                input_strings["code_file"],
+                strength,
+                temperature,
+                language,
+            )
         except Exception as e:
             print(f"[bold red]Error generating tests: {e}[/bold red]")
             ctx.exit(1)
@@ -104,18 +103,16 @@ def cmd_test_main(
             )
             ctx.exit(1)
         try:
-            for step in track(range(1), description="Increasing test coverage..."):
-                unit_test, total_cost, model_name = increase_tests(
-                    existing_unit_tests=input_strings["existing_tests"],
-                    coverage_report=input_strings["coverage_report"],
-                    code=input_strings["code_file"],
-                    prompt_that_generated_code=input_strings["prompt_file"],
-                    language=language,
-                    strength=strength,
-                    temperature=temperature,
-                    verbose=verbose,
-                    target_coverage=target_coverage,
-                )
+            unit_test, total_cost, model_name = increase_tests(
+                existing_unit_tests=input_strings["existing_tests"],
+                coverage_report=input_strings["coverage_report"],
+                code=input_strings["code_file"],
+                prompt_that_generated_code=input_strings["prompt_file"],
+                language=language,
+                strength=strength,
+                temperature=temperature,
+                verbose=verbose,
+            )
         except Exception as e:
             print(f"[bold red]Error increasing test coverage: {e}[/bold red]")
             ctx.exit(1)
