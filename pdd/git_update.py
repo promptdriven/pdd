@@ -12,7 +12,8 @@ def git_update(
     input_prompt: str,
     modified_code_file: str,
     strength: float,
-    temperature: float
+    temperature: float,
+    verbose: bool = False
 ) -> Tuple[Optional[str], float, str]:
     """
     Read in modified code, restore the prior checked-in version from GitHub,
@@ -59,7 +60,8 @@ def git_update(
             input_code=original_input_code,
             modified_code=modified_code,
             strength=strength,
-            temperature=temperature
+            temperature=temperature,
+            verbose=verbose
         )
 
         # Write back the modified code
