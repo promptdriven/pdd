@@ -125,6 +125,10 @@ build:
 	@echo "Building pdd"
 	@python -m build
 
+clean:
+	@echo "Cleaning up"
+	@rm -rf output pdd/code_fixed.py tests/test_code_fixed.py output.csv
+
 analysis:
 	@echo "Running regression analysis"
 	@mkdir -p staging/regression
