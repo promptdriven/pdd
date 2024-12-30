@@ -62,7 +62,8 @@ def test_git_update_success(mock_repo, mock_update_prompt, mock_console_print):
                 input_code=ORIGINAL_CODE,
                 modified_code=ORIGINAL_CODE,
                 strength=STRENGTH,
-                temperature=TEMPERATURE
+                temperature=TEMPERATURE,
+                verbose=False
             )
             # Ensure the file was written with modified code
             m.assert_called_with(MODIFIED_CODE_FILE, 'w')
@@ -213,7 +214,8 @@ def test_git_update_empty_original_code(mock_repo, mock_update_prompt, mock_cons
                 input_code="",
                 modified_code="",
                 strength=STRENGTH,
-                temperature=TEMPERATURE
+                temperature=TEMPERATURE,
+                verbose=False
             )
 
 def test_git_update_non_tuple_return(mock_repo, mock_update_prompt, mock_console_print):
