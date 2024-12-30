@@ -1,116 +1,106 @@
-from typing import Tuple
 from rich import print
 from .load_prompt_template import load_prompt_template
+from .preprocess import preprocess
 from .llm_invoke import llm_invoke
 from .unfinished_prompt import unfinished_prompt
 from .continue_generation import continue_generation
 from .postprocess import postprocess
 
-def context_generator(
-    code_module: str,
-    prompt: str,
-    language: str = "python",
-    strength: float = 0.5,
-    temperature: float = 0.0,
-    verbose: bool = False
-) -> Tuple[str, float, str]:
+def context_generator(code_module: str, prompt: str, language: str = "python", strength: float = 0.5, temperature: float = 0, verbose: bool = False) -> tuple:
     """
-    Generate a concise example demonstrating how to use a code module properly.
+    Generates a concise example on how to use a given code module properly.
 
     Args:
-        code_module (str): The code module to generate an example for.
-        prompt (str): The prompt used to generate the code_module.
-        language (str, optional): Programming language. Defaults to "python".
-        strength (float, optional): LLM model strength (0-1). Defaults to 0.5.
-        temperature (float, optional): LLM temperature (0-1). Defaults to 0.0.
-        verbose (bool, optional): Print detailed information. Defaults to False.
+        code_module (str): The code module to generate a concise example for.
+        prompt (str): The prompt that was used to generate the code_module.
+        language (str): The language of the code module. Default is "python".
+        strength (float): The strength of the LLM model to use. Default is 0.5. Range is between 0 and 1.
+        temperature (float): The temperature of the LLM model to use. Default is 0. Range is between 0 and 1.
+        verbose (bool): Whether to print out the details of the function. Default is False.
 
     Returns:
-        Tuple[str, float, str]: (example_code, total_cost, model_name)
+        tuple: A tuple containing the example code, total cost, and model name.
     """
     try:
-        # Input validation
-        if not code_module or not prompt:
-            raise ValueError("code_module and prompt must not be empty")
-        if not 0 <= strength <= 1 or not 0 <= temperature <= 1:
-            raise ValueError("strength and temperature must be between 0 and 1")
-
-        total_cost = 0.0
-        model_name = ""
-
-        # Step 1: Load the example generator prompt template
-        example_prompt = load_prompt_template("example_generator_LLM")
-        if not example_prompt:
-            raise ValueError("Failed to load example generator prompt template")
-
+        # Step 1: Load and preprocess the 'example_generator_LLM' prompt template
+        prompt_template = load_prompt_template("example_generator_LLM")
+        if not prompt_template:
+            raise ValueError("Failed to load the 'example_generator_LLM' prompt template.")
+        
+        processed_prompt_template = preprocess(prompt_template, recursive=False, double_curly_brackets=False)
         if verbose:
-            print("[blue]Generating example using prompt template...[/blue]")
+            print("[blue]Processed Prompt Template:[/blue]")
+            print(processed_prompt_template)
 
-        # Step 2: Generate initial example using llm_invoke
-        input_json = {
-            "code_module": code_module,
-            "processed_prompt": prompt,
-            "language": language
-        }
+        # Step 2: Preprocess the input prompt and run the code through the model using llm_invoke
+        processed_prompt = preprocess(prompt, recursive=True, double_curly_brackets=True)
+        if verbose:
+            print("[blue]Processed Input Prompt:[/blue]")
+            print(processed_prompt)
 
-        initial_response = llm_invoke(
-            prompt=example_prompt,
-            input_json=input_json,
+        llm_response = llm_invoke(
+            prompt=processed_prompt_template,
+            input_json={
+                "code_module": code_module,
+                "processed_prompt": processed_prompt,
+                "language": language
+            },
             strength=strength,
             temperature=temperature,
             verbose=verbose
         )
 
-        total_cost += initial_response['cost']
-        model_name = initial_response['model_name']
-        initial_output = initial_response['result']
-
-        # Step 3: Check if generation is complete
-        last_chunk = initial_output[-600:] if len(initial_output) > 600 else initial_output
-        reasoning, is_finished, unfinished_cost, _ = unfinished_prompt(
-            prompt_text=last_chunk,
+        # Step 3: Detect if the generation is incomplete using the unfinished_prompt function
+        last_600_chars = llm_response['result'][-600:]
+        reasoning, is_finished, unfinished_cost, unfinished_model = unfinished_prompt(
+            prompt_text=last_600_chars,
             strength=0.5,
-            temperature=0.0,
+            temperature=temperature,
             verbose=verbose
         )
-        total_cost += unfinished_cost
 
-        if verbose:
-            print(f"[yellow]Completion check: {is_finished}[/yellow]")
-            print(f"[yellow]Reasoning: {reasoning}[/yellow]")
-
-        final_output = ""
         if not is_finished:
-            # Step 3a: Continue generation if incomplete
             if verbose:
-                print("[blue]Continuing incomplete generation...[/blue]")
-            
-            continued_output, continue_cost, continue_model = continue_generation(
-                formatted_input_prompt=example_prompt,
-                llm_output=initial_output,
+                print("[yellow]Generation is incomplete. Continuing generation...[/yellow]")
+            final_llm_output, continue_cost, continue_model = continue_generation(
+                formatted_input_prompt=processed_prompt_template,
+                llm_output=llm_response['result'],
                 strength=strength,
                 temperature=temperature,
                 verbose=verbose
             )
-            total_cost += continue_cost
+            total_cost = llm_response['cost'] + unfinished_cost + continue_cost
             model_name = continue_model
-            final_output = continued_output
         else:
-            # Step 3b: Postprocess if complete
             if verbose:
-                print("[blue]Post-processing complete generation...[/blue]")
-            
-            final_output, postprocess_cost, model_name = postprocess(
-                initial_output,
-                language,
-                strength=0.895,
-                temperature=temperature,
-                verbose=verbose
-            )
-            total_cost += postprocess_cost
+                print("[green]Generation is complete.[/green]")
+            final_llm_output = llm_response['result']
+            total_cost = llm_response['cost'] + unfinished_cost
+            model_name = llm_response['model_name']
 
-        return final_output, total_cost, model_name
+        # Step 4: Postprocess the model output result
+        example_code, postprocess_cost, postprocess_model = postprocess(
+            llm_output=final_llm_output,
+            language=language,
+            strength=0.9,
+            temperature=temperature,
+            verbose=verbose
+        )
+        total_cost += postprocess_cost
+
+        return example_code, total_cost, model_name
 
     except Exception as e:
-        print(f"[red]Error in context_generator: {str(e)}[/red]")
-        raise
+        print(f"[red]An error occurred: {e}[/red]")
+        return None, 0.0, None
+
+# Example usage
+if __name__ == "__main__":
+    code_module = "numpy"
+    prompt = "Generate a concise example of how to use numpy to create an array."
+    example_code, total_cost, model_name = context_generator(code_module, prompt, verbose=True)
+    if example_code:
+        print("[bold green]Generated Example Code:[/bold green]")
+        print(example_code)
+        print(f"[bold blue]Total Cost: ${total_cost:.6f}[/bold blue]")
+        print(f"[bold blue]Model Name: {model_name}[/bold blue]")

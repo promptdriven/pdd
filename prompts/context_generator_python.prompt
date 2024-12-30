@@ -22,6 +22,11 @@
             <include>context/load_prompt_template_example.py</include>
         </load_prompt_template_example>
 
+        For preprocessing prompts:
+        <preprocess_example>
+            <include>context/preprocess_example.py</include>
+        </preprocess_example>
+
         For running prompts with llm_invoke:
         <llm_invoke_example>
             <include>context/llm_invoke_example.py</include>
@@ -44,11 +49,11 @@
     </internal_modules>
 
 % This function will do the following:
-    Step 1. Load the 'example_generator_LLM' prompt template.
+    Step 1. Load and preprocess (with parameters recursive=False and double_curly_brackets=False) the 'example_generator_LLM' prompt template.
     Step 2. Run the code through the model using llm_invoke. 
         2a. Pass the following string parameters to the prompt during invoke:
             - 'code_module'
-            - 'processed_prompt'
+            - 'processed_prompt' (preprocess with parameters recursive=True and double_curly_brackets=True the input prompt)
             - 'language'
     Step 3. Detect if the generation is incomplete using the unfinished_prompt function (strength .5) by passing in the last 600 characters of the output of Step 2.
         - a. If incomplete, call the continue_generation function to complete the generation.
