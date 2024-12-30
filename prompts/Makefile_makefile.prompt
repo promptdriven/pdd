@@ -7,11 +7,14 @@
     e) Tests (e.g. test_*.py)
   - Testing- Be sure to incude the staging Python modules directory in the PYTHONPATH when running tests so it can find the modules. Also, use unittest to run the tests.
   - Cleaning
+    - Remove the 'output' directory.
+    - Remove the 'pdd/code_fixed.py' file.
+    - Remove the 'tests/test_code_fixed.py' file.
+    - Remove the 'output.csv' file.
   - Generating requirements.txt from pipreqs
   - Production (e.g. copy files from staging to pdd)
   - Staging (e.g. copy files from pdd, context, tests and data  to staging to reduce the cost of regenerating everything)
   - etc.
-
 
 % Here is the help of pdd: ```<./README.md>```
   
@@ -93,4 +96,4 @@
   - Prompts have different output file extensions depending on the language. For instance, '_makefile.prompt' has no file extensions, '_csv.prompt' end in '.csv', '_python.prompt' end in '.py', etc. As a result, there needs to be separate generate for each type of language.
   - Print out the commands as they run.
   - If the directory doesn't already exist, create it.
-  - To run 'pdd', use the command: ```python pdd/pdd.py```
+  - To run 'pdd', use the command: ```python pdd/pdd.py`````
