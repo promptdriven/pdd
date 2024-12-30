@@ -21,12 +21,39 @@ def context_generator(code_module: str, prompt: str, language: str = "python", s
     Returns:
         tuple: A tuple containing the example code, total cost, and model name.
     """
+    # Step 0: Input validation
+    if not code_module:
+        if verbose:
+            print("[red]Error: code_module is missing.[/red]")
+        return None, 0.0, None
+
+    if not prompt:
+        if verbose:
+            print("[red]Error: prompt is missing.[/red]")
+        return None, 0.0, None
+
+    supported_languages = ["python", "javascript", "java"]
+    if language not in supported_languages:
+        if verbose:
+            print(f"[red]Error: Unsupported language '{language}'.[/red]")
+        return None, 0.0, None
+
+    if not (0 <= strength <= 1):
+        if verbose:
+            print(f"[red]Error: Invalid strength '{strength}'. Must be between 0 and 1.[/red]")
+        return None, 0.0, None
+
+    if not (0 <= temperature <= 1):
+        if verbose:
+            print(f"[red]Error: Invalid temperature '{temperature}'. Must be between 0 and 1.[/red]")
+        return None, 0.0, None
+
     try:
         # Step 1: Load and preprocess the 'example_generator_LLM' prompt template
         prompt_template = load_prompt_template("example_generator_LLM")
         if not prompt_template:
             raise ValueError("Failed to load the 'example_generator_LLM' prompt template.")
-        
+
         processed_prompt_template = preprocess(prompt_template, recursive=False, double_curly_brackets=False)
         if verbose:
             print("[blue]Processed Prompt Template:[/blue]")
