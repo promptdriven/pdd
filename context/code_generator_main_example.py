@@ -18,7 +18,7 @@ ctx.obj = {
 }
 
 # Define the path to the prompt file
-prompt_file = "prompts/example_prompt.prompt"
+prompt_file = "output/example_prompt.prompt"
 
 # Create the prompt file content
 prompt_content = """
@@ -34,7 +34,7 @@ with open(prompt_file, "w") as f:
     f.write(prompt_content)
 
 # Define the output file path (optional)
-output_file = "generated_code/factorial.py"
+output_file = "output/factorial.py"
 
 # Call the code_generator_main function
 generated_code, total_cost, model_name = code_generator_main(
