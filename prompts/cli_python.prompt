@@ -65,15 +65,10 @@
         <include>context/context_generator_example.py</include>
         </context_generator_example>
 
-        - `test` command: To generate a unit test from code and its prompt file, use `generate_test`. Here is an example of how to generate a unit test from a code file:
+        - `test` command: To generate or to increase coverage of a unit test from code and its prompt file, use `cmd_test_main`. Here is an example of how to generate/increase coverage of  a unit test from a code file:
         <generate_test_example>
-        <include>context/generate_test_example.py</include>
+        <include>context/cmd_test_main_example.py</include>
         </generate_test_example>
-
-        - `test --coverage_report` sub-command: To generate more tests to increase test coverage for the unit tests, use the `increase_tests` function. Here is an example of how to increase coverage for the unit tests:
-        <increase_tests_example>
-        <include>context/increase_tests_example.py</include>
-        </increase_tests_example>
 
         - `preprocess` command: The core logic is implemented in the `preprocess_main` function, defined in a separate module. Here's how to use `preprocess_main`:
         <preprocess_main_example>
