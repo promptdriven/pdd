@@ -55,9 +55,9 @@
         <include>context/change_main_example.py</include>
         </change_main_example>
 
-        - `generate` command: To generate runnable code from a prompt file, use `code_generator`. Here is an example of how to generate code from the prompt from a file:
+        - `generate` command: To generate runnable code from a prompt file, use `code_generator_main`. Here is an example of how to generate code from the prompt from a file:
         <code_generator_example>
-        <include>context/code_generator_example.py</include>
+        <include>context/code_generator_main_example.py</include>
         </code_generator_example>
 
         - `example` command: To generate example code from a code file, use `context_generator`. Here is an example of how to generate an example from a code file:
