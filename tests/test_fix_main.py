@@ -8,6 +8,11 @@ from rich.console import Console
 # Since the code under test is in pdd/fix_main.py, we import the fix_main function here:
 from pdd.fix_main import fix_main
 
+# create the output directory if it does not exist
+import os
+os.makedirs("output", exist_ok=True)
+
+
 @pytest.fixture
 def mock_ctx():
     """
@@ -49,8 +54,8 @@ def test_fix_main_without_loop(
             'error_file': 'Error message content'
         },
         {
-            'output_test': 'tests/test_code_fixed.py',
-            'output_code': 'pdd/code_fixed.py',
+            'output_test': 'output/test_code_fixed.py',
+            'output_code': 'output/code_fixed.py',
             'output_results': 'results/fix_results.log'
         },
         None
@@ -130,8 +135,8 @@ def test_fix_main_with_loop(
             'unit_test_file': 'Test unit test file content'
         },
         {
-            'output_test': 'tests/test_code_fixed.py',
-            'output_code': 'pdd/code_fixed.py',
+            'output_test': 'output/test_code_fixed.py',
+            'output_code': 'output/code_fixed.py',
             'output_results': 'results/fix_results.log'
         },
         None
