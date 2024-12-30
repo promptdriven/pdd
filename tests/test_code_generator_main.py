@@ -4,6 +4,11 @@ from click.testing import CliRunner
 import sys
 from pdd.code_generator_main import code_generator_main
 
+#if output directory does not exist, create it
+import os   
+os.makedirs("output", exist_ok=True)
+
+
 # Mock the construct_paths and code_generator functions
 @patch('pdd.code_generator_main.construct_paths')
 @patch('pdd.code_generator_main.code_generator')
@@ -18,7 +23,7 @@ def test_code_generator_main_success(mock_code_generator, mock_construct_paths):
 
     mock_construct_paths.return_value = (
         {"prompt_file": "mock_prompt_content"},
-        {"output": "mock_output_path"},
+        {"output": "output/mock_output_path"},
         "python"
     )
 
@@ -73,7 +78,7 @@ def test_code_generator_main_generation_error(mock_code_generator, mock_construc
 
     mock_construct_paths.return_value = (
         {"prompt_file": "mock_prompt_content"},
-        {"output": "mock_output_path"},
+        {"output": "output/mock_output_path"},
         "python"
     )
 
@@ -96,7 +101,7 @@ def test_code_generator_main_quiet_mode(mock_code_generator, mock_construct_path
 
     mock_construct_paths.return_value = (
         {"prompt_file": "mock_prompt_content"},
-        {"output": "mock_output_path"},
+        {"output": "output/mock_output_path"},
         "python"
     )
 
