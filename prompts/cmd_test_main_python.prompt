@@ -32,6 +32,11 @@
       <generate_test_example>
       <include>context/generate_test_example.py</include>
       </generate_test_example>
+
+      - Here how to increase coverage for the `test --coverage_report` sub-command by using the `increase_tests` function. Here is an example of how to increase coverage for the unit tests:
+        <increase_tests_example>
+        <include>context/increase_tests_example.py</include>
+        </increase_tests_example>
    </internal_example_modules>
 </examples>
 
@@ -39,33 +44,3 @@
    <cli_command_readme>
    <include>./README.md</include>
    </cli_command_readme>
-
-% Additional Requirements:
-1. The function should handle the following CLI options:
-   - `--output`: Specify where to save the generated test file. The default file name is `test_<basename>.<language_file_extension>`.
-   - `--language`: Specify the programming language. Defaults to the language specified by the prompt file name.
-2. The function should use the `construct_paths` function to handle input and output file paths.
-3. The function should use the `generate_test` function to generate the unit tests.
-4. The function should support the global options like `--verbose`, `--strength`, and `--temperature` passed through the `ctx` object.
-5. The function should handle errors gracefully and print appropriate error messages using the `rprint` function from the `rich` library.
-6. The function should return the generated unit test code, the total cost of the operation, and the name of the model used.
-
-% Example Usage:
-```python
-# Generate initial unit tests
-cmd_test_main(ctx, "factorial_calculator_python.prompt", "src/factorial_calculator.py", output="tests/test_factorial_calculator.py", language="python")
-```
-
-% Example Output:
-```python
-# Generated unit test code
-def test_factorial():
-    assert factorial(5) == 120
-    assert factorial(0) == 1
-    assert factorial(1) == 1
-```
-
-% Error Handling:
-- If the prompt file or code file does not exist, the function should print an error message and exit with a non-zero status code.
-- If the `generate_test` function fails, the function should print an error message and exit with a non-zero status code.
-- If the output file cannot be written, the function should print an error message and exit with a non-zero status code.
