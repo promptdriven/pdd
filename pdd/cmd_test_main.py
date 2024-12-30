@@ -39,6 +39,13 @@ def cmd_test_main(
     Returns:
         Tuple[str, float, str]: Generated unit test code, total cost, and model name.
     """
+    # Initialize variables
+    unit_test = ""
+    total_cost = 0.0
+    model_name = ""
+    output_file_paths = {"output": output}
+    input_strings = {}
+
     verbose = ctx.obj["verbose"]
     strength = ctx.obj["strength"]
     temperature = ctx.obj["temperature"]
@@ -79,6 +86,7 @@ def cmd_test_main(
     except Exception as e:
         print(f"[bold red]Error constructing paths: {e}[/bold red]")
         ctx.exit(1)
+        return "", 0.0, ""
 
     if verbose:
         print(f"[bold blue]Language detected:[/bold blue] {language}")
@@ -96,12 +104,14 @@ def cmd_test_main(
         except Exception as e:
             print(f"[bold red]Error generating tests: {e}[/bold red]")
             ctx.exit(1)
+            return "", 0.0, ""
     else:
         if not existing_tests:
             print(
                 "[bold red]Error: --existing-tests is required when using --coverage-report[/bold red]"
             )
             ctx.exit(1)
+            return "", 0.0, ""
         try:
             unit_test, total_cost, model_name = increase_tests(
                 existing_unit_tests=input_strings["existing_tests"],
@@ -116,6 +126,7 @@ def cmd_test_main(
         except Exception as e:
             print(f"[bold red]Error increasing test coverage: {e}[/bold red]")
             ctx.exit(1)
+            return "", 0.0, ""
 
     # Handle output
     output_file = output_file_paths["output"]
@@ -125,6 +136,7 @@ def cmd_test_main(
     if not output_file:
         print("[bold red]Error: Output file path could not be determined.[/bold red]")
         ctx.exit(1)
+        return "", 0.0, ""
     try:
         with open(output_file, "w") as f:
             f.write(unit_test)
@@ -134,6 +146,7 @@ def cmd_test_main(
     except Exception as e:
         print(f"[bold red]Error saving tests to file: {e}[/bold red]")
         ctx.exit(1)
+        return "", 0.0, ""
 
     if verbose:
         print(f"[bold blue]Total cost:[/bold blue] ${total_cost:.6f}")
