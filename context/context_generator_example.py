@@ -20,7 +20,8 @@ example_code, total_cost, model_name = context_generator(
     prompt=prompt,
     language=language,
     strength=strength,
-    temperature=temperature
+    temperature=temperature,
+    verbose=True
 )
 
 # Print the results

@@ -4,3 +4,4 @@
     - When creating Click examples, be sure to pass in arguments so the example can be run without user input.
     - When working with files, create the content of required examples files that would be read by the function.
     - Do not use try/except blocks in the examples.
+    - created files should be in the output directory.
