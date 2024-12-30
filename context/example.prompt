@@ -1,5 +1,5 @@
     - The environment variables are already set and packages are already installed so just show how to use the module.
-    - Know that the generated example will be in a different directory ('pdd') than the module it is calling and will need an absolute reference. The module file name will be same as the function name.
+    - Know that the generated example will be in a different directory ('pdd') than the module it is calling and will need an absolute reference (e.g. `from pdd.module_name import module_name`). The module file name will be same as the function name.
     - Be sure the units if any are described for the inputs and outputs (e.g. in dollars per million tokens)
     - When creating Click examples, be sure to pass in arguments so the example can be run without user input.
     - When working with files, create the content of required examples files that would be read by the function.
