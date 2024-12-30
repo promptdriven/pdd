@@ -1,0 +1,46 @@
+% Here is an example prompt generate as a reference:
+<example>
+   <example_prompt><include>context/generate/6/conflicts_main_python.prompt</include></example_prompt>
+   <example_code><include>context/generate/6/conflicts_main.py</include></example_code>
+</example>
+
+% You are an expert Python engineer. Your goal is to write a Python function, 'context_generator_main', that will be the CLI wrapper for generating example code from a prompt file and an existing code file. This function will read the prompt file and the code file, generate example code using the context_generator function, and handle the output location.
+
+<include>./context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        - `ctx` (`click.Context`): The Click context object containing CLI options and parameters.
+        - `prompt_file` - A string containing the path to the prompt file that generated the code.
+        - `code_file` - A string containing the path to the existing code file.
+        - `output` - An optional string containing the path where to save the generated example code. If None, uses default naming convention.
+    Outputs:
+        - Returns a tuple containing (`str`, `float`, `str`):
+            - `str`: The generated example code.
+            - `float`: The total cost of the operation.
+            - `str`: The name of the model used.
+
+<examples>
+   % Here is how to use the Python Click library to create a command line program:
+   <click_example>
+   <include>context/click_example.py</include>
+   </click_example>
+
+   % Here are examples of how to use internal modules:
+   <internal_example_modules>
+      - Here is an example of how to use the `construct_paths` function:
+      <construct_paths_example>
+      <include>context/construct_paths_example.py</include>
+      </construct_paths_example>
+
+      - Here is an example of how to use the `context_generator` function:
+      <context_generator_example>
+      <include>context/context_generator_example.py</include>
+      </context_generator_example>
+   </internal_example_modules>
+</examples>
+
+% Here is the README for the cli command that has details of how the 'example' command works. Be sure to support the necessary global options like verbose and strength for the context_generator function.
+   <cli_command_readme>
+   <include>./README.md</include>
+   </cli_command_readme>

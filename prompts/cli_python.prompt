@@ -60,9 +60,9 @@
         <include>context/code_generator_main_example.py</include>
         </code_generator_example>
 
-        - `example` command: To generate example code from a code file, use `context_generator`. Here is an example of how to generate an example from a code file:
+        - `example` command: To generate example code from a code file, use `context_generator_main`. Here is an example of how to generate an example from a code file:
         <context_generator_example>
-        <include>context/context_generator_example.py</include>
+        <include>context/context_generator_main_example.py</include>
         </context_generator_example>
 
         - `test` command: To generate or to increase coverage of a unit test from code and its prompt file, use `cmd_test_main`. Here is an example of how to generate/increase coverage of  a unit test from a code file:
