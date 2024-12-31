@@ -80,7 +80,7 @@ def crash_main(
                 max_attempts=max_attempts or 3,
                 budget=budget or 5.0,
                 error_log_file=error_file,
-                verbose=not ctx.params.get('quiet', False)
+                verbose=not ctx.params.get('verbose', False)
             )
         else:
             # Use single fix attempt
@@ -92,7 +92,7 @@ def crash_main(
                 errors=error_content,
                 strength=strength,
                 temperature=temperature,
-                verbose=not ctx.params.get('quiet', False)
+                verbose=not ctx.params.get('verbose', False)
             )
             success = True
             attempts = 1

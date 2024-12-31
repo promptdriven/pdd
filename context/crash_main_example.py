@@ -57,7 +57,7 @@ RecursionError: maximum recursion depth exceeded
     # Create a mock Click context with model parameters
     ctx = click.Context(click.Command('crash'))
     ctx.obj = {'strength': 0.9, 'temperature': 0}
-    ctx.params = {'force': True, 'quiet': False}
+    ctx.params = {'force': True, 'quiet': False, 'verbose': True}
 
     # Call crash_main with iterative fixing enabled
     success, fixed_code, fixed_program, attempts, cost, model = crash_main(
