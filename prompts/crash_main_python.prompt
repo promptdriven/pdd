@@ -1,0 +1,61 @@
+% Here is an example prompt generate as a reference:
+<example>
+   <example_prompt><include>context/generate/6/conflicts_main_python.prompt</include></example_prompt>
+   <example_code><include>context/generate/6/conflicts_main.py</include></example_code>
+</example>
+
+% You are an expert Python engineer. Your goal is to write a Python function, 'crash_main', that will be the CLI wrapper for fixing errors in a code module and its calling program that caused a program to crash. This function will read the necessary files, call the fix_code_module_errors function, and handle the output locations.
+
+<include>./context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        - `ctx` (`click.Context`): The Click context object containing CLI options and parameters.
+        - 'prompt_file' (str): Filename of the prompt file that generated the code module.
+        - 'code_file' (str): Filename of the code module that caused the crash and will be modified.
+        - 'program_file' (str): Filename of the program that was running the code module.
+        - 'error_file' (str): Filename of the file containing the errors from the program run.
+        - 'output' (Optional[str]): Path where to save the fixed code file. If None, uses default naming convention.
+        - 'output_program' (Optional[str]): Path where to save the fixed program file. If None, uses default naming convention.
+        - 'loop' (bool): Enable iterative fixing process. Default is False.
+        - 'max_attempts' (Optional[int]): Maximum number of fix attempts before giving up. Only used if loop=True. Default is 3.
+        - 'budget' (Optional[float]): Maximum cost allowed for the fixing process. Only used if loop=True. Default is $5.0.
+    
+    Outputs:
+        - Returns a tuple containing:
+            - `bool`: Success status
+            - `str`: The final fixed code module
+            - `str`: The final fixed program
+            - `int`: Total number of fix attempts made
+            - `float`: Total cost of all fix attempts
+            - `str`: The name of the model used
+
+<examples>
+   % Here is how to use the Python Click library to create a command line program:
+   <click_example>
+   <include>context/click_example.py</include>
+   </click_example>
+
+   % Here are examples of how to use internal modules:
+   <internal_example_modules>
+      - Here is an example of how to use the `construct_paths` function:
+      <construct_paths_example>
+      <include>context/construct_paths_example.py</include>
+      </construct_paths_example>
+
+      - Here is an example of how to use the `fix_code_module_errors` function:
+      <fix_code_module_errors_example>
+      <include>context/fix_code_module_errors_example.py</include>
+      </fix_code_module_errors_example>
+
+      - Here is an example of how to use the `fix_code_loop` function:
+      <fix_code_loop_example>
+      <include>context/fix_code_loop_example.py</include>
+      </fix_code_loop_example>
+   </internal_example_modules>
+</examples>
+
+% Here is the README for the cli command that has details of how the 'crash' command and related sub-command works:
+   <cli_command_readme>
+   <include>./README.md</include>
+   </cli_command_readme>
