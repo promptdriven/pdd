@@ -3,7 +3,7 @@ import subprocess
 import shutil
 from rich.console import Console
 from rich import print as rprint
-from pdd.fix_code_module_errors import fix_code_module_errors  # Assuming this module exists
+from pdd.fix_code_module_errors import fix_code_module_errors
 
 def fix_code_loop(
     code_file: str,
@@ -48,8 +48,15 @@ def fix_code_loop(
     # Step 2: Initialize variables
     total_attempts = 0
     total_cost = 0.0
-    best_iteration = 0
-    model_name = ""  # Initialize model_name
+    model_name = ""
+
+    # Check if verification program exists
+    if not os.path.exists(verification_program):
+        error_message = f"Error: Verification program not found at {verification_program}"
+        rprint(f"[bold red]{error_message}[/bold red]")
+        with open(error_log_file, "a") as f:
+            f.write(error_message + "\n")
+        return False, "", "", total_attempts, total_cost, model_name
 
     # Create backup copies of the original files
     original_verification_program = verification_program + ".original"
@@ -58,6 +65,7 @@ def fix_code_loop(
     shutil.copy(code_file, original_code_file)
 
     # Step 3: Main loop
+    success = False
     while total_attempts < max_attempts:
         # Step 3a: Print iteration information
         rprint(f"\n[bold blue]Attempt: {total_attempts + 1}[/bold blue]")
@@ -116,6 +124,12 @@ def fix_code_loop(
                 f.write(f"Error reading files: {e}\n")
             return False, "", "", total_attempts, total_cost, model_name
 
+        # Check budget before calling fix_code_module_errors
+        if total_cost >= budget:
+            rprint(f"[bold red]Budget exceeded. Stopping.[/bold red]")
+            success = False
+            break
+
         # Call fix_code_module_errors with temporary console
         temp_console = Console(file=open(os.devnull, "w"), record=True)
         with temp_console.capture() as capture:
@@ -135,11 +149,11 @@ def fix_code_loop(
         with open(error_log_file, "a") as f:
             f.write(captured_output)
 
+        # Update total cost and check budget again
         total_cost += cost
-
-        # Check budget
         if total_cost > budget:
-            rprint(f"[bold red]Budget exceeded. Stopping.[/bold red]")
+            rprint(f"[bold red]Budget exceeded after fix attempt. Stopping.[/bold red]")
+            success = False
             break
 
         # Check if no changes were needed
@@ -175,17 +189,18 @@ def fix_code_loop(
         rprint("[bold yellow]Restoring original files.[/bold yellow]")
         shutil.copy(original_verification_program, verification_program)
         shutil.copy(original_code_file, code_file)
-
-    # Step 5: Return results
-    try:
-        with open(verification_program, "r") as f:
-            final_program = f.read()
-        with open(code_file, "r") as f:
-            final_code = f.read()
-    except FileNotFoundError as e:
-        rprint(f"[bold red]Error reading final files: {e}[/bold red]")
-        with open(error_log_file, "a") as f:
-            f.write(f"Error reading final files: {e}\n")
-        return False, "", "", total_attempts, total_cost, model_name
+        final_program = ""
+        final_code = ""
+    else:
+        try:
+            with open(verification_program, "r") as f:
+                final_program = f.read()
+            with open(code_file, "r") as f:
+                final_code = f.read()
+        except FileNotFoundError as e:
+            rprint(f"[bold red]Error reading final files: {e}[/bold red]")
+            with open(error_log_file, "a") as f:
+                f.write(f"Error reading final files: {e}\n")
+            return False, "", "", total_attempts, total_cost, model_name
 
     return success, final_program, final_code, total_attempts, total_cost, model_name
