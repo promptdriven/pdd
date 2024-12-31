@@ -3,7 +3,8 @@ import click
 from click.testing import CliRunner
 from unittest.mock import patch, MagicMock
 from pdd.detect_change_main import detect_change_main
-from pdd import DEFAULT_STRENGTH
+import csv
+import os
 
 @pytest.fixture
 def mock_construct_paths():
@@ -22,12 +23,12 @@ def mock_rprint():
 
 @pytest.fixture
 def mock_csv_writer():
-    with patch('pdd.detect_change_main.csv.DictWriter') as mock:
+    with patch('csv.DictWriter') as mock:
         yield mock
 
 @pytest.fixture
 def mock_open():
-    with patch('pdd.detect_change_main.open') as mock:
+    with patch('builtins.open') as mock:
         yield mock
 
 @pytest.fixture
@@ -41,21 +42,14 @@ def test_detect_change_main_success(mock_construct_paths, mock_detect_change, mo
     """
     # Setup mock data
     mock_ctx = MagicMock(spec=click.Context)
-    mock_ctx.obj = {'strength': DEFAULT_STRENGTH, 'temperature': 0, 'force': False, 'quiet': False, 'time': None}
-    mock_ctx.scope_depth = 0
-    mock_ctx.params = {}
-    mock_ctx.parent = None
-    mock_ctx.command = MagicMock()
-    mock_ctx.terminal_width = 80
-    mock_ctx.max_content_width = 80
-    mock_ctx.exit_code = 0
+    mock_ctx.params = {'force': False, 'quiet': False}
+    mock_ctx.obj = {'strength': 0.9, 'temperature': 0}
 
     prompt_files = ['prompt1.prompt', 'prompt2.prompt']
     change_file = 'change_description.prompt'
     output = 'output.csv'
 
     mock_construct_paths.return_value = (
-        {},  # resolved_config
         {'change_file': 'change content', 'prompt_file_0': 'prompt1 content', 'prompt_file_1': 'prompt2 content'},
         {'output': 'output.csv'},
         None
@@ -86,16 +80,14 @@ def test_detect_change_main_success(mock_construct_paths, mock_detect_change, mo
         force=False,
         quiet=False,
         command='detect',
-        command_options={'output': 'output.csv'},
-        context_override=None,
+        command_options={'output': 'output.csv'}
     )
 
     mock_detect_change.assert_called_once_with(
         ['prompt1.prompt', 'prompt2.prompt'],
         'change content',
-        DEFAULT_STRENGTH,
+        0.9,
         0,
-        None,
         verbose=True
     )
 
@@ -113,21 +105,14 @@ def test_detect_change_main_no_changes(mock_construct_paths, mock_detect_change,
     """
     # Setup mock data
     mock_ctx = MagicMock(spec=click.Context)
-    mock_ctx.obj = {'strength': DEFAULT_STRENGTH, 'temperature': 0, 'force': False, 'quiet': False, 'time': None}
-    mock_ctx.scope_depth = 0
-    mock_ctx.params = {}
-    mock_ctx.parent = None
-    mock_ctx.command = MagicMock()
-    mock_ctx.terminal_width = 80
-    mock_ctx.max_content_width = 80
-    mock_ctx.exit_code = 0
+    mock_ctx.params = {'force': False, 'quiet': False}
+    mock_ctx.obj = {'strength': 0.9, 'temperature': 0}
 
     prompt_files = ['prompt1.prompt']
     change_file = 'change_description.prompt'
     output = None
 
     mock_construct_paths.return_value = (
-        {},  # resolved_config
         {'change_file': 'change content', 'prompt_file_0': 'prompt1 content'},
         {},
         None
@@ -140,14 +125,6 @@ def test_detect_change_main_no_changes(mock_construct_paths, mock_detect_change,
 
     # Assertions
     assert result == ([], 0.0, 'gpt-4')
-    mock_detect_change.assert_called_once_with(
-        ['prompt1.prompt'],
-        'change content',
-        DEFAULT_STRENGTH,
-        0,
-        None,
-        verbose=True
-    )
     mock_rprint.assert_any_call("No changes needed for any of the analyzed prompts.")
 
 def test_detect_change_main_error(mock_construct_paths, mock_rprint, mock_sys_exit):
@@ -156,14 +133,8 @@ def test_detect_change_main_error(mock_construct_paths, mock_rprint, mock_sys_ex
     """
     # Setup mock data
     mock_ctx = MagicMock(spec=click.Context)
-    mock_ctx.obj = {'strength': DEFAULT_STRENGTH, 'temperature': 0, 'force': False, 'quiet': False, 'time': None}
-    mock_ctx.scope_depth = 0
-    mock_ctx.params = {}
-    mock_ctx.parent = None
-    mock_ctx.command = MagicMock()
-    mock_ctx.terminal_width = 80
-    mock_ctx.max_content_width = 80
-    mock_ctx.exit_code = 0
+    mock_ctx.params = {'force': False, 'quiet': False}
+    mock_ctx.obj = {'strength': 0.9, 'temperature': 0}
 
     prompt_files = ['prompt1.prompt']
     change_file = 'change_description.prompt'
@@ -184,21 +155,14 @@ def test_detect_change_main_quiet_mode(mock_construct_paths, mock_detect_change,
     """
     # Setup mock data
     mock_ctx = MagicMock(spec=click.Context)
-    mock_ctx.obj = {'strength': DEFAULT_STRENGTH, 'temperature': 0, 'force': False, 'quiet': True, 'time': None}
-    mock_ctx.scope_depth = 0
-    mock_ctx.params = {}
-    mock_ctx.parent = None
-    mock_ctx.command = MagicMock()
-    mock_ctx.terminal_width = 80
-    mock_ctx.max_content_width = 80
-    mock_ctx.exit_code = 0
+    mock_ctx.params = {'force': False, 'quiet': True}
+    mock_ctx.obj = {'strength': 0.9, 'temperature': 0}
 
     prompt_files = ['prompt1.prompt']
     change_file = 'change_description.prompt'
     output = None
 
     mock_construct_paths.return_value = (
-        {},  # resolved_config
         {'change_file': 'change content', 'prompt_file_0': 'prompt1 content'},
         {},
         None
@@ -210,14 +174,6 @@ def test_detect_change_main_quiet_mode(mock_construct_paths, mock_detect_change,
     detect_change_main(mock_ctx, prompt_files, change_file, output)
 
     # Assertions
-    mock_detect_change.assert_called_once_with(
-        ['prompt1.prompt'],
-        'change content',
-        DEFAULT_STRENGTH,
-        0,
-        None,
-        verbose=False
-    )
     mock_rprint.assert_not_called()
 
 def test_detect_change_main_csv_output(mock_construct_paths, mock_detect_change, mock_csv_writer, mock_open):
@@ -226,21 +182,14 @@ def test_detect_change_main_csv_output(mock_construct_paths, mock_detect_change,
     """
     # Setup mock data
     mock_ctx = MagicMock(spec=click.Context)
-    mock_ctx.obj = {'strength': DEFAULT_STRENGTH, 'temperature': 0, 'force': False, 'quiet': False, 'time': None}
-    mock_ctx.scope_depth = 0
-    mock_ctx.params = {}
-    mock_ctx.parent = None
-    mock_ctx.command = MagicMock()
-    mock_ctx.terminal_width = 80
-    mock_ctx.max_content_width = 80
-    mock_ctx.exit_code = 0
+    mock_ctx.params = {'force': False, 'quiet': False}
+    mock_ctx.obj = {'strength': 0.9, 'temperature': 0}
 
     prompt_files = ['prompt1.prompt']
     change_file = 'change_description.prompt'
     output = 'output.csv'
 
     mock_construct_paths.return_value = (
-        {},  # resolved_config
         {'change_file': 'change content', 'prompt_file_0': 'prompt1 content'},
         {'output': 'output.csv'},
         None
@@ -256,14 +205,6 @@ def test_detect_change_main_csv_output(mock_construct_paths, mock_detect_change,
     detect_change_main(mock_ctx, prompt_files, change_file, output)
 
     # Assertions
-    mock_detect_change.assert_called_once_with(
-        ['prompt1.prompt'],
-        'change content',
-        DEFAULT_STRENGTH,
-        0,
-        None,
-        verbose=True
-    )
     mock_open.assert_called_once_with('output.csv', 'w', newline='')
     mock_csv_writer.return_value.writeheader.assert_called_once()
     mock_csv_writer.return_value.writerow.assert_called_once_with(

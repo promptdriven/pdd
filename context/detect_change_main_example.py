@@ -8,8 +8,8 @@ def main():
     """
     # Create a Click context object to simulate CLI parameters
     ctx = click.Context(click.Command('detect_change_main'))
-    # ctx.params = {'force': False, 'quiet': False}  # Default CLI options
-    ctx.obj = {'strength': 0.5, 'temperature': 0, 'force': False, 'quiet': False}  # Model parameters
+    ctx.params = {'force': False, 'quiet': False}  # Default CLI options
+    ctx.obj = {'strength': 0.5, 'temperature': 0}  # Model parameters
 
     # Define the list of prompt files and the change description file
     prompt_files = [

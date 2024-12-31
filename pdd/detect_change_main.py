@@ -6,7 +6,6 @@ from rich import print as rprint
 
 from .construct_paths import construct_paths
 from .detect_change import detect_change
-from . import DEFAULT_TIME, DEFAULT_STRENGTH
 
 def detect_change_main(
     ctx: click.Context,
@@ -39,13 +38,12 @@ def detect_change_main(
             "output": output
         }
 
-        resolved_config, input_strings, output_file_paths, _ = construct_paths(
+        input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
-            force=ctx.obj.get('force', False),
-            quiet=ctx.obj.get('quiet', False),
+            force=ctx.params.get('force', False),
+            quiet=ctx.params.get('quiet', False),
             command="detect",
-            command_options=command_options,
-            context_override=ctx.obj.get('context')
+            command_options=command_options
         )
 
         # Get change description content
@@ -55,9 +53,8 @@ def detect_change_main(
         prompt_contents = [input_strings[f"prompt_file_{i}"] for i in range(len(prompt_files))]
 
         # Get model parameters from context
-        strength = ctx.obj.get('strength', DEFAULT_STRENGTH)
+        strength = ctx.obj.get('strength', 0.9)
         temperature = ctx.obj.get('temperature', 0)
-        time_budget = ctx.obj.get('time', DEFAULT_TIME)
 
         # Analyze which prompts need changes
         changes_list, total_cost, model_name = detect_change(
@@ -65,8 +62,7 @@ def detect_change_main(
             change_description,
             strength,
             temperature,
-            time_budget,
-            verbose=not ctx.obj.get('quiet', False)
+            verbose=not ctx.params.get('quiet', False)
         )
 
         # Save results to CSV if output path is specified
@@ -79,7 +75,7 @@ def detect_change_main(
                     writer.writerow(change)
 
         # Provide user feedback
-        if not ctx.obj.get('quiet', False):
+        if not ctx.params.get('quiet', False):
             rprint("[bold green]Change detection completed successfully.[/bold green]")
             rprint(f"[bold]Model used:[/bold] {model_name}")
             rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
@@ -99,6 +95,6 @@ def detect_change_main(
         return changes_list, total_cost, model_name
 
     except Exception as e:
-        if not ctx.obj.get('quiet', False):
+        if not ctx.params.get('quiet', False):
             rprint(f"[bold red]Error:[/bold red] {str(e)}")
         sys.exit(1)
