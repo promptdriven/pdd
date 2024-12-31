@@ -31,11 +31,11 @@ print(f"Average is: {result}")
     # 3. Define the original prompt that generated the code
     prompt = "Write a function that calculates the average of a list of numbers"
 
-    module_name = "llm_invoke"
-    code_file = "pdd/" + module_name + ".py"
-    verification_file = "context/" + module_name + "_example.py"
-    # read prompt from file
-    prompt = Path("prompts/" + module_name + "_python.prompt").read_text()
+    # module_name = "get_extension"
+    # code_file = "pdd/" + module_name + ".py"
+    # verification_file = "context/" + module_name + "_example.py"
+    # # read prompt from file
+    # prompt = Path("prompts/" + module_name + "_python.prompt").read_text()
 
     
     # Run the fix_code_loop
@@ -43,8 +43,8 @@ print(f"Average is: {result}")
         code_file=code_file,
         prompt=prompt,
         verification_program=verification_file,
-        strength=1,        # Use a moderately strong model
-        temperature=1,     # Use deterministic output
+        strength=.5,        # Use a moderately strong model
+        temperature=0,     # Use deterministic output
         max_attempts=5,      # Try up to 5 fixes
         budget=5,         # Maximum budget of $5 USD
         error_log_file="fix_attempt.log",
