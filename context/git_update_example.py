@@ -8,11 +8,11 @@ def main() -> None:
     # Define input parameters
     # input_prompt: str = "Create a function to calculate the area of a circle."
     # load input prompt from file
-    name = 'xml_tagger'
+    name = 'fix_main'
     with open(f"prompts/{name}_python.prompt", "r") as file:
         input_prompt = file.read()
     modified_code_file: str = f"pdd/{name}.py"
-    strength: float = 0.8  # Strength parameter for the LLM (0.0 to 1.0)
+    strength: float = .915  # Strength parameter for the LLM (0.0 to 1.0)
     temperature: float = 0  # Temperature parameter for the LLM
 
     try:
@@ -21,7 +21,8 @@ def main() -> None:
             input_prompt=input_prompt,
             modified_code_file=modified_code_file,
             strength=strength,
-            temperature=temperature
+            temperature=temperature,
+            verbose=True
         )
 
         if result:
