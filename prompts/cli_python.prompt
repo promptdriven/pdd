@@ -90,9 +90,9 @@
         <include>context/update_main_example.py</include>
         </update_prompt_example>
 
-        - `detect` command: To analyze a list of prompt files and a change description to determine which prompts need to be changed, use the `detect_change` function. Here is an example of how to detect prompts that need changes:
+        - `detect` command: To analyze a list of prompt files and a change description to determine which prompts need to be changed, use the `detect_change_main` function. Here is an example of how to detect prompts that need changes:
         <detect_change_example>
-        <include>context/detect_change_example.py</include>
+        <include>context/detect_change_main_example.py</include>
         </detect_change_example>
 
         - `conflicts` command: To analyze two prompt files to find conflicts between them and suggest how to resolve those conflicts, use the `conflicts_main` function. Here is an example of how to use the `conflicts_main` function:
