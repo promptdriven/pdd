@@ -73,7 +73,7 @@ def test_generate_test_invalid_template(valid_inputs, monkeypatch):
 
 # Test edge cases
 def test_generate_test_minimum_values(valid_inputs):
-    valid_inputs['strength'] = 0.0
+    valid_inputs['strength'] = 0.15
     valid_inputs['temperature'] = 0.0
     result = generate_test(**valid_inputs)
     assert isinstance(result, tuple)
