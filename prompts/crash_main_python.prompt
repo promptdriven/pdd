@@ -59,3 +59,5 @@
    <cli_command_readme>
    <include>./README.md</include>
    </cli_command_readme>
+
+% Note: The function should use the `verbose` parameter from the Click context to control the verbosity of the fixing process. If `verbose` is True, the function should output detailed information about the fixing process. This replaces the previous `quiet` parameter, which suppressed output when set to True.
