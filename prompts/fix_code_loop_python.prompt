@@ -1,4 +1,4 @@
-% You are an expert Python Software Engineer. Your goal is to write a Python function, "fix_code_loop", that will attempt to fix errors in a code module through multiple iterations.
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "fix_code_loop", that will attempt to fix errors in a code module through multiple iterations, with an added verbose mode for detailed logging.
 
 <include>context/python_preamble.prompt</include>
 
@@ -12,6 +12,7 @@
     - `max_attempts`: An integer representing the maximum number of fix attempts before giving up.
     - `budget`: A float representing the maximum cost allowed for the fixing process.
     - `error_log_file`: A string containing the path to the error log file (default: "error_code.log").
+    - `verbose`: A boolean flag to enable detailed logging of the fixing process (default: False).
   Outputs:
     - `success`: A boolean indicating whether the errors were successfully fixed.
     - `final_program`: A string containing the contents of the final verification program file.
@@ -27,7 +28,6 @@
   <include>context/fix_code_module_errors_example.py</include>
   </fix_code_module_errors_example>
 </internal_example_modules>
-
 
 % This function will do the following:
   Step 1. Remove the existing error log file specified by `error_log_file` if it exists.
@@ -50,6 +50,7 @@
          * `errors`: The errors extracted from the error log file.
          * `error_log_file`: The path to the error log file.
          * `strength` and `temperature`: The provided values.
+         * `verbose`: The provided verbose flag.
        - rprint the standard output from the `fix_code_module_errors` function and also append it to the error log file.
        - Add the returned `total_cost` to the total cost accumulator.
        - If the total cost exceeds the `budget`, break the loop.
@@ -60,4 +61,4 @@
          * Write the `fixed_program` back to the `verification_program`.
     e. Increment the attempt counter.
   Step 4. If the last run didn't work, copy back the `verification_program` and `code_file` from the original.
-  Step 5. Return the success status,final verification program, final code contents, total number of attempts, total cost, and model name.
+  Step 5. Return the success status, final verification program, final code contents, total number of attempts, total cost, and model name.

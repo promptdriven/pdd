@@ -19,7 +19,8 @@ def fix_code_loop(
     temperature: float,
     max_attempts: int,
     budget: float,
-    error_log_file: str = "error_code.log"
+    error_log_file: str = "error_code.log",
+    verbose: bool = False
 ) -> Tuple[bool, str, str, int, float, str]:
     """
     Attempts to fix errors in a code module through multiple iterations.
@@ -180,7 +181,8 @@ def fix_code_loop(
                     code=code_content,
                     errors=last_errors,
                     strength=strength,
-                    temperature=temperature
+                    temperature=temperature,
+                    verbose=verbose
                 )
 
                 # Restore the original console

@@ -35,7 +35,8 @@ TypeError: unsupported operand type(s) for +: 'int' and 'str'
         code=code_module,             # The code module containing the error (str)
         errors=error_message,         # The error message received (str)
         strength=0.5,                 # Model strength (float between 0-1, higher = stronger model)
-        temperature=0                 # Temperature for model output (float, 0 = deterministic)
+        temperature=0,                 # Temperature for model output (float, 0 = deterministic)
+        verbose=True                  # Whether to print debug information (bool)
     )
 
     """
