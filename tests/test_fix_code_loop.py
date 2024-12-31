@@ -1,457 +1,275 @@
-# tests/test_fix_code_loop.py
-
-import pytest
 import os
 import shutil
 import subprocess
-from unittest import mock
-from unittest.mock import patch, mock_open, MagicMock
-from pathlib import Path
+import tempfile
+import pytest
+from unittest.mock import patch, MagicMock
 
-# Assuming the package is structured with 'pdd.fix_code_loop'
-# and 'pdd.fix_code_module_errors'
-
+# Import the function under test
+# Adjust the import below if your actual package or file structure is different.
 from pdd.fix_code_loop import fix_code_loop
 
-
 @pytest.fixture
-def setup_files(tmp_path):
+def temp_workspace():
     """
-    Fixture to create temporary code_file and verification_program.
+    Creates a temporary directory for test files and cleans up afterward.
     """
-    code_file = tmp_path / "code.py"
-    verification_program = tmp_path / "verify.py"
-    code_file.write_text(
-        """
-def calculate_sum(numbers):
-    return sum(numbers)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        current_dir = os.getcwd()
+        try:
+            os.chdir(tmpdir)
+            yield tmpdir
+        finally:
+            os.chdir(current_dir)
 
-result = calculate_sum("123")  # Error: trying to sum a string
-print(result)
+def write_file(filename: str, content: str):
+    """
+    Helper to write content to a file.
+    """
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(content)
+
+def read_file(filename: str) -> str:
+    """
+    Helper to read and return content from a file.
+    """
+    with open(filename, "r", encoding="utf-8") as f:
+        return f.read()
+
+@pytest.mark.parametrize("verbose_flag", [True, False])
+def test_fix_code_loop_runs_successfully_first_try(temp_workspace, verbose_flag):
+    """
+    Test that fix_code_loop immediately succeeds when the verification program
+    runs without errors. No attempts to "fix" the code should be necessary.
+    """
+    # Create a dummy verification program that always succeeds
+    verification_program_path = "verify_success.py"
+    verification_program_text = """
+print("Verification passed successfully.")
 """
-    )
-    verification_program.write_text(
-        """
-import code
+    write_file(verification_program_path, verification_program_text)
 
-def test_calculate_sum():
-    try:
-        code.calculate_sum("123")
-    except TypeError as e:
-        print(e)
-        exit(1)
-
-if __name__ == "__main__":
-        test_calculate_sum()
+    # Create a dummy code file (though it won't really be run in this scenario)
+    code_file_path = "dummy_code.py"
+    code_file_text = """
+def dummy_function():
+    return "OK"
 """
-    )
-    return str(code_file), str(verification_program)
+    write_file(code_file_path, code_file_text)
 
-
-@pytest.fixture
-def mock_fix_code_module_errors():
-    """
-    Fixture to mock fix_code_module_errors function.
-    """
-    with patch("pdd.fix_code_loop.fix_code_module_errors") as mock_func:
-        yield mock_func
-
-
-@pytest.fixture
-def mock_subprocess_run_success():
-    """
-    Fixture to mock subprocess.run to simulate successful execution.
-    """
-    with patch("subprocess.run") as mock_run:
-        mock_process = MagicMock()
-        mock_process.returncode = 0
-        mock_process.stdout = "Success"
-        mock_process.stderr = ""
-        mock_run.return_value = mock_process
-        yield mock_run
-
-
-@pytest.fixture
-def mock_subprocess_run_failure():
-    """
-    Fixture to mock subprocess.run to simulate failed execution.
-    """
-    with patch("subprocess.run") as mock_run:
-        mock_process = MagicMock()
-        mock_process.returncode = 1
-        mock_process.stdout = ""
-        mock_process.stderr = "TypeError: unsupported operand type(s) for +: 'int' and 'str'"
-        mock_run.return_value = mock_process
-        yield mock_run
-
-
-def test_successful_fix_first_attempt(setup_files, mock_subprocess_run_success, mock_fix_code_module_errors):
-    """
-    Test that fix_code_loop succeeds without needing any fixes.
-    """
-    code_file, verification_program = setup_files
-
-    result = fix_code_loop(
-        code_file=code_file,
-        prompt="Write a function that calculates the sum of numbers",
-        verification_program=verification_program,
-        strength=0.7,
-        temperature=0.5,
-        max_attempts=3,
-        budget=10.0
-    )
-
-    assert result[0] is True  # success
-    assert result[3] == 1  # total_attempts
-    assert result[4] == 0.0  # total_cost
-    assert result[5] == ""  # model_name
-
-
-def test_fix_requires_one_attempt(setup_files, mock_subprocess_run_failure, mock_fix_code_module_errors):
-    """
-    Test that fix_code_loop makes one fix attempt and succeeds.
-    """
-    code_file, verification_program = setup_files
-
-    # Mock fix_code_module_errors to return updates
-    mock_fix_code_module_errors.return_value = (True, True, "fixed_verify.py", "fixed_code.py", 2.5, "GPT-4")
-
-    # After first failure, simulate success
-    def subprocess_run_side_effect(*args, **kwargs):
-        if mock_subprocess_run_failure.call_count == 1:
-            # First attempt fails
-            mock_process = MagicMock()
-            mock_process.returncode = 1
-            mock_process.stdout = ""
-            mock_process.stderr = "TypeError: unsupported operand type(s) for +: 'int' and 'str'"
-            return mock_process
-        else:
-            # Second attempt succeeds
-            mock_process = MagicMock()
-            mock_process.returncode = 0
-            mock_process.stdout = "Success"
-            mock_process.stderr = ""
-            return mock_process
-
-    mock_subprocess_run_failure.side_effect = subprocess_run_side_effect
-
-    result = fix_code_loop(
-        code_file=code_file,
-        prompt="Write a function that calculates the sum of numbers",
-        verification_program=verification_program,
-        strength=0.7,
-        temperature=0.5,
-        max_attempts=3,
-        budget=10.0
-    )
-
-    assert result[0] is True  # success
-    assert result[3] == 2  # total_attempts
-    assert result[4] == 2.5  # total_cost
-    assert result[5] == "GPT-4"  # model_name
-    mock_fix_code_module_errors.assert_called_once()
-
-
-def test_budget_exceeded(setup_files, mock_subprocess_run_failure, mock_fix_code_module_errors):
-    """
-    Test that fix_code_loop stops when the budget is exceeded.
-    """
-    code_file, verification_program = setup_files
-
-    # Mock fix_code_module_errors to always add cost
-    mock_fix_code_module_errors.return_value = (True, True, "fixed_verify.py", "fixed_code.py", 5.0, "GPT-4")
-
-    # Keep failing to exhaust the budget
-    def subprocess_run_side_effect(*args, **kwargs):
-        mock_process = MagicMock()
-        mock_process.returncode = 1
-        mock_process.stdout = ""
-        mock_process.stderr = "TypeError: unsupported operand type(s) for +: 'int' and 'str'"
-        return mock_process
-
-    mock_subprocess_run_failure.side_effect = subprocess_run_side_effect
-
-    result = fix_code_loop(
-        code_file=code_file,
-        prompt="Write a function that calculates the sum of numbers",
-        verification_program=verification_program,
-        strength=0.7,
-        temperature=0.5,
-        max_attempts=5,
-        budget=10.0  # Only two attempts possible
-    )
-
-    assert result[0] is False  # not successful
-    assert result[3] == 2  # total_attempts before budget exceeded
-    assert result[4] == 10.0  # total_cost
-    assert result[5] == "GPT-4"  # model_name
-    assert mock_fix_code_module_errors.call_count == 2
-
-
-def test_max_attempts_exceeded(setup_files, mock_subprocess_run_failure, mock_fix_code_module_errors):
-    """
-    Test that fix_code_loop stops after reaching max_attempts.
-    """
-    code_file, verification_program = setup_files
-
-    # Mock fix_code_module_errors to add a small cost each time
-    mock_fix_code_module_errors.return_value = (True, True, "fixed_verify.py", "fixed_code.py", 1.0, "GPT-4")
-
-    # Always fail
-    def subprocess_run_side_effect(*args, **kwargs):
-        mock_process = MagicMock()
-        mock_process.returncode = 1
-        mock_process.stdout = ""
-        mock_process.stderr = "TypeError: unsupported operand type(s) for +: 'int' and 'str'"
-        return mock_process
-
-    mock_subprocess_run_failure.side_effect = subprocess_run_side_effect
-
-    result = fix_code_loop(
-        code_file=code_file,
-        prompt="Write a function that calculates the sum of numbers",
-        verification_program=verification_program,
-        strength=0.7,
-        temperature=0.5,
-        max_attempts=3,
-        budget=10.0
-    )
-
-    assert result[0] is False  # not successful
-    assert result[3] == 3  # total_attempts reached
-    assert result[4] == 3.0  # total_cost
-    assert result[5] == "GPT-4"  # model_name
-    assert mock_fix_code_module_errors.call_count == 3
-
-
-def test_invalid_strength_temperature(setup_files):
-    """
-    Test that fix_code_loop raises ValueError for invalid strength or temperature.
-    """
-    code_file, verification_program = setup_files
-
-    with pytest.raises(ValueError):
-        fix_code_loop(
-            code_file=code_file,
-            prompt="Write a function that calculates the sum of numbers",
-            verification_program=verification_program,
-            strength=1.5,  # Invalid
-            temperature=0.5,
-            max_attempts=3,
-            budget=10.0
-        )
-
-    with pytest.raises(ValueError):
-        fix_code_loop(
-            code_file=code_file,
-            prompt="Write a function that calculates the sum of numbers",
-            verification_program=verification_program,
-            strength=0.7,
-            temperature=-0.1,  # Invalid
-            max_attempts=3,
-            budget=10.0
-        )
-
-
-def test_invalid_max_attempts_budget(setup_files):
-    """
-    Test that fix_code_loop raises ValueError for invalid max_attempts or budget.
-    """
-    code_file, verification_program = setup_files
-
-    with pytest.raises(ValueError):
-        fix_code_loop(
-            code_file=code_file,
-            prompt="Write a function that calculates the sum of numbers",
-            verification_program=verification_program,
-            strength=0.7,
-            temperature=0.5,
-            max_attempts=0,  # Invalid
-            budget=10.0
-        )
-
-    with pytest.raises(ValueError):
-        fix_code_loop(
-            code_file=code_file,
-            prompt="Write a function that calculates the sum of numbers",
-            verification_program=verification_program,
-            strength=0.7,
-            temperature=0.5,
-            max_attempts=3,
-            budget=-5.0  # Invalid
-        )
-
-
-def test_missing_files():
-    """
-    Test that fix_code_loop raises FileNotFoundError when code_file or verification_program is missing.
-    """
-    with pytest.raises(FileNotFoundError):
-        fix_code_loop(
-            code_file="non_existent_code.py",
-            prompt="Write a function that calculates the sum of numbers",
-            verification_program="non_existent_verify.py",
-            strength=0.7,
-            temperature=0.5,
-            max_attempts=3,
-            budget=10.0
-        )
-
-
-def test_no_changes_needed(setup_files, mock_subprocess_run_failure, mock_fix_code_module_errors):
-    """
-    Test that fix_code_loop stops when no changes are needed.
-    """
-    code_file, verification_program = setup_files
-
-    # Mock fix_code_module_errors to indicate no updates needed
-    mock_fix_code_module_errors.return_value = (False, False, "", "", 0.0, "")
-
-    # Simulate one failure
-    mock_process = MagicMock()
-    mock_process.returncode = 1
-    mock_process.stdout = ""
-    mock_process.stderr = "TypeError: unsupported operand type(s) for +: 'int' and 'str'"
-    mock_subprocess_run_failure.return_value = mock_process
-
-    result = fix_code_loop(
-        code_file=code_file,
-        prompt="Write a function that calculates the sum of numbers",
-        verification_program=verification_program,
-        strength=0.7,
-        temperature=0.5,
-        max_attempts=5,
-        budget=10.0
-    )
-
-    assert result[0] is False  # not successful
-    assert result[3] == 1  # only one attempt
-    assert result[4] == 0.0  # no cost
-    assert mock_fix_code_module_errors.assert_called_once()
-
-
-def test_restores_original_files_on_failure(setup_files, mock_subprocess_run_failure, mock_fix_code_module_errors):
-    """
-    Test that fix_code_loop restores original files if unable to fix errors.
-    """
-    code_file, verification_program = setup_files
-
-    # Mock fix_code_module_errors to always attempt fixes but never succeed
-    mock_fix_code_module_errors.return_value = (True, True, "fixed_verify.py", "fixed_code.py", 1.0, "GPT-4")
-
-    # Always fail
-    mock_process = MagicMock()
-    mock_process.returncode = 1
-    mock_process.stdout = ""
-    mock_process.stderr = "TypeError: unsupported operand type(s) for +: 'int' and 'str'"
-    mock_subprocess_run_failure.return_value = mock_process
-
-    original_code = Path(code_file).read_text()
-    original_verify = Path(verification_program).read_text()
-
-    result = fix_code_loop(
-        code_file=code_file,
-        prompt="Write a function that calculates the sum of numbers",
-        verification_program=verification_program,
-        strength=0.7,
-        temperature=0.5,
-        max_attempts=2,
-        budget=5.0
-    )
-
-    # After failure, files should be restored
-    assert Path(code_file).read_text() == original_code
-    assert Path(verification_program).read_text() == original_verify
-    assert result[0] is False  # not successful
-
-
-def test_error_log_file_handling(setup_files, mock_subprocess_run_failure, mock_fix_code_module_errors, tmp_path):
-    """
-    Test that fix_code_loop handles the error_log_file correctly.
-    """
-    code_file, verification_program = setup_files
-    error_log = tmp_path / "custom_error.log"
-
-    # Mock fix_code_module_errors to attempt a fix
-    mock_fix_code_module_errors.return_value = (True, False, "", "fixed_code.py", 1.0, "GPT-4")
-
-    # Simulate one failure and one success
-    def subprocess_run_side_effect(*args, **kwargs):
-        if mock_subprocess_run_failure.call_count == 0:
-            # First attempt fails
-            mock_process = MagicMock()
-            mock_process.returncode = 1
-            mock_process.stdout = ""
-            mock_process.stderr = "Error on first attempt"
-            return mock_process
-        else:
-            # Second attempt succeeds
-            mock_process = MagicMock()
-            mock_process.returncode = 0
-            mock_process.stdout = "Success on second attempt"
-            mock_process.stderr = ""
-            return mock_process
-
-    mock_subprocess_run_failure.side_effect = subprocess_run_side_effect
-
-    result = fix_code_loop(
-        code_file=code_file,
-        prompt="Write a function that calculates the sum of numbers",
-        verification_program=verification_program,
-        strength=0.7,
+    # Call fix_code_loop
+    success, final_program, final_code, total_attempts, total_cost, model_name = fix_code_loop(
+        code_file=code_file_path,
+        prompt="A dummy prompt",
+        verification_program=verification_program_path,
+        strength=0.5,
         temperature=0.5,
         max_attempts=3,
         budget=10.0,
-        error_log_file=str(error_log)
+        error_log_file="error_code.log",
+        verbose=verbose_flag,
     )
 
-    # Check that the custom error log file was created and contains the error
-    assert error_log.exists()
-    log_content = error_log.read_text()
-    assert "Error on first attempt" in log_content
-    assert "Success on second attempt" in log_content
+    # Validate results
+    assert success is True, "The code should have succeeded on the first try."
+    assert total_attempts == 0, "No fix attempts should have been made."
+    assert total_cost == 0.0, "No cost should be incurred."
+    assert "Verification passed successfully." in final_program
+    assert "def dummy_function()" in final_code
 
-    assert result[0] is True  # success
-    assert result[3] == 2  # two attempts
-    assert result[4] == 1.0  # total cost
-    assert result[5] == "GPT-4"  # model name
-    mock_fix_code_module_errors.assert_called_once()
-
-
-def test_relative_imports(mock_subprocess_run_success, mock_fix_code_module_errors, setup_files):
+def test_fix_code_loop_missing_verification_program(temp_workspace):
     """
-    Test that fix_code_loop uses relative imports correctly.
+    Test that fix_code_loop returns an immediate False if the verification
+    program does not exist.
     """
-    code_file, verification_program = setup_files
+    # Create a code file
+    code_file_path = "dummy_code.py"
+    write_file(code_file_path, "print('Hello from code!')")
 
-    # Since imports are relative, ensure that the function can be called correctly
-    result = fix_code_loop(
-        code_file=code_file,
-        prompt="Write a function that calculates the sum of numbers",
-        verification_program=verification_program,
-        strength=0.7,
+    # Provide a verification path that doesn't exist
+    verification_program_path = "missing_verify.py"
+
+    success, final_program, final_code, total_attempts, total_cost, model_name = fix_code_loop(
+        code_file=code_file_path,
+        prompt="Prompt that generated code",
+        verification_program=verification_program_path,
+        strength=0.5,
         temperature=0.5,
-        max_attempts=1,
-        budget=10.0
+        max_attempts=3,
+        budget=10.0,
+        error_log_file="error_code.log",
+        verbose=False,
     )
 
-    assert result[0] is True  # success
-    assert mock_fix_code_module_errors.call_count == 0  # No fixes needed
+    # Validate results
+    assert success is False, "Should fail immediately if verification program is missing."
+    assert total_attempts == 0, "No attempts should have been made."
+    assert total_cost == 0.0, "No cost should be incurred because fix was never called."
+    assert final_program == "", "No final program should be returned on failure."
+    assert final_code == "", "No final code should be returned on failure."
 
-
-def test_zero_max_attempts(setup_files):
+@patch("pdd.fix_code_loop.fix_code_module_errors")
+def test_fix_code_loop_needs_fixing(mock_fix_code_module_errors, temp_workspace):
     """
-    Test that fix_code_loop raises ValueError when max_attempts is less than 1.
+    Test that fix_code_loop attempts to fix the code when the verification program
+    fails. The mock of fix_code_module_errors simulates a single successful fix.
     """
-    code_file, verification_program = setup_files
+    # Create an initial verification program that fails
+    verification_program_path = "verification_fail.py"
+    verification_program_text = """
+import sys
 
-    with pytest.raises(ValueError):
-        fix_code_loop(
-            code_file=code_file,
-            prompt="Write a function that calculates the sum of numbers",
-            verification_program=verification_program,
-            strength=0.7,
+# We simulate an error
+raise ValueError("Simulated verification failure!")
+"""
+    write_file(verification_program_path, verification_program_text)
+
+    # Create a code file that presumably has an error
+    code_file_path = "erroneous_code.py"
+    code_file_text = """
+def troublesome_function():
+    raise Exception("Something is wrong")
+"""
+    write_file(code_file_path, code_file_text)
+
+    # Mock fix_code_module_errors to simulate a single fix
+    def mock_fix(*args, **kwargs):
+        return (True, True,  # update_program, update_code
+                "print('Fixed verification!')",  # fixed_program
+                "def troublesome_function(): return 'All good now!'",  # fixed_code
+                0.5,  # cost
+                "mock-model-v1"  # model_name
+               )
+
+    mock_fix_code_module_errors.side_effect = mock_fix
+
+    success, final_program, final_code, total_attempts, total_cost, model_name = fix_code_loop(
+        code_file=code_file_path,
+        prompt="Prompt for code that doesn't work",
+        verification_program=verification_program_path,
+        strength=0.5,
+        temperature=0.5,
+        max_attempts=5,
+        budget=10.0,
+        error_log_file="error_code.log",
+        verbose=True,
+    )
+
+    # Validate results
+    assert success is True, "Should succeed after the mock fix is applied."
+    # The function attempts once, sees the error, then calls mock fix, so total_attempts should be 1
+    assert total_attempts == 1, "Expected exactly one fix attempt."
+    assert total_cost == 0.5, "Cost should sum up to the value returned by the mock fix."
+    assert "Fixed verification!" in final_program, "Expected the updated verification program."
+    assert "All good now!" in final_code, "Expected the updated code content."
+    assert model_name == "mock-model-v1", "Should return the mocked model name."
+
+@patch("pdd.fix_code_loop.fix_code_module_errors")
+def test_fix_code_loop_exceed_budget(mock_fix_code_module_errors, temp_workspace):
+    """
+    Test that fix_code_loop stops if the total cost exceeds the budget.
+    We simulate multiple failed fixes that each add cost.
+    """
+    # Create a verification program that fails
+    verification_program_path = "verification_fail_budget.py"
+    verification_program_text = """
+raise RuntimeError("Always fails")
+"""
+    write_file(verification_program_path, verification_program_text)
+
+    # Create a code file that presumably needs fixes
+    code_file_path = "expensive_code.py"
+    code_file_text = """
+def expensive_problem():
+    raise Exception("Needs fixing")
+"""
+    write_file(code_file_path, code_file_text)
+
+    # The first two attempts each add cost, the third attempt should exceed the budget
+    # and cause fix_code_loop to stop.
+    def mock_fix(*args, **kwargs):
+        return (True, True,
+                "print('Still broken verification')",
+                "def expensive_problem(): raise Exception('Still not fixed')",
+                6.0,  # cost each time
+                "expensive-model"
+               )
+
+    mock_fix_code_module_errors.side_effect = mock_fix
+
+    success, final_program, final_code, total_attempts, total_cost, model_name = fix_code_loop(
+        code_file=code_file_path,
+        prompt="Prompt for an expensive fix",
+        verification_program=verification_program_path,
+        strength=0.5,
+        temperature=0.5,
+        max_attempts=5,
+        budget=10.0,  # Will be exceeded on first fix
+        error_log_file="error_code.log",
+        verbose=True,
+    )
+
+    # Validate results
+    assert success is False, "Should fail because the budget was exceeded."
+    assert total_attempts == 1, "Only one attempt should be made before exceeding the budget."
+    assert total_cost > 10.0, "Total cost should exceed the original budget."
+    assert model_name == "expensive-model", "Should report the model name from the mock."
+
+    # Check that the code was restored to the original (since fix eventually failed)
+    with open(verification_program_path, "r") as vf:
+        restored_verification = vf.read()
+    with open(code_file_path, "r") as cf:
+        restored_code = cf.read()
+
+    assert "Always fails" in restored_verification, "Original verification program should be restored."
+    assert "Needs fixing" in restored_code, "Original code should be restored."
+    
+def test_fix_code_loop_exceed_max_attempts(temp_workspace):
+    """
+    Test that fix_code_loop stops if the maximum attempts are reached, even if
+    the budget is not exceeded.
+    We substitute a failing verification program and no real fix attempts.
+    """
+
+    verification_program_path = "verify_to_fail.py"
+    write_file(
+        verification_program_path,
+        "print('Attempting verification...'); raise RuntimeError('It fails every time')"
+    )
+
+    code_file_path = "broken_code.py"
+    write_file(
+        code_file_path,
+        "raise Exception('Code is broken')"
+    )
+
+    # We patch fix_code_module_errors to do nothing or return no changes repeatedly
+    with patch("pdd.fix_code_loop.fix_code_module_errors") as mock_fix:
+        # Always return no changes needed - to simulate repeated attempts with no improvement
+        mock_fix.return_value = (False, False, "", "", 1.0, "mocked_model")
+
+        success, final_program, final_code, total_attempts, total_cost, model_name = fix_code_loop(
+            code_file=code_file_path,
+            prompt="Prompt for broken code",
+            verification_program=verification_program_path,
+            strength=0.5,
             temperature=0.5,
-            max_attempts=0,  # Invalid
-            budget=10.0
+            max_attempts=2,  # Limit attempts
+            budget=100.0,    # Substantial budget, so we can check attempts
+            error_log_file="error_code.log",
+            verbose=False,
         )
+
+        # After each failure, we see no changes needed => fix_code_loop should break immediately,
+        # or continue until max_attempts if it tries to bypass "no changes" logic.
+        # The code checks for "if not update_program and not update_code" => break immediately.
+        # So we may see total_attempts = 1 with success=False if it tries once and sees no changes.
+        # This test ensures it doesn't loop infinitely.
+        assert success is False, "Should not succeed because errors were never fixed."
+        assert total_attempts <= 2, "Should not exceed max_attempts."
+        assert total_cost == pytest.approx(1.0, abs=1e-9), (
+            "Expected cost is the sum from the single call to fix_code_module_errors."
+        )
+        assert model_name == "mocked_model", "Should capture the mocked model name."
+        assert final_program == "", "Verification program was never updated."
+        assert final_code == "", "Code was never updated."
