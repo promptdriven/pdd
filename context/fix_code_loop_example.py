@@ -47,7 +47,8 @@ print(f"Average is: {result}")
         temperature=1,     # Use deterministic output
         max_attempts=5,      # Try up to 5 fixes
         budget=5,         # Maximum budget of $5 USD
-        error_log_file="fix_attempt.log"
+        error_log_file="fix_attempt.log",
+        verbose=True
     )
     
     # Print results
