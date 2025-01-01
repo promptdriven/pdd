@@ -70,7 +70,7 @@ def test_insert_includes_success(
         output_prompt, csv_output, total_cost, model_name = insert_includes(
             input_prompt="Some input prompt",
             directory_path="./test_dir",
-            csv_filename="dependencies.csv",
+            csv_filename="output/dependencies.csv",
             strength=0.7,
             temperature=0.5,
             verbose=verbose_flag
@@ -94,7 +94,7 @@ def test_insert_includes_missing_prompt_template(mock_load_prompt_template):
         insert_includes(
             input_prompt="Some input prompt",
             directory_path="./test_dir",
-            csv_filename="dependencies.csv",
+            csv_filename="output/dependencies.csv",
             strength=0.7,
             temperature=0.5,
             verbose=False
@@ -165,7 +165,7 @@ def test_insert_includes_invalid_llm_response(
         insert_includes(
             input_prompt="Some input prompt",
             directory_path="./test_dir",
-            csv_filename="dependencies.csv",
+            csv_filename="output/dependencies.csv",
             strength=0.7,
             temperature=0.5,
             verbose=False
@@ -187,7 +187,7 @@ def test_insert_includes_auto_include_exception(
         insert_includes(
             input_prompt="Some input prompt",
             directory_path="./test_dir",
-            csv_filename="dependencies.csv",
+            csv_filename="output/dependencies.csv",
             strength=0.7,
             temperature=0.5,
             verbose=False
