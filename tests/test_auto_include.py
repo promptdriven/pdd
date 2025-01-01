@@ -20,7 +20,7 @@ AUTO_INCLUDE_RESPONSE = {
     "model_name": "model-auto-include"
 }
 EXTRACT_INCLUDE_RESPONSE = {
-    "result": {"string_of_includes": "# Includes\nimport example1\nimport example2"},
+    "result": AutoIncludeOutput(string_of_includes="# Includes\nimport example1\nimport example2"),
     "cost": 0.03,
     "model_name": "model-extract-include"
 }
@@ -102,7 +102,7 @@ def test_auto_include_missing_input_prompt():
             directory_path="context/c*.py",
             csv_file=CSV_OUTPUT
         )
-    assert "Input prompt and directory path are required" in str(exc_info.value)
+    assert "Input prompt cannot be empty" in str(exc_info.value)
 
 def test_auto_include_missing_directory_path():
     with pytest.raises(ValueError) as exc_info:
@@ -111,7 +111,7 @@ def test_auto_include_missing_directory_path():
             directory_path="",
             csv_file=CSV_OUTPUT
         )
-    assert "Input prompt and directory path are required" in str(exc_info.value)
+    assert "Invalid 'directory_path'." in str(exc_info.value)
 
 def test_auto_include_invalid_strength():
     with pytest.raises(ValueError) as exc_info:
@@ -121,7 +121,7 @@ def test_auto_include_invalid_strength():
             csv_file=CSV_OUTPUT,
             strength=1.5
         )
-    assert "Strength and temperature must be between 0 and 1" in str(exc_info.value)
+    assert "Strength must be between 0 and 1" in str(exc_info.value)
 
 def test_auto_include_invalid_temperature():
     with pytest.raises(ValueError) as exc_info:
@@ -131,7 +131,7 @@ def test_auto_include_invalid_temperature():
             csv_file=CSV_OUTPUT,
             temperature=-0.1
         )
-    assert "Strength and temperature must be between 0 and 1" in str(exc_info.value)
+    assert "Temperature must be between 0 and 1" in str(exc_info.value)
 
 @patch("pdd.auto_include.load_prompt_template")
 def test_auto_include_load_prompt_failure(mock_load_prompt_template, valid_inputs):
@@ -211,7 +211,7 @@ def test_auto_include_empty_csv_output(mock_llm_invoke, mock_summarize_directory
             "model_name": "model-auto-include"
         },
         {
-            "result": {"string_of_includes": ""},
+            "result": AutoIncludeOutput(string_of_includes=""),
             "cost": 0.03,
             "model_name": "model-extract-include"
         }
