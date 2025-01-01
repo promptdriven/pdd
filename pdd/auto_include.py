@@ -40,6 +40,8 @@ def auto_include(
         # Input validation
         if not input_prompt:
             raise ValueError("Input prompt cannot be empty")
+        if not directory_path:
+            raise ValueError("Invalid 'directory_path'.")
         if not 0 <= strength <= 1:
             raise ValueError("Strength must be between 0 and 1")
         if not 0 <= temperature <= 1:
@@ -73,11 +75,18 @@ def auto_include(
         model_name = summary_model
 
         # Parse CSV to get available includes
-        df = pd.read_csv(StringIO(csv_output))
-        available_includes = df.apply(
-            lambda row: f"File: {row['full_path']}\nSummary: {row['file_summary']}", 
-            axis=1
-        ).tolist()
+        if not csv_output:
+            available_includes = []
+        else:
+            try:
+                df = pd.read_csv(StringIO(csv_output))
+                available_includes = df.apply(
+                    lambda row: f"File: {row['full_path']}\nSummary: {row['file_summary']}",
+                    axis=1
+                ).tolist()
+            except Exception as e:
+                console.print(f"[red]Error parsing CSV: {str(e)}[/red]")
+                available_includes = []
 
         if verbose:
             console.print(Panel("Step 3: Running auto_include_LLM prompt", style="blue"))
@@ -100,27 +109,32 @@ def auto_include(
             console.print(Panel("Step 4: Running extract_auto_include_LLM prompt", style="blue"))
 
         # Run extract_auto_include_LLM prompt
-        extract_response = llm_invoke(
-            prompt=extract_prompt,
-            input_json={"llm_output": auto_include_response["result"]},
-            strength=strength,
-            temperature=temperature,
-            verbose=verbose,
-            output_pydantic=AutoIncludeOutput
-        )
-        total_cost += extract_response["cost"]
-        model_name = extract_response["model_name"]
+        try:
+            extract_response = llm_invoke(
+                prompt=extract_prompt,
+                input_json={"llm_output": auto_include_response["result"]},
+                strength=strength,
+                temperature=temperature,
+                verbose=verbose,
+                output_pydantic=AutoIncludeOutput
+            )
+            total_cost += extract_response["cost"]
+            model_name = extract_response["model_name"]
 
-        if verbose:
-            console.print(Panel("Step 5: Extracting dependencies", style="blue"))
+            if verbose:
+                console.print(Panel("Step 5: Extracting dependencies", style="blue"))
 
-        # Extract dependencies
-        dependencies = extract_response["result"].string_of_includes
+            # Extract dependencies
+            dependencies = extract_response["result"].string_of_includes
+        except Exception as e:
+            console.print(f"[red]Error extracting dependencies: {str(e)}[/red]")
+            dependencies = ""
 
         if verbose:
             console.print(Panel(f"""
 Results:
 Dependencies: {dependencies}
+CSV Output: {csv_output}
 Total Cost: ${total_cost:.6f}
 Model Used: {model_name}
             """, style="green"))
