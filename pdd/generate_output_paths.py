@@ -119,6 +119,11 @@ def generate_output_paths(command, output_locations, basename, language, file_ex
             'PDD_CRASH_OUTPUT_PATH',
             f"{basename}_fixed{file_extension}"
         )
+        output_paths['output_program'] = get_output_path(
+            output_locations.get('output_program'),
+            'PDD_CRASH_PROGRAM_OUTPUT_PATH',
+            f"{basename}_fixed{file_extension}"
+        )
     elif command == 'trace':
         output_paths['output'] = get_output_path(
             output_locations.get('output'),
