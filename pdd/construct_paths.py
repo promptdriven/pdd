@@ -174,7 +174,7 @@ def construct_paths(
         "crash":       "prompt_file",
         "trace":       "prompt_file",
         "split":       "input_prompt",
-        "change":      "input_prompt_file" if "input_prompt_file" in input_file_paths else "change_file",
+        "change":      "input_prompt_file" if "input_prompt_file" in input_file_paths else "change_prompt_file",
         "detect":      "change_file",
         "conflicts":   "prompt1",
     }
