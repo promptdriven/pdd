@@ -14,7 +14,7 @@ def main() -> None:
 def calculate_average(numbers):
     return sum(numbers) / len(numbers)
     """
-    code_file = "module_to_test.py"
+    code_file = "output/module_to_test.py"
     Path(code_file).write_text(code_content)
     
     # 2. Create a verification program that tests the code
@@ -25,7 +25,7 @@ from module_to_test import calculate_average
 result = calculate_average("123")
 print(f"Average is: {result}")
     """
-    verification_file = "verify_code.py"
+    verification_file = "output/verify_code.py"
     Path(verification_file).write_text(verify_content)
     
     # 3. Define the original prompt that generated the code
@@ -47,7 +47,7 @@ print(f"Average is: {result}")
         temperature=0,     # Use deterministic output
         max_attempts=5,      # Try up to 5 fixes
         budget=5,         # Maximum budget of $5 USD
-        error_log_file="fix_attempt.log",
+        error_log_file="output/fix_attempt.log",
         verbose=True
     )
     
