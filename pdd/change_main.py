@@ -10,7 +10,7 @@ from .change import change as change_func
 from .process_csv_change import process_csv_change
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.WARNING)
+logger.setLevel(logging.DEBUG)  # Changed from WARNING to DEBUG
 
 def change_main(
     ctx: click.Context,
