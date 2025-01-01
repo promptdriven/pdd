@@ -42,34 +42,34 @@ def main() -> None:
         "budget": 10.0,        # Maximum budget in dollars
     }
 
-#     # Create directories for the example
-#     os.makedirs("example_code_directory", exist_ok=True)
-#     os.makedirs("example_output_directory", exist_ok=True)
+    # Create directories for the example
+    os.makedirs("output/example_code_directory", exist_ok=True)
+    os.makedirs("output/example_output_directory", exist_ok=True)
 
-#     # ------------- Single-Change Mode Example -------------
+    # ------------- Single-Change Mode Example -------------
 
-#     # Create sample input files for single-change mode
-#     change_prompt_file = "change_prompt.prompt"
-#     input_code_file = "example_code.py"
-#     input_prompt_file = "input_prompt.prompt"
-#     output_file = "modified_prompt.prompt"
+    # Create sample input files for single-change mode
+    change_prompt_file = "output/change_prompt.prompt"
+    input_code_file = "output/example_code.py"
+    input_prompt_file = "output/input_prompt.prompt"
+    output_file = "output/modified_prompt.prompt"
 
-#     with open(change_prompt_file, "w") as f:
-#         f.write("Modify the function to add error handling for division by zero.")
+    with open(change_prompt_file, "w") as f:
+        f.write("Modify the function to add error handling for division by zero.")
 
-#     with open(input_code_file, "w") as f:
-#         f.write("""
-# def divide(a, b):
-#     return a / b
-# """)
+    with open(input_code_file, "w") as f:
+        f.write("""
+def divide(a, b):
+    return a / b
+""")
 
-#     with open(input_prompt_file, "w") as f:
-#         f.write("Write a function to perform division of two numbers.")
-    base = 'split'
-    change_prompt_file = "context/change/22/change.prompt"
-    input_code_file = f"pdd/{base}.py"
-    input_prompt_file = f"prompts/{base}_python.prompt"
-    output_file = f"prompts/{base}_main_python.prompt"
+    with open(input_prompt_file, "w") as f:
+        f.write("Write a function to perform division of two numbers.")
+    # base = 'split'
+    # change_prompt_file = "context/change/22/change.prompt"
+    # input_code_file = f"pdd/{base}.py"
+    # input_prompt_file = f"prompts/{base}_python.prompt"
+    # output_file = f"/{base}_main_python.prompt"
 
     # Call change_main in single-change mode
     rprint("[bold underline]Single-Change Mode Example[/bold underline]")
@@ -89,58 +89,58 @@ def main() -> None:
 
 #     # ------------- CSV Batch-Change Mode Example -------------
 
-#     # Create sample code files in a directory
-#     code_directory = "example_code_directory"
-#     prompt_file_1 = Path(code_directory) / "script1_python.prompt"
-#     prompt_file_2 = Path(code_directory) / "script2_python.prompt"
+    # Create sample code files in a directory
+    code_directory = "output/example_code_directory"
+    prompt_file_1 = Path(code_directory) / "script1_python.prompt"
+    prompt_file_2 = Path(code_directory) / "script2_python.prompt"
 
-#     with open(prompt_file_1, "w") as f:
-#         f.write("Create the function to add two numbers.")
+    with open(prompt_file_1, "w") as f:
+        f.write("Create the function to add two numbers.")
     
-#     with open(prompt_file_2, "w") as f:
-#         f.write("Create the function to subtract two numbers.")
+    with open(prompt_file_2, "w") as f:
+        f.write("Create the function to subtract two numbers.")
 
-#     code_file_1 = Path(code_directory) / "script1.py"
-#     code_file_2 = Path(code_directory) / "script2.py"
+    code_file_1 = Path(code_directory) / "script1.py"
+    code_file_2 = Path(code_directory) / "script2.py"
 
-#     with open(code_file_1, "w") as f:
-#         f.write("""
-# def add(a, b):
-#     return a + b
-# """)
+    with open(code_file_1, "w") as f:
+        f.write("""
+def add(a, b):
+    return a + b
+""")
 
-#     with open(code_file_2, "w") as f:
-#         f.write("""
-# def subtract(a, b):
-#     return a - b
-# """)
+    with open(code_file_2, "w") as f:
+        f.write("""
+def subtract(a, b):
+    return a - b
+""")
 
-#     # Create a CSV file specifying changes for batch processing
-#     csv_change_prompt_file = "batch_changes.csv"
-#     with open(csv_change_prompt_file, "w") as csvfile:
-#         csvfile.write("prompt_name,change_instructions\n")
-#         csvfile.write(f"{prompt_file_1},Modify the function to handle overflow errors.\n")
-#         csvfile.write(f"{prompt_file_2},Optimize the function for large integers.\n")
+    # Create a CSV file specifying changes for batch processing
+    csv_change_prompt_file = "batch_changes.csv"
+    with open(csv_change_prompt_file, "w") as csvfile:
+        csvfile.write("prompt_name,change_instructions\n")
+        csvfile.write(f"{prompt_file_1},Modify the function to handle overflow errors.\n")
+        csvfile.write(f"{prompt_file_2},Optimize the function for large integers.\n")
 
-#     # Define output file for batch changes
-#     batch_output_file = None#"batch_modified_prompts.csv"
+    # Define output file for batch changes
+    batch_output_file = None#"batch_modified_prompts.csv"
 
-#     # Call change_main in CSV batch-change mode
-#     rprint("\n[bold underline]CSV Batch-Change Mode Example[/bold underline]")
-#     message, total_cost_csv, model_name_csv = change_main(
-#         ctx=ctx,
-#         change_prompt_file=csv_change_prompt_file,
-#         input_code=code_directory,
-#         input_prompt_file=None,  # Not used in CSV mode
-#         output=batch_output_file,
-#         use_csv=True  # CSV mode enabled
-#     )
+    # Call change_main in CSV batch-change mode
+    rprint("\n[bold underline]CSV Batch-Change Mode Example[/bold underline]")
+    message, total_cost_csv, model_name_csv = change_main(
+        ctx=ctx,
+        change_prompt_file=csv_change_prompt_file,
+        input_code=code_directory,
+        input_prompt_file=None,  # Not used in CSV mode
+        output=batch_output_file,
+        use_csv=True  # CSV mode enabled
+    )
 
-#     # Display the outputs
-#     rprint(f"\n[bold]{message}[/bold]")
-#     rprint(f"[bold]Total Cost:[/bold] ${total_cost_csv:.6f}")
-#     rprint(f"[bold]Model Used:[/bold] {model_name_csv}")
-#     rprint(f"[bold]Batch Results Saved to:[/bold] {batch_output_file}")
+    # Display the outputs
+    rprint(f"\n[bold]{message}[/bold]")
+    rprint(f"[bold]Total Cost:[/bold] ${total_cost_csv:.6f}")
+    rprint(f"[bold]Model Used:[/bold] {model_name_csv}")
+    rprint(f"[bold]Batch Results Saved to:[/bold] {batch_output_file}")
 
 if __name__ == "__main__":
     main()
