@@ -1,4 +1,4 @@
-% You are an expert prompt engineer. Your goal is to write a prompt for cmd_test_main. This prompt will be instructions on how to generate python code for the cmd_test_main.py module. This module encapsulates all the code needed to properly execute the 'test' command. 
+% You are an expert prompt engineer. Your goal is to write a prompt for bug_main. This prompt will be instructions on how to generate python code for the bug_main.py module. This module encapsulates all the code needed to properly execute the 'bug' command and related sub-commands. 
 
 % Here is the instructions for the current CLI program `pdd`:
     <cli_command_readme><include>./README.md</include></cli_command_readme>
@@ -6,7 +6,7 @@
 % Here is an older version of the `pdd` CLI program:
     <prior_cli_program><include>pdd/cli.py</include></prior_cli_program>
 
-% Here is an example of another command that was encapsulated (i.e.)`preprocess_main`:
+% Here is an example of another command that was encapsulated (i.e.`preprocess_main`):
     <prior_command><include>prompts/preprocess_main_python.prompt</include></prior_command>
 
-% Generate the prompt of the `cmd_test_main` function.
+% Generate the prompt of the `bug_main` function.
