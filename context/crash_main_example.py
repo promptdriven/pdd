@@ -61,6 +61,11 @@ RecursionError: maximum recursion depth exceeded
     ctx = click.Context(click.Command('crash'))
     ctx.obj = {'strength': 0.9, 'temperature': 0}
     ctx.params = {'force': True, 'quiet': False, 'verbose': True}
+    # basename = "auto_include"
+    # prompt_file= f'prompts/{basename}_python.prompt'
+    # code_file= f'pdd/{basename}.py'  
+    # program_file= f'context/{basename}_example.py'  
+    # error_file= "crash_error.log",
 
     # Call crash_main with iterative fixing enabled
     success, fixed_code, fixed_program, attempts, cost, model = crash_main(
