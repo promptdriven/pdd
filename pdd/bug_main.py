@@ -1,4 +1,5 @@
 import sys
+import os
 from typing import Tuple, Optional
 import click
 from rich import print as rprint
@@ -69,6 +70,8 @@ def bug_main(
 
         # Save results if output path is provided
         if output_file_paths.get("output"):
+            # Create directory if it doesn't exist
+            os.makedirs(os.path.dirname(output_file_paths["output"]), exist_ok=True)
             with open(output_file_paths["output"], 'w') as f:
                 f.write(unit_test)
 

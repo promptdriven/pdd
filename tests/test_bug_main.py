@@ -20,7 +20,8 @@ def mock_ctx():
     """Fixture to mock the context object."""
     ctx = MagicMock()
     ctx.params = {'force': False, 'quiet': False}
-    ctx.obj = {'strength': 0.9, 'temperature': 0}
+    ctx.obj = MagicMock()
+    ctx.obj.get = MagicMock(side_effect=lambda key, default: default)
     return ctx
 
 @pytest.fixture
@@ -50,6 +51,15 @@ def test_bug_main_success(mock_ctx, mock_construct_paths, mock_bug_to_unit_test,
     # Arrange
     output_dir = tmpdir.mkdir("output")
     output_path = str(output_dir.join("mock_unit_test.py"))
+    mock_construct_paths.return_value = (
+        {
+            "prompt_file": MOCK_PROMPT_CONTENT,
+            "code_file": MOCK_CODE_CONTENT,
+            "program_file": MOCK_PROGRAM_CONTENT
+        },
+        {"output": output_path},
+        "Python"
+    )
     
     # Act
     result = bug_main(
