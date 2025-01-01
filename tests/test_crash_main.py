@@ -4,13 +4,28 @@ from pathlib import Path
 import click
 from pdd.crash_main import crash_main
 
+def delete_output_files():
+    output_files = [
+        "output/fixed_code_loop.py",
+        "output/fixed_program_loop.py",
+        "output/test_code.py",
+        "output/test_error.log",
+        "output/test_program.py",
+        "output/test_prompt.txt",
+        "test_fixed.prompt"
+    ]
+    for file in output_files:
+        if os.path.exists(file):
+            os.remove(file)
+
 # Fixture for temporary test files
 @pytest.fixture
 def test_files(tmp_path):
     # Create test files in output directory
     output_dir = Path("output")
     output_dir.mkdir(exist_ok=True)
-    
+    delete_output_files()
+
     # Create test prompt file
     prompt_content = "Write a function that calculates factorial"
     prompt_file = output_dir / "test_prompt.txt"
@@ -65,6 +80,11 @@ def test_basic_crash_fix(ctx, test_files):
     """Test basic crash fix without loop option"""
     output_code = "output/fixed_code.py"
     output_program = "output/fixed_program.py"
+        # Delete output files if they exist
+    if os.path.exists(output_code):
+        os.remove(output_code)
+    if os.path.exists(output_program):
+        os.remove(output_program)
     
     success, final_code, final_program, attempts, cost, model = crash_main(
         ctx=ctx,
