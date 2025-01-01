@@ -33,7 +33,7 @@
     Step 1. Load all existing input files into the input_strings dictionary using the 'input_file_paths' dictionary with the pdd description examples as the keys. For error files, create them if they don't exist, but if they do exist, load them like any other file. Alert the user of any errors in loading the input files.
     Step 2. Extract out the basename from the input file path and be sure to handle all corner cases.
     Step 3. Construct the output file paths using the above rules using the "generate_output_paths" function. Be sure to remove non-output keys from the command_options dictionary before passing it to the "generate_output_paths" function output_location dictionary parameters.
-    Step 4. If the output files already exist, and force isn't true, check with the user if the program should overwrite. Use click.style to style the confirmation message and click.secho for the cancellation message. If the user presses 'n' or 'N' then exit the program. If the user presses enter, 'y' or 'Y' then overwrite the output files.
+    Step 4. If the output files already exist, and force isn't true, check with the user if the program should overwrite. Use click.style to style the confirmation message and click.secho for the cancellation message. When prompting for confirmation, set the default to True so pressing Enter will choose to overwrite. If the user presses 'n' or 'N' then exit the program. If the user presses enter, 'y' or 'Y' then overwrite the output files.
     Step 5. Return the 'input_strings', 'output_file_paths' and 'language'
 
 Follow these steps in this order:
