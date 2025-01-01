@@ -116,7 +116,7 @@ def subtract(a, b):
 """)
 
     # Create a CSV file specifying changes for batch processing
-    csv_change_prompt_file = "batch_changes.csv"
+    csv_change_prompt_file = "output/batch_changes.csv"
     with open(csv_change_prompt_file, "w") as csvfile:
         csvfile.write("prompt_name,change_instructions\n")
         csvfile.write(f"{prompt_file_1},Modify the function to handle overflow errors.\n")
