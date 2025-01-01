@@ -110,9 +110,9 @@
         <include>context/trace_main_example.py</include>
         </trace_main_example>
 
-        - `bug` command: To create a unit test from a bug in a code module, use the `bug_to_unit_test` function. Here is an example of how to create a unit test from a bug in a code module:
+        - `bug` command: To create a unit test from a bug in a code module, use the `bug_main` function. Here is an example of how to create a unit test from a bug in a code module:
         <bug_to_unit_test_example>
-        <include>context/bug_to_unit_test_example.py</include>
+        <include>context/bug_main_example.py</include>
         </bug_to_unit_test_example>
 
         - `auto-deps` command: The core logic is implemented in the `auto_deps_main` function, defined in a separate module. Here's how to use `auto_deps_main`:

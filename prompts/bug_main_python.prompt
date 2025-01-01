@@ -1,0 +1,50 @@
+% Here is an example prompt generate as a reference:
+<example>
+   <example_prompt><include>context/generate/6/conflicts_main_python.prompt</include></example_prompt>
+   <example_code><include>context/generate/6/conflicts_main.py</include></example_code>
+</example>
+
+% You are an expert Python engineer. Your goal is to write a Python function, 'bug_main', that will be the CLI wrapper for generating unit tests based on observed and desired outputs. This function will take the original prompt, code, program, and outputs to generate a unit test that can reproduce and verify the bug fix.
+
+<include>./context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        - `ctx` (`click.Context`): The Click context object containing CLI options and parameters.
+        - `prompt_file` (str): Filename of the prompt file that generated the code.
+        - `code_file` (str): Filename of the code file being tested.
+        - `program_file` (str): Filename of the program used to run the code under test.
+        - `current_output` (str): The current (incorrect) output of the program.
+        - `desired_output` (str): The desired (correct) output of the program.
+        - `output` (Optional[str]): Optional path where to save the generated unit test. If None, prints to console.
+        - `language` (Optional[str]): Optional programming language for the unit test. Defaults to "Python".
+    Outputs:
+        - Returns a tuple containing (`str`, `float`, `str`):
+            - `str`: The generated unit test code
+            - `float`: The total cost of the operation
+            - `str`: The name of the model used
+
+<examples>
+   % Here is how to use the Python Click library to create a command line program:
+   <click_example>
+   <include>context/click_example.py</include>
+   </click_example>
+
+% Here are examples of how to use internal modules:
+   <internal_example_modules>
+      - Here is an example of how to use the `construct_paths` function:
+        <construct_paths_example>
+        <include>context/construct_paths_example.py</include>
+        </construct_paths_example>
+
+      - Here is an example of how to use the `bug_to_unit_test` function:
+        <bug_to_unit_test_example>
+        <include>context/bug_to_unit_test_example.py</include>
+        </bug_to_unit_test_example>
+   </internal_example_modules>
+</examples>
+
+% Here is the README for the cli command that has details of how the 'bug' command works:
+   <cli_command_readme>
+   <include>./README.md</include>
+   </cli_command_readme>
