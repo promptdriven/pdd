@@ -237,7 +237,8 @@ def construct_paths(
                 out_path = Path(out_path_str)
                 if out_path.exists():
                     if not Confirm.ask(
-                        f"Output file [bold blue]{out_path}[/bold blue] already exists. Overwrite?"
+                        f"Output file [bold blue]{out_path}[/bold blue] already exists. Overwrite?",
+                        default=True
                     ):
                         rich_print("[bold red]Cancelled by user. Exiting.[/bold red]")
                         raise SystemExit(1)
