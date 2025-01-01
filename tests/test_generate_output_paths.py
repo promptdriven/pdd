@@ -150,3 +150,112 @@ def test_missing_language(mock_mkdir):
     result = generate_output_paths('preprocess', {}, 'myfile', '', '.py')
     assert result == {'output': 'myfile__preprocessed.prompt'}
     mock_mkdir.assert_not_called()
+
+
+def test_generate_output_paths():
+    """
+    Unit tests for the generate_output_paths function.
+    Covers various scenarios and edge cases to ensure correctness.
+    """
+    # Test case 1: 'generate' command with a directory in output_locations
+    command = 'generate'
+    output_locations = {'output': 'output_dir/'}
+    basename = 'example'
+    language = 'python'
+    file_extension = '.py'
+
+    expected_output = {'output': os.path.join('output_dir', 'example.py')}
+    assert generate_output_paths(command, output_locations, basename, language, file_extension) == expected_output
+
+    # Test case 2: 'example' command with environment variable override
+    command = 'example'
+    output_locations = {'output': None}
+    basename = 'example'
+    language = 'python'
+    file_extension = '.py'
+
+    with patch.dict(os.environ, {'PDD_EXAMPLE_OUTPUT_PATH': 'env_output_dir'}):
+        expected_output = {'output': os.path.join('env_output_dir', 'example_example.py')}
+        assert generate_output_paths(command, output_locations, basename, language, file_extension) == expected_output
+
+    # Test case 3: 'test' command with default naming convention
+    command = 'test'
+    output_locations = {'output': None}
+    basename = 'example'
+    language = 'python'
+    file_extension = '.py'
+
+    expected_output = {'output': 'test_example.py'}
+    assert generate_output_paths(command, output_locations, basename, language, file_extension) == expected_output
+
+    # Test case 4: 'fix' command with multiple outputs
+    command = 'fix'
+    output_locations = {'output_test': 'fix_output_dir/', 'output_code': None, 'output_results': None}
+    basename = 'example'
+    language = 'python'
+    file_extension = '.py'
+
+    expected_output = {
+        'output_test': os.path.join('fix_output_dir', 'test_example_fixed.py'),
+        'output_code': 'example_fixed.py',
+        'output_results': 'example_fix_results.log'
+    }
+    assert generate_output_paths(command, output_locations, basename, language, file_extension) == expected_output
+
+    # Test case 5: 'split' command with missing keys in output_locations
+    command = 'split'
+    output_locations = {}
+    basename = 'example'
+    language = 'python'
+    file_extension = '.py'
+
+    expected_output = {
+        'output_sub': 'sub_example.prompt',
+        'output_modified': 'modified_example.prompt'
+    }
+    assert generate_output_paths(command, output_locations, basename, language, file_extension) == expected_output
+
+    # Test case 6: 'crash' command with environment variable override
+    command = 'crash'
+    output_locations = {'output': None, 'output_program': None}
+    basename = 'example'
+    language = 'python'
+    file_extension = '.py'
+
+    with patch.dict(os.environ, {'PDD_CRASH_OUTPUT_PATH': 'crash_output_dir'}):
+        expected_output = {
+            'output': os.path.join('crash_output_dir', 'example_fixed.py'),
+            'output_program': 'example_fixed.py'
+        }
+        assert generate_output_paths(command, output_locations, basename, language, file_extension) == expected_output
+
+    # Test case 7: 'bug' command with default naming convention
+    command = 'bug'
+    output_locations = {'output': None}
+    basename = 'example'
+    language = 'python'
+    file_extension = '.py'
+
+    expected_output = {'output': 'test_example_bug.py'}
+    assert generate_output_paths(command, output_locations, basename, language, file_extension) == expected_output
+
+    # Test case 8: 'auto-deps' command with environment variable override
+    command = 'auto-deps'
+    output_locations = {'output': None}
+    basename = 'example'
+    language = 'python'
+    file_extension = '.py'
+
+    with patch.dict(os.environ, {'PDD_AUTO_DEPS_OUTPUT_PATH': 'auto_deps_output_dir'}):
+        expected_output = {'output': os.path.join('auto_deps_output_dir', 'example_with_deps.prompt')}
+        assert generate_output_paths(command, output_locations, basename, language, file_extension) == expected_output
+
+    # Test case 9: Invalid command should raise ValueError
+    command = 'invalid_command'
+    output_locations = {'output': None}
+    basename = 'example'
+    language = 'python'
+    file_extension = '.py'
+
+    with pytest.raises(ValueError):
+        generate_output_paths(command, output_locations, basename, language, file_extension)
