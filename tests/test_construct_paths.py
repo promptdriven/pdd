@@ -745,3 +745,54 @@ def test_construct_paths_detects_incorrect_output_path(setup_test_files):
     # The desired output path should not have an extra underscore
     desired_output_path = str(setup_test_files / "main_gen.prompt")
     assert output_file_paths["output"] == desired_output_path, f"Expected {desired_output_path}, but got {output_file_paths['output']}"
+
+def test_construct_paths():
+    """
+    Unit test for the construct_paths function to ensure it generates the correct output file paths,
+    language, and input strings based on the provided input file paths and command options.
+    """
+    # Define input file paths
+    input_file_paths = {
+        "prompt_file": "prompts/regression_bash.prompt",
+    }
+
+    # Define command options
+    command_options = {
+        "output": "tests",
+    }
+
+    # Expected output file paths
+    expected_output_file_paths = {
+        "output": "tests/regression.sh",
+    }
+
+    # Expected language
+    expected_language = "bash"
+
+    # Call the construct_paths function
+    input_strings, output_file_paths, language = construct_paths(
+        input_file_paths=input_file_paths,
+        force=True,
+        quiet=False,
+        command="generate",
+        command_options=command_options
+    )
+
+    # Assert that the output file paths match the expected output
+    assert output_file_paths == expected_output_file_paths, (
+        f"Expected output file paths: {expected_output_file_paths}, but got: {output_file_paths}"
+    )
+
+    # Assert that the language matches the expected language
+    assert language == expected_language, (
+        f"Expected language: {expected_language}, but got: {language}"
+    )
+
+    # Assert that the input strings are correctly loaded
+    assert "prompt_file" in input_strings, "Prompt file content was not loaded correctly"
+
+    # Clean up: Remove the generated output file if it exists
+    output_file = Path(expected_output_file_paths["output"])
+    if output_file.exists():
+        os.remove(output_file)
+
