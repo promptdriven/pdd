@@ -83,8 +83,7 @@ requirements:
 # Clean generated files
 clean:
 	@echo "Cleaning generated files"
-	@rm -rf $(STAGING_DIR)
-	@rm -rf output output.csv
+	@rm -rf staging output output.csv
 
 .PHONY: staging
 staging:
