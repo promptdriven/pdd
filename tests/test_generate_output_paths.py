@@ -98,7 +98,10 @@ def test_conflicts_command(mock_mkdir):
 @patch('pathlib.Path.mkdir')
 def test_crash_command(mock_mkdir):
     result = generate_output_paths('crash', {}, 'myfile', 'python', '.py')
-    assert result == {'output': 'myfile_fixed.py'}
+    assert result == {
+        'output': 'myfile_fixed.py',
+        'output_program': 'myfile_fixed.py'
+    }
     mock_mkdir.assert_not_called()
 
 @patch('pathlib.Path.mkdir')
