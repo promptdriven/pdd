@@ -100,15 +100,10 @@
         <include>context/conflicts_main_example.py</include>
         </conflicts_main_example>
 
-        - `crash` command: To fix errors in a code module that caused a program to crash, use the `fix_code_module_errors` function. Here is an example of how to fix errors in a code module that caused a program to crash:
-        <fix_code_module_errors_example>
-        <include>context/fix_code_module_errors_example.py</include>
-        </fix_code_module_errors_example>
-
-        - `crash --loop` sub-command: To loop on the above fix errors in a code module that caused a program to crash, use the `fix_code_module_errors_loop` function. Here is an example of how to loop on the above fix errors in a code module that caused a program to crash:
-        <fix_code_module_errors_loop_example>
-        <include>context/fix_code_loop_example.py</include>
-        </fix_code_module_errors_loop_example>
+        - `crash` command and related sub-commands: To fix errors in a code module that caused a program to crash, use the `crash_main` function. Here is an example of how to fix errors in a code module that caused a program to crash:
+        <crash_main_example>
+        <include>context/crash_main_example.py</include>
+        </crash_main_example>
 
         - `trace` command: The core logic is implemented in the `trace_main` function, which is defined in a separate module. Here is an example of how to use the `trace_main` function:
         <trace_main_example>
