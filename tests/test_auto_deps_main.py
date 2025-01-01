@@ -1,10 +1,8 @@
-"""Tests for the auto_deps_main function."""
-from unittest.mock import patch, MagicMock
 import pytest
+from unittest.mock import patch, MagicMock, mock_open
+import sys
 import click
 
-# Import DEFAULT_STRENGTH
-from pdd import DEFAULT_STRENGTH, DEFAULT_TIME
 from pdd.auto_deps_main import auto_deps_main
 
 @pytest.fixture
@@ -19,23 +17,20 @@ def mock_ctx():
         'force': False
     }
     ctx.obj = {
-        'strength': DEFAULT_STRENGTH,
-        'temperature': 0,
-        'time': DEFAULT_TIME
+        'strength': 0.9,
+        'temperature': 0
     }
     return ctx
 
 @pytest.mark.parametrize("csv_path_return", [None, "custom_deps.csv"])
-@patch("builtins.open", new_callable=MagicMock)
 @patch("pdd.auto_deps_main.construct_paths")
 @patch("pdd.auto_deps_main.insert_includes")
 @patch("pdd.auto_deps_main.Path")
 def test_auto_deps_normal_operation(
-    mock_path,  # pylint: disable=unused-argument
+    mock_path,
     mock_insert_includes,
     mock_construct_paths,
-    mock_open,  # pylint: disable=unused-argument
-    mock_ctx,  # pylint: disable=redefined-outer-name
+    mock_ctx,
     csv_path_return
 ):
     """
@@ -48,7 +43,6 @@ def test_auto_deps_normal_operation(
     prompt_file = "sample_prompt_python.prompt"
     directory_path = "context/"
     mock_construct_paths.return_value = (
-        {},  # resolved_config
         {"prompt_file": "Contents of prompt file"},
         {
             "output": "output/sample_prompt_python_with_deps.prompt",
@@ -84,30 +78,28 @@ def test_auto_deps_normal_operation(
     mock_insert_includes.assert_called_once_with(
         input_prompt="Contents of prompt file",
         directory_path=directory_path,
-        csv_filename=mock_construct_paths.return_value[2]["csv"],
-        prompt_filename=prompt_file,
+        csv_filename=mock_construct_paths.return_value[1]["csv"],
         strength=mock_ctx.obj["strength"],
         temperature=mock_ctx.obj["temperature"],
-        time=mock_ctx.obj["time"],
-        verbose=not mock_ctx.params["quiet"],
-        progress_callback=None  # No progress callback when called directly
+        verbose=not mock_ctx.params["quiet"]
     )
     assert modified_prompt == "Modified prompt with includes"
     assert total_cost == 0.123456
     assert model_name == "text-davinci-003"
-    # Note: File writing behavior is verified by functional tests
-    # The mock assertions here verify insert_includes is called correctly
+    assert mock_path_obj.write_text.call_count == 2
+    written_prompt = mock_path_obj.write_text.call_args_list[0][0][0]
+    written_csv = mock_path_obj.write_text.call_args_list[1][0][0]
+    assert "Modified prompt with includes" in written_prompt
+    assert "csv content" in written_csv
 
-@patch("builtins.open", new_callable=MagicMock)
 @patch("pdd.auto_deps_main.construct_paths")
 @patch("pdd.auto_deps_main.insert_includes")
 @patch("pdd.auto_deps_main.Path")
 def test_auto_deps_force_scan_operation(
-    mock_path,  # pylint: disable=unused-argument
+    mock_path,
     mock_insert_includes,
     mock_construct_paths,
-    mock_open,  # pylint: disable=unused-argument
-    mock_ctx  # pylint: disable=redefined-outer-name
+    mock_ctx
 ):
     """
     Test the operation of auto_deps_main when force-scan is True.
@@ -117,7 +109,6 @@ def test_auto_deps_force_scan_operation(
     prompt_file = "another_prompt_python.prompt"
     directory_path = "context/"
     mock_construct_paths.return_value = (
-        {},  # resolved_config
         {"prompt_file": "Contents of prompt file"},
         {
             "output": "output/another_prompt_python_with_deps.prompt",
@@ -155,12 +146,9 @@ def test_auto_deps_force_scan_operation(
         input_prompt="Contents of prompt file",
         directory_path=directory_path,
         csv_filename="forced_scan_deps.csv",
-        prompt_filename=prompt_file,
         strength=mock_ctx.obj["strength"],
         temperature=mock_ctx.obj["temperature"],
-        time=mock_ctx.obj["time"],
-        verbose=not mock_ctx.params["quiet"],
-        progress_callback=None  # No progress callback when called directly
+        verbose=not mock_ctx.params["quiet"]
     )
     assert modified_prompt == "Modified prompt after force scan"
     assert total_cost == 0.111111
@@ -169,61 +157,32 @@ def test_auto_deps_force_scan_operation(
 @patch("pdd.auto_deps_main.construct_paths")
 @patch("pdd.auto_deps_main.insert_includes")
 @patch("pdd.auto_deps_main.Path")
+@patch("pdd.auto_deps_main.sys")
 def test_auto_deps_handles_error_scenario(
-    mock_path,  # pylint: disable=unused-argument
+    mock_sys,
+    mock_path,
     mock_insert_includes,
     mock_construct_paths,
-    mock_ctx  # pylint: disable=redefined-outer-name
+    mock_ctx
 ):
     """
-    Test that auto_deps_main returns an error tuple when an exception is raised.
-    Per the spec, errors should return ("", 0.0, "Error: {exc}") to allow
-    the orchestrator to handle failures gracefully.
+    Test that auto_deps_main calls sys.exit(1) if an exception is raised.
     """
     # Arrange
     mock_construct_paths.side_effect = Exception("Test exception")
+    mock_sys.exit = MagicMock()
 
     # Act
-    modified_prompt, total_cost, model_name = auto_deps_main(
-        ctx=mock_ctx,
-        prompt_file="bad_prompt_file.prompt",
-        directory_path="context/",
-        auto_deps_csv_path=None,
-        output=None,
-        force_scan=False
-    )
-
-    # Assert - should return error tuple instead of raising
-    assert modified_prompt == ""
-    assert total_cost == 0.0
-    assert "Error:" in model_name
-    assert "Test exception" in model_name
-    mock_insert_includes.assert_not_called()
-
-@patch("pdd.auto_deps_main.construct_paths")
-@patch("pdd.auto_deps_main.insert_includes")
-@patch("pdd.auto_deps_main.Path")
-def test_auto_deps_reraises_click_abort(
-    mock_path,  # pylint: disable=unused-argument
-    mock_insert_includes,
-    mock_construct_paths,
-    mock_ctx  # pylint: disable=redefined-outer-name
-):
-    """
-    Test that auto_deps_main re-raises click.Abort to allow the orchestrator
-    to stop the sync loop when the user cancels.
-    """
-    # Arrange
-    mock_construct_paths.side_effect = click.Abort()
-
-    # Act / Assert - click.Abort should be re-raised, not caught
-    with pytest.raises(click.Abort):
+    with pytest.raises(SystemExit):
         auto_deps_main(
             ctx=mock_ctx,
-            prompt_file="cancelled_prompt.prompt",
+            prompt_file="bad_prompt_file.prompt",
             directory_path="context/",
             auto_deps_csv_path=None,
             output=None,
             force_scan=False
         )
+
+    # Assert
+    mock_sys.exit.assert_called_once_with(1)
     mock_insert_includes.assert_not_called()
