@@ -2,6 +2,9 @@ from pathlib import Path
 import click
 from pdd.crash_main import crash_main
 
+# create output directory if it doesn't exist
+Path("output").mkdir(exist_ok=True)
+
 def demonstrate_crash_main():
     """
     Demonstrates how to use the crash_main function to fix errors in a code module 
