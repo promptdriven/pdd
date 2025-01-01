@@ -67,12 +67,11 @@ def fix_code_loop(
     # Step 3: Main loop
     success = False
     while total_attempts < max_attempts:
-        # Step 3a: Print iteration information
         rprint(f"\n[bold blue]Attempt: {total_attempts + 1}[/bold blue]")
         with open(error_log_file, "a") as f:
             f.write(f"\nAttempt: {total_attempts + 1}\n")
 
-        # Step 3b: Run verification program and capture output/errors
+        # Run the verification program
         try:
             result = subprocess.run(
                 ["python", verification_program],
@@ -84,7 +83,7 @@ def fix_code_loop(
                 f.write(result.stdout)
                 f.write(result.stderr)
 
-            # Step 3c: Check for successful execution
+            # Check for successful execution
             if result.returncode == 0:
                 rprint("[bold green]Code ran successfully![/bold green]")
                 success = True
@@ -97,7 +96,7 @@ def fix_code_loop(
                 f.write(error_message + "\n")
             return False, "", "", total_attempts, total_cost, model_name
 
-        # Step 3d: Handle program failure
+        # If we get here, code failed
         rprint("[bold red]Code execution failed.[/bold red]")
         with open(error_log_file, "r") as f:
             error_message = f.read()
@@ -106,13 +105,17 @@ def fix_code_loop(
         escaped_error_message = error_message.replace("[", "\\[").replace("]", "\\]")
         rprint(f"[bold red]Errors found:\n[/bold red]{escaped_error_message}")
 
-        # Create backup copies of the current files
-        verification_program_backup = verification_program.rsplit(".", 1)[0] + f"_{total_attempts + 1}." + verification_program.rsplit(".", 1)[1]
-        code_file_backup = code_file.rsplit(".", 1)[0] + f"_{total_attempts + 1}." + code_file.rsplit(".", 1)[1]
+        # Create iteration backups
+        verification_program_backup = (verification_program.rsplit(".", 1)[0]
+                                       + f"_{total_attempts + 1}."
+                                       + verification_program.rsplit(".", 1)[1])
+        code_file_backup = (code_file.rsplit(".", 1)[0]
+                            + f"_{total_attempts + 1}."
+                            + code_file.rsplit(".", 1)[1])
         shutil.copy(verification_program, verification_program_backup)
         shutil.copy(code_file, code_file_backup)
 
-        # Read file contents
+        # Read current file contents
         try:
             with open(verification_program, "r") as f:
                 program_content = f.read()
@@ -130,7 +133,7 @@ def fix_code_loop(
             success = False
             break
 
-        # Call fix_code_module_errors with temporary console
+        # Call fix_code_module_errors
         temp_console = Console(file=open(os.devnull, "w"), record=True)
         with temp_console.capture() as capture:
             update_program, update_code, fixed_program, fixed_code, cost, model_name = fix_code_module_errors(
@@ -142,27 +145,30 @@ def fix_code_loop(
                 temperature=temperature,
                 verbose=verbose,
             )
-        
-        # Get the captured output and print/log it
         captured_output = temp_console.export_text()
         rprint(captured_output)
         with open(error_log_file, "a") as f:
             f.write(captured_output)
 
-        # Update total cost and check budget again
+        # Add the cost of this fix attempt
         total_cost += cost
+
+        # Now increment attempts right after we’ve incurred cost
+        total_attempts += 1
+
+        # Check budget after fix
         if total_cost > budget:
-            rprint(f"[bold red]Budget exceeded after fix attempt. Stopping.[/bold red]")
+            rprint("[bold red]Budget exceeded after fix attempt. Stopping.[/bold red]")
             success = False
             break
 
-        # Check if no changes were needed
+        # If no changes to either file, nothing more to do
         if not update_program and not update_code:
             rprint("[bold yellow]No changes needed. Stopping.[/bold yellow]")
             success = False
             break
 
-        # Update files if needed
+        # Overwrite code file if updated
         if update_code:
             try:
                 with open(code_file, "w") as f:
@@ -172,6 +178,8 @@ def fix_code_loop(
                 with open(error_log_file, "a") as f:
                     f.write(f"Error writing to code file: {e}\n")
                 return False, "", "", total_attempts, total_cost, model_name
+
+        # Overwrite verification program if updated
         if update_program:
             try:
                 with open(verification_program, "w") as f:
@@ -182,9 +190,7 @@ def fix_code_loop(
                     f.write(f"Error writing to verification program: {e}\n")
                 return False, "", "", total_attempts, total_cost, model_name
 
-        total_attempts += 1
-
-    # Step 4: Restore original files if the last run didn't work
+    # Step 4: If not successful, restore the original files
     if not success:
         rprint("[bold yellow]Restoring original files.[/bold yellow]")
         shutil.copy(original_verification_program, verification_program)
