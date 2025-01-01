@@ -185,15 +185,17 @@ def expensive_problem():
 """
     write_file(code_file_path, code_file_text)
 
-    # The first two attempts each add cost, the third attempt should exceed the budget
-    # and cause fix_code_loop to stop.
+    # Update the mock so each "fix" is still broken (force a continued failure)
+    # and each fix attempt costs 6.0
     def mock_fix(*args, **kwargs):
-        return (True, True,
-                "print('Still broken verification')",
-                "def expensive_problem(): raise Exception('Still not fixed')",
-                6.0,  # cost each time
-                "expensive-model"
-               )
+        return (
+            True, 
+            True,
+            "raise RuntimeError('Still broken verification')",
+            "def expensive_problem(): raise Exception('Still not fixed')",
+            6.0,  # cost each time
+            "expensive-model"
+        )
 
     mock_fix_code_module_errors.side_effect = mock_fix
 
@@ -204,23 +206,21 @@ def expensive_problem():
         strength=0.5,
         temperature=0.5,
         max_attempts=5,
-        budget=10.0,  # Will be exceeded on first fix
+        budget=10.0,  # Will be exceeded on the second fix
         error_log_file="error_code.log",
         verbose=True,
     )
 
     # Validate results
     assert success is False, "Should fail because the budget was exceeded."
-    assert total_attempts == 1, "Only one attempt should be made before exceeding the budget."
+    # After the first failing attempt: cost=6.0; second attempt also fails -> cost=12.0 > budget
+    assert total_attempts == 2, "Should make two fix attempts before exceeding the budget."
     assert total_cost > 10.0, "Total cost should exceed the original budget."
     assert model_name == "expensive-model", "Should report the model name from the mock."
 
     # Check that the code was restored to the original (since fix eventually failed)
-    with open(verification_program_path, "r") as vf:
-        restored_verification = vf.read()
-    with open(code_file_path, "r") as cf:
-        restored_code = cf.read()
-
+    restored_verification = read_file(verification_program_path)
+    restored_code = read_file(code_file_path)
     assert "Always fails" in restored_verification, "Original verification program should be restored."
     assert "Needs fixing" in restored_code, "Original code should be restored."
     
