@@ -10,27 +10,24 @@ from rich.console import Console
 from rich.panel import Panel
 
 from .construct_paths import construct_paths
-from .code_generator import code_generator
-from .context_generator import context_generator
-from .generate_test import generate_test
-from .preprocess import preprocess as preprocess_func
-from .xml_tagger import xml_tagger
-from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
-from .fix_error_loop import fix_error_loop
-from .split import split as split_func
+from .code_generator_main import code_generator_main
+from .context_generator_main import context_generator_main
+from .cmd_test_main import cmd_test_main
+from .preprocess_main import preprocess_main
+from .fix_main import fix_main
+from .split_main import split_main
 from .change_main import change_main
-from .update_prompt import update_prompt
-from .git_update import git_update
-from .detect_change import detect_change
+from .update_main import update_main
+from .detect_change_main import detect_change_main
 from .conflicts_main import conflicts_main
-from .fix_code_module_errors import fix_code_module_errors
+from .crash_main import crash_main
 from .trace_main import trace_main
-from .bug_to_unit_test import bug_to_unit_test
+from .bug_main import bug_main
+from .auto_deps_main import auto_deps_main
 from .track_cost import track_cost
 from .auto_update import auto_update
 
 console = Console()
-
 
 @click.group()
 @click.option('--force', is_flag=True, help='Overwrite existing files without asking for confirmation.')
@@ -53,6 +50,8 @@ def cli(ctx, force: bool, strength: float, temperature: float, verbose: bool, qu
     ctx.obj['output_cost'] = output_cost or os.environ.get('PDD_OUTPUT_COST_PATH')
     ctx.obj['review_examples'] = review_examples
 
+    auto_update()
+
 @cli.command()
 @click.argument('prompt_file', type=click.Path(exists=True))
 @click.option('--output', type=click.Path(), help='Specify where to save the generated code.')
@@ -60,36 +59,7 @@ def cli(ctx, force: bool, strength: float, temperature: float, verbose: bool, qu
 @track_cost
 def generate(ctx, prompt_file: str, output: Optional[str]) -> Tuple[str, float, str]:
     """Create runnable code from a prompt file."""
-    input_files = {'prompt_file': prompt_file}
-    command_options = {'output': output}
-    
-    try:
-        input_strings, output_file_paths, language = construct_paths(
-            input_file_paths=input_files,
-            force=ctx.obj['force'],
-            quiet=ctx.obj['quiet'],
-            command="generate",
-            command_options=command_options
-        )
-        
-        runnable_code, total_cost, model_name = code_generator(
-            input_strings['prompt_file'],
-            language,
-            ctx.obj['strength'],
-            ctx.obj['temperature'],
-            ctx.obj['verbose']
-        )
-        
-        with open(output_file_paths['output'], 'w') as f:
-            f.write(runnable_code)
-        
-        if not ctx.obj['quiet']:
-            rprint(f"Generated code saved to: {output_file_paths['output']}")
-        
-        return runnable_code, total_cost, model_name
-    except Exception as e:
-        rprint(f"[bold red]Error: {str(e)}[/bold red]")
-        ctx.exit(1)
+    return code_generator_main(ctx, prompt_file, output)
 
 @cli.command()
 @click.argument('prompt_file', type=click.Path(exists=True))
@@ -99,121 +69,55 @@ def generate(ctx, prompt_file: str, output: Optional[str]) -> Tuple[str, float, 
 @track_cost
 def example(ctx, prompt_file: str, code_file: str, output: Optional[str]) -> Tuple[str, float, str]:
     """Create an example file from an existing code file and the prompt that generated the code file."""
-    input_files = {'prompt_file': prompt_file, 'code_file': code_file}
-    command_options = {'output': output}
-    
-    try:
-        input_strings, output_file_paths, language = construct_paths(
-            input_file_paths=input_files,
-            force=ctx.obj['force'],
-            quiet=ctx.obj['quiet'],
-            command="example",
-            command_options=command_options
-        )
-        
-        example_code, total_cost, model_name = context_generator(
-            input_strings['code_file'],
-            input_strings['prompt_file'],
-            language,
-            ctx.obj['strength'],
-            ctx.obj['temperature'],
-            ctx.obj['verbose']
-        )
-        
-        with open(output_file_paths['output'], 'w') as f:
-            f.write(example_code)
-        
-        if not ctx.obj['quiet']:
-            rprint(f"Generated example code saved to: {output_file_paths['output']}")
-        
-        return example_code, total_cost, model_name
-    except Exception as e:
-        rprint(f"[bold red]Error: {str(e)}[/bold red]")
-        ctx.exit(1)
+    return context_generator_main(ctx, prompt_file, code_file, output)
 
 @cli.command()
 @click.argument('prompt_file', type=click.Path(exists=True))
 @click.argument('code_file', type=click.Path(exists=True))
 @click.option('--output', type=click.Path(), help='Specify where to save the generated test file.')
 @click.option('--language', help='Specify the programming language.')
+@click.option('--coverage-report', type=click.Path(exists=True), help='Path to the coverage report file for existing tests.')
+@click.option('--existing-tests', type=click.Path(exists=True), help='Path to the existing unit test file.')
+@click.option('--target-coverage', type=float, default=90.0, help='Desired code coverage percentage to achieve.')
+@click.option('--merge', is_flag=True, help='Merge new tests with existing test file.')
 @click.pass_context
 @track_cost
-def test(ctx, prompt_file: str, code_file: str, output: Optional[str], language: Optional[str]) -> Tuple[str, float, str]:
-    """Generate a unit test file for a given code file and its corresponding prompt file."""
-    input_files = {'prompt_file': prompt_file, 'code_file': code_file}
-    command_options = {'output': output, 'language': language}
-    
-    try:
-        input_strings, output_file_paths, detected_language = construct_paths(
-            input_file_paths=input_files,
-            force=ctx.obj['force'],
-            quiet=ctx.obj['quiet'],
-            command="test",
-            command_options=command_options
-        )
-        
-        language = language or detected_language
-        
-        unit_test, total_cost, model_name = generate_test(
-            input_strings['prompt_file'],
-            input_strings['code_file'],
-            ctx.obj['strength'],
-            ctx.obj['temperature'],
-            language,
-            ctx.obj['verbose']
-        )
-        
-        with open(output_file_paths['output'], 'w') as f:
-            f.write(unit_test)
-        
-        if not ctx.obj['quiet']:
-            rprint(f"Generated unit test saved to: {output_file_paths['output']}")
-        
-        return unit_test, total_cost, model_name
-    except Exception as e:
-        rprint(f"[bold red]Error: {str(e)}[/bold red]")
-        ctx.exit(1)
+def test(
+    ctx,
+    prompt_file: str,
+    code_file: str,
+    output: Optional[str],
+    language: Optional[str],
+    coverage_report: Optional[str],
+    existing_tests: Optional[str],
+    target_coverage: Optional[float],
+    merge: bool
+) -> Tuple[str, float, str]:
+    """Generate or enhance unit tests for a given code file and its corresponding prompt file."""
+    return cmd_test_main(
+        ctx=ctx,
+        prompt_file=prompt_file,
+        code_file=code_file,
+        output=output,
+        language=language,
+        coverage_report=coverage_report,
+        existing_tests=existing_tests,
+        target_coverage=target_coverage,
+        merge=merge
+    )
 
 @cli.command()
 @click.argument('prompt_file', type=click.Path(exists=True))
 @click.option('--output', type=click.Path(), help='Specify where to save the preprocessed prompt file.')
 @click.option('--xml', is_flag=True, help='Automatically insert XML delimiters for long and complex prompt files.')
+@click.option('--recursive', is_flag=True, help='Recursively preprocess all prompt files in the prompt file.')
+@click.option('--double', is_flag=True, help='Curly brackets will be doubled.')
+@click.option('--exclude', multiple=True, help='List of keys to exclude from curly bracket doubling.')
 @click.pass_context
 @track_cost
-def preprocess(ctx, prompt_file: str, output: Optional[str], xml: bool) -> Tuple[str, float, str]:
+def preprocess(ctx, prompt_file: str, output: Optional[str], xml: bool, recursive: bool, double: bool, exclude: List[str]) -> Tuple[str, float, str]:
     """Preprocess prompt files and save the results."""
-    input_files = {'prompt_file': prompt_file}
-    command_options = {'output': output}
-    
-    try:
-        input_strings, output_file_paths, _ = construct_paths(
-            input_file_paths=input_files,
-            force=ctx.obj['force'],
-            quiet=ctx.obj['quiet'],
-            command="preprocess",
-            command_options=command_options
-        )
-        
-        if xml:
-            processed_prompt, total_cost, model_name = xml_tagger(
-                input_strings['prompt_file'],
-                ctx.obj['strength'],
-                ctx.obj['temperature']
-            )
-        else:
-            processed_prompt = preprocess_func(input_strings['prompt_file'], recursive=False, double_curly_brackets=True)
-            total_cost, model_name = 0.0, "N/A"
-        
-        with open(output_file_paths['output'], 'w') as f:
-            f.write(processed_prompt)
-        
-        if not ctx.obj['quiet']:
-            rprint(f"Preprocessed prompt saved to: {output_file_paths['output']}")
-        
-        return processed_prompt, total_cost, model_name
-    except Exception as e:
-        rprint(f"[bold red]Error: {str(e)}[/bold red]")
-        ctx.exit(1)
+    return preprocess_main(ctx, prompt_file, output, xml, recursive, double, exclude)
 
 @cli.command()
 @click.argument('prompt_file', type=click.Path(exists=True))
@@ -234,95 +138,11 @@ def fix(ctx, prompt_file: str, code_file: str, unit_test_file: str, error_file: 
         output_test: Optional[str], output_code: Optional[str], output_results: Optional[str],
         loop: bool, verification_program: Optional[str], max_attempts: int, budget: float, auto_submit: bool) -> Tuple[bool, str, str, int, float, str]:
     """Fix errors in code and unit tests based on error messages and the original prompt file."""
-    input_files = {
-        'prompt_file': prompt_file,
-        'code_file': code_file,
-        'unit_test_file': unit_test_file,
-        'error_file': error_file
-    }
-    command_options = {
-        'output_test': output_test,
-        'output_code': output_code,
-        'output_results': output_results
-    }
-    
-    try:
-        input_strings, output_file_paths, _ = construct_paths(
-            input_file_paths=input_files,
-            force=ctx.obj['force'],
-            quiet=ctx.obj['quiet'],
-            command="fix",
-            command_options=command_options
-        )
-        
-        if loop:
-            success, final_unit_test, final_code, total_attempts, total_cost, model_name = fix_error_loop(
-                unit_test_file,
-                code_file,
-                input_strings['prompt_file'],
-                verification_program,
-                ctx.obj['strength'],
-                ctx.obj['temperature'],
-                max_attempts,
-                budget,
-                output_file_paths['output_results'],
-                # auto_submit
-            )
-            
-            if success:
-                if final_unit_test and output_file_paths.get('output_test'):
-                    with open(output_file_paths['output_test'], 'w') as f:
-                        f.write(final_unit_test)
-                if final_code and output_file_paths.get('output_code'):
-                    with open(output_file_paths['output_code'], 'w') as f:
-                        f.write(final_code)
-                
-                if not ctx.obj['quiet']:
-                    if output_file_paths.get('output_test'):
-                        rprint(f"Fixed unit test saved to: {output_file_paths['output_test']}")
-                    if output_file_paths.get('output_code'):
-                        rprint(f"Fixed code saved to: {output_file_paths['output_code']}")
-                    if output_file_paths.get('output_results'):
-                        rprint(f"Fix results saved to: {output_file_paths['output_results']}")
-                    rprint(f"Total attempts: {total_attempts}")
-                    rprint(f"Total cost: ${total_cost:.6f}")
-                    rprint(f"Model used: {model_name}")
-            else:
-                rprint("[bold red]Failed to fix errors within the given constraints.[/bold red]")
-            
-            return success, final_unit_test, final_code, total_attempts, total_cost, model_name
-        else:
-            update_unit_test, update_code, fixed_unit_test, fixed_code, total_cost, model_name = fix_errors_from_unit_tests(
-                input_strings['unit_test_file'],
-                input_strings['code_file'],
-                input_strings['prompt_file'],
-                input_strings['error_file'],
-                output_file_paths['output_results'],
-                ctx.obj['strength'],
-                ctx.obj['temperature']
-            )
-            
-            if update_unit_test and output_file_paths.get('output_test'):
-                with open(output_file_paths['output_test'], 'w') as f:
-                    f.write(fixed_unit_test)
-            if update_code and output_file_paths.get('output_code'):
-                with open(output_file_paths['output_code'], 'w') as f:
-                    f.write(fixed_code)
-            
-            if not ctx.obj['quiet']:
-                if output_file_paths.get('output_test'):
-                    rprint(f"Fixed unit test saved to: {output_file_paths['output_test']}")
-                if output_file_paths.get('output_code'):
-                    rprint(f"Fixed code saved to: {output_file_paths['output_code']}")
-                if output_file_paths.get('output_results'):
-                    rprint(f"Fix results saved to: {output_file_paths['output_results']}")
-                rprint(f"Fix cost: ${total_cost:.6f}")
-                rprint(f"Model used: {model_name}")
-            
-            return True, fixed_unit_test, fixed_code, 1, total_cost, model_name
-    except Exception as e:
-        rprint(f"[bold red]Error: {str(e)}[/bold red]")
-        ctx.exit(1)
+    return fix_main(
+        ctx, prompt_file, code_file, unit_test_file, error_file,
+        output_test, output_code, output_results,
+        loop, verification_program, max_attempts, budget, auto_submit
+    )
 
 @cli.command()
 @click.argument('input_prompt', type=click.Path(exists=True))
@@ -335,120 +155,50 @@ def fix(ctx, prompt_file: str, code_file: str, unit_test_file: str, error_file: 
 def split(ctx, input_prompt: str, input_code: str, example_code: str,
           output_sub: Optional[str], output_modified: Optional[str]) -> Tuple[str, str, float, str]:
     """Split large complex prompt files into smaller, more manageable prompt files."""
-    input_files = {
-        'input_prompt': input_prompt,
-        'input_code': input_code,
-        'example_code': example_code
-    }
-    command_options = {
-        'output_sub': output_sub,
-        'output_modified': output_modified
-    }
-    
-    try:
-        input_strings, output_file_paths, _ = construct_paths(
-            input_file_paths=input_files,
-            force=ctx.obj['force'],
-            quiet=ctx.obj['quiet'],
-            command="split",
-            command_options=command_options
-        )
-        
-        sub_prompt, modified_prompt, total_cost = split_func(
-            input_strings['input_prompt'],
-            input_strings['input_code'],
-            input_strings['example_code'],
-            ctx.obj['strength'],
-            ctx.obj['temperature']
-        )
-        
-        with open(output_file_paths['output_sub'], 'w') as f:
-            f.write(sub_prompt)
-        with open(output_file_paths['output_modified'], 'w') as f:
-            f.write(modified_prompt)
-        
-        if not ctx.obj['quiet']:
-            rprint(f"Sub-prompt saved to: {output_file_paths['output_sub']}")
-            rprint(f"Modified prompt saved to: {output_file_paths['output_modified']}")
-        
-        return sub_prompt, modified_prompt, total_cost, "N/A"
-    except Exception as e:
-        rprint(f"[bold red]Error: {str(e)}[/bold red]")
-        ctx.exit(1)
+    return split_main(
+        ctx, input_prompt, input_code, example_code,
+        output_sub, output_modified
+    )
 
 @cli.command()
 @click.argument('change_prompt_file', type=click.Path(exists=True))
 @click.argument('input_code', type=click.Path(exists=True))
-@click.argument('input_prompt_file', type=click.Path(exists=True), required=False)
+@click.argument('input_prompt_file', type=click.Path(exists=False), required=False)
 @click.option('--output', type=click.Path(), help='Specify where to save the modified prompt file.')
 @click.option('--csv', is_flag=True, help='Use a CSV file for the change prompts instead of a text file.')
 @click.pass_context
 @track_cost
-def change(ctx, change_prompt_file: str, input_code: str, input_prompt_file: Optional[str], output: Optional[str], csv: bool) -> Tuple[str, float, str]:
+def change(
+    ctx,
+    change_prompt_file: str,
+    input_code: str,
+    input_prompt_file: Optional[str],
+    output: Optional[str],
+    csv: bool
+) -> Tuple[str, float, str]:
     """Modify an input prompt file based on a change prompt and the corresponding input code."""
-    return change_main(ctx, change_prompt_file, input_code, input_prompt_file, output, csv)
+    return change_main(
+        ctx,
+        change_prompt_file,
+        input_code,
+        input_prompt_file,
+        output,
+        csv
+    )
 
 @cli.command()
 @click.argument('input_prompt_file', type=click.Path(exists=True))
 @click.argument('modified_code_file', type=click.Path(exists=True))
-@click.argument('input_code_file', type=click.Path(exists=True), required=False)
+@click.option('--input-code-file', type=click.Path(exists=True), help='Optional path to the original code file.')
 @click.option('--output', type=click.Path(), help='Specify where to save the modified prompt file.')
 @click.option('--git', is_flag=True, help="Use git history to find the original code file instead of providing 'INPUT_CODE_FILE'.")
 @click.pass_context
 @track_cost
 def update(ctx, input_prompt_file: str, modified_code_file: str, input_code_file: Optional[str], output: Optional[str], git: bool) -> Tuple[str, float, str]:
     """Update the original prompt file based on the original code and the modified code."""
-    input_files = {
-        'input_prompt_file': input_prompt_file,
-        'modified_code_file': modified_code_file
-    }
-    if input_code_file:
-        input_files['input_code_file'] = input_code_file
-    command_options = {'output': output, 'git': git}
-    
-    try:
-        input_strings, output_file_paths, _ = construct_paths(
-            input_file_paths=input_files,
-            force=ctx.obj['force'],
-            quiet=ctx.obj['quiet'],
-            command="update",
-            command_options=command_options
-        )
-
-        if git:
-            # Use git to retrieve the original code file
-            original_code = git_update(
-                input_prompt = input_strings['input_prompt_file'],
-                modified_code_file = modified_code_file,
-                strength=ctx.obj['strength'],
-                temperature=ctx.obj['temperature']
-            )
-            if original_code:
-                modified_prompt, total_cost, model_name = original_code
-            else:
-                raise Exception("Git update failed to retrieve original code.")
-        else:
-            if not input_code_file:
-                raise click.UsageError("INPUT_CODE_FILE is required when not using --git")
-            
-            modified_prompt, total_cost, model_name = update_prompt(
-                input_strings['input_prompt_file'],
-                input_strings['input_code_file'],
-                input_strings['modified_code_file'],
-                ctx.obj['strength'],
-                ctx.obj['temperature']
-            )
-        
-        with open(output_file_paths['output'], 'w') as f:
-            f.write(modified_prompt)
-        
-        if not ctx.obj['quiet']:
-            rprint(f"Updated prompt saved to: {output_file_paths['output']}" if not git else "Prompt updated via git.")
-        
-        return modified_prompt, total_cost, model_name
-    except Exception as e:
-        rprint(f"[bold red]Error: {str(e)}[/bold red]")
-        ctx.exit(1)
+    return update_main(
+        ctx, input_prompt_file, modified_code_file, input_code_file, output, git
+    )
 
 @cli.command()
 @click.argument('prompt_files', nargs=-1, type=click.Path(exists=True))
@@ -458,39 +208,7 @@ def update(ctx, input_prompt_file: str, modified_code_file: str, input_code_file
 @track_cost
 def detect(ctx, prompt_files: List[str], change_file: str, output: Optional[str]) -> Tuple[List[dict], float, str]:
     """Analyze a list of prompt files and a change description to determine which prompts need to be changed."""
-    input_files = {'change_file': change_file}
-    command_options = {'output': output}
-    
-    try:
-        input_strings, output_file_paths, _ = construct_paths(
-            input_file_paths=input_files,
-            force=ctx.obj['force'],
-            quiet=ctx.obj['quiet'],
-            command="detect",
-            command_options=command_options
-        )
-        
-        changes_list, total_cost, model_name = detect_change(
-            prompt_files,
-            input_strings['change_file'],
-            ctx.obj['strength'],
-            ctx.obj['temperature']
-        )
-        
-        with open(output_file_paths['output'], 'w', newline='') as csvfile:
-            fieldnames = ['prompt_name', 'change_instructions']
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writeheader()
-            for change in changes_list:
-                writer.writerow(change)
-        
-        if not ctx.obj['quiet']:
-            rprint(f"Analysis results saved to: {output_file_paths['output']}")
-        
-        return changes_list, total_cost, model_name
-    except Exception as e:
-        rprint(f"[bold red]Error: {str(e)}[/bold red]")
-        ctx.exit(1)
+    return detect_change_main(ctx, prompt_files, change_file, output)
 
 @cli.command()
 @click.argument('prompt1', type=click.Path(exists=True))
@@ -508,46 +226,28 @@ def conflicts(ctx, prompt1: str, prompt2: str, output: Optional[str]) -> Tuple[L
 @click.argument('program_file', type=click.Path(exists=True))
 @click.argument('error_file', type=click.Path())
 @click.option('--output', type=click.Path(), help='Specify where to save the fixed code file.')
+@click.option('--output-program', type=click.Path(), help='Specify where to save the fixed program file.')
+@click.option('--loop', is_flag=True, help='Enable iterative fixing process.')
+@click.option('--max-attempts', type=int, default=3, help='Set the maximum number of fix attempts before giving up.')
+@click.option('--budget', type=float, default=5.0, help='Set the maximum cost allowed for the fixing process.')
 @click.pass_context
 @track_cost
-def crash(ctx, prompt_file: str, code_file: str, program_file: str, error_file: str, output: Optional[str]) -> Tuple[str, float, str]:
+def crash(
+    ctx,
+    prompt_file: str,
+    code_file: str,
+    program_file: str,
+    error_file: str,
+    output: Optional[str],
+    output_program: Optional[str],
+    loop: bool,
+    max_attempts: int,
+    budget: float
+) -> Tuple[bool, str, str, int, float, str]:
     """Fix errors in a code module that caused a program to crash."""
-    input_files = {
-        'prompt_file': prompt_file,
-        'code_file': code_file,
-        'program_file': program_file,
-        'error_file': error_file
-    }
-    command_options = {'output': output}
-    
-    try:
-        input_strings, output_file_paths, _ = construct_paths(
-            input_file_paths=input_files,
-            force=ctx.obj['force'],
-            quiet=ctx.obj['quiet'],
-            command="crash",
-            command_options=command_options
-        )
-        
-        update_program, update_code, fixed_program, fixed_code, total_cost, model_name = fix_code_module_errors(
-            input_strings['program_file'],
-            input_strings['prompt_file'],
-            input_strings['code_file'],
-            input_strings['error_file'],
-            ctx.obj['strength'],
-            ctx.obj['temperature']
-        )
-        
-        with open(output_file_paths['output'], 'w') as f:
-            f.write(fixed_code)
-        
-        if not ctx.obj['quiet']:
-            rprint(f"Fixed code saved to: {output_file_paths['output']}")
-        
-        return fixed_code, total_cost, model_name
-    except Exception as e:
-        rprint(f"[bold red]Error: {str(e)}[/bold red]")
-        ctx.exit(1)
+    return crash_main(
+        ctx, prompt_file, code_file, program_file, error_file, output, output_program, loop, max_attempts, budget
+    )
 
 @cli.command()
 def install_completion():
@@ -597,6 +297,17 @@ def install_completion():
 @cli.command()
 @click.argument('prompt_file', type=click.Path(exists=True))
 @click.argument('code_file', type=click.Path(exists=True))
+@click.argument('code_line', type=int)
+@click.option('--output', type=click.Path(), help='Specify where to save the trace analysis results.')
+@click.pass_context
+@track_cost
+def trace(ctx, prompt_file: str, code_file: str, code_line: int, output: Optional[str]) -> Tuple[str, float, str]:
+    """Find the associated line number between a prompt file and the generated code."""
+    return trace_main(ctx, prompt_file, code_file, code_line, output)
+
+@cli.command()
+@click.argument('prompt_file', type=click.Path(exists=True))
+@click.argument('code_file', type=click.Path(exists=True))
 @click.argument('program_file', type=click.Path(exists=True))
 @click.argument('current_output', type=str)
 @click.argument('desired_output', type=str)
@@ -615,55 +326,42 @@ def bug(
     language: Optional[str]
 ) -> Tuple[str, float, str]:
     """Generate a unit test based on observed and desired outputs, given the original prompt and code."""
-    try:
-        # Load necessary files
-        with open(prompt_file, 'r') as pf:
-            prompt = pf.read()
-        with open(code_file, 'r') as cf:
-            code = cf.read()
-        with open(program_file, 'r') as prf:
-            program = prf.read()
-        
-        # Call the bug_to_unit_test function
-        unit_test, total_cost, model_name = bug_to_unit_test(
-            current_output=current_output,
-            desired_output=desired_output,
-            prompt_used_to_generate_the_code=prompt,
-            code_under_test=code,
-            program_used_to_run_code_under_test=program,
-            strength=ctx.obj['strength'],
-            temperature=ctx.obj['temperature'],
-            language=language or "Python"
-        )
-        
-        if output:
-            with open(output, 'w') as f:
-                f.write(unit_test)
-            if not ctx.obj['quiet']:
-                rprint(f"Generated bug-related unit test saved to: {output}")
-        else:
-            if not ctx.obj['quiet']:
-                rprint(unit_test)
-        
-        rprint(f"Total Cost: ${total_cost:.6f}")
-        rprint(f"Model Used: {model_name}")
-        
-        return unit_test, total_cost, model_name
-    except Exception as e:
-        rprint(f"[bold red]Error generating bug-related unit test: {str(e)}[/bold red]")
-        ctx.exit(1)
+    return bug_main(
+        ctx,
+        prompt_file,
+        code_file,
+        program_file,
+        current_output,
+        desired_output,
+        output,
+        language
+    )
 
 @cli.command()
 @click.argument('prompt_file', type=click.Path(exists=True))
-@click.argument('code_file', type=click.Path(exists=True))
-@click.argument('code_line', type=int)
-@click.option('--output', type=click.Path(), help='Specify where to save the trace analysis results.')
+@click.argument('directory_path', type=str)
+@click.option('--output', type=click.Path(), help='Specify where to save the modified prompt file with dependencies inserted.')
+@click.option('--auto-deps-csv-path', default='./project_dependencies.csv', help='Specify the CSV file that contains or will contain dependency information.')
+@click.option('--force-scan', is_flag=True, help='Force rescanning of all potential dependency files even if they exist in the CSV file.')
 @click.pass_context
 @track_cost
-def trace(ctx, prompt_file: str, code_file: str, code_line: int, output: Optional[str]) -> Tuple[str, float, str]:
-    """Find the associated line number between a prompt file and the generated code."""
-    return trace_main(ctx, prompt_file, code_file, code_line, output) 
+def auto_deps(
+    ctx,
+    prompt_file: str,
+    directory_path: str,
+    output: Optional[str],
+    auto_deps_csv_path: Optional[str],
+    force_scan: bool
+) -> Tuple[str, float, str]:
+    """Analyze a prompt file and a directory of potential dependencies to determine and insert needed dependencies into the prompt."""
+    return auto_deps_main(
+        ctx,
+        prompt_file,
+        directory_path,
+        auto_deps_csv_path,
+        output,
+        force_scan
+    )
 
 if __name__ == '__main__':
-    auto_update()
     cli()
