@@ -84,6 +84,7 @@ requirements:
 clean:
 	@echo "Cleaning generated files"
 	@rm -rf $(STAGING_DIR)
+	@rm -rf output output.csv
 
 .PHONY: staging
 staging:
@@ -124,10 +125,6 @@ install:
 build:
 	@echo "Building pdd"
 	@python -m build
-
-clean:
-	@echo "Cleaning up"
-	@rm -rf output output.csv
 
 analysis:
 	@echo "Running regression analysis"
