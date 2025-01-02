@@ -40,8 +40,8 @@ def detect_change_main(
 
         input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
-            force=ctx.params.get('force', False),
-            quiet=ctx.params.get('quiet', False),
+            force=ctx.obj.get('force', False),
+            quiet=ctx.obj.get('quiet', False),
             command="detect",
             command_options=command_options
         )
@@ -62,7 +62,7 @@ def detect_change_main(
             change_description,
             strength,
             temperature,
-            verbose=not ctx.params.get('quiet', False)
+            verbose=not ctx.obj.get('quiet', False)
         )
 
         # Save results to CSV if output path is specified
@@ -75,7 +75,7 @@ def detect_change_main(
                     writer.writerow(change)
 
         # Provide user feedback
-        if not ctx.params.get('quiet', False):
+        if not ctx.obj.get('quiet', False):
             rprint("[bold green]Change detection completed successfully.[/bold green]")
             rprint(f"[bold]Model used:[/bold] {model_name}")
             rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
@@ -95,6 +95,6 @@ def detect_change_main(
         return changes_list, total_cost, model_name
 
     except Exception as e:
-        if not ctx.params.get('quiet', False):
+        if not ctx.obj.get('quiet', False):
             rprint(f"[bold red]Error:[/bold red] {str(e)}")
         sys.exit(1)

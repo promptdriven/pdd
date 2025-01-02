@@ -155,8 +155,8 @@ def test_detect_change_main_quiet_mode(mock_construct_paths, mock_detect_change,
     """
     # Setup mock data
     mock_ctx = MagicMock(spec=click.Context)
-    mock_ctx.params = {'force': False, 'quiet': True}
-    mock_ctx.obj = {'strength': 0.9, 'temperature': 0}
+
+    mock_ctx.obj = {'strength': 0.9, 'temperature': 0, 'force': False, 'quiet': True}
 
     prompt_files = ['prompt1.prompt']
     change_file = 'change_description.prompt'
