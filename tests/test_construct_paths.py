@@ -758,12 +758,12 @@ def test_construct_paths():
 
     # Define command options
     command_options = {
-        "output": "tests",
+        "output": "output",
     }
 
     # Expected output file paths
     expected_output_file_paths = {
-        "output": "tests/regression.sh",
+        "output": "output/regression.sh",
     }
 
     # Expected language
