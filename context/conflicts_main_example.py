@@ -16,7 +16,7 @@ with open(prompt2, 'w') as f:
 # Create a mock Click context
 class MockContext:
     def __init__(self):
-        self.params = {
+        self.obj = {
             'force': True,
             'quiet': False,
             'strength': 0.5,

@@ -8,16 +8,12 @@ from pdd.conflicts_main import conflicts_main
 def mock_ctx():
     """Fixture to create a mock Click context with parameters."""
     ctx = MagicMock()
-    ctx.params = {
+    ctx.obj = {
         'force': False,
         'quiet': False,
         'strength': 0.9,
         'temperature': 0
     }
-    ctx.obj.get.side_effect = lambda key, default: {
-        'strength': 0.9,
-        'temperature': 0
-    }.get(key, default)
     return ctx
 
 
@@ -306,7 +302,7 @@ def test_quiet_mode(mock_rprint, mock_construct_paths, mock_conflicts_in_prompts
 def test_force_option(mock_rprint, mock_construct_paths, mock_conflicts_in_prompts, mock_ctx):
     """Test conflicts_main with the force option enabled."""
     # Modify context to have force=True
-    mock_ctx.params['force'] = True
+    mock_ctx.obj['force'] = True
     
     # Setup construct_paths
     mock_construct_paths.return_value = (
