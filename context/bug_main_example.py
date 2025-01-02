@@ -5,14 +5,11 @@ from pdd.bug_main import bug_main
 # Create a Click context object
 ctx = click.Context(click.Command('bug'))
 
-# Set Click context parameters
-ctx.params = {
-    'force': False,  # Do not overwrite existing files
-    'quiet': False,  # Print verbose output
-}
 
 # Set Click context object attributes
 ctx.obj = {
+    'force': False,  # Do not overwrite existing files
+    'quiet': False,  # Print verbose output
     'strength': 0.9,  # Strength of the AI model (0 to 1)
     'temperature': 0,  # Temperature for the AI model (0 for deterministic output)
 }

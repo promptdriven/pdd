@@ -17,11 +17,13 @@ MOCK_MODEL_NAME = "gpt-4"
 
 @pytest.fixture
 def mock_ctx():
-    """Fixture to mock the context object."""
+    """
+    Fixture to mock the context object so that 'force' and 'quiet'
+    can be manipulated properly in each test.
+    """
     ctx = MagicMock()
+    # Use a normal dictionary; we can set force/quiet in individual tests.
     ctx.obj = {'force': False, 'quiet': False}
-    ctx.obj = MagicMock()
-    ctx.obj.get = MagicMock(side_effect=lambda key, default: default)
     return ctx
 
 @pytest.fixture
@@ -121,7 +123,8 @@ def test_bug_main_error(mock_ctx, mock_construct_paths, mock_bug_to_unit_test):
         )
     
     # Assert
-    mock_ctx.obj.get.assert_called()
+    # We remove `mock_ctx.obj.get.assert_called()` because `ctx.obj` is a dict.
+    # Checking for SystemExit is enough to confirm the error path is exercised.
 
 def test_bug_main_quiet_mode(mock_ctx, mock_construct_paths, mock_bug_to_unit_test):
     """Test case for bug_main in quiet mode."""
