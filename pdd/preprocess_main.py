@@ -29,8 +29,8 @@ def preprocess_main(
         command_options = {"output": output}
         input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
-            force=ctx.params.get("force", False),
-            quiet=ctx.params.get("quiet", False),
+            force=ctx.obj.get("force", False),
+            quiet=ctx.obj.get("quiet", False),
             command="preprocess",
             command_options=command_options,
         )
@@ -55,7 +55,7 @@ def preprocess_main(
             f.write(processed_prompt)
 
         # Provide user feedback
-        if not ctx.params.get("quiet", False):
+        if not ctx.obj.get("quiet", False):
             rprint("[bold green]Prompt preprocessing completed successfully.[/bold green]")
             if xml:
                 rprint(f"[bold]XML Tagging used: {model_name}[/bold]")
@@ -67,6 +67,6 @@ def preprocess_main(
         return processed_prompt, total_cost, model_name
 
     except Exception as e:
-        if not ctx.params.get("quiet", False):
+        if not ctx.obj.get("quiet", False):
             rprint(f"[bold red]Error during preprocessing:[/bold red] {e}")
         sys.exit(1)
