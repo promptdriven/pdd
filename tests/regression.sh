@@ -28,6 +28,8 @@ mkdir -p "$STAGING_PATH/regression"
 LOG_FILE="regression.log"
 COST_FILE="regression_cost.csv"
 
+rm $LOG_FILE
+
 # Primary test prompt files and their outputs
 EXTENSION_PROMPT="get_extension_python.prompt"
 EXTENSION_SCRIPT="get_extension.py"
@@ -204,8 +206,8 @@ run_pdd_command bug \
     "$PROMPTS_PATH/$EXTENSION_PROMPT" \
     "$STAGING_PATH/regression/$EXTENSION_SCRIPT" \
     "$STAGING_PATH/regression/$EXTENSION_VERIFICATION_PROGRAM" \
-    "\"$CURRENT_OUTPUT\"" \
-    "\"$DESIRED_OUTPUT\""
+    "$CURRENT_OUTPUT" \
+    "$DESIRED_OUTPUT"
 
 # 16) auto-deps
 run_pdd_command auto-deps \
