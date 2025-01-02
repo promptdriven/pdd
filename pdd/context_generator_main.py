@@ -27,8 +27,8 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
         }
         input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
-            force=ctx.params.get('force', False),
-            quiet=ctx.params.get('quiet', False),
+            force=ctx.obj.get('force', False),
+            quiet=ctx.obj.get('quiet', False),
             command="example",
             command_options=command_options
         )
@@ -45,7 +45,7 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
             prompt=prompt_content,
             strength=strength,
             temperature=temperature,
-            verbose=ctx.params.get('verbose', False)
+            verbose=ctx.obj.get('verbose', False)
         )
 
         # Save results
@@ -54,7 +54,7 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
                 f.write(example_code)
 
         # Provide user feedback
-        if not ctx.params.get('quiet', False):
+        if not ctx.obj.get('quiet', False):
             rprint("[bold green]Example code generated successfully.[/bold green]")
             rprint(f"[bold]Model used:[/bold] {model_name}")
             rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
@@ -68,6 +68,6 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
         return example_code, total_cost, model_name
 
     except Exception as e:
-        if not ctx.params.get('quiet', False):
+        if not ctx.obj.get('quiet', False):
             rprint(f"[bold red]Error:[/bold red] {str(e)}")
         sys.exit(1)
