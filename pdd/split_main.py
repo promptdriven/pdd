@@ -49,8 +49,8 @@ def split_main(
         # Get input strings and output paths
         input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
-            force=ctx.params.get('force', False),
-            quiet=ctx.params.get('quiet', False),
+            force=ctx.obj.get('force', False),
+            quiet=ctx.obj.get('quiet', False),
             command="split",
             command_options=command_options
         )
@@ -66,7 +66,7 @@ def split_main(
             example_code=input_strings["example_code"],
             strength=strength,
             temperature=temperature,
-            verbose=not ctx.params.get('quiet', False)
+            verbose=not ctx.obj.get('quiet', False)
         )
 
         # Save the output files
@@ -79,7 +79,7 @@ def split_main(
             raise IOError(f"Failed to save output files: {str(e)}")
 
         # Provide user feedback if not in quiet mode
-        if not ctx.params.get('quiet', False):
+        if not ctx.obj.get('quiet', False):
             rprint("[bold green]Successfully split the prompt![/bold green]")
             rprint(f"[bold]Sub-prompt saved to:[/bold] {output_file_paths['output_sub']}")
             rprint(f"[bold]Modified prompt saved to:[/bold] {output_file_paths['output_modified']}")
@@ -89,7 +89,7 @@ def split_main(
 
     except Exception as e:
         # Handle errors and provide appropriate feedback
-        if not ctx.params.get('quiet', False):
+        if not ctx.obj.get('quiet', False):
             rprint(f"[bold red]Error:[/bold red] {str(e)}")
             
             # Provide more specific error messages based on the exception type
