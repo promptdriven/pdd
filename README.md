@@ -481,15 +481,15 @@ This will print out the line number in the prompt file for the associated the co
 Generate a unit test based on observed and desired outputs, given the original prompt and code.
 
 ```
-pdd [GLOBAL OPTIONS] bug [OPTIONS] PROMPT_FILE CODE_FILE PROGRAM_FILE CURRENT_OUTPUT DESIRED_OUTPUT
+pdd [GLOBAL OPTIONS] bug [OPTIONS] PROMPT_FILE CODE_FILE PROGRAM_FILE CURRENT_OUTPUT_FILE DESIRED_OUTPUT_FILE
 ```
 
 Arguments:
 - `PROMPT_FILE`: Filename of the prompt file that generated the code.
 - `CODE_FILE`: Filename of the code file being tested.
 - `PROGRAM_FILE`: Filename of the program used to run the code under test.
-- `CURRENT_OUTPUT`: The current (incorrect) output of the program.
-- `DESIRED_OUTPUT`: The desired (correct) output of the program.
+- `CURRENT_OUTPUT_FILE`: File containing the current (incorrect) output of the program.
+- `DESIRED_OUTPUT_FILE`: File containing the desired (correct) output of the program.
 
 Options:
 - `--output LOCATION`: Specify where to save the generated unit test. The default file name is `test_<basename>_bug.<language_extension>`.
@@ -497,7 +497,7 @@ Options:
 
 Example:
 ```
-pdd [GLOBAL OPTIONS] bug --output tests/test_factorial_calculator_bug.py factorial_calculator_python.prompt src/factorial_calculator.py main_program.py "Factorial of 5 is 60" "Factorial of 5 is 120"
+pdd [GLOBAL OPTIONS] bug --output tests/test_factorial_calculator_bug.py factorial_calculator_python.prompt src/factorial_calculator.py main_program.py current_output.txt desired_output.txt
 ```
 
 ### 14. auto-deps
