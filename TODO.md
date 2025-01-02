@@ -1,11 +1,8 @@
 # TODO
 
 ## On Deck
-- [ ] add loop to crash command like with fix
-- [ ] auto-includes
-- [ ] increase the number of unit tests to generate
-- [ ] auto update the utility
-- [ ] auto set PDD_PATH for package install
+- [ ] fix toml file
+
 
 ## Features
 
@@ -43,8 +40,9 @@
 - [ ] Use existing good prompt code example to generate code for the prompt
 - [ ] update prompt for makefile
 - [ ] fix warnings in the code
-- [ ] fix toml file
 - [ ] MLX support for faster local
+- [ ] Vertex AI support
+- [ ] AWS Nova support
 
 
 ## Documentation
