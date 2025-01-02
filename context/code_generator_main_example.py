@@ -5,16 +5,12 @@ from pdd.code_generator_main import code_generator_main
 # Create a Click context object to simulate CLI parameters
 ctx = click.Context(click.Command('generate'))
 
-# Set Click context parameters
-ctx.params = {
-    'force': False,  # Do not overwrite existing files
-    'quiet': False,  # Show verbose output
-}
-
 # Set Click context object attributes (e.g., strength and temperature)
 ctx.obj = {
     'strength': 0.5,  # Strength of the AI model (0.0 to 1.0)
     'temperature': 0.2,  # Temperature for randomness (0.0 to 1.0)
+    'force': False,  # Do not overwrite existing files
+    'quiet': False,  # Show verbose output
 }
 
 # Define the path to the prompt file
