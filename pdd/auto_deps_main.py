@@ -44,8 +44,8 @@ def auto_deps_main(
 
         input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
-            force=ctx.params.get('force', False),
-            quiet=ctx.params.get('quiet', False),
+            force=ctx.obj.get('force', False),
+            quiet=ctx.obj.get('quiet', False),
             command="auto-deps",
             command_options=command_options
         )
@@ -55,7 +55,7 @@ def auto_deps_main(
 
         # Handle force_scan option
         if force_scan and Path(csv_path).exists():
-            if not ctx.params.get('quiet', False):
+            if not ctx.obj.get('quiet', False):
                 rprint(f"[yellow]Removing existing CSV file due to --force-scan option: {csv_path}[/yellow]")
             Path(csv_path).unlink()
 
@@ -70,7 +70,7 @@ def auto_deps_main(
             csv_filename=csv_path,
             strength=strength,
             temperature=temperature,
-            verbose=not ctx.params.get('quiet', False)
+            verbose=not ctx.obj.get('quiet', False)
         )
 
         # Save the modified prompt to the output file
@@ -82,7 +82,7 @@ def auto_deps_main(
             Path(csv_path).write_text(csv_output)
 
         # Provide user feedback
-        if not ctx.params.get('quiet', False):
+        if not ctx.obj.get('quiet', False):
             rprint("[bold green]Successfully analyzed and inserted dependencies![/bold green]")
             rprint(f"[bold]Model used:[/bold] {model_name}")
             rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
@@ -92,7 +92,7 @@ def auto_deps_main(
         return modified_prompt, total_cost, model_name
 
     except Exception as e:
-        if not ctx.params.get('quiet', False):
+        if not ctx.obj.get('quiet', False):
             rprint(f"[bold red]Error:[/bold red] {str(e)}")
         sys.exit(1)
         # Removed the "raise" line so that we only exit, satisfying the test.

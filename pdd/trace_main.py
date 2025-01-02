@@ -23,7 +23,7 @@ def trace_main(ctx: click.Context, prompt_file: str, code_file: str, code_line: 
     Returns:
         Tuple[str, float, str]: A tuple containing the prompt line number, total cost, and model name.
     """
-    quiet = ctx.params.get('quiet', False)
+    quiet = ctx.obj.get('quiet', False)
     logger.debug(f"Starting trace_main with quiet={quiet}")
     try:
         # Construct file paths
@@ -36,7 +36,7 @@ def trace_main(ctx: click.Context, prompt_file: str, code_file: str, code_line: 
         }
         input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
-            force=ctx.params.get('force', False),
+            force=ctx.obj.get('force', False),
             quiet=quiet,
             command="trace",
             command_options=command_options
@@ -49,8 +49,8 @@ def trace_main(ctx: click.Context, prompt_file: str, code_file: str, code_line: 
         logger.debug("Input files loaded")
 
         # Perform trace analysis
-        strength = ctx.params.get('strength', 0.5)
-        temperature = ctx.params.get('temperature', 0.0)
+        strength = ctx.obj.get('strength', 0.5)
+        temperature = ctx.obj.get('temperature', 0.0)
         try:
             prompt_line, total_cost, model_name = trace(
                 code_content, code_line, prompt_content, strength, temperature

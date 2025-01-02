@@ -39,8 +39,8 @@ def update_main(
         command_options = {"output": output}
         input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
-            force=ctx.params.get("force", False),
-            quiet=ctx.params.get("quiet", False),
+            force=ctx.obj.get("force", False),
+            quiet=ctx.obj.get("quiet", False),
             command="update",
             command_options=command_options,
         )
@@ -78,7 +78,7 @@ def update_main(
             f.write(modified_prompt)
 
         # Provide user feedback
-        if not ctx.params.get("quiet", False):
+        if not ctx.obj.get("quiet", False):
             rprint("[bold green]Prompt updated successfully.[/bold green]")
             rprint(f"[bold]Model used:[/bold] {model_name}")
             rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
@@ -87,10 +87,10 @@ def update_main(
         return modified_prompt, total_cost, model_name
 
     except ValueError as e:
-        if not ctx.params.get("quiet", False):
+        if not ctx.obj.get("quiet", False):
             rprint(f"[bold red]Input error:[/bold red] {str(e)}")
         sys.exit(1)
     except Exception as e:
-        if not ctx.params.get("quiet", False):
+        if not ctx.obj.get("quiet", False):
             rprint(f"[bold red]Error:[/bold red] {str(e)}")
         sys.exit(1)

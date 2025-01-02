@@ -9,7 +9,7 @@ from pdd.trace_main import trace_main
 def mock_ctx():
     """Fixture to create a mock Click context with default parameters."""
     mock_context = Mock(spec=Context)
-    mock_context.params = {
+    mock_context.obj = {
         'force': False,
         'quiet': False,
         'strength': 0.5,
@@ -246,7 +246,7 @@ def test_trace_main_quiet_mode(mock_rprint, mock_trace, mock_construct_paths, mo
     output = 'output/trace_result_quiet.txt'
 
     # Update context to set 'quiet' to True
-    mock_ctx.params['quiet'] = True
+    mock_ctx.obj['quiet'] = True
 
     mock_construct_paths.return_value = (
         {
@@ -300,7 +300,7 @@ def test_trace_main_force_overwrite(mock_rprint, mock_trace, mock_construct_path
     output = 'output/trace_result_force.txt'
 
     # Update context to set 'force' to True
-    mock_ctx.params['force'] = True
+    mock_ctx.obj['force'] = True
 
     mock_construct_paths.return_value = (
         {
@@ -411,8 +411,8 @@ def test_trace_main_missing_strength_temperature(mock_rprint, mock_trace, mock_c
     output = 'output/trace_result_missing_params.txt'
 
     # Remove 'strength' and 'temperature' from params
-    mock_ctx.params.pop('strength', None)
-    mock_ctx.params.pop('temperature', None)
+    mock_ctx.obj.pop('strength', None)
+    mock_ctx.obj.pop('temperature', None)
 
     mock_construct_paths.return_value = (
         {
