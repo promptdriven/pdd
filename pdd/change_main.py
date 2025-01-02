@@ -37,7 +37,7 @@ def change_main(
         if not use_csv and not input_prompt_file:
             error_msg = "Error: 'input_prompt_file' is required when not using '--csv' mode."
             logger.error(error_msg)
-            if not ctx.params.get('quiet', False):
+            if not ctx.obj.get('quiet', False):
                 rprint(f"[bold red]{error_msg}[/bold red]")
             return (error_msg, 0.0, "")
 
@@ -47,13 +47,13 @@ def change_main(
                 if not os.path.isdir(input_code):
                     error_msg = f"In CSV mode, 'input_code' must be a directory. Got: {input_code}"
                     logger.error(error_msg)
-                    if not ctx.params.get('quiet', False):
+                    if not ctx.obj.get('quiet', False):
                         rprint(f"[bold red]Error: {error_msg}[/bold red]")
                     return (error_msg, 0.0, "")
             except Exception as e:
                 error_msg = f"Error checking input_code directory: {str(e)}"
                 logger.error(error_msg)
-                if not ctx.params.get('quiet', False):
+                if not ctx.obj.get('quiet', False):
                     rprint(f"[bold red]Error: {error_msg}[/bold red]")
                 return (error_msg, 0.0, "")
 
@@ -72,8 +72,8 @@ def change_main(
         logger.debug(f"Constructing paths with input_file_paths={input_file_paths}")
         input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
-            force=ctx.params.get('force', False),
-            quiet=ctx.params.get('quiet', False),
+            force=ctx.obj.get('force', False),
+            quiet=ctx.obj.get('quiet', False),
             command="change",
             command_options=command_options
         )
@@ -96,14 +96,14 @@ def change_main(
                     if 'prompt_name' not in reader.fieldnames or 'change_instructions' not in reader.fieldnames:
                         error_msg = "CSV file must contain 'prompt_name' and 'change_instructions' columns."
                         logger.error(error_msg)
-                        if not ctx.params.get('quiet', False):
+                        if not ctx.obj.get('quiet', False):
                             rprint(f"[bold red]Error: {error_msg}[/bold red]")
                         return (error_msg, 0.0, "")
                     logger.debug(f"CSV file validated. Columns: {reader.fieldnames}")
             except Exception as e:
                 error_msg = f"Error reading CSV file: {str(e)}"
                 logger.error(error_msg)
-                if not ctx.params.get('quiet', False):
+                if not ctx.obj.get('quiet', False):
                     rprint(f"[bold red]Error: {error_msg}[/bold red]")
                 return (error_msg, 0.0, "")
 
@@ -123,7 +123,7 @@ def change_main(
             except Exception as e:
                 error_msg = f"Error during CSV processing: {str(e)}"
                 logger.error(error_msg)
-                if not ctx.params.get('quiet', False):
+                if not ctx.obj.get('quiet', False):
                     rprint(f"[bold red]Error: {error_msg}[/bold red]")
                 return (error_msg, 0.0, "")
 
@@ -155,12 +155,12 @@ def change_main(
                 except Exception as e:
                     error_msg = f"Error writing output: {str(e)}"
                     logger.error(error_msg)
-                    if not ctx.params.get('quiet', False):
+                    if not ctx.obj.get('quiet', False):
                         rprint(f"[bold red]Error: {error_msg}[/bold red]")
                     return (error_msg, total_cost, model_name)
 
             # Provide user feedback
-            if not ctx.params.get('quiet', False):
+            if not ctx.obj.get('quiet', False):
                 if use_csv and success:
                     rprint("[bold green]Batch change operation completed successfully.[/bold green]")
                     rprint(f"[bold]Model used:[/bold] {model_name}")
@@ -192,13 +192,13 @@ def change_main(
                     change_prompt=change_prompt_content,
                     strength=strength,
                     temperature=temperature,
-                    verbose=ctx.params.get('verbose', False),
+                    verbose=ctx.obj.get('verbose', False),
                 )
                 logger.debug("change_func completed")
             except Exception as e:
                 error_msg = f"An unexpected error occurred: {str(e)}"
                 logger.error(error_msg)
-                if not ctx.params.get('quiet', False):
+                if not ctx.obj.get('quiet', False):
                     rprint(f"[bold red]Error: {error_msg}[/bold red]")
                 return (error_msg, 0.0, "")
 
@@ -214,12 +214,12 @@ def change_main(
             except Exception as e:
                 error_msg = f"Error writing output file: {str(e)}"
                 logger.error(error_msg)
-                if not ctx.params.get('quiet', False):
+                if not ctx.obj.get('quiet', False):
                     rprint(f"[bold red]Error: {error_msg}[/bold red]")
                 return (error_msg, total_cost, model_name)
 
             # Provide user feedback
-            if not ctx.params.get('quiet', False):
+            if not ctx.obj.get('quiet', False):
                 rprint("[bold green]Prompt modification completed successfully.[/bold green]")
                 rprint(f"[bold]Model used:[/bold] {model_name}")
                 rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
@@ -231,7 +231,7 @@ def change_main(
     except Exception as e:
         error_msg = f"An unexpected error occurred: {str(e)}"
         logger.error(error_msg)
-        if not ctx.params.get('quiet', False):
+        if not ctx.obj.get('quiet', False):
             rprint(f"[bold red]Error: {error_msg}[/bold red]")
         return (error_msg, 0.0, "")
 
