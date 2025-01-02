@@ -27,6 +27,8 @@
 
 % Use get_extension to get the file extension for the language. When checking if an extension can be determined, pass an empty string ("") instead of None to the get_extension function. The file extension and language is used for the subsequent functionality below.
 
+% The known languages of the pdd system can be found at $PDD_PATH/data/language_format.csv which has the following columns: language,comment,extension
+
 % Unless quiet is True, print out the input and output file paths that are being used and the steps being done below.
 
 % This function will do the following:
