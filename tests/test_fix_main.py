@@ -20,13 +20,11 @@ def mock_ctx():
     You can override params or obj fields in specific tests if needed.
     """
     ctx = MagicMock(spec=Context)
-    # Mimic ctx.params with default values
-    ctx.params = {
-        'force': False,
-        'quiet': False,
-    }
+ 
     # Mimic ctx.obj with default values
     ctx.obj = {
+        'force': False,
+        'quiet': False,
         'strength': 0.9,
         'temperature': 0.0
     }
@@ -222,7 +220,7 @@ def test_fix_main_handles_exception_and_exits(mocked_construct_paths, mock_ctx):
     Test that fix_main handles an exception, prints an error (unless quiet=True),
     and calls sys.exit(1).
     """
-    mock_ctx.params['quiet'] = False  # so we can see the printed error
+    mock_ctx.obj['quiet'] = False  # so we can see the printed error
     with pytest.raises(SystemExit) as sys_exit:
         fix_main(
             ctx=mock_ctx,
