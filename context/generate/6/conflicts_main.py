@@ -28,8 +28,8 @@ def conflicts_main(ctx: click.Context, prompt1: str, prompt2: str, output: Optio
         }
         input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
-            force=ctx.params.get('force', False),
-            quiet=ctx.params.get('quiet', False),
+            force=ctx.obj.get('force', False),
+            quiet=ctx.obj.get('quiet', False),
             command="conflicts",
             command_options=command_options
         )
@@ -59,7 +59,7 @@ def conflicts_main(ctx: click.Context, prompt1: str, prompt2: str, output: Optio
                 writer.writerow(conflict)
 
         # Provide user feedback
-        if not ctx.params.get('quiet', False):
+        if not ctx.obj.get('quiet', False):
             rprint("[bold green]Conflict analysis completed successfully.[/bold green]")
             rprint(f"[bold]Model used:[/bold] {model_name}")
             rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
@@ -79,6 +79,6 @@ def conflicts_main(ctx: click.Context, prompt1: str, prompt2: str, output: Optio
         return conflicts, total_cost, model_name
 
     except Exception as e:
-        if not ctx.params.get('quiet', False):
+        if not ctx.obj.get('quiet', False):
             rprint(f"[bold red]Error:[/bold red] {str(e)}")
         sys.exit(1)
