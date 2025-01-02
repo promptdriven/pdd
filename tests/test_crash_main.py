@@ -200,7 +200,7 @@ def test_crash_fix_with_quiet_mode(ctx, test_files):
 
 def test_crash_fix_with_force_option(ctx, test_files):
     """Test crash fix with force option enabled"""
-    ctx.params['force'] = True
+    ctx.obj['force'] = True
     output_code = "output/fixed_code_force.py"
     output_program = "output/fixed_program_force.py"
     
