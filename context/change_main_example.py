@@ -29,12 +29,15 @@ def main() -> None:
     ctx = click.Context(click.Command("change"))
 
     # Set up CLI options (as would be parsed from command-line arguments)
-    ctx.params["force"] = True  # Do not overwrite existing files
-    ctx.params["quiet"] = False  # Verbose output
-    ctx.params["verbose"] = True  # Non-verbose output
+    # ctx.obj["force"] = True  # Do not overwrite existing files
+    # ctx.obj["quiet"] = False  # Verbose output
+    # ctx.obj["verbose"] = True  # Non-verbose output
 
     # Set up global options accessible via 'ctx.obj'
     ctx.obj = {
+        "force" : True,  # Do not overwrite existing files
+        "quiet" : False,  # Verbose output
+        "verbose" : True,  # Non-verbose output
         "strength": .915,      # LLM strength parameter (0.0 to 1.0)
         "temperature": 0,     # LLM temperature parameter (0.0 to 1.0)
         "language": "python", # Programming language for code files

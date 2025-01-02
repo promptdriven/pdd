@@ -349,8 +349,8 @@ def test_change_main_csv_success(
 ):
     # Arrange
     ctx = create_mock_context(
-        params={'force': True, 'quiet': False},
-        obj={'strength': 0.7, 'temperature': 0.3, 'language': 'python', 'extension': '.py', 'budget': 20.0}
+        params={},
+        obj={'force': True, 'quiet': False, 'strength': 0.7, 'temperature': 0.3, 'language': 'python', 'extension': '.py', 'budget': 20.0}
     )
     change_prompt_file = "path/to/change_prompts.csv"
     input_code = "path/to/code_directory"
