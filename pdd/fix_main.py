@@ -67,8 +67,8 @@ def fix_main(
 
         input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
-            force=ctx.params.get('force', False),
-            quiet=ctx.params.get('quiet', False),
+            force=ctx.obj.get('force', False),
+            quiet=ctx.obj.get('quiet', False),
             command="fix",
             command_options=command_options
         )
@@ -117,7 +117,7 @@ def fix_main(
                 f.write(fixed_code)
 
         # Provide user feedback
-        if not ctx.params.get('quiet', False):
+        if not ctx.obj.get('quiet', False):
             rprint(f"[bold]{'Success' if success else 'Failed'} to fix errors[/bold]")
             rprint(f"[bold]Total attempts:[/bold] {attempts}")
             rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
@@ -132,6 +132,6 @@ def fix_main(
         return success, fixed_unit_test, fixed_code, attempts, total_cost, model_name
 
     except Exception as e:
-        if not ctx.params.get('quiet', False):
+        if not ctx.obj.get('quiet', False):
             rprint(f"[bold red]Error:[/bold red] {str(e)}")
         sys.exit(1)
