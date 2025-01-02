@@ -64,24 +64,21 @@ def main() -> None:
 
     # Construct file paths
     input_file_paths = {
-        "prompt_file": "output/factorial_prompt.txt",
-        "code_file": "output/factorial.py",
-        "program_file": "output/main.py",
-        "error_file": "output/error.log"
+        "prompt_file": "prompts/regression_bash.prompt",
     }
     command_options = {
-        "output": "output/fixed_factorial.py",
-        "output_program": "output/fixed_main.py"
+        "output": "tests",
     }
-    input_strings, output_file_paths, _ = construct_paths(
+    input_strings, output_file_paths, language = construct_paths(
         input_file_paths=input_file_paths,
         force=True,
-        quiet=True,
-        command="crash",
+        quiet=False,
+        command="generate",
         command_options=command_options
     )
-    # print(f"Input Strings: {input_strings}")
+    print(f"Input Strings: {input_strings}")
     print(f"Output File Paths: {output_file_paths}")
+    print(f"Language: {language}")
 
 if __name__ == "__main__":
     main()
