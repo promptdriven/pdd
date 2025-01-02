@@ -197,7 +197,7 @@ def test_preprocess_main_quiet_mode(basic_click_context, capsys):
     """
     Test that no Rich output is printed when ctx.params['quiet'] is True.
     """
-    basic_click_context.params["quiet"] = True
+    basic_click_context.obj["quiet"] = True
 
     with patch("pdd.preprocess_main.construct_paths") as mock_construct_paths, \
          patch("pdd.preprocess_main.preprocess") as mock_preprocess, \
