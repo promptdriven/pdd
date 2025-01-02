@@ -53,8 +53,8 @@ def crash_main(
         }
         input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
-            force=ctx.params.get('force', False),
-            quiet=ctx.params.get('quiet', False),
+            force=ctx.obj.get('force', False),
+            quiet=ctx.obj.get('quiet', False),
             command="crash",
             command_options=command_options
         )
@@ -80,7 +80,7 @@ def crash_main(
                 max_attempts=max_attempts or 3,
                 budget=budget or 5.0,
                 error_log_file=error_file,
-                verbose=not ctx.params.get('verbose', False)
+                verbose=not ctx.obj.get('verbose', False)
             )
         else:
             # Use single fix attempt
@@ -92,7 +92,7 @@ def crash_main(
                 errors=error_content,
                 strength=strength,
                 temperature=temperature,
-                verbose=not ctx.params.get('verbose', False)
+                verbose=not ctx.obj.get('verbose', False)
             )
             success = True
             attempts = 1
@@ -106,7 +106,7 @@ def crash_main(
                 f.write(final_program)
 
         # Provide user feedback
-        if not ctx.params.get('quiet', False):
+        if not ctx.obj.get('quiet', False):
             if success:
                 rprint("[bold green]Crash fix completed successfully.[/bold green]")
             else:
@@ -122,6 +122,6 @@ def crash_main(
         return success, final_code, final_program, attempts, cost, model
 
     except Exception as e:
-        if not ctx.params.get('quiet', False):
+        if not ctx.obj.get('quiet', False):
             rprint(f"[bold red]Error:[/bold red] {str(e)}")
         sys.exit(1)

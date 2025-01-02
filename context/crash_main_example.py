@@ -59,8 +59,7 @@ RecursionError: maximum recursion depth exceeded
 
     # Create a mock Click context with model parameters
     ctx = click.Context(click.Command('crash'))
-    ctx.obj = {'strength': 0.9, 'temperature': 0}
-    ctx.params = {'force': True, 'quiet': False, 'verbose': True}
+    ctx.obj = {'strength': 0.9, 'temperature': 0, 'force': True, 'quiet': False, 'verbose': True}
     # basename = "auto_include"
     # prompt_file= f'prompts/{basename}_python.prompt'
     # code_file= f'pdd/{basename}.py'  
