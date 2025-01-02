@@ -21,4 +21,8 @@
 
 % These changes will make the regression script more consistent and focused on testing the core functionality of the pdd cli.
 
-% Use a strength of 0.5 and a temperature of 0 for all commands.
+% Use a strength of 0.5, a temperature of 0 and force for all commands.
+
+% Set PDD_AUTO_UPDATE to false for the regression script so pdd doesn't ask to update itself.
+
+% Remove the current regression.log file if it exists when starting.
