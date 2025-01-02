@@ -1,5 +1,5 @@
-import sys
 import os
+import sys
 from typing import Tuple, Optional
 import click
 from rich import print as rprint
@@ -24,18 +24,20 @@ def bug_main(
     :param prompt_file: Path to the prompt file that generated the code.
     :param code_file: Path to the code file being tested.
     :param program_file: Path to the program used to run the code under test.
-    :param current_output: The current (incorrect) output of the program.
-    :param desired_output: The desired (correct) output of the program.
+    :param current_output: Path to the file containing the current (incorrect) output.
+    :param desired_output: Path to the file containing the desired (correct) output.
     :param output: Optional path to save the generated unit test.
     :param language: Optional programming language for the unit test. Defaults to "Python".
-    :return: A tuple containing the generated unit test code, total cost, and model name used.
+    :return: A tuple containing the generated unit test, total cost, and model name used.
     """
     try:
         # Construct file paths
         input_file_paths = {
             "prompt_file": prompt_file,
             "code_file": code_file,
-            "program_file": program_file
+            "program_file": program_file,
+            "current_output": current_output,
+            "desired_output": desired_output
         }
         command_options = {
             "output": output,
@@ -53,13 +55,15 @@ def bug_main(
         prompt_content = input_strings["prompt_file"]
         code_content = input_strings["code_file"]
         program_content = input_strings["program_file"]
+        current_output_content = input_strings["current_output"]
+        desired_output_content = input_strings["desired_output"]
 
         # Generate unit test
         strength = ctx.obj.get('strength', 0.9)
         temperature = ctx.obj.get('temperature', 0)
         unit_test, total_cost, model_name = bug_to_unit_test(
-            current_output,
-            desired_output,
+            current_output_content,
+            desired_output_content,
             prompt_content,
             code_content,
             program_content,
