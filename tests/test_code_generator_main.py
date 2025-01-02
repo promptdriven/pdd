@@ -96,8 +96,8 @@ def test_code_generator_main_quiet_mode(mock_code_generator, mock_construct_path
     """
     # Setup mock objects
     mock_ctx = MagicMock()
-    mock_ctx.params = {'force': False, 'quiet': True}
-    mock_ctx.obj = {'strength': 0.5, 'temperature': 0.0}
+    # mock_ctx.params = {'force': False, 'quiet': True}
+    mock_ctx.obj = {'strength': 0.5, 'temperature': 0.0, 'force': False, 'quiet': True}
 
     mock_construct_paths.return_value = (
         {"prompt_file": "mock_prompt_content"},

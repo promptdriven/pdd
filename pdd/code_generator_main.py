@@ -25,8 +25,8 @@ def code_generator_main(ctx: click.Context, prompt_file: str, output: Optional[s
         }
         input_strings, output_file_paths, language = construct_paths(
             input_file_paths=input_file_paths,
-            force=ctx.params.get('force', False),
-            quiet=ctx.params.get('quiet', False),
+            force=ctx.obj.get('force', False),
+            quiet=ctx.obj.get('quiet', False),
             command="generate",
             command_options=command_options
         )
@@ -42,7 +42,7 @@ def code_generator_main(ctx: click.Context, prompt_file: str, output: Optional[s
             language,
             strength,
             temperature,
-            verbose=not ctx.params.get('quiet', False)
+            verbose=not ctx.obj.get('quiet', False)
         )
 
         # Save results
@@ -51,7 +51,7 @@ def code_generator_main(ctx: click.Context, prompt_file: str, output: Optional[s
                 f.write(generated_code)
 
         # Provide user feedback
-        if not ctx.params.get('quiet', False):
+        if not ctx.obj.get('quiet', False):
             rprint("[bold green]Code generation completed successfully.[/bold green]")
             rprint(f"[bold]Model used:[/bold] {model_name}")
             rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
@@ -61,6 +61,6 @@ def code_generator_main(ctx: click.Context, prompt_file: str, output: Optional[s
         return generated_code, total_cost, model_name
 
     except Exception as e:
-        if not ctx.params.get('quiet', False):
+        if not ctx.obj.get('quiet', False):
             rprint(f"[bold red]Error:[/bold red] {str(e)}")
         sys.exit(1)
