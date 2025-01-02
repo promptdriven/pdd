@@ -1,253 +1,231 @@
 #!/bin/bash
-
-################################################################################
-# regression.sh
 #
-# Comprehensive regression test script for the PDD (Prompt-Driven Development)
-# Command Line Interface (CLI). This script executes all `pdd` commands to ensure
-# their proper functionality. All output files are directed to the
-# "$STAGING_PATH/regression" directory while the commands run in the current
-# directory.
+# regression.sh - Comprehensive regression script for pdd CLI
 #
-# Usage:
-#   ./regression.sh
-#
-# Ensure that the following environment variables are set before running the script:
-#   PDD_PATH - Base path where PDD resources are located.
-#
-################################################################################
+# This script exercises all major pdd CLI commands in a single automated run.
+# It creates output in the $STAGING_PATH/regression directory but does NOT
+# change the current directory. All commands are invoked with a fixed AI model
+# strength (0.5) and temperature (0.0). Auto-updates are disabled.
 
-# Exit immediately if a command exits with a non-zero status.
-set -e
+###############################################################################
+# Environment Setup
+###############################################################################
+export PDD_AUTO_UPDATE=false  # Disable auto-updates for regression testing
+VERBOSE=1                     # Enable verbose logging: 1 (on), 0 (off)
+PDD_SCRIPT="pdd"              # The pdd executable name
 
-# ------------------------------ Configuration ----------------------------------
-
-# Define variables for commonly used paths
+# Commonly used directories
 STAGING_PATH="${PDD_PATH}/staging"
-REGRESSION_DIR="${STAGING_PATH}/regression"
-PDD_SCRIPT="pdd"
 PROMPTS_PATH="${PDD_PATH}/prompts"
 CONTEXT_PATH="${PDD_PATH}/context"
-TESTS_DIR="${STAGING_PATH}/tests"
-LOG_FILE="${REGRESSION_DIR}/regression.log"
-COST_FILE="${REGRESSION_DIR}/regression_cost.csv"
 
-# Define variables for commonly used filenames
+# Create the staging directory for regression output
+mkdir -p "$STAGING_PATH/regression"
 
-# Example 1: Extension
+###############################################################################
+# Variables for Filenames and Logging
+###############################################################################
+LOG_FILE="regression.log"
+COST_FILE="regression_cost.csv"
+
+# Primary test prompt files and their outputs
 EXTENSION_PROMPT="get_extension_python.prompt"
 EXTENSION_SCRIPT="get_extension.py"
 EXTENSION_TEST="test_get_extension.py"
-EXTENSION_ERROR_LOG="${REGRESSION_DIR}/error.log"
-EXTENSION_ERROR_LOOP_LOG="${REGRESSION_DIR}/error_loop.log"
-EXTENSION_VERIFICATION_PROGRAM="${REGRESSION_DIR}/get_extension_example.py"
-XML_OUTPUT_PROMPT="${REGRESSION_DIR}/get_extension_python_xml.prompt"
+EXTENSION_VERIFICATION_PROGRAM="get_extension_example.py"
+EXTENSION_ERROR_LOG="error.log"
+EXTENSION_ERROR_LOOP_LOG="error_loop.log"
+XML_OUTPUT_PROMPT="get_extension_python_xml.prompt"
 
-# Example 2: Change
+# Change command prompt files
 CHANGE_PROMPT="initial_code_generator_python.prompt"
 CHANGE_SCRIPT="initial_code_generator.py"
-CHANGE_DESCRIPTION_PROMPT="change.prompt"
-CHANGE_CONTEXT_PROMPT="${CONTEXT_PATH}/change/11/${CHANGE_PROMPT}"
-CHANGE_DESCRIPTION_FILE="${CONTEXT_PATH}/change/11/${CHANGE_DESCRIPTION_PROMPT}"
+CHANGE_CONTEXT_PROMPT="change.prompt"
 
-# Example 3: Split
+# Split command prompt files
 SPLIT_PROMPT="initial_construct_paths_python.prompt"
 SPLIT_SCRIPT="construct_paths.py"
 SPLIT_EXAMPLE_SCRIPT="split_construct_paths_generate_output_filename.py"
 
-# Example 4: Trace
-TRACE_LINE=31  # Example line number
+# Outputs for the "bug" command
+CURRENT_OUTPUT="The extension is .tx"
+DESIRED_OUTPUT="The extension is .txt"
 
-# Example 5: Bug
-CURRENT_OUTPUT="Incorrect output"
-DESIRED_OUTPUT="Correct output"
-
-# General Variables
-VERBOSE=1
-
-# ------------------------------ Functions ---------------------------------------
-
-# Function to print messages if verbose is enabled
+###############################################################################
+# Logging Functions
+###############################################################################
 log() {
+    # Print messages if verbose is enabled
     if [ "$VERBOSE" -eq 1 ]; then
         echo "$1"
     fi
 }
 
-# Function to log timestamped entries
 log_timestamped() {
+    # Append timestamped entries to the regression log
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
 }
 
-# Function to run PDD command, print progress, and log output
+###############################################################################
+# Function to Run pdd Commands with Uniform Options
+###############################################################################
 run_pdd_command() {
     local command=$1
     shift
-    local args=("$@")
+    # Always use --strength=0.5 --temperature=0.0 and cost tracking
+    local cmd="$PDD_SCRIPT --strength=0.5 --temperature=0.0 --force --output-cost $COST_FILE $command $*"
 
-    log "Running: $PDD_SCRIPT ${GLOBAL_OPTIONS[*]} $command ${args[*]}"
-    echo "Running: $PDD_SCRIPT ${GLOBAL_OPTIONS[*]} $command ${args[*]}" >> "$LOG_FILE"
-    
-    # Execute the pdd command
-    $PDD_SCRIPT "${GLOBAL_OPTIONS[@]}" "$command" "${args[@]}" >> "$LOG_FILE" 2>&1
-
+    log "Running: $cmd"
+    $cmd >> "$LOG_FILE" 2>&1
     if [ $? -eq 0 ]; then
-        log "Command '$command' completed successfully."
-        log_timestamped "Command: $PDD_SCRIPT ${GLOBAL_OPTIONS[*]} $command ${args[*]} - Completed successfully."
+        log "Command completed successfully."
+        log_timestamped "Command: $cmd - Completed successfully."
     else
-        log "Command '$command' failed. Check $LOG_FILE for details."
-        log_timestamped "Command: $PDD_SCRIPT ${GLOBAL_OPTIONS[*]} $command ${args[*]} - Failed."
+        log "Command failed."
+        log_timestamped "Command: $cmd - Failed."
         exit 1
     fi
-    log "----------------------------------------" >> "$LOG_FILE"
+    log "----------------------------------------"
 }
 
-# ------------------------------ Setup ------------------------------------------
+###############################################################################
+# Regression Tests
+###############################################################################
+log "Starting regression tests..."
+log_timestamped "Regression tests started."
 
-# Create the regression test directory
-log "Creating regression test directory at $REGRESSION_DIR"
-mkdir -p "$REGRESSION_DIR"
+# 1) generate
+run_pdd_command generate \
+    --output "$STAGING_PATH/regression/$EXTENSION_SCRIPT" \
+    "$PROMPTS_PATH/$EXTENSION_PROMPT"
 
-# Initialize log file
-echo "Regression Test Log - $(date)" > "$LOG_FILE"
-echo "----------------------------------------" >> "$LOG_FILE"
+# 2) example
+run_pdd_command example \
+    --output "$STAGING_PATH/regression/$EXTENSION_VERIFICATION_PROGRAM" \
+    "$PROMPTS_PATH/$EXTENSION_PROMPT" \
+    "$STAGING_PATH/regression/$EXTENSION_SCRIPT"
 
-# Initialize cost file header if it doesn't exist
-if [ ! -f "$COST_FILE" ]; then
-    echo "timestamp,model,command,cost,input_files,output_files" > "$COST_FILE"
-fi
+# 3) test
+run_pdd_command test \
+    --output "$STAGING_PATH/regression/$EXTENSION_TEST" \
+    "$PROMPTS_PATH/$EXTENSION_PROMPT" \
+    "$STAGING_PATH/regression/$EXTENSION_SCRIPT"
 
-# ------------------------------ Environment -------------------------------------
+# 4) preprocess (no XML)
+run_pdd_command preprocess \
+    --output "$STAGING_PATH/regression/preprocessed_$EXTENSION_PROMPT" \
+    "$PROMPTS_PATH/$EXTENSION_PROMPT"
 
-# Define global options for pdd commands
-GLOBAL_OPTIONS=(
-    "--force"                 # Overwrite existing files without confirmation
-    "--strength" "0.5"        # Example strength value
-    "--temperature" "0.0"     # Example temperature value
-    "--verbose"               # Increase verbosity
-    "--output-cost" "$COST_FILE"  # Enable cost tracking
-)
+# 5) preprocess with --xml
+run_pdd_command preprocess \
+    --xml \
+    --output "$STAGING_PATH/regression/$XML_OUTPUT_PROMPT" \
+    "$PROMPTS_PATH/$EXTENSION_PROMPT"
 
-# ------------------------------ Regression Tests -------------------------------
+# 6) update
+run_pdd_command update \
+    --output "$STAGING_PATH/regression/updated_$EXTENSION_PROMPT" \
+    "$PROMPTS_PATH/$EXTENSION_PROMPT" \
+    "$PDD_PATH/pdd/$EXTENSION_SCRIPT" \
+    "$STAGING_PATH/regression/$EXTENSION_SCRIPT"
 
-# Run regression tests for all PDD commands
+# 7) change
+run_pdd_command change \
+    --output "$STAGING_PATH/regression/changed_$CHANGE_PROMPT" \
+    "$CONTEXT_PATH/change/11/$CHANGE_PROMPT" \
+    "$CONTEXT_PATH/change/11/$CHANGE_SCRIPT" \
+    "$CONTEXT_PATH/change/11/$CHANGE_CONTEXT_PROMPT"
 
-# 1. Generate
-log "Running 'generate' command"
-run_pdd_command generate --output "${REGRESSION_DIR}/${EXTENSION_SCRIPT}" "${PROMPTS_PATH}/${EXTENSION_PROMPT}"
+# 8) fix
+python -m pytest "$STAGING_PATH/regression/$EXTENSION_TEST" > "$STAGING_PATH/regression/pytest_output.log"
+run_pdd_command fix \
+    --output-test "$STAGING_PATH/regression/fixed_$EXTENSION_TEST" \
+    --output-code "$STAGING_PATH/regression/fixed_$EXTENSION_SCRIPT" \
+    "$PROMPTS_PATH/$EXTENSION_PROMPT" \
+    "$STAGING_PATH/regression/$EXTENSION_SCRIPT" \
+    "$STAGING_PATH/regression/$EXTENSION_TEST" \
+    "$STAGING_PATH/regression/pytest_output.log"
 
-# 2. Example
-log "Running 'example' command"
-run_pdd_command example --output "${EXTENSION_VERIFICATION_PROGRAM}" "${PROMPTS_PATH}/${EXTENSION_PROMPT}" "${REGRESSION_DIR}/${EXTENSION_SCRIPT}"
+# 9) fix with --loop
+run_pdd_command fix \
+    --loop \
+    --output-test "$STAGING_PATH/regression/fixed_loop_$EXTENSION_TEST" \
+    --output-code "$STAGING_PATH/regression/fixed_loop_$EXTENSION_SCRIPT" \
+    --output-results "$STAGING_PATH/regression/fixed_loop_results.log" \
+    --verification-program "$STAGING_PATH/regression/$EXTENSION_VERIFICATION_PROGRAM" \
+    --max-attempts 2 \
+    --budget 5.0 \
+    "$PROMPTS_PATH/$EXTENSION_PROMPT" \
+    "$STAGING_PATH/regression/$EXTENSION_SCRIPT" \
+    "$STAGING_PATH/regression/$EXTENSION_TEST" \
+    "$STAGING_PATH/regression/$EXTENSION_ERROR_LOOP_LOG"
 
-# 3. Test
-log "Running 'test' command"
-run_pdd_command test --output "${REGRESSION_DIR}/${EXTENSION_TEST}" "${PROMPTS_PATH}/${EXTENSION_PROMPT}" "${REGRESSION_DIR}/${EXTENSION_SCRIPT}"
+# 10) split
+run_pdd_command split \
+    --output-sub "$STAGING_PATH/regression/sub_$SPLIT_PROMPT" \
+    --output-modified "$STAGING_PATH/regression/modified_$SPLIT_PROMPT" \
+    "$CONTEXT_PATH/split/4/$SPLIT_PROMPT" \
+    "$CONTEXT_PATH/split/4/$SPLIT_SCRIPT" \
+    "$CONTEXT_PATH/split/4/$SPLIT_EXAMPLE_SCRIPT"
 
-# 4. Preprocess
-log "Running 'preprocess' command"
-run_pdd_command preprocess --output "${REGRESSION_DIR}/preprocessed_${EXTENSION_PROMPT}" "${PROMPTS_PATH}/${EXTENSION_PROMPT}"
+# 11) detect
+run_pdd_command detect \
+    --output "$STAGING_PATH/regression/detect_results.csv" \
+    "$PROMPTS_PATH/$EXTENSION_PROMPT" \
+    "$CONTEXT_PATH/change/11/$CHANGE_PROMPT" \
+    "$CONTEXT_PATH/split/4/$SPLIT_PROMPT" \
+    "$CONTEXT_PATH/change/11/$CHANGE_CONTEXT_PROMPT"
 
-# 5. Preprocess with XML
-log "Running 'preprocess' command with --xml option"
-run_pdd_command preprocess --xml --output "${XML_OUTPUT_PROMPT}" "${PROMPTS_PATH}/${EXTENSION_PROMPT}"
+# 12) conflicts
+run_pdd_command conflicts \
+    --output "$STAGING_PATH/regression/conflicts_analysis.csv" \
+    "$PROMPTS_PATH/$EXTENSION_PROMPT" \
+    "$CONTEXT_PATH/change/11/$CHANGE_PROMPT"
 
-# 6. Update
-log "Running 'update' command"
-run_pdd_command update --output "${REGRESSION_DIR}/updated_${EXTENSION_PROMPT}" "${PROMPTS_PATH}/${EXTENSION_PROMPT}" "${REGRESSION_DIR}/${EXTENSION_SCRIPT}" "${REGRESSION_DIR}/${EXTENSION_SCRIPT}"
+# 13) crash
+python "$STAGING_PATH/regression/$EXTENSION_VERIFICATION_PROGRAM" >& "$STAGING_PATH/regression/$EXTENSION_ERROR_LOG"
+run_pdd_command crash \
+    --output "$STAGING_PATH/regression/fixed_crash_$EXTENSION_SCRIPT" \
+    "$PROMPTS_PATH/$EXTENSION_PROMPT" \
+    "$STAGING_PATH/regression/$EXTENSION_SCRIPT" \
+    "$STAGING_PATH/regression/$EXTENSION_VERIFICATION_PROGRAM" \
+    "$STAGING_PATH/regression/$EXTENSION_ERROR_LOG"
 
-# 7. Change
-log "Running 'change' command"
+# 14) trace
+run_pdd_command trace \
+    --output "$STAGING_PATH/regression/trace_results.log" \
+    "$PROMPTS_PATH/$EXTENSION_PROMPT" \
+    "$STAGING_PATH/regression/$EXTENSION_SCRIPT" \
+    31
 
-# Ensure that the change description prompt exists
-if [ ! -f "${CHANGE_DESCRIPTION_FILE}" ]; then
-    log "Change description prompt file '${CHANGE_DESCRIPTION_FILE}' does not exist. Creating a default change prompt."
-    echo "% Describe the changes to be applied to the 'initial_code_generator_python.prompt'." > "${CHANGE_DESCRIPTION_FILE}"
-fi
+# 15) bug
+run_pdd_command bug \
+    --output "$STAGING_PATH/regression/bug_$EXTENSION_TEST" \
+    "$PROMPTS_PATH/$EXTENSION_PROMPT" \
+    "$STAGING_PATH/regression/$EXTENSION_SCRIPT" \
+    "$STAGING_PATH/regression/$EXTENSION_VERIFICATION_PROGRAM" \
+    "\"$CURRENT_OUTPUT\"" \
+    "\"$DESIRED_OUTPUT\""
 
-run_pdd_command change --output "${REGRESSION_DIR}/changed_${CHANGE_PROMPT}" \
-                       "${CHANGE_DESCRIPTION_FILE}" \
-                       "${CONTEXT_PATH}/change/11/${CHANGE_SCRIPT}" \
-                       "${CHANGE_CONTEXT_PROMPT}"
+# 16) auto-deps
+run_pdd_command auto-deps \
+    --output "$STAGING_PATH/regression/auto_deps_$EXTENSION_PROMPT" \
+    "$PROMPTS_PATH/$EXTENSION_PROMPT" \
+    "$STAGING_PATH/regression"
 
-# 8. Fix
-log "Running 'fix' command"
-# Assuming pytest is set up correctly
-python -m pytest "${REGRESSION_DIR}/${EXTENSION_TEST}" > "${REGRESSION_DIR}/pytest_output.log" || true
-run_pdd_command fix --output-test "${REGRESSION_DIR}/fixed_${EXTENSION_TEST}" \
-                    --output-code "${REGRESSION_DIR}/fixed_${EXTENSION_SCRIPT}" \
-                    "${PROMPTS_PATH}/${EXTENSION_PROMPT}" "${REGRESSION_DIR}/${EXTENSION_SCRIPT}" "${REGRESSION_DIR}/${EXTENSION_TEST}" "${REGRESSION_DIR}/pytest_output.log"
-
-# 9. Fix with Loop
-log "Running 'fix' command with --loop option"
-run_pdd_command fix --loop \
-                    --output-test "${REGRESSION_DIR}/fixed_loop_${EXTENSION_TEST}" \
-                    --output-code "${REGRESSION_DIR}/fixed_loop_${EXTENSION_SCRIPT}" \
-                    --output-results "${REGRESSION_DIR}/fixed_loop_results.log" \
-                    --verification-program "${EXTENSION_VERIFICATION_PROGRAM}" \
-                    --max-attempts 2 \
-                    --budget 5.0 \
-                    "${PROMPTS_PATH}/${EXTENSION_PROMPT}" "${REGRESSION_DIR}/${EXTENSION_SCRIPT}" "${REGRESSION_DIR}/${EXTENSION_TEST}" "${REGRESSION_DIR}/fix_loop_error.log"
-
-# 10. Split
-log "Running 'split' command"
-run_pdd_command split --output-sub "${REGRESSION_DIR}/sub_${SPLIT_PROMPT}" \
-                      --output-modified "${REGRESSION_DIR}/modified_${SPLIT_PROMPT}" \
-                      "${CONTEXT_PATH}/split/4/${SPLIT_PROMPT}" \
-                      "${CONTEXT_PATH}/split/4/${SPLIT_SCRIPT}" \
-                      "${CONTEXT_PATH}/split/4/${SPLIT_EXAMPLE_SCRIPT}"
-
-# 11. Detect
-log "Running 'detect' command"
-run_pdd_command detect --output "${REGRESSION_DIR}/detect_results.csv" \
-                       "${PROMPTS_PATH}/${EXTENSION_PROMPT}" \
-                       "${CONTEXT_PATH}/change/11/${CHANGE_PROMPT}" \
-                       "${CONTEXT_PATH}/split/4/${SPLIT_PROMPT}" \
-                       "${CHANGE_DESCRIPTION_FILE}"
-
-# 12. Conflicts
-log "Running 'conflicts' command"
-run_pdd_command conflicts --output "${REGRESSION_DIR}/conflicts_analysis.csv" \
-                          "${PROMPTS_PATH}/${EXTENSION_PROMPT}" \
-                          "${CONTEXT_PATH}/change/11/${CHANGE_PROMPT}"
-
-# 13. Crash
-log "Running 'crash' command"
-# Simulate a crash by running a faulty program
-python "${EXTENSION_VERIFICATION_PROGRAM}" >& "${EXTENSION_ERROR_LOG}" || true
-run_pdd_command crash --output "${REGRESSION_DIR}/fixed_crash_${EXTENSION_SCRIPT}" \
-                      "${PROMPTS_PATH}/${EXTENSION_PROMPT}" \
-                      "${REGRESSION_DIR}/${EXTENSION_SCRIPT}" \
-                      "${EXTENSION_VERIFICATION_PROGRAM}" \
-                      "${EXTENSION_ERROR_LOG}"
-
-# 14. Trace
-log "Running 'trace' command"
-run_pdd_command trace --output "${REGRESSION_DIR}/trace_results.log" \
-                      "${PROMPTS_PATH}/${EXTENSION_PROMPT}" \
-                      "${REGRESSION_DIR}/${EXTENSION_SCRIPT}" \
-                      "${TRACE_LINE}"
-
-# 15. Bug
-log "Running 'bug' command"
-run_pdd_command bug --output "${REGRESSION_DIR}/test_bug_${EXTENSION_SCRIPT}" \
-                   "${PROMPTS_PATH}/${EXTENSION_PROMPT}" \
-                   "${REGRESSION_DIR}/${EXTENSION_SCRIPT}" \
-                   "${EXTENSION_VERIFICATION_PROGRAM}" \
-                   "\"${CURRENT_OUTPUT}\"" \
-                   "\"${DESIRED_OUTPUT}\""
-
-# ------------------------------ Completion -------------------------------------
-
-log "Regression tests completed. Check ${LOG_FILE} for detailed results."
+log "Regression tests completed."
 log_timestamped "Regression tests completed."
 
-# Display total cost
+###############################################################################
+# Display Total Cost
+###############################################################################
 if [ -f "$COST_FILE" ]; then
-    total_cost=$(awk -F',' 'NR>1 {sum += $4} END {printf "%.2f", sum}' "$COST_FILE")
-    log "Total cost of all operations: \$${total_cost}"
-    log_timestamped "Total cost of all operations: \$${total_cost}"
+    total_cost=$(awk -F',' '{sum += $4} END {print sum}' "$COST_FILE")
+    log "Total cost of all operations: $total_cost"
+    log_timestamped "Total cost of all operations: $total_cost"
 else
     log "Cost file not found. Unable to calculate total cost."
     log_timestamped "Cost file not found. Unable to calculate total cost."
 fi
+
+exit 0
