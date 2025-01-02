@@ -31,7 +31,7 @@ def test_split_main_success(mock_ctx, quiet_mode, capsys):
     and returns the expected values.
     """
     # Arrange
-    mock_ctx.params["quiet"] = quiet_mode
+    mock_ctx.obj["quiet"] = quiet_mode
 
     # Prepare mock return values for construct_paths and split
     mock_input_strings = {
@@ -206,7 +206,7 @@ def test_split_main_quiet_mode(mock_ctx, capsys):
     Test that no user feedback is printed in quiet mode except for errors.
     In normal operation, it should return without printing anything.
     """
-    mock_ctx.params["quiet"] = True
+    mock_ctx.obj["quiet"] = True
 
     mock_input_strings = {
         "input_prompt": "prompt content",
@@ -238,4 +238,4 @@ def test_split_main_quiet_mode(mock_ctx, capsys):
         captured = capsys.readouterr()
         assert "Successfully split the prompt!" not in captured.out
         assert "Total cost:" not in captured.out
-        assert mock_ctx.params["quiet"] is True
+        assert mock_ctx.obj["quiet"] is True
