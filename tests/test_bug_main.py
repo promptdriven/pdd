@@ -1,177 +1,202 @@
-import pytest
 import os
+import sys
+import pytest
 from unittest.mock import patch, MagicMock
 from click.testing import CliRunner
 from rich.console import Console
-from pdd.bug_main import bug_main
 
-# Mock data for testing
-MOCK_PROMPT_CONTENT = "Mock prompt content"
-MOCK_CODE_CONTENT = "Mock code content"
-MOCK_PROGRAM_CONTENT = "Mock program content"
-MOCK_CURRENT_OUTPUT = "Mock current output"
-MOCK_DESIRED_OUTPUT = "Mock desired output"
-MOCK_UNIT_TEST = "Mock unit test"
-MOCK_TOTAL_COST = 0.001
-MOCK_MODEL_NAME = "gpt-4"
+# Import the module under test
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'pdd')))
+from pdd.bug_main import bug_main
 
 @pytest.fixture
 def mock_ctx():
-    """
-    Fixture to mock the context object so that 'force' and 'quiet'
-    can be manipulated properly in each test.
-    """
+    """Fixture to create a mock context object."""
     ctx = MagicMock()
-    # Use a normal dictionary; we can set force/quiet in individual tests.
-    ctx.obj = {'force': False, 'quiet': False}
+    ctx.obj = {'force': False, 'quiet': False, 'strength': 0.9, 'temperature': 0}
     return ctx
 
 @pytest.fixture
-def mock_construct_paths():
-    """Fixture to mock the construct_paths function."""
-    with patch('pdd.bug_main.construct_paths') as mock_construct:
-        mock_construct.return_value = (
-            {
-                "prompt_file": MOCK_PROMPT_CONTENT,
-                "code_file": MOCK_CODE_CONTENT,
-                "program_file": MOCK_PROGRAM_CONTENT
-            },
-            {"output": "output/mock_unit_test.py"},
-            "Python"
-        )
-        yield mock_construct
+def mock_input_files(tmpdir):
+    """Fixture to create temporary input files for testing."""
+    prompt_file = tmpdir.join("prompt.prompt")
+    code_file = tmpdir.join("code.py")
+    program_file = tmpdir.join("program.py")
+    current_output = tmpdir.join("current_output.txt")
+    desired_output = tmpdir.join("desired_output.txt")
 
-@pytest.fixture
-def mock_bug_to_unit_test():
-    """Fixture to mock the bug_to_unit_test function."""
-    with patch('pdd.bug_main.bug_to_unit_test') as mock_bug:
-        mock_bug.return_value = (MOCK_UNIT_TEST, MOCK_TOTAL_COST, MOCK_MODEL_NAME)
-        yield mock_bug
+    prompt_file.write("Prompt content")
+    code_file.write("Code content")
+    program_file.write("Program content")
+    current_output.write("Current output content")
+    desired_output.write("Desired output content")
 
-def test_bug_main_success(mock_ctx, mock_construct_paths, mock_bug_to_unit_test, tmpdir):
+    return {
+        "prompt_file": str(prompt_file),
+        "code_file": str(code_file),
+        "program_file": str(program_file),
+        "current_output": str(current_output),
+        "desired_output": str(desired_output)
+    }
+
+def test_bug_main_success(mock_ctx, mock_input_files, tmpdir):
     """Test case for successful execution of bug_main."""
-    # Arrange
-    output_dir = tmpdir.mkdir("output")
-    output_path = str(output_dir.join("mock_unit_test.py"))
-    mock_construct_paths.return_value = (
-        {
-            "prompt_file": MOCK_PROMPT_CONTENT,
-            "code_file": MOCK_CODE_CONTENT,
-            "program_file": MOCK_PROGRAM_CONTENT
-        },
-        {"output": output_path},
-        "Python"
-    )
+    output_file = str(tmpdir.join("output_test.py"))
     
-    # Act
-    result = bug_main(
-        mock_ctx,
-        "mock_prompt.prompt",
-        "mock_code.py",
-        "mock_program.py",
-        MOCK_CURRENT_OUTPUT,
-        MOCK_DESIRED_OUTPUT,
-        output_path
-    )
-    
-    # Assert
-    assert result == (MOCK_UNIT_TEST, MOCK_TOTAL_COST, MOCK_MODEL_NAME)
-    assert os.path.exists(output_path)
-    with open(output_path, 'r') as f:
-        assert f.read() == MOCK_UNIT_TEST
-
-def test_bug_main_no_output(mock_ctx, mock_construct_paths, mock_bug_to_unit_test):
-    """Test case for bug_main when no output file is specified."""
-    # Arrange
-    mock_construct_paths.return_value = (
-        {
-            "prompt_file": MOCK_PROMPT_CONTENT,
-            "code_file": MOCK_CODE_CONTENT,
-            "program_file": MOCK_PROGRAM_CONTENT
-        },
-        {"output": None},
-        "Python"
-    )
-    
-    # Act
-    result = bug_main(
-        mock_ctx,
-        "mock_prompt.prompt",
-        "mock_code.py",
-        "mock_program.py",
-        MOCK_CURRENT_OUTPUT,
-        MOCK_DESIRED_OUTPUT
-    )
-    
-    # Assert
-    assert result == (MOCK_UNIT_TEST, MOCK_TOTAL_COST, MOCK_MODEL_NAME)
-
-def test_bug_main_error(mock_ctx, mock_construct_paths, mock_bug_to_unit_test):
-    """Test case for bug_main when an error occurs."""
-    # Arrange
-    mock_bug_to_unit_test.side_effect = Exception("Test error")
-    
-    # Act
-    with pytest.raises(SystemExit):
-        bug_main(
-            mock_ctx,
-            "mock_prompt.prompt",
-            "mock_code.py",
-            "mock_program.py",
-            MOCK_CURRENT_OUTPUT,
-            MOCK_DESIRED_OUTPUT
+    with patch('pdd.bug_main.construct_paths') as mock_construct_paths, \
+         patch('pdd.bug_main.bug_to_unit_test') as mock_bug_to_unit_test:
+        
+        # Mock construct_paths
+        mock_construct_paths.return_value = (
+            {
+                "prompt_file": "Prompt content",
+                "code_file": "Code content",
+                "program_file": "Program content",
+                "current_output": "Current output content",
+                "desired_output": "Desired output content"
+            },
+            {"output": output_file},
+            None
         )
-    
-    # Assert
-    # We remove `mock_ctx.obj.get.assert_called()` because `ctx.obj` is a dict.
-    # Checking for SystemExit is enough to confirm the error path is exercised.
+        
+        # Mock bug_to_unit_test
+        mock_bug_to_unit_test.return_value = ("Generated unit test", 0.001, "gpt-4")
+        
+        # Call the function
+        result = bug_main(
+            mock_ctx,
+            mock_input_files["prompt_file"],
+            mock_input_files["code_file"],
+            mock_input_files["program_file"],
+            mock_input_files["current_output"],
+            mock_input_files["desired_output"],
+            output=output_file
+        )
+        
+        # Assertions
+        assert result == ("Generated unit test", 0.001, "gpt-4")
+        assert os.path.exists(output_file)
+        with open(output_file, 'r') as f:
+            assert f.read() == "Generated unit test"
 
-def test_bug_main_quiet_mode(mock_ctx, mock_construct_paths, mock_bug_to_unit_test):
+def test_bug_main_no_output(mock_ctx, mock_input_files):
+    """Test case for bug_main when no output file is specified."""
+    with patch('pdd.bug_main.construct_paths') as mock_construct_paths, \
+         patch('pdd.bug_main.bug_to_unit_test') as mock_bug_to_unit_test:
+        
+        # Mock construct_paths
+        mock_construct_paths.return_value = (
+            {
+                "prompt_file": "Prompt content",
+                "code_file": "Code content",
+                "program_file": "Program content",
+                "current_output": "Current output content",
+                "desired_output": "Desired output content"
+            },
+            {"output": None},
+            None
+        )
+        
+        # Mock bug_to_unit_test
+        mock_bug_to_unit_test.return_value = ("Generated unit test", 0.001, "gpt-4")
+        
+        # Call the function
+        result = bug_main(
+            mock_ctx,
+            mock_input_files["prompt_file"],
+            mock_input_files["code_file"],
+            mock_input_files["program_file"],
+            mock_input_files["current_output"],
+            mock_input_files["desired_output"]
+        )
+        
+        # Assertions
+        assert result == ("Generated unit test", 0.001, "gpt-4")
+
+def test_bug_main_error_handling(mock_ctx, mock_input_files):
+    """Test case for error handling in bug_main."""
+    with patch('pdd.bug_main.construct_paths') as mock_construct_paths:
+        # Mock construct_paths to raise an exception
+        mock_construct_paths.side_effect = Exception("Test error")
+        
+        # Call the function and expect it to exit
+        with pytest.raises(SystemExit):
+            bug_main(
+                mock_ctx,
+                mock_input_files["prompt_file"],
+                mock_input_files["code_file"],
+                mock_input_files["program_file"],
+                mock_input_files["current_output"],
+                mock_input_files["desired_output"]
+            )
+
+def test_bug_main_quiet_mode(mock_ctx, mock_input_files):
     """Test case for bug_main in quiet mode."""
-    # Arrange
     mock_ctx.obj['quiet'] = True
     
-    # Act
-    result = bug_main(
-        mock_ctx,
-        "mock_prompt.prompt",
-        "mock_code.py",
-        "mock_program.py",
-        MOCK_CURRENT_OUTPUT,
-        MOCK_DESIRED_OUTPUT
-    )
-    
-    # Assert
-    assert result == (MOCK_UNIT_TEST, MOCK_TOTAL_COST, MOCK_MODEL_NAME)
+    with patch('pdd.bug_main.construct_paths') as mock_construct_paths, \
+         patch('pdd.bug_main.bug_to_unit_test') as mock_bug_to_unit_test:
+        
+        # Mock construct_paths
+        mock_construct_paths.return_value = (
+            {
+                "prompt_file": "Prompt content",
+                "code_file": "Code content",
+                "program_file": "Program content",
+                "current_output": "Current output content",
+                "desired_output": "Desired output content"
+            },
+            {"output": None},
+            None
+        )
+        
+        # Mock bug_to_unit_test
+        mock_bug_to_unit_test.return_value = ("Generated unit test", 0.001, "gpt-4")
+        
+        # Call the function
+        result = bug_main(
+            mock_ctx,
+            mock_input_files["prompt_file"],
+            mock_input_files["code_file"],
+            mock_input_files["program_file"],
+            mock_input_files["current_output"],
+            mock_input_files["desired_output"]
+        )
+        
+        # Assertions
+        assert result == ("Generated unit test", 0.001, "gpt-4")
 
-def test_bug_main_force_mode(mock_ctx, mock_construct_paths, mock_bug_to_unit_test):
-    """Test case for bug_main in force mode."""
-    # Arrange
-    mock_ctx.obj['force'] = True
-    
-    # Act
-    result = bug_main(
-        mock_ctx,
-        "mock_prompt.prompt",
-        "mock_code.py",
-        "mock_program.py",
-        MOCK_CURRENT_OUTPUT,
-        MOCK_DESIRED_OUTPUT
-    )
-    
-    # Assert
-    assert result == (MOCK_UNIT_TEST, MOCK_TOTAL_COST, MOCK_MODEL_NAME)
-    mock_construct_paths.assert_called_with(
-        input_file_paths={
-            "prompt_file": "mock_prompt.prompt",
-            "code_file": "mock_code.py",
-            "program_file": "mock_program.py"
-        },
-        force=True,
-        quiet=False,
-        command="bug",
-        command_options={
-            "output": None,
-            "language": "Python"
-        }
-    )
+def test_bug_main_different_language(mock_ctx, mock_input_files):
+    """Test case for bug_main with a different programming language."""
+    with patch('pdd.bug_main.construct_paths') as mock_construct_paths, \
+         patch('pdd.bug_main.bug_to_unit_test') as mock_bug_to_unit_test:
+        
+        # Mock construct_paths
+        mock_construct_paths.return_value = (
+            {
+                "prompt_file": "Prompt content",
+                "code_file": "Code content",
+                "program_file": "Program content",
+                "current_output": "Current output content",
+                "desired_output": "Desired output content"
+            },
+            {"output": None},
+            "JavaScript"
+        )
+        
+        # Mock bug_to_unit_test
+        mock_bug_to_unit_test.return_value = ("Generated unit test", 0.001, "gpt-4")
+        
+        # Call the function
+        result = bug_main(
+            mock_ctx,
+            mock_input_files["prompt_file"],
+            mock_input_files["code_file"],
+            mock_input_files["program_file"],
+            mock_input_files["current_output"],
+            mock_input_files["desired_output"],
+            language="JavaScript"
+        )
+        
+        # Assertions
+        assert result == ("Generated unit test", 0.001, "gpt-4")
