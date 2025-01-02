@@ -19,7 +19,7 @@ MOCK_MODEL_NAME = "gpt-4"
 def mock_ctx():
     """Fixture to mock the context object."""
     ctx = MagicMock()
-    ctx.params = {'force': False, 'quiet': False}
+    ctx.obj = {'force': False, 'quiet': False}
     ctx.obj = MagicMock()
     ctx.obj.get = MagicMock(side_effect=lambda key, default: default)
     return ctx
