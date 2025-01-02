@@ -126,7 +126,7 @@ def test_bug_main_error(mock_ctx, mock_construct_paths, mock_bug_to_unit_test):
 def test_bug_main_quiet_mode(mock_ctx, mock_construct_paths, mock_bug_to_unit_test):
     """Test case for bug_main in quiet mode."""
     # Arrange
-    mock_ctx.params['quiet'] = True
+    mock_ctx.obj['quiet'] = True
     
     # Act
     result = bug_main(
@@ -144,7 +144,7 @@ def test_bug_main_quiet_mode(mock_ctx, mock_construct_paths, mock_bug_to_unit_te
 def test_bug_main_force_mode(mock_ctx, mock_construct_paths, mock_bug_to_unit_test):
     """Test case for bug_main in force mode."""
     # Arrange
-    mock_ctx.params['force'] = True
+    mock_ctx.obj['force'] = True
     
     # Act
     result = bug_main(
