@@ -13,6 +13,7 @@ from langchain_anthropic import ChatAnthropic
 from langchain_openai import ChatOpenAI # Chatbot and conversational tasks
 from langchain_openai import OpenAI # General language tasks
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_google_vertexai import ChatVertexAI
 from langchain_groq import ChatGroq
 from langchain_together import Together
 
@@ -66,6 +67,15 @@ chain = prompt_template |llm| StrOutputParser()
 # Run the template. Notice that the input is a dictionary with a single key "topic" which feeds it into the above prompt template. This is needed because the prompt template has a variable {topic} which needs to be filled in when invoked.
 result = chain.invoke({"topic": "cats"})
 print("********Google:", result)
+
+
+llm = ChatVertexAI(model="gemini-pro", temperature=0, callbacks=[handler])
+# Combine with a model and parser to output a string
+chain = prompt_template |llm| StrOutputParser()
+
+# Run the template. Notice that the input is a dictionary with a single key "topic" which feeds it into the above prompt template. This is needed because the prompt template has a variable {topic} which needs to be filled in when invoked.
+result = chain.invoke({"topic": "cats"})
+print("********GoogleVertex:", result)
 
 
 # Define your desired data structure.
