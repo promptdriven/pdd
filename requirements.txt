@@ -17,8 +17,9 @@ pydantic==2.9.2
 pytest==8.3.2
 rich==13.9.1
 tiktoken==0.7.0
-transformers==4.44.0
+#transformers==4.44.0
 build
 python-Levenshtein
 pytest-cov
 langchain_ollama
+langchain-google-vertexai
