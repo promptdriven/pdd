@@ -151,7 +151,7 @@ def test_bug_command_help(runner):
 
 def test_auto_deps_command_help(runner):
     """Test 'pdd auto_deps --help'. Should display usage for the auto_deps command."""
-    result = runner.invoke(cli, ["auto_deps", "--help"])
+    result = runner.invoke(cli, ["auto-deps", "--help"])
     assert result.exit_code == 0
     assert "Analyze a prompt file and a directory of potential dependencies" in result.output
 
@@ -222,7 +222,7 @@ def test_get_shell_rc_path():
         ("crash", ["PROMPT_FILE", "CODE_FILE", "PROGRAM_FILE", "ERROR_FILE"]),
         ("trace", ["PROMPT_FILE", "CODE_FILE", "CODE_LINE"]),
         ("bug", ["PROMPT_FILE", "CODE_FILE", "PROGRAM_FILE", "CURRENT_OUTPUT", "DESIRED_OUTPUT"]),
-        ("auto_deps", ["PROMPT_FILE", "DIRECTORY_PATH"]),
+        ("auto-deps", ["PROMPT_FILE", "DIRECTORY_PATH"]),
     ],
 )
 def test_commands_with_no_args_give_error(runner, command, required_args):
