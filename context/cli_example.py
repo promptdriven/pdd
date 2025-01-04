@@ -1,6 +1,9 @@
 import os
 from pdd.cli import cli
 
+# Disable auto-update by setting environment variable
+os.environ["PDD_AUTO_UPDATE"] = "false"
+
 def main() -> None:
     """
     Main function to demonstrate the usage of the 'generate' command from the PDD CLI module.
