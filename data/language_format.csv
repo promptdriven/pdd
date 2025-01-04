@@ -55,3 +55,4 @@ OCaml,"(**)",.ml
 LLM,del,.prompt
 prompt,del,.prompt
 TOML,#,.toml
+Log,del,.log
