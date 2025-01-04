@@ -49,6 +49,10 @@ def fix_main(
         - Total cost of operation (float)
         - Name of model used (str)
     """
+    # Check verification program requirement before any file operations
+    if loop and not verification_program:
+        raise click.UsageError("--verification-program is required when using --loop")
+
     try:
         # Construct file paths
         input_file_paths = {
@@ -79,9 +83,6 @@ def fix_main(
 
         if loop:
             # Use fix_error_loop for iterative fixing
-            if not verification_program:
-                raise click.UsageError("--verification-program is required when using --loop")
-
             success, fixed_unit_test, fixed_code, attempts, total_cost, model_name = fix_error_loop(
                 unit_test_file=unit_test_file,
                 code_file=code_file,
