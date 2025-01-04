@@ -8,17 +8,20 @@
             "module": "pdd.cli",
             "console": "integratedTerminal",
             "args": [
-                "--output-cost", 
-                "staging/regression/regression_cost.csv", 
-                "fix", 
-                "--output-test", 
-                "staging/regression/fixed_test_get_extension.py", 
-                "--output-code", 
-                "staging/regression/fixed_get_extension.py", 
-                "/Users/gregtanaka/Documents/PDD/prompts/get_extension_python.prompt", 
-                "staging/regression/get_extension.py", 
-                "staging/regression/test_get_extension.py", 
-                "staging/regression/error.log"
+                "--force",
+                "--strength",
+                "0.5",
+                "--temperature",
+                "0.0",
+                "--output-cost",
+                "/Users/gregtanaka/pdd/staging/regression/regression_cost.csv",
+                "auto-deps",
+                "--output",
+                "/Users/gregtanaka/pdd/staging/regression/auto_deps_get_extension_python.prompt",
+                "--csv",
+                "project_dependencies.csv",
+                "/Users/gregtanaka/pdd/prompts/get_extension_python.prompt",
+                "/Users/gregtanaka/pdd/context/*.py"
             ]
         },
         {
