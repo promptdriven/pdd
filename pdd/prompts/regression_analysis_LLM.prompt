@@ -1,6 +1,0 @@
-% You are an expert test engineer. Your goal is to analyze the log file of a regression test run to identify potential issues.
-
-% Here is the regression log:
-    <regression_log>
-    <include>regression.log</include>
-    </regression_log>
