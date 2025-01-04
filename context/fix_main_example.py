@@ -48,10 +48,10 @@ if __name__ == '__main__':
     ctx_obj = {
         'strength': 0.9,
         'temperature': 0,
-        'force': False,
+        'force': True,
         'quiet': False
     }
-    sys.argv = [sys.argv[0], '--prompt-file', 'prompts/get_extension_python.prompt', '--code-file', 'pdd/get_extension.py', '--unit-test-file', 'tests/test_get_extension.py', '--error-file', 'test.log', '--loop', '--verification-program', 'context/get_extension_example.py']
+    sys.argv = [sys.argv[0], '--prompt-file', 'prompts/get_extension_python.prompt', '--code-file', 'pdd/get_extension.py', '--unit-test-file', 'tests/test_get_extension.py', '--error-file', 'test.log', '--loop', '--verification-program', 'context/get_extension_example.py', '--output-code', 'output', '--output-test', 'output']
     # Run the command
     fix_command(obj=ctx_obj)
 
