@@ -465,8 +465,8 @@ def trace(
 @click.argument("prompt_file", type=click.Path(exists=True))
 @click.argument("code_file", type=click.Path(exists=True))
 @click.argument("program_file", type=click.Path(exists=True))
-@click.argument("current_output", type=str)
-@click.argument("desired_output", type=str)
+@click.argument("current_output", type=click.Path(exists=True))
+@click.argument("desired_output", type=click.Path(exists=True))
 @click.option(
     "--output",
     metavar="LOCATION",
@@ -500,7 +500,7 @@ def bug(
     help="Specify where to save the modified prompt file with dependencies inserted.",
 )
 @click.option(
-    "--auto-deps-csv-path",
+    "--csv",
     type=click.Path(),
     default="./project_dependencies.csv",
     help="Specify the CSV file that contains or will contain dependency information.",
@@ -515,13 +515,13 @@ def auto_deps(
     prompt_file: str,
     directory_path: str,
     output: Optional[str],
-    auto_deps_csv_path: Optional[str],
+    csv: Optional[str],
     force_scan: bool,
 ) -> Tuple[str, float, str]:
     """
     Analyze a prompt file and a directory of potential dependencies to determine and insert needed dependencies into the prompt.
     """
-    return auto_deps_main(ctx, prompt_file, directory_path, auto_deps_csv_path, output, force_scan)
+    return auto_deps_main(ctx, prompt_file, directory_path, csv, output, force_scan)
 
 if __name__ == "__main__":
     cli()
