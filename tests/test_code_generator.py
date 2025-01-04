@@ -84,7 +84,8 @@ def test_code_generator_valid_input_complete(
         llm_output=MOCK_INITIAL_RESPONSE['result'],
         language="python",
         strength=0.895,
-        temperature=0.0
+        temperature=0.0,
+        verbose=True
     )
     assert runnable_code == "runnable_code_here"
     assert total_cost == MOCK_INITIAL_RESPONSE['cost'] + MOCK_UNFINISHED_RESPONSE_COMPLETE[2] + MOCK_POSTPROCESS_RESPONSE[1]
@@ -137,7 +138,8 @@ def test_code_generator_valid_input_incomplete(
         llm_output=MOCK_FINAL_OUTPUT,
         language="python",
         strength=0.895,
-        temperature=0.0
+        temperature=0.0,
+        verbose=False
     )
     assert runnable_code == "runnable_code_here"
     assert total_cost == (
@@ -288,7 +290,8 @@ def test_code_generator_edge_case_exact_600_chars(
         llm_output='a' * 600,
         language="python",
         strength=0.895,
-        temperature=0.0
+        temperature=0.0,
+        verbose=False
     )
     assert runnable_code == "runnable_code_here"
     assert total_cost == 0.05 + 0.01 + 0.02
