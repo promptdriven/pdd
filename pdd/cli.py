@@ -405,7 +405,7 @@ def get_shell_rc_path(shell: str) -> Optional[str]:
         return None
 
 
-@cli.command()
+@cli.command(name="install_completion")  # Explicitly specify the command name
 def install_completion():
     """
     Install shell completion for the PDD CLI.
