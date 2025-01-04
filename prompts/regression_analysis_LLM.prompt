@@ -2,5 +2,5 @@
 
 % Here is the regression log:
     <regression_log>
-    <include>staging/regression/regression.log</include>
+    <include>regression.log</include>
     </regression_log>

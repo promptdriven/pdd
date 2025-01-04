@@ -128,6 +128,6 @@ build:
 analysis:
 	@echo "Running regression analysis"
 	@mkdir -p staging/regression
-	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH pdd --strength 0.925 generate --output staging/regression/regression_analysis.log prompts/regression_analysis_LLM.prompt
+	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH pdd --strength 1 generate --output staging/regression/regression_analysis.log prompts/regression_analysis_LLM.prompt
 	@echo "Analysis results:"
 	@python -c "from rich.console import Console; from rich.syntax import Syntax; console = Console(); content = open('staging/regression/regression_analysis.log').read(); syntax = Syntax(content, 'python', theme='monokai', line_numbers=True); console.print(syntax)"
