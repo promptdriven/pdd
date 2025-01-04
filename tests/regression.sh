@@ -120,6 +120,7 @@ run_pdd_command conflicts --output "$STAGING_PATH/regression/conflicts_analysis.
 log "Running crash command"
 python "$STAGING_PATH/regression/$EXTENSION_VERIFICATION_PROGRAM" >& "$STAGING_PATH/regression/$EXTENSION_ERROR_LOG"
 run_pdd_command crash --output "$STAGING_PATH/regression/fixed_crash_$EXTENSION_SCRIPT" \
+                      --output-program "$STAGING_PATH/regression/fixed_crash_$EXTENSION_VERIFICATION_PROGRAM"
                       "$PROMPTS_PATH/$EXTENSION_PROMPT" "$STAGING_PATH/regression/$EXTENSION_SCRIPT" \
                       "$STAGING_PATH/regression/$EXTENSION_VERIFICATION_PROGRAM" "$STAGING_PATH/regression/$EXTENSION_ERROR_LOG"
 
