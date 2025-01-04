@@ -510,7 +510,7 @@ pdd [GLOBAL OPTIONS] auto-deps [OPTIONS] PROMPT_FILE DIRECTORY_PATH
 
 Arguments:
 - `PROMPT_FILE`: Filename of the prompt file that needs dependencies analyzed and inserted.
-- `DIRECTORY_PATH`: Path to the directory containing potential dependency files (can include glob patterns, e.g., "context/*_example.py").
+- `DIRECTORY_PATH`: Path to the directory containing potential dependency files (should include glob patterns, e.g., "context/*_example.py").
 
 Options:
 - `--output LOCATION`: Specify where to save the modified prompt file with dependencies inserted. The default file name is `<basename>_with_deps.prompt`. If an environment variable `PDD_AUTO_DEPS_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
