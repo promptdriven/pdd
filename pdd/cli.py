@@ -521,7 +521,17 @@ def auto_deps(
     """
     Analyze a prompt file and a directory of potential dependencies to determine and insert needed dependencies into the prompt.
     """
-    return auto_deps_main(ctx, prompt_file, directory_path, csv, output, force_scan)
+    # Strip quotes from directory_path path if present
+    if directory_path and directory_path.startswith('"') and directory_path.endswith('"'):
+        directory_path = directory_path[1:-1]
+    return auto_deps_main(
+        ctx=ctx,
+        prompt_file=prompt_file,
+        directory_path=directory_path,
+        auto_deps_csv_path=csv,
+        output=output,
+        force_scan=force_scan
+    )
 
 if __name__ == "__main__":
     cli()

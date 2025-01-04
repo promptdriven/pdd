@@ -113,7 +113,7 @@
         <include>context/bug_main_example.py</include>
         </bug_to_unit_test_example>
 
-        - `auto-deps` command: The core logic is implemented in the `auto_deps_main` function, defined in a separate module. Here's how to use `auto_deps_main`:
+        - `auto-deps` command: The core logic is implemented in the `auto_deps_main` function, defined in a separate module. Be sure to strip quotes from directory_path path if present before calling `auto_deps_main`. Here's how to use `auto_deps_main`:
         <auto_deps_main_example>
         <include>context/auto_deps_main_example.py</include>
         </auto_deps_main_example>
