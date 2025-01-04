@@ -29,20 +29,6 @@ from .auto_deps_main import auto_deps_main
 
 console = Console()
 
-# Check if PDD_PATH is set, otherwise use importlib.resources
-if "PDD_PATH" not in os.environ:
-    try:
-        with importlib.resources.path("pdd", "cli.py") as p:
-            PDD_PATH = str(p.parent)
-    except ImportError:
-        print(
-            "Error: Could not determine the path to the 'pdd' package. "
-            "Please set the PDD_PATH environment variable manually."
-        )
-        sys.exit(1)
-else:
-    PDD_PATH = os.environ["PDD_PATH"]
-
 @click.group()
 @click.option(
     "--force",
@@ -391,7 +377,6 @@ def crash(
         budget,
     )
 
-
 def get_shell_rc_path(shell: str) -> Optional[str]:
     """Determine the shell's RC file path."""
     home = os.path.expanduser("~")
@@ -404,8 +389,7 @@ def get_shell_rc_path(shell: str) -> Optional[str]:
     else:
         return None
 
-
-@cli.command(name="install_completion")  # Explicitly specify the command name
+@cli.command(name="install_completion")
 def install_completion():
     """
     Install shell completion for the PDD CLI.
@@ -413,22 +397,29 @@ def install_completion():
     This command:
       - Checks the user's shell. If unsupported, raises click.Abort() => exit_code=1
       - Checks that a completion script for that shell exists in PDD_PATH, else also raises click.Abort()
-      - Otherwise appends 'source path/to/script' to the shell RC file so completions are loaded
+      - Otherwise appends 'source path/to/script' to the RC file
       - Returns normally => exit_code=0 on success
     """
-    import click
-
-    def get_shell() -> str:
-        return os.path.basename(os.environ.get("SHELL", ""))
-
-    shell = get_shell()
+    shell = os.path.basename(os.environ.get("SHELL", ""))
     rc_file = get_shell_rc_path(shell)
-
     if not rc_file:
         rprint(f"[red]Unsupported shell: {shell}[/red]")
         raise click.Abort()  # => exit_code=1
 
-    completion_script_path = os.path.join(PDD_PATH, f"pdd_completion.{shell}")
+    if "PDD_PATH" in os.environ:
+        local_pdd_path = os.environ["PDD_PATH"]
+    else:
+        try:
+            with importlib.resources.path("pdd", "cli.py") as p:
+                local_pdd_path = str(p.parent)
+        except ImportError:
+            rprint(
+                "Error: Could not determine the path to the 'pdd' package. "
+                "Please set the PDD_PATH environment variable manually."
+            )
+            sys.exit(1)
+
+    completion_script_path = os.path.join(local_pdd_path, f"pdd_completion.{shell}")
     if not os.path.exists(completion_script_path):
         rprint(f"[red]Completion script not found: {completion_script_path}[/red]")
         raise click.Abort()  # => exit_code=1
@@ -436,22 +427,20 @@ def install_completion():
     source_command = f"source {completion_script_path}"
 
     try:
-        with open(rc_file, "r") as f:
-            content = f.read()
-
+        with open(rc_file, "r", encoding="utf-8") as cf:
+            content = cf.read()
         if source_command not in content:
-            with open(rc_file, "a") as f:
-                f.write(f"\n# PDD CLI completion\n{source_command}\n")
+            with open(rc_file, "a", encoding="utf-8") as rf:
+                rf.write(f"\n# PDD CLI completion\n{source_command}\n")
+
             rprint(f"[green]Shell completion installed for {shell}.[/green]")
             rprint(f"Please restart your shell or run 'source {rc_file}' to enable completion.")
         else:
             rprint(f"[yellow]Shell completion already installed for {shell}.[/yellow]")
-
-    except Exception as exc:
+    except OSError as exc:
         rprint(f"[red]Failed to install shell completion: {exc}[/red]")
         raise click.Abort()  # => exit_code=1
 
-    # If we made it here, success => exit_code=0
     return
 
 
