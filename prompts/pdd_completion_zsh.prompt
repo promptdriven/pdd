@@ -1,0 +1,6 @@
+%You are an expert ZSH engineer. Your goal is to create pdd_completion.zsh for the PDD CLI.
+
+% Here is the README for PDD CLI:
+    <readme_pdd>
+        <include>README.md</include>
+    </readme_pdd>

@@ -419,7 +419,7 @@ def install_completion():
             )
             sys.exit(1)
 
-    completion_script_path = os.path.join(local_pdd_path, f"pdd_completion.{shell}")
+    completion_script_path = os.path.join(local_pdd_path, f"pdd/pdd_completion.{shell}")
     if not os.path.exists(completion_script_path):
         rprint(f"[red]Completion script not found: {completion_script_path}[/red]")
         raise click.Abort()  # => exit_code=1

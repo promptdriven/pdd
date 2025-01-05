@@ -16,6 +16,7 @@ C#,//,.cs
 SQL,--,.sql
 Shell,#,.sh
 Bash,#,.sh
+Zsh,#,.zsh
 PowerShell,#,.ps1
 Perl,#,.pl
 R,#,.R
