@@ -10,6 +10,23 @@ from rich import print as rprint
 from rich.console import Console
 from rich.panel import Panel
 
+if "PDD_PATH" in os.environ:
+    local_pdd_path = os.environ["PDD_PATH"]
+else:
+    try:
+        with importlib.resources.path("pdd", "cli.py") as p:
+            local_pdd_path = str(p.parent)
+            # set the PDD_PATH environment variable
+            os.environ["PDD_PATH"] = local_pdd_path
+            rprint(f"PDD_PATH set to {local_pdd_path}")
+    except ImportError:
+        rprint(
+            "Error: Could not determine the path to the 'pdd' package. "
+            "Please set the PDD_PATH environment variable manually."
+        )
+        sys.exit(1)
+
+
 from .code_generator_main import code_generator_main
 from .context_generator_main import context_generator_main
 from .cmd_test_main import cmd_test_main
@@ -187,7 +204,7 @@ def preprocess(
 @click.argument("prompt_file", type=click.Path(exists=True))
 @click.argument("code_file", type=click.Path(exists=True))
 @click.argument("unit_test_file", type=click.Path(exists=True))
-@click.argument("error_file", type=click.Path())
+@click.argument("error_file", type=click.Path(exists=False))
 @click.option("--output-test", type=click.Path(), help="Where to save the fixed unit test file.")
 @click.option("--output-code", type=click.Path(), help="Where to save the fixed code file.")
 @click.option(
@@ -405,19 +422,6 @@ def install_completion():
     if not rc_file:
         rprint(f"[red]Unsupported shell: {shell}[/red]")
         raise click.Abort()  # => exit_code=1
-
-    if "PDD_PATH" in os.environ:
-        local_pdd_path = os.environ["PDD_PATH"]
-    else:
-        try:
-            with importlib.resources.path("pdd", "cli.py") as p:
-                local_pdd_path = str(p.parent)
-        except ImportError:
-            rprint(
-                "Error: Could not determine the path to the 'pdd' package. "
-                "Please set the PDD_PATH environment variable manually."
-            )
-            sys.exit(1)
 
     completion_script_path = os.path.join(local_pdd_path, f"pdd/pdd_completion.{shell}")
     if not os.path.exists(completion_script_path):
