@@ -49,7 +49,19 @@ def write_to_error_file(file_path: str, content: str) -> None:
         
         # Use atomic write with temporary file
         try:
+            # First read existing content if file exists
+            existing_content = ""
+            if os.path.exists(file_path):
+                try:
+                    with open(file_path, 'r') as f:
+                        existing_content = f.read()
+                except Exception as e:
+                    console.print(f"[yellow]Warning: Could not read existing file {file_path}: {str(e)}[/yellow]")
+
+            # Write both existing and new content to temp file
             with NamedTemporaryFile(mode='w', dir=parent_dir, delete=False) as tmp_file:
+                if existing_content:
+                    tmp_file.write(existing_content)
                 tmp_file.write(f"{separator}{content}\n")
                 tmp_path = tmp_file.name
             
