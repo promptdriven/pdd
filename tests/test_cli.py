@@ -7,12 +7,10 @@ from unittest.mock import patch
 # Adjust the import as needed if your code structure differs
 from pdd.cli import cli, get_shell_rc_path
 
-
 @pytest.fixture
 def runner():
     """Returns a Click CliRunner instance."""
     return CliRunner()
-
 
 def test_cli_no_command(runner):
     """Invoke the CLI with no command. Should display help and exit with code 0."""
@@ -20,7 +18,6 @@ def test_cli_no_command(runner):
     assert result.exit_code == 0
     assert "PDD (Prompt-Driven Development) Command Line Interface" in result.output
     assert "Commands:" in result.output
-
 
 def test_cli_help_global(runner):
     """Invoke the CLI with --help. Should display general usage/help."""
@@ -31,13 +28,11 @@ def test_cli_help_global(runner):
     assert "--force" in result.output
     assert "Commands:" in result.output
 
-
 def test_generate_command_missing_args(runner):
     """Test 'pdd generate' without required arguments. Should error and display help text."""
     result = runner.invoke(cli, ["generate"])
     assert result.exit_code != 0
     assert "Error: Missing argument 'PROMPT_FILE'" in result.output
-
 
 def test_generate_command_help(runner):
     """Test 'pdd generate --help'. Should display usage for generate."""
@@ -46,20 +41,17 @@ def test_generate_command_help(runner):
     assert "Create runnable code from a prompt file." in result.output
     assert "--output" in result.output
 
-
 def test_example_command_missing_args(runner):
     """Test 'pdd example' without required arguments. Should error and display help text."""
     result = runner.invoke(cli, ["example"])
     assert result.exit_code != 0
     assert "Error: Missing argument 'PROMPT_FILE'" in result.output
 
-
 def test_example_command_help(runner):
     """Test 'pdd example --help'. Should display usage for example."""
     result = runner.invoke(cli, ["example", "--help"])
     assert result.exit_code == 0
     assert "Create an example file from an existing code file" in result.output
-
 
 def test_test_command_help(runner):
     """Test 'pdd test --help'. Should display usage for the test command."""
@@ -69,7 +61,6 @@ def test_test_command_help(runner):
     assert "--merge" in result.output
     assert "--coverage-report" in result.output
 
-
 def test_preprocess_command_help(runner):
     """Test 'pdd preprocess --help'. Should display usage for the preprocess command."""
     result = runner.invoke(cli, ["preprocess", "--help"])
@@ -77,7 +68,6 @@ def test_preprocess_command_help(runner):
     assert "Preprocess prompt files and save the results." in result.output
     assert "--xml" in result.output
     assert "--recursive" in result.output
-
 
 def test_fix_command_help(runner):
     """Test 'pdd fix --help'. Should display usage for the fix command."""
@@ -87,7 +77,6 @@ def test_fix_command_help(runner):
     assert "--loop" in result.output
     assert "--verification-program" in result.output
 
-
 def test_split_command_help(runner):
     """Test 'pdd split --help'. Should display usage for the split command."""
     result = runner.invoke(cli, ["split", "--help"])
@@ -96,14 +85,12 @@ def test_split_command_help(runner):
     assert "--output-sub" in result.output
     assert "--output-modified" in result.output
 
-
 def test_change_command_help(runner):
     """Test 'pdd change --help'. Should display usage for the change command."""
     result = runner.invoke(cli, ["change", "--help"])
     assert result.exit_code == 0
     assert "Modify an input prompt file based on a change prompt" in result.output
     assert "--csv" in result.output
-
 
 def test_update_command_help(runner):
     """Test 'pdd update --help'. Should display usage for the update command."""
@@ -112,20 +99,17 @@ def test_update_command_help(runner):
     assert "Update the original prompt file based on the original code" in result.output
     assert "--git" in result.output
 
-
 def test_detect_command_help(runner):
     """Test 'pdd detect --help'. Should display usage for the detect command."""
     result = runner.invoke(cli, ["detect", "--help"])
     assert result.exit_code == 0
     assert "Analyze a list of prompt files" in result.output
 
-
 def test_conflicts_command_help(runner):
     """Test 'pdd conflicts --help'. Should display usage for the conflicts command."""
     result = runner.invoke(cli, ["conflicts", "--help"])
     assert result.exit_code == 0
     assert "Analyze two prompt files to find conflicts" in result.output
-
 
 def test_crash_command_help(runner):
     """Test 'pdd crash --help'. Should display usage for the crash command."""
@@ -134,13 +118,11 @@ def test_crash_command_help(runner):
     assert "Fix errors in a code module that caused a program to crash" in result.output
     assert "--loop" in result.output
 
-
 def test_trace_command_help(runner):
     """Test 'pdd trace --help'. Should display usage for the trace command."""
     result = runner.invoke(cli, ["trace", "--help"])
     assert result.exit_code == 0
     assert "Find the associated line number between a prompt file and the generated code." in result.output
-
 
 def test_bug_command_help(runner):
     """Test 'pdd bug --help'. Should display usage for the bug command."""
@@ -148,13 +130,11 @@ def test_bug_command_help(runner):
     assert result.exit_code == 0
     assert "Generate a unit test based on observed and desired outputs" in result.output
 
-
 def test_auto_deps_command_help(runner):
     """Test 'pdd auto_deps --help'. Should display usage for the auto_deps command."""
     result = runner.invoke(cli, ["auto-deps", "--help"])
     assert result.exit_code == 0
     assert "Analyze a prompt file and a directory of potential dependencies" in result.output
-
 
 def test_install_completion_unsupported_shell(runner):
     """
@@ -167,18 +147,20 @@ def test_install_completion_unsupported_shell(runner):
         assert result.exit_code == 1
         assert "Unsupported shell" in result.output
 
-
 def test_install_completion_fish_shell(runner, tmp_path):
     """
     Test 'pdd install_completion' with fish shell by mocking $SHELL environment to 'fish'
     and mocking the existence of a completion script for fish.
     """
-    mock_pdd_path = str(tmp_path)
-    completion_script_fish = os.path.join(mock_pdd_path, "pdd/pdd_completion.fish")
+    # Create a pdd subdirectory in the temporary directory
+    mock_pdd_path = tmp_path / "pdd"
+    os.makedirs(mock_pdd_path)
+
+    completion_script_fish = os.path.join(mock_pdd_path, "pdd_completion.fish")
     with open(completion_script_fish, "w") as f:
         f.write("# fish completion script")
 
-    with patch.dict(os.environ, {"SHELL": "/bin/fish", "PDD_PATH": mock_pdd_path}):
+    with patch.dict(os.environ, {"SHELL": "/bin/fish", "PDD_PATH": str(tmp_path)}):
         mock_rc_file = os.path.join(str(tmp_path), "config.fish")
         with open(mock_rc_file, "w") as rc:
             rc.write("# fish config\n")
@@ -195,7 +177,6 @@ def test_install_completion_fish_shell(runner, tmp_path):
                 rc_contents = rc.read()
                 assert f"source {completion_script_fish}" in rc_contents
 
-
 def test_get_shell_rc_path():
     """Verify that get_shell_rc_path returns expected defaults for known shells."""
     home = os.path.expanduser("~")
@@ -204,7 +185,6 @@ def test_get_shell_rc_path():
     assert get_shell_rc_path("zsh") == os.path.join(home, ".zshrc")
     assert get_shell_rc_path("fish") == os.path.join(home, ".config", "fish", "config.fish")
     assert get_shell_rc_path("csh") is None
-
 
 @pytest.mark.parametrize(
     "command, required_args",
