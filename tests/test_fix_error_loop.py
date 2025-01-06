@@ -43,7 +43,7 @@ def test_successful_fix(temp_files):
                 )
                 
                 assert success == True
-                assert attempts == 2 # Corrected assertion
+                assert attempts == 2
                 assert cost == 0.1
                 assert model == "gpt-4"
 
@@ -114,7 +114,12 @@ def test_verification_failure(temp_files):
         mock_run.side_effect = [
             MagicMock(stdout="1 failed", stderr="", returncode=1),  # First pytest
             MagicMock(stdout="verification failed", stderr="error", returncode=1),  # Failed verification
-            MagicMock(stdout="1 failed", stderr="", returncode=1)   # Pytest after verification failure
+            MagicMock(stdout="1 failed", stderr="", returncode=1),   # Pytest after verification failure
+            MagicMock(stdout="verification failed again", stderr="error again", returncode=1), # Second verification
+            MagicMock(stdout="1 failed", stderr="", returncode=1), # Second pytest
+            MagicMock(stdout="1 failed", stderr="", returncode=1),  # Third pytest
+            MagicMock(stdout="1 failed", stderr="", returncode=1),  # Final pytest
+            MagicMock(stdout="1 failed", stderr="", returncode=1)   # Extra for safety
         ]
         
         with patch('pdd.fix_error_loop.fix_errors_from_unit_tests') as mock_fix:
@@ -128,5 +133,10 @@ def test_verification_failure(temp_files):
                 )
                 
                 assert success == False
-                assert attempts == 2 # Corrected assertion
+                assert attempts == 3
                 assert os.path.exists(error_log)
+                with open(error_log, 'r') as f:
+                    content = f.read()
+                    assert "verification failed" in content
+                    assert "verification failed again" in content
+                    assert "Restoring previous working code" in content
