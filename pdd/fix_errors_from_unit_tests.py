@@ -1,11 +1,13 @@
 import os
+import tempfile  # Added missing import
 from datetime import datetime
 from typing import Tuple, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from rich import print as rprint
 from rich.markdown import Markdown
 from rich.console import Console
 from rich.panel import Panel
+from tempfile import NamedTemporaryFile
 
 from .preprocess import preprocess
 from .load_prompt_template import load_prompt_template
@@ -19,17 +21,69 @@ class CodeFix(BaseModel):
     fixed_unit_test: str = Field(description="The fixed unit test code")
     fixed_code: str = Field(description="The fixed code under test")
 
+def validate_inputs(strength: float, temperature: float) -> None:
+    """Validate strength and temperature parameters."""
+    if not 0 <= strength <= 1:
+        raise ValueError("Strength must be between 0 and 1")
+    if not 0 <= temperature <= 1:
+        raise ValueError("Temperature must be between 0 and 1")
+
 def write_to_error_file(file_path: str, content: str) -> None:
     """Write content to error file with timestamp and separator."""
     try:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         separator = f"\n{'='*80}\n{timestamp}\n{'='*80}\n"
         
-        with open(file_path, 'a', encoding='utf-8') as f:
-            f.write(f"{separator}{content}\n")
+        # Ensure parent directory exists
+        parent_dir = os.path.dirname(file_path)
+        use_fallback = False
+        
+        if parent_dir:
+            try:
+                os.makedirs(parent_dir, exist_ok=True)
+            except Exception as e:
+                console.print(f"[yellow]Warning: Could not create directory {parent_dir}: {str(e)}[/yellow]")
+                # Fallback to system temp directory
+                use_fallback = True
+                parent_dir = None
+        
+        # Use atomic write with temporary file
+        try:
+            with NamedTemporaryFile(mode='w', dir=parent_dir, delete=False) as tmp_file:
+                tmp_file.write(f"{separator}{content}\n")
+                tmp_path = tmp_file.name
+            
+            # Only attempt atomic move if not using fallback
+            if not use_fallback:
+                try:
+                    os.replace(tmp_path, file_path)
+                except Exception as e:
+                    console.print(f"[yellow]Warning: Could not move file to {file_path}: {str(e)}[/yellow]")
+                    use_fallback = True
+            
+            if use_fallback:
+                # Write to fallback location in system temp directory
+                fallback_path = os.path.join(tempfile.gettempdir(), os.path.basename(file_path))
+                try:
+                    os.replace(tmp_path, fallback_path)
+                    console.print(f"[yellow]Warning: Using fallback location: {fallback_path}[/yellow]")
+                except Exception as e:
+                    console.print(f"[red]Error writing to fallback location: {str(e)}[/red]")
+                    try:
+                        os.unlink(tmp_path)
+                    except:
+                        pass
+                    raise
+        except Exception as e:
+            console.print(f"[red]Error writing to error file: {str(e)}[/red]")
+            try:
+                os.unlink(tmp_path)
+            except:
+                pass
+            raise
     except Exception as e:
-        console.print(f"[red]Error writing to error file: {str(e)}[/red]")
-
+        console.print(f"[red]Error in write_to_error_file: {str(e)}[/red]")
+        raise
 
 def fix_errors_from_unit_tests(
     unit_test: str,
@@ -57,6 +111,12 @@ def fix_errors_from_unit_tests(
     Returns:
         Tuple containing update flags, fixed code/tests, total cost, and model name
     """
+    # Input validation
+    if not all([unit_test, code, prompt, error, error_file]):
+        raise ValueError("All input parameters must be non-empty")
+    
+    validate_inputs(strength, temperature)
+
     total_cost = 0.0
     model_name = ""
 
@@ -121,7 +181,7 @@ def fix_errors_from_unit_tests(
             exclude_keys=['unit_test', 'code', 'unit_test_fix']
         )
 
-        # Step 6: Run second prompt through llm_invoke
+        # Step 6: Run second prompt through llm_invoke with fixed strength
         if verbose:
             console.print(Panel("[bold green]Running extract_unit_code_fix...[/bold green]"))
 
@@ -132,7 +192,7 @@ def fix_errors_from_unit_tests(
                 "unit_test": unit_test,
                 "code": code
             },
-            strength=0.895,
+            strength=0.895,  # Fixed strength as per requirements
             temperature=temperature,
             output_pydantic=CodeFix,
             verbose=verbose
@@ -145,7 +205,6 @@ def fix_errors_from_unit_tests(
             console.print(f"Total cost: ${total_cost:.6f}")
             console.print(f"Model used: {model_name}")
 
-        # Step 7: Return results
         return (
             result2.update_unit_test,
             result2.update_code,
@@ -155,6 +214,12 @@ def fix_errors_from_unit_tests(
             model_name
         )
 
+    except ValidationError as e:
+        error_msg = f"Validation error in fix_errors_from_unit_tests: {str(e)}"
+        if verbose:
+            console.print(f"[bold red]{error_msg}[/bold red]")
+        write_to_error_file(error_file, error_msg)
+        return False, False, "", "", 0.0, ""
     except Exception as e:
         error_msg = f"Error in fix_errors_from_unit_tests: {str(e)}"
         if verbose:
