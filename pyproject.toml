@@ -1,28 +1,40 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = [
+    "setuptools>=43.0.0",
+    "wheel"
+]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "pdd"
-version = "0.2.0"
+version = "0.2.1"
 description = "PDD (Prompt-Driven Development) Command Line Interface"
 readme = "README.md"
-authors = [{ name = "Greg Tanaka", email = "glt@alumni.caltech.edu" }]
+authors = [
+    { name = "Greg Tanaka", email = "glt@alumni.caltech.edu" }
+]
 license = { text = "MIT" }
 classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.7",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
-    "Operating System :: OS Independent",
-    "License :: OSI Approved :: MIT License",
-    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Software Development :: Code Generators",
-    "Topic :: Software Development :: Build Tools",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence"
 ]
-keywords = ["cli", "prompt-driven development", "code generation", "AI development"]
+keywords = [
+    "prompt-driven development",
+    "code generation",
+    "AI",
+    "LLM",
+    "unit testing",
+    "software development"
+]
 dependencies = [
     "GitPython==3.1.43",
     "anthropic==0.34.2",
@@ -39,23 +51,29 @@ dependencies = [
     "langchain_together==0.2.0",
     "pandas==2.2.3",
     "pydantic==2.9.2",
+    "pytest==8.3.2",
     "rich==13.9.1",
     "tiktoken==0.7.0",
-    "transformers==4.44.0",
+    "build",
     "python-Levenshtein",
+    "pytest-cov",
+    "langchain_ollama",
+    "langchain-google-vertexai"
 ]
-requires-python = ">=3.7"
-
-[project.optional-dependencies]
-dev = ["pytest==8.3.2", "build"]
+requires-python = ">=3.8"
 
 [project.urls]
-"Homepage" = "https://github.com/gltanaka/PDD"
-"Bug Tracker" = "https://github.com/gltanaka/PDD/issues"
+Homepage = "https://github.com/gltanaka/pdd"
+Repository = "https://github.com/gltanaka/pdd.git"
 
 [project.scripts]
 pdd = "pdd.cli:cli"
 
 [tool.setuptools.packages.find]
 include = ["pdd*"]
-exclude = ["tests*"]
+
+[tool.setuptools.package-data]
+"pdd" = [
+    "prompts/*_LLM.prompt",
+    "data/*"
+]
