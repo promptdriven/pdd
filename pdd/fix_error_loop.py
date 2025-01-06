@@ -25,18 +25,31 @@ class IterationResult:
         return False
 
 def extract_test_results(pytest_output: str) -> Tuple[int, int]:
-    """Extract the number of fails and errors from pytest output."""
+    """Extract the number of fails and errors from pytest output.
+    
+    Args:
+        pytest_output (str): The complete pytest output text
+        
+    Returns:
+        Tuple[int, int]: Number of fails and errors respectively
+    """
     fails = errors = 0
     
-    # Look for patterns like "4 failed", "1 error"
-    fail_match = re.search(r'(\d+)\s+failed', pytest_output)
-    error_match = re.search(r'(\d+)\s+error', pytest_output)
+    # First try to match the summary line
+    summary_match = re.search(r'=+ (\d+) failed[,\s]', pytest_output)
+    if summary_match:
+        fails = int(summary_match.group(1))
+    else:
+        # Fallback to looking for any "X failed" pattern
+        fail_match = re.search(r'(\d+)\s+failed', pytest_output)
+        if fail_match:
+            fails = int(fail_match.group(1))
     
-    if fail_match:
-        fails = int(fail_match.group(1))
+    # Look for error patterns
+    error_match = re.search(r'(\d+)\s+error', pytest_output)
     if error_match:
         errors = int(error_match.group(1))
-    
+        
     return fails, errors
 
 def create_backup_files(unit_test_file: str, code_file: str, fails: int, 
