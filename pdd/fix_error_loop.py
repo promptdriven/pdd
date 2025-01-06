@@ -21,7 +21,7 @@ class IterationResult:
         if self.total_fails_and_errors < other.total_fails_and_errors:
             return True
         if self.total_fails_and_errors == other.total_fails_and_errors:
-            return self.fails < other.fails
+            return self.errors < other.errors  # Changed to compare errors first
         return False
 
 def extract_test_results(pytest_output: str) -> Tuple[int, int]:
@@ -83,12 +83,16 @@ def fix_error_loop(
     
     while attempt_count < max_attempts:
         rprint(f"[bold yellow]Attempt {attempt_count + 1}[/bold yellow]")
+        
+        # Increment attempt counter first
+        attempt_count += 1
+        
         # Step 3a: Run pytest
         with open(error_log_file, 'a') as f:
             result = subprocess.run(['python', '-m', 'pytest', '-vv', '--no-cov', unit_test_file],
                                  capture_output=True, text=True)
             f.write("\n****************************************************************************************************\n")
-            f.write("\nAttempt " + str(attempt_count + 1) + ":\n")
+            f.write("\nAttempt " + str(attempt_count) + ":\n")
             f.write("\n****************************************************************************************************\n")
             f.write(result.stdout + result.stderr)
         
@@ -103,7 +107,7 @@ def fix_error_loop(
         # Step 3c: Handle test failures
         with open(error_log_file, 'r') as f:
             error_content = f.read()
-        rprint(f"[bold red]Test output (attempt {attempt_count + 1}):[/bold red]")
+        rprint(f"[bold red]Test output (attempt {attempt_count}):[/bold red]")
         rprint(error_content.replace('[', '\\[').replace(']', '\\]'))
         
         # Create backups
@@ -140,8 +144,6 @@ def fix_error_loop(
             with open(unit_test_file, 'w') as f:
                 f.write(fixed_unit_test)
 
-        attempt_count += 1
-                
         if update_code:
             with open(code_file, 'w') as f:
                 f.write(fixed_code)
@@ -164,7 +166,11 @@ def fix_error_loop(
         if current_iteration.is_better_than(best_iteration):
             best_iteration = current_iteration
             
-        
+        # Check budget after increment
+        if total_cost > budget:
+            rprint("[bold red]Budget exceeded![/bold red]")
+            break
+            
     # Step 4: Final test run
     with open(error_log_file, 'a') as f:
         final_result = subprocess.run(['python', '-m', 'pytest', '-vv', unit_test_file],
