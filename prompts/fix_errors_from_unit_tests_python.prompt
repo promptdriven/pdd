@@ -49,7 +49,7 @@
             - 'code'
             - 'prompt' (use preprocess function with recursive=False, double_curly_brackets=True, and exclude_keys=['unit_test', 'code', 'unit_test_fix'])
             - 'errors'
-        3b. Append the output to error_file with a clear separator to distinguish it from previous content. 
+        3b. Append the output to error_file with a clear separator to distinguish it from previous content. Ensure that existing log content is preserved.
     Step 4. This will pretty print the markdown formatting that is present in the result via the rich Markdown function to both the console and the error_file. It will also pretty print the number of output tokens in the result and the cost. Also, print out the total cost of this run.
     Step 5. Then this will preprocess the extract_unit_code_fix prompt (with recursive=False, double_curly_brackets=True, and exclude_keys=['unit_test', 'code', 'unit_test_fix'])
     Step 6. Run the second prompt through llm_invoke with strength=0.895:
