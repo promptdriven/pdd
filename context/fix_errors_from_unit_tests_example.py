@@ -23,8 +23,8 @@ def add(a, b):
     prompt = "Write a function that adds two numbers"
     error = "AssertionError: assert 0 == 1" # String of the Error message from the unit test
     error_file = "error_logs.txt"       # This is the fix results file
-    strength = 0.7  # LLM strength (0 to 1)
-    temperature = 0.5  # LLM temperature
+    strength = 0.5  # LLM strength (0 to 1)
+    temperature = 0.0  # LLM temperature
 
     # Call the function
     update_unit_test, update_code, fixed_unit_test, fixed_code, total_cost, model_name = fix_errors_from_unit_tests(
