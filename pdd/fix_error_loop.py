@@ -21,7 +21,7 @@ class IterationResult:
         if self.total_fails_and_errors < other.total_fails_and_errors:
             return True
         if self.total_fails_and_errors == other.total_fails_and_errors:
-            return self.errors < other.errors  # Changed to compare errors first
+            return self.errors < other.errors  # Prioritize fewer errors
         return False
 
 def extract_test_results(pytest_output: str) -> Tuple[int, int]:
