@@ -71,9 +71,12 @@ def fix_error_loop(
     if not (0 <= strength <= 1 and 0 <= temperature <= 1):
         raise ValueError("Strength and temperature must be between 0 and 1")
     
-    # Step 1: Remove existing error log file
-    if os.path.exists(error_log_file):
-        os.remove(error_log_file)
+    # Step 1: Remove existing error log file if it exists
+    try:
+        if os.path.exists(error_log_file):
+            os.remove(error_log_file)
+    except FileNotFoundError:
+        pass  # File doesn't exist, which is fine
     
     # Step 2: Initialize variables
     attempt_count = 0
@@ -152,6 +155,7 @@ def fix_error_loop(
             rprint("[bold yellow]Running Verification.[/bold yellow]")
             verification_result = subprocess.run(['python', verification_program],
                                               capture_output=True, text=True)
+
             if verification_result.returncode != 0:
                 rprint("[bold red]Verification failed! Restoring previous code.[/bold red]")
                 shutil.copy2(backup_code, code_file)
