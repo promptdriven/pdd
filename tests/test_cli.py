@@ -174,7 +174,7 @@ def test_install_completion_fish_shell(runner, tmp_path):
     and mocking the existence of a completion script for fish.
     """
     mock_pdd_path = str(tmp_path)
-    completion_script_fish = os.path.join(mock_pdd_path, "pdd_completion.fish")
+    completion_script_fish = os.path.join(mock_pdd_path, "pdd/pdd_completion.fish")
     with open(completion_script_fish, "w") as f:
         f.write("# fish completion script")
 
