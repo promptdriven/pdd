@@ -36,7 +36,7 @@ def extract_test_results(pytest_output: str) -> Tuple[int, int]:
     fails = errors = 0
     
     # First try to match the summary line
-    summary_match = re.search(r'=+ (\d+) failed[,\s]', pytest_output)
+    summary_match = re.search(r'=+ (\d+) failed[\,\s]', pytest_output)
     if summary_match:
         fails = int(summary_match.group(1))
     else:
