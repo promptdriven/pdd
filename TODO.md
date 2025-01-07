@@ -1,7 +1,8 @@
 # TODO
+- [ ] Vertex AI support
+- [ ] install completion test
 
 ## On Deck
-- [ ] fix toml file
 
 
 ## Features
@@ -41,7 +42,6 @@
 - [ ] update prompt for makefile
 - [ ] fix warnings in the code
 - [ ] MLX support for faster local
-- [ ] Vertex AI support
 - [ ] AWS Nova support
 
 
