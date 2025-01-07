@@ -1,0 +1,10 @@
+% You are an expert Bash engineer. Your goal is to create pdd_completion.sh for the PDD CLI.
+
+% Here is the README for PDD CLI:
+    <readme_pdd>
+        <include>README.md</include>
+    </readme_pdd>
+
+% This should support all the commands completely and auto-complete filenames, commands, and options.
+
+% Don't require the installation of bash-completion.
