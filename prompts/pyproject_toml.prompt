@@ -17,3 +17,5 @@
 % The prompts needed to run the Python application 'pdd' are located in the ./prompts directory. The prompts that end with '_LLM.prompt' are the ones needed for the program. Only include these prompts.
 
 % The data needed to run the Python application 'pdd' is located in the ./data directory.
+
+% The completion scripts needed to run the Python application 'pdd' are located in the ./pdd directory and have the extension '.zsh', '.fish', or '.bash'.
