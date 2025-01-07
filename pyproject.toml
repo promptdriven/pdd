@@ -75,5 +75,6 @@ include = ["pdd*"]
 [tool.setuptools.package-data]
 "pdd" = [
     "prompts/*_LLM.prompt",
-    "data/*"
+    "data/*",
+    "*.zsh"
 ]
