@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pdd-cli"
-version = "0.0.3"
+version = "0.0.4"
 description = "PDD (Prompt-Driven Development) Command Line Interface"
 readme = {file = "pypi_description.rst", content-type = "text/x-rst"}
 authors = [
@@ -53,7 +53,8 @@ dependencies = [
     "python-Levenshtein",
     "pytest-cov",
     "langchain_ollama",
-    "langchain-google-vertexai"
+    "langchain-google-vertexai",
+    "semver"
 ]
 requires-python = ">=3.12"
 

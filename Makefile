@@ -123,7 +123,10 @@ install:
 
 build:
 	@echo "Building pdd"
+	@rm -rf dist
 	@python -m build
+	@rm dist/*.tar.gz #don't upload source distribution
+	@twine upload --repository pypi dist/*.whl
 
 analysis:
 	@echo "Running regression analysis"
