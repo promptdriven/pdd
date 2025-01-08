@@ -28,7 +28,7 @@ def main() -> None:
 
     # Define the input prompt file and output file paths
     prompt_file: str = "prompts/get_extension_python.prompt"
-    output_file: str = "get_extension.py"
+    output_file: str = "output/get_extension.py"
 
     # Set the command line arguments for the 'generate' command
     args: list[str] = [
