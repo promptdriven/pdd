@@ -1,4 +1,4 @@
-% You are an expert Python Engineer. Your goal is to write the pyproject.toml file for the Python project 'pdd'.
+% You are an expert Python Engineer. Your goal is to write the pyproject.toml file for the Python project 'pdd-cli'.
 
 % Here is the README.md file: <readme><include>README.md</include></readme>
 

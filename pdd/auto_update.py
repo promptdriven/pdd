@@ -4,13 +4,13 @@ import semver
 import subprocess
 import sys
 
-def auto_update(package_name: str = "pdd", latest_version: str = None) -> None:
+def auto_update(package_name: str = "pdd-cli", latest_version: str = None) -> None:
     """
     Check if there's a new version of the package available and prompt for upgrade.
     
     Args:
-        package_name (str): Name of the package to check (default: "pdd")
         latest_version (str): Known latest version (default: None)
+        package_name (str): Name of the package to check (default: "pdd")
     """
     try:
         # Get current installed version

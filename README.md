@@ -81,7 +81,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.2.1
+Current version: 0.0.3
 
 To check your installed version, run:
 ```
@@ -637,55 +637,6 @@ Basic syntax for multi-command chaining:
 ```
 pdd [GLOBAL OPTIONS] COMMAND1 [OPTIONS] [ARGS]... [COMMAND2 [OPTIONS] [ARGS]...]...
 ```
-
-Here are some examples of multi-command chaining to illustrate its power and flexibility:
-
-1. Generate code, create an example, and run tests in one go:
-```
-pdd [GLOBAL OPTIONS] generate --output src/factorial_calculator.py factorial_calculator_python.prompt example --output examples/factorial_usage.py factorial_calculator_python.prompt src/factorial_calculator.py test --output tests/test_factorial_calculator.py factorial_calculator_python.prompt src/factorial_calculator.py
-```
-
-2. Preprocess a prompt, generate code, and create an example with cost tracking:
-```
-pdd --output-cost usage.csv preprocess --output preprocessed/data_pipeline_preprocessed.prompt data_processing_pipeline_python.prompt generate --output src/data_pipeline.py preprocessed/data_pipeline_preprocessed.prompt example --output examples/pipeline_usage.py preprocessed/data_pipeline_preprocessed.prompt src/data_pipeline.py
-```
-
-3. Split a large prompt, generate code from the sub-prompt, and create a test:
-```
-pdd [GLOBAL OPTIONS] split --output-sub sub_prompts/data_processing_module.prompt --output-modified modified_prompts/main_pipeline.prompt large_data_pipeline_python.prompt src/data_pipeline.py examples/pipeline_interface.py generate --output src/data_processing_module.py sub_prompts/data_processing_module.prompt test --output tests/test_data_processing_module.py sub_prompts/data_processing_module.prompt src/data_processing_module.py
-```
-
-4. Update a prompt based on code changes, then generate new code and tests:
-```
-pdd [GLOBAL OPTIONS] update --output updated_prompts/updated_web_scraper.prompt web_scraper_python.prompt src/modified_scraper.py src/original_scraper.py generate --output src/new_scraper.py updated_prompts/updated_web_scraper.prompt test --output tests/test_new_scraper.py updated_prompts/updated_web_scraper.prompt src/new_scraper.py
-```
-
-5. Detect prompts that need changes, then apply changes to those prompts:
-```
-pdd [GLOBAL OPTIONS] detect --output to_change.csv data_processing_python.prompt web_scraper_python.prompt api_interface_python.prompt changes.prompt change --csv --output modified_prompts/ to_change.csv src/
-```
-
-6. Analyze conflicts between two prompts and then update one of them:
-```
-pdd [GLOBAL OPTIONS] conflicts --output conflicts.csv data_processing_module_python.prompt data_visualization_module_python.prompt update --output updated_data_processing_module.prompt data_processing_module_python.prompt $(head -n 1 conflicts.csv | cut -d',' -f4) $(head -n 1 conflicts.csv | cut -d',' -f5)
-```
-
-7. Generate code, fix errors, and run tests:
-```
-pdd [GLOBAL OPTIONS] generate --output src/factorial_calculator.py factorial_calculator_python.prompt fix --output-test tests/test_factorial_calculator_fixed.py --output-code src/factorial_calculator_fixed.py --output-results results/factorial_fix_results.log factorial_calculator_python.prompt src/factorial_calculator.py tests/test_factorial_calculator.py errors.log test --output tests/test_factorial_calculator.py factorial_calculator_python.prompt src/factorial_calculator_fixed.py
-```
-
-8. Generate code after analyzing and inserting dependencies:
-```
-pdd [GLOBAL OPTIONS] auto-deps --output prompts/data_pipeline_with_deps.prompt --csv project_deps.csv data_processing_pipeline_python.prompt "context/*_example.py" generate --output src/data_pipeline.py prompts/data_pipeline_with_deps.prompt
-```
-
-9. Generate code and improve test coverage in one go:
-```
-pdd [GLOBAL OPTIONS] generate --output src/calculator.py calculator_python.prompt test --output tests/test_calculator.py calculator_python.prompt src/calculator.py test --coverage-report coverage.xml --existing-tests tests/test_calculator.py --merge --target-coverage 95.0 calculator_python.prompt src/calculator.py
-```
-
-These examples demonstrate how you can combine multiple PDD commands to create sophisticated workflows, automating complex development tasks in a single command line invocation. Remember that options always come before arguments for each command in the chain.
 
 ## Getting Help
 

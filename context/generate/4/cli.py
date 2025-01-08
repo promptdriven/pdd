@@ -39,7 +39,7 @@ console = Console()
 @click.option('--quiet', is_flag=True, help='Decrease output verbosity for minimal information.')
 @click.option('--output-cost', type=click.Path(), help='Enable cost tracking and output a CSV file with usage details.')
 @click.option('--review-examples', is_flag=True, help='Review and optionally exclude few-shot examples before command execution.')
-@click.version_option(version="0.2.1")
+@click.version_option(version="0.0.1")
 @click.pass_context
 def cli(ctx, force: bool, strength: float, temperature: float, verbose: bool, quiet: bool, output_cost: Optional[str], review_examples: bool):
     """PDD (Prompt-Driven Development) Command Line Interface"""

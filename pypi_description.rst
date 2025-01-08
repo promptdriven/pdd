@@ -1,7 +1,7 @@
 PDD (Prompt-Driven Development) Command Line Interface
 ======================================================
 
-.. image:: https://img.shields.io/badge/pdd--cli-v0.2.1-blue
+.. image:: https://img.shields.io/badge/pdd--cli-v0.0.3-blue
    :alt: PDD-CLI Version
 
 **Unlock the power of prompt-driven development with the PDD-CLI!**
@@ -26,7 +26,6 @@ Key Features
 *   **Cost Tracking:** Monitor and report the cost of operations with the `--output-cost` option.
 *   **Example Review:** Review and control the use of few-shot examples with the `--review-examples` option.
 *   **Automatic Example Submission:** Automatically submit successful fixes to the PDD Cloud platform with the `--auto-submit` option.
-*   **Multi-Command Chaining:** Execute multiple PDD commands in a single line for efficient workflows.
 *   **Environment Variable Configuration:** Customize output locations and other settings using environment variables.
 *   **Git Integration:** Use git history to find the original code file with the `--git` option in the `update` command.
 *   **Auto-Update:** Stay up-to-date with the latest features and security patches (controllable via environment variable).
@@ -179,4 +178,4 @@ Get Started Today!
 
 Install `pdd-cli` and revolutionize your development workflow with the power of prompt-driven development. Explore the comprehensive documentation and examples to unlock the full potential of PDD.
 
-For more information, visit the `pdd-cli` repository: [https://github.com/Gregthe চালাki/pdd](https://github.com/Gregthe চালাki/pdd)
+For more information, visit the `pdd-cli` repository: [https://github.com/gltanaka/pdd](https://github.com/gltanaka/pdd)
