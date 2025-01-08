@@ -162,13 +162,17 @@ def test_install_completion_fish_shell(runner, tmp_path):
 
     with patch.dict(os.environ, {"SHELL": "/bin/fish", "PDD_PATH": str(tmp_path)}):
         mock_rc_file = os.path.join(str(tmp_path), "config.fish")
+        mock_rc_dir = os.path.dirname(mock_rc_file)
+        os.makedirs(mock_rc_dir, exist_ok=True)
         with open(mock_rc_file, "w") as rc:
             rc.write("# fish config\n")
 
         def mock_rc_path(shell: str):
             return mock_rc_file if shell == "fish" else None
 
-        with patch("pdd.cli.get_shell_rc_path", side_effect=mock_rc_path):
+        # Simulate completion script existing
+        with patch("pdd.cli.get_shell_rc_path", side_effect=mock_rc_path), \
+             patch("os.path.exists", side_effect=lambda x: x == completion_script_fish or x == mock_rc_dir or os.path.exists(x)):
             result = runner.invoke(cli, ["install_completion"])
             assert result.exit_code == 0
             assert "Shell completion installed for fish." in result.output
@@ -176,6 +180,13 @@ def test_install_completion_fish_shell(runner, tmp_path):
             with open(mock_rc_file, "r") as rc:
                 rc_contents = rc.read()
                 assert f"source {completion_script_fish}" in rc_contents
+
+        # Simulate completion script not existing
+        with patch("pdd.cli.get_shell_rc_path", side_effect=mock_rc_path), \
+             patch("os.path.exists", return_value=False):
+            result = runner.invoke(cli, ["install_completion"])
+            assert result.exit_code == 1
+            assert "Completion script not found" in result.output
 
 def test_get_shell_rc_path():
     """Verify that get_shell_rc_path returns expected defaults for known shells."""
