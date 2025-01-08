@@ -32,9 +32,7 @@ keywords = [
 ]
 dependencies = [
     "GitPython==3.1.43",
-    "anthropic==0.34.2",
     "click==8.1.7",
-    "fuzzywuzzy==0.18.0",
     "langchain==0.3.1",
     "langchain_anthropic==0.2.1",
     "langchain_community==0.3.1",
