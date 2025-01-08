@@ -76,5 +76,7 @@ include = ["pdd*"]
 "pdd" = [
     "prompts/*_LLM.prompt",
     "data/*",
-    "*.zsh"
+    "*.zsh",
+    "*.fish",
+    "*.sh"
 ]

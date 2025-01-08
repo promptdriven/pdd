@@ -405,34 +405,72 @@ def get_shell_rc_path(shell: str) -> Optional[str]:
         return os.path.join(home, ".config", "fish", "config.fish")
     else:
         return None
+    
+def get_current_shell() -> Optional[str]:
+    """Determine the currently running shell more reliably."""
+    # Method 1: Check process name using 'ps'
+    try:
+        import subprocess
+        result = subprocess.run(['ps', '-p', str(os.getppid()), '-o', 'comm='], 
+                              capture_output=True, text=True)
+        if result.returncode == 0:
+            # Strip whitespace and get basename without path
+            shell = os.path.basename(result.stdout.strip())
+            # Remove leading dash if present (login shell)
+            return shell.lstrip('-')
+    except (subprocess.SubprocessError, FileNotFoundError):
+        pass
+
+    # Method 2: Check $0 special parameter
+    try:
+        result = subprocess.run(['sh', '-c', 'echo "$0"'], 
+                              capture_output=True, text=True)
+        if result.returncode == 0:
+            shell = os.path.basename(result.stdout.strip())
+            return shell.lstrip('-')
+    except (subprocess.SubprocessError, FileNotFoundError):
+        pass
+
+    # Fallback to SHELL env var if all else fails
+    return os.path.basename(os.environ.get("SHELL", ""))
+
+def get_completion_script_extension(shell: str) -> str:
+    """Get the appropriate file extension for shell completion scripts."""
+    extensions = {
+        "bash": "sh",
+        "zsh": "zsh",
+        "fish": "fish"
+    }
+    return extensions.get(shell, shell)
 
 @cli.command(name="install_completion")
 def install_completion():
-    """
-    Install shell completion for the PDD CLI.
-
-    This command:
-      - Checks the user's shell. If unsupported, raises click.Abort() => exit_code=1
-      - Checks that a completion script for that shell exists in PDD_PATH, else also raises click.Abort()
-      - Otherwise appends 'source path/to/script' to the RC file
-      - Returns normally => exit_code=0 on success
-    """
-    shell = os.path.basename(os.environ.get("SHELL", ""))
+    """Install shell completion for the PDD CLI."""
+    shell = get_current_shell()
     rc_file = get_shell_rc_path(shell)
     if not rc_file:
         rprint(f"[red]Unsupported shell: {shell}[/red]")
-        raise click.Abort()  # => exit_code=1
-
-    completion_script_path = os.path.join(local_pdd_path, f"pdd_completion.{shell}")
+        raise click.Abort()
+    
+    ext = get_completion_script_extension(shell)
+    completion_script_path = os.path.join(local_pdd_path, f"pdd_completion.{ext}")
     if not os.path.exists(completion_script_path):
         rprint(f"[red]Completion script not found: {completion_script_path}[/red]")
-        raise click.Abort()  # => exit_code=1
+        raise click.Abort()
 
     source_command = f"source {completion_script_path}"
 
     try:
+        # Create config file if it doesn't exist
+        if not os.path.exists(rc_file):
+            os.makedirs(os.path.dirname(rc_file), exist_ok=True)
+            with open(rc_file, "w", encoding="utf-8") as cf:
+                cf.write("")
+
+        # Read existing content
         with open(rc_file, "r", encoding="utf-8") as cf:
             content = cf.read()
+
         if source_command not in content:
             with open(rc_file, "a", encoding="utf-8") as rf:
                 rf.write(f"\n# PDD CLI completion\n{source_command}\n")
@@ -443,7 +481,7 @@ def install_completion():
             rprint(f"[yellow]Shell completion already installed for {shell}.[/yellow]")
     except OSError as exc:
         rprint(f"[red]Failed to install shell completion: {exc}[/red]")
-        raise click.Abort()  # => exit_code=1
+        raise click.Abort()
 
     return
 
