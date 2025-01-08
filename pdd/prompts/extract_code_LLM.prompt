@@ -2,7 +2,7 @@
 
 % Here is the llm_output to parse: <llm_output>{llm_output}</llm_output>
 
-% Here is the type of the text block to extract: <block_type>{language}</block_type>. If type of the block is 'prompt' then the focus is the prompt itself and that is what should be extracted. If the type is 'log' then the focus is the report itself and that is what should be extracted.
+% Here is the type of the text block to extract: <block_type>{language}</block_type>. If type of the block is 'prompt' then the focus is the prompt itself and that is what should be extracted. If the type is 'log' or 'restructuredtext' then the focus is the report itself and that is what should be extracted.
 
 % Otherwise, when not extracting 'prompt' or 'log', you are extracting a code block from llm_output, consider and correct the following for the extracted code:
     - Should be the block of code typically delimited by triple backticks followed by the name of the language of the block. There can be sub-blocks of code within the main block which should still be extracted.
