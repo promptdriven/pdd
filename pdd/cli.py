@@ -18,7 +18,6 @@ else:
             local_pdd_path = str(p.parent)
             # set the PDD_PATH environment variable
             os.environ["PDD_PATH"] = local_pdd_path
-            rprint(f"PDD_PATH set to {local_pdd_path}")
     except ImportError:
         rprint(
             "Error: Could not determine the path to the 'pdd' package. "
