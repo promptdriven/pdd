@@ -1,7 +1,7 @@
 PDD (Prompt-Driven Development) Command Line Interface
 ======================================================
 
-.. image:: https://img.shields.io/badge/pdd--cli-v0.0.3-blue
+.. image:: https://img.shields.io/badge/pdd--cli-v0.0.4-blue
    :alt: PDD-CLI Version
 
 **Unlock the power of prompt-driven development with the PDD-CLI!**
