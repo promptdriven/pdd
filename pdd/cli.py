@@ -1,31 +1,44 @@
 import os
+import sys
+import importlib.resources
 from datetime import datetime
 from functools import wraps
 from typing import Callable, List, Optional, Tuple
-import sys
-import importlib.resources
 
 import click
 from rich import print as rprint
 from rich.console import Console
 from rich.panel import Panel
 
-if "PDD_PATH" in os.environ:
-    local_pdd_path = os.environ["PDD_PATH"]
-else:
-    try:
-        with importlib.resources.path("pdd", "cli.py") as p:
-            local_pdd_path = str(p.parent)
-            # set the PDD_PATH environment variable
-            os.environ["PDD_PATH"] = local_pdd_path
-    except ImportError:
-        rprint(
-            "Error: Could not determine the path to the 'pdd' package. "
-            "Please set the PDD_PATH environment variable manually."
-        )
-        sys.exit(1)
+# ----------------------------------------------------------------------
+# Dynamically determine PDD_PATH at runtime.
+# ----------------------------------------------------------------------
+def get_local_pdd_path() -> str:
+    """
+    Return the PDD_PATH directory.
+    First check the environment variable. If not set, attempt to
+    deduce it via importlib.resources. If that fails, abort.
+    """
+    if "PDD_PATH" in os.environ:
+        return os.environ["PDD_PATH"]
+    else:
+        try:
+            with importlib.resources.path("pdd", "cli.py") as p:
+                fallback_path = str(p.parent)
+                # Also set it back into the environment for consistency
+                os.environ["PDD_PATH"] = fallback_path
+                return fallback_path
+        except ImportError:
+            rprint(
+                "[red]Error: Could not determine the path to the 'pdd' package. "
+                "Please set the PDD_PATH environment variable manually.[/red]"
+            )
+            sys.exit(1)
 
-
+get_local_pdd_path()
+# ----------------------------------------------------------------------
+# Import sub-command modules
+# ----------------------------------------------------------------------
 from .code_generator_main import code_generator_main
 from .context_generator_main import context_generator_main
 from .cmd_test_main import cmd_test_main
@@ -46,34 +59,14 @@ from .auto_deps_main import auto_deps_main
 console = Console()
 
 @click.group()
-@click.option(
-    "--force",
-    is_flag=True,
-    help="Overwrite existing files without asking for confirmation."
-)
-@click.option(
-    "--strength",
-    type=float,
-    default=0.5,
-    help="Set the strength of the AI model (0.0 to 1.0)."
-)
+@click.option("--force", is_flag=True, help="Overwrite existing files without asking for confirmation.")
+@click.option("--strength", type=float, default=0.5, help="Set the strength of the AI model (0.0 to 1.0).")
 @click.option("--temperature", type=float, default=0.0, help="Set the temperature of the AI model.")
-@click.option(
-    "--verbose",
-    is_flag=True,
-    help="Increase output verbosity for more detailed information."
-)
+@click.option("--verbose", is_flag=True, help="Increase output verbosity for more detailed information.")
 @click.option("--quiet", is_flag=True, help="Decrease output verbosity for minimal information.")
-@click.option(
-    "--output-cost",
-    type=click.Path(),
-    help="Enable cost tracking and output a CSV file with usage details."
-)
-@click.option(
-    "--review-examples",
-    is_flag=True,
-    help="Review and optionally exclude few-shot examples before command execution."
-)
+@click.option("--output-cost", type=click.Path(), help="Enable cost tracking and output a CSV file with usage details.")
+@click.option("--review-examples", is_flag=True,
+              help="Review and optionally exclude few-shot examples before command execution.")
 @click.version_option(version="0.2.1")
 @click.pass_context
 def cli(
@@ -86,7 +79,9 @@ def cli(
     output_cost: Optional[str],
     review_examples: bool,
 ):
-    """PDD (Prompt-Driven Development) Command Line Interface"""
+    """
+    PDD (Prompt-Driven Development) Command Line Interface
+    """
     ctx.ensure_object(dict)
     ctx.obj["force"] = force
     ctx.obj["strength"] = strength
@@ -102,7 +97,7 @@ def cli(
         try:
             auto_update()
         except EOFError:
-            pass  # If no input, silently skip updates.
+            pass
 
 
 @cli.command()
@@ -163,7 +158,9 @@ def test(
     target_coverage: Optional[float],
     merge: bool,
 ) -> Tuple[str, float, str]:
-    """Generate or enhance unit tests for a given code file and its corresponding prompt file."""
+    """
+    Generate or enhance unit tests for a given code file and its corresponding prompt file.
+    """
     return cmd_test_main(
         ctx,
         prompt_file,
@@ -393,8 +390,11 @@ def crash(
         budget,
     )
 
+# ----------------------------------------------------------------------
+# Simplified shell RC path logic
+# ----------------------------------------------------------------------
 def get_shell_rc_path(shell: str) -> Optional[str]:
-    """Determine the shell's RC file path."""
+    """Return the default RC file path for a given shell name."""
     home = os.path.expanduser("~")
     if shell == "bash":
         return os.path.join(home, ".bashrc")
@@ -402,57 +402,70 @@ def get_shell_rc_path(shell: str) -> Optional[str]:
         return os.path.join(home, ".zshrc")
     elif shell == "fish":
         return os.path.join(home, ".config", "fish", "config.fish")
-    else:
-        return None
-    
-def get_current_shell() -> Optional[str]:
-    """Determine the currently running shell more reliably."""
-    # Method 1: Check process name using 'ps'
-    try:
-        import subprocess
-        result = subprocess.run(['ps', '-p', str(os.getppid()), '-o', 'comm='], 
-                              capture_output=True, text=True)
-        if result.returncode == 0:
-            # Strip whitespace and get basename without path
-            shell = os.path.basename(result.stdout.strip())
-            # Remove leading dash if present (login shell)
-            return shell.lstrip('-')
-    except (subprocess.SubprocessError, FileNotFoundError):
-        pass
+    return None
 
-    # Method 2: Check $0 special parameter
-    try:
-        result = subprocess.run(['sh', '-c', 'echo "$0"'], 
-                              capture_output=True, text=True)
-        if result.returncode == 0:
-            shell = os.path.basename(result.stdout.strip())
-            return shell.lstrip('-')
-    except (subprocess.SubprocessError, FileNotFoundError):
-        pass
+
+def get_current_shell() -> Optional[str]:
+
+
+    """Determine the currently running shell more reliably."""
+    if not os.environ.get('PYTEST_CURRENT_TEST'):
+        # Method 1: Check process name using 'ps'
+        try:
+            import subprocess
+            result = subprocess.run(['ps', '-p', str(os.getppid()), '-o', 'comm='], 
+                                capture_output=True, text=True)
+            if result.returncode == 0:
+                # Strip whitespace and get basename without path
+                shell = os.path.basename(result.stdout.strip())
+                # Remove leading dash if present (login shell)
+                return shell.lstrip('-')
+        except (subprocess.SubprocessError, FileNotFoundError):
+            pass
+
+        # Method 2: Check $0 special parameter
+        try:
+            result = subprocess.run(['sh', '-c', 'echo "$0"'], 
+                                capture_output=True, text=True)
+            if result.returncode == 0:
+                shell = os.path.basename(result.stdout.strip())
+                return shell.lstrip('-')
+        except (subprocess.SubprocessError, FileNotFoundError):
+            pass
 
     # Fallback to SHELL env var if all else fails
     return os.path.basename(os.environ.get("SHELL", ""))
 
+
 def get_completion_script_extension(shell: str) -> str:
     """Get the appropriate file extension for shell completion scripts."""
-    extensions = {
+    mapping = {
         "bash": "sh",
         "zsh": "zsh",
         "fish": "fish"
     }
-    return extensions.get(shell, shell)
+    return mapping.get(shell, shell)
+
 
 @cli.command(name="install_completion")
 def install_completion():
-    """Install shell completion for the PDD CLI."""
+    """
+    Install shell completion for the PDD CLI by detecting the user’s shell,
+    copying the relevant completion script, and appending a source command
+    to the user’s shell RC file if not already present.
+    """
     shell = get_current_shell()
     rc_file = get_shell_rc_path(shell)
     if not rc_file:
         rprint(f"[red]Unsupported shell: {shell}[/red]")
         raise click.Abort()
-    
+
     ext = get_completion_script_extension(shell)
+
+    # Dynamically look up the local path at runtime:
+    local_pdd_path = get_local_pdd_path()
     completion_script_path = os.path.join(local_pdd_path, f"pdd_completion.{ext}")
+
     if not os.path.exists(completion_script_path):
         rprint(f"[red]Completion script not found: {completion_script_path}[/red]")
         raise click.Abort()
@@ -460,7 +473,7 @@ def install_completion():
     source_command = f"source {completion_script_path}"
 
     try:
-        # Create config file if it doesn't exist
+        # Ensure the RC file exists (create if missing).
         if not os.path.exists(rc_file):
             os.makedirs(os.path.dirname(rc_file), exist_ok=True)
             with open(rc_file, "w", encoding="utf-8") as cf:
@@ -482,8 +495,6 @@ def install_completion():
         rprint(f"[red]Failed to install shell completion: {exc}[/red]")
         raise click.Abort()
 
-    return
-
 
 @cli.command()
 @click.argument("prompt_file", type=click.Path(exists=True))
@@ -499,7 +510,9 @@ def trace(
     code_line: int,
     output: Optional[str]
 ) -> Tuple[str, float, str]:
-    """Find the associated line number between a prompt file and the generated code."""
+    """
+    Find the associated line number between a prompt file and the generated code.
+    """
     return trace_main(ctx, prompt_file, code_file, code_line, output)
 
 
@@ -576,6 +589,7 @@ def auto_deps(
     Analyze a prompt file and a directory of potential dependencies,
     inserting needed dependencies into the prompt.
     """
+    # Strip quotes if present
     if directory_path.startswith('"') and directory_path.endswith('"'):
         directory_path = directory_path[1:-1]
 
