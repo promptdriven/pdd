@@ -4,6 +4,81 @@
 
 PDD (Prompt-Driven Development) is a versatile tool for generating code, creating examples, running unit tests, and managing prompt files. It leverages AI models to streamline the development process, allowing developers to work more efficiently with prompt-driven code generation.
 
+## Basic Installation
+
+Install PDD using pip:
+```bash
+pip install pdd-cli
+```
+
+Verify installation:
+```bash
+pdd --version
+```
+
+## Advanced Installation Options
+
+### Virtual Environment Installation
+```bash
+# Create virtual environment
+python -m venv pdd-env
+
+# Activate environment
+# On Windows:
+pdd-env\Scripts\activate
+# On Unix/MacOS:
+source pdd-env/bin/activate
+
+# Install PDD
+pip install pdd-cli
+```
+
+## API Key Setup
+
+PDD requires an API key for the language model. Set up your environment variable:
+
+```bash
+# For OpenAI
+export OPENAI_API_KEY=your_api_key_here
+
+# For Anthropic
+export ANTHROPIC_API_KEY=your_api_key_here
+
+# For other supported providers
+export PROVIDER_API_KEY=your_api_key_here
+```
+
+Add these to your `.bashrc`, `.zshrc`, or equivalent for persistence.
+
+## Post-Installation Setup
+
+1. Enable tab completion:
+```bash
+pdd install_completion
+```
+
+2. Configure environment variables (optional):
+```bash
+# Add to .bashrc, .zshrc, or equivalent
+export PDD_AUTO_UPDATE=true
+export PDD_GENERATE_OUTPUT_PATH=/path/to/generated/code/
+export PDD_TEST_OUTPUT_PATH=/path/to/tests/
+```
+
+## Troubleshooting Common Installation Issues
+
+1. **Command not found**
+   ```bash
+   # Add to PATH if needed
+   export PATH="$HOME/.local/bin:$PATH"
+   ```
+
+2. **Permission errors**
+   ```bash
+   # Install with user permissions
+   pip install --user pdd-cli
+   ```
+
 ## Version
 
 Current version: 0.2.1
@@ -632,7 +707,7 @@ PDD provides comprehensive help features:
 
 - **Tab Completion**: PDD supports tab completion for commands and options in compatible shells. You can install tab completion by running:
   ```
-  pdd --install-completion
+  pdd install_completion
   ```
 - **Colorized Output**: PDD provides colorized output for better readability in compatible terminals.
 
