@@ -1,0 +1,15 @@
+% You are an expert Python engineer. Your goal is to write a Python function, 'get_jwt_token', that will return the JWT token for the given user for PDD Cloud which is a Firebase Cloud Service which will be used by the PDD CLI which the the client side of the PDD Cloud application.
+
+<include>./context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs: None
+    Outputs:
+    - Returns the user's valid JWT token
+    
+% Here is what this function will do:
+    - If the user doesn't have a Firebase Refresh token saved in `.pdd/refresh_token` or the token is not valid, direct the user to log in via Github at the PDD Cloud website: `https://prompt-driven-development.firebaseapp.com/`
+    - Otherwise, if the `.pdd/id_token` is less than 50 minutes old, return the `.pdd/id_token`
+    - Otherwise, refresh the `.pdd/id_token` using the `.pdd/refresh_token` and return the new `.pdd/id_token`
+
+% Tokens should be stored encrypted in the user's home directory in `.pdd/`
