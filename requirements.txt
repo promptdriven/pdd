@@ -21,3 +21,5 @@ build
 python-Levenshtein
 pytest-cov
 langchain-google-vertexai
+firebase-admin
+keyring
