@@ -1,15 +1,119 @@
-% You are an expert Python engineer. Your goal is to write a Python function, 'get_jwt_token', that will return the JWT token for the given user for PDD Cloud which is a Firebase Cloud Service which will be used by the PDD CLI which the the client side of the PDD Cloud application.
+% Create a Python module that implements GitHub SSO authentication for the `PDD` CLI application connecting to the PDD Cloud Firebase backend. The core function `get_jwt_token()` should handle the complete authentication flow while maintaining a simple user experience.
 
-<include>./context/python_preamble.prompt</include>
+Function Signature:
+```python
+    async def get_jwt_token(
+        github_client_id: str,
+        firebase_api_key: str, 
+        firebase_project_id: str,
+        backend_url: str
+    ) -> str:
+        """
+        Get a Firebase ID token using GitHub SSO authentication.
+        
+        Args:
+            github_client_id: OAuth client ID for GitHub app
+            firebase_api_key: Firebase Web API key
+            firebase_project_id: Firebase project identifier
+            backend_url: URL of backend service that exchanges GitHub token for Firebase custom token
+            
+        Returns:
+            str: A valid Firebase ID token
+            
+        Raises:
+            AuthError: If authentication fails
+            NetworkError: If there are connectivity issues
+            TokenError: If token exchange fails
+        """
+```
 
-% Here are the inputs and outputs of the function:
-    Inputs: None
-    Outputs:
-    - Returns the user's valid JWT token
-    
-% Here is what this function will do:
-    - If the user doesn't have a Firebase Refresh token saved in `.pdd/refresh_token` or the token is not valid, direct the user to log in via Github at the PDD Cloud website: `https://prompt-driven-development.firebaseapp.com/`
-    - Otherwise, if the `.pdd/id_token` is less than 50 minutes old, return the `.pdd/id_token`
-    - Otherwise, refresh the `.pdd/id_token` using the `.pdd/refresh_token` and return the new `.pdd/id_token`
+% Core Requirements:
+    - Zero configuration required from end users
+    - Automatic token storage in system keyring
+    - Browser-based GitHub OAuth flow on first use
+    - Automatic token refresh handling
+    - Clear error messages for users
 
-% Tokens should be stored encrypted in the user's home directory in `.pdd/`
+% Authentication Flow:
+    1. Check for existing valid Firebase ID token in keyring
+    2. If valid token exists, return it
+    3. If no token or expired:
+        a. Check for valid GitHub token in keyring
+        b. If no valid GitHub token:
+            - Start local server on port 8000 for OAuth callback
+            - Open browser to GitHub OAuth login
+            - Handle OAuth callback
+            - Store GitHub token in keyring
+        c. Exchange GitHub token for Firebase custom token via backend
+        d. Exchange custom token for ID token using Firebase Auth REST API
+        e. Store Firebase ID token in keyring
+        f. Return ID token
+
+% Technical Requirements: 
+    - Use asyncio for async/await support
+    - Use requests for HTTP calls
+    - Use keyring for secure token storage
+    - Handle all token expiration and refresh scenarios
+    - Include proper type hints
+    - Implement comprehensive error handling:
+        - Network connectivity issues
+        - Authentication failures
+        - Token storage/retrieval failures
+        - Browser launch failures
+        - Token exchange failures
+
+% Implementation Details:
+    - Local callback server should use http.server.HTTPServer
+    - Token storage should use system keyring with appropriate app name
+    - Token refresh should happen automatically when needed
+    - All credentials should be passed in, not hardcoded
+    - Error messages should be user-friendly
+    - Logging should be appropriate for CLI use
+
+% Example Usage in CLI App:
+```python
+    from auth import get_jwt_token
+
+    # These constants would be built into the CLI app
+    GITHUB_CLIENT_ID = "your-github-client-id"
+    FIREBASE_API_KEY = "your-firebase-api-key"
+    FIREBASE_PROJECT_ID = "your-project-id"
+    BACKEND_URL = "https://your-backend.com"
+
+    async def main():
+        try:
+            token = await get_jwt_token(
+                github_client_id=GITHUB_CLIENT_ID,
+                firebase_api_key=FIREBASE_API_KEY,
+                firebase_project_id=FIREBASE_PROJECT_ID,
+                backend_url=BACKEND_URL
+            )
+            # Use token for API calls...
+            
+        except AuthError as e:
+            print(f"Authentication failed: {e}")
+        except NetworkError as e:
+            print(f"Network error: {e}")
+        except TokenError as e:
+            print(f"Token error: {e}")
+```
+
+% End User Experience:
+    - User installs CLI tool
+    - User runs any CLI command
+    - On first use:
+        - Browser opens to GitHub login
+        - User authorizes application
+        - Browser can be closed
+        - CLI command continues
+    - Subsequent commands work automatically
+
+% The implementation should require no configuration from end users while maintaining security and proper error handling. All complexity should be hidden from the user while providing clear feedback when issues occur.
+
+% This prompt should generate code that:
+    1. Has a clean, well-defined interface
+    2. Handles the complete auth flow
+    3. Provides a smooth user experience
+    4. Is maintainable and testable
+    5. Has proper error handling
+    6. Keeps configuration in the CLI app, not the auth module
