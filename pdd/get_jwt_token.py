@@ -6,6 +6,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Optional, Tuple
 from urllib.parse import parse_qs, urlparse
+import secrets
 
 import keyring
 import requests
@@ -18,8 +19,9 @@ FIREBASE_AUTH_DOMAIN = "https://identitytoolkit.googleapis.com/v1/accounts"
 FIREBASE_REFRESH_TOKEN_URL = f"{FIREBASE_AUTH_DOMAIN}:token"
 FIREBASE_SIGN_IN_WITH_IDP_URL = f"{FIREBASE_AUTH_DOMAIN}:signInWithIdp"
 CALLBACK_PORT = 8080
-CALLBACK_URL = f"http://localhost:{CALLBACK_PORT}/callback"
-
+CALLBACK_URL = "https://prompt-driven-development.firebaseapp.com/__/auth/handler"
+FIREBASE_API_KEY = "AIzaSyC0w2jwRR82ZFgQs_YXJoEBqnnTH71X6BE"
+GITHUB_CLIENT_ID = "Ov23liJ4eSm0y5W1L20u"
 # Rich console for pretty printing
 console = Console()
 
@@ -67,27 +69,46 @@ def refresh_firebase_token(refresh_token: str, firebase_api_key: str) -> str:
 # OAuth Callback Server
 class CallbackHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        """Handle OAuth callback."""
-        parsed_url = urlparse(self.path)
-        if parsed_url.path == "/callback":
-            query_params = parse_qs(parsed_url.query)
-            if "code" in query_params:
-                self.send_response(200)
-                self.send_header("Content-type", "text/html")
-                self.end_headers()
-                self.wfile.write(
-                    b"<html><body><h1>Authentication successful! You can close this window.</h1></body></html>"
-                )
-                self.server.auth_code = query_params["code"][0]
-            else:
-                self.send_error(400, "Missing authorization code")
+        """Handle the callback from GitHub"""
+        query_components = parse_qs(urlparse(self.path).query)
+        
+        # Verify state parameter
+        received_state = query_components.get('state', [None])[0]
+        if received_state != self.server.expected_state:
+            self.send_error(400, "State verification failed")
+            return
+            
+        # Continue with existing code...
+        code = query_components.get('code', [None])[0]
+        if code:
+            self.server.auth_code = code
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html')
+            self.end_headers()
+            self.wfile.write(b"Authorization successful! You can close this window.")
         else:
-            self.send_error(404, "Not Found")
+            self.send_error(400, "No authorization code received")
 
 async def start_callback_server() -> str:
     """Start a local server to handle OAuth callback."""
     server = HTTPServer(("localhost", CALLBACK_PORT), CallbackHandler)
     server.auth_code = None
+    
+    # Generate a random state parameter
+    state = secrets.token_urlsafe(16)
+    server.expected_state = state
+    
+    # Construct GitHub OAuth URL with state parameter
+    github_oauth_url = (
+        "https://github.com/login/oauth/authorize"
+        f"?client_id={GITHUB_CLIENT_ID}"
+        f"&redirect_uri={CALLBACK_URL}"
+        f"&state={state}"
+        "&scope=read:user"
+    )
+    
+    webbrowser.open(github_oauth_url)
+    
     console.print("[bold green]Waiting for GitHub authentication...[/bold green]")
     while not server.auth_code:
         server.handle_request()
@@ -155,8 +176,7 @@ async def get_jwt_token(firebase_api_key: str, github_client_id: str) -> str:
 
 # Example Usage
 async def main():
-    FIREBASE_API_KEY = "AIzaSyC0w2jwRR82ZFgQs_YXJoEBqnnTH71X6BE"
-    GITHUB_CLIENT_ID = "Ov23liJ4eSm0y5W1L20u"
+
 
     try:
         token = await get_jwt_token(
