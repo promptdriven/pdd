@@ -1,6 +1,9 @@
 # TODO
 - [ ] Vertex AI support
-- [ ] install completion test
+- [ ] support for when keys are missing
+- [ ] Python 3.13 support
+- [ ] Run on server based keys
+- [ ] github login 
 
 ## On Deck
 
@@ -18,8 +21,6 @@
 - [ ] benchmark fix the prompt based on diffs to the code file
 - [ ] Use perplexica to automatically find context
 - [ ] use context caching during fixing errors
-- [ ] github login 
-- [ ] Run on server based keys
 - [ ] create a marketplace where people can earn LLM credits for their examples or people can put up bounties for examples
 - [ ] ability to check in known good examples
 - [ ] take a chat conversation and collapse down into a single prompt
@@ -30,7 +31,7 @@
 
 ## Bugs
 
-- [ ] Fix change command fixing
+
 
 ## Improvements
 
@@ -47,4 +48,6 @@
 
 ## Documentation
 
-- [ ] Update README with installation instructions
+- [ ] Update README with usage
+- [ ] Model support
+- [ ] prompt xml support
