@@ -1,15 +1,13 @@
-% You are an expert Python developer with a lot of Firebase experience. Create a Python module that implements GitHub authentication for the `PDD` CLI application using Firebase Auth's built-in GitHub provider. The implementation should provide a simple get_jwt_token() function that handles the complete Firebase/GitHub authentication flow with zero custom backend requirements.
-
-<include>context/python_preamble.prompt</include>
+% You are an expert Python developer with a lot of Firebase experience. Create a Python module that implements GitHub authentication for a CLI application using Firebase Auth and GitHub's Device Flow. The implementation should provide a simple get_jwt_token() function that handles the complete authentication flow with no browser interaction required.
 
 % Function Signature:
 ```python
     async def get_jwt_token(
         firebase_api_key: str,
         github_client_id: str
-        ) -> str:
+    ) -> str:
         """
-        Get a Firebase ID token using Firebase's built-in GitHub authentication provider.
+        Get a Firebase ID token using GitHub's Device Flow authentication.
         
         Args:
             firebase_api_key: Firebase Web API key
@@ -21,47 +19,57 @@
         Raises:
             AuthError: If authentication fails
             NetworkError: If there are connectivity issues
-            TokenError: If token exchange/refresh fails
+            TokenError: If token exchange fails
         """
 ```
 
 % Core Requirements:
-    - Zero custom backend required
+
+    - Use GitHub's Device Flow (device authorization grant RFC 8628)
     - Zero configuration needed from end users
+    - No browser or local server required
     - Automatic token storage in system keyring
-    - Browser-based GitHub OAuth flow using Firebase's built-in provider
+    - Clear user instructions in terminal
     - Automatic token refresh through Firebase
-    - Clear error messages for users
 
 % Authentication Flow:
-    1. Check for existing valid Firebase ID token in keyring
-    2. If valid token exists, return it
-    3. If no token or expired:
-        a. Start local server for OAuth callback
-        b. Open browser to Firebase's GitHub auth URL
-        c. Handle the OAuth response
-        d. Store Firebase ID token in keyring
-        e. Return token
 
-% Technical Requirements:
-    - Use asyncio for async/await support
+    - Check for existing valid Firebase ID token in keyring
+    - If valid token exists, return it
+    - If no token or expired:
+        a. Request device code from GitHub's OAuth device endpoint
+        b. Display user code and verification URL in terminal
+        c. Poll GitHub's OAuth endpoint for completion
+        d. Exchange device code for GitHub token
+        e. Exchange GitHub token for Firebase token
+        f. Store Firebase token in keyring
+        g. Return token
+
+% Technical Details:
+
+    - GitHub Device Flow Endpoints:
+        POST https://github.com/login/device/code
+        POST https://github.com/login/oauth/access_token
+    - Poll with interval specified in response
+
+
+% User Experience in Terminal:
+    - CopyTo authenticate, visit: https://github.com/login/device
+    - Enter code: ABCD-EFGH
+    - Waiting for authentication...
+
+% Token Storage:
+    - Store refresh token in system keyring
+    - Handle token refresh automatically
+    - Clear storage on authentication errors
+
+% Implementation Requirements:
+    - Use asyncio for async/await and polling
     - Use requests for HTTP calls
     - Use keyring for secure token storage
-    - Handle token expiration and refresh through Firebase
-    - Include proper type hints
-    - Implement error handling:
-        - Network connectivity issues
-        - Authentication failures
-        - Token storage/retrieval failures
-        - Browser launch failures
-
-% Implementation Details:
-    - Use Firebase Authentication REST API endpoints
-    - Local callback server using http.server.HTTPServer
-    - Token storage using system keyring
-    - Automatic token refresh using Firebase's refresh token endpoint
-    - Clear user feedback during authentication process
-    - Logging appropriate for CLI use
+    - Handle all error cases gracefully
+    - Clear user feedback during authentication
+    - Proper typing and docstrings
 
 % Example Usage in CLI App:
 ```python
@@ -85,22 +93,22 @@
             print(f"Network error: {e}")
         except TokenError as e:
             print(f"Token error: {e}")
-```
+``` 
 
 % End User Experience:
-    - User installs CLI tool
-    - User runs any CLI command
-    - On first use:
-        - Browser opens to GitHub login through Firebase
-        - User authorizes application
-        - Browser can be closed
-        - CLI command continues
+    - User runs CLI command
+    - If not authenticated:
+        - See verification URL and code in terminal
+        - Visit URL on any device
+        - Enter code
+        - CLI continues automatically
     - Subsequent commands work automatically
 
-% Configuration Requirements:
-    - Firebase project with GitHub authentication enabled
-    - GitHub OAuth app registered with Firebase URL as callback
-    - Firebase Web API key
-    - GitHub Client ID
+% The implementation should provide a seamless authentication experience using GitHub's Device Flow, requiring no browser interaction and working in any terminal environment including SSH sessions.
 
-% The implementation should provide a seamless authentication experience while requiring no custom backend infrastructure or user configuration. All token management should be handled through Firebase's built-in services.
+% Error Handling:
+    - Network connectivity issues
+    - Authentication timeouts
+    - Invalid/expired tokens
+    - User cancellation
+    - Rate limiting

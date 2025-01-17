@@ -1,127 +1,274 @@
 import asyncio
 import json
-import os
-import sys
-import webbrowser
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Optional, Tuple
-from urllib.parse import parse_qs, urlparse
-import secrets
+import time
+import uuid
+from typing import Dict, Optional, Tuple
 
 import keyring
 import requests
-from rich.console import Console
-from rich.prompt import Prompt
+from firebase_admin import auth, credentials, initialize_app
 
-# Constants
-KEYRING_SERVICE_NAME = "pdd_cli_firebase_auth"
-FIREBASE_AUTH_DOMAIN = "https://identitytoolkit.googleapis.com/v1/accounts"
-FIREBASE_REFRESH_TOKEN_URL = f"{FIREBASE_AUTH_DOMAIN}:token"
-FIREBASE_SIGN_IN_WITH_IDP_URL = f"{FIREBASE_AUTH_DOMAIN}:signInWithIdp"
-CALLBACK_PORT = 8080
-CALLBACK_URL = "https://prompt-driven-development.firebaseapp.com/__/auth/handler"
-FIREBASE_API_KEY = "AIzaSyC0w2jwRR82ZFgQs_YXJoEBqnnTH71X6BE"
-GITHUB_CLIENT_ID = "Ov23liJ4eSm0y5W1L20u"
-# Rich console for pretty printing
-console = Console()
-
-# Custom Exceptions
+# Custom exception classes for better error handling
 class AuthError(Exception):
+    """Base class for authentication errors."""
     pass
 
 class NetworkError(Exception):
+    """Raised for network connectivity issues."""
     pass
 
 class TokenError(Exception):
+    """Raised for errors during token exchange or refresh."""
     pass
 
-# Helper Functions
-def get_stored_token() -> Optional[Tuple[str, str]]:
-    """Retrieve stored Firebase ID token and refresh token from keyring."""
-    id_token = keyring.get_password(KEYRING_SERVICE_NAME, "id_token")
-    refresh_token = keyring.get_password(KEYRING_SERVICE_NAME, "refresh_token")
-    return (id_token, refresh_token) if id_token and refresh_token else None
+class UserCancelledError(AuthError):
+    """Raised when the user cancels the authentication process."""
+    pass
 
-def store_tokens(id_token: str, refresh_token: str) -> None:
-    """Store Firebase ID token and refresh token in keyring."""
-    keyring.set_password(KEYRING_SERVICE_NAME, "id_token", id_token)
-    keyring.set_password(KEYRING_SERVICE_NAME, "refresh_token", refresh_token)
+class RateLimitError(AuthError):
+    """Raised when rate limits are exceeded."""
+    pass
 
-def clear_tokens() -> None:
-    """Clear stored Firebase tokens from keyring."""
-    keyring.delete_password(KEYRING_SERVICE_NAME, "id_token")
-    keyring.delete_password(KEYRING_SERVICE_NAME, "refresh_token")
-
-def refresh_firebase_token(refresh_token: str, firebase_api_key: str) -> str:
-    """Refresh Firebase ID token using refresh token."""
-    payload = {
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token,
-    }
-    response = requests.post(
-        f"{FIREBASE_REFRESH_TOKEN_URL}?key={firebase_api_key}",
-        json=payload,
-    )
-    if response.status_code != 200:
-        raise TokenError("Failed to refresh Firebase ID token")
-    return response.json()["id_token"]
-
-# OAuth Callback Server
-class CallbackHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        """Handle the callback from GitHub"""
-        query_components = parse_qs(urlparse(self.path).query)
-        
-        # Verify state parameter
-        received_state = query_components.get('state', [None])[0]
-        if received_state != self.server.expected_state:
-            self.send_error(400, "State verification failed")
-            return
-            
-        # Continue with existing code...
-        code = query_components.get('code', [None])[0]
-        if code:
-            self.server.auth_code = code
-            self.send_response(200)
-            self.send_header('Content-type', 'text/html')
-            self.end_headers()
-            self.wfile.write(b"Authorization successful! You can close this window.")
-        else:
-            self.send_error(400, "No authorization code received")
-
-async def start_callback_server() -> str:
-    """Start a local server to handle OAuth callback."""
-    server = HTTPServer(("localhost", CALLBACK_PORT), CallbackHandler)
-    server.auth_code = None
-    
-    # Generate a random state parameter
-    state = secrets.token_urlsafe(16)
-    server.expected_state = state
-    
-    # Construct GitHub OAuth URL with state parameter
-    github_oauth_url = (
-        "https://github.com/login/oauth/authorize"
-        f"?client_id={GITHUB_CLIENT_ID}"
-        f"&redirect_uri={CALLBACK_URL}"
-        f"&state={state}"
-        "&scope=read:user"
-    )
-    
-    webbrowser.open(github_oauth_url)
-    
-    console.print("[bold green]Waiting for GitHub authentication...[/bold green]")
-    while not server.auth_code:
-        server.handle_request()
-    return server.auth_code
-
-# Main Function
-async def get_jwt_token(firebase_api_key: str, github_client_id: str) -> str:
+class DeviceFlow:
     """
-    Get a Firebase ID token using Firebase's built-in GitHub authentication provider.
+    Handles the GitHub Device Flow authentication process.
+    """
+
+    def __init__(self, client_id: str):
+        self.client_id = client_id
+        self.device_code_url = "https://github.com/login/device/code"
+        self.access_token_url = "https://github.com/login/oauth/access_token"
+        self.scope = "repo,user"  # Adjust scopes as needed
+
+    async def request_device_code(self) -> Dict:
+        """
+        Requests a device code from GitHub.
+
+        Returns:
+            Dict: Response from GitHub containing device code, user code, etc.
+
+        Raises:
+            NetworkError: If there's a network issue.
+            AuthError: If GitHub returns an error.
+        """
+        try:
+            response = requests.post(
+                self.device_code_url,
+                headers={"Accept": "application/json"},
+                data={"client_id": self.client_id, "scope": self.scope},
+                timeout=10
+            )
+            response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
+            return response.json()
+        except requests.exceptions.ConnectionError as e:
+            raise NetworkError(f"Failed to connect to GitHub: {e}")
+        except requests.exceptions.RequestException as e:
+            raise AuthError(f"Error requesting device code: {e}")
+
+    async def poll_for_token(self, device_code: str, interval: int, expires_in: int) -> str:
+        """
+        Polls GitHub for the access token until the user authenticates or the code expires.
+
+        Args:
+            device_code: The device code obtained from request_device_code.
+            interval: The polling interval in seconds.
+            expires_in: The time in seconds until the device code expires.
+
+        Returns:
+            str: The GitHub access token.
+
+        Raises:
+            NetworkError: If there's a network issue.
+            AuthError: If the user doesn't authenticate in time or cancels.
+            TokenError: If there's an error exchanging the code for a token.
+        """
+        start_time = time.time()
+        while time.time() - start_time < expires_in:
+            try:
+                response = requests.post(
+                    self.access_token_url,
+                    headers={"Accept": "application/json"},
+                    data={
+                        "client_id": self.client_id,
+                        "device_code": device_code,
+                        "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                    },
+                    timeout=10
+                )
+                response.raise_for_status()
+                data = response.json()
+
+                if "error" in data:
+                    if data["error"] == "authorization_pending":
+                        await asyncio.sleep(interval)
+                    elif data["error"] == "slow_down":
+                        await asyncio.sleep(data["interval"])
+                    elif data["error"] == "expired_token":
+                        raise AuthError("Device code expired.")
+                    elif data["error"] == "access_denied":
+                        raise UserCancelledError("User denied access.")
+                    else:
+                        raise AuthError(f"GitHub authentication error: {data['error']}")
+                else:
+                    return data["access_token"]
+            except requests.exceptions.ConnectionError as e:
+                raise NetworkError(f"Failed to connect to GitHub: {e}")
+            except requests.exceptions.RequestException as e:
+                raise TokenError(f"Error exchanging device code for token: {e}")
+
+        raise AuthError("Authentication timed out.")
+
+class FirebaseAuthenticator:
+    """
+    Handles Firebase authentication and token management.
+    """
+
+    def __init__(self, firebase_api_key: str, app_name: str):
+        self.firebase_api_key = firebase_api_key
+        self.app_name = app_name
+        self.keyring_service_name = f"firebase-auth-{app_name}"
+        self.keyring_user_name = "refresh_token"
+
+        # Initialize a dummy Firebase app for token verification
+        self.firebase_app = initialize_app(
+            credentials.Certificate(
+                {
+                    "type": "service_account",
+                    "project_id": "dummy-project-id",  # Replace with a dummy project ID
+                    "private_key_id": str(uuid.uuid4()),
+                    "private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n",  # Replace with a dummy private key
+                    "client_email": "firebase-adminsdk-dummy@dummy-project-id.iam.gserviceaccount.com",  # Replace with a dummy email
+                    "client_id": str(uuid.uuid4()),
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                    "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-dummy%40dummy-project-id.iam.gserviceaccount.com"
+                }
+            ),
+            name=self.app_name
+        )
+
+    def _store_refresh_token(self, refresh_token: str):
+        """Stores the Firebase refresh token in the system keyring."""
+        keyring.set_password(self.keyring_service_name, self.keyring_user_name, refresh_token)
+
+    def _get_stored_refresh_token(self) -> Optional[str]:
+        """Retrieves the Firebase refresh token from the system keyring."""
+        return keyring.get_password(self.keyring_service_name, self.keyring_user_name)
+
+    def _delete_stored_refresh_token(self):
+        """Deletes the stored Firebase refresh token from the keyring."""
+        try:
+            keyring.delete_password(self.keyring_service_name, self.keyring_user_name)
+        except keyring.errors.NoKeyringError:
+            print("No keyring found. Token deletion skipped.")
+        except keyring.errors.PasswordDeleteError:
+            print("Failed to delete token from keyring.")
+
+    async def _refresh_firebase_token(self, refresh_token: str) -> str:
+        """
+        Refreshes the Firebase ID token using the refresh token.
+
+        Args:
+            refresh_token: The Firebase refresh token.
+
+        Returns:
+            str: The new Firebase ID token.
+
+        Raises:
+            NetworkError: If there's a network issue.
+            TokenError: If the refresh token is invalid or there's an error.
+        """
+        try:
+            response = requests.post(
+                f"https://securetoken.googleapis.com/v1/token?key={self.firebase_api_key}",
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                },
+                timeout=10
+            )
+            response.raise_for_status()
+            data = response.json()
+            new_refresh_token = data["refresh_token"]
+            self._store_refresh_token(new_refresh_token)
+            return data["id_token"]
+        except requests.exceptions.ConnectionError as e:
+            raise NetworkError(f"Failed to connect to Firebase: {e}")
+        except requests.exceptions.RequestException as e:
+            if e.response and e.response.status_code == 400:
+                error_data = e.response.json()
+                if error_data.get("error", {}).get("message") == "INVALID_REFRESH_TOKEN":
+                    self._delete_stored_refresh_token()
+                    raise TokenError("Invalid or expired refresh token. Please re-authenticate.")
+                elif error_data.get("error", {}).get("message") == "TOO_MANY_ATTEMPTS_TRY_LATER":
+                    raise RateLimitError("Too many refresh attempts. Please try again later.")
+                else:
+                    raise TokenError(f"Error refreshing Firebase token: {e}")
+            else:
+                raise TokenError(f"Error refreshing Firebase token: {e}")
+
+    async def exchange_github_token_for_firebase_token(self, github_token: str) -> Tuple[str, str]:
+        """
+        Exchanges a GitHub access token for a Firebase ID token and refresh token.
+
+        Args:
+            github_token: The GitHub access token.
+
+        Returns:
+            Tuple[str, str]: The Firebase ID token and refresh token.
+
+        Raises:
+            NetworkError: If there's a network issue.
+            TokenError: If the token exchange fails.
+        """
+        try:
+            response = requests.post(
+                f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key={self.firebase_api_key}",
+                data={
+                    "requestUri": "http://localhost",  # Required by Firebase, but not used in Device Flow
+                    "returnSecureToken": True,
+                    "postBody": f"access_token={github_token}&providerId=github.com",
+                },
+                timeout=10
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data["idToken"], data["refreshToken"]
+        except requests.exceptions.ConnectionError as e:
+            raise NetworkError(f"Failed to connect to Firebase: {e}")
+        except requests.exceptions.RequestException as e:
+            raise TokenError(f"Error exchanging GitHub token for Firebase token: {e}")
+
+    def verify_firebase_token(self, id_token: str) -> bool:
+        """
+        Verifies the Firebase ID token.
+
+        Args:
+            id_token: The Firebase ID token.
+
+        Returns:
+            bool: True if the token is valid, False otherwise.
+        """
+        try:
+            auth.verify_id_token(id_token, app=self.firebase_app)
+            return True
+        except auth.ExpiredIdTokenError:
+            return False
+        except auth.InvalidIdTokenError:
+            return False
+        except Exception as e:
+            print(f"Unexpected error during token verification: {e}")
+            return False
+
+async def get_jwt_token(firebase_api_key: str, github_client_id: str, app_name: str = "my-cli-app") -> str:
+    """
+    Get a Firebase ID token using GitHub's Device Flow authentication.
 
     Args:
         firebase_api_key: Firebase Web API key
         github_client_id: OAuth client ID for GitHub app
+        app_name: Unique name for your CLI application
 
     Returns:
         str: A valid Firebase ID token
@@ -129,67 +276,49 @@ async def get_jwt_token(firebase_api_key: str, github_client_id: str) -> str:
     Raises:
         AuthError: If authentication fails
         NetworkError: If there are connectivity issues
-        TokenError: If token exchange/refresh fails
+        TokenError: If token exchange fails
     """
-    # Check for existing valid token
-    stored_tokens = get_stored_token()
-    if stored_tokens:
-        id_token, refresh_token = stored_tokens
+    firebase_auth = FirebaseAuthenticator(firebase_api_key, app_name)
+
+    # Check for existing refresh token
+    refresh_token = firebase_auth._get_stored_refresh_token()
+    if refresh_token:
         try:
-            # Attempt to refresh token if expired
-            id_token = refresh_firebase_token(refresh_token, firebase_api_key)
-            store_tokens(id_token, refresh_token)
-            return id_token
-        except TokenError:
-            console.print("[bold yellow]Stored token expired. Starting new authentication flow...[/bold yellow]")
-            clear_tokens()
+            # Attempt to refresh the token
+            id_token = await firebase_auth._refresh_firebase_token(refresh_token)
+            if firebase_auth.verify_firebase_token(id_token):
+                return id_token
+            else:
+                print("Refreshed token is invalid. Attempting re-authentication.")
+                firebase_auth._delete_stored_refresh_token()
+        except (NetworkError, TokenError, RateLimitError) as e:
+            print(f"Token refresh failed: {e}")
+            if not isinstance(e, RateLimitError):
+                firebase_auth._delete_stored_refresh_token()
+            if isinstance(e, RateLimitError):
+                raise
+            print("Attempting re-authentication...")
 
-    # Start OAuth flow
-    try:
-        auth_code = await start_callback_server()
-    except Exception as e:
-        raise NetworkError(f"Failed to start local server: {e}")
+    # Initiate Device Flow
+    device_flow = DeviceFlow(github_client_id)
+    device_code_response = await device_flow.request_device_code()
 
-    # Exchange auth code for Firebase ID token
-    try:
-        payload = {
-            "postBody": f"code={auth_code}&providerId=github.com",
-            "requestUri": CALLBACK_URL,
-            "returnSecureToken": True,
-            "client_id": github_client_id,
-        }
-        response = requests.post(
-            f"{FIREBASE_SIGN_IN_WITH_IDP_URL}?key={firebase_api_key}",
-            json=payload,
-        )
-        if response.status_code != 200:
-            raise AuthError("Failed to authenticate with GitHub")
-        data = response.json()
-        id_token = data["idToken"]
-        refresh_token = data["refreshToken"]
-        store_tokens(id_token, refresh_token)
-        return id_token
-    except requests.exceptions.RequestException as e:
-        raise NetworkError(f"Failed to exchange auth code: {e}")
-    except KeyError:
-        raise TokenError("Invalid response from Firebase")
+    # Display instructions to the user
+    print(f"To authenticate, visit: {device_code_response['verification_uri']}")
+    print(f"Enter code: {device_code_response['user_code']}")
+    print("Waiting for authentication...")
 
-# Example Usage
-async def main():
+    # Poll for GitHub token
+    github_token = await device_flow.poll_for_token(
+        device_code_response["device_code"],
+        device_code_response["interval"],
+        device_code_response["expires_in"],
+    )
 
+    # Exchange GitHub token for Firebase token
+    id_token, refresh_token = await firebase_auth.exchange_github_token_for_firebase_token(github_token)
 
-    try:
-        token = await get_jwt_token(
-            firebase_api_key=FIREBASE_API_KEY,
-            github_client_id=GITHUB_CLIENT_ID
-        )
-        console.print(f"[bold green]Successfully authenticated! Token: {token}[/bold green]")
-    except AuthError as e:
-        console.print(f"[bold red]Authentication failed: {e}[/bold red]")
-    except NetworkError as e:
-        console.print(f"[bold red]Network error: {e}[/bold red]")
-    except TokenError as e:
-        console.print(f"[bold red]Token error: {e}[/bold red]")
+    # Store refresh token
+    firebase_auth._store_refresh_token(refresh_token)
 
-if __name__ == "__main__":
-    asyncio.run(main())
+    return id_token
