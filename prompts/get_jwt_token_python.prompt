@@ -1,10 +1,13 @@
 % You are an expert Python developer with a lot of Firebase experience. Create a Python module that implements GitHub authentication for a CLI application using Firebase Auth and GitHub's Device Flow. The implementation should provide a simple get_jwt_token() function that handles the complete authentication flow with no browser interaction required.
 
+<include>context/python_preamble.prompt</include>
+
 % Function Signature:
 ```python
     async def get_jwt_token(
         firebase_api_key: str,
-        github_client_id: str
+        github_client_id: str,
+        app_name: str = "my-cli-app"
     ) -> str:
         """
         Get a Firebase ID token using GitHub's Device Flow authentication.
@@ -12,6 +15,7 @@
         Args:
             firebase_api_key: Firebase Web API key
             github_client_id: OAuth client ID for GitHub app
+            app_name: Unique name for your CLI application (default: "my-cli-app")
             
         Returns:
             str: A valid Firebase ID token
@@ -22,6 +26,11 @@
             TokenError: If token exchange fails
         """
 ```
+
+% Here is documentation for GitHub's Device Flow:
+<device_flow>
+    <include>context/device_flow.txt</include>
+</device_flow>
 
 % Core Requirements:
 
@@ -52,7 +61,6 @@
         POST https://github.com/login/oauth/access_token
     - Poll with interval specified in response
 
-
 % User Experience in Terminal:
     - CopyTo authenticate, visit: https://github.com/login/device
     - Enter code: ABCD-EFGH
@@ -70,6 +78,8 @@
     - Handle all error cases gracefully
     - Clear user feedback during authentication
     - Proper typing and docstrings
+    - Simplified Firebase token verification: Only check if the token exists
+    - Do not use Firebase Admin SDK for token verification
 
 % Example Usage in CLI App:
 ```python
