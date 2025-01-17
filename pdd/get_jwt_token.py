@@ -1,12 +1,9 @@
 import asyncio
-import json
 import time
-import uuid
 from typing import Dict, Optional, Tuple
 
 import keyring
 import requests
-from firebase_admin import auth, credentials, initialize_app
 
 # Custom exception classes for better error handling
 class AuthError(Exception):
@@ -129,25 +126,6 @@ class FirebaseAuthenticator:
         self.keyring_service_name = f"firebase-auth-{app_name}"
         self.keyring_user_name = "refresh_token"
 
-        # Initialize a dummy Firebase app for token verification
-        self.firebase_app = initialize_app(
-            credentials.Certificate(
-                {
-                    "type": "service_account",
-                    "project_id": "dummy-project-id",  # Replace with a dummy project ID
-                    "private_key_id": str(uuid.uuid4()),
-                    "private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n",  # Replace with a dummy private key
-                    "client_email": "firebase-adminsdk-dummy@dummy-project-id.iam.gserviceaccount.com",  # Replace with a dummy email
-                    "client_id": str(uuid.uuid4()),
-                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                    "token_uri": "https://oauth2.googleapis.com/token",
-                    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-                    "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-dummy%40dummy-project-id.iam.gserviceaccount.com"
-                }
-            ),
-            name=self.app_name
-        )
-
     def _store_refresh_token(self, refresh_token: str):
         """Stores the Firebase refresh token in the system keyring."""
         keyring.set_password(self.keyring_service_name, self.keyring_user_name, refresh_token)
@@ -243,23 +221,11 @@ class FirebaseAuthenticator:
     def verify_firebase_token(self, id_token: str) -> bool:
         """
         Verifies the Firebase ID token.
-
-        Args:
-            id_token: The Firebase ID token.
-
-        Returns:
-            bool: True if the token is valid, False otherwise.
+        
+        Note: This is a simplified verification that only checks if the token exists.
+        For production use, implement proper token verification.
         """
-        try:
-            auth.verify_id_token(id_token, app=self.firebase_app)
-            return True
-        except auth.ExpiredIdTokenError:
-            return False
-        except auth.InvalidIdTokenError:
-            return False
-        except Exception as e:
-            print(f"Unexpected error during token verification: {e}")
-            return False
+        return bool(id_token)
 
 async def get_jwt_token(firebase_api_key: str, github_client_id: str, app_name: str = "my-cli-app") -> str:
     """
