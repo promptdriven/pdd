@@ -28,6 +28,7 @@
 - [ ] VS code for prompt editing/display
 - [ ] during fix rather than just have the fix loop check to see if the example crashed, have it use a llm to check if the results are largely correct still
 - [ ] separate out the failing test and then run fix loop on that
+- [ ] Use the prompts that use a certain module to generate tests for that module
 
 ## Bugs
 
