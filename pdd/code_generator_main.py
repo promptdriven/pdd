@@ -5,6 +5,7 @@ from rich import print as rprint
 
 from .construct_paths import construct_paths
 from .code_generator import code_generator
+from .get_jwt_token import get_jwt_token
 
 def code_generator_main(ctx: click.Context, prompt_file: str, output: Optional[str]) -> Tuple[str, float, str]:
     """
@@ -37,13 +38,62 @@ def code_generator_main(ctx: click.Context, prompt_file: str, output: Optional[s
         # Generate code
         strength = ctx.obj.get('strength', 0.5)
         temperature = ctx.obj.get('temperature', 0.0)
-        generated_code, total_cost, model_name = code_generator(
-            prompt_content,
-            language,
-            strength,
-            temperature,
-            verbose=not ctx.obj.get('quiet', False)
-        )
+        verbose = not ctx.obj.get('quiet', False)
+
+        if ctx.obj.get('local', False):
+            # Local execution
+            generated_code, total_cost, model_name = code_generator(
+                prompt_content,
+                language,
+                strength,
+                temperature,
+                verbose=verbose
+            )
+        else:
+            # Cloud execution
+            try:
+                import asyncio
+                import os
+                # Get JWT token for cloud authentication
+                jwt_token = asyncio.run(get_jwt_token(
+                    firebase_api_key=os.environ.get("REACT_APP_FIREBASE_API_KEY"),
+                    github_client_id=os.environ.get("GITHUB_CLIENT_ID"),
+                    app_name="PDD Code Generator"
+                ))
+                # Call cloud code generator
+                import requests
+                headers = {
+                    "Authorization": f"Bearer {jwt_token}",
+                    "Content-Type": "application/json"
+                }
+                data = {
+                    "promptContent": prompt_content,
+                    "language": language,
+                    "strength": strength,
+                    "temperature": temperature,
+                    "verbose": verbose
+                }
+                response = requests.post(
+                    "https://generate-code-cloud-c437voydwa-uc.a.run.app",
+                    headers=headers,
+                    json=data
+                )
+                response.raise_for_status()
+                result = response.json()
+                generated_code = result["generatedCode"]
+                total_cost = result["totalCost"]
+                model_name = result["modelName"]
+
+            except Exception as e:
+                if not ctx.obj.get('quiet', False):
+                    rprint("[bold red]Cloud execution failed, falling back to local mode[/bold red]")
+                generated_code, total_cost, model_name = code_generator(
+                    prompt_content,
+                    language,
+                    strength,
+                    temperature,
+                    verbose=verbose
+                )
 
         # Save results
         if output_file_paths["output"]:
