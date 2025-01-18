@@ -39,8 +39,10 @@ def code_generator_main(ctx: click.Context, prompt_file: str, output: Optional[s
         strength = ctx.obj.get('strength', 0.5)
         temperature = ctx.obj.get('temperature', 0.0)
         verbose = not ctx.obj.get('quiet', False)
+        local = ctx.obj.get('local', False)
 
-        if ctx.obj.get('local', False):
+        if local:
+            print("Running in local mode")
             # Local execution
             generated_code, total_cost, model_name = code_generator(
                 prompt_content,
