@@ -11,6 +11,7 @@ ctx.obj = {
     'temperature': 0.2,  # Temperature for randomness (0.0 to 1.0)
     'force': False,  # Do not overwrite existing files
     'quiet': False,  # Show verbose output
+    # 'local': True,  # Run the code generator locally
 }
 
 # Define the path to the prompt file
@@ -18,10 +19,10 @@ prompt_file = "output/example_prompt.prompt"
 
 # Create the prompt file content
 prompt_content = """
-You are an expert Python engineer. Write a Python function that calculates the factorial of a number.
+You are an expert Python engineer. Write a Python function that calculates the factorial of two numbers.
 The function should:
-- Accept an integer as input.
-- Return the factorial of the input number.
+- Accept two integers as input.
+- Return the factorial of the input numbers.
 - Handle edge cases (e.g., negative numbers, zero).
 """
 

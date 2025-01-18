@@ -1,45 +1,71 @@
-% Here is an example prompt generate as a reference:
-<example>
-   <example_prompt><include>context/generate/6/conflicts_main_python.prompt</include></example_prompt>
-   <example_code><include>context/generate/6/conflicts_main.py</include></example_code>
-</example>
+% Here is an example prompt and associated generated example code to be used as a reference for the generation of code for the prompt below:
+<example_generation>
+   <example_prompt><include>context/generate/7/code_generator_main_python.prompt</include></example_prompt>
+   <example_code><include>context/generate/7/code_generator_main.py</include></example_code>
+</example_generation>
 
-% You are an expert Python engineer. Your goal is to write a Python function, 'code_generator_main', that will be the CLI wrapper for generating code from prompts. This function will read a prompt file, generate code using the code_generator function, and handle the output location.
+% Generate code for the following prompt:
+<prompt_to_generate_code_from>
+   % You are an expert Python engineer. Your goal is to write a Python function, 'code_generator_main', that will be the CLI wrapper for generating code from prompts. This function will read a prompt file, generate code using the code_generator function, and handle the output location.
 
-<include>./context/python_preamble.prompt</include>
+   <include>./context/python_preamble.prompt</include>
 
-% Here are the inputs and outputs of the function:
-    Inputs:
-        - `ctx` (`click.Context`): The Click context object containing CLI options and parameters.
-        - 'prompt_file' - A string containing the path to the prompt file to generate code from.
-        - 'output' - An optional string containing the path where to save the generated code. If None, uses default naming convention.
-    Outputs:
-        - Returns a tuple containing (`str`, `float`, `str`):
-            - `str`: The generated code.
-            - `float`: The total cost of the operation.
-            - `str`: The name of the model used.
+   % Here are the inputs and outputs of the function:
+      Inputs:
+         - `ctx` (`click.Context`): The Click context object containing CLI options and parameters.
+         - 'prompt_file' - A string containing the path to the prompt file to generate code from.
+         - 'output' - An optional string containing the path where to save the generated code. If None, uses default naming convention.
+      Outputs:
+         - Returns a tuple containing (`str`, `float`, `str`):
+               - `str`: The generated code.
+               - `float`: The total cost of the operation.
+               - `str`: The name of the model used.
 
-<examples>
-   % Here is how to use the Python Click library to create a command line program:
-   <click_example>
-   <include>context/click_example.py</include>
-   </click_example>
+   <examples>
+      % Here is how to use the Python Click library to create a command line program:
+      <click_example>
+      <include>context/click_example.py</include>
+      </click_example>
 
-   % Here are examples of how to use internal modules:
-   <internal_example_modules>
-      - Here is an example of how to use the `construct_paths` function:
-      <construct_paths_example>
-      <include>context/construct_paths_example.py</include>
-      </construct_paths_example>
+      % Here are examples of how to use internal modules:
+      <internal_example_modules>
+         - Here is an example of how to use the `construct_paths` function:
+         <construct_paths_example>
+         <include>context/construct_paths_example.py</include>
+         </construct_paths_example>
 
-      - Here is an example of how to use the `code_generator` function:
-      <code_generator_example>
-      <include>context/code_generator_example.py</include>
-      </code_generator_example>
-   </internal_example_modules>
-</examples>
+         - Here is an example of how to use the `code_generator` function:
+         <code_generator_example>
+         <include>context/code_generator_example.py</include>
+         </code_generator_example>
 
-% Here is the README for the cli command that has details of how the 'generate' command works:
-   <cli_command_readme>
-   <include>./README.md</include>
-   </cli_command_readme>
+         - Here is an example of how to use the `get_jwt_token` function to get the JWT_TOKEN:
+         <get_jwt_token_example>
+         <include>context/get_jwt_token_example.py</include>
+         </get_jwt_token_example>
+         % The `get_jwt_token` function is a async function and must be run with `asyncio.run`. Use the environment variable `REACT_APP_FIREBASE_API_KEY` to pass the firebase api key to the function.
+      </internal_example_modules>
+
+      % Here is how to call the cloud version of the code generator when not using the `--local` flag:
+      <cloud_code_generator_example>
+         curl -X POST \                                                                                                                                      
+               'https://generate-code-cloud-c437voydwa-uc.a.run.app' \
+               -H "Authorization: Bearer $JWT_TOKEN" \
+               -H 'Content-Type: application/json' \
+               -d '{
+            "promptContent": "Write a function to reverse sort a dictionary in python.",
+            "language": "python",
+            "strength": 0.5,
+            "temperature": 0.0,
+            "verbose": true
+         }'
+      </cloud_code_generator_example>
+   </examples>
+
+   % Here is the README for the cli command that has details of how the 'generate' command works:
+      <cli_command_readme>
+      <include>./README.md</include>
+      </cli_command_readme>
+
+   % Use the `--local` flag to determine whether to run the code generator locally or in the cloud.
+</prompt_to_generate_code_from>
