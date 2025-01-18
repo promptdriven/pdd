@@ -33,9 +33,30 @@ source pdd-env/bin/activate
 pip install pdd-cli
 ```
 
-## API Key Setup
+## Cloud vs Local Execution
 
-PDD requires an API key for the language model. Set up your environment variable:
+PDD commands can be run either in the cloud or locally. By default, all commands run in the cloud mode, which provides several advantages:
+
+- No need to manage API keys locally
+- Access to more powerful models
+- Shared examples and improvements across the PDD community
+- Automatic updates and improvements
+- Better cost optimization
+
+### Cloud Authentication
+
+When running in cloud mode (default), PDD uses GitHub Single Sign-On (SSO) for authentication. On first use, you'll be prompted to authenticate:
+
+1. PDD will open your default browser to the GitHub login page
+2. Log in with your GitHub account
+3. Authorize PDD Cloud to access your GitHub profile
+4. Once authenticated, you can return to your terminal to continue using PDD
+
+The authentication token is securely stored locally and automatically refreshed as needed.
+
+### Local Mode Requirements
+
+When running in local mode with the `--local` flag, you'll need to set up API keys:
 
 ```bash
 # For OpenAI
@@ -49,6 +70,7 @@ export PROVIDER_API_KEY=your_api_key_here
 ```
 
 Add these to your `.bashrc`, `.zshrc`, or equivalent for persistence.
+
 
 ## Post-Installation Setup
 
@@ -81,7 +103,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.4
+Current version: 0.0.6
 
 To check your installed version, run:
 ```
@@ -133,6 +155,7 @@ These options can be used with any command:
 - `--quiet`: Decrease output verbosity for minimal information.
 - `--output-cost PATH_TO_CSV_FILE`: Enable cost tracking and output a CSV file with usage details.
 - `--review-examples`: Review and optionally exclude few-shot examples before command execution.
+- `--local`: Run commands locally instead of in the cloud.
 
 ## Auto-Update Control
 
@@ -222,8 +245,12 @@ Here are the main commands provided by PDD:
 
 Create runnable code from a prompt file.
 
-```
-pdd [GLOBAL OPTIONS] generate [OPTIONS] PROMPT_FILE
+```bash
+# Cloud execution (default)
+pdd generate [OPTIONS] PROMPT_FILE
+
+# Local execution
+pdd --local generate [OPTIONS] PROMPT_FILE
 ```
 
 Arguments:
@@ -724,6 +751,25 @@ PDD provides informative error messages when issues occur during command executi
 
 When an error occurs, PDD will display a message describing the issue and, when possible, suggest steps to resolve it.
 
+## Cloud Features
+
+When running in cloud mode (default), PDD provides additional features:
+
+1. **Shared Examples**: Access to a growing database of community-contributed examples
+2. **Automatic Updates**: Latest improvements and bug fixes are automatically available
+3. **Cost Optimization**: Smart model selection and caching to minimize costs
+4. **Usage Analytics**: Track your team's usage and costs through the PDD Cloud dashboard
+5. **Collaboration**: Share prompts and generated code with team members
+
+To access the PDD Cloud dashboard: https://promptdriven.ai/
+
+Here you can:
+- View usage statistics
+- Manage team access
+- Configure default settings
+- Access shared examples
+- Track costs
+
 ## Troubleshooting
 
 Here are some common issues and their solutions:
@@ -744,6 +790,11 @@ Here are some common issues and their solutions:
    - Verify the CSV file format and content
    - Check file permissions for the dependency directory
 
+7. **Command Timeout**:
+   - Check internet connection
+   - Try running with `--local` flag to compare
+   - If persistent, check PDD Cloud status page
+
 If you encounter persistent issues, consult the PDD documentation or post an issue on GitHub for assistance.
 
 ## Security Considerations
@@ -761,6 +812,23 @@ When using PDD, keep the following security considerations in mind:
 5. **Output Handling**: Treat output files with the same security considerations as you would any other code or configuration files in your project.
 
 6. **Dependency Analysis**: When using the `auto-deps` command, be cautious with untrusted dependency files and verify the generated summaries before including them in your prompts.
+
+When using PDD in cloud mode:
+
+1. **Authentication**: 
+   - PDD uses GitHub SSO for secure authentication
+   - Tokens are stored securely in your system's credential manager
+   - No need to manage API keys manually
+
+2. **Data Privacy**:
+   - All data is encrypted in transit and at rest
+   - Prompts and generated code are associated only with your account
+   - You can delete your data at any time through the dashboard
+
+3. **Team Access**:
+   - Manage team member access through GitHub organizations
+   - Set up fine-grained permissions for different commands
+   - Track usage per team member
 
 Additionally:
 - Consider disabling auto-updates in production environments using `PDD_AUTO_UPDATE=false`
