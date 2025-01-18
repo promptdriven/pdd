@@ -9,7 +9,7 @@ def main() -> None:
     It sets up the parameters, calls the function, and prints the results.
     """
     # Define input parameters
-    base = 'get_extension'
+    base = 'code_generator_main'
     # Define the parameters for the function
     unit_test_file: str = f'tests/test_{base}.py'  # Path to your unit test file
     code_file: str = f'pdd/{base}.py'          # Path to your code file
@@ -17,8 +17,8 @@ def main() -> None:
     with open(f'prompts/{base}_python.prompt', 'r') as file:
         prompt = file.read()
     verification_program: str = f'context/{base}_example.py'          # Path to your verification program
-    strength: float = 1                            # Strength parameter for error fixing
-    temperature: float = 0                        # Temperature parameter for error fixing
+    strength: float = .949                            # Strength parameter for error fixing
+    temperature: float = 1                        # Temperature parameter for error fixing
     max_attempts: int = 5                           # Maximum number of attempts to fix errors
     budget: float = 100.0                            # Maximum budget for fixing errors
     error_log_file = "fix_error_loop_example.log"  # Path to the error log file

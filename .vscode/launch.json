@@ -2,26 +2,27 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "PDD CLI: Generate",
+            "name": "PDD CLI: Fix Loop",
             "type": "debugpy",
             "request": "launch",
             "module": "pdd.cli",
             "console": "integratedTerminal",
             "args": [
-                "--force",
                 "--strength",
-                "0.5",
-                "--temperature",
-                "0.0",
-                "--output-cost",
-                "/Users/gregtanaka/pdd/staging/regression/regression_cost.csv",
-                "auto-deps",
-                "--output",
-                "/Users/gregtanaka/pdd/staging/regression/auto_deps_get_extension_python.prompt",
-                "--csv",
-                "project_dependencies.csv",
-                "/Users/gregtanaka/pdd/prompts/get_extension_python.prompt",
-                "/Users/gregtanaka/pdd/context/*.py"
+                "0.575",
+                "--verbose",
+                "fix",
+                "--output-test",
+                "tests/test_fix_error_loop.py",
+                "--output-code",
+                "pdd/fix_error_loop.py",
+                "--loop",
+                "--verification-program",
+                "context/fix_error_loop_example.py",
+                "prompts/fix_error_loop_python.prompt",
+                "pdd/fix_error_loop.py",
+                "tests/test_fix_error_loop.py",
+                "loop_error.log"
             ]
         },
         {

@@ -25,6 +25,7 @@
 - [ ] ability to check in known good examples
 - [ ] take a chat conversation and collapse down into a single prompt
 - [ ] warming option for temperature increase
+- [ ] strength option for strength increase
 - [ ] VS code for prompt editing/display
 - [ ] during fix rather than just have the fix loop check to see if the example crashed, have it use a llm to check if the results are largely correct still
 - [ ] separate out the failing test and then run fix loop on that
@@ -45,6 +46,7 @@
 - [ ] fix warnings in the code
 - [ ] MLX support for faster local
 - [ ] AWS Nova support
+- [ ] fix quiet vs. verbose ambiguity
 
 
 ## Documentation
