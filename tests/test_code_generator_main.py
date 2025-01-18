@@ -4,8 +4,8 @@ from click.testing import CliRunner
 import sys
 from pdd.code_generator_main import code_generator_main
 
-#if output directory does not exist, create it
-import os   
+# if output directory does not exist, create it
+import os
 os.makedirs("output", exist_ok=True)
 
 
@@ -18,8 +18,8 @@ def test_code_generator_main_success(mock_code_generator, mock_construct_paths):
     """
     # Setup mock objects
     mock_ctx = MagicMock()
-    mock_ctx.params = {'force': False, 'quiet': False}
-    mock_ctx.obj = {'strength': 0.5, 'temperature': 0.0}
+    # Add 'local': True so that we call the local code_generator
+    mock_ctx.obj = {'strength': 0.5, 'temperature': 0.0, 'force': False, 'quiet': False, 'local': True}
 
     mock_construct_paths.return_value = (
         {"prompt_file": "mock_prompt_content"},
@@ -49,6 +49,7 @@ def test_code_generator_main_success(mock_code_generator, mock_construct_paths):
         verbose=True
     )
 
+
 @patch('pdd.code_generator_main.construct_paths')
 def test_code_generator_main_file_not_found(mock_construct_paths):
     """
@@ -56,14 +57,15 @@ def test_code_generator_main_file_not_found(mock_construct_paths):
     """
     # Setup mock objects
     mock_ctx = MagicMock()
-    mock_ctx.params = {'force': False, 'quiet': False}
-    mock_ctx.obj = {'strength': 0.5, 'temperature': 0.0}
+    # Setting local True or not doesn't matter here, but we can keep it for consistency
+    mock_ctx.obj = {'strength': 0.5, 'temperature': 0.0, 'force': False, 'quiet': False, 'local': True}
 
     mock_construct_paths.side_effect = FileNotFoundError("File not found")
 
     # Call the function and expect SystemExit
     with pytest.raises(SystemExit):
         code_generator_main(mock_ctx, "nonexistent_prompt_file", "mock_output")
+
 
 @patch('pdd.code_generator_main.construct_paths')
 @patch('pdd.code_generator_main.code_generator')
@@ -73,8 +75,8 @@ def test_code_generator_main_generation_error(mock_code_generator, mock_construc
     """
     # Setup mock objects
     mock_ctx = MagicMock()
-    mock_ctx.params = {'force': False, 'quiet': False}
-    mock_ctx.obj = {'strength': 0.5, 'temperature': 0.0}
+    # Must have local=True so the local code_generator is invoked
+    mock_ctx.obj = {'strength': 0.5, 'temperature': 0.0, 'force': False, 'quiet': False, 'local': True}
 
     mock_construct_paths.return_value = (
         {"prompt_file": "mock_prompt_content"},
@@ -88,6 +90,7 @@ def test_code_generator_main_generation_error(mock_code_generator, mock_construc
     with pytest.raises(SystemExit):
         code_generator_main(mock_ctx, "mock_prompt_file", "mock_output")
 
+
 @patch('pdd.code_generator_main.construct_paths')
 @patch('pdd.code_generator_main.code_generator')
 def test_code_generator_main_quiet_mode(mock_code_generator, mock_construct_paths):
@@ -96,8 +99,8 @@ def test_code_generator_main_quiet_mode(mock_code_generator, mock_construct_path
     """
     # Setup mock objects
     mock_ctx = MagicMock()
-    # mock_ctx.params = {'force': False, 'quiet': True}
-    mock_ctx.obj = {'strength': 0.5, 'temperature': 0.0, 'force': False, 'quiet': True}
+    # Here we want quiet=True, but also local=True so that we call code_generator
+    mock_ctx.obj = {'strength': 0.5, 'temperature': 0.0, 'force': False, 'quiet': True, 'local': True}
 
     mock_construct_paths.return_value = (
         {"prompt_file": "mock_prompt_content"},
@@ -120,6 +123,7 @@ def test_code_generator_main_quiet_mode(mock_code_generator, mock_construct_path
         verbose=False
     )
 
+
 @patch('pdd.code_generator_main.construct_paths')
 @patch('pdd.code_generator_main.code_generator')
 def test_code_generator_main_no_output(mock_code_generator, mock_construct_paths):
@@ -128,8 +132,7 @@ def test_code_generator_main_no_output(mock_code_generator, mock_construct_paths
     """
     # Setup mock objects
     mock_ctx = MagicMock()
-    mock_ctx.params = {'force': False, 'quiet': False}
-    mock_ctx.obj = {'strength': 0.5, 'temperature': 0.0}
+    mock_ctx.obj = {'strength': 0.5, 'temperature': 0.0, 'force': False, 'quiet': False, 'local': True}
 
     mock_construct_paths.return_value = (
         {"prompt_file": "mock_prompt_content"},
