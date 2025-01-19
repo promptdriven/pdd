@@ -9,7 +9,7 @@ ctx = click.Context(click.Command('generate'))
 ctx.obj = {
     'strength': 0.5,  # Strength of the AI model (0.0 to 1.0)
     'temperature': 0.2,  # Temperature for randomness (0.0 to 1.0)
-    'force': False,  # Do not overwrite existing files
+    'force': True,  # Do not overwrite existing files
     'quiet': False,  # Show verbose output
     # 'local': True,  # Run the code generator locally
 }
