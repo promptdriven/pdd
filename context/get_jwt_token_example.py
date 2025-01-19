@@ -38,5 +38,30 @@ async def main():
         print(f"Rate limit exceeded: {e}")
         print("Too many authentication attempts. Please try again later.")
 
+    # Replace the JWT_TOKEN in .env with the token generated here
+    env_file_path = ".env"
+    new_token_line = f"JWT_TOKEN={token}\n"
+
+    # Read the existing lines from the .env file
+    if os.path.exists(env_file_path):
+        with open(env_file_path, "r") as file:
+            lines = file.readlines()
+    else:
+        lines = []
+
+    # Write the new token to the .env file, replacing the old one if it exists
+    with open(env_file_path, "w") as file:
+        token_replaced = False
+        for line in lines:
+            if line.startswith("JWT_TOKEN="):
+                file.write(new_token_line)
+                token_replaced = True
+            else:
+                file.write(line)
+        if not token_replaced:
+            file.write(new_token_line)
+
+    print(f"JWT_TOKEN has been updated in {env_file_path}")
+
 if __name__ == "__main__":
     asyncio.run(main())
