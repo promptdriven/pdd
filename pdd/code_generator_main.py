@@ -77,7 +77,7 @@ def code_generator_main(ctx: click.Context, prompt_file: str, output: Optional[s
                     "verbose": verbose
                 }
                 response = requests.post(
-                    "https://generate-code-cloud-c437voydwa-uc.a.run.app",
+                    "https://us-central1-prompt-driven-development.cloudfunctions.net/generateCode",
                     headers=headers,
                     json=data
                 )
