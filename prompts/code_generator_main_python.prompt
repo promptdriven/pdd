@@ -49,7 +49,7 @@
       % Here is how to call the cloud version of the code generator when not using the `--local` flag:
       <cloud_code_generator_example>
          curl -X POST \                                                                                                                                      
-               'https://generate-code-cloud-c437voydwa-uc.a.run.app' \
+               'https://us-central1-prompt-driven-development.cloudfunctions.net/generateCode' \
                -H "Authorization: Bearer $JWT_TOKEN" \
                -H 'Content-Type: application/json' \
                -d '{
