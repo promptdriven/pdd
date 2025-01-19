@@ -3,6 +3,8 @@ from typing import Tuple, Optional
 import click
 from rich import print as rprint
 
+import requests   # <── Added at top level so the tests can patch pdd.code_generator_main.requests
+
 from .construct_paths import construct_paths
 from .code_generator import code_generator
 from .get_jwt_token import get_jwt_token
@@ -63,7 +65,6 @@ def code_generator_main(ctx: click.Context, prompt_file: str, output: Optional[s
                     app_name="PDD Code Generator"
                 ))
                 # Call cloud code generator
-                import requests
                 headers = {
                     "Authorization": f"Bearer {jwt_token}",
                     "Content-Type": "application/json"
