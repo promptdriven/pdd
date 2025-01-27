@@ -171,7 +171,7 @@ def create_llm_instance(selected_model, temperature, handler):
             llm = ChatOpenAI(model=model_name, temperature=temperature,
                                 openai_api_key=api_key, callbacks=[handler], openai_api_base = base_url)
         else:
-            if model_name[0] == 'o':
+            if model_name[0] == 'o' and 'mini' not in model_name:
                 llm = ChatOpenAI(model=model_name, temperature=temperature,
                     openai_api_key=api_key, callbacks=[handler], 
                     reasoning_effort='high')
