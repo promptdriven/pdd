@@ -13,7 +13,8 @@ def code_generator(
     language: str,
     strength: float,
     temperature: float = 0.0,
-    verbose: bool = False
+    verbose: bool = False,
+    preprocess_prompt: bool = True,
 ) -> Tuple[str, float, str]:
     """
     Generate code from a prompt using a language model.
@@ -47,9 +48,13 @@ def code_generator(
         model_name = ""
 
         # Step 1: Preprocess the prompt
-        if verbose:
-            console.print("[bold blue]Step 1: Preprocessing prompt[/bold blue]")
-        processed_prompt = preprocess(prompt, recursive=False, double_curly_brackets=True)
+        if preprocess_prompt:
+            if verbose:
+                console.print("[bold blue]Step 1: Preprocessing prompt[/bold blue]")
+
+            processed_prompt = preprocess(prompt, recursive=False, double_curly_brackets=True)
+        else:
+            processed_prompt = prompt
 
         # Step 2: Generate initial response
         if verbose:
