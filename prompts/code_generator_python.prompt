@@ -9,6 +9,7 @@
         'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
         'temperature' - A float that is the temperature of the LLM model to use. Default is 0.
         'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
+        'preprocess_prompt' - A boolean that indicates whether to preprocess the prompt. Default is True.
     Outputs:
         'runnable_code' - A string that is runnable code
         'total_cost' - A float that is the total cost of the model run
@@ -43,9 +44,9 @@
     </internal_modules>
 
 % This program will use Langchain to do the following:
-    Step 1. Preprocess the raw prompt using the preprocess function from the preprocess module.
+    Step 1. Conditionally preprocess the raw prompt using the preprocess function from the preprocess module based on the value of 'preprocess_prompt'. If 'preprocess_prompt' is True, preprocess the prompt; otherwise, use the raw prompt directly.
 
-    Step 2. Run the prompt through llm_invoke with an empty dictionary ('{}') and the provided strength and temperature.
+    Step 2. Run the prompt (either preprocessed or raw) through llm_invoke with an empty dictionary ('{}') and the provided strength and temperature.
 
     Step 3. Detect if the generation is incomplete using the unfinished_prompt function (strength .5) by passing in the last 600 characters of the output of Step 3.
         - a. If incomplete, call the continue_generation function to complete the generation.
