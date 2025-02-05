@@ -1,0 +1,60 @@
+<context>
+% You are an expert Python engineer. Your goal is to write the `install_completion` function that will be part of the `pdd` command-line program. This function will handle the core logic for the `install_completion` command.
+
+<include>context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs: None
+    Outputs: None
+
+<examples>
+   % Here is how to use the Python Click library to create a command line program:
+   <click_example>
+   <include>context/click_example.py</include>
+   </click_example>
+
+   % Here are examples of how to use internal modules:
+   <internal_example_modules>
+      - Here is an example of how to use the `get_local_pdd_path` function:
+      <get_local_pdd_path_example>
+      <include>context/get_local_pdd_path_example.py</include>
+      </get_local_pdd_path_example>
+   </internal_example_modules>
+</examples>
+
+% The function should perform the following steps:
+   1. **Shell Detection:**
+      - Use the `get_current_shell` function to reliably detect the user's current shell using multiple methods (`ps`, `$0`, and `SHELL` environment variable).
+      - Handle cases where the shell cannot be detected and use `rprint` to output an error message in red: `"[red]Unsupported shell: {shell}[/red]"`.
+      - Raise `click.Abort()` to exit if the shell is not supported.
+
+   2. **Completion Script Handling:**
+      - Use the `get_completion_script_extension` function to determine the appropriate file extension for shell completion scripts based on the detected shell.
+      - Use the `get_local_pdd_path` function to dynamically determine the path to the completion script at runtime.
+      - Handle cases where the completion script cannot be found and use `rprint` to output an error message in red: `"[red]Completion script not found: {completion_script_path}[/red]"`.
+      - Raise `click.Abort()` to exit if the completion script is not found.
+
+   3. **Shell RC File Update:**
+      - Use the `get_shell_rc_path` function to determine the path to the user's shell RC file.
+      - Ensure that the RC file exists before attempting to modify it by creating it if it doesn't exist. Use `os.makedirs` to create any missing directories in the path.
+      - Read the existing content of the RC file.
+      - Check if the source command for the completion script is already present in the RC file.
+      - If the source command is not present, append it to the RC file, along with a comment indicating that it is for PDD CLI completion.
+      - Use `rprint` to provide feedback to the user about the installation status:
+         - If successful: `"[green]Shell completion installed for {shell}.[/green]"` and `"Please restart your shell or run 'source {rc_file}' to enable completion."`
+         - If already installed: `"[yellow]Shell completion already installed for {shell}.[/yellow]"`
+         - If failed: `"[red]Failed to install shell completion: {exc}[/red]"` and raise `click.Abort()` to exit.
+
+   4. **Error Handling:**
+      - Wrap the main logic in a `try-except` block to catch `OSError` exceptions.
+      - Use `rprint` to display error messages in red and exit gracefully using `click.Abort()` if necessary.
+
+   5. **Helper Functions:**
+      - Include the following helper functions, which are needed by `install_completion`:
+         - `get_shell_rc_path(shell: str) -> Optional[str]`: Returns the default RC file path for a given shell name.
+         - `get_current_shell() -> Optional[str]`: Determines the currently running shell more reliably.
+         - `get_completion_script_extension(shell: str) -> str`: Gets the appropriate file extension for shell completion scripts.
+         - `get_local_pdd_path() -> str`: Returns the `PDD_PATH` directory, first checking the environment variable, then attempting to deduce it via `importlib.resources`, and aborting if that fails.
+
+% Ensure that the function adheres to the existing codebase's coding style, including proper typing annotations, docstrings, and exception handling.
+</context>
