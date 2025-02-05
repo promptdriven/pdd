@@ -45,7 +45,8 @@ console = Console()
 @click.option("--output-cost", type=click.Path(), help="Enable cost tracking and output a CSV file with usage details.")
 @click.option("--review-examples", is_flag=True,
               help="Review and optionally exclude few-shot examples before command execution.")
-@click.version_option(version="0.0.5")
+@click.option('--local', is_flag=True, help='Run commands locally instead of in the cloud.')
+@click.version_option(version="0.0.6")
 @click.pass_context
 def cli(
     ctx,
@@ -56,6 +57,7 @@ def cli(
     quiet: bool,
     output_cost: Optional[str],
     review_examples: bool,
+    local: bool
 ):
     """
     PDD (Prompt-Driven Development) Command Line Interface
@@ -68,6 +70,7 @@ def cli(
     ctx.obj["quiet"] = quiet
     ctx.obj["output_cost"] = output_cost or os.environ.get("PDD_OUTPUT_COST_PATH")
     ctx.obj["review_examples"] = review_examples
+    ctx.obj['local'] = local
 
     # Auto-update check, but handle EOF errors so tests do not crash.
     auto_update_enabled = os.environ.get("PDD_AUTO_UPDATE", "true").lower() == "true"
