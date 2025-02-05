@@ -4,6 +4,7 @@
 - [ ] Python 3.13 support
 - [ ] Run on server based keys
 - [ ] github login 
+- [ ] redo generate code to make sure processing happens locally
 
 ## On Deck
 
