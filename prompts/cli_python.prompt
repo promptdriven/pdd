@@ -117,12 +117,12 @@
         <include>context/auto_deps_main_example.py</include>
         </auto_deps_main_example>
  
-        - `install_completion` command: The core logic is implemented in the `install_completion` function, defined in a separate module. Here's how to use `install_completion`:
+        - `install_completion` command: The core logic is implemented in the `install_completion` function, defined in a separate module. Here's how to use `install_completion` and `get_local_pdd_path`:
         <install_completion_example>
         <include>context/install_completion_example.py</include>
         </install_completion_example>
-
+        % 
     </internal_example_modules>
-    
+
     % Ensure consistency across commands, following shared coding standards and documentation practices.
 </instructions>
