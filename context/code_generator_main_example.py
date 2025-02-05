@@ -1,7 +1,7 @@
 import click
 from rich import print as rprint
 from pdd.code_generator_main import code_generator_main
-
+import os
 # Create a Click context object to simulate CLI parameters
 ctx = click.Context(click.Command('generate'))
 
@@ -25,6 +25,11 @@ The function should:
 - Return the factorial of the input numbers.
 - Handle edge cases (e.g., negative numbers, zero).
 """
+
+# Create the output directory if it doesn't already exist
+output_dir = "output"
+if not os.path.exists(output_dir):
+    os.makedirs(output_dir)
 
 # Write the prompt content to the file
 with open(prompt_file, "w") as f:
