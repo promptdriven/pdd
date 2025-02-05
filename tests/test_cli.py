@@ -2,10 +2,11 @@ import os
 import pytest
 from click.testing import CliRunner
 from unittest.mock import patch
+from pdd.install_completion import get_shell_rc_path
 
 # Import the Click group from the module under test
 # Adjust the import as needed if your code structure differs
-from pdd.cli import cli, get_shell_rc_path
+from pdd.cli import cli
 
 @pytest.fixture
 def runner():
@@ -136,6 +137,41 @@ def test_auto_deps_command_help(runner):
     assert result.exit_code == 0
     assert "Analyze a prompt file and a directory of potential dependencies" in result.output
 
+@pytest.mark.parametrize(
+    "command, required_args",
+    [
+        ("generate", ["PROMPT_FILE"]),
+        ("example", ["PROMPT_FILE", "CODE_FILE"]),
+        ("test", ["PROMPT_FILE", "CODE_FILE"]),
+        ("preprocess", ["PROMPT_FILE"]),
+        ("fix", ["PROMPT_FILE", "CODE_FILE", "UNIT_TEST_FILE", "ERROR_FILE"]),
+        ("split", ["INPUT_PROMPT", "INPUT_CODE", "EXAMPLE_CODE"]),
+        ("change", ["CHANGE_PROMPT_FILE", "INPUT_CODE"]),
+        ("update", ["INPUT_PROMPT_FILE", "MODIFIED_CODE_FILE"]),
+        ("detect", ["PROMPT_FILES", "CHANGE_FILE"]),
+        ("conflicts", ["PROMPT1", "PROMPT2"]),
+        ("crash", ["PROMPT_FILE", "CODE_FILE", "PROGRAM_FILE", "ERROR_FILE"]),
+        ("trace", ["PROMPT_FILE", "CODE_FILE", "CODE_LINE"]),
+        ("bug", ["PROMPT_FILE", "CODE_FILE", "PROGRAM_FILE", "CURRENT_OUTPUT", "DESIRED_OUTPUT"]),
+        ("auto-deps", ["PROMPT_FILE", "DIRECTORY_PATH"]),
+    ],
+)
+
+def test_commands_with_no_args_give_error(runner, command, required_args):
+    """
+    Parametrized test to ensure commands that require arguments fail when none are provided,
+    producing a missing argument error. This checks that the Click argument
+    definitions are in place.
+    """
+    result = runner.invoke(cli, [command])
+    assert result.exit_code != 0
+    for arg in required_args:
+        if arg == "PROMPT_FILES":
+            continue
+        assert f"Missing argument '{arg}'" in result.output or "Missing argument" in result.output, (
+            f"Command '{command}' did not complain about missing arg '{arg}'. Output:\n{result.output}"
+        )
+
 def test_install_completion_unsupported_shell(runner):
     """
     Test 'pdd install_completion' with an unsupported shell by mocking $SHELL environment
@@ -146,6 +182,7 @@ def test_install_completion_unsupported_shell(runner):
         result = runner.invoke(cli, ["install_completion"])
         assert result.exit_code == 1
         assert "Unsupported shell" in result.output
+
 
 def test_install_completion_fish_shell(runner, tmp_path):
     """
@@ -184,7 +221,7 @@ def test_install_completion_fish_shell(runner, tmp_path):
                 return True
             return real_exists(path)
 
-        with patch("pdd.cli.get_shell_rc_path", side_effect=mock_rc_path), \
+        with patch("pdd.install_completion.get_shell_rc_path", side_effect=mock_rc_path), \
              patch("os.path.exists", side_effect=safe_exists):
             result = runner.invoke(cli, ["install_completion"])
             assert result.exit_code == 0, f"Expected exit_code 0 but got {result.exit_code}"
@@ -194,46 +231,3 @@ def test_install_completion_fish_shell(runner, tmp_path):
             with open(mock_rc_file, "r") as rc:
                 contents = rc.read()
                 assert f"source {completion_script_fish}" in contents
-
-def test_get_shell_rc_path():
-    """Verify that get_shell_rc_path returns expected defaults for known shells."""
-    home = os.path.expanduser("~")
-
-    assert get_shell_rc_path("bash") == os.path.join(home, ".bashrc")
-    assert get_shell_rc_path("zsh") == os.path.join(home, ".zshrc")
-    assert get_shell_rc_path("fish") == os.path.join(home, ".config", "fish", "config.fish")
-    assert get_shell_rc_path("csh") is None
-
-@pytest.mark.parametrize(
-    "command, required_args",
-    [
-        ("generate", ["PROMPT_FILE"]),
-        ("example", ["PROMPT_FILE", "CODE_FILE"]),
-        ("test", ["PROMPT_FILE", "CODE_FILE"]),
-        ("preprocess", ["PROMPT_FILE"]),
-        ("fix", ["PROMPT_FILE", "CODE_FILE", "UNIT_TEST_FILE", "ERROR_FILE"]),
-        ("split", ["INPUT_PROMPT", "INPUT_CODE", "EXAMPLE_CODE"]),
-        ("change", ["CHANGE_PROMPT_FILE", "INPUT_CODE"]),
-        ("update", ["INPUT_PROMPT_FILE", "MODIFIED_CODE_FILE"]),
-        ("detect", ["PROMPT_FILES", "CHANGE_FILE"]),
-        ("conflicts", ["PROMPT1", "PROMPT2"]),
-        ("crash", ["PROMPT_FILE", "CODE_FILE", "PROGRAM_FILE", "ERROR_FILE"]),
-        ("trace", ["PROMPT_FILE", "CODE_FILE", "CODE_LINE"]),
-        ("bug", ["PROMPT_FILE", "CODE_FILE", "PROGRAM_FILE", "CURRENT_OUTPUT", "DESIRED_OUTPUT"]),
-        ("auto-deps", ["PROMPT_FILE", "DIRECTORY_PATH"]),
-    ],
-)
-def test_commands_with_no_args_give_error(runner, command, required_args):
-    """
-    Parametrized test to ensure commands that require arguments fail when none are provided,
-    producing a missing argument error. This checks that the Click argument
-    definitions are in place.
-    """
-    result = runner.invoke(cli, [command])
-    assert result.exit_code != 0
-    for arg in required_args:
-        if arg == "PROMPT_FILES":
-            continue
-        assert f"Missing argument '{arg}'" in result.output or "Missing argument" in result.output, (
-            f"Command '{command}' did not complain about missing arg '{arg}'. Output:\n{result.output}"
-        )
