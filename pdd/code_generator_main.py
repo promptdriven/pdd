@@ -8,6 +8,7 @@ import requests   # <── Added at top level so the tests can patch pdd.code_g
 from .construct_paths import construct_paths
 from .code_generator import code_generator
 from .get_jwt_token import get_jwt_token
+from .preprocess import preprocess
 
 def code_generator_main(ctx: click.Context, prompt_file: str, output: Optional[str]) -> Tuple[str, float, str]:
     """
@@ -69,8 +70,12 @@ def code_generator_main(ctx: click.Context, prompt_file: str, output: Optional[s
                     "Authorization": f"Bearer {jwt_token}",
                     "Content-Type": "application/json"
                 }
+                # Preprocess the prompt
+                processed_prompt = preprocess(prompt_content, recursive=False, double_curly_brackets=True)
+                if verbose:
+                    print(f"Processed prompt: {processed_prompt}")
                 data = {
-                    "promptContent": prompt_content,
+                    "promptContent": processed_prompt,
                     "language": language,
                     "strength": strength,
                     "temperature": temperature,

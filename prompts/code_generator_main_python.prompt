@@ -44,11 +44,17 @@
          <include>context/get_jwt_token_example.py</include>
          </get_jwt_token_example>
          % The `get_jwt_token` function is a async function and must be run with `asyncio.run`. Use the environment variable `REACT_APP_FIREBASE_API_KEY` to pass the firebase api key to the function.
+
+         - Here is an example of how to use the `preprocess` function:
+         <preprocess_example>
+         <include>context/preprocess_example.py</include>
+         </preprocess_example>
+
       </internal_example_modules>
 
       % Here is how to call the cloud version of the code generator when not using the `--local` flag:
       <cloud_code_generator_example>
-         curl -X POST \                                                                                                                                      
+         curl -X POST \
                'https://us-central1-prompt-driven-development.cloudfunctions.net/generateCode' \
                -H "Authorization: Bearer $JWT_TOKEN" \
                -H 'Content-Type: application/json' \
@@ -67,5 +73,5 @@
       <include>./README.md</include>
       </cli_command_readme>
 
-   % Use the `--local` flag to determine whether to run the code generator locally or in the cloud.
-</prompt_to_generate_code_from>
+   % Use the `--local` flag to determine whether to run the code generator locally or in the cloud.  When running in the cloud, preprocess the prompt using the `preprocess` function before sending it to the cloud function.  The `promptContent` field in the JSON payload should contain the *processed* prompt. If verbose is true, print the processed prompt to standard output.
+   </prompt_to_generate_code_from>
