@@ -1,5 +1,5 @@
 provider,model,input,output,coding_arena_elo,base_url,api_key,counter,encoder,max_tokens,max_completion_tokens,structured_output
-OpenAI,"o1-mini-2024-09-12",3,12,1301,,,tiktoken,o200k_base,,65536,False
+OpenAI,"o3-mini",1.1,4.4,1301,,,tiktoken,o200k_base,,100000,False
 OpenAI,"deepseek-coder",0.14,0.28,1256,"https://api.deepseek.com/beta","DEEPSEEK_API_KEY",autotokenizer,deepseek-coder-7b-instruct-v1.5,8192,,False
 OpenAI,"deepseek-reasoner",0.55,2.19,1309,"https://api.deepseek.com/beta","DEEPSEEK_API_KEY",autotokenizer,deepseek-coder-7b-instruct-v1.5,8192,,False
 Ollama,"qwen2.5-coder:32b-instruct-fp16",0.0,0.0,1227,,,,,,,False
