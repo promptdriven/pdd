@@ -4,29 +4,18 @@ from unittest.mock import patch, MagicMock
 from pydantic import BaseModel
 from pdd.llm_invoke import llm_invoke
 
+# NEW: Define MockModelInfo by aliasing the ModelInfo from our module.
+from pdd.llm_invoke import ModelInfo as MockModelInfo
+
+@pytest.fixture
+def mock_select_model():
+    with patch('pdd.llm_invoke.select_model') as mock:
+        yield mock
+
 # Define a sample Pydantic model for testing
 class SampleOutputModel(BaseModel):
     field1: str
     field2: int
-
-# Sample models to be returned by the mocked load_models function
-class MockModelInfo:
-    def __init__(self, provider, model, input_cost, output_cost, coding_arena_elo,
-                 base_url=None, api_key=None, counter=None, encoder=None,
-                 max_tokens=None, max_completion_tokens=None, structured_output=False):
-        self.provider = provider
-        self.model = model
-        self.input_cost = input_cost
-        self.output_cost = output_cost
-        self.coding_arena_elo = coding_arena_elo
-        self.base_url = base_url
-        self.api_key = api_key
-        self.counter = counter
-        self.encoder = encoder
-        self.max_tokens = max_tokens
-        self.max_completion_tokens = max_completion_tokens
-        self.structured_output = structured_output
-        self.average_cost = (self.input_cost + self.output_cost) / 2
 
 @pytest.fixture
 def mock_load_models():
@@ -38,7 +27,13 @@ def mock_load_models():
                 input_cost=0.02,
                 output_cost=0.03,
                 coding_arena_elo=1500,
-                structured_output=True
+                structured_output=True,
+                base_url="",
+                api_key="",
+                counter="",
+                encoder="",
+                max_tokens="",
+                max_completion_tokens=""
             ),
             MockModelInfo(
                 provider='OpenAI',
@@ -46,7 +41,13 @@ def mock_load_models():
                 input_cost=0.01,
                 output_cost=0.015,
                 coding_arena_elo=1200,
-                structured_output=False
+                structured_output=False,
+                base_url="",
+                api_key="",
+                counter="",
+                encoder="",
+                max_tokens="",
+                max_completion_tokens=""
             ),
             MockModelInfo(
                 provider='Anthropic',
@@ -54,7 +55,13 @@ def mock_load_models():
                 input_cost=0.025,
                 output_cost=0.035,
                 coding_arena_elo=1600,
-                structured_output=False
+                structured_output=False,
+                base_url="",
+                api_key="",
+                counter="",
+                encoder="",
+                max_tokens="",
+                max_completion_tokens=""
             ),
             MockModelInfo(
                 provider='Google',
@@ -62,7 +69,13 @@ def mock_load_models():
                 input_cost=0.015,
                 output_cost=0.025,
                 coding_arena_elo=1550,
-                structured_output=False
+                structured_output=False,
+                base_url="",
+                api_key="",
+                counter="",
+                encoder="",
+                max_tokens="",
+                max_completion_tokens=""
             )
         ]
         mock.return_value = mock_models
@@ -278,8 +291,7 @@ def test_llm_invoke_with_env_variables(mock_load_models, mock_set_llm_cache):
 
             assert response['result'] == "Mocked LLM response"
             assert response['model_name'] == 'gpt-4o-mini'
-            
-    
+
 def test_llm_invoke_with_structured_output_not_supported(mock_load_models, mock_create_llm_instance, mock_set_llm_cache):
     # Select a model that does not support structured output
     with patch('pdd.llm_invoke.select_model') as mock_select:
@@ -289,7 +301,13 @@ def test_llm_invoke_with_structured_output_not_supported(mock_load_models, mock_
             input_cost=0.01,
             output_cost=0.015,
             coding_arena_elo=1200,
-            structured_output=False
+            structured_output=False,
+            base_url="",
+            api_key="",
+            counter="",
+            encoder="",
+            max_tokens="",
+            max_completion_tokens=""
         )
         mock_select.return_value = mock_model
 
