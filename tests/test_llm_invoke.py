@@ -78,12 +78,6 @@ def mock_create_llm_instance():
         yield mock
 
 @pytest.fixture
-def mock_select_model():
-    with patch('pdd.llm_invoke.select_model') as mock:
-        mock.return_value = None  # Will set in individual tests
-        yield mock
-
-@pytest.fixture
 def mock_set_llm_cache():
     with patch('pdd.llm_invoke.set_llm_cache') as mock:
         yield mock
@@ -109,22 +103,18 @@ class MockLLM:
 
 def test_llm_invoke_valid_input(mock_load_models, mock_set_llm_cache):
     with patch('pdd.llm_invoke.create_llm_instance') as mock_create_llm_instance:
-        with patch('pdd.llm_invoke.select_model') as mock_select_model:
-            mock_create_llm_instance.return_value = MockLLM("Mocked LLM response")
-            mock_select_model.return_value = mock_load_models.return_value[0]
+        mock_create_llm_instance.return_value = MockLLM("Mocked LLM response")
 
-            prompt = "Tell me a joke about cats."
-            input_json = {"topic": "cats"}
-            strength = 0.5
-            temperature = 0.7
-            verbose = False
-            output_pydantic = None
+        # Set first model as candidate
+        mock_load_models.return_value[0].api_key = "EXISTING_KEY"
 
-            response = llm_invoke(prompt, input_json, strength, temperature, verbose, output_pydantic)
+        response = llm_invoke(
+            "Valid prompt", 
+            {"topic": "cats"}, 
+            0.5, 0.7, False
+        )
 
-            assert response['result'] == "Mocked LLM response"
-            assert response['cost'] == 0.0  # Tokens are mocked as None
-            assert response['model_name'] == 'gpt-4o-mini'
+        assert response['model_name'] == 'gpt-4o-mini'
 
 def test_llm_invoke_missing_prompt(mock_load_models, mock_create_llm_instance, mock_select_model, mock_set_llm_cache):
     input_json = {"topic": "cats"}
@@ -167,78 +157,52 @@ def test_llm_invoke_invalid_prompt_template(mock_load_models, mock_create_llm_in
             llm_invoke(prompt, input_json, strength, temperature, verbose)
 
 def test_llm_invoke_strength_less_than_half(mock_load_models, mock_set_llm_cache):
-    # Adjust select_model to return 'cheap-model' based on strength
-    with patch('pdd.llm_invoke.select_model') as mock_select:
-        mock_model = MockModelInfo(
-            provider='OpenAI',
-            model='cheap-model',
-            input_cost=0.01,
-            output_cost=0.015,
-            coding_arena_elo=1200,
-            structured_output=False
+    # Configure mock models
+    mock_load_models.return_value[1].api_key = "EXISTING_KEY"
+
+    with patch('pdd.llm_invoke.create_llm_instance') as mock_create:
+        mock_create.return_value = MockLLM("Mocked response")
+
+        response = llm_invoke(
+            "Test prompt",
+            {"topic": "test"},
+            0.3, 0.7, False
         )
-        mock_select.return_value = mock_model
 
-        with patch('pdd.llm_invoke.create_llm_instance') as mock_create:
-            mock_create.return_value = MockLLM("Mocked LLM response")
-
-            prompt = "Tell me a joke about cats."
-            input_json = {"topic": "cats"}
-            strength = 0.3
-            temperature = 0.7
-            verbose = False
-
-            response = llm_invoke(prompt, input_json, strength, temperature, verbose)
-
-            assert response['model_name'] == 'cheap-model'
+        assert response['model_name'] == 'cheap-model'
 
 def test_llm_invoke_strength_greater_than_half(mock_load_models, mock_set_llm_cache):
-    # Adjust select_model to return 'claude-3' based on strength
-    with patch('pdd.llm_invoke.select_model') as mock_select:
-        mock_model = MockModelInfo(
-            provider='Anthropic',
-            model='claude-3',
-            input_cost=0.025,
-            output_cost=0.035,
-            coding_arena_elo=1600,
-            structured_output=False
+    # Configure mock models
+    mock_load_models.return_value[2].api_key = "EXISTING_KEY"
+
+    with patch('pdd.llm_invoke.create_llm_instance') as mock_create:
+        mock_create.return_value = MockLLM("Mocked response")
+
+        response = llm_invoke(
+            "Test prompt",
+            {"topic": "test"},
+            0.7, 0.7, False
         )
-        mock_select.return_value = mock_model
 
-        with patch('pdd.llm_invoke.create_llm_instance') as mock_create:
-            mock_create.return_value = MockLLM("Mocked LLM response")
-
-            prompt = "Tell me a joke about cats."
-            input_json = {"topic": "cats"}
-            strength = 0.7
-            temperature = 0.7
-            verbose = False
-
-            response = llm_invoke(prompt, input_json, strength, temperature, verbose)
-
-            assert response['model_name'] == 'claude-3'
+        assert response['model_name'] == 'claude-3'
 
 def test_llm_invoke_output_pydantic(mock_load_models, mock_set_llm_cache):
-    with patch('pdd.llm_invoke.select_model') as mock_select_model:
-        mock_model = mock_load_models.return_value[0]  # gpt-4o-mini
-        mock_select_model.return_value = mock_model
+    with patch('pdd.llm_invoke.create_llm_instance') as mock_create:
+        json_response = '{"field1": "value1", "field2": 123}'
+        mock_create.return_value = MockLLM(json_response)
 
-        with patch('pdd.llm_invoke.create_llm_instance') as mock_create:
-            json_response = '{"field1": "value1", "field2": 123}'
-            mock_create.return_value = MockLLM(json_response)
+        prompt = "Provide data."
+        input_json = {"query": "Provide data."}
+        strength = 0.5
+        temperature = 0.7
+        verbose = False
+        output_pydantic = SampleOutputModel
 
-            prompt = "Provide data."
-            input_json = {"query": "Provide data."}
-            strength = 0.5
-            temperature = 0.7
-            verbose = False
-            output_pydantic = SampleOutputModel
+        response = llm_invoke(prompt, input_json, strength, temperature, verbose, output_pydantic)
 
-            response = llm_invoke(prompt, input_json, strength, temperature, verbose, output_pydantic)
-
-            expected_result = SampleOutputModel(field1="value1", field2=123)
-            assert response['result'] == expected_result
-            assert response['model_name'] == 'gpt-4o-mini'
+        expected_result = SampleOutputModel(field1="value1", field2=123)
+        assert response['result'] == expected_result
+        assert response['model_name'] == 'gpt-4o-mini'
 
 def test_llm_invoke_llm_error(mock_load_models, mock_set_llm_cache):
     class FaultyLLM:
@@ -250,19 +214,16 @@ def test_llm_invoke_llm_error(mock_load_models, mock_set_llm_cache):
 
     with patch('pdd.llm_invoke.create_llm_instance') as mock_create:
         mock_create.return_value = FaultyLLM()
-        with patch('pdd.llm_invoke.select_model') as mock_select:
-            mock_model = mock_load_models.return_value[0]
-            mock_select.return_value = mock_model
 
-            prompt = "Tell me a joke about cats."
-            input_json = {"topic": "cats"}
-            strength = 0.5
-            temperature = 0.7
-            verbose = False
-            output_pydantic = None
+        prompt = "Tell me a joke about cats."
+        input_json = {"topic": "cats"}
+        strength = 0.5
+        temperature = 0.7
+        verbose = False
+        output_pydantic = None
 
-            with pytest.raises(RuntimeError, match="Error during LLM invocation: LLM failure"):
-                llm_invoke(prompt, input_json, strength, temperature, verbose, output_pydantic)
+        with pytest.raises(RuntimeError, match="Error during LLM invocation: LLM failure"):
+            llm_invoke(prompt, input_json, strength, temperature, verbose, output_pydantic)
 
 def test_llm_invoke_verbose(mock_load_models, mock_set_llm_cache, capsys):
     with patch('pdd.llm_invoke.create_llm_instance') as mock_create:
@@ -294,32 +255,31 @@ def test_llm_invoke_verbose(mock_load_models, mock_set_llm_cache, capsys):
             assert "Input JSON: {'topic': 'cats'}" in captured.out
             assert "Result: Mocked LLM response" in captured.out
 
-def test_llm_invoke_with_env_variables(mock_load_models, mock_create_llm_instance, mock_select_model, mock_set_llm_cache):
+def test_llm_invoke_with_env_variables(mock_load_models, mock_set_llm_cache):
     # Mock environment variables
     with patch.dict(os.environ, {
         'PDD_MODEL_DEFAULT': 'gpt-4o-mini',
         'PDD_PATH': '/fake/path'
     }):
         with patch('pdd.llm_invoke.create_llm_instance') as mock_create:
-            with patch('pdd.llm_invoke.select_model') as mock_select:
-                mock_create.return_value = MockLLM("Mocked LLM response")
-                mock_select.return_value = mock_load_models.return_value[0]
+            mock_create.return_value = MockLLM("Mocked LLM response")
 
-                prompt = "Tell me a joke about cats."
-                input_json = {"topic": "cats"}
-                strength = 0.5
-                temperature = 0.7
-                verbose = False
-                output_pydantic = None
+            prompt = "Tell me a joke about cats."
+            input_json = {"topic": "cats"}
+            strength = 0.5
+            temperature = 0.7
+            verbose = False
+            output_pydantic = None
 
-                response = llm_invoke(prompt, input_json, strength, temperature, verbose, output_pydantic)
+            response = llm_invoke(prompt, input_json, strength, temperature, verbose, output_pydantic)
 
-                # Ensure load_models was called
-                mock_load_models.assert_called_once()
+            # Ensure load_models was called
+            mock_load_models.assert_called_once()
 
-                assert response['result'] == "Mocked LLM response"
-                assert response['model_name'] == 'gpt-4o-mini'
-
+            assert response['result'] == "Mocked LLM response"
+            assert response['model_name'] == 'gpt-4o-mini'
+            
+    
 def test_llm_invoke_with_structured_output_not_supported(mock_load_models, mock_create_llm_instance, mock_set_llm_cache):
     # Select a model that does not support structured output
     with patch('pdd.llm_invoke.select_model') as mock_select:
