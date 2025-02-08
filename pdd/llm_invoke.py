@@ -130,33 +130,44 @@ def select_base_model(models, base_model_name):
 
 def get_candidate_models(strength, models, base_model):
     """
-    Computes a candidate sorted list of models based on the strength parameter.
-    For strength < 0.5, candidates are those at or below the base average cost.
-    For strength > 0.5, candidates are those with coding_arena_elo >= base.
-    For strength == 0.5, candidates are the base model first then higher ELO models in ascending order.
-    Returns a list of ModelInfo candidates.
+    Returns ordered list of candidate models based on strength parameter.
+    Only includes models with available API keys.
     """
-    candidates = []
+    # Filter models with available API keys first
+    available_models = []
+    for model in models:
+        if not model.api_key or os.environ.get(model.api_key):
+            available_models.append(model)
+    
+    if not available_models:
+        raise RuntimeError("No models available with valid API keys")
+
+    # For base model case (strength = 0.5), try to use base model or fallback
+    if strength == 0.5:
+        base_candidates = [m for m in available_models if m.model == base_model.model]
+        if base_candidates:
+            return base_candidates
+        # If base model not available, use first available model
+        return [available_models[0]]
+        
+    # For strength < 0.5, find cheaper models
     if strength < 0.5:
-        cheaper_models = [m for m in models if m.average_cost <= base_model.average_cost]
+        cheaper_models = [m for m in available_models if m.average_cost <= base_model.average_cost]
         if not cheaper_models:
-            return [base_model]
+            return [base_model] if base_model in available_models else [available_models[0]]
         cheapest = min(cheaper_models, key=lambda m: m.average_cost)
         cost_range = base_model.average_cost - cheapest.average_cost
         target_cost = cheapest.average_cost + (strength / 0.5) * cost_range
-        candidates = sorted(cheaper_models, key=lambda m: abs(m.average_cost - target_cost))
-    elif strength > 0.5:
-        better_models = [m for m in models if m.coding_arena_elo >= base_model.coding_arena_elo]
-        if not better_models:
-            return [base_model]
-        highest = max(better_models, key=lambda m: m.coding_arena_elo)
-        elo_range = highest.coding_arena_elo - base_model.coding_arena_elo
-        target_elo = base_model.coding_arena_elo + ((strength - 0.5) / 0.5) * elo_range
-        candidates = sorted(better_models, key=lambda m: abs(m.coding_arena_elo - target_elo))
-    else:
-        higher_elo = [m for m in models if m.coding_arena_elo > base_model.coding_arena_elo]
-        candidates = [base_model] + sorted(higher_elo, key=lambda m: m.coding_arena_elo)
-    return candidates
+        return sorted(cheaper_models, key=lambda m: abs(m.average_cost - target_cost))
+    
+    # For strength > 0.5, find better models by ELO
+    better_models = [m for m in available_models if m.coding_arena_elo >= base_model.coding_arena_elo]
+    if not better_models:
+        return [base_model] if base_model in available_models else [available_models[0]]
+    highest = max(better_models, key=lambda m: m.coding_arena_elo)
+    elo_range = highest.coding_arena_elo - base_model.coding_arena_elo
+    target_elo = base_model.coding_arena_elo + ((strength - 0.5) / 0.5) * elo_range
+    return sorted(better_models, key=lambda m: abs(m.coding_arena_elo - target_elo))
 
 def create_llm_instance(selected_model, temperature, handler):
     """
@@ -252,29 +263,27 @@ def llm_invoke(prompt, input_json, strength, temperature, verbose=False, output_
     set_llm_cache(SQLiteCache(database_path=".langchain.db"))
     base_model_name = os.environ.get('PDD_MODEL_DEFAULT', 'gpt-4o-mini')
     models = load_models()
-    base_model = select_base_model(models, base_model_name)
-    candidate_models = get_candidate_models(strength, models, base_model)
+
+    try:
+        base_model = select_base_model(models, base_model_name)
+    except ValueError as e:
+        raise RuntimeError(f"Base model error: {str(e)}") from e
+
+    try:
+        candidate_models = get_candidate_models(strength, models, base_model)
+    except RuntimeError as e:
+        raise RuntimeError(f"Model selection error: {str(e)}") from e
+
     if verbose:
         rprint(f"[bold cyan]Candidate models (in order):[/bold cyan] {[m.model for m in candidate_models]}")
 
-    invocation_error = None
-
+    last_error = None
     for candidate in candidate_models:
-        if candidate.api_key:
-            if not os.environ.get(candidate.api_key):
-                if verbose:
-                    rprint(f"[yellow]Skipping model {candidate.model} because required environment variable '{candidate.api_key}' is not set.[/yellow]")
-                continue
-
         handler = CompletionStatusHandler()
-
         try:
             prompt_template = PromptTemplate.from_template(prompt)
-        except Exception as e:
-            raise ValueError(f"Invalid prompt template: {str(e)}")
-
-        try:
             llm = create_llm_instance(candidate, temperature, handler)
+            
             if output_pydantic:
                 if candidate.structured_output:
                     llm = llm.with_structured_output(output_pydantic)
@@ -285,33 +294,43 @@ def llm_invoke(prompt, input_json, strength, temperature, verbose=False, output_
             else:
                 chain = prompt_template | llm | StrOutputParser()
 
-            result_output = chain.invoke(input_json)
-            cost = calculate_cost(handler, candidate)
-            if verbose:
-                rprint(f"[bold green]Selected model: {candidate.model}[/bold green]")
-                rprint(f"Per input token cost: ${candidate.input_cost} per million tokens")
-                rprint(f"Per output token cost: ${candidate.output_cost} per million tokens")
-                rprint(f"Number of input tokens: {handler.input_tokens}")
-                rprint(f"Number of output tokens: {handler.output_tokens}")
-                rprint(f"Cost of invoke run: ${cost:.6f}")
-                rprint(f"Strength used: {strength}")
-                rprint(f"Temperature used: {temperature}")
-                try:
-                    rprint(f"Input JSON: {json.dumps(input_json, indent=2)}")
-                except Exception:
-                    rprint(f"Input JSON: {input_json}")
-                if output_pydantic:
-                    rprint(f"Output Pydantic format: {output_pydantic}")
-                rprint(f"Result: {result_output}")
-            return {'result': result_output, 'cost': cost, 'model_name': candidate.model}
-
+            try:
+                result_output = chain.invoke(input_json)
+                cost = calculate_cost(handler, candidate)
+                
+                if verbose:
+                    rprint(f"[bold green]Selected model: {candidate.model}[/bold green]")
+                    rprint(f"Per input token cost: ${candidate.input_cost} per million tokens")
+                    rprint(f"Per output token cost: ${candidate.output_cost} per million tokens")
+                    rprint(f"Number of input tokens: {handler.input_tokens}")
+                    rprint(f"Number of output tokens: {handler.output_tokens}")
+                    rprint(f"Cost of invoke run: ${cost:.6f}")
+                    rprint(f"Strength used: {strength}")
+                    rprint(f"Temperature used: {temperature}")
+                    try:
+                        rprint(f"Input JSON: {json.dumps(input_json, indent=2)}")
+                    except Exception:
+                        rprint(f"Input JSON: {input_json}")
+                    if output_pydantic:
+                        rprint(f"Output Pydantic format: {output_pydantic}")
+                    rprint(f"Result: {result_output}")
+                
+                return {'result': result_output, 'cost': cost, 'model_name': candidate.model}
+            except Exception as e:
+                last_error = e
+                if verbose:
+                    rprint(f"[red]Error with model {candidate.model}: {str(e)}[/red]")
+                continue
+                
         except Exception as e:
-            invocation_error = e
+            last_error = e
             if verbose:
-                rprint(f"[red]Invocation failed with model {candidate.model}: {str(e)}[/red]")
+                rprint(f"[red]Error with model {candidate.model}: {str(e)}[/red]")
             continue
 
-    raise RuntimeError(f"All candidate models failed. Last error: {invocation_error}")
+    if last_error:
+        raise RuntimeError(f"Error during LLM invocation: {str(last_error)}")
+    raise RuntimeError("No available models could process the request")
 
 if __name__ == "__main__":
     example_prompt = "Tell me a joke about {topic}"
