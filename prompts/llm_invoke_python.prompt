@@ -10,11 +10,11 @@
         'temperature' - Floating point number indicating the temperature of the LLM.
         'verbose' - Boolean indicating whether to print extra information.
         'output_pydantic' - Optional. This specifies a pydantic_object output format from the LLM model. If not given, the output will be a string.
-    Output:
+    Output (dictionary):
         'result' - Output from the LLM model.
         'cost' - Cost of the invoke run.
         'model_name' - Name of the selected model.
-
+        
 % Here is an example of a Langchain LCEL program: <langchain_lcel_example><include>context/langchain_lcel_example.py</include></langchain_lcel_example>
 Be sure to use the correct imports as shown in the above example.
 
@@ -22,9 +22,9 @@ Be sure to use the correct imports as shown in the above example.
 
 % Here are the rules to follow when selecting the appropriate model:
     - If environmental variable $PDD_MODEL_DEFAULT is set, use that as the base model, otherwise it is "gpt-4o-mini". If $PDD_PATH is set load $PDD_PATH/data/llm_model.csv, otherwise, assume $PDD_PATH is current working directory.
-    - When strength < 0.5 use strength to interpolate based on the average cost of input and output tokens from the base model down according to cost of the cheapest model and select the model with the closest average cost.
-    - When strength > 0.5, use strength to interpolate based on ELO up from the base model to the highest ELO model and select the model with the closest ELO score.
-    - Use base model when strength is 0.5.
+    - When strength < 0.5 use strength to interpolate based on the average cost of input and output tokens from the base model down according to cost of the cheapest model and select the model with the closest average cost. If calling the model fails during invoke, use the next cheapest model, and repeat until a model is found that works.
+    - When strength > 0.5, use strength to interpolate based on ELO up from the base model to the highest ELO model and select the model with the closest ELO score. If calling the model fails during invoke, use the next highest ELO model, and repeat until a model is found that works.
+    - Use base model when strength is 0.5. If calling the model fails during invoke, use the next highest ELO model, and repeat until a model is found that works.
 
 % CRITICAL: For models that support 'structured_output', use the '.with_structured_output()' when a desired Pydantic output is requested. Use PydanticOutputParser instead of JsonOutputParser for better Pydantic handling.
 
