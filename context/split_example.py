@@ -28,11 +28,11 @@ def factorial(n):
 result = factorial(5)
 print(f"Factorial of 5 is: {result}")
     """
-        strength: float = .5  # Float value between 0 and 1
+        strength: float = 0.5  # Float value between 0 and 1
         temperature: float = 0.0  # Float value between 0 and 1
 
-        # Call the split function
-        sub_prompt, modified_prompt, total_cost = split(
+        # Call the split function and unpack the new 4-tuple
+        sub_prompt, modified_prompt, model_name, total_cost = split(
             input_prompt=input_prompt,
             input_code=input_code,
             example_code=example_code,
@@ -44,6 +44,7 @@ print(f"Factorial of 5 is: {result}")
         # Print the results
         console.print(f"[bold]Sub Prompt:[/bold]\n{sub_prompt}")
         console.print(f"[bold]Modified Prompt:[/bold]\n{modified_prompt}")
+        console.print(f"[bold]Model used:[/bold] {model_name}")
         console.print(f"[bold]Total Cost:[/bold] ${total_cost:.6f}")
     except Exception as e:
         console.print(f"[bold red]An error occurred:[/bold red] {e}")

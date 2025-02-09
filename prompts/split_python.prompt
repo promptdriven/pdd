@@ -13,6 +13,7 @@
     Outputs as a tuple:
         - 'sub_prompt': A string containing the sub_prompt that was split from the input_prompt.
         - 'modified_prompt': A string containing the modified prompt from input_prompt split from the sub_prompt.
+        - 'model_name': A string containing the name of the model used in the first llm_invoke call.
         - 'total_cost': A float value representing the total cost of running the function.
 
 % Here is how to use the internal modules:
@@ -41,12 +42,13 @@
     3. Run the input through the model using llm_invoke with the processed split_LLM prompt:
         - a. Pass the following string parameters to the prompt during invocation: 'input_prompt', 'input_code', 'example_code'.
         - b. If verbose is True, pretty print the output of 3a, including the token count and estimated cost.
+        - c.  Capture the 'model_name' from the result of this llm_invoke call.
     4. Run the output from Step 3 through llm_invoke with the preprocessed extract_prompt_split_LLM prompt:
         - a. Use a separate llm_invoke call with a fixed strength of 0.89 for the JSON extraction step.
         - b. Pass the following string parameters to the prompt during invocation: 'llm_output' (this string is from Step 3).
         - c. If verbose is True, pretty print the running message with the token count and cost.
         - d. Extract 'sub_prompt' and 'modified_prompt' key values from the Pydantic output.
-    5. If verbose is True, pretty print the extracted sub_prompt and modified_prompt using Rich Markdown function. Include token counts and costs.
-    6. Return the 'sub_prompt', 'modified_prompt', and the total_cost of both invokes as a tuple.
+    5. If verbose is True, pretty print the extracted sub_prompt and modified_prompt using Rich Markdown function. Include token counts, costs, and the model_name.
+    6. Return the 'sub_prompt', 'modified_prompt', 'model_name', and the total_cost of both invokes as a tuple.  The 'model_name' should be the second to last element in the tuple.
 
 % Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses.

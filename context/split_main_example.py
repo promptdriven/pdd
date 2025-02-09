@@ -34,8 +34,8 @@ def split_cli(ctx, input_prompt_file: str, input_code_file: str, example_code_fi
     }
 
     try:
-        # Pass CLI parameters to split_main
-        sub_prompt, modified_prompt, total_cost = split_main(
+        # Pass CLI parameters to split_main and unpack the new 4-tuple return value
+        sub_prompt, modified_prompt, model_name, total_cost = split_main(
             ctx,
             input_prompt_file=input_prompt_file,
             input_code_file=input_code_file,
@@ -48,6 +48,7 @@ def split_cli(ctx, input_prompt_file: str, input_code_file: str, example_code_fi
         if not quiet:
             click.echo(f"Sub-prompt returned:\n{sub_prompt}")
             click.echo(f"Modified prompt returned:\n{modified_prompt}")
+            click.echo(f"Model used: {model_name}")
             click.echo(f"Total cost of operation: ${total_cost:.6f}")
     except Exception as e:
         click.echo(f"An error occurred: {e}", err=True)
