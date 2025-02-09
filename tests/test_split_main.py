@@ -48,6 +48,7 @@ def test_split_main_success(mock_ctx, quiet_mode, capsys):
     sub_prompt_result = "sub prompt result"
     modified_prompt_result = "modified prompt result"
     total_cost_result = 0.123456
+    mock_model_name = "mock_model" # Added mock model name
 
     with patch("pdd.split_main.construct_paths") as mock_construct_paths, \
          patch("pdd.split_main.split") as mock_split, \
@@ -55,10 +56,10 @@ def test_split_main_success(mock_ctx, quiet_mode, capsys):
 
         # Set up our patched functions
         mock_construct_paths.return_value = (mock_input_strings, mock_output_paths, mock_language)
-        mock_split.return_value = (sub_prompt_result, modified_prompt_result, total_cost_result)
+        mock_split.return_value = (sub_prompt_result, modified_prompt_result, mock_model_name, total_cost_result) # Corrected mock return
 
         # Act
-        sub_prompt, modified_prompt, total_cost = split_main(
+        sub_prompt, modified_prompt, total_cost, model_name = split_main( # Corrected unpacking
             mock_ctx,
             "input_prompt_file.prompt",
             "input_code_file.py",
@@ -71,6 +72,8 @@ def test_split_main_success(mock_ctx, quiet_mode, capsys):
         assert sub_prompt == sub_prompt_result
         assert modified_prompt == modified_prompt_result
         assert total_cost == total_cost_result
+        assert model_name == mock_model_name # Added model name assertion
+
 
         # Check that construct_paths was called with correct arguments
         mock_construct_paths.assert_called_once()
@@ -141,6 +144,7 @@ def test_split_main_io_error_during_write(mock_ctx, capsys):
         "output_modified": "/fake_dir/modified_prompt.prompt"
     }
     mock_language = "python"
+    mock_model_name = "mock_model"
 
     with patch("pdd.split_main.construct_paths") as mock_construct_paths, \
          patch("pdd.split_main.split") as mock_split, \
@@ -148,7 +152,7 @@ def test_split_main_io_error_during_write(mock_ctx, capsys):
          pytest.raises(SystemExit) as exc_info:
 
         mock_construct_paths.return_value = (mock_input_strings, mock_output_paths, mock_language)
-        mock_split.return_value = ("sub prompt", "modified prompt", 0.5)
+        mock_split.return_value = ("sub prompt", "modified prompt", mock_model_name, 0.5)
 
         split_main(
             mock_ctx,
@@ -162,7 +166,7 @@ def test_split_main_io_error_during_write(mock_ctx, capsys):
     captured = capsys.readouterr()
     assert exc_info.value.code == 1
     assert "Error:" in captured.out
-    assert "Disk full" in captured.out
+    assert "Failed to save output files: Disk full" in captured.out  # Corrected assertion
     assert "Hint: Check file permissions and disk space." in captured.out
 
 def test_split_main_value_error(mock_ctx, capsys):
@@ -217,12 +221,13 @@ def test_split_main_quiet_mode(mock_ctx, capsys):
         "output_sub": "/fake_dir/sub_prompt.prompt",
         "output_modified": "/fake_dir/modified_prompt.prompt"
     }
+    mock_model_name = "mock_model"
 
     with patch("pdd.split_main.construct_paths") as mock_construct_paths, \
          patch("pdd.split_main.split") as mock_split, \
          patch("builtins.open", mock_open()):
         mock_construct_paths.return_value = (mock_input_strings, mock_output_paths, None)
-        mock_split.return_value = ("sub prompt", "modified prompt", 1.234)
+        mock_split.return_value = ("sub prompt", "modified prompt", mock_model_name, 1.234) # Corrected Mock
 
         # Call function
         split_main(
