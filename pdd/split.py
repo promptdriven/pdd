@@ -17,20 +17,22 @@ def split(
     strength: float,
     temperature: float,
     verbose: bool = False
-) -> Tuple[str, str, float]:
+) -> Tuple[str, str, str, float]:
     """
     Split a prompt into a sub_prompt and modified_prompt.
 
     Args:
-        input_prompt (str): The prompt to split
-        input_code (str): The code generated from the input_prompt
-        example_code (str): Example code showing usage
-        strength (float): LLM strength parameter (0-1)
-        temperature (float): LLM temperature parameter (0-1)
-        verbose (bool): Whether to print detailed information
+        input_prompt (str): The prompt to split.
+        input_code (str): The code generated from the input_prompt.
+        example_code (str): Example code showing usage.
+        strength (float): LLM strength parameter (0-1).
+        temperature (float): LLM temperature parameter (0-1).
+        verbose (bool): Whether to print detailed information.
 
     Returns:
-        Tuple[str, str, float]: (sub_prompt, modified_prompt, total_cost)
+        Tuple[str, str, str, float]: (sub_prompt, modified_prompt, model_name, total_cost)
+            where model_name is the name of the model used (returned as the second to last tuple element)
+            and total_cost is the aggregated cost from all LLM invocations.
     """
     total_cost = 0.0
 
@@ -78,8 +80,9 @@ def split(
             temperature=temperature,
             verbose=verbose
         )
-        
         total_cost += split_response["cost"]
+        # Capture the model name from the first invocation.
+        model_name = split_response["model_name"]
 
         # 4. Extract JSON with second LLM invocation
         if verbose:
@@ -93,7 +96,6 @@ def split(
             output_pydantic=PromptSplit,
             verbose=verbose
         )
-        
         total_cost += extract_response["cost"]
 
         # Extract results
@@ -107,13 +109,14 @@ def split(
             rprint(Markdown(f"### Sub Prompt\n{sub_prompt}"))
             rprint(Markdown(f"### Modified Prompt\n{modified_prompt}"))
             rprint(f"[bold cyan]Total Cost: ${total_cost:.6f}[/bold cyan]")
+            rprint(f"[bold cyan]Model used: {model_name}[/bold cyan]")
 
-        # 6. Return results
-        return sub_prompt, modified_prompt, total_cost
+        # 6. Return results (model_name is the 2nd to last element)
+        return sub_prompt, modified_prompt, model_name, total_cost
 
     except Exception as e:
         # Print an error message, then raise an exception that includes
-        # the prefix “Error in split function: …” in its final message.
+        # the prefix "Error in split function: …" in its final message.
         rprint(f"[bold red]Error in split function: {str(e)}[/bold red]")
         # Re-raise using the same exception type but with a modified message.
         raise type(e)(f"Error in split function: {str(e)}") from e

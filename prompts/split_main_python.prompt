@@ -17,9 +17,10 @@
         - 'output_sub' (`Optional[str]`): Path where to save the sub-prompt. If None, uses default naming convention.
         - 'output_modified' (`Optional[str]`): Path where to save the modified prompt. If None, uses default naming convention.
     Outputs:
-        - Returns a tuple containing (`str`, `str`, `float`):
+        - Returns a tuple containing (`str`, `str`, `str`, `float`):
             - `str`: The sub-prompt content
             - `str`: The modified prompt content
+            - `str`: The model name used (second to last element)
             - `float`: The total cost of the operation
 
 % Example for using the Python Click library:
