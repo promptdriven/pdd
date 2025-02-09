@@ -1,6 +1,5 @@
 # TODO
 - [ ] Vertex AI support
-- [ ] support for when keys are missing
 - [ ] Python 3.13 support
 
 
