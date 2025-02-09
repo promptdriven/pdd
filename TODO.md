@@ -1,5 +1,4 @@
 # TODO
-- [ ] Vertex AI support
 - [ ] Python 3.13 support
 
 
