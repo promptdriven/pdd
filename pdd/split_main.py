@@ -13,7 +13,7 @@ def split_main(
     example_code_file: str,
     output_sub: Optional[str],
     output_modified: Optional[str]
-) -> Tuple[str, str, float]:
+) -> Tuple[str, str, str, float]:
     """
     CLI wrapper for splitting a prompt into a sub_prompt and modified_prompt.
 
@@ -30,6 +30,7 @@ def split_main(
             - str: The sub-prompt content
             - str: The modified prompt content
             - float: The total cost of the operation
+            - str: The model name used (second to last element)
 
     Raises:
         SystemExit: If any error occurs during execution.
@@ -59,8 +60,8 @@ def split_main(
         strength = ctx.obj.get('strength', 0.5)
         temperature = ctx.obj.get('temperature', 0)
 
-        # Call the split function
-        sub_prompt, modified_prompt, total_cost = split(
+        # Call the split function and unpack the new tuple signature
+        sub_prompt, modified_prompt, model_name, total_cost = split(
             input_prompt=input_strings["input_prompt"],
             input_code=input_strings["input_code"],
             example_code=input_strings["example_code"],
@@ -83,9 +84,10 @@ def split_main(
             rprint("[bold green]Successfully split the prompt![/bold green]")
             rprint(f"[bold]Sub-prompt saved to:[/bold] {output_file_paths['output_sub']}")
             rprint(f"[bold]Modified prompt saved to:[/bold] {output_file_paths['output_modified']}")
+            rprint(f"[bold]Model used:[/bold] {model_name}")
             rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
 
-        return sub_prompt, modified_prompt, total_cost
+        return sub_prompt, modified_prompt, total_cost, model_name
 
     except Exception as e:
         # Handle errors and provide appropriate feedback
