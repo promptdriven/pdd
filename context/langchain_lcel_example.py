@@ -107,7 +107,7 @@ result = chain.invoke({"query": "Tell me a joke about openai."})
 print("4o mini JSON: ",result)
 print(result.setup) # How to access the structured output
 
-llm = ChatOpenAI(model="o1-preview", temperature=1, 
+llm = ChatOpenAI(model="o1", temperature=1, 
                            callbacks=[handler],model_kwargs = {"max_completion_tokens" : 1000})
 # Chain the components. 
 #  The class `LLMChain` was deprecated in LangChain 0.1.17 and will be removed in 1.0. Use RunnableSequence, e.g., `prompt | llm` instead.
