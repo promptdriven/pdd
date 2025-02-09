@@ -221,7 +221,7 @@ def create_llm_instance(selected_model, temperature, handler):
     if max_completion_tokens:
         llm.model_kwargs = {"max_completion_tokens": max_completion_tokens}
     elif max_tokens:
-        if provider == 'google':
+        if provider == 'google' or provider == 'googlevertexai':
             llm.max_output_tokens = max_tokens
         else:
             llm.max_tokens = max_tokens
