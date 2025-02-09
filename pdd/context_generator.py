@@ -109,7 +109,7 @@ def context_generator(code_module: str, prompt: str, language: str = "python", s
         example_code, postprocess_cost, postprocess_model = postprocess(
             llm_output=final_llm_output,
             language=language,
-            strength=0.9,
+            strength=0.89,
             temperature=temperature,
             verbose=verbose
         )
