@@ -4,10 +4,10 @@
 export PDD_AUTO_UPDATE=false
 
 # Define variables for commonly used paths
-STAGING_PATH="$PDD_PATH/staging"
+STAGING_PATH="$PDD_PATH/../staging"
 PDD_SCRIPT="pdd"
-PROMPTS_PATH="$PDD_PATH/prompts"
-CONTEXT_PATH="$PDD_PATH/context"
+PROMPTS_PATH="$PDD_PATH/../prompts"
+CONTEXT_PATH="$PDD_PATH/../context"
 CONTEXT_PATH_GLOB="$CONTEXT_PATH/*.py"
 LOG_FILE="regression.log"
 COST_FILE="regression_cost.csv"
