@@ -83,7 +83,7 @@ def test_code_generator_valid_input_complete(
     mock_postprocess.assert_called_once_with(
         llm_output=MOCK_INITIAL_RESPONSE['result'],
         language="python",
-        strength=0.895,
+        strength=0.89,
         temperature=0.0,
         verbose=True
     )
@@ -137,7 +137,7 @@ def test_code_generator_valid_input_incomplete(
     mock_postprocess.assert_called_once_with(
         llm_output=MOCK_FINAL_OUTPUT,
         language="python",
-        strength=0.895,
+        strength=0.89,
         temperature=0.0,
         verbose=False
     )
@@ -289,7 +289,7 @@ def test_code_generator_edge_case_exact_600_chars(
     mock_postprocess.assert_called_once_with(
         llm_output='a' * 600,
         language="python",
-        strength=0.895,
+        strength=0.89,
         temperature=0.0,
         verbose=False
     )
