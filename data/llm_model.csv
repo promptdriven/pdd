@@ -4,7 +4,7 @@ OpenAI,"deepseek-coder",0.14,0.28,1256,"https://api.deepseek.com/beta",DEEPSEEK_
 OpenAI,"deepseek-reasoner",0.55,2.19,1309,"https://api.deepseek.com/beta",DEEPSEEK_API_KEY,autotokenizer,deepseek-coder-7b-instruct-v1.5,8192,,False
 Ollama,"qwen2.5-coder:32b-instruct-fp16",0.0,0.0,1227,,PWD,,,,,False
 Ollama,"athene-v2:72b-q8_0",0.0,0.0,1253,,PWD,,,,,False
-Anthropic,"claude-3-5-sonnet-20241022",3,15,1309,,ANTHROPIC_API_KEY,anthropic,claude-3-sonnet-20240229,8192,,False
+Anthropic,"claude-3-5-sonnet-20241022",3,15,1308,,ANTHROPIC_API_KEY,anthropic,claude-3-sonnet-20240229,8192,,False
 Google,"gemini-2.0-flash-exp",0.15,0.60,1281,,GOOGLE_API_KEY,,,8192,,False
 Fireworks,"accounts/fireworks/models/llama-v3p3-70b-instruct",3,3,1280,,FIREWORKS_API_KEY,,,16384,,False
 Fireworks,"accounts/fireworks/models/qwen2p5-coder-32b-instruct",.9,.9,1226,,FIREWORKS_API_KEY,,,2048,,False
@@ -13,5 +13,5 @@ OpenAI,"gpt-4o-2024-11-20",2.5,10,1306,,OPENAI_API_KEY,tiktoken,o200k_base,16384
 OpenAI,"o1-2024-12-17",15,60,1311,,OPENAI_API_KEY,tiktoken,o200k_base,,32768,True
 OpenAI,"grok-beta",5,15,1255,"https://api.x.ai/v1",XAI_API_KEY,tiktoken,o200k_base,4096,,False
 Anthropic,"claude-3-5-haiku-20241022",1,5,1265,,ANTHROPIC_API_KEY,anthropic,claude-3-sonnet-20240229,8192,,False
-GoogleVertexAI,gemini-2.0-pro-exp-02-05,0,0,1321,,VERTEX_AI_API_KEY,,,8192,,False
-Google,gemini-exp-1206,0.15,0.60,1321,,GOOGLE_API_KEY,,,8192,,False
+GoogleVertexAI,gemini-2.0-pro-exp-02-05,0.14,.59,1321,,VERTEX_AI_API_KEY,,,8192,,False
+Google,gemini-exp-1206,0.15,0.60,1320,,GOOGLE_API_KEY,,,8192,,False
