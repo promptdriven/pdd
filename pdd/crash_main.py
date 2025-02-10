@@ -82,10 +82,13 @@ def crash_main(
                 error_log_file=error_file,
                 verbose=not ctx.obj.get('verbose', False)
             )
+            # Determine if the contents were updated by comparing with original inputs
+            update_code = final_code != code_content
+            update_program = final_program != program_content
         else:
             # Use single fix attempt
             from .fix_code_module_errors import fix_code_module_errors
-            _, _, final_program, final_code, cost, model = fix_code_module_errors(
+            update_program, update_code, final_program, final_code, cost, model = fix_code_module_errors(
                 program=program_content,
                 prompt=prompt_content,
                 code=code_content,
@@ -97,11 +100,11 @@ def crash_main(
             success = True
             attempts = 1
 
-        # Save results
-        if output_file_paths.get("output"):
+        # Save results only if updates occurred
+        if update_code and output_file_paths.get("output"):
             with open(output_file_paths["output"], 'w') as f:
                 f.write(final_code)
-        if output_file_paths.get("output_program"):
+        if update_program and output_file_paths.get("output_program"):
             with open(output_file_paths["output_program"], 'w') as f:
                 f.write(final_program)
 
@@ -114,9 +117,9 @@ def crash_main(
             rprint(f"[bold]Model used:[/bold] {model}")
             rprint(f"[bold]Total attempts:[/bold] {attempts}")
             rprint(f"[bold]Total cost:[/bold] ${cost:.6f}")
-            if output:
+            if update_code and output:
                 rprint(f"[bold]Fixed code saved to:[/bold] {output_file_paths['output']}")
-            if output_program:
+            if update_program and output_program:
                 rprint(f"[bold]Fixed program saved to:[/bold] {output_file_paths['output_program']}")
 
         return success, final_code, final_program, attempts, cost, model
