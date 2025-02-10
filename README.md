@@ -213,7 +213,7 @@ The generated CSV file includes the following columns:
 - timestamp: The date and time of the command execution
 - model: The AI model used for the operation
 - command: The PDD command that was executed
-- cost: The estimated cost of the operation in USD (e.g., 0.05 for 5 cents)
+- cost: The estimated cost of the operation in USD (e.g., 0.05 for 5 cents). This will be zero for local models or operations that do not use a LLM.
 - input_files: A list of input files involved in the operation
 - output_files: A list of output files generated or modified by the operation
 
@@ -353,7 +353,7 @@ Arguments:
 
 Options:
 - `--output LOCATION`: Specify where to save the preprocessed prompt file. The default file name is `<basename>_<language>_preprocessed.prompt`.
-- `--xml`: Automatically insert XML delimiters for long and complex prompt files to structure the content better. With this option prompts are not preprocessed.
+- `--xml`: Automatically insert XML delimiters for long and complex prompt files to structure the content better. With this option prompts are only preprocessed to insert in XML delimiters, but not preprocessed otherwise.
 - `--recursive`: Recursively preprocess all prompt files in the prompt file.
 - `--double`: Curly brackets will be doubled.
 - `--exclude`: List of keys to exclude from curly bracket doubling.
@@ -397,6 +397,7 @@ Outputs:
   - Success status (boolean)
   - Total number of fix attempts made
   - Total cost of all fix attempts
+- This will also create versions of the unit test and code files for the different iterations (with suffixes `_failures_errors_attemptnum`) of the fix attempts.
 
 Example:
 ```
