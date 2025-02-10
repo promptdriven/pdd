@@ -79,7 +79,7 @@ requirements:
 	@cat ./tmp_requirements.txt ./requirements.txt | sort | uniq > ./final_requirements.txt
 	@mv ./final_requirements.txt ./requirements.txt
 	@rm ./tmp_requirements.txt
-	@fawltydeps --detailed ./requirements.txt
+	@fawltydeps --detailed 
 
 # Clean generated files
 clean:
