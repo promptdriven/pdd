@@ -9,7 +9,7 @@ PDD_SCRIPT="pdd"
 PROMPTS_PATH="$PDD_PATH/../prompts"
 CONTEXT_PATH="$PDD_PATH/../context"
 CONTEXT_PATH_GLOB="$CONTEXT_PATH/*.py"
-LOG_FILE="regression.log"
+LOG_FILE="$STAGING_PATH/regression/regression.log"
 COST_FILE="regression_cost.csv"
 
 # Define variables for commonly used filenames
