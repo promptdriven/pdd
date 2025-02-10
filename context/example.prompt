@@ -5,3 +5,4 @@
     - When working with files, create the content of required examples files that would be read by the function.
     - Do not use try/except blocks in the examples.
     - created files should be in the output directory.
+    - The PDD_PATH environment variable is already set to the path of the pdd directory.

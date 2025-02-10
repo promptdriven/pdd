@@ -32,6 +32,12 @@ SPLIT_EXAMPLE_SCRIPT="split_construct_paths_generate_output_filename.py"
 # Enable verbose output (1 for true, 0 for false)
 VERBOSE=1
 
+# Set the strength variable
+STRENGTH=0.85
+
+# Set the temperature variable
+TEMPERATURE=1
+
 # Remove regression.log if it exists
 if [ -f "$LOG_FILE" ]; then
     rm "$LOG_FILE"
@@ -53,14 +59,14 @@ log_timestamped() {
 run_pdd_command() {
     local command=$1
     local args="${@:2}"
-    log "Running: $PDD_SCRIPT --force --strength 0.5 --temperature 0.0 --output-cost $STAGING_PATH/regression/$COST_FILE $command $args"
-    $PDD_SCRIPT --force --strength 0.5 --temperature 0.0 --output-cost $STAGING_PATH/regression/$COST_FILE $command $args >> "$LOG_FILE" 2>&1
+    log "Running: $PDD_SCRIPT --force --strength $STRENGTH --temperature $TEMPERATURE --output-cost $STAGING_PATH/regression/$COST_FILE $command $args"
+    $PDD_SCRIPT --force --strength $STRENGTH --temperature $TEMPERATURE --output-cost $STAGING_PATH/regression/$COST_FILE $command $args >> "$LOG_FILE" 2>&1
     if [ $? -eq 0 ]; then
         log "Command completed successfully."
-        log_timestamped "Command: $PDD_SCRIPT --force --strength 0.5 --temperature 0.0 --output-cost $STAGING_PATH/regression/$COST_FILE $command $args - Completed successfully."
+        log_timestamped "Command: $PDD_SCRIPT --force --strength $STRENGTH --temperature $TEMPERATURE --output-cost $STAGING_PATH/regression/$COST_FILE $command $args - Completed successfully."
     else
         log "Command failed."
-        log_timestamped "Command: $PDD_SCRIPT --force --strength 0.5 --temperature 0.0 --output-cost $STAGING_PATH/regression/$COST_FILE $command $args - Failed."
+        log_timestamped "Command: $PDD_SCRIPT --force --strength $STRENGTH --temperature $TEMPERATURE --output-cost $STAGING_PATH/regression/$COST_FILE $command $args - Failed."
         exit 1
     fi
     log "----------------------------------------"
@@ -74,12 +80,24 @@ log "----------------------------------------"
 
 # Run regression tests
 log "Running regression tests"
+
+# Generate extension script from its prompt
 run_pdd_command generate --output "$STAGING_PATH/regression/$EXTENSION_SCRIPT" "$PROMPTS_PATH/$EXTENSION_PROMPT"
+
+# Backup the originally generated extension script for update comparison
+cp "$STAGING_PATH/regression/$EXTENSION_SCRIPT" "$STAGING_PATH/regression/original_$EXTENSION_SCRIPT"
+
+# Modify the extension script slightly to trigger an update (adding a print statement)
+sed -i '1i print("Hello World")' "$STAGING_PATH/regression/$EXTENSION_SCRIPT"
+
+# Continue with the rest of the regression test commands
 run_pdd_command example --output  "$STAGING_PATH/regression/$EXTENSION_VERIFICATION_PROGRAM"  "$PROMPTS_PATH/$EXTENSION_PROMPT" "$STAGING_PATH/regression/$EXTENSION_SCRIPT"
 run_pdd_command test --output "$STAGING_PATH/regression/$EXTENSION_TEST" "$PROMPTS_PATH/$EXTENSION_PROMPT" "$STAGING_PATH/regression/$EXTENSION_SCRIPT"
 run_pdd_command preprocess --output "$STAGING_PATH/regression/preprocessed_$EXTENSION_PROMPT" "$PROMPTS_PATH/$EXTENSION_PROMPT"
 run_pdd_command preprocess --xml --output "$STAGING_PATH/regression/$XML_OUTPUT_PROMPT" "$PROMPTS_PATH/$EXTENSION_PROMPT"
-run_pdd_command update --output "$STAGING_PATH/regression/updated_$EXTENSION_PROMPT" "$PROMPTS_PATH/$EXTENSION_PROMPT" "$STAGING_PATH/regression/$EXTENSION_SCRIPT" "$STAGING_PATH/regression/$EXTENSION_SCRIPT"
+
+# Updated update command now uses both the modified and original version of the extension script
+run_pdd_command update --output "$STAGING_PATH/regression/updated_$EXTENSION_PROMPT" "$PROMPTS_PATH/$EXTENSION_PROMPT" "$STAGING_PATH/regression/$EXTENSION_SCRIPT" "$STAGING_PATH/regression/original_$EXTENSION_SCRIPT"
 
 # Run change command
 log "Running change command"
@@ -131,8 +149,8 @@ run_pdd_command trace --output "$STAGING_PATH/regression/trace_results.log" \
 
 # Run bug command
 log "Running bug command"
-echo "Current output" > "$STAGING_PATH/regression/current_output.txt"
-echo "Desired output" > "$STAGING_PATH/regression/desired_output.txt"
+echo "The file extension for 'Python' is: '.py'" > "$STAGING_PATH/regression/current_output.txt"
+echo "The file extension for 'Python' is: 'py'" > "$STAGING_PATH/regression/desired_output.txt"
 run_pdd_command bug --output "$STAGING_PATH/regression/bug_$EXTENSION_TEST" \
                     "$PROMPTS_PATH/$EXTENSION_PROMPT" "$STAGING_PATH/regression/$EXTENSION_SCRIPT" \
                     "$STAGING_PATH/regression/$EXTENSION_VERIFICATION_PROGRAM" \

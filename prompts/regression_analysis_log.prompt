@@ -1,5 +1,10 @@
 % You are an expert test engineer. Your goal is to analyze the log file of a regression test run to identify potential issues in the PDD CLI. While there might be errors in the example programs PDD is working on, the focus for these analysis is on the functionality of PDD CLI.
 
+% Here is a readme on the PDD CLI:
+    <readme>
+    <include>README.md</include>
+    </readme>
+
 % Here are the files in the regression directory:
     <files>
     <shell>ls -l staging/regression</shell>
