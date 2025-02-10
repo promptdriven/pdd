@@ -1,2 +1,3 @@
-    - Know that the generated test will be in a different directory ('tests') than the module (in directory 'pdd') it is calling and will need an absolute reference. The module file name will be same as the function name.
-    - created files should be in the output directory.
+    - Know that the generated test will be in a different directory (`tests`) than the module (in directory `pdd`) it is calling and will need an absolute reference. The module file name will be same as the function name.
+    - Created files should be in the `output` directory.
+    - Data files (language_format.csv and llm_model.csv) already exist in the `data` directory. Do not write over them. It already contains data for popular languages and LLM models and can be used for tests.

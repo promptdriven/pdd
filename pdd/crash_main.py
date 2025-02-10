@@ -82,9 +82,6 @@ def crash_main(
                 error_log_file=error_file,
                 verbose=not ctx.obj.get('verbose', False)
             )
-            # Determine if the contents were updated by comparing with original inputs
-            update_code = final_code != code_content
-            update_program = final_program != program_content
         else:
             # Use single fix attempt
             from .fix_code_module_errors import fix_code_module_errors
@@ -100,7 +97,11 @@ def crash_main(
             success = True
             attempts = 1
 
-        # Save results only if updates occurred
+        # Determine if contents were actually updated
+        update_code = final_code != code_content
+        update_program = final_program != program_content
+
+        # Save results if contents changed
         if update_code and output_file_paths.get("output"):
             with open(output_file_paths["output"], 'w') as f:
                 f.write(final_code)

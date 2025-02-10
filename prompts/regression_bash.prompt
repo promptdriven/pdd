@@ -15,13 +15,16 @@
     4. In the 'crash' command, use EXTENSION_VERIFICATION_PROGRAM instead of TRACE_PROGRAM.
     5. For the 'bug' command:
         - Use EXTENSION_SCRIPT and EXTENSION_VERIFICATION_PROGRAM
-        - Add quotes around CURRENT_OUTPUT and DESIRED_OUTPUT
+        - Use specific Python extension examples:
+            - Current output: "The file extension for 'Python' is: '.py'"
+            - Desired output: "The file extension for 'Python' is: 'py'"
         - Include "bug_" in the output filename
     6. Ensure all commands use appropriate and consistent file paths and variables.
-
-% These changes will make the regression script more consistent and focused on testing the core functionality of the pdd cli.
-
-% Use a strength of 0.5, a temperature of 0 and force for all commands.
+    7. Use a strength of 0.85 and a temperature of 1.0 for all commands.
+    8. For the update command:
+        - Create a backup of the original extension script
+        - Modify the extension script by adding a print statement
+        - Use both modified and original versions in the update command
 
 % Set PDD_AUTO_UPDATE to false for the regression script so pdd doesn't ask to update itself.
 
