@@ -1,181 +1,187 @@
 PDD (Prompt-Driven Development) Command Line Interface
 ======================================================
 
-.. image:: https://img.shields.io/badge/pdd--cli-v0.0.4-blue
+PDD (Prompt-Driven Development) is a command-line interface that harnesses AI models to generate and maintain code from prompt files. Whether you want to create new features, fix bugs, enhance unit tests, or manage complex prompt structures, pdd-cli streamlines your workflow through an intuitive interface and powerful automation.
+.. image:: https://img.shields.io/badge/pdd--cli-v0.0.6-blue
    :alt: PDD-CLI Version
-
-**Unlock the power of prompt-driven development with the PDD-CLI!**
-
-PDD (Prompt-Driven Development) is a revolutionary approach to software development that leverages the power of AI to streamline your workflow. The `pdd-cli` package provides a powerful command-line interface to interact with the PDD ecosystem, allowing you to generate code, create examples, run tests, and manage prompt files with ease.
-
 Key Features
 ------------
 
-*   **Code Generation:** Effortlessly generate runnable code from natural language prompts using the `generate` command.
-*   **Example Creation:** Automatically create example files from existing code and prompts with the `example` command.
-*   **Automated Testing:** Generate and enhance unit tests with the `test` command, including coverage analysis and improvement.
-*   **Prompt Management:** Preprocess, split, change, and update prompt files using commands like `preprocess`, `split`, `change`, and `update`.
-*   **Error Fixing:** Automatically fix errors in code and unit tests with the `fix` command, featuring iterative fixing and budget control.
-*   **Conflict Resolution:** Analyze and resolve conflicts between prompts using the `conflicts` command.
-*   **Crash Recovery:** Fix errors that caused a program to crash with the `crash` command, featuring iterative fixing and budget control.
-*   **Trace Analysis:** Find the associated line number between a prompt file and the generated code with the `trace` command.
-*   **Bug Reproduction:** Generate a unit test based on observed and desired outputs with the `bug` command.
-*   **Dependency Management:** Automatically analyze and insert dependencies into prompts with the `auto-deps` command.
-*   **Multi-Language Support:** Work with a wide range of programming languages, including Python, JavaScript, Java, C++, Ruby, and Go.
-*   **AI Model Control:** Fine-tune the AI model's output with options like `--strength` and `--temperature`.
-*   **Cost Tracking:** Monitor and report the cost of operations with the `--output-cost` option.
-*   **Example Review:** Review and control the use of few-shot examples with the `--review-examples` option.
-*   **Automatic Example Submission:** Automatically submit successful fixes to the PDD Cloud platform with the `--auto-submit` option.
-*   **Environment Variable Configuration:** Customize output locations and other settings using environment variables.
-*   **Git Integration:** Use git history to find the original code file with the `--git` option in the `update` command.
-*   **Auto-Update:** Stay up-to-date with the latest features and security patches (controllable via environment variable).
-*   **Comprehensive Help:** Access detailed help for all commands and options.
-*   **Tab Completion:** Enjoy tab completion for commands and options in compatible shells.
-*   **Colorized Output:** Benefit from colorized output for improved readability.
+- Cloud or Local Execution  
+  • Run in the cloud (default) with no need to manage API keys.  
+  • Switch to local mode with the ``--local`` flag for full control using your own API keys.
 
-Installation
-------------
+- GitHub Single Sign-On  
+  • Secure authentication with GitHub SSO in cloud mode.  
+  • Automatic token handling so you can focus on coding.
 
-Install `pdd-cli` using pip:
+- Comprehensive Command Suite  
+  • Generate: Create runnable code from prompt files.  
+  • Example: Build examples that showcase generated code usage.  
+  • Test: Produce or improve unit tests based on coverage goals.  
+  • Fix & Crash: Automatically identify and correct errors, iterating if necessary.  
+  • Update & Change: Keep your prompt files in sync with evolving codebases.  
+  • Split & Detect: Manage and analyze complex prompts at scale.  
+  • …and more!
 
-.. code-block:: bash
+- Automated Testing & Cost Tracking  
+  • Generate coverage reports and additional test cases on the fly.  
+  • Optional cost-tracking (CSV) for AI usage.  
 
-    pip install pdd-cli
+- Rich Configuration & Customization  
+  • Environment variables to define default output paths and settings.  
+  • Fine-tune AI model behavior with ``--strength`` and ``--temperature``.  
+  • Built-in auto-update (configurable via env var).
 
-Verify the installation:
+- Cross-Language Support  
+  • Python, Java, JavaScript, Ruby, Go, C++, and beyond.  
+  • Prompt naming conventions let PDD infer language automatically.
 
-.. code-block:: bash
+Quick Installation
+------------------
 
-    pdd --version
+.. code-block:: console
 
-Advanced Installation
----------------------
+   pip install pdd-cli
 
-For more control, you can install `pdd-cli` in a virtual environment:
+After installation, verify:
 
-.. code-block:: bash
+.. code-block:: console
 
-    # Create virtual environment
-    python -m venv pdd-env
+   pdd --version
+
+You’ll see the current PDD version (e.g., 0.0.6).
+
+Advanced Installation Tips
+--------------------------
+
+Virtual Environment
+~~~~~~~~~~~~~~~~~~
+Create and activate a virtual environment, then install pdd-cli:
+
+.. code-block:: console
+
+   python -m venv pdd-env
 
     # Activate environment
     # On Windows:
     pdd-env\Scripts\activate
     # On Unix/MacOS:
-    source pdd-env/bin/activate
+   source pdd-env/bin/activate
 
     # Install PDD
-    pip install pdd-cli
+   pip install pdd-cli
 
-API Key Setup
--------------
+Environment Variables
+~~~~~~~~~~~~~~~~~~~~
+Optionally, add environment variables to your shell startup (e.g., ``.bashrc``, ``.zshrc``):
 
-`pdd-cli` requires an API key for the language model. Set up your environment variable:
+.. code-block:: console
 
-.. code-block:: bash
+   export PDD_AUTO_UPDATE=true
+   export PDD_GENERATE_OUTPUT_PATH=/path/to/generated/code/
+   export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
-    # For OpenAI
-    export OPENAI_API_KEY=your_api_key_here
+Tab Completion
+~~~~~~~~~~~~~~
+Enable shell completion:
 
-    # For Anthropic
-    export ANTHROPIC_API_KEY=your_api_key_here
+.. code-block:: console
 
-    # For other supported providers
-    export PROVIDER_API_KEY=your_api_key_here
+   pdd install_completion
 
-Add these to your `.bashrc`, `.zshrc`, or equivalent for persistence.
+Cloud vs Local
+--------------
 
-Post-Installation Setup
-------------------------
+By default, PDD runs in cloud mode, using GitHub SSO for secure access to AI models—no local API keys needed. If you want or need to run locally:
 
-1. Enable tab completion:
+.. code-block:: console
 
-    .. code-block:: bash
+   pdd --local generate my_prompt_python.prompt
 
-        pdd install_completion
+Be sure to configure API keys in your environment ahead of time:
 
-2. Configure environment variables (optional):
+.. code-block:: console
 
-    .. code-block:: bash
-
-        # Add to .bashrc, .zshrc, or equivalent
-        export PDD_AUTO_UPDATE=true
-        export PDD_GENERATE_OUTPUT_PATH=/path/to/generated/code/
-        export PDD_TEST_OUTPUT_PATH=/path/to/tests/
+   export OPENAI_API_KEY=your_api_key_here
+   export ANTHROPIC_API_KEY=your_api_key_here
+   # etc.
 
 Basic Usage
 -----------
 
-.. code-block:: bash
+All commands follow a standard pattern:
 
-    pdd [GLOBAL OPTIONS] COMMAND [OPTIONS] [ARGS]...
+.. code-block:: console
 
-Global Options
---------------
+   pdd [GLOBAL OPTIONS] COMMAND [COMMAND OPTIONS] [ARGS]...
 
-*   `--force`: Overwrite existing files without asking.
-*   `--strength FLOAT`: Set the AI model strength (0.0 to 1.0, default 0.5).
-*   `--temperature FLOAT`: Set the AI model temperature (default 0.0).
-*   `--verbose`: Increase output verbosity.
-*   `--quiet`: Decrease output verbosity.
-*   `--output-cost PATH_TO_CSV_FILE`: Enable cost tracking.
-*   `--review-examples`: Review and optionally exclude few-shot examples.
+Example – Generate Code
+~~~~~~~~~~~~~~~~~~~~~~~
 
-Commands
---------
+Generate Python code from a prompt:
 
-Here's a quick overview of the core commands. Use `pdd COMMAND --help` for detailed information on each command.
+.. code-block:: console
 
-1. **generate**: Create code from a prompt file.
-2. **example**: Create an example file from code and its prompt.
-3. **test**: Generate or enhance unit tests.
-4. **preprocess**: Preprocess prompt files.
-5. **fix**: Fix errors in code and unit tests.
-6. **split**: Split large prompt files.
-7. **change**: Modify a prompt based on a change prompt.
-8. **update**: Update a prompt based on modified code.
-9. **detect**: Determine which prompts need changes.
-10. **conflicts**: Find conflicts between prompts.
-11. **crash**: Fix errors that caused a program to crash.
-12. **trace**: Find the associated line number between a prompt file and the generated code.
-13. **bug**: Generate a unit test based on observed and desired outputs.
-14. **auto-deps**: Analyze and insert dependencies into prompts.
+   pdd generate factorial_calculator_python.prompt
 
-Example Workflow
-----------------
+In cloud mode (no local keys required). Or locally if you prefer:
 
-Here's a simple example of generating code and tests:
+.. code-block:: console
 
-.. code-block:: bash
+   pdd --local generate factorial_calculator_python.prompt
 
-    # Generate code
-    pdd generate --output src/factorial.py factorial_python.prompt
+Example – Test
+~~~~~~~~~~~~~~
 
-    # Generate tests
-    pdd test --output tests/test_factorial.py factorial_python.prompt src/factorial.py
+Automatically create or enhance tests:
 
-Multi-Command Chaining Example
+.. code-block:: console
+
+   pdd test factorial_calculator_python.prompt src/factorial_calculator.py
+
+Use coverage analysis:
+
+.. code-block:: console
+
+   pdd test --coverage-report coverage.xml --existing-tests tests/test_factorial.py \
+       factorial_prompt.prompt src/factorial.py
+
+Example – Fix Iteratively
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+Attempt to fix failing code or tests in multiple loops:
+
+.. code-block:: console
+
+   pdd fix --loop \
+       factorial_calculator_python.prompt src/factorial_calculator.py tests/test_factorial.py errors.log
+
+PDD will keep trying (with a budget limit configurable by ``--budget``) until tests pass or attempts are exhausted.
+
+Why Prompt-Driven Development?
 ------------------------------
-
-You can chain multiple commands for complex workflows:
-
-.. code-block:: bash
-
-    pdd generate --output src/calculator.py calculator_python.prompt test --output tests/test_calculator.py calculator_python.prompt src/calculator.py test --coverage-report coverage.xml --existing-tests tests/test_calculator.py --merge --target-coverage 95.0 calculator_python.prompt src/calculator.py
-
-Why Choose PDD-CLI?
--------------------
 
 *   **Increased Productivity:** Automate tedious tasks and focus on higher-level design.
 *   **Improved Code Quality:** Leverage AI to generate well-structured and tested code.
 *   **Faster Development Cycles:** Rapidly prototype and iterate on your ideas.
 *   **Reduced Errors:** Automatically identify and fix errors in your code.
 *   **Enhanced Collaboration:** Work seamlessly with prompt files as a shared source of truth.
-*   **Cost-Effective:** Track and optimize your AI model usage.
 
-Get Started Today!
-------------------
+Getting Help
+------------
 
-Install `pdd-cli` and revolutionize your development workflow with the power of prompt-driven development. Explore the comprehensive documentation and examples to unlock the full potential of PDD.
+Use inline help to discover commands and options:
 
-For more information, visit the `pdd-cli` repository: [https://github.com/gltanaka/pdd](https://github.com/gltanaka/pdd)
+.. code-block:: console
+
+   pdd --help
+   pdd generate --help
+   pdd fix --help
+   ...
+
+
+Report issues or contribute at https://github.com/promptdriven/pdd-cli.  
+
+
+Happy Prompt-Driven Coding!
