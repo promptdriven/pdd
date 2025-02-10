@@ -30,6 +30,13 @@
             - `float`: Total cost of all fix attempts
             - `str`: The name of the model used
 
+% Important implementation details:
+    - The function should track whether the code and program files were actually modified during the fixing process
+    - Only write output files if their contents have actually changed from the original
+    - Provide user feedback that accurately reflects which files were modified and saved
+    - Compare final contents with original contents to determine if updates occurred
+    - Update the feedback messages to only show save locations for files that were actually modified
+
 <examples>
    % Here is how to use the Python Click library to create a command line program:
    <click_example>
