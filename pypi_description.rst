@@ -1,9 +1,11 @@
+.. image:: https://img.shields.io/badge/pdd--cli-v0.0.7-blue
+   :alt: PDD-CLI Version
+
 PDD (Prompt-Driven Development) Command Line Interface
 ======================================================
 
 PDD (Prompt-Driven Development) is a command-line interface that harnesses AI models to generate and maintain code from prompt files. Whether you want to create new features, fix bugs, enhance unit tests, or manage complex prompt structures, pdd-cli streamlines your workflow through an intuitive interface and powerful automation.
-.. image:: https://img.shields.io/badge/pdd--cli-v0.0.6-blue
-   :alt: PDD-CLI Version
+
 Key Features
 ------------
 
@@ -37,6 +39,7 @@ Key Features
   • Python, Java, JavaScript, Ruby, Go, C++, and beyond.  
   • Prompt naming conventions let PDD infer language automatically.
 
+
 Quick Installation
 ------------------
 
@@ -50,13 +53,14 @@ After installation, verify:
 
    pdd --version
 
-You’ll see the current PDD version (e.g., 0.0.6).
+You’ll see the current PDD version (e.g., 0.0.7).
 
 Advanced Installation Tips
 --------------------------
 
-Virtual Environment
-~~~~~~~~~~~~~~~~~~
+
+**Virtual Environment**
+
 Create and activate a virtual environment, then install pdd-cli:
 
 .. code-block:: console
@@ -65,15 +69,16 @@ Create and activate a virtual environment, then install pdd-cli:
 
     # Activate environment
     # On Windows:
-    pdd-env\Scripts\activate
+   pdd-env\Scripts\activate
     # On Unix/MacOS:
    source pdd-env/bin/activate
 
     # Install PDD
    pip install pdd-cli
 
-Environment Variables
-~~~~~~~~~~~~~~~~~~~~
+
+**Environment Variables**
+
 Optionally, add environment variables to your shell startup (e.g., ``.bashrc``, ``.zshrc``):
 
 .. code-block:: console
@@ -116,8 +121,7 @@ All commands follow a standard pattern:
 
    pdd [GLOBAL OPTIONS] COMMAND [COMMAND OPTIONS] [ARGS]...
 
-Example – Generate Code
-~~~~~~~~~~~~~~~~~~~~~~~
+**Example – Generate Code**
 
 Generate Python code from a prompt:
 
@@ -131,8 +135,7 @@ In cloud mode (no local keys required). Or locally if you prefer:
 
    pdd --local generate factorial_calculator_python.prompt
 
-Example – Test
-~~~~~~~~~~~~~~
+**Example – Test**
 
 Automatically create or enhance tests:
 
@@ -147,8 +150,8 @@ Use coverage analysis:
    pdd test --coverage-report coverage.xml --existing-tests tests/test_factorial.py \
        factorial_prompt.prompt src/factorial.py
 
-Example – Fix Iteratively
-~~~~~~~~~~~~~~~~~~~~~~~~
+
+**Example – Fix Iteratively**
 
 Attempt to fix failing code or tests in multiple loops:
 
@@ -179,9 +182,5 @@ Use inline help to discover commands and options:
    pdd generate --help
    pdd fix --help
    ...
-
-
-Report issues or contribute at https://github.com/promptdriven/pdd-cli.  
-
 
 Happy Prompt-Driven Coding!
