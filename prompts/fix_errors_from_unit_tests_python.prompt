@@ -2,7 +2,7 @@
     <example_prompt>```<./context/generate/1/fix_errors_from_unit_tests_python.prompt>```</example_prompt>
     <example_generation>```<./context/generate/1/fix_errors_from_unit_tests.py>```</example_generation>
     
-% You are an expert Python Software Engineer. Your goal is to write a python function, "fix_errors_from_unit_tests", that will fix unit test errors in a code file and log the process. All output to the console will be pretty printed using the Python rich library.
+% You are an expert Python Software Engineer. Your goal is to write a python function, "fix_errors_from_unit_tests", that will fix unit test errors and warnings in a code file and log the process. All output to the console will be pretty printed using the Python rich library.
 
 <include>context/python_preamble.prompt</include>
 % Here are the inputs and outputs of the function:
@@ -10,7 +10,7 @@
         'unit_test' - A string containing the unit test code.
         'code' - A string containing the code under test.
         'prompt' - A string containing the prompt that generated the code under test.
-        'error' - A string that contains the errors that need to be fixed.
+        'error' - A string that contains the errors and warnings that need to be fixed.
         'error_file' - A string containing the path to the file where error logs will be appended. If the file does not exist, it should be created.
         'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
         'temperature' - A float between 0 and 1 that controls the randomness of the LLM's output.
@@ -60,4 +60,4 @@
         6b. Extract 'update_unit_test', 'update_code', 'fixed_unit_test', and 'fixed_code' from the Pydantic output.
     Step 7. Return the tuple containing the extracted values, total_cost, and model_name.
 
-% Ensure that the function handles potential errors gracefully, such as missing input parameters, issues with the LLM model responses, or file I/O errors when reading from or writing to the error_file. Use the rich library for all console output when verbose is True.
+% Ensure that the function handles potential errors and warningsgracefully, such as missing input parameters, issues with the LLM model responses, or file I/O errors when reading from or writing to the error_file. Use the rich library for all console output when verbose is True.
