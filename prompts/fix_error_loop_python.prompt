@@ -45,13 +45,13 @@
     Step 3. Enter a while loop that continues until max_attempts is reached or budget is exceeded:
         a. Print out to console and error log file the attempt iteration
         b. Run the unit_test_file with 'python -m pytest -vv --no-cov' and pipe all output appended to the specified error log file.
-        c. If the test passes, break the loop.
-        d. If the test fails:
-           - Read and print the error message from the error log file, but be sure to escape square brackets first so rprint doesn't misinterpret them as a command.
-           - Extract the number of fails and errors from pytest -vv stdout. The extraction should first attempt to match the summary line (e.g., "=+ 4 failed, 2 passed") and fall back to looking for patterns like "X failed" if the summary line is not found.
-           - Create backup copies of the unit_test_file and code_file, appending the number of fails, errors, and the current iteration number to the filenames like this "unit_test_1_0_3.py" and "code_1_0_3.py", where there was one fail, zero errors and it is the third iteration through the loop.
+        c. If the test passes and has no warnings, break the loop.
+        d. If the test fails or has warnings:
+           - Read and print the error and warning messages from the error log file, but be sure to escape square brackets first so rprint doesn't misinterpret them as a command.
+           - Extract the number of fails, errors and warnings from pytest -vv stdout. The extraction should first attempt to match the summary line (e.g., "=+ 4 failed, 2 passed, 2 warnings") and fall back to looking for patterns like "X failed" if the summary line is not found.
+           - Create backup copies of the unit_test_file and code_file in their respective directories, appending the current iteration number, the number of errors, fails, and warnings to the filenames like this "unit_test_filename_3_1_0_2.py" and "code_filename_3_1_0_2.py", it is the third iteration where there was one error, zero fails, and two warnings through the loop.
            - Read the contents of the unit_test_file and code_file.
-           - Call fix_errors_from_unit_tests with the file contents, error from the error log file, the error log file, and the provided strength and temperature. Pass the verbose flag to enable detailed logging if specified.
+           - Call fix_errors_from_unit_tests with the file contents, error and warning messages from the error log file, the error log file, and the provided strength and temperature. Pass the verbose flag to enable detailed logging if specified.
            - Add the returned total_cost to the total cost accumulator.
            - If the total cost exceeds the budget, break the loop.
            - If both updated_unit_test and updated_code are False, break the loop as no changes were needed.
