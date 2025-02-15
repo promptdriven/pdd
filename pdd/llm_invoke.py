@@ -5,7 +5,7 @@ llm_invoke.py
 This module provides a single function, llm_invoke, that runs a prompt with a given input
 against a language model (LLM) using Langchain and returns the output, cost, and model name.
 The function supports model selection based on cost/ELO interpolation controlled by the
-“strength” parameter. It also implements a retry mechanism: if a model invocation fails,
+"strength" parameter. It also implements a retry mechanism: if a model invocation fails,
 it falls back to the next candidate (cheaper for strength < 0.5, or higher ELO for strength ≥ 0.5).
 
 Usage:
@@ -62,11 +62,23 @@ class CompletionStatusHandler(BaseCallbackHandler):
         self.is_complete = True
         if response.generations and response.generations[0]:
             generation = response.generations[0][0]
-            self.finish_reason = (generation.generation_info.get('finish_reason') or "").lower()
-            if hasattr(generation.message, 'usage_metadata'):
+            # Safely get generation_info; if it's None, default to {}
+            generation_info = generation.generation_info or {}
+            self.finish_reason = (generation_info.get('finish_reason') or "").lower()
+            
+            # Attempt to get token usage from generation.message if available.
+            if (
+                hasattr(generation, "message")
+                and generation.message is not None
+                and hasattr(generation.message, "usage_metadata")
+                and generation.message.usage_metadata
+            ):
                 usage_metadata = generation.message.usage_metadata
-                self.input_tokens = usage_metadata.get('input_tokens')
-                self.output_tokens = usage_metadata.get('output_tokens')
+            else:
+                usage_metadata = generation_info.get("usage_metadata", {})
+            
+            self.input_tokens = usage_metadata.get('input_tokens', 0)
+            self.output_tokens = usage_metadata.get('output_tokens', 0)
 
 class ModelInfo:
     """
