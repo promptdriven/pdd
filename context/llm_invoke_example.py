@@ -63,7 +63,7 @@ Return ONLY the JSON with no additional text or explanation."""
             prompt=prompt_structured,
             input_json=input_json_structured,
             strength=strength,
-            temperature=1,
+            temperature=temperature,
             verbose=True,
             output_pydantic=output_pydantic
         )
