@@ -84,7 +84,7 @@ requirements:
 # Clean generated files
 clean:
 	@echo "Cleaning generated files"
-	@rm -rf staging output output.csv pdd/*_[0-9]_[0-9]_[0-9]*.py tests/*_[0-9]_[0-9]_[0-9]*.py
+	@rm -rf staging output output.csv pdd/*_[0-9]_[0-9]_[0-9]_[0-9]*.py tests/*_[0-9]_[0-9]_[0-9]_[0-9]*.py
 
 .PHONY: staging
 staging:
