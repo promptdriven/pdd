@@ -17,11 +17,23 @@ def test_add():
     
     code = """
 def add(a, b):
+    import numpy as np
+
+    # Simple attempt to see if both 'a' and 'b' can be cast to float
+    try:
+        float(a)
+        float(b)
+    except (TypeError, ValueError):
+        _ = np.asscalar(np.array([42]))
+
+    # Return the usual result
     return a + b
 """
     
     prompt = "Write a function that adds two numbers"
-    error = "AssertionError: assert 0 == 1" # String of the Error message from the unit test
+    error = """AssertionError: assert 0 == 1 
+        DeprecationWarning: np.asscalar(a) is deprecated since NumPy v1.16, use 'np.ndarray.item()' instead _ = np.asscalar(np.array([42]))""" # String of the Error message from the unit test
+
     error_file = "error_logs.txt"       # This is the fix results file
     strength = 0.5  # LLM strength (0 to 1)
     temperature = 0.0  # LLM temperature
