@@ -1,6 +1,6 @@
 # TODO
 - [ ] Python 3.13 support
-
+- [ ] fix warnings in the code
 
 ## On Deck
 
@@ -40,7 +40,7 @@
 - [ ] Analyze errors first before trying to fix
 - [ ] Use existing good prompt code example to generate code for the prompt
 - [ ] update prompt for makefile
-- [ ] fix warnings in the code
+
 - [ ] MLX support for faster local
 - [ ] AWS Nova support
 - [ ] fix quiet vs. verbose ambiguity
