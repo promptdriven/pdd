@@ -2,7 +2,7 @@ import os
 import pytest
 from pathlib import Path
 from unittest.mock import patch, mock_open, MagicMock
-from pdd.fix_error_loop import fix_error_loop, extract_test_results, create_backup_files, IterationResult
+from pdd.fix_error_loop import fix_error_loop
 
 # Fixture for temporary files
 @pytest.fixture
