@@ -9,7 +9,7 @@
 <include>context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the function:
-    Input: 
+    Input:
         'prompt' - String with the prompt to be used for the LLM model.
         'input_json' - JSON object with the input to be used for the LLM model.
         'strength' - Floating point number with 0 being the cheapest model, 0.5 being the base model and 1 being the model with the highest ELO score.
@@ -52,3 +52,6 @@ Be sure to use the correct imports as shown in the above example.
     - The input JSON (use try-except to handle rich printing failures, falling back to standard print).
     - The optional Pydantic output format.
     - The result using rprint.
+
+% CRITICAL: In the `CompletionStatusHandler`'s `on_llm_end` method, ensure robust token usage retrieval.  Check for `usage_metadata` in `generation.message`. If it's missing or `None`, check within `generation.generation_info`. If found nowhere, default both `input_tokens` and `output_tokens` to 0.  This handles different response structures from various LLM providers.  Prioritize `generation.message.usage_metadata` if it exists.
+```
