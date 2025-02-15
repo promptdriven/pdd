@@ -79,12 +79,18 @@ def context_generator(code_module: str, prompt: str, language: str = "python", s
 
         # Step 3: Detect if the generation is incomplete using the unfinished_prompt function
         last_600_chars = llm_response['result'][-600:]
-        reasoning, is_finished, unfinished_cost, unfinished_model = unfinished_prompt(
-            prompt_text=last_600_chars,
-            strength=0.5,
-            temperature=temperature,
-            verbose=verbose
-        )
+        try:
+            reasoning, is_finished, unfinished_cost, unfinished_model = unfinished_prompt(
+                prompt_text=last_600_chars,
+                strength=0.5,
+                temperature=temperature,
+                verbose=verbose
+            )
+        except Exception as e:
+            print(f"[red]Error in unfinished_prompt: {e}[/red]")
+            is_finished = True  # Treat as finished if unfinished_prompt fails
+            unfinished_cost = 0.0
+            unfinished_model = None
 
         if not is_finished:
             if verbose:
