@@ -1,9 +1,10 @@
 import os
 import sys
 import subprocess
-from unittest.mock import patch, Mock
+from unittest.mock import patch
 import pytest
 import shutil
+from pathlib import Path
 
 from pdd.fix_error_loop import fix_error_loop
 
@@ -33,11 +34,12 @@ def test_add():
     verify_file = tmp_path / "verify.py"
     verify_file.write_text("print('Verification passed')")
     
+    # Return as Path objects so we can use .parent
     return {
-        "code_file": str(code_file),
-        "test_file": str(test_file),
-        "verify_file": str(verify_file),
-        "error_log": str(tmp_path / "error_log.txt"),
+        "code_file": code_file,
+        "test_file": test_file,
+        "verify_file": verify_file,
+        "error_log": tmp_path / "error_log.txt",
     }
 
 def mock_pytest_failure(*args, **kwargs):
@@ -71,21 +73,22 @@ def test_successful_fix(setup_files):
         with patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix:
             mock_fix.return_value = (
                 True, True, 
-                files["test_file"], 
-                "def add(a, b): return a + b",
-                0.1, "mock-model"
+                files["test_file"].read_text(), 
+                "def add(a, b): return a + b",  # corrected
+                0.1, 
+                "mock-model"
             )
             
             success, final_test, final_code, attempts, cost, model = fix_error_loop(
-                unit_test_file=files["test_file"],
-                code_file=files["code_file"],
+                unit_test_file=str(files["test_file"]),  # pass strings to function
+                code_file=str(files["code_file"]),
                 prompt="Test prompt",
-                verification_program=files["verify_file"],
+                verification_program=str(files["verify_file"]),
                 strength=0.5,
                 temperature=0.0,
                 max_attempts=3,
                 budget=10.0,
-                error_log_file=files["error_log"],
+                error_log_file=str(files["error_log"]),
                 verbose=False
             )
     
@@ -104,16 +107,17 @@ def test_max_attempts_exceeded(setup_files):
             mock_fix.return_value = (False, False, "", "", 0.0, "mock-model")
             
             success, final_test, final_code, attempts, cost, model = fix_error_loop(
-                files["test_file"],
-                files["code_file"],
+                str(files["test_file"]),
+                str(files["code_file"]),
                 "Test prompt",
-                files["verify_file"],
+                str(files["verify_file"]),
                 0.5, 0.0, 3, 10.0,
-                files["error_log"]
+                str(files["error_log"])
             )
     
     assert success is False
-    assert attempts == 3
+    assert attempts == 3  # the loop tries 3 fixes, each one fails
+    # code was never successfully changed
     assert "return a + b + 1" in final_code
 
 def test_verification_failure(setup_files):
@@ -121,30 +125,33 @@ def test_verification_failure(setup_files):
     
     with patch("subprocess.run") as mock_run:
         mock_run.side_effect = [
-            mock_pytest_failure(),
-            subprocess.CompletedProcess(args=[], returncode=1),  # Verification failure
-            mock_pytest_failure(),
+            mock_pytest_failure(),  # first test run
+            subprocess.CompletedProcess(args=[], returncode=1),  # verification failure
+            mock_pytest_failure(),  # second test run in same iteration
         ]
         
         with patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix:
             mock_fix.return_value = (
                 True, True,
-                files["test_file"],
-                "def add(a, b): return 0",  # Bad fix
-                0.1, "mock-model"
+                files["test_file"].read_text(),
+                "def add(a, b): return 0",  # intentionally bad fix
+                0.1, 
+                "mock-model"
             )
             
             success, final_test, final_code, attempts, cost, model = fix_error_loop(
-                files["test_file"],
-                files["code_file"],
+                str(files["test_file"]),
+                str(files["code_file"]),
                 "Test prompt",
-                files["verify_file"],
+                str(files["verify_file"]),
                 0.5, 0.0, 3, 10.0,
-                files["error_log"]
+                str(files["error_log"])
             )
     
+    # We expect it to fail eventually
     assert success is False
-    assert "return a + b + 1" in final_code  # Original code restored
+    # And we expect the original code to be restored after verification fails
+    assert "return a + b + 1" in final_code  
 
 def test_backup_creation(setup_files):
     files = setup_files
@@ -156,17 +163,19 @@ def test_backup_creation(setup_files):
             mock_fix.return_value = (True, True, "", "", 0.1, "mock-model")
             
             fix_error_loop(
-                files["test_file"],
-                files["code_file"],
+                str(files["test_file"]),
+                str(files["code_file"]),
                 "Test prompt",
-                files["verify_file"],
+                str(files["verify_file"]),
                 0.5, 0.0, 1, 10.0,
-                files["error_log"]
+                str(files["error_log"])
             )
     
+    # Confirm that the code backup was created
     backup_files = list(files["code_file"].parent.glob("code_*.py"))
     assert len(backup_files) == 1
-    assert "1_0_0" in backup_files[0].name  # Format: attempt_errors_fails_warnings
+    # The backup filename should have pattern: code_<iteration>_<errors>_<fails>_<warnings>_<timestamp>.py
+    assert "code_1_1_1_0" in backup_files[0].name
 
 def test_missing_files():
     success, *rest = fix_error_loop(
