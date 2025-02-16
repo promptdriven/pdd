@@ -38,7 +38,7 @@ def main():
         # Track model changes for strength ranges
         if current_model != response['model_name']:
             if current_model is not None:
-                model_ranges[current_model].append((range_start, strength - 0.02))
+                model_ranges[current_model].append((range_start, strength - 0.005))
             current_model = response['model_name']
             range_start = strength
         
@@ -47,39 +47,42 @@ def main():
         print(f"Model Used: {response['model_name']}")
         
         # Example 2: Structured Output with Pydantic Model
-        prompt_structured = """Generate a joke about {topic}. 
-Return it in this exact JSON format:
-{{
-    "setup": "your setup here",
-    "punchline": "your punchline here"
-}}
-Return ONLY the JSON with no additional text or explanation."""
+        prompt_structured = (
+            "Generate a joke about {topic}. \n"
+            "Return it in this exact JSON format:\n"
+            "{\n"
+            '    "setup": "your setup here",\n'
+            '    "punchline": "your punchline here"\n'
+            "}\n"
+            "Return ONLY the JSON with no additional text or explanation."
+        )
         input_json_structured = {"topic": "data scientists"}
         output_pydantic = Joke
         
         print("\n--- Structured Output ---")
+        try:
+            response_structured = llm_invoke(
+                prompt=prompt_structured,
+                input_json=input_json_structured,
+                strength=strength,
+                temperature=temperature,
+                verbose=True,
+                output_pydantic=output_pydantic
+            )
+            print(f"Result: {response_structured['result']}")
+            print(f"Cost: ${response_structured['cost']:.6f}")
+            print(f"Model Used: {response_structured['model_name']}")
+
+            # Access structured data
+            joke: Joke = response_structured['result']
+            print(f"\nJoke Setup: {joke.setup}")
+            print(f"Joke Punchline: {joke.punchline}")
+        except Exception as e:
+            print(f"Error encountered during structured output: {e}")
         
-        response_structured = llm_invoke(
-            prompt=prompt_structured,
-            input_json=input_json_structured,
-            strength=strength,
-            temperature=temperature,
-            verbose=True,
-            output_pydantic=output_pydantic
-        )
-        
-        print(f"Result: {response_structured['result']}")
-        print(f"Cost: ${response_structured['cost']:.6f}")
-        print(f"Model Used: {response_structured['model_name']}")
-        
-        # Accessing structured data
-        joke: Joke = response_structured['result']
-        print(f"\nJoke Setup: {joke.setup}")
-        print(f"Joke Punchline: {joke.punchline}")
-        
-        strength += 0.01
-        # round to 2 decimal places
-        strength = round(strength, 2)
+        strength += 0.005
+        # round to 3 decimal places
+        strength = round(strength, 3)
     
     # Add the final range for the last model
     model_ranges[current_model].append((range_start, 1.0))
@@ -89,7 +92,7 @@ Return ONLY the JSON with no additional text or explanation."""
     for model, ranges in model_ranges.items():
         print(f"\n{model}:")
         for start, end in ranges:
-            print(f"  Strength {start:.2f} to {end:.2f}")
+            print(f"  Strength {start:.3f} to {end:.3f}")
 
 if __name__ == "__main__":
     main()
