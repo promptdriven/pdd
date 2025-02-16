@@ -42,10 +42,10 @@
 - [ ] Analyze errors first before trying to fix
 - [ ] Use existing good prompt code example to generate code for the prompt
 - [ ] update prompt for makefile
-
 - [ ] MLX support for faster local
 - [ ] AWS Nova support
 - [ ] fix quiet vs. verbose ambiguity
+- [ ] reasoning support
 
 
 ## Documentation
