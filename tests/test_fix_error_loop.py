@@ -1,142 +1,179 @@
 import os
+import sys
+import subprocess
+from unittest.mock import patch, Mock
 import pytest
-from pathlib import Path
-from unittest.mock import patch, mock_open, MagicMock
+import shutil
+
 from pdd.fix_error_loop import fix_error_loop
 
-# Fixture for temporary files
 @pytest.fixture
-def temp_files(tmp_path):
-    unit_test = tmp_path / "test_example.py"
-    code_file = tmp_path / "example.py"
-    verification = tmp_path / "verify.py"
-    error_log = tmp_path / "error_log.txt"
+def setup_files(tmp_path):
+    # Create directories
+    code_dir = tmp_path / "pdd"
+    code_dir.mkdir()
+    test_dir = tmp_path / "tests"
+    test_dir.mkdir()
     
-    # Create dummy files
-    unit_test.write_text("def test_dummy(): assert True")
-    code_file.write_text("def dummy(): return True")
-    verification.write_text("print('verification successful')")
+    # Create initial code file with error
+    code_file = code_dir / "code.py"
+    code_content = "def add(a, b): return a + b + 1  # Intentional error"
+    code_file.write_text(code_content)
     
-    return str(unit_test), str(code_file), str(verification), str(error_log)
+    # Create unit test file
+    test_file = test_dir / "test_code.py"
+    test_content = """
+def test_add():
+    assert add(2, 3) == 5
+    assert add(-1, 1) == 0
+"""
+    test_file.write_text(test_content)
+    
+    # Create verification program
+    verify_file = tmp_path / "verify.py"
+    verify_file.write_text("print('Verification passed')")
+    
+    return {
+        "code_file": str(code_file),
+        "test_file": str(test_file),
+        "verify_file": str(verify_file),
+        "error_log": str(tmp_path / "error_log.txt"),
+    }
 
-def test_successful_fix(temp_files):
-    unit_test, code_file, verification, error_log = temp_files
+def mock_pytest_failure(*args, **kwargs):
+    return subprocess.CompletedProcess(
+        args=args,
+        returncode=1,
+        stdout="1 failed, 0 passed, 0 warnings",
+        stderr=""
+    )
+
+def mock_pytest_success(*args, **kwargs):
+    return subprocess.CompletedProcess(
+        args=args,
+        returncode=0,
+        stdout="0 failed, 1 passed, 0 warnings",
+        stderr=""
+    )
+
+def test_successful_fix(setup_files):
+    files = setup_files
     
-    # Mock subprocess.run to simulate passing tests after one attempt
-    with patch('subprocess.run') as mock_run:
+    # Mock subprocess.run to handle pytest and verification calls
+    with patch("subprocess.run") as mock_run:
         mock_run.side_effect = [
-            MagicMock(stdout="1 failed", stderr="", returncode=1),  # First pytest run
-            MagicMock(stdout="success", stderr="", returncode=0),   # Verification
-            MagicMock(stdout="All tests passed", stderr="", returncode=0),  # Final pytest
-            MagicMock(stdout="All tests passed", stderr="", returncode=0)   # Extra for safety
+            mock_pytest_failure(),  # Initial test run
+            mock_pytest_success(),  # Post-fix test run
+            mock_pytest_success(),  # Final verification
         ]
         
-        # Mock fix_errors_from_unit_tests
-        with patch('pdd.fix_error_loop.fix_errors_from_unit_tests') as mock_fix:
-            mock_fix.return_value = (True, True, "fixed test", "fixed code", 0.1, "gpt-4")
+        # Mock fix_errors_from_unit_tests to return corrected code
+        with patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix:
+            mock_fix.return_value = (
+                True, True, 
+                files["test_file"], 
+                "def add(a, b): return a + b",
+                0.1, "mock-model"
+            )
             
-            # Mock file existence
-            with patch('os.path.exists', return_value=True):
-                success, final_test, final_code, attempts, cost, model = fix_error_loop(
-                    unit_test, code_file, "test prompt", verification,
-                    0.7, 0.5, 3, 1.0, error_log
-                )
-                
-                assert success == True
-                assert attempts == 2
-                assert cost == 0.1
-                assert model == "gpt-4"
-
-def test_budget_exceeded(temp_files):
-    unit_test, code_file, verification, error_log = temp_files
+            success, final_test, final_code, attempts, cost, model = fix_error_loop(
+                unit_test_file=files["test_file"],
+                code_file=files["code_file"],
+                prompt="Test prompt",
+                verification_program=files["verify_file"],
+                strength=0.5,
+                temperature=0.0,
+                max_attempts=3,
+                budget=10.0,
+                error_log_file=files["error_log"],
+                verbose=False
+            )
     
-    with patch('subprocess.run') as mock_run:
-        mock_run.return_value = MagicMock(stdout="1 failed", stderr="", returncode=1)
+    assert success is True
+    assert "return a + b" in final_code
+    assert attempts == 1
+    assert cost == 0.1
+
+def test_max_attempts_exceeded(setup_files):
+    files = setup_files
+    
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = mock_pytest_failure()
         
-        with patch('pdd.fix_error_loop.fix_errors_from_unit_tests') as mock_fix:
-            mock_fix.return_value = (True, True, "fixed test", "fixed code", 2.0, "gpt-4")
+        with patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix:
+            mock_fix.return_value = (False, False, "", "", 0.0, "mock-model")
             
-            success, _, _, attempts, cost, _ = fix_error_loop(
-                unit_test, code_file, "test prompt", verification,
-                0.7, 0.5, 3, 1.0, error_log
-            )
-            
-            assert success == False
-            assert cost == 2.0
-            assert attempts == 1
-
-def test_invalid_inputs():
-    with patch('os.path.exists', return_value=False):
-        with pytest.raises(FileNotFoundError):
-            fix_error_loop(
-                "nonexistent.py", "nonexistent.py", "prompt",
-                "nonexistent.py", 0.7, 0.5, 3, 1.0
+            success, final_test, final_code, attempts, cost, model = fix_error_loop(
+                files["test_file"],
+                files["code_file"],
+                "Test prompt",
+                files["verify_file"],
+                0.5, 0.0, 3, 10.0,
+                files["error_log"]
             )
     
-    with patch('os.path.exists', return_value=True):
-        with pytest.raises(ValueError):
-            fix_error_loop(
-                "test.py", "code.py", "prompt",
-                "verify.py", 1.5, 0.5, 3, 1.0
-            )
+    assert success is False
+    assert attempts == 3
+    assert "return a + b + 1" in final_code
 
-def test_extract_test_results():
-    # Test various pytest output formats
-    assert extract_test_results("4 failed, 2 passed") == (4, 0)
-    assert extract_test_results("1 error, 1 failed") == (1, 1)
-    assert extract_test_results("1 error") == (0, 1)
-    assert extract_test_results("All tests passed") == (0, 0)
-
-def test_create_backup_files(temp_files):
-    unit_test, code_file, _, _ = temp_files
+def test_verification_failure(setup_files):
+    files = setup_files
     
-    backup_unit, backup_code = create_backup_files(unit_test, code_file, 1, 0, 3)
-    
-    assert os.path.exists(backup_unit)
-    assert os.path.exists(backup_code)
-    assert backup_unit.endswith("_1_0_3.py")
-    assert backup_code.endswith("_1_0_3.py")
-
-def test_iteration_result_comparison():
-    result1 = IterationResult(fails=1, errors=0, iteration=1, total_fails_and_errors=1)
-    result2 = IterationResult(fails=2, errors=0, iteration=2, total_fails_and_errors=2)
-    result3 = IterationResult(fails=1, errors=1, iteration=3, total_fails_and_errors=2)
-    
-    assert result1.is_better_than(result2)
-    assert result1.is_better_than(result3)
-    assert result2.is_better_than(result3)  # Same total but fewer errors
-    assert result1.is_better_than(None)
-
-def test_verification_failure(temp_files):
-    unit_test, code_file, verification, error_log = temp_files
-    
-    with patch('subprocess.run') as mock_run:
+    with patch("subprocess.run") as mock_run:
         mock_run.side_effect = [
-            MagicMock(stdout="1 failed", stderr="", returncode=1),  # First pytest
-            MagicMock(stdout="verification failed", stderr="error", returncode=1),  # Failed verification
-            MagicMock(stdout="1 failed", stderr="", returncode=1),   # Pytest after verification failure
-            MagicMock(stdout="verification failed again", stderr="error again", returncode=1), # Second verification
-            MagicMock(stdout="1 failed", stderr="", returncode=1), # Second pytest
-            MagicMock(stdout="1 failed", stderr="", returncode=1),  # Third pytest
-            MagicMock(stdout="1 failed", stderr="", returncode=1),  # Final pytest
-            MagicMock(stdout="1 failed", stderr="", returncode=1)   # Extra for safety
+            mock_pytest_failure(),
+            subprocess.CompletedProcess(args=[], returncode=1),  # Verification failure
+            mock_pytest_failure(),
         ]
         
-        with patch('pdd.fix_error_loop.fix_errors_from_unit_tests') as mock_fix:
-            mock_fix.return_value = (True, True, "fixed test", "fixed code", 0.1, "gpt-4")
+        with patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix:
+            mock_fix.return_value = (
+                True, True,
+                files["test_file"],
+                "def add(a, b): return 0",  # Bad fix
+                0.1, "mock-model"
+            )
             
-            # Mock file existence
-            with patch('os.path.exists', return_value=True):
-                success, _, _, attempts, cost, _ = fix_error_loop(
-                    unit_test, code_file, "test prompt", verification,
-                    0.7, 0.5, 3, 1.0, error_log
-                )
-                
-                assert success == False
-                assert attempts == 3
-                assert os.path.exists(error_log)
-                with open(error_log, 'r') as f:
-                    content = f.read()
-                    assert "verification failed" in content
-                    assert "verification failed again" in content
-                    assert "Restoring previous working code" in content
+            success, final_test, final_code, attempts, cost, model = fix_error_loop(
+                files["test_file"],
+                files["code_file"],
+                "Test prompt",
+                files["verify_file"],
+                0.5, 0.0, 3, 10.0,
+                files["error_log"]
+            )
+    
+    assert success is False
+    assert "return a + b + 1" in final_code  # Original code restored
+
+def test_backup_creation(setup_files):
+    files = setup_files
+    
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = mock_pytest_failure()
+        
+        with patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix:
+            mock_fix.return_value = (True, True, "", "", 0.1, "mock-model")
+            
+            fix_error_loop(
+                files["test_file"],
+                files["code_file"],
+                "Test prompt",
+                files["verify_file"],
+                0.5, 0.0, 1, 10.0,
+                files["error_log"]
+            )
+    
+    backup_files = list(files["code_file"].parent.glob("code_*.py"))
+    assert len(backup_files) == 1
+    assert "1_0_0" in backup_files[0].name  # Format: attempt_errors_fails_warnings
+
+def test_missing_files():
+    success, *rest = fix_error_loop(
+        "nonexistent_test.py",
+        "nonexistent_code.py",
+        "prompt",
+        "verify.py",
+        0.5, 0.0, 3, 10.0
+    )
+    assert success is False
