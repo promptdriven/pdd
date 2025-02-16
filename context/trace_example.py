@@ -28,7 +28,7 @@ Write a function that prints "Hello, World!" and returns 42.
 The function should be named hello_world.
 Print the result of calling the function.
     """
-    strength = 0.89  # Strength of the LLM model (0.0 to 1.0)
+    strength = .97  # Strength of the LLM model (0.0 to 1.0)
     temperature = 0.0  # Temperature for LLM generation (0.0 to 1.0)
 
     try:

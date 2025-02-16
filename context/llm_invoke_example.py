@@ -50,10 +50,10 @@ def main():
         prompt_structured = (
             "Generate a joke about {topic}. \n"
             "Return it in this exact JSON format:\n"
-            "{\n"
+            "{{ \n"
             '    "setup": "your setup here",\n'
             '    "punchline": "your punchline here"\n'
-            "}\n"
+            "}}\n"
             "Return ONLY the JSON with no additional text or explanation."
         )
         input_json_structured = {"topic": "data scientists"}

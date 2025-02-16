@@ -95,7 +95,7 @@ def fix_code_module_errors(
         second_response = llm_invoke(
             prompt=extract_prompt,
             input_json=extract_input,
-            strength=0.89,  # Fixed strength as specified
+            strength=0.97,  # Fixed strength as specified
             temperature=temperature,
             verbose=verbose,
             output_pydantic=CodeFix

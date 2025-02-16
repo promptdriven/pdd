@@ -104,7 +104,7 @@ def code_generator(
         runnable_code, postprocess_cost, model_name_post = postprocess(
             llm_output=final_output,
             language=language,
-            strength=0.89,
+            strength=0.97,
             temperature=0.0,
             verbose=verbose
         )
