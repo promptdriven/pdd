@@ -317,6 +317,7 @@ def llm_invoke(prompt, input_json, strength, temperature, verbose=False, output_
             llm = create_llm_instance(model, temperature, handler)
             if output_pydantic:
                 if model.structured_output:
+                    llm.cache = False # TODO: remove this fix once langchain cache is fixed https://github.com/langchain-ai/langchain/issues/29003
                     llm = llm.with_structured_output(output_pydantic)
                     chain = prompt_template | llm
                 else:
