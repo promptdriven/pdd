@@ -101,7 +101,7 @@ def detect_change(
         extract_response = llm_invoke(
             prompt=extract_prompt,
             input_json={"llm_output": detect_response['result']},
-            strength=0.89,
+            strength=0.97,
             temperature=0.0,
             verbose=verbose,
             output_pydantic=ChangesList

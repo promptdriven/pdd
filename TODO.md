@@ -29,6 +29,7 @@
 - [ ] Use the prompts that use a certain module to generate tests for that module
 - [ ] include in <web> content</web>
 - [ ] MCP support for better context
+- [ ] debug using pdb in non-interactive mode
 
 ## Bugs
 

@@ -86,7 +86,7 @@ def change(
         extract_response = llm_invoke(
             prompt=extract_prompt,
             input_json={"llm_output": change_response["result"]},
-            strength=0.89,  # Fixed strength as specified
+            strength=0.97,  # Fixed strength as specified
             temperature=temperature,
             verbose=verbose,
             output_pydantic=ExtractedPrompt

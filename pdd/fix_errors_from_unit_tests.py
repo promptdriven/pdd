@@ -204,7 +204,7 @@ def fix_errors_from_unit_tests(
                 "unit_test": unit_test,
                 "code": code
             },
-            strength=0.895,  # Fixed strength as per requirements
+            strength=0.97,  # Fixed strength as per requirements
             temperature=temperature,
             output_pydantic=CodeFix,
             verbose=verbose

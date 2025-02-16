@@ -10,10 +10,8 @@ Google,gemini-exp-1206,1.25,5,1313,,GOOGLE_API_KEY,,,8192,,False
 OpenAI,"deepseek-r1-distill-llama-70b-specdec",5,5,1314,https://api.groq.com/openai/v1,GROQ_API_KEY,autotokenizer,deepseek-coder-7b-instruct-v1.5,16384,,False
 Ollama,"deepseek-r1:70b-llama-distill-q8_0",0.0,0.0,1315,,PWD,,,,,False
 Ollama,deepseek-r1:32b-qwen-distill-fp16,0.0,0.0,1316,,PWD,,,,,False
-Fireworks,"accounts/fireworks/models/deepseek-r1-distill-qwen-32b",.5,.5,1317,,FIREWORKS_API_KEY,,,8192,,True
-Fireworks,accounts/fireworks/models/deepseek-r1-distill-llama-70b,1.2,1.2,1318,,FIREWORKS_API_KEY,,,16384,,False
 OpenAI,"o3-mini",1.1,4.4,1319,,OPENAI_API_KEY,tiktoken,o200k_base,,100000,True
 OpenAI,"o1-2024-12-17",15,60,1331,,OPENAI_API_KEY,tiktoken,o200k_base,,32768,True
-OpenAI,"chatgpt-4o-latest",2.5,10,1332,,OPENAI_API_KEY,tiktoken,o200k_base,16384,,True
+OpenAI,"gpt-4o",2.5,10,1332,,OPENAI_API_KEY,tiktoken,o200k_base,16384,,True
 OpenAI,"deepseek-reasoner",0.55,2.19,1336,https://api.deepseek.com/beta,DEEPSEEK_API_KEY,autotokenizer,deepseek-coder-7b-instruct-v1.5,8192,,False
 Fireworks,accounts/fireworks/models/deepseek-r1,3,8,1338,,FIREWORKS_API_KEY,,,8192,,False

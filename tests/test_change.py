@@ -99,7 +99,7 @@ def test_change_llm_invoke_called_correctly(valid_inputs, mock_llm_response, moc
                 # Verify second call (extract prompt)
                 second_call_kwargs = mock_llm_invoke.call_args_list[1][1]
                 assert 'llm_output' in second_call_kwargs['input_json']
-                assert second_call_kwargs['strength'] == 0.89  # Fixed strength for extract
+                assert second_call_kwargs['strength'] == .97  # Fixed strength for extract
 
 # Test verbose output
 def test_change_verbose_output(valid_inputs, mock_llm_response, mock_extract_response):

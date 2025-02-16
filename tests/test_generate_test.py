@@ -39,12 +39,12 @@ def test_generate_test_verbose(valid_inputs):
 # Test input validation
 def test_validate_inputs_empty_prompt():
     with pytest.raises(ValueError, match="Prompt must be a non-empty string"):
-        _validate_inputs("", "code", 0.7, 0.5, "python")
+        _validate_inputs("", "code", 0.97, 0.5, "python")
 
 
 def test_validate_inputs_none_code():
     with pytest.raises(ValueError, match="Code must be a non-empty string"):
-        _validate_inputs("prompt", None, 0.7, 0.5, "python")
+        _validate_inputs("prompt", None, 0.97, 0.5, "python")
 
 
 def test_validate_inputs_invalid_strength():
@@ -54,12 +54,12 @@ def test_validate_inputs_invalid_strength():
 
 def test_validate_inputs_invalid_temperature():
     with pytest.raises(ValueError, match="Temperature must be a float"):
-        _validate_inputs("prompt", "code", 0.7, "invalid", "python")
+        _validate_inputs("prompt", "code", 0.97, "invalid", "python")
 
 
 def test_validate_inputs_empty_language():
     with pytest.raises(ValueError, match="Language must be a non-empty string"):
-        _validate_inputs("prompt", "code", 0.7, 0.5, "")
+        _validate_inputs("prompt", "code", 0.97, 0.5, "")
 
 # Test error handling
 def test_generate_test_invalid_template(valid_inputs, monkeypatch):
@@ -73,7 +73,7 @@ def test_generate_test_invalid_template(valid_inputs, monkeypatch):
 
 # Test edge cases
 def test_generate_test_minimum_values(valid_inputs):
-    valid_inputs['strength'] = 0.15
+    valid_inputs['strength'] = 0.31
     valid_inputs['temperature'] = 0.0
     result = generate_test(**valid_inputs)
     assert isinstance(result, tuple)
