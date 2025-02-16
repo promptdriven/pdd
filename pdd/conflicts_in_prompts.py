@@ -85,7 +85,7 @@ def conflicts_in_prompts(
         extract_response = llm_invoke(
             prompt=extract_prompt,
             input_json=extract_input,
-            strength=0.89,  # As specified
+            strength=0.97,  # As specified
             temperature=temperature,
             output_pydantic=ConflictResponse,
             verbose=verbose

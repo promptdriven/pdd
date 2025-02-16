@@ -125,5 +125,5 @@ def test_correct_llm_parameters(mock_dependencies):
     
     # Check second LLM call
     second_call = mock_dependencies['llm_invoke'].call_args_list[1][1]
-    assert second_call['strength'] == 0.89  # Fixed strength for second call
+    assert second_call['strength'] == .97  # Fixed strength for second call
     assert second_call['temperature'] == temperature

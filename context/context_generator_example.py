@@ -11,8 +11,8 @@ if not pdd_path:
 code_module = "def add(a, b):\n    return a + b"
 prompt = "Write a function 'add' that adds two numbers."
 language = "python"
-strength = 0.7
-temperature = 0.2
+strength = 0.5
+temperature = 0.0
 
 # Call the context_generator function
 example_code, total_cost, model_name = context_generator(

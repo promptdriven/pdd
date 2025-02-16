@@ -72,7 +72,7 @@ def xml_tagger(
         extraction_response = llm_invoke(
             prompt=extract_xml_prompt,
             input_json={"xml_generated_analysis": xml_generated_analysis},
-            strength=0.89,  # Fixed strength as specified
+            strength=0.97,  # Fixed strength as specified
             temperature=temperature,
             verbose=verbose,
             output_pydantic=XMLOutput

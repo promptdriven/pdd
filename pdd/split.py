@@ -91,7 +91,7 @@ def split(
         extract_response = llm_invoke(
             prompt=processed_extract_prompt,
             input_json={"llm_output": split_response["result"]},
-            strength=0.89,  # Fixed strength for extraction
+            strength=0.97,  # Fixed strength for extraction
             temperature=temperature,
             output_pydantic=PromptSplit,
             verbose=verbose
