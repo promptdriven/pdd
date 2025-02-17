@@ -66,7 +66,7 @@ def crash_main(
         error_content = input_strings["error_file"]
 
         # Get model parameters from context
-        strength = ctx.obj.get('strength', 0.9)
+        strength = ctx.obj.get('strength', 0.97)
         temperature = ctx.obj.get('temperature', 0)
 
         if loop:
@@ -98,9 +98,15 @@ def crash_main(
             attempts = 1
 
         # Determine if contents were actually updated
-        update_code = final_code != code_content
-        update_program = final_program != program_content
-
+        if final_code != "":
+            update_code = final_code != code_content
+        else:
+            update_code = False
+        if final_program != "":
+            update_program = final_program != program_content
+        else:
+            update_program = False
+            
         # Save results if contents changed
         if update_code and output_file_paths.get("output"):
             with open(output_file_paths["output"], 'w') as f:

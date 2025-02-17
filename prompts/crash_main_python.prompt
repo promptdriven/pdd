@@ -36,6 +36,8 @@
     - Provide user feedback that accurately reflects which files were modified and saved
     - Compare final contents with original contents to determine if updates occurred
     - Update the feedback messages to only show save locations for files that were actually modified
+    - **Handle cases where the fixing process returns empty strings for the fixed code or program. If an empty string is returned, consider the file *not* updated, even if the original file was also empty.** This avoids incorrectly flagging a file as modified.
+    - The default value of `strength` should be 0.97.
 
 <examples>
    % Here is how to use the Python Click library to create a command line program:
