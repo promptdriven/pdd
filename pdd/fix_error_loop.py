@@ -39,7 +39,7 @@ def extract_pytest_summary(log_contents: str) -> (int, int, int):
         errors_match = re.search(r"(\d+)\s+error", log_contents, re.IGNORECASE)
         warnings_match = re.search(r"(\d+)\s+warning", log_contents, re.IGNORECASE)
         fails = int(failed_match.group(1)) if failed_match else 0
-        errors = int(errors_match.group(1)) if errors_match else 0
+        errors = int(errors_match.group(1)) if errors_match else fails
         warnings = int(warnings_match.group(1)) if warnings_match else 0
     return fails, errors, warnings
 
