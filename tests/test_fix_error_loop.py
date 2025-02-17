@@ -124,10 +124,23 @@ def test_verification_failure(setup_files):
     files = setup_files
     
     with patch("subprocess.run") as mock_run:
+        # Provide enough side effects for up to 3 fix attempts (each iteration can run
+        # pytest twice + a verification call, plus a final pytest at the end).
         mock_run.side_effect = [
-            mock_pytest_failure(),  # first test run
-            subprocess.CompletedProcess(args=[], returncode=1),  # verification failure
-            mock_pytest_failure(),  # second test run in same iteration
+            # Iteration 1
+            mock_pytest_failure(),  # 1) first test run
+            subprocess.CompletedProcess(args=[], returncode=1),  # 2) verification failure
+            mock_pytest_failure(),  # 3) second test run
+            # Iteration 2
+            mock_pytest_failure(),  # 4) first test run
+            subprocess.CompletedProcess(args=[], returncode=1),  # 5) verification failure
+            mock_pytest_failure(),  # 6) second test run
+            # Iteration 3
+            mock_pytest_failure(),  # 7) first test run
+            subprocess.CompletedProcess(args=[], returncode=1),  # 8) verification failure
+            mock_pytest_failure(),  # 9) second test run
+            # Final pytest run
+            mock_pytest_failure(),  # 10) final run
         ]
         
         with patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix:
@@ -151,7 +164,7 @@ def test_verification_failure(setup_files):
     # We expect it to fail eventually
     assert success is False
     # And we expect the original code to be restored after verification fails
-    assert "return a + b + 1" in final_code  
+    assert "return a + b + 1" in final_code
 
 def test_backup_creation(setup_files):
     files = setup_files
