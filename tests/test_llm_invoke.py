@@ -111,7 +111,7 @@ class MockLLM:
 
     def with_structured_output(self, pydantic_model):
         if isinstance(self.response, str):
-            self.response = pydantic_model.parse_raw(self.response)
+            self.response = pydantic_model.model_validate_json(self.response)
         return self
 
 def test_llm_invoke_valid_input(mock_load_models, mock_set_llm_cache):
