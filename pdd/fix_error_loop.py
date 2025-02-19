@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 import os
 import sys
-import re
 import subprocess
 import shutil
 from datetime import datetime
+
+# Added for the new pytest-based reporting:
+# import pytest
+# import io
 
 from rich import print as rprint
 from rich.console import Console
@@ -18,30 +21,59 @@ def escape_brackets(text: str) -> str:
     """Escape square brackets so Rich doesn't misinterpret them."""
     return text.replace("[", "\\[").replace("]", "\\]")
 
-def extract_pytest_summary(log_contents: str) -> (int, int, int):
+def run_pytest_on_file(test_file: str) -> (int, int, int, str):
     """
-    Extract the number of fails, errors and warnings from pytest output.
-    Try to match a typical summary line first; if not found, fall back to individual regex searches.
-    Returns a tuple: (fails, errors, warnings)
+    Run pytest on the specified test file using a custom plugin to capture results.
+    Returns a tuple: (failures, errors, warnings, logs)
     """
-    fails, errors, warnings = sys.maxsize, sys.maxsize, sys.maxsize  # defaults if not found
-    summary_pattern = re.compile(
-        r"=+\s*(\d+)\s+failed.*?,.*?(\d+)\s+passed.*?,.*?(\d+)\s+warnings", re.IGNORECASE | re.DOTALL
-    )
-    match = summary_pattern.search(log_contents)
-    if match:
-        fails = int(match.group(1))
-        # Some pytest outputs lump failures and errors together, but let's keep them the same if not distinct:
-        errors = int(match.group(1))
-        warnings = int(match.group(3))
-    else:
-        failed_match = re.search(r"(\d+)\s+failed", log_contents, re.IGNORECASE)
-        errors_match = re.search(r"(\d+)\s+error", log_contents, re.IGNORECASE)
-        warnings_match = re.search(r"(\d+)\s+warning", log_contents, re.IGNORECASE)
-        fails = int(failed_match.group(1)) if failed_match else 0
-        errors = int(errors_match.group(1)) if errors_match else fails
-        warnings = int(warnings_match.group(1)) if warnings_match else 0
-    return fails, errors, warnings
+    import pytest
+    import io
+    # import sys
+
+    class TestResultCollector:
+        def __init__(self):
+            self.failures = 0
+            self.errors = 0
+            self.warnings = 0
+            self.logs = io.StringIO()  # Capture logs in memory
+
+        def pytest_runtest_logreport(self, report):
+            """Capture test failures and errors"""
+            if report.when == "call":
+                if report.failed:
+                    self.failures += 1
+                elif report.outcome == "error":
+                    self.errors += 1
+            if report.when == "setup" and report.failed:
+                self.errors += 1
+            if report.when == "teardown" and report.failed:
+                self.errors += 1
+
+        def pytest_sessionfinish(self, session):
+            """Capture warnings from pytest session"""
+            terminal_reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+            if terminal_reporter:
+                self.warnings = len(terminal_reporter.stats.get("warnings", []))
+
+        def capture_logs(self):
+            """Redirect stdout and stderr to capture logs"""
+            sys.stdout = self.logs
+            sys.stderr = self.logs
+
+        def get_logs(self):
+            """Return captured logs and reset stdout/stderr"""
+            sys.stdout = sys.__stdout__
+            sys.stderr = sys.__stderr__
+            return self.logs.getvalue()
+
+    collector = TestResultCollector()
+    collector.capture_logs()
+    try:
+        # Run pytest on the given test file.
+        pytest.main(["-vv", test_file], plugins=[collector])
+    finally:
+        logs = collector.get_logs()
+    return collector.failures, collector.errors, collector.warnings, logs
 
 def fix_error_loop(unit_test_file: str,
                    code_file: str,
@@ -55,10 +87,12 @@ def fix_error_loop(unit_test_file: str,
                    verbose: bool = False):
     """
     Attempt to fix errors in a unit test and corresponding code using repeated iterations, 
-    counting only the number of times we actually call the LLM fix function. The tests 
-    are re-run in the same iteration after a fix to see if we've succeeded, so that 
-    'attempts' matches the number of fix attempts (not the total test runs).
-    
+    counting only the number of times we actually call the LLM fix function. 
+    The tests are re-run in the same iteration after a fix to see if we've succeeded,
+    so that 'attempts' matches the number of fix attempts (not the total test runs).
+
+    This updated version uses pytest's API directly to retrieve failures, errors, and warnings.
+
     Inputs:
         unit_test_file: Path to the file containing unit tests.
         code_file: Path to the file containing the code under test.
@@ -124,11 +158,9 @@ def fix_error_loop(unit_test_file: str,
         with open(error_log_file, "a") as elog:
             elog.write(f"\n{iteration_header}\n")
 
-        # 1) Run the unit tests:
+        # 1) Run the unit tests using pytest's API directly.
         try:
-            pytest_cmd = [sys.executable, "-m", "pytest", "-vv", "--no-cov", unit_test_file]
-            result = subprocess.run(pytest_cmd, capture_output=True, text=True)
-            pytest_output = result.stdout + "\n" + result.stderr
+            fails, errors, warnings, pytest_output = run_pytest_on_file(unit_test_file)
         except Exception as e:
             rprint(f"[red]Error running pytest:[/red] {e}")
             return False, "", "", fix_attempts, total_cost, model_name
@@ -139,12 +171,10 @@ def fix_error_loop(unit_test_file: str,
 
         # Print to console (escaped):
         rprint(f"[magenta]Pytest output:[/magenta]\n{escape_brackets(pytest_output)}")
-
-        fails, errors, warnings = extract_pytest_summary(pytest_output)
         if verbose:
             rprint(f"[cyan]Iteration summary: {fails} failed, {errors} errors, {warnings} warnings[/cyan]")
 
-        # If test is fully successful, we break out:
+        # If tests are fully successful, we break out:
         if fails == 0 and errors == 0 and warnings == 0:
             rprint("[green]All tests passed with no warnings! Exiting loop.[/green]")
             break
@@ -196,7 +226,7 @@ def fix_error_loop(unit_test_file: str,
 
         # Call fix:
         try:
-            # read error log file into pytest_output so it has history of all previous attempts:
+            # Read error log file into pytest_output so it has history of all previous attempts:
             with open(error_log_file, "r") as f:
                 pytest_output = f.read()
 
@@ -222,10 +252,7 @@ def fix_error_loop(unit_test_file: str,
             rprint(f"[red]Exceeded the budget of ${budget:.6f}. Ending fixing loop.[/red]")
             break
 
-        # Even if no changes, the tests require we continue up to max_attempts
-        # so skip the old "break if no changes" logic.
-
-        # If updated_unit_test is True, write to file:
+        # Update unit test file if needed.
         if updated_unit_test:
             try:
                 with open(unit_test_file, "w") as f:
@@ -236,7 +263,7 @@ def fix_error_loop(unit_test_file: str,
                 rprint(f"[red]Error writing updated unit test:[/red] {e}")
                 break
 
-        # If updated_code is True, write it and run verification:
+        # Update code file and run verification if needed.
         if updated_code:
             try:
                 with open(code_file, "w") as f:
@@ -274,13 +301,10 @@ def fix_error_loop(unit_test_file: str,
                 except Exception as e:
                     rprint(f"[red]Error restoring backup code file:[/red] {e}")
                     break
-                # We do NOT break or exit this for-loop; let next iteration attempt to fix again.
-        
-        # IMPORTANT: Re-run the tests in the *same* iteration to see if we have fixed the problem:
-        # So that if the new code or new test is good, we can break out with exactly one fix_attempt.
+
+        # Re-run the tests in the same iteration:
         try:
-            second_run_result = subprocess.run(pytest_cmd, capture_output=True, text=True)
-            second_run_output = second_run_result.stdout + "\n" + second_run_result.stderr
+            fails2, errors2, warnings2, second_run_output = run_pytest_on_file(unit_test_file)
         except Exception as e:
             rprint(f"[red]Error running second pytest attempt in iteration {iteration}:[/red] {e}")
             return False, "", "", fix_attempts, total_cost, model_name
@@ -291,12 +315,10 @@ def fix_error_loop(unit_test_file: str,
 
         rprint(f"[magenta]Second pytest check:[/magenta]\n{escape_brackets(second_run_output)}")
 
-        fails2, errors2, warnings2 = extract_pytest_summary(second_run_output)
         if fails2 == 0 and errors2 == 0 and warnings2 == 0:
             rprint("[green]All tests passed on the second run of this iteration! Exiting loop.[/green]")
             break
         else:
-            # Update best iteration if needed:
             if (errors2 < best_iteration_info["errors"] or
                 (errors2 == best_iteration_info["errors"] and fails2 < best_iteration_info["fails"]) or
                 (errors2 == best_iteration_info["errors"] and fails2 == best_iteration_info["fails"] and warnings2 < best_iteration_info["warnings"])):
@@ -308,16 +330,14 @@ def fix_error_loop(unit_test_file: str,
                     "unit_test_backup": unit_test_backup,
                     "code_backup": code_backup
                 }
-            # If still not passing, we simply continue to the next iteration in the while loop.
 
-    # After we exit the while or exceed attempts/budget, run pytest once more to get final stats:
+    # Final test run:
     try:
-        final_pytest_cmd = [sys.executable, "-m", "pytest", "-vv", "--no-cov", unit_test_file]
-        final_result = subprocess.run(final_pytest_cmd, capture_output=True, text=True)
-        final_output = final_result.stdout + "\n" + final_result.stderr
+        final_fails, final_errors, final_warnings, final_output = run_pytest_on_file(unit_test_file)
     except Exception as e:
         rprint(f"[red]Error running final pytest:[/red] {e}")
         final_output = f"Error: {e}"
+        final_fails = final_errors = final_warnings = sys.maxsize
 
     with open(error_log_file, "a") as elog:
         elog.write("\n=== Final Pytest Run ===\n")
@@ -325,13 +345,9 @@ def fix_error_loop(unit_test_file: str,
 
     rprint(f"[blue]Final pytest output:[/blue]\n{escape_brackets(final_output)}")
 
-    # Possibly restore best iteration if the final run is not the best:
-    # The prompt says: "If the last run isn't the best iteration, restore the best."
-    final_fails, final_errors, final_warnings = extract_pytest_summary(final_output)
+    # Possibly restore best iteration if the final run is not as good:
     if best_iteration_info["attempt"] is not None:
-        # Compare final run to best iteration:
         is_better_final = False
-        # If final has strictly fewer errors, or tie then fewer fails, or tie then fewer warnings => keep final
         if final_errors < best_iteration_info["errors"]:
             is_better_final = True
         elif final_errors == best_iteration_info["errors"] and final_fails < best_iteration_info["fails"]:
@@ -363,8 +379,6 @@ def fix_error_loop(unit_test_file: str,
         rprint(f"[red]Error reading final files:[/red] {e}")
         final_unit_test, final_code = "", ""
 
-    # Check final results for success (no fails, no errors, no warnings)
-    final_fails, final_errors, final_warnings = extract_pytest_summary(final_output)
     success = (final_fails == 0 and final_errors == 0 and final_warnings == 0)
     if success:
         rprint("[green]Final tests passed with no warnings.[/green]")
