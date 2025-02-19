@@ -46,7 +46,7 @@ console = Console()
 @click.option("--review-examples", is_flag=True,
               help="Review and optionally exclude few-shot examples before command execution.")
 @click.option('--local', is_flag=True, help='Run commands locally instead of in the cloud.')
-@click.version_option(version="0.0.13")
+@click.version_option(version="0.0.14")
 @click.pass_context
 def cli(
     ctx,
