@@ -1,10 +1,8 @@
-# tests/test_summarize_directory.py
-
 import pytest
 from unittest.mock import patch, mock_open, MagicMock
 from pdd.summarize_directory import summarize_directory
 import os
-from datetime import datetime
+from datetime import datetime, UTC
 import csv
 from io import StringIO
 
@@ -69,8 +67,7 @@ def test_valid_inputs_with_existing_csv(tmp_path, mock_load_prompt_template, moc
 
     # Create existing CSV with file1
     existing_csv = f'''full_path,file_summary,date
-"{os.path.relpath(str(file1))}","Existing summary.",{datetime.utcnow().isoformat()}
-'''
+"{os.path.relpath(str(file1))}","Existing summary.",{datetime.now(UTC).isoformat()}'''
 
     directory_path = str(tmp_path / "*.py")
     strength = 0.5
@@ -288,9 +285,8 @@ def test_partial_summarization(tmp_path, mock_load_prompt_template, mock_llm_inv
 
     # Create existing CSV with file1 and file2
     existing_csv = f'''full_path,file_summary,date
-"{os.path.relpath(str(file1))}","Existing summary.",{datetime.utcnow().isoformat()}
-"{os.path.relpath(str(file2))}","Existing summary.",{datetime.utcnow().isoformat()}
-'''
+"{os.path.relpath(str(file1))}","Existing summary.",{datetime.now(UTC).isoformat()}
+"{os.path.relpath(str(file2))}","Existing summary.",{datetime.now(UTC).isoformat()}'''
 
     directory_path = str(tmp_path / "*.py")
     strength = 0.5
@@ -300,11 +296,11 @@ def test_partial_summarization(tmp_path, mock_load_prompt_template, mock_llm_inv
 
     # Mock file modification time: file1 not changed, file2 modified, file3 new
     with patch('pdd.summarize_directory.os.path.getmtime') as mock_getmtime:
-        current_time = datetime.utcnow().timestamp()
+        current_time = datetime.now(UTC).timestamp()
         mock_getmtime.side_effect = [
-            file1.stat().st_mtime,  # file1
-            current_time + 100,      # file2 modified
-            file3.stat().st_mtime   # file3
+            file1.stat().st_mtime,  # file1 unchanged
+            current_time + 100,     # file2 modified
+            file3.stat().st_mtime   # file3 new
         ]
 
         csv_output, total_cost, model_name = summarize_directory(
