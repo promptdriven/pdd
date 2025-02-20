@@ -1,130 +1,50 @@
 import argparse
 import json
 import io
-import re
 import sys
 import pytest
-import subprocess
-from pathlib import Path
 from rich.console import Console
 from rich.pretty import pprint
 import os
-from .python_env_detector import detect_host_python_executable
 
 console = Console()
 
 
-def _find_project_root(test_file: Path) -> Path | None:
-    """
-    Find the project root directory by looking for .pddrc (definitive PDD marker).
-
-    Only .pddrc is used as the project marker to ensure we don't incorrectly
-    identify project roots for non-PDD projects. This is a conservative approach
-    that maintains backward compatibility.
-
-    Args:
-        test_file: Path to the test file
-
-    Returns:
-        The project root directory if .pddrc is found, None otherwise.
-        When None is returned, the caller should use original behavior.
-    """
-    current = test_file.resolve().parent
-
-    # Walk up the directory tree looking for .pddrc only
-    while current != current.parent:
-        if (current / ".pddrc").exists():
-            return current
-        current = current.parent
-
-    # No .pddrc found - return None to signal original behavior should be used
-    return None
-
-
-_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-
-
-def _strip_ansi(text: str) -> str:
-    """Remove ANSI escape sequences from text for reliable parsing."""
-    return _ANSI_ESCAPE_RE.sub("", text)
-
-
-def extract_failing_files_from_output(pytest_output: str) -> list[str]:
-    """
-    Extract unique file paths from pytest FAILED output lines.
-
-    Parses patterns like:
-    - FAILED tests/test_foo.py::test_name - error message
-    - tests/test_foo.py::test_name FAILED
-
-    Args:
-        pytest_output: The combined stdout/stderr from a pytest run
-
-    Returns:
-        List of unique file paths (without ::test_name suffix) that had failures,
-        in the order they were first encountered.
-    """
-    cleaned_output = _strip_ansi(pytest_output)
-
-    failing_files = []
-    seen = set()
-
-    # Pattern 1: FAILED path/file.py::test_name (with optional error)
-    pattern1 = r'FAILED\s+([^\s:]+\.py)::'
-    for match in re.finditer(pattern1, cleaned_output):
-        file_path = match.group(1)
-        if file_path not in seen:
-            failing_files.append(file_path)
-            seen.add(file_path)
-
-    # Pattern 2: path/file.py::test_name FAILED (verbose output)
-    pattern2 = r'([^\s:]+\.py)::\S+\s+FAILED'
-    for match in re.finditer(pattern2, cleaned_output):
-        file_path = match.group(1)
-        if file_path not in seen:
-            failing_files.append(file_path)
-            seen.add(file_path)
-
-    return failing_files
-
-
 class TestResultCollector:
-    __test__ = False  # Prevent pytest from collecting this plugin as a test
+    """
+    A pytest plugin to collect test results.
+    """
 
     def __init__(self):
         self.failures = 0
         self.errors = 0
         self.warnings = 0
         self.passed = 0
-        self.logs = io.StringIO()
+        self.logs = io.StringIO()  # Capture logs in memory
         self.stdout = ""
         self.stderr = ""
 
     def pytest_runtest_logreport(self, report):
-        """
-        Treat any failing 'call' phase as a test failure (matching what Pytest calls 'failed'),
-        and only count setup/teardown failures (or 'report.outcome == "error"') as errors.
-        """
-        # 'report.when' can be "setup", "call", or "teardown"
+        """Capture test failures, errors, and passes."""
         if report.when == "call":
-            if report.passed:
-                self.passed += 1
-            elif report.failed:
-                # All exceptions that occur in the test body are 'failures'
+            if report.failed:
                 self.failures += 1
             elif report.outcome == "error":
-                # Not frequently used, but included for completeness
                 self.errors += 1
-        elif report.when in ("setup", "teardown") and report.failed:
-            # Setup/teardown failures are 'errors'
+            elif report.passed:
+                self.passed += 1
+        if report.when == "setup" and report.failed:
+            self.errors += 1
+        if report.when == "teardown" and report.failed:
             self.errors += 1
 
     def pytest_sessionfinish(self, session):
         """Capture warnings from pytest session."""
-        if hasattr(session.config, 'pluginmanager'):
-            terminal_reporter = session.config.pluginmanager.get_plugin("terminalreporter")
-            if terminal_reporter:
-                self.warnings = len(terminal_reporter.stats.get("warnings", []))
+        terminal_reporter = session.config.pluginmanager.get_plugin(
+            "terminalreporter"
+        )
+        if terminal_reporter:
+            self.warnings = len(terminal_reporter.stats.get("warnings", []))
 
     def capture_logs(self):
         """Redirect stdout and stderr to capture logs."""
@@ -135,19 +55,17 @@ class TestResultCollector:
         """Return captured logs and reset stdout/stderr."""
         self.stdout = self.logs.getvalue()
         self.stderr = self.logs.getvalue()
-        sys.stdout = sys.__stdout__
-        sys.stderr = sys.__stderr__
+        sys.stdout = sys.__stdout__  # Reset stdout
+        sys.stderr = sys.__stderr__  # Reset stderr
         return self.stdout, self.stderr
 
-def run_pytest_and_capture_output(test_file: str, extra_files: list[str] | None = None) -> dict:
+
+def run_pytest_and_capture_output(test_file: str) -> dict:
     """
-    Runs pytest on the given test file(s) and captures the output.
+    Runs pytest on the given test file and captures the output.
 
     Args:
-        test_file: The path to the primary test file.
-        extra_files: Optional list of additional test files to run alongside
-            the primary file. Used for Bug #360 fix where test failures only
-            manifest when multiple test files are run together.
+        test_file: The path to the test file.
 
     Returns:
         A dictionary containing the pytest output.
@@ -162,128 +80,28 @@ def run_pytest_and_capture_output(test_file: str, extra_files: list[str] | None 
         )
         return {}
 
-    # Use environment-aware Python executable for pytest execution
-    python_executable = detect_host_python_executable()
+    collector = TestResultCollector()
+    try:
+        collector.capture_logs()
+        result = pytest.main([test_file], plugins=[collector])
+    finally:
+        stdout, stderr = collector.get_logs()
 
-    # Find the project root directory for proper pytest execution (PDD projects only)
-    test_path = Path(test_file).resolve()
-    project_root = _find_project_root(test_path)
-
-    # Build subprocess kwargs - only modify cwd/env for PDD projects (.pddrc found)
-    subprocess_kwargs = {
-        "capture_output": True,
-        "text": True,
-        "timeout": 300,
-        "stdin": subprocess.DEVNULL,
+    return {
+        "test_file": test_file,
+        "test_results": [
+            {
+                "standard_output": stdout,
+                "standard_error": stderr,
+                "return_code": int(result),
+                "warnings": collector.warnings,
+                "errors": collector.errors,
+                "failures": collector.failures,
+                "passed": collector.passed,
+            }
+        ],
     }
 
-    # Bug #360: Include extra test files to detect test isolation failures
-    all_test_paths = [str(test_path)]
-    if extra_files:
-        all_test_paths.extend(extra_files)
-    pytest_args = [python_executable, "-B", "-m", "pytest"] + all_test_paths + ["-v"]
-
-    if project_root is not None:
-        # PDD project detected - set up proper environment
-        subprocess_kwargs["cwd"] = str(project_root)
-
-        # Build PYTHONPATH with both project root and src/ if it exists
-        paths_to_add = [str(project_root)]
-        src_dir = project_root / "src"
-        if src_dir.is_dir():
-            paths_to_add.insert(0, str(src_dir))  # src/ takes priority
-
-        env = os.environ.copy()
-        existing_pythonpath = env.get("PYTHONPATH", "")
-        if existing_pythonpath:
-            paths_to_add.append(existing_pythonpath)
-        env["PYTHONPATH"] = os.pathsep.join(paths_to_add)
-        subprocess_kwargs["env"] = env
-
-        # Add --rootdir to ensure pytest uses project's config
-        pytest_args.append(f"--rootdir={project_root}")
-
-    try:
-        # Run pytest using subprocess with the detected Python executable
-        # Use -B flag to disable bytecode caching, ensuring fresh imports
-        result = subprocess.run(pytest_args, **subprocess_kwargs)
-        
-        stdout = result.stdout
-        stderr = result.stderr
-        return_code = result.returncode
-        parse_stdout = _strip_ansi(stdout or "")
-        
-        # Parse the output to extract test results
-        # Count passed, failed, and skipped tests from the output
-        passed = parse_stdout.count(" PASSED")
-        failures = parse_stdout.count(" FAILED") + parse_stdout.count(" ERROR")
-        errors = 0  # Will be included in failures for subprocess execution
-        # Parse warnings from pytest's summary line only (e.g., "=== 2 passed, 1 warning in 0.05s ===")
-        # Avoid counting library warnings (LiteLLM, Pydantic, PDD logs) that appear in stdout
-        summary_lines = [
-            line
-            for line in parse_stdout.splitlines()
-            if re.match(r"^=+.*=+$", line.strip())
-        ]
-        summary_text = summary_lines[-1] if summary_lines else ""
-        warning_match = re.search(r"(\d+) warnings?", summary_text)
-        warnings = int(warning_match.group(1)) if warning_match else 0
-        
-        # If return code is 2, it indicates a pytest error
-        if return_code == 2:
-            errors = 1
-        # Safety net: if parsing missed failures due to formatting (e.g., ANSI colors),
-        # never report a passing result on a non-zero return code.
-        if return_code != 0 and failures == 0 and errors == 0:
-            if return_code == 1:
-                failures = 1
-            else:
-                errors = 1
-
-        return {
-            "test_file": test_file,
-            "test_results": [
-                {
-                    "standard_output": stdout,
-                    "standard_error": stderr,
-                    "return_code": return_code,
-                    "warnings": warnings,
-                    "errors": errors,
-                    "failures": failures,
-                    "passed": passed,
-                }
-            ],
-        }
-    except subprocess.TimeoutExpired:
-        return {
-            "test_file": test_file,
-            "test_results": [
-                {
-                    "standard_output": "",
-                    "standard_error": "Test execution timed out",
-                    "return_code": -1,
-                    "warnings": 0,
-                    "errors": 1,
-                    "failures": 0,
-                    "passed": 0,
-                }
-            ],
-        }
-    except Exception as e:
-        return {
-            "test_file": test_file,
-            "test_results": [
-                {
-                    "standard_output": "",
-                    "standard_error": f"Error running pytest: {str(e)}",
-                    "return_code": -1,
-                    "warnings": 0,
-                    "errors": 1,
-                    "failures": 0,
-                    "passed": 0,
-                }
-            ],
-        }
 
 def save_output_to_json(output: dict, output_file: str = "pytest.json"):
     """
@@ -291,7 +109,7 @@ def save_output_to_json(output: dict, output_file: str = "pytest.json"):
 
     Args:
         output: The dictionary containing the pytest output.
-        output_file: The name of the output JSON file. Defaults to "pytest.json".
+        output_file: The name of the output JSON file.  Defaults to "pytest.json".
     """
     try:
         with open(output_file, "w", encoding="utf-8") as f:
@@ -304,6 +122,7 @@ def save_output_to_json(output: dict, output_file: str = "pytest.json"):
             f"[bold red]Error saving output to JSON: {e}[/]"
         )
 
+
 def main():
     """
     Main function for the pytest_output CLI tool.
@@ -314,20 +133,15 @@ def main():
     parser.add_argument(
         "test_file", type=str, help="Path to the test file."
     )
-    parser.add_argument(
-        "--json-only", action="store_true", help="Output only JSON to stdout."
-    )
     args = parser.parse_args()
 
+    console.print(f"Running pytest on: [blue]{args.test_file}[/blue]")
     pytest_output = run_pytest_and_capture_output(args.test_file)
 
-    if args.json_only:
-        # Print only valid JSON to stdout.
-        print(json.dumps(pytest_output))
-    else:
-        console.print(f"Running pytest on: [blue]{args.test_file}[/blue]")
+    if pytest_output:
         pprint(pytest_output, console=console)  # Pretty print the output
         save_output_to_json(pytest_output)
+
 
 if __name__ == "__main__":
     main()
