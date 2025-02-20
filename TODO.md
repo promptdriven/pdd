@@ -32,11 +32,14 @@
 - [ ] debug using pdb in non-interactive mode
 
 ## Bugs
+- [ ] error message and help don't match
+- [ ] when only open ai env var test, example and fix infinite loop
+
 
 
 
 ## Improvements
-
+- [ ] display model list
 - [ ] read from a csv file the comment 
 - [ ] fix make file production and prepopulate
 - [ ] have fix remember what was the closest code passing and start from that to hill climb
