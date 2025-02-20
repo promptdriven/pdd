@@ -4,6 +4,7 @@ import sys
 import subprocess
 import shutil
 from datetime import datetime
+import json
 
 # Added for the new pytest-based reporting:
 # import pytest
@@ -23,57 +24,34 @@ def escape_brackets(text: str) -> str:
 
 def run_pytest_on_file(test_file: str) -> (int, int, int, str):
     """
-    Run pytest on the specified test file using a custom plugin to capture results.
+    Run pytest on the specified test file using subprocess.
     Returns a tuple: (failures, errors, warnings, logs)
     """
-    import pytest
-    import io
-    # import sys
-
-    class TestResultCollector:
-        def __init__(self):
-            self.failures = 0
-            self.errors = 0
-            self.warnings = 0
-            self.logs = io.StringIO()  # Capture logs in memory
-
-        def pytest_runtest_logreport(self, report):
-            """Capture test failures and errors"""
-            if report.when == "call":
-                if report.failed:
-                    self.failures += 1
-                elif report.outcome == "error":
-                    self.errors += 1
-            if report.when == "setup" and report.failed:
-                self.errors += 1
-            if report.when == "teardown" and report.failed:
-                self.errors += 1
-
-        def pytest_sessionfinish(self, session):
-            """Capture warnings from pytest session"""
-            terminal_reporter = session.config.pluginmanager.get_plugin("terminalreporter")
-            if terminal_reporter:
-                self.warnings = len(terminal_reporter.stats.get("warnings", []))
-
-        def capture_logs(self):
-            """Redirect stdout and stderr to capture logs"""
-            sys.stdout = self.logs
-            sys.stderr = self.logs
-
-        def get_logs(self):
-            """Return captured logs and reset stdout/stderr"""
-            sys.stdout = sys.__stdout__
-            sys.stderr = sys.__stderr__
-            return self.logs.getvalue()
-
-    collector = TestResultCollector()
-    collector.capture_logs()
     try:
-        # Run pytest on the given test file.
-        pytest.main(["-vv", test_file], plugins=[collector])
-    finally:
-        logs = collector.get_logs()
-    return collector.failures, collector.errors, collector.warnings, logs
+        # Include "--json-only" to ensure only valid JSON is printed.
+        cmd = [sys.executable, "-m", "pdd.pytest_output", "--json-only", test_file]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        # Parse the JSON output from stdout
+        try:
+            output = json.loads(result.stdout)
+            test_results = output.get('test_results', [{}])[0]
+            
+            failures = test_results.get('failures', 0)
+            errors = test_results.get('errors', 0)
+            warnings = test_results.get('warnings', 0)
+            
+            # Combine stdout and stderr from the test results
+            logs = test_results.get('standard_output', '') + '\n' + test_results.get('standard_error', '')
+            
+            return failures, errors, warnings, logs
+            
+        except json.JSONDecodeError:
+            # If JSON parsing fails, return the raw output
+            return 1, 1, 0, f"Failed to parse pytest output:\n{result.stdout}\n{result.stderr}"
+            
+    except Exception as e:
+        return 1, 1, 0, f"Error running pytest: {str(e)}"
 
 def fix_error_loop(unit_test_file: str,
                    code_file: str,
