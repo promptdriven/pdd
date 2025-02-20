@@ -1,0 +1,32 @@
+% You are an expert Python Software Engineer. Your goal is to write a Python CLI tool, "pytest_output", that will capture the output of pytest and save it to a JSON file.
+
+<include>context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the CLI:
+    Command Line Interface Input arguments: 
+        'test_file' - A string containing the path to the test file.
+    Command Line Interface Outputs:
+        'pytest.json' - A JSON file containing the output of pytest.
+
+
+% Here is an example of the TestResultCollector plugin used to capture pytest results:
+<pytest_result_collector_example>
+    <include>context/pytest_example.py</include>
+</pytest_result_collector_example>
+
+% This function will do the following:
+    Step 1. Run pytest on the given test file.
+    Step 2. Capture the output of pytest.
+    Step 3. Save the output of pytest to the 'pytest.json' file with the following format:
+        {
+            "test_file": "path/to/test_file.py",
+            "test_results": [
+                {
+                    "standard_output": "standard output of the test",
+                    "standard_error": "standard error of the test",
+                    "return_code": "return code of the test",
+                    "warnings": "warnings of the test",
+                    "errors": "errors of the test",
+                    "failures": "failures of the test",
+                    "passed": "passed of the test",
+                }

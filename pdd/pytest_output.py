@@ -1,0 +1,147 @@
+import argparse
+import json
+import io
+import sys
+import pytest
+from rich.console import Console
+from rich.pretty import pprint
+import os
+
+console = Console()
+
+
+class TestResultCollector:
+    """
+    A pytest plugin to collect test results.
+    """
+
+    def __init__(self):
+        self.failures = 0
+        self.errors = 0
+        self.warnings = 0
+        self.passed = 0
+        self.logs = io.StringIO()  # Capture logs in memory
+        self.stdout = ""
+        self.stderr = ""
+
+    def pytest_runtest_logreport(self, report):
+        """Capture test failures, errors, and passes."""
+        if report.when == "call":
+            if report.failed:
+                self.failures += 1
+            elif report.outcome == "error":
+                self.errors += 1
+            elif report.passed:
+                self.passed += 1
+        if report.when == "setup" and report.failed:
+            self.errors += 1
+        if report.when == "teardown" and report.failed:
+            self.errors += 1
+
+    def pytest_sessionfinish(self, session):
+        """Capture warnings from pytest session."""
+        terminal_reporter = session.config.pluginmanager.get_plugin(
+            "terminalreporter"
+        )
+        if terminal_reporter:
+            self.warnings = len(terminal_reporter.stats.get("warnings", []))
+
+    def capture_logs(self):
+        """Redirect stdout and stderr to capture logs."""
+        sys.stdout = self.logs
+        sys.stderr = self.logs
+
+    def get_logs(self):
+        """Return captured logs and reset stdout/stderr."""
+        self.stdout = self.logs.getvalue()
+        self.stderr = self.logs.getvalue()
+        sys.stdout = sys.__stdout__  # Reset stdout
+        sys.stderr = sys.__stderr__  # Reset stderr
+        return self.stdout, self.stderr
+
+
+def run_pytest_and_capture_output(test_file: str) -> dict:
+    """
+    Runs pytest on the given test file and captures the output.
+
+    Args:
+        test_file: The path to the test file.
+
+    Returns:
+        A dictionary containing the pytest output.
+    """
+    if not os.path.exists(test_file):
+        console.print(f"[bold red]Error: Test file '{test_file}' not found.[/]")
+        return {}
+
+    if not test_file.endswith(".py"):
+        console.print(
+            f"[bold red]Error: Test file '{test_file}' must be a Python file (.py).[/]"
+        )
+        return {}
+
+    collector = TestResultCollector()
+    try:
+        collector.capture_logs()
+        result = pytest.main([test_file], plugins=[collector])
+    finally:
+        stdout, stderr = collector.get_logs()
+
+    return {
+        "test_file": test_file,
+        "test_results": [
+            {
+                "standard_output": stdout,
+                "standard_error": stderr,
+                "return_code": int(result),
+                "warnings": collector.warnings,
+                "errors": collector.errors,
+                "failures": collector.failures,
+                "passed": collector.passed,
+            }
+        ],
+    }
+
+
+def save_output_to_json(output: dict, output_file: str = "pytest.json"):
+    """
+    Saves the pytest output to a JSON file.
+
+    Args:
+        output: The dictionary containing the pytest output.
+        output_file: The name of the output JSON file.  Defaults to "pytest.json".
+    """
+    try:
+        with open(output_file, "w", encoding="utf-8") as f:
+            json.dump(output, f, indent=4)
+        console.print(
+            f"[green]Pytest output saved to '{output_file}'.[/green]"
+        )
+    except Exception as e:
+        console.print(
+            f"[bold red]Error saving output to JSON: {e}[/]"
+        )
+
+
+def main():
+    """
+    Main function for the pytest_output CLI tool.
+    """
+    parser = argparse.ArgumentParser(
+        description="Capture pytest output and save it to a JSON file."
+    )
+    parser.add_argument(
+        "test_file", type=str, help="Path to the test file."
+    )
+    args = parser.parse_args()
+
+    console.print(f"Running pytest on: [blue]{args.test_file}[/blue]")
+    pytest_output = run_pytest_and_capture_output(args.test_file)
+
+    if pytest_output:
+        pprint(pytest_output, console=console)  # Pretty print the output
+        save_output_to_json(pytest_output)
+
+
+if __name__ == "__main__":
+    main()
