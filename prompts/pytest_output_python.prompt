@@ -1,13 +1,14 @@
-% You are an expert Python Software Engineer. Your goal is to write a Python CLI tool, "pytest_output", that will capture the output of pytest and save it to a JSON file.
+% You are an expert Python Software Engineer. Your goal is to write a Python CLI tool, "pytest_output", that will capture the output of pytest and save it to a JSON file.  The tool should also provide an option to output *only* the JSON to standard output.
 
 <include>context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the CLI:
     Command Line Interface Input arguments: 
         'test_file' - A string containing the path to the test file.
+        '--json-only' - An optional boolean flag. If present, output *only* the JSON to standard output.  Do not print any other messages.
     Command Line Interface Outputs:
-        'pytest.json' - A JSON file containing the output of pytest.
-
+        'pytest.json' - A JSON file containing the output of pytest.  This file is *always* created.
+        Standard Output - If `--json-only` is present, output the JSON data to standard output.  Otherwise, output human-readable information, including pretty-printed test results.
 
 % Here is an example of the TestResultCollector plugin used to capture pytest results:
 <pytest_result_collector_example>
@@ -30,3 +31,7 @@
                     "failures": "failures of the test",
                     "passed": "passed of the test",
                 }
+            ]
+        }
+    Step 4.  If the `--json-only` flag is provided, print *only* the JSON data to standard output.  Do not print any other messages to standard output in this case.
+    Step 5.  If the `--json-only` flag is *not* provided, print a message indicating which file is being tested, pretty-print the captured output to the console, and print a message indicating that the output has been saved to a file.
