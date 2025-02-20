@@ -133,12 +133,18 @@ def main():
     parser.add_argument(
         "test_file", type=str, help="Path to the test file."
     )
+    parser.add_argument(
+        "--json-only", action="store_true", help="Output only JSON to stdout."
+    )
     args = parser.parse_args()
 
-    console.print(f"Running pytest on: [blue]{args.test_file}[/blue]")
     pytest_output = run_pytest_and_capture_output(args.test_file)
 
-    if pytest_output:
+    if args.json_only:
+        # Print only valid JSON to stdout.
+        print(json.dumps(pytest_output))
+    else:
+        console.print(f"Running pytest on: [blue]{args.test_file}[/blue]")
         pprint(pytest_output, console=console)  # Pretty print the output
         save_output_to_json(pytest_output)
 
