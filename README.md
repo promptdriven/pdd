@@ -103,7 +103,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.14
+Current version: 0.0.15
 
 To check your installed version, run:
 ```
