@@ -9,18 +9,16 @@ import os
 
 console = Console()
 
-
 class TestResultCollector:
     """
     A pytest plugin to collect test results.
     """
-
     def __init__(self):
         self.failures = 0
         self.errors = 0
         self.warnings = 0
         self.passed = 0
-        self.logs = io.StringIO()  # Capture logs in memory
+        self.logs = io.StringIO()
         self.stdout = ""
         self.stderr = ""
 
@@ -28,23 +26,23 @@ class TestResultCollector:
         """Capture test failures, errors, and passes."""
         if report.when == "call":
             if report.failed:
-                self.failures += 1
+                if hasattr(report, 'outcome') and report.outcome == 'failed':
+                    self.failures += 1
+                else:
+                    self.errors += 1
             elif report.outcome == "error":
                 self.errors += 1
             elif report.passed:
                 self.passed += 1
-        if report.when == "setup" and report.failed:
-            self.errors += 1
-        if report.when == "teardown" and report.failed:
+        elif report.when in ("setup", "teardown") and report.failed:
             self.errors += 1
 
     def pytest_sessionfinish(self, session):
         """Capture warnings from pytest session."""
-        terminal_reporter = session.config.pluginmanager.get_plugin(
-            "terminalreporter"
-        )
-        if terminal_reporter:
-            self.warnings = len(terminal_reporter.stats.get("warnings", []))
+        if hasattr(session.config, 'pluginmanager'):
+            terminal_reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+            if terminal_reporter:
+                self.warnings = len(terminal_reporter.stats.get("warnings", []))
 
     def capture_logs(self):
         """Redirect stdout and stderr to capture logs."""
@@ -55,8 +53,8 @@ class TestResultCollector:
         """Return captured logs and reset stdout/stderr."""
         self.stdout = self.logs.getvalue()
         self.stderr = self.logs.getvalue()
-        sys.stdout = sys.__stdout__  # Reset stdout
-        sys.stderr = sys.__stderr__  # Reset stderr
+        sys.stdout = sys.__stdout__
+        sys.stderr = sys.__stderr__
         return self.stdout, self.stderr
 
 
