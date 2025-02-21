@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 
 # Create a directory for test outputs
-OUTPUT_DIR = "tests/output"
+OUTPUT_DIR = "output"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
