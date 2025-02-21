@@ -30,6 +30,7 @@
 - [ ] include in <web> content</web>
 - [ ] MCP support for better context
 - [ ] debug using pdb in non-interactive mode
+- [ ] show what apis are available for a given module
 
 ## Bugs
 - [ ] error message and help don't match

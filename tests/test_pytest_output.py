@@ -71,17 +71,20 @@ def test_run_pytest_and_capture_output_failed_test() -> None:
 
 
 def test_run_pytest_and_capture_output_error_test() -> None:
-    """Test case: pytest run with a test that errors."""
+    """Test case: pytest run with an exception in the test body (ValueError)."""
     test_file = os.path.join(OUTPUT_DIR, "test_error.py")
     create_test_file(test_file, "def test_error():\n    raise ValueError")
     result = run_pytest_and_capture_output(test_file)
+
     assert result["test_file"] == test_file
     assert result["test_results"][0]["return_code"] == 1
-    assert result["test_results"][0]["errors"] == 1
+    
+    # Now that we're matching Pytest's default handling, a ValueError is a "failure":
+    assert result["test_results"][0]["failures"] == 1
+    assert result["test_results"][0]["errors"] == 0
+    
     assert result["test_results"][0]["passed"] == 0
-    assert result["test_results"][0]["failures"] == 0
     assert result["test_results"][0]["warnings"] == 0
-    os.remove(test_file)
 
 
 def test_run_pytest_and_capture_output_with_warnings() -> None:
