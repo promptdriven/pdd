@@ -1,4 +1,4 @@
-import pkg_resources
+import importlib.metadata
 import requests
 import semver
 import subprocess
@@ -14,7 +14,7 @@ def auto_update(package_name: str = "pdd-cli", latest_version: str = None) -> No
     """
     try:
         # Get current installed version
-        current_version = pkg_resources.get_distribution(package_name).version
+        current_version = importlib.metadata.version(package_name)
 
         # If latest_version is not provided, fetch from PyPI
         if latest_version is None:
@@ -63,7 +63,7 @@ def auto_update(package_name: str = "pdd-cli", latest_version: str = None) -> No
             else:
                 print("Please answer 'y' or 'n'")
 
-    except pkg_resources.DistributionNotFound:
+    except importlib.metadata.PackageNotFoundError:
         print(f"Package {package_name} is not installed")
     except Exception as e:
         print(f"Error checking for updates: {str(e)}")
