@@ -210,23 +210,4 @@ def test_test_result_collector_pytest_hooks() -> None:
 
     collector.pytest_sessionfinish(MockSession())
     assert collector.warnings == 0  # Should remain 0 as terminalreporter is None
-
-
-if __name__ == "__main__":
-    pytest.main()  # This line is added to allow running the tests directly if needed.
-
-
-# Explanation:
-# The code block is a comprehensive set of unit tests for a Python module that interacts with pytest.
-# It includes tests for functions that run pytest, save outputs to JSON, and collect test results.
-# The code is well-structured, with helper functions and mock objects to simulate different scenarios.
-# The tests cover various cases, including successful runs, failures, errors, and warnings.
-# The code is formatted according to PEP 8 standards and includes type hints for better readability and maintenance.
-# The main focus of the generation was to create a robust testing suite for the given module, ensuring all functionalities are tested thoroughly.
-# The code is complete and handles exceptions, ensuring that the tests are reliable and informative.
-# The addition of `if __name__ == "__main__": pytest.main()` allows the tests to be run directly, which is useful for standalone testing.
-# No errors were detected in the code, and it is ready for execution in a Python environment with pytest installed.
-
-
-# Focus: The focus of the generation was to create a comprehensive and robust testing suite for a Python module that interacts with pytest.
-# Explanation: The block type was the focus because it provides a complete set of unit tests for the module, ensuring all functionalities are tested thoroughly. The code is well-structured, formatted according to PEP 8 standards, and includes type hints for better readability and maintenance. The tests cover various scenarios, including successful runs, failures, errors, and warnings, making it a reliable and informative testing suite. The code is complete, handles exceptions, and is ready for execution in a Python environment with pytest installed. No errors were detected in the code.
+    
