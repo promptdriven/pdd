@@ -1,6 +1,7 @@
 # File: output/test_auto_update.py
 
 import pytest
+import importlib
 from unittest.mock import patch, MagicMock
 from pdd.auto_update import auto_update
 
@@ -89,9 +90,9 @@ def test_auto_update_fetch_latest_version_failure(mock_importlib_metadata_versio
 
 def test_auto_update_invalid_version_format(mock_importlib_metadata_version, mock_requests_get):
     """Test when the version format is invalid and falls back to string comparison."""
-    mock_importlib_metadata_version.return_value = "1.0.0-alpha"
+    mock_importlib_metadata_version.return_value = "1.0.0x"
     mock_requests_get.return_value = MagicMock(
-        status_code=200, json=lambda: {"info": {"version": "1.0.0"}}
+        status_code=200, json=lambda: {"info": {"version": "1.0.0x"}}
     )
 
     with patch("builtins.print") as mock_print:
