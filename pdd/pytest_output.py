@@ -10,9 +10,8 @@ import os
 console = Console()
 
 class TestResultCollector:
-    """
-    A pytest plugin to collect test results.
-    """
+    __test__ = False  # Prevent pytest from collecting this plugin as a test
+
     def __init__(self):
         self.failures = 0
         self.errors = 0
@@ -23,18 +22,22 @@ class TestResultCollector:
         self.stderr = ""
 
     def pytest_runtest_logreport(self, report):
-        """Capture test failures, errors, and passes."""
+        """
+        Treat any failing 'call' phase as a test failure (matching what Pytest calls 'failed'),
+        and only count setup/teardown failures (or 'report.outcome == "error"') as errors.
+        """
+        # 'report.when' can be "setup", "call", or "teardown"
         if report.when == "call":
-            if report.failed:
-                if hasattr(report, 'outcome') and report.outcome == 'failed':
-                    self.failures += 1
-                else:
-                    self.errors += 1
-            elif report.outcome == "error":
-                self.errors += 1
-            elif report.passed:
+            if report.passed:
                 self.passed += 1
+            elif report.failed:
+                # All exceptions that occur in the test body are 'failures'
+                self.failures += 1
+            elif report.outcome == "error":
+                # Not frequently used, but included for completeness
+                self.errors += 1
         elif report.when in ("setup", "teardown") and report.failed:
+            # Setup/teardown failures are 'errors'
             self.errors += 1
 
     def pytest_sessionfinish(self, session):
@@ -56,7 +59,6 @@ class TestResultCollector:
         sys.stdout = sys.__stdout__
         sys.stderr = sys.__stderr__
         return self.stdout, self.stderr
-
 
 def run_pytest_and_capture_output(test_file: str) -> dict:
     """
@@ -100,14 +102,13 @@ def run_pytest_and_capture_output(test_file: str) -> dict:
         ],
     }
 
-
 def save_output_to_json(output: dict, output_file: str = "pytest.json"):
     """
     Saves the pytest output to a JSON file.
 
     Args:
         output: The dictionary containing the pytest output.
-        output_file: The name of the output JSON file.  Defaults to "pytest.json".
+        output_file: The name of the output JSON file. Defaults to "pytest.json".
     """
     try:
         with open(output_file, "w", encoding="utf-8") as f:
@@ -119,7 +120,6 @@ def save_output_to_json(output: dict, output_file: str = "pytest.json"):
         console.print(
             f"[bold red]Error saving output to JSON: {e}[/]"
         )
-
 
 def main():
     """
@@ -145,7 +145,6 @@ def main():
         console.print(f"Running pytest on: [blue]{args.test_file}[/blue]")
         pprint(pytest_output, console=console)  # Pretty print the output
         save_output_to_json(pytest_output)
-
 
 if __name__ == "__main__":
     main()
