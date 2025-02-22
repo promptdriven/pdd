@@ -37,6 +37,11 @@ def run_pytest_on_file(test_file: str) -> (int, int, int, str):
             output = json.loads(result.stdout)
             test_results = output.get('test_results', [{}])[0]
             
+            # Check pytest's return code first
+            return_code = test_results.get('return_code', 1)
+            if return_code != 0:
+                return 1, 1, 0, f"Pytest failed with return code {return_code}\n{result.stdout}\n{result.stderr}"
+            
             failures = test_results.get('failures', 0)
             errors = test_results.get('errors', 0)
             warnings = test_results.get('warnings', 0)
