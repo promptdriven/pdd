@@ -1,6 +1,5 @@
 # TODO
 - [ ] Python 3.13 support
-- [ ] fix warnings in the code
 
 ## On Deck
 
@@ -33,11 +32,6 @@
 - [ ] show what apis are available for a given module
 
 ## Bugs
-- [ ] error message and help don't match
-- [ ] when only open ai env var test, example and fix infinite loop
-
-
-
 
 ## Improvements
 - [ ] display model list
