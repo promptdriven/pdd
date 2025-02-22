@@ -3,7 +3,7 @@
 <include>context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the function:
-    Inputs: 
+    Inputs:
         'unit_test_file' - A string containing the path to the unit test file.
         'code_file' - A string containing the path to the code file being tested.
         'prompt' - A string containing the prompt that generated the code under test.
@@ -46,7 +46,7 @@
            - Number of warnings
            - Complete test output logs (Combine stdout and stderr from the test results within the JSON.)
            - Include error handling in case the pytest output is not valid JSON.
-           - **Important:** Before accessing the detailed test results (failures, errors, warnings), check the `return_code` in the JSON. If the `return_code` is not 0, pytest encountered a general error, and the detailed results might be missing.  In this case, return an error state (e.g., 1, 1, 0 for failures, errors, warnings) and include the raw output in the logs.
+           - **Important:** Check the `return_code` in the JSON. If the `return_code` is not 0, pytest encountered a general error, and the detailed results might be missing. Be sure increment the `errors` count if `return_code` is 2.
         c. If the test passes and has no warnings, break the loop.
         d. If the test fails or has warnings:
            - Print the captured test output to the console and error log file, escaping square brackets for proper Rich console display
@@ -61,7 +61,7 @@
            - If updated_code is True:
               * Write the fixed_code back to the code_file.
               * Run the verification_program to check if the code still runs.
-              * If the verification fails, restore the last known working code_file from one of the backups and output the errors and results of the failed verification run into the error log file so that this can be debugged in the next iteration and indicate that a restore has happened. Then continue the loop. 
+              * If the verification fails, restore the last known working code_file from one of the backups and output the errors and results of the failed verification run into the error log file so that this can be debugged in the next iteration and indicate that a restore has happened. Then continue the loop.
               * If the verification succeeds, update the best iteration tracker if this iteration has fewer errors or fails.
            - Run the tests again in the same iteration using the pytest subprocess call to check if the fixes worked
     Step 4. After the loop ends, run pytest one final time using the subprocess call, append the output to the error log file, escape square brackets and print it to the console.
@@ -72,6 +72,5 @@
     - Run pytest on the specified test file using `subprocess`.
     - Return a tuple: `(failures, errors, warnings, logs)`.
     - Use the `pdd.pytest_output` custom reporter with the `--json-only` flag.
-    - **Crucially, check the `return_code` from the pytest JSON output *before* attempting to parse detailed results. If `return_code` is not 0, return (1, 1, 0, "Pytest failed with return code ...") indicating an error.**
     - If `return_code` is 0, parse `failures`, `errors`, `warnings`, and combine `standard_output` and `standard_error` for `logs`.
     - Handle `json.JSONDecodeError` and other exceptions gracefully.

@@ -39,12 +39,13 @@ def run_pytest_on_file(test_file: str) -> (int, int, int, str):
             
             # Check pytest's return code first
             return_code = test_results.get('return_code', 1)
-            if return_code != 0:
-                return 1, 1, 0, f"Pytest failed with return code {return_code}\n{result.stdout}\n{result.stderr}"
             
             failures = test_results.get('failures', 0)
             errors = test_results.get('errors', 0)
             warnings = test_results.get('warnings', 0)
+
+            if return_code == 2:
+                errors += 1
             
             # Combine stdout and stderr from the test results
             logs = test_results.get('standard_output', '') + '\n' + test_results.get('standard_error', '')
