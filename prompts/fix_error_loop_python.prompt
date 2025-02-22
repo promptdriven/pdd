@@ -46,6 +46,7 @@
            - Number of warnings
            - Complete test output logs (Combine stdout and stderr from the test results within the JSON.)
            - Include error handling in case the pytest output is not valid JSON.
+           - **Important:** Before accessing the detailed test results (failures, errors, warnings), check the `return_code` in the JSON. If the `return_code` is not 0, pytest encountered a general error, and the detailed results might be missing.  In this case, return an error state (e.g., 1, 1, 0 for failures, errors, warnings) and include the raw output in the logs.
         c. If the test passes and has no warnings, break the loop.
         d. If the test fails or has warnings:
            - Print the captured test output to the console and error log file, escaping square brackets for proper Rich console display
@@ -66,3 +67,11 @@
     Step 4. After the loop ends, run pytest one final time using the subprocess call, append the output to the error log file, escape square brackets and print it to the console.
     Step 5. If the last run isn't the best iteration, copy back the files from the best iteration and print out which was the best iteration.
     Step 6. Return the success status, final unit test contents, final code contents, total number of attempts, and total cost.
+
+% In addition, update the docstring and implementation of the `run_pytest_on_file` function.  The function should:
+    - Run pytest on the specified test file using `subprocess`.
+    - Return a tuple: `(failures, errors, warnings, logs)`.
+    - Use the `pdd.pytest_output` custom reporter with the `--json-only` flag.
+    - **Crucially, check the `return_code` from the pytest JSON output *before* attempting to parse detailed results. If `return_code` is not 0, return (1, 1, 0, "Pytest failed with return code ...") indicating an error.**
+    - If `return_code` is 0, parse `failures`, `errors`, `warnings`, and combine `standard_output` and `standard_error` for `logs`.
+    - Handle `json.JSONDecodeError` and other exceptions gracefully.
