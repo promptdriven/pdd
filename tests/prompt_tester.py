@@ -14,8 +14,6 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-import difflib
-import re
 
 from rich.console import Console
 from rich.text import Text
@@ -27,7 +25,7 @@ from rich.table import Table
 from pdd.llm_invoke import llm_invoke
 
 # For dynamic model creation
-from pydantic import create_model, ValidationError, BaseModel, Field
+from pydantic import create_model, ValidationError
 
 # --- Internal helper functions (could be placed in internal modules with relative imports) ---
 
@@ -59,43 +57,23 @@ def create_dynamic_model(expected_dict: dict):
     return DynamicModel
 
 def diff_text(expected: Any, actual: Any) -> Text:
-    """Generate a unified diff view using Rich text formatting"""
+    """Generate a comparison view using Rich text formatting"""
     diff = Text()
     
-    # Convert to strings and split into lines
-    def format_value(value):
-        if isinstance(value, str):
-            # Handle strings with escaped newlines
-            return '\n'.join(value.replace('\\n', '\n').splitlines())
-        if isinstance(value, (dict, list)):
-            return json.dumps(value, indent=2)
-        return str(value)
+    # Convert complex objects to strings
+    expected_str = json.dumps(expected, indent=2) if isinstance(expected, dict) else str(expected)
+    actual_str = json.dumps(actual, indent=2) if isinstance(actual, dict) else str(actual)
+
+    # Expected section
+    diff.append("Expected Output:\n", style="bold green")
+    diff.append(expected_str + "\n", style="green")
     
-    expected_str = format_value(expected)
-    actual_str = format_value(actual)
+    # Divider
+    diff.append("\n" + "-" * 50 + "\n", style="bold white")
     
-    expected_lines = expected_str.splitlines()
-    actual_lines = actual_str.splitlines()
-    
-    # Generate unified diff
-    diff_lines = difflib.unified_diff(
-        expected_lines, actual_lines,
-        fromfile='Expected', tofile='Actual',
-        lineterm=''
-    )
-    
-    # Colorize diff output
-    for line in diff_lines:
-        if line.startswith('+++') or line.startswith('---'):
-            diff.append(line + '\n', style="bold cyan")
-        elif line.startswith('@@'):
-            diff.append(line + '\n', style="bold yellow")
-        elif line.startswith('+'):
-            diff.append(line + '\n', style="green")
-        elif line.startswith('-'):
-            diff.append(line + '\n', style="red")
-        else:
-            diff.append(line + '\n', style="white")
+    # Actual section
+    diff.append("Actual Output:\n", style="bold red")
+    diff.append(actual_str + "\n", style="red")
     
     return diff
 
@@ -106,195 +84,17 @@ def load_nested_files(data, json_ref_dir):
     elif isinstance(data, list):
         return [load_nested_files(item, json_ref_dir) for item in data]
     elif isinstance(data, str):
-        # Only process non-empty strings as file paths
-        if data:  # This is the key check added
-            file_path = os.path.join(json_ref_dir, data)
-            print(f"Checking path: {file_path}")  # Debug line
-            if os.path.exists(file_path):
-                print(f"Loading file: {file_path}")  # Debug line
-                try:
-                    return load_json_from_file(file_path)
-                except ValueError:
-                    return load_file_content(file_path)
-        # Return original data (including empty strings) if not a valid file path
-        return data
+        file_path = os.path.join(json_ref_dir, data)
+        print(f"Checking path: {file_path}")  # Debug line
+        if os.path.exists(file_path):
+            print(f"Loading file: {file_path}")  # Debug line
+            try:
+                return load_json_from_file(file_path)
+            except ValueError:
+                return load_file_content(file_path)
     return data
 
-def compare_dicts(expected_dict: dict, actual_dict: dict, path: str = "") -> list[tuple[str, Text]]:
-    """
-    Recursively compare two dicts.
-    Return a list of (key_path, diff_text_obj) for each mismatched entry.
-    """
-    diffs = []
-    console = Console()  # Create a Rich console instance
-    
-    for key in expected_dict:
-        new_path = f"{path}.{key}" if path else key
-        expected_val = expected_dict[key]
-        actual_val = actual_dict.get(key, "<MISSING>")
-
-        # Print comparison result for each key using Rich console
-        if expected_val == actual_val:
-            console.print(f"[green]✓[/green] Comparing {new_path}")
-            console.print(f"  Expected: [blue]{str(expected_val)}[/blue]")
-            console.print(f"  Actual:   [blue]{str(actual_val)}[/blue]")
-        else:
-            console.print(f"[red]✗[/red] Comparing {new_path}")
-            console.print(f"  Expected: [blue]{str(expected_val)}[/blue]")
-            console.print(f"  Actual:   [red]{str(actual_val)}[/red]")
-        console.print()  # Add blank line for readability
-
-        if isinstance(expected_val, dict):
-            if not isinstance(actual_val, dict):
-                diff = Text()
-                diff.append("Dictionary key mismatch: ", style="yellow")
-                diff.append(new_path, style="bold yellow")
-                diff.append(f"\nExpected dict, got {type(actual_val).__name__}\n")
-                diff.append(diff_text(expected_val, actual_val))
-                diffs.append((new_path, diff))
-            else:
-                diffs.extend(compare_dicts(expected_val, actual_dict.get(key, {}), new_path))
-        elif isinstance(expected_val, list):
-            if not isinstance(actual_val, list):
-                diff = Text()
-                diff.append("List key mismatch: ", style="yellow")
-                diff.append(new_path, style="bold yellow")
-                diff.append(f"\nExpected list, got {type(actual_val).__name__}\n")
-                diff.append(diff_text(expected_val, actual_val))
-                diffs.append((new_path, diff))
-            else:
-                for i, (e_item, a_item) in enumerate(zip(expected_val, actual_val)):
-                    if json.dumps(e_item, sort_keys=True) != json.dumps(a_item, sort_keys=True):
-                        item_path = f"{new_path}[{i}]"
-                        diff = Text()
-                        diff.append("Array item mismatch: ", style="yellow")
-                        diff.append(item_path, style="bold yellow")
-                        diff.append("\n")
-                        diff.append(diff_text(e_item, a_item))
-                        diffs.append((item_path, diff))
-        else:
-            if expected_val != actual_val:
-                key_diff = Text()
-                key_diff.append("Key mismatch: ", style="yellow")
-                key_diff.append(new_path, style="bold yellow")
-                key_diff.append("\n")
-                key_diff.append(diff_text(expected_val, actual_val))
-                diffs.append((new_path, key_diff))
-    return diffs
-
 # --- Main function for testing the prompt ---
-
-class ComparisonStrategy:
-    """Base class for comparison strategies"""
-    def compare_values(self, expected, actual, path: str = "") -> tuple[bool, Text]:
-        raise NotImplementedError
-        
-    def aggregate_results(self, results: list[tuple[bool, Text]]) -> tuple[bool, Text]:
-        overall_result = all(result[0] for result in results)
-        combined_diff = Text().join(result[1] for result in results)
-        return overall_result, combined_diff
-
-class DirectComparisonStrategy(ComparisonStrategy):
-    """Strategy for direct value comparisons"""
-    def __init__(self, console):
-        self.console = console
-
-    def compare_values(self, expected, actual, path: str = "") -> tuple[bool, Text]:
-        if expected == actual:
-            if path:  # Only print if path exists
-                self.console.print(f"[Direct Check] Key {path}: Matched", style="green")
-            return True, Text()
-            
-        if path:  # Only print if path exists
-            self.console.print(f"[Direct Check] Key {path}: Mismatch", style="red")
-        diff = Text()
-        diff.append("Mismatch: ", style="yellow")
-        diff.append(path, style="bold yellow") if path else None
-        diff.append("\n")
-        diff.append(diff_text(expected, actual))
-        return False, diff
-
-class LLMComparisonStrategy(ComparisonStrategy):
-    """Strategy for LLM-based equivalence checks"""
-    def __init__(self, strength: float, temperature: float, console):
-        self.strength = strength
-        self.temperature = temperature
-        self.console = console
-
-    def compare_values(self, expected, actual, path: str = "") -> tuple[bool, Text]:
-        class ComparisonResult(BaseModel):
-            explanations: list[str] = Field(description="List of similarities AND differences between outputs")
-            answer: str = Field(description="Final equivalence verdict: YES or NO")
-
-        comparison_prompt = (
-            "Analyze these outputs for equivalence. Identify what is THE SAME and what is DIFFERENT.\n"
-            "Return JSON with:\n"
-            "1. 'explanations' - list of key similarities AND differences\n"
-            "2. 'answer' - YES if outputs are equivalent despite differences, NO otherwise\n\n"
-            "Expected Output:\n<expected_output>\n{expected}\n</expected_output>\n\n"
-            "Actual Output:\n<actual_output>\n{actual}\n</actual_output>"
-        )
-
-        expected_str = json.dumps(expected, indent=2) if isinstance(expected, (dict, list)) else str(expected)
-        actual_str = json.dumps(actual, indent=2) if isinstance(actual, (dict, list)) else str(actual)
-        
-        try:
-            comp_response = llm_invoke(
-                prompt=comparison_prompt,
-                input_json={"expected": expected_str, "actual": actual_str},
-                strength=self.strength,
-                temperature=self.temperature,
-                verbose=False,
-                output_pydantic=ComparisonResult
-            )
-            comp_result = comp_response.get("result", None)
-            
-            explanations = []
-            if comp_result:
-                explanations = [f"[{path}] {explanation}" for explanation in comp_result.explanations]
-                passed = comp_result.answer.strip().lower() == "yes"
-                status = "Equivalent" if passed else "Not Equivalent"
-                if path:  # Only print if path exists
-                    self.console.print(f"[LLM Check] Key {path}: {status}", style="green" if passed else "red")
-            else:
-                passed = False
-                explanations = [f"[{path}] No comparison result"]
-                self.console.print(f"[red]Key {path}: Comparison Failed[/red]")
-            
-            return passed, Text("\n".join(explanations), style="green" if passed else "red")
-        except Exception as e:
-            self.console.print(f"[red]Key {path}: Error - {str(e)}[/red]")
-            return False, Text(f"[{path}] Comparison failed: {str(e)}", style="red")
-
-def compare_structures(expected, actual, strategy: ComparisonStrategy, path: str = "") -> tuple[bool, Text]:
-    """Recursive comparison using the specified strategy"""
-    if isinstance(expected, dict) and isinstance(actual, dict):
-        results = []
-        for key in expected:
-            new_path = f"{path}.{key}" if path else key
-            result = compare_structures(
-                expected[key], 
-                actual.get(key, "<MISSING>"), 
-                strategy,
-                new_path
-            )
-            results.append(result)
-        return strategy.aggregate_results(results)
-        
-    elif isinstance(expected, list) and isinstance(actual, list):
-        results = []
-        for i, (e_item, a_item) in enumerate(zip(expected, actual)):
-            result = compare_structures(
-                e_item, 
-                a_item, 
-                strategy,
-                f"{path}[{i}]" if path else f"[{i}]"
-            )
-            results.append(result)
-        return strategy.aggregate_results(results)
-        
-    else:
-        return strategy.compare_values(expected, actual, path)
 
 def prompt_tester(prompt_name: str, strength: float = 0.5, temperature: float = 0.0) -> None:
     """
@@ -444,43 +244,93 @@ def prompt_tester(prompt_name: str, strength: float = 0.5, temperature: float = 
                 continue
 
             # Compare based on eval_type.
-            expected_str = ""
-            actual_str = ""
             passed = False
             diff_output = None
 
             if eval_type.lower() == "deterministic":
-                strategy = DirectComparisonStrategy(console)
-                passed, diff_output = compare_structures(expected_output, actual_result, strategy)
-                
-            elif eval_type.lower() == "llm_equivalent":
-                strategy = LLMComparisonStrategy(strength, temperature, console)
-                passed, diff_output = compare_structures(expected_output, actual_result, strategy)
-            else:
-                # For non-deterministic structured tests
+                # For deterministic tests, we compare the entire string.
+                # If the expected_output is structured (dict) then convert actual_result to dict (or str) for comparison.
+                expected_str = (
+                    json.dumps(expected_output, indent=2)
+                    if expected_is_structured else str(expected_output)
+                )
                 if expected_is_structured:
-                    diff_output = Text()
-                    actual_dict = (actual_result if isinstance(actual_result, dict)
-                                   else actual_result.model_dump())
-                    
-                    # Compare recursively and get granular diffs
-                    subdiffs = compare_dicts(expected_output, actual_dict)
-                    
-                    if subdiffs:
+                    try:
+                        # actual_result should already be a dict from our pydantic model parsing.
+                        actual_dict = actual_result if isinstance(actual_result, dict) else actual_result.model_dump()
+                        # Reformat for ease of comparison.
+                        actual_str = json.dumps(actual_dict, indent=2)
+                    except Exception:
+                        actual_str = str(actual_result)
+                else:
+                    actual_str = str(actual_result)
+
+                if expected_str.strip() == actual_str.strip():
+                    passed = True
+                else:
+                    passed = False
+                    diff_output = diff_text(expected_str, actual_str)
+
+            elif eval_type.lower() == "llm_equivalent":
+                # For LLM_equivalent, call llm_invoke with a comparison prompt.
+                comparison_prompt = (
+                    "Given two outputs below, determine if they are equivalent in meaning. "
+                    "Return YES if they are equivalent and NO if they are not.\n\n"
+                    "Expected Output:\n{expected}\n\nActual Output:\n{actual}"
+                )
+                # Prepare variables (as strings).
+                expected_str = (
+                    json.dumps(expected_output, indent=2)
+                    if expected_is_structured else str(expected_output)
+                )
+                actual_str = (
+                    json.dumps(actual_result, indent=2)
+                    if expected_is_structured and isinstance(actual_result, dict)
+                    else str(actual_result)
+                )
+
+                try:
+                    comp_response = llm_invoke(
+                        prompt=comparison_prompt,
+                        input_json={"expected": expected_str, "actual": actual_str},
+                        strength=strength,
+                        temperature=temperature,
+                        verbose=False
+                    )
+                    comp_result = comp_response.get("result", "").strip().lower()
+                    if "yes" in comp_result:
+                        passed = True
+                    else:
                         passed = False
-                        diff_output.append(f"[bold]Found {len(subdiffs)} differences:[/bold]\n")
-                        for i, (path, diff) in enumerate(subdiffs, 1):
-                            diff_output.append(f"\n[bold yellow]{i}. Mismatch at path: {path}[/bold yellow]")
-                            diff_output.append(diff)
+                        diff_output = Text("LLM judged the outputs as not equivalent.", style="red")
+                except Exception as e:
+                    console.print(f"[red]Error during LLM equivalence testing: {e}[/red]")
+                    log_lines.append(f"Error during LLM equivalence testing: {traceback.format_exc()}")
+                    passed = False
+            else:
+                # For non-deterministic structured tests, perform key-by-key comparisons if both expected and actual are dictionaries.
+                if expected_is_structured and isinstance(actual_result, dict):
+                    differences = []
+                    for key in expected_output.keys():
+                        expected_val = expected_output.get(key, "")
+                        actual_val = actual_result.get(key, "")
+                        if str(expected_val).strip() != str(actual_val).strip():
+                            differences.append((key, str(expected_val), str(actual_val)))
+                    if differences:
+                        passed = False
+                        # Build diff output per key.
+                        diff_output = Text()
+                        for key, exp_val, act_val in differences:
+                            diff_output.append(f"\n[bold magenta]Key:[/bold magenta] {key}\n")
+                            diff_output.append(diff_text(exp_val, act_val))
                     else:
                         passed = True
                 else:
-                    # Fallback: plain string comparison
+                    # Fallback: plain string comparison.
                     expected_str = str(expected_output)
                     actual_str = str(actual_result)
                     if expected_str.strip() == actual_str.strip():
                         passed = True
-                        diff_output = None
                     else:
                         passed = False
                         diff_output = diff_text(expected_str, actual_str)
