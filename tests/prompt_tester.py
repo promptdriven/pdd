@@ -132,19 +132,40 @@ def compare_dicts(expected_dict: dict, actual_dict: dict, path: str = "") -> lis
 
         if isinstance(expected_val, dict):
             if not isinstance(actual_val, dict):
-                diffs.append((new_path, diff_text(expected_val, actual_val)))
+                diff = Text()
+                diff.append("Dictionary key mismatch: ", style="yellow")
+                diff.append(new_path, style="bold yellow")
+                diff.append(f"\nExpected dict, got {type(actual_val).__name__}\n")
+                diff.append(diff_text(expected_val, actual_val))
+                diffs.append((new_path, diff))
             else:
-                diffs.extend(compare_dicts(expected_val, actual_val, new_path))
+                diffs.extend(compare_dicts(expected_val, actual_dict.get(key, {}), new_path))
         elif isinstance(expected_val, list):
             if not isinstance(actual_val, list):
-                diffs.append((new_path, diff_text(expected_val, actual_val)))
+                diff = Text()
+                diff.append("List key mismatch: ", style="yellow")
+                diff.append(new_path, style="bold yellow")
+                diff.append(f"\nExpected list, got {type(actual_val).__name__}\n")
+                diff.append(diff_text(expected_val, actual_val))
+                diffs.append((new_path, diff))
             else:
                 for i, (e_item, a_item) in enumerate(zip(expected_val, actual_val)):
                     if json.dumps(e_item, sort_keys=True) != json.dumps(a_item, sort_keys=True):
-                        diffs.append((f"{new_path}[{i}]", diff_text(e_item, a_item)))
+                        item_path = f"{new_path}[{i}]"
+                        diff = Text()
+                        diff.append("Array item mismatch: ", style="yellow")
+                        diff.append(item_path, style="bold yellow")
+                        diff.append("\n")
+                        diff.append(diff_text(e_item, a_item))
+                        diffs.append((item_path, diff))
         else:
             if expected_val != actual_val:
-                diffs.append((new_path, diff_text(expected_val, actual_val)))
+                key_diff = Text()
+                key_diff.append("Key mismatch: ", style="yellow")
+                key_diff.append(new_path, style="bold yellow")
+                key_diff.append("\n")
+                key_diff.append(diff_text(expected_val, actual_val))
+                diffs.append((new_path, key_diff))
     return diffs
 
 # --- Main function for testing the prompt ---
@@ -297,32 +318,37 @@ def prompt_tester(prompt_name: str, strength: float = 0.5, temperature: float = 
                 continue
 
             # Compare based on eval_type.
+            expected_str = ""
+            actual_str = ""
             passed = False
             diff_output = None
 
             if eval_type.lower() == "deterministic":
-                # For deterministic tests, we compare the entire string.
-                # If the expected_output is structured (dict) then convert actual_result to dict (or str) for comparison.
-                expected_str = (
-                    json.dumps(expected_output, indent=2)
-                    if expected_is_structured else str(expected_output)
-                )
                 if expected_is_structured:
                     try:
-                        # actual_result should already be a dict from our pydantic model parsing.
                         actual_dict = actual_result if isinstance(actual_result, dict) else actual_result.model_dump()
-                        # Reformat for ease of comparison.
-                        actual_str = json.dumps(actual_dict, indent=2)
-                    except Exception:
-                        actual_str = str(actual_result)
+                        diffs = compare_dicts(expected_output, actual_dict)
+                        
+                        if not diffs:
+                            passed = True
+                        else:
+                            diff_output = Text()
+                            for key_path, diff in diffs:
+                                diff_output.append(diff)
+                            passed = False
+                    except Exception as e:
+                        console.print(f"[yellow]Warning: Structured comparison failed: {e}[/yellow]")
+                        # Fallback to string comparison
+                        expected_str = json.dumps(expected_output, indent=2)
+                        actual_str = json.dumps(actual_result, indent=2) if isinstance(actual_result, dict) else str(actual_result)
+                        diff_output = diff_text(expected_str, actual_str)
+                        passed = expected_str.strip() == actual_str.strip()
                 else:
+                    # Handle simple string comparison
+                    expected_str = str(expected_output)
                     actual_str = str(actual_result)
-
-                if expected_str.strip() == actual_str.strip():
-                    passed = True
-                else:
-                    passed = False
                     diff_output = diff_text(expected_str, actual_str)
+                    passed = expected_str.strip() == actual_str.strip()
 
             elif eval_type.lower() == "llm_equivalent":
                 # For LLM_equivalent, call llm_invoke with a comparison prompt.
@@ -374,7 +400,7 @@ def prompt_tester(prompt_name: str, strength: float = 0.5, temperature: float = 
                         passed = False
                         diff_output.append(f"[bold]Found {len(subdiffs)} differences:[/bold]\n")
                         for i, (path, diff) in enumerate(subdiffs, 1):
-                            diff_output.append(f"\n[bold]{i}. {path}[/bold]")
+                            diff_output.append(f"\n[bold yellow]{i}. Mismatch at path: {path}[/bold yellow]")
                             diff_output.append(diff)
                     else:
                         passed = True
