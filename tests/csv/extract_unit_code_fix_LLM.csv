@@ -1,0 +1,2 @@
+test_case,eval_type,expected_output
+"{""unit_test"":""1/unit_test.py"", ""code"":""1/code.py"", ""unit_test_fix"":""1/unit_test.log""}","deterministic","{""update_unit_test"":true, ""update_code"":false, ""fixed_unit_test"":""1/fixed_unit_test.py"", ""fixed_code"":""fixed_code.py""}"
