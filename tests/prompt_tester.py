@@ -62,8 +62,16 @@ def diff_text(expected: Any, actual: Any) -> Text:
     diff = Text()
     
     # Convert to strings and split into lines
-    expected_str = json.dumps(expected, indent=2) if isinstance(expected, (dict, list)) else str(expected)
-    actual_str = json.dumps(actual, indent=2) if isinstance(actual, (dict, list)) else str(actual)
+    def format_value(value):
+        if isinstance(value, str):
+            # Handle strings with escaped newlines
+            return '\n'.join(value.replace('\\n', '\n').splitlines())
+        if isinstance(value, (dict, list)):
+            return json.dumps(value, indent=2)
+        return str(value)
+    
+    expected_str = format_value(expected)
+    actual_str = format_value(actual)
     
     expected_lines = expected_str.splitlines()
     actual_lines = actual_str.splitlines()
