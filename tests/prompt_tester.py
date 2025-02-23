@@ -14,6 +14,7 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+import difflib
 
 from rich.console import Console
 from rich.text import Text
@@ -57,23 +58,35 @@ def create_dynamic_model(expected_dict: dict):
     return DynamicModel
 
 def diff_text(expected: Any, actual: Any) -> Text:
-    """Generate a comparison view using Rich text formatting"""
+    """Generate a unified diff view using Rich text formatting"""
     diff = Text()
     
-    # Convert complex objects to strings
-    expected_str = json.dumps(expected, indent=2) if isinstance(expected, dict) else str(expected)
-    actual_str = json.dumps(actual, indent=2) if isinstance(actual, dict) else str(actual)
-
-    # Expected section
-    diff.append("Expected Output:\n", style="bold green")
-    diff.append(expected_str + "\n", style="green")
+    # Convert to strings and split into lines
+    expected_str = json.dumps(expected, indent=2) if isinstance(expected, (dict, list)) else str(expected)
+    actual_str = json.dumps(actual, indent=2) if isinstance(actual, (dict, list)) else str(actual)
     
-    # Divider
-    diff.append("\n" + "-" * 50 + "\n", style="bold white")
+    expected_lines = expected_str.splitlines()
+    actual_lines = actual_str.splitlines()
     
-    # Actual section
-    diff.append("Actual Output:\n", style="bold red")
-    diff.append(actual_str + "\n", style="red")
+    # Generate unified diff
+    diff_lines = difflib.unified_diff(
+        expected_lines, actual_lines,
+        fromfile='Expected', tofile='Actual',
+        lineterm=''
+    )
+    
+    # Colorize diff output
+    for line in diff_lines:
+        if line.startswith('+++') or line.startswith('---'):
+            diff.append(line + '\n', style="bold cyan")
+        elif line.startswith('@@'):
+            diff.append(line + '\n', style="bold yellow")
+        elif line.startswith('+'):
+            diff.append(line + '\n', style="green")
+        elif line.startswith('-'):
+            diff.append(line + '\n', style="red")
+        else:
+            diff.append(line + '\n', style="white")
     
     return diff
 
@@ -93,6 +106,34 @@ def load_nested_files(data, json_ref_dir):
             except ValueError:
                 return load_file_content(file_path)
     return data
+
+def compare_dicts(expected_dict: dict, actual_dict: dict, path: str = "") -> list[tuple[str, Text]]:
+    """
+    Recursively compare two dicts.
+    Return a list of (key_path, diff_text_obj) for each mismatched entry.
+    """
+    diffs = []
+    for key in expected_dict:
+        new_path = f"{path}.{key}" if path else key
+        expected_val = expected_dict[key]
+        actual_val = actual_dict.get(key, "<MISSING>")
+
+        if isinstance(expected_val, dict):
+            if not isinstance(actual_val, dict):
+                diffs.append((new_path, diff_text(expected_val, actual_val)))
+            else:
+                diffs.extend(compare_dicts(expected_val, actual_val, new_path))
+        elif isinstance(expected_val, list):
+            if not isinstance(actual_val, list):
+                diffs.append((new_path, diff_text(expected_val, actual_val)))
+            else:
+                for i, (e_item, a_item) in enumerate(zip(expected_val, actual_val)):
+                    if json.dumps(e_item, sort_keys=True) != json.dumps(a_item, sort_keys=True):
+                        diffs.append((f"{new_path}[{i}]", diff_text(e_item, a_item)))
+        else:
+            if expected_val != actual_val:
+                diffs.append((new_path, diff_text(expected_val, actual_val)))
+    return diffs
 
 # --- Main function for testing the prompt ---
 
@@ -308,29 +349,30 @@ def prompt_tester(prompt_name: str, strength: float = 0.5, temperature: float = 
                     log_lines.append(f"Error during LLM equivalence testing: {traceback.format_exc()}")
                     passed = False
             else:
-                # For non-deterministic structured tests, perform key-by-key comparisons if both expected and actual are dictionaries.
-                if expected_is_structured and isinstance(actual_result, dict):
-                    differences = []
-                    for key in expected_output.keys():
-                        expected_val = expected_output.get(key, "")
-                        actual_val = actual_result.get(key, "")
-                        if str(expected_val).strip() != str(actual_val).strip():
-                            differences.append((key, str(expected_val), str(actual_val)))
-                    if differences:
+                # For non-deterministic structured tests
+                if expected_is_structured:
+                    diff_output = Text()
+                    actual_dict = (actual_result if isinstance(actual_result, dict)
+                                   else actual_result.model_dump())
+                    
+                    # Compare recursively and get granular diffs
+                    subdiffs = compare_dicts(expected_output, actual_dict)
+                    
+                    if subdiffs:
                         passed = False
-                        # Build diff output per key.
-                        diff_output = Text()
-                        for key, exp_val, act_val in differences:
-                            diff_output.append(f"\n[bold magenta]Key:[/bold magenta] {key}\n")
-                            diff_output.append(diff_text(exp_val, act_val))
+                        diff_output.append(f"[bold]Found {len(subdiffs)} differences:[/bold]\n")
+                        for i, (path, diff) in enumerate(subdiffs, 1):
+                            diff_output.append(f"\n[bold]{i}. {path}[/bold]")
+                            diff_output.append(diff)
                     else:
                         passed = True
                 else:
-                    # Fallback: plain string comparison.
+                    # Fallback: plain string comparison
                     expected_str = str(expected_output)
                     actual_str = str(actual_result)
                     if expected_str.strip() == actual_str.strip():
                         passed = True
+                        diff_output = None
                     else:
                         passed = False
                         diff_output = diff_text(expected_str, actual_str)
