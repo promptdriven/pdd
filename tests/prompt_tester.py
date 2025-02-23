@@ -97,14 +97,18 @@ def load_nested_files(data, json_ref_dir):
     elif isinstance(data, list):
         return [load_nested_files(item, json_ref_dir) for item in data]
     elif isinstance(data, str):
-        file_path = os.path.join(json_ref_dir, data)
-        print(f"Checking path: {file_path}")  # Debug line
-        if os.path.exists(file_path):
-            print(f"Loading file: {file_path}")  # Debug line
-            try:
-                return load_json_from_file(file_path)
-            except ValueError:
-                return load_file_content(file_path)
+        # Only process non-empty strings as file paths
+        if data:  # This is the key check added
+            file_path = os.path.join(json_ref_dir, data)
+            print(f"Checking path: {file_path}")  # Debug line
+            if os.path.exists(file_path):
+                print(f"Loading file: {file_path}")  # Debug line
+                try:
+                    return load_json_from_file(file_path)
+                except ValueError:
+                    return load_file_content(file_path)
+        # Return original data (including empty strings) if not a valid file path
+        return data
     return data
 
 def compare_dicts(expected_dict: dict, actual_dict: dict, path: str = "") -> list[tuple[str, Text]]:
