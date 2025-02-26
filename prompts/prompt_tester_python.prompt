@@ -12,9 +12,13 @@
         - prompt_results.log: Writes out the results of the tests to a log file and rich prints out the results to the console.
  
  % The CSV file format is as follows with a header row:
-    - test_case (filename of a JSON string), each string type key value will refere to a filename in the ./tests/csv/name_of_prompt_to_be_tested directory.
-    - eval_type (string),
-    - expected_output (filename of a JSON string or string), each string type key value will refere to a filename in the ./tests/csv/name_of_prompt_to_be_tested directory.
+    - test_case (filename of a JSON string/object), where:
+        • String values in nested structures will be recursively replaced with file contents if they match files in the reference directory (./tests/csv/name_of_prompt_to_be_tested)
+        • Empty strings will be preserved as-is
+    - eval_type (string), 
+    - expected_output (filename of a JSON string/object or string), with:
+        • Same nested file loading rules as test_case
+        • Supports multi-level JSON structures with mixed types
 
 % By default here is where the various files are located:
     - prompt_file: ./prompts/prompter_to_be_tested.prompt
@@ -39,3 +43,25 @@
         * If the test case is 
             - "deterministic", then the expected output can be compared using a string comparison. Otherwise, do a string comparison of each key of expected_output dictionary with the dictionary from the llm_invoke output. Indicate which specific key value pairs are different by running a separate diff of the expected_output and the llm_invoke output for each of the keys that are different. Rich print the diff (rich.syntax.Syntax) so it's easy to see the differences.
             - "LLM_equivalent" then the expected output can be compared to the output of the prompt using a comparison prompt via llm_invoke.
+
+% Enhanced comparison requirements:
+    - For structured outputs, perform DEEP recursive comparison of nested dictionaries/lists
+    - For mismatches, display:
+        • Full path to mismatched element (e.g. "user.address[0].street")
+        • Type mismatches (e.g. expected dict vs received string)
+        • Unified diffs with color coding:
+            - Green: Added content
+            - Red: Removed content  
+            - Yellow: Location markers
+    - Handle special cases:
+        • JSON strings with escaped newlines
+        • Mixed structure/string comparisons
+        • Array index tracking for list differences
+
+% Additional requirements:
+    - Implement cost tracking for each LLM invocation
+    - Display model costs in test results table
+    - Support partial matches for non-deterministic eval types:
+        • Validate existing keys/types
+        • Ignore extra keys in actual output
+    - Automatic fallback to string comparison if structured validation fails
