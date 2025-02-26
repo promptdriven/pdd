@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pdd-cli"
-version = "0.0.17"
+version = "0.0.18"
 description = "PDD (Prompt-Driven Development) Command Line Interface"
 readme = {file = "pypi_description.rst", content-type = "text/x-rst"}
 authors = [
@@ -34,24 +34,24 @@ dependencies = [
     "GitPython==3.1.44",
     "Requests==2.32.3",
     "click==8.1.7",
-    "keyring==24.3.1",
-    "langchain==0.3.18",
-    "langchain_anthropic==0.3.7",
-    "langchain_community==0.3.17",
-    "langchain_core==0.3.34",
+    "keyring==25.6.0",
+    "langchain==0.3.19",
+    "langchain_anthropic==0.3.8",
+    "langchain_community==0.3.18",
+    "langchain_core==0.3.40",
     "langchain_fireworks==0.2.7",
-    "langchain_google_genai==2.0.9",
+    "langchain_google_genai==2.0.11",
     "langchain_google_vertexai==2.0.13",
     "langchain_groq==0.2.4",
     "langchain_ollama==0.2.3",
-    "langchain_openai==0.3.4",
+    "langchain_openai==0.3.7",
     "langchain_together==0.3.0",
     "pandas==2.2.3",
     "pydantic==2.10.6",
     "rich==13.9.4",
     "semver==3.0.2",
     "setuptools==75.1.0",
-    "python-Levenshtein"
+    "python-Levenshtein",
 ]
 requires-python = ">=3.12"
 
