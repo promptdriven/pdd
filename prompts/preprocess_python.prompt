@@ -1,4 +1,4 @@
-% You are an expert Python engineer. Your goal is to write a Python function, 'preprocess_prompt', that will preprocess the prompt from a prompt string for a LLM. This will use regular expressions to preprocess specific XML-like tags, if any, in the prompt.
+% You are an expert Python engineer. Your goal is to write a Python function, 'preprocess', that will preprocess the prompt from a prompt string for a LLM. This will use regular expressions to preprocess specific XML-like tags, if any, in the prompt.
 
 <include>./context/python_preamble.prompt</include>
 
@@ -15,6 +15,7 @@
     'include' - This tag will include the content of the file indicated in the include tag. The 'include tag' will be directly replaced with the content of the file in the prompt, without wrapping it in a new tag.
     'pdd' - This tag indicates a comment and anything in this XML will be deleted from the string including the 'pdd' tags themselves.
     'shell' - This tag indicates that there are shell commands to run. Capture all output of the shell commands and include it in the prompt but remove the shell tags.
+    'web' - This tag indicates that there is a web page to scrape. When scraping the web page, extract only the meaningful content (main text, relevant headers, key information) while filtering out unnecessary data such as CSS, JavaScript, navigation menus, advertisements, and other non-content elements. Include only this cleaned, relevant content in the prompt and remove the web tags themselves.
 
 % Includes can be nested, that is there can be includes inside of the files of the includes and 'preprocess' should be called recursively on these include files if recursive is True. There are two ways of having includes in the prompt:
     1. Will check to see if the file has any angle brackets in triple backticks. If so, it will read the included file indicated in the angle brackets and replace the angle brackets with the content of the included file. This will be done recursively until there are no more angle brackets in triple backticks. The program will then remove the angle brackets but leave the contents in the triple backticks.
