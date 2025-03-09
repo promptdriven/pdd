@@ -88,7 +88,17 @@ run_pdd_command generate --output "$STAGING_PATH/regression/$EXTENSION_SCRIPT" "
 cp "$STAGING_PATH/regression/$EXTENSION_SCRIPT" "$STAGING_PATH/regression/original_$EXTENSION_SCRIPT"
 
 # Modify the extension script slightly to trigger an update (adding a print statement)
-sed -i '1i print("Hello World")' "$STAGING_PATH/regression/$EXTENSION_SCRIPT"
+if [[ $(uname) == "Darwin" ]]; then
+  # macOS - BSD sed requires backslash after 'i' and newline before the text
+  # Need to add the print and a blank line to ensure proper spacing
+  sed -i '' '1i\
+print("Hello World")\
+
+' "$STAGING_PATH/regression/$EXTENSION_SCRIPT"
+else
+  # Linux/Others - GNU sed
+  sed -i '1i print("Hello World")\n' "$STAGING_PATH/regression/$EXTENSION_SCRIPT"
+fi
 
 # Continue with the rest of the regression test commands
 run_pdd_command example --output  "$STAGING_PATH/regression/$EXTENSION_VERIFICATION_PROGRAM"  "$PROMPTS_PATH/$EXTENSION_PROMPT" "$STAGING_PATH/regression/$EXTENSION_SCRIPT"
@@ -106,11 +116,30 @@ run_pdd_command change --output "$STAGING_PATH/regression/changed_$CHANGE_PROMPT
                        "$CONTEXT_PATH/change/11/$CHANGE_SCRIPT" \
                        "$CONTEXT_PATH/change/11/$CHANGE_CONTEXT_PROMPT"
 
+# Run crash command
+log "Running crash command"
+python "$STAGING_PATH/regression/$EXTENSION_VERIFICATION_PROGRAM" >& "$STAGING_PATH/regression/$EXTENSION_ERROR_LOG"
+run_pdd_command crash --output "$STAGING_PATH/regression/fixed_crash_$EXTENSION_SCRIPT" \
+                      --output-program "$STAGING_PATH/regression/fixed_crash_$EXTENSION_VERIFICATION_PROGRAM" \
+                      "$PROMPTS_PATH/$EXTENSION_PROMPT" "$STAGING_PATH/regression/$EXTENSION_SCRIPT" \
+                      "$STAGING_PATH/regression/$EXTENSION_VERIFICATION_PROGRAM" "$STAGING_PATH/regression/$EXTENSION_ERROR_LOG"
+
+# If there are files (from output and/or output program) created by the crash command, use them for the fix command, otherwise, use the current files
+if [ -f "$STAGING_PATH/regression/fixed_crash_$EXTENSION_SCRIPT" ]; then
+    cp "$STAGING_PATH/regression/fixed_crash_$EXTENSION_SCRIPT" "$STAGING_PATH/regression/$EXTENSION_SCRIPT"
+fi
+
+if [ -f "$STAGING_PATH/regression/fixed_crash_$EXTENSION_VERIFICATION_PROGRAM" ]; then
+    cp "$STAGING_PATH/regression/fixed_crash_$EXTENSION_VERIFICATION_PROGRAM" "$STAGING_PATH/regression/$EXTENSION_VERIFICATION_PROGRAM"
+fi
+
 # Run fix commands
 log "Running fix commands"
 python -m pytest "$STAGING_PATH/regression/$EXTENSION_TEST" > "$STAGING_PATH/regression/pytest_output.log"
 run_pdd_command fix --output-test "$STAGING_PATH/regression/fixed_$EXTENSION_TEST" --output-code "$STAGING_PATH/regression/fixed_$EXTENSION_SCRIPT" \
                     "$PROMPTS_PATH/$EXTENSION_PROMPT" "$STAGING_PATH/regression/$EXTENSION_SCRIPT" "$STAGING_PATH/regression/$EXTENSION_TEST" "$STAGING_PATH/regression/pytest_output.log"
+
+# Run fix command with loop
 run_pdd_command fix --loop --output-test "$STAGING_PATH/regression/fixed_loop_$EXTENSION_TEST" --output-code "$STAGING_PATH/regression/fixed_loop_$EXTENSION_SCRIPT" \
                     --output-results "$STAGING_PATH/regression/fixed_loop_results.log" \
                     --verification-program "$STAGING_PATH/regression/$EXTENSION_VERIFICATION_PROGRAM" --max-attempts 2 --budget 5.0 \
@@ -133,14 +162,6 @@ run_pdd_command detect --output "$STAGING_PATH/regression/detect_results.csv" \
 log "Running conflicts command"
 run_pdd_command conflicts --output "$STAGING_PATH/regression/conflicts_analysis.csv" \
                           "$PROMPTS_PATH/$EXTENSION_PROMPT" "$CONTEXT_PATH/change/11/$CHANGE_PROMPT"
-
-# Run crash command
-log "Running crash command"
-python "$STAGING_PATH/regression/$EXTENSION_VERIFICATION_PROGRAM" >& "$STAGING_PATH/regression/$EXTENSION_ERROR_LOG"
-run_pdd_command crash --output "$STAGING_PATH/regression/fixed_crash_$EXTENSION_SCRIPT" \
-                      --output-program "$STAGING_PATH/regression/fixed_crash_$EXTENSION_VERIFICATION_PROGRAM" \
-                      "$PROMPTS_PATH/$EXTENSION_PROMPT" "$STAGING_PATH/regression/$EXTENSION_SCRIPT" \
-                      "$STAGING_PATH/regression/$EXTENSION_VERIFICATION_PROGRAM" "$STAGING_PATH/regression/$EXTENSION_ERROR_LOG"
 
 # Run trace command
 log "Running trace command"
