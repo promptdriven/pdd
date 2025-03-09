@@ -60,7 +60,7 @@ set_llm_cache(SQLiteCache(database_path=".langchain.db"))
 # Create the LCEL template. Make note of the variable {topic} which will be filled in later.
 prompt_template = PromptTemplate.from_template("Tell me a joke about {topic}")
 
-llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0, callbacks=[handler])
+llm = ChatGoogleGenerativeAI(model="gemini-2.0-pro-exp-02-05", temperature=0, callbacks=[handler])
 # Combine with a model and parser to output a string
 chain = prompt_template |llm| StrOutputParser()
 
@@ -69,7 +69,7 @@ result = chain.invoke({"topic": "cats"})
 print("********Google:", result)
 
 
-llm = ChatVertexAI(model="gemini-pro", temperature=0, callbacks=[handler])
+llm = ChatVertexAI(model="gemini-2.0-pro-exp-02-05", temperature=0, callbacks=[handler])
 # Combine with a model and parser to output a string
 chain = prompt_template |llm| StrOutputParser()
 
@@ -207,6 +207,18 @@ chain = (
 result = chain.invoke({"topic": "Tell me a joke about the president"})
 print("config alt:",result)
 
+
+import json
+from langchain_anthropic import ChatAnthropic
+
+llm = ChatAnthropic(
+    model="claude-3-7-sonnet-latest",
+    max_tokens=5000,  # Total tokens for the response
+    thinking={"type": "enabled", "budget_tokens": 2000},  # Tokens for internal reasoning
+)
+
+response = llm.invoke("What is the cube root of 50.653?")
+print(json.dumps(response.content, indent=2))
 
 
 llm = ChatGroq(temperature=0, model_name="mixtral-8x7b-32768", callbacks=[handler])

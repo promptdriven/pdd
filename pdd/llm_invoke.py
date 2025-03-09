@@ -226,7 +226,16 @@ def create_llm_instance(selected_model, temperature, handler):
                 llm = ChatOpenAI(model=model_name, temperature=temperature,
                                  openai_api_key=api_key, callbacks=[handler])
     elif provider == 'anthropic':
-        llm = ChatAnthropic(model=model_name, temperature=temperature, callbacks=[handler])
+        # Special case for Claude 3.7 Sonnet with thinking token budget
+        if 'claude-3-7-sonnet' in model_name:
+            llm = ChatAnthropic(
+                model=model_name, 
+                temperature=temperature, 
+                callbacks=[handler],
+                thinking={"type": "enabled", "budget_tokens": 4000}  # 32K thinking token budget
+            )
+        else:
+            llm = ChatAnthropic(model=model_name, temperature=temperature, callbacks=[handler])
     elif provider == 'google':
         llm = ChatGoogleGenerativeAI(model=model_name, temperature=temperature, callbacks=[handler])
     elif provider == 'googlevertexai':
