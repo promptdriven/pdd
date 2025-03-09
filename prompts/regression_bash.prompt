@@ -25,7 +25,21 @@
         - Create a backup of the original extension script
         - Modify the extension script by adding a print statement
         - Use both modified and original versions in the update command
+    9. Add comprehensive logging functionality:
+        - Include a timestamped log file (regression.log)
+        - Track the success or failure of each command
+        - Add a verbose output option (enabled by default)
+    10. Implement the 'fix --loop' command:
+        - Include parameters like --max-attempts and --budget
+        - Specify output file locations for test, code, and results
+        - Use the verification program in the command
+    11. Add OS-specific code for the sed command to handle differences between macOS (BSD sed) and Linux (GNU sed)
+    12. Include error handling that checks command success and exits if a command fails
+    13. Add a summary at the end that calculates the total cost from all operations
+    14. After the 'crash' command, check if output files exist before copying them to be used in subsequent commands
 
 % Set PDD_AUTO_UPDATE to false for the regression script so pdd doesn't ask to update itself.
 
 % Remove the current regression.log file if it exists when starting.
+
+% Include a cost output file (regression_cost.csv) to track the cost of each command and calculate the total at the end.

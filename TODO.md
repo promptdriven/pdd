@@ -44,7 +44,7 @@
 - [ ] MLX support for faster local
 - [ ] AWS Nova support
 - [ ] fix quiet vs. verbose ambiguity
-- [ ] reasoning support
+- [ ] reasoning support, allow strength to go above 1 to allocate more thinking tokens
 
 
 ## Documentation

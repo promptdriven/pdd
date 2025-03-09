@@ -6,6 +6,7 @@ prompt = """
     <include>Makefile</include>
     <shell>echo Hello World</shell>
     <pdd>This is a comment</pdd>
+    <web>https://python.langchain.com/docs/introduction/</web>
     {test}
     {test2}
     ```<TODO.md>```
