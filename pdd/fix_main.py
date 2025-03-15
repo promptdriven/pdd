@@ -11,6 +11,7 @@ from .construct_paths import construct_paths
 from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
 from .fix_error_loop import fix_error_loop
 from .get_jwt_token import get_jwt_token
+from .get_language import get_language
 
 def fix_main(
     ctx: click.Context,
@@ -175,13 +176,22 @@ def fix_main(
                             "metadata": {
                                 "title": f"Auto-submitted fix for {os.path.basename(code_file)}",
                                 "description": "Automatically submitted successful code fix",
-                                "language": "python",  # You might want to detect this
+                                "language": get_language(os.path.splitext(code_file)[1]),  # Detect language from file extension
                                 "framework": "",
                                 "tags": ["auto-fix", "example"],
                                 "isPublic": True,
                                 "price": 0.0
                             }
                         }
+
+                        # Add verification program if specified
+                        if verification_program:
+                            with open(verification_program, 'r') as f:
+                                verifier_content = f.read()
+                            payload["input"]["example"] = [{
+                                "content": verifier_content,
+                                "filename": os.path.basename(verification_program)
+                            }]
 
                         # Add error logs if available
                         if "error_file" in input_strings:
@@ -196,7 +206,7 @@ def fix_main(
                                 analysis_content = f.read()
                             payload["output"]["analysis"] = [{
                                 "content": analysis_content,
-                                "filename": "analysis.txt"
+                                "filename": os.path.basename(output_file_paths["output_results"])
                             }]
 
                         # Submit the example to Firebase Cloud Function
