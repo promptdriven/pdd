@@ -11,6 +11,11 @@
 % Here are the inputs and outputs of the function:
     Inputs:
         - `ctx` (`click.Context`): The Click context object containing CLI options and parameters.
+            Context parameters used:
+            - strength (float): Model strength parameter, defaults to 0.9
+            - temperature (float): Model temperature parameter, defaults to 0
+            - force (bool): Whether to force overwrite existing files
+            - quiet (bool): Whether to suppress output messages
         - `prompt_file` (str): The filename of the prompt file that generated the code under test.
         - `code_file` (str): The filename of the code file to be fixed.
         - `unit_test_file` (str): The filename of the unit test file.
@@ -34,11 +39,61 @@
             - `str`: Name of the model used
 
 % Important Implementation Notes:
-- When calling fix_error_loop, pass the original file paths (code_file and unit_test_file) directly rather than using processed input_strings
-- When calling fix_errors_from_unit_tests, use the processed input_strings from construct_paths
-- Handle both fixing approaches appropriately based on the --loop parameter
-- Implement proper error handling and user feedback using rich.print
-- Save output files and provide detailed success/failure information
+1. File Path Handling:
+   - When calling fix_error_loop, pass the original file paths (code_file and unit_test_file) directly rather than using processed input_strings
+   - When calling fix_errors_from_unit_tests, use the processed input_strings from construct_paths
+   - Handle both fixing approaches appropriately based on the --loop parameter
+
+2. Error Handling Requirements:
+   - Validate verification program:
+     * Raise click.UsageError if --loop is used without --verification-program
+   - Handle file operations:
+     * Use try/except blocks for file reading/writing
+     * Provide formatted error messages using rich.print
+   - Handle auto-submission errors:
+     * Authentication errors
+     * API submission errors
+     * Missing environment variables
+   - Exit with sys.exit(1) on critical errors
+
+3. Auto-submit Functionality:
+   When auto_submit is True and the fix is successful:
+   a) Authentication:
+      - Get JWT token using get_jwt_token()
+      - Required environment variables:
+        * REACT_APP_FIREBASE_API_KEY
+        * GITHUB_CLIENT_ID
+   b) Submission Payload:
+      - Input files:
+        * prompts (content and filename)
+        * code (content and filename)
+        * tests (content and filename)
+        * errors (if available)
+        * verification program (if specified)
+      - Output files:
+        * fixed code (content and filename)
+        * fixed tests (content and filename)
+        * analysis (if available)
+      - Metadata:
+        * title: "Auto-submitted fix for {filename}"
+        * description: "Automatically submitted successful code fix"
+        * language: detected from file extension
+        * framework: ""
+        * tags: ["auto-fix", "example"]
+        * isPublic: True
+        * price: 0.0
+   c) Submit to endpoint:
+      - URL: https://us-central1-prompt-driven-development.cloudfunctions.net/submitExample
+      - Headers: Authorization with JWT token
+      - Handle response and provide user feedback
+
+4. User Feedback:
+   - Use rich.print for formatted output
+   - Show success/failure status
+   - Display total attempts and cost
+   - Show model name used
+   - List saved file paths
+   - Show auto-submit status if enabled
 
 <examples>
    % Here is how to use the Python Click library to create a command line program:
@@ -62,6 +117,16 @@
       <fix_loop_example>
       <include>context/fix_error_loop_example.py</include>
       </fix_loop_example>
+
+      - Here is how to get the JWT token:
+      <get_jwt_token_example>
+      <include>context/get_jwt_token_example.py</include>
+      </get_jwt_token_example>
+
+      - Here is how to get the language:
+      <get_language_example>
+      <include>context/get_language_example.py</include>
+      </get_language_example>
    </internal_example_modules>
 </examples>
 
