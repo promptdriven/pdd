@@ -3,9 +3,14 @@ from typing import Tuple, Optional
 import click
 from rich import print as rprint
 
+import requests
+import asyncio
+import os
+
 from .construct_paths import construct_paths
 from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
 from .fix_error_loop import fix_error_loop
+from .get_jwt_token import get_jwt_token
 
 def fix_main(
     ctx: click.Context,
@@ -129,6 +134,92 @@ def fix_main(
                 rprint(f"  Code file: {output_file_paths['output_code']}")
                 if output_file_paths.get("output_results"):
                     rprint(f"  Results file: {output_file_paths['output_results']}")
+
+                # Auto-submit example if requested and successful
+                if auto_submit:
+                    try:
+                        # Get JWT token for cloud authentication
+                        jwt_token = asyncio.run(get_jwt_token(
+                            firebase_api_key=os.environ.get("REACT_APP_FIREBASE_API_KEY"),
+                            github_client_id=os.environ.get("GITHUB_CLIENT_ID"),
+                            app_name="PDD Code Generator"
+                        ))
+
+                        # Prepare the submission payload
+                        payload = {
+                            "command": "fix",
+                            "input": {
+                                "prompts": [{
+                                    "content": input_strings["prompt_file"],
+                                    "filename": os.path.basename(prompt_file)
+                                }],
+                                "code": [{
+                                    "content": input_strings["code_file"],
+                                    "filename": os.path.basename(code_file)
+                                }],
+                                "test": [{
+                                    "content": input_strings["unit_test_file"],
+                                    "filename": os.path.basename(unit_test_file)
+                                }]
+                            },
+                            "output": {
+                                "code": [{
+                                    "content": fixed_code,
+                                    "filename": os.path.basename(output_file_paths["output_code"])
+                                }],
+                                "test": [{
+                                    "content": fixed_unit_test,
+                                    "filename": os.path.basename(output_file_paths["output_test"])
+                                }]
+                            },
+                            "metadata": {
+                                "title": f"Auto-submitted fix for {os.path.basename(code_file)}",
+                                "description": "Automatically submitted successful code fix",
+                                "language": "python",  # You might want to detect this
+                                "framework": "",
+                                "tags": ["auto-fix", "example"],
+                                "isPublic": True,
+                                "price": 0.0
+                            }
+                        }
+
+                        # Add error logs if available
+                        if "error_file" in input_strings:
+                            payload["input"]["error"] = [{
+                                "content": input_strings["error_file"],
+                                "filename": os.path.basename(error_file)
+                            }]
+
+                        # Add analysis if available
+                        if output_file_paths.get("output_results"):
+                            with open(output_file_paths["output_results"], 'r') as f:
+                                analysis_content = f.read()
+                            payload["output"]["analysis"] = [{
+                                "content": analysis_content,
+                                "filename": "analysis.txt"
+                            }]
+
+                        # Submit the example to Firebase Cloud Function
+                        headers = {
+                            "Authorization": f"Bearer {jwt_token}",
+                            "Content-Type": "application/json"
+                        }
+                        response = requests.post(
+                            'https://us-central1-prompt-driven-development.cloudfunctions.net/submitExample',
+                            json=payload,
+                            headers=headers
+                        )
+                        
+                        if response.status_code == 200:
+                            if not ctx.obj.get('quiet', False):
+                                rprint("[bold green]Successfully submitted example[/bold green]")
+                        else:
+                            if not ctx.obj.get('quiet', False):
+                                rprint(f"[bold red]Failed to submit example: {response.text}[/bold red]")
+
+                    except Exception as e:
+                        if not ctx.obj.get('quiet', False):
+                            rprint(f"[bold red]Error submitting example: {str(e)}[/bold red]")
 
         return success, fixed_unit_test, fixed_code, attempts, total_cost, model_name
 
