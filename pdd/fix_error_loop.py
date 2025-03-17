@@ -135,28 +135,32 @@ def fix_error_loop(unit_test_file: str,
 
     # We do up to max_attempts fix attempts or until budget is exceeded
     iteration = 0
+    # Run an initial test to determine starting state
+    try:
+        fails, errors, warnings, pytest_output = run_pytest_on_file(unit_test_file)
+    except Exception as e:
+        rprint(f"[red]Error running initial pytest:[/red] {e}")
+        return False, "", "", fix_attempts, total_cost, model_name
+
     while fix_attempts < max_attempts and total_cost < budget:
         iteration += 1
-        iteration_header = f"=== Attempt iteration {iteration} ==="
-        rprint(f"[bold blue]{iteration_header}[/bold blue]")
-        with open(error_log_file, "a") as elog:
-            elog.write(f"\n{iteration_header}\n")
-
-        # 1) Run the unit tests using pytest's API directly.
-        try:
-            fails, errors, warnings, pytest_output = run_pytest_on_file(unit_test_file)
-        except Exception as e:
-            rprint(f"[red]Error running pytest:[/red] {e}")
-            return False, "", "", fix_attempts, total_cost, model_name
 
         # Append to error log:
         with open(error_log_file, "a") as elog:
             elog.write(f"<pytest_output iteration={iteration}>\n")
             elog.write(pytest_output + "\n")
             elog.write("</pytest_output>\n")
-            elog.write("\n\n<fix_attempt iteration={iteration}>\n")
-
-
+            
+        # If tests pass initially, no need to fix anything
+        if fails == 0 and errors == 0 and warnings == 0:
+            rprint("[green]All tests already pass with no warnings! No fixes needed.[/green]")
+            return True, "", "", 0, 0.0, ""
+        
+        iteration_header = f"=== Attempt iteration {iteration} ==="
+        rprint(f"[bold blue]{iteration_header}[/bold blue]")
+        with open(error_log_file, "a") as elog:
+            elog.write(f"\n{iteration_header}\n\n")
+            elog.write(f"<fix_attempt iteration={iteration}>\n")
         # Print to console (escaped):
         rprint(f"[magenta]Pytest output:[/magenta]\n{escape_brackets(pytest_output)}")
         if verbose:
@@ -192,7 +196,7 @@ def fix_error_loop(unit_test_file: str,
         # Update best iteration if needed:
         if (errors < best_iteration_info["errors"] or
             (errors == best_iteration_info["errors"] and fails < best_iteration_info["fails"]) or
-            (errors == best_iteration_info["errors"] and fails == best_iteration_info["fails"] and warnings <fix_attempt best_iteration_info["warnings"])):
+            (errors == best_iteration_info["errors"] and fails == best_iteration_info["fails"] and warnings < best_iteration_info["warnings"])):
             best_iteration_info = {
                 "attempt": iteration,
                 "fails": fails,
@@ -276,7 +280,7 @@ def fix_error_loop(unit_test_file: str,
 
             with open(error_log_file, "a") as elog:
                 elog.write(f"</fix_attempt>\n\n")
-                elog.write(f"\n[Verification attempt at iteration {iteration}]<verification_output iteration={iteration}>\n")
+                elog.write(f"\n[Verification attempt at iteration {iteration}]\n<verification_output iteration={iteration}>\n")
                 elog.write(verify_output )
                 elog.write("</verification_output>\n")
 
@@ -292,34 +296,12 @@ def fix_error_loop(unit_test_file: str,
                     rprint(f"[red]Error restoring backup code file:[/red] {e}")
                     break
 
-        # Re-run the tests in the same iteration:
+        # Run pytest for the next iteration
         try:
-            fails2, errors2, warnings2, second_run_output = run_pytest_on_file(unit_test_file)
+            fails, errors, warnings, pytest_output = run_pytest_on_file(unit_test_file)
         except Exception as e:
-            rprint(f"[red]Error running second pytest attempt in iteration {iteration}:[/red] {e}")
+            rprint(f"[red]Error running pytest for next iteration:[/red] {e}")
             return False, "", "", fix_attempts, total_cost, model_name
-
-        # with open(error_log_file, "a") as elog:
-        #     elog.write("\n=== Second Pytest Check (same iteration) ===\n")
-        #     elog.write(second_run_output + "\n")
-
-        rprint(f"[magenta]Second pytest check:[/magenta]\n{escape_brackets(second_run_output)}")
-
-        if fails2 == 0 and errors2 == 0 and warnings2 == 0:
-            rprint("[green]All tests passed on the second run of this iteration! Exiting loop.[/green]")
-            break
-        else:
-            if (errors2 < best_iteration_info["errors"] or
-                (errors2 == best_iteration_info["errors"] and fails2 < best_iteration_info["fails"]) or
-                (errors2 == best_iteration_info["errors"] and fails2 == best_iteration_info["fails"] and warnings2 < best_iteration_info["warnings"])):
-                best_iteration_info = {
-                    "attempt": iteration,
-                    "fails": fails2,
-                    "errors": errors2,
-                    "warnings": warnings2,
-                    "unit_test_backup": unit_test_backup,
-                    "code_backup": code_backup
-                }
 
     # Final test run:
     try:
