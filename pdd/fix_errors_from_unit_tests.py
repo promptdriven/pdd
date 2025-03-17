@@ -161,7 +161,7 @@ def fix_errors_from_unit_tests(
             fix_errors_prompt,
             recursive=False,
             double_curly_brackets=True,
-            exclude_keys=['unit_test', 'code', 'unit_test_fix']
+            exclude_keys=['unit_test', 'code', 'errors', 'prompt']
         )
 
         if verbose:

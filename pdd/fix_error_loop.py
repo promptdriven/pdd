@@ -151,7 +151,11 @@ def fix_error_loop(unit_test_file: str,
 
         # Append to error log:
         with open(error_log_file, "a") as elog:
+            elog.write(f"<pytest_output iteration={iteration}>\n")
             elog.write(pytest_output + "\n")
+            elog.write("</pytest_output>\n")
+            elog.write("\n\n<fix_attempt iteration={iteration}>\n")
+
 
         # Print to console (escaped):
         rprint(f"[magenta]Pytest output:[/magenta]\n{escape_brackets(pytest_output)}")
@@ -188,7 +192,7 @@ def fix_error_loop(unit_test_file: str,
         # Update best iteration if needed:
         if (errors < best_iteration_info["errors"] or
             (errors == best_iteration_info["errors"] and fails < best_iteration_info["fails"]) or
-            (errors == best_iteration_info["errors"] and fails == best_iteration_info["fails"] and warnings < best_iteration_info["warnings"])):
+            (errors == best_iteration_info["errors"] and fails == best_iteration_info["fails"] and warnings <fix_attempt best_iteration_info["warnings"])):
             best_iteration_info = {
                 "attempt": iteration,
                 "fails": fails,
@@ -271,8 +275,10 @@ def fix_error_loop(unit_test_file: str,
                 verify_output = f"Verification program error: {e}"
 
             with open(error_log_file, "a") as elog:
-                elog.write(f"\n[Verification attempt at iteration {iteration}]\n")
-                elog.write(verify_output + "\n")
+                elog.write(f"</fix_attempt>\n\n")
+                elog.write(f"\n[Verification attempt at iteration {iteration}]<verification_output iteration={iteration}>\n")
+                elog.write(verify_output )
+                elog.write("</verification_output>\n")
 
             rprint(f"[blue]Verification program output:[/blue]\n{escape_brackets(verify_output)}")
 
@@ -281,7 +287,7 @@ def fix_error_loop(unit_test_file: str,
                 try:
                     shutil.copy(code_backup, code_file)
                     with open(error_log_file, "a") as elog:
-                        elog.write(f"Restored code file from backup: {code_backup}\n")
+                        elog.write(f"Restored code file from backup: {code_backup}, because verification program failed to run.\n")
                 except Exception as e:
                     rprint(f"[red]Error restoring backup code file:[/red] {e}")
                     break
@@ -293,9 +299,9 @@ def fix_error_loop(unit_test_file: str,
             rprint(f"[red]Error running second pytest attempt in iteration {iteration}:[/red] {e}")
             return False, "", "", fix_attempts, total_cost, model_name
 
-        with open(error_log_file, "a") as elog:
-            elog.write("\n=== Second Pytest Check (same iteration) ===\n")
-            elog.write(second_run_output + "\n")
+        # with open(error_log_file, "a") as elog:
+        #     elog.write("\n=== Second Pytest Check (same iteration) ===\n")
+        #     elog.write(second_run_output + "\n")
 
         rprint(f"[magenta]Second pytest check:[/magenta]\n{escape_brackets(second_run_output)}")
 
