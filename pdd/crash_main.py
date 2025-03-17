@@ -51,10 +51,14 @@ def crash_main(
             "output": output,
             "output_program": output_program
         }
+
+        force = ctx.params.get("force", ctx.obj.get("force", False))
+        quiet = ctx.params.get("quiet", ctx.obj.get("quiet", False))
+
         input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
-            force=ctx.obj.get('force', False),
-            quiet=ctx.obj.get('quiet', False),
+            force=force,
+            quiet=quiet,
             command="crash",
             command_options=command_options
         )
@@ -66,72 +70,62 @@ def crash_main(
         error_content = input_strings["error_file"]
 
         # Get model parameters from context
-        strength = ctx.obj.get('strength', 0.97)
-        temperature = ctx.obj.get('temperature', 0)
+        strength = ctx.obj.get("strength", 0.97)
+        temperature = ctx.obj.get("temperature", 0)
+
+        verbose = ctx.params.get("verbose", ctx.obj.get("verbose", False))
 
         if loop:
             # Use iterative fixing process
             success, final_code, final_program, attempts, cost, model = fix_code_loop(
-                code_file=code_file,
-                prompt=prompt_content,
-                verification_program=program_file,
-                strength=strength,
-                temperature=temperature,
-                max_attempts=max_attempts or 3,
-                budget=budget or 5.0,
-                error_log_file=error_file,
-                verbose=not ctx.obj.get('verbose', False)
+                code_file, prompt_content, program_file, strength, temperature, max_attempts or 3, budget or 5.0, error_file, verbose
             )
         else:
             # Use single fix attempt
             from .fix_code_module_errors import fix_code_module_errors
             update_program, update_code, final_program, final_code, cost, model = fix_code_module_errors(
-                program=program_content,
-                prompt=prompt_content,
-                code=code_content,
-                errors=error_content,
-                strength=strength,
-                temperature=temperature,
-                verbose=not ctx.obj.get('verbose', False)
+                program_content, prompt_content, code_content, error_content, strength, temperature, verbose
             )
             success = True
             attempts = 1
 
-        # Determine if contents were actually updated
-        if final_code != "":
-            update_code = final_code != code_content
-        else:
-            update_code = False
-        if final_program != "":
-            update_program = final_program != program_content
-        else:
-            update_program = False
-            
-        # Save results if contents changed
-        if update_code and output_file_paths.get("output"):
-            with open(output_file_paths["output"], 'w') as f:
+        # Ensure we have content to write, falling back to original content if needed
+        if final_code == "":
+            final_code = code_content
+        
+        if final_program == "":
+            final_program = program_content
+
+        # Determine whether to write the files based on whether paths are provided
+        should_write_code = output_file_paths.get("output") is not None
+        should_write_program = output_file_paths.get("output_program") is not None
+
+        # Write output files
+        if should_write_code:
+            with open(output_file_paths["output"], "w") as f:
                 f.write(final_code)
-        if update_program and output_file_paths.get("output_program"):
-            with open(output_file_paths["output_program"], 'w') as f:
+
+        if should_write_program:
+            with open(output_file_paths["output_program"], "w") as f:
                 f.write(final_program)
 
         # Provide user feedback
-        if not ctx.obj.get('quiet', False):
+        if not quiet:
             if success:
                 rprint("[bold green]Crash fix completed successfully.[/bold green]")
             else:
-                rprint("[bold yellow]Crash fix completed with some issues.[/bold yellow]")
+                rprint("[bold yellow]Crash fix completed with issues.[/bold yellow]")
             rprint(f"[bold]Model used:[/bold] {model}")
             rprint(f"[bold]Total attempts:[/bold] {attempts}")
-            rprint(f"[bold]Total cost:[/bold] ${cost:.6f}")
-            if update_code and output:
+            rprint(f"[bold]Total cost:[/bold] ${cost:.2f}")
+            if should_write_code:
                 rprint(f"[bold]Fixed code saved to:[/bold] {output_file_paths['output']}")
-            if update_program and output_program:
+            if should_write_program:
                 rprint(f"[bold]Fixed program saved to:[/bold] {output_file_paths['output_program']}")
 
         return success, final_code, final_program, attempts, cost, model
-
+    
     except Exception as e:
-        if not ctx.obj.get('quiet', False):
+        if not quiet:
             rprint(f"[bold red]Error:[/bold red] {str(e)}")
         sys.exit(1)
