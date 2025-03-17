@@ -166,7 +166,7 @@ def double_curly(text: str, exclude_keys: List[str] = None) -> str:
                 pattern_excl = r'\{' + re.escape(key) + r'\}'
                 placeholder_excl = f"{placeholder_prefix_excl}{placeholder_counter}{placeholder_suffix}"
                 temp_part = re.sub(pattern_excl, placeholder_excl, temp_part)
-                placeholder_mapping[placeholder_excl] = f"{{{key}}}"
+                placeholder_mapping[placeholder_excl] =  "{" + key + "}"
                 placeholder_counter += 1
 
             # Step 2: Protect empty braces '{}' by replacing with placeholders

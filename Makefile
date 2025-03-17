@@ -78,7 +78,7 @@ fix:
 		name=$$(basename $$prompt _python.prompt); \
 		echo "Fixing $$name"; \
 		if [ -f "$(CONTEXT_DIR)/$${name}_example.py" ]; then \
-			pdd --strength .85 --verbose --force fix --loop --auto-submit  --output-test output/ --output-code output/ --verification-program $(CONTEXT_DIR)/$${name}_example.py $$prompt $(PDD_DIR)/$${name}.py $(TESTS_DIR)/test_$${name}.py $${name}.log; \
+			pdd --strength .85 --temperature 1 --verbose --force fix --loop --auto-submit  --output-test output/ --output-code output/ --verification-program $(CONTEXT_DIR)/$${name}_example.py $$prompt $(PDD_DIR)/$${name}.py $(TESTS_DIR)/test_$${name}.py $${name}.log; \
 		else \
 			echo "Warning: No verification program found for $$name"; \
 		fi; \
