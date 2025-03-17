@@ -25,7 +25,7 @@ EXAMPLE_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(CONTEXT_DIR)/%_example.py,$(PY_O
 # Test files
 TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 
-.PHONY: all clean test requirements production coverage staging regression install build analysis
+.PHONY: all clean test requirements production coverage staging regression install build analysis fix
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -70,6 +70,19 @@ coverage:
 	@echo "Running tests with coverage"
 	@cd $(STAGING_DIR)
 	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH pytest --cov=$(PDD_DIR) --cov-report=term-missing --cov-report=html $(TESTS_DIR)
+
+# Fix prompts command
+fix:
+	@echo "Attempting to fix all prompts"
+	@for prompt in $(wildcard $(PROMPTS_DIR)/*_python.prompt); do \
+		name=$$(basename $$prompt _python.prompt); \
+		echo "Fixing $$name"; \
+		if [ -f "$(CONTEXT_DIR)/$${name}_example.py" ]; then \
+			pdd --strength .85 --verbose --force fix --loop --auto-submit  --output-test output/ --output-code output/ --verification-program $(CONTEXT_DIR)/$${name}_example.py $$prompt $(PDD_DIR)/$${name}.py $(TESTS_DIR)/test_$${name}.py $${name}.log; \
+		else \
+			echo "Warning: No verification program found for $$name"; \
+		fi; \
+	done
 
 # Generate requirements.txt
 requirements:
