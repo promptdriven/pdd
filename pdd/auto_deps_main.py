@@ -95,4 +95,3 @@ def auto_deps_main(
         if not ctx.obj.get('quiet', False):
             rprint(f"[bold red]Error:[/bold red] {str(e)}")
         sys.exit(1)
-        # Removed the "raise" line so that we only exit, satisfying the test.

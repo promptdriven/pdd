@@ -7,6 +7,8 @@ import requests
 import asyncio
 import os
 
+from .preprocess import preprocess
+
 from .construct_paths import construct_paths
 from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
 from .fix_error_loop import fix_error_loop
@@ -145,13 +147,17 @@ def fix_main(
                             github_client_id=os.environ.get("GITHUB_CLIENT_ID"),
                             app_name="PDD Code Generator"
                         ))
-
+                        processed_prompt = preprocess(
+                            input_strings["prompt_file"],
+                            recursive=False,
+                            double_curly_brackets=True
+                        )
                         # Prepare the submission payload
                         payload = {
                             "command": "fix",
                             "input": {
                                 "prompts": [{
-                                    "content": input_strings["prompt_file"],
+                                    "content": processed_prompt,
                                     "filename": os.path.basename(prompt_file)
                                 }],
                                 "code": [{

@@ -154,6 +154,12 @@ def fix_errors_from_unit_tests(
         processed_prompt = preprocess(
             prompt,
             recursive=False,
+            double_curly_brackets=True
+        )
+        
+        processed_fix_errors_prompt = preprocess(
+            fix_errors_prompt,
+            recursive=False,
             double_curly_brackets=True,
             exclude_keys=['unit_test', 'code', 'unit_test_fix']
         )
@@ -162,7 +168,7 @@ def fix_errors_from_unit_tests(
             console.print(Panel("[bold green]Running fix_errors_from_unit_tests...[/bold green]"))
 
         response1 = llm_invoke(
-            prompt=fix_errors_prompt,
+            prompt=processed_fix_errors_prompt,
             input_json={
                 "unit_test": unit_test,
                 "code": code,
