@@ -46,7 +46,7 @@ def fix_command(ctx, **kwargs):
 if __name__ == '__main__':
     # Set up Click context with default values
     ctx_obj = {
-        'strength': 0.9,
+        'strength': 0.97,
         'temperature': 0,
         'force': True,
         'quiet': False
