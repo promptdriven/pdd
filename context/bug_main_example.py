@@ -12,7 +12,7 @@ def main() -> None:
     ctx_obj = {
         'force': True,  # Overwrite existing files
         'quiet': False,  # Show all output
-        'strength': 0.9,  # Model strength (0-1)
+        'strength': 0.97,  # Model strength (0-1)
         'temperature': 0  # Model randomness (0-1)
     }
     ctx = click.Context(click.Command('bug'), obj=ctx_obj)
