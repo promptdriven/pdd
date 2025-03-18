@@ -1,57 +1,12 @@
-"""
-Minimal example: Using Firecrawl for web scraping in PDD.
-
-Install: pip install firecrawl-py
-Set: export FIRECRAWL_API_KEY=your_api_key
-"""
-
-from firecrawl import Firecrawl
+# Install with pip install firecrawl-py
+from firecrawl import FirecrawlApp
 import os
 
-api_key = os.environ.get('FIRECRAWL_API_KEY')
-if not api_key:
-    raise ValueError("FIRECRAWL_API_KEY not set")
+app = FirecrawlApp(api_key=os.environ.get('FIRECRAWL_API_KEY', 'YOUR_API_KEY'))
 
-app = Firecrawl(api_key=api_key)
+response = app.scrape_url(url='google.com/', params={
+	'formats': [ 'markdown' ],
+})
 
-# Scrape a URL and get markdown content
-response = app.scrape('https://example.com', formats=['markdown'])
-
-# Handle both dict response (new API) and object response (legacy)
-if isinstance(response, dict) and 'markdown' in response:
-    content = response['markdown']
-elif hasattr(response, 'markdown'):
-    content = response.markdown
-else:
-    content = None
-
-print(content)
-
-# Cache-aware example (for generated code that needs to minimize API calls):
-from pdd.firecrawl_cache import get_firecrawl_cache
-
-cache = get_firecrawl_cache()
-url = 'https://example.com'
-
-# Check cache first
-cached = cache.get(url)
-if cached:
-    print(f"Using cached content")
-    content = cached
-else:
-    # Scrape if not cached
-    response = app.scrape(url, formats=['markdown'])
-    if isinstance(response, dict) and 'markdown' in response:
-        content = response['markdown']
-    elif hasattr(response, 'markdown'):
-        content = response.markdown
-    else:
-        content = None
-
-    # Store in cache
-    if content:
-        cache.set(url, content, ttl_hours=24)
-        print(f"Scraped and cached")
-
-# Note: Caching is automatic when using <web>URL</web> tags in prompts.
-# For cache management, use: pdd firecrawl-cache stats|clear|check|info
+print(response)
+# {'markdown': "[About](https://about.google/?fg=1&utm_source=google-US&utm_medium=referral&utm_campaign=hp-header) [Store](https://store.google.com/US?utm_source=hp_header&utm_medium=google_ooo&utm_campaign=GS100042&hl=en-US)\n\n[Gmail](https://mail.google.com/mail/&ogbl)\n\n[Images](https://www.google.com/imghp?hl=en&ogbl)\n\n[Google apps](https://www.google.com/intl/en/about/products)\n\n[Sign in](https://accounts.google.com/ServiceLogin?hl=en&passive=true&continue=https://www.google.com/&ec=GAZAmgQ)\n\n[iframe](https://ogs.google.com/widget/callout?prid=19046229&pgid=19046228&puid=2e6b2513ec221596&eom=1&cce=1&dc=1&origin=https%3A%2F%2Fwww.google.com&cn=callout&pid=1&spid=538&hl=en)\n\n![Google](https://www.google.com/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png)\n\nChoose what you’re giving feedback on\n\n* * *\n\nSee more\n\nDelete\n\nDelete\n\nReport inappropriate predictions\n\nI'm Feeling Curious\n\nI'm Feeling Hungry\n\nI'm Feeling Adventurous\n\nI'm Feeling Playful\n\nI'm Feeling Stellar\n\nI'm Feeling Doodley\n\nI'm Feeling Trendy\n\nI'm Feeling Artistic\n\nI'm Feeling Funny\n\n[Advertising](https://www.google.com/intl/en_us/ads/?subid=ww-ww-et-g-awa-a-g_hpafoot1_1!o2&utm_source=google.com&utm_medium=referral&utm_campaign=google_hpafooter&fg=1) [Business](https://www.google.com/services/?subid=ww-ww-et-g-awa-a-g_hpbfoot1_1!o2&utm_source=google.com&utm_medium=referral&utm_campaign=google_hpbfooter&fg=1) [How Search works](https://google.com/search/howsearchworks/?fg=1)\n\n[![](<Base64-Image-Removed>)Our third decade of climate action: join us](https://sustainability.google/?utm_source=googlehpfooter&utm_medium=housepromos&utm_campaign=bottom-footer&utm_content=)\n\n[Privacy](https://policies.google.com/privacy?hl=en&fg=1) [Terms](https://policies.google.com/terms?hl=en&fg=1)\n\nSettings\n\n[Search settings](https://www.google.com/preferences?hl=en&fg=1)\n\n[Advanced search](https://www.google.com/advanced_search?hl=en&fg=1)\n\n[Your data in Search](https://www.google.com/history/privacyadvisor/search/unauth?utm_source=googlemenu&fg=1&cctld=com)\n\n[Search history](https://www.google.com/history/optout?hl=en&fg=1)\n\n[Search help](https://support.google.com/websearch/?p=ws_results_help&hl=en&fg=1)\n\nSend feedback\n\nDark theme: Off\n\nGoogle apps", 'metadata': {'referrer': 'origin', 'title': 'Google', 'language': 'en', 'scrapeId': 'f5433150-c76b-4d20-9329-7a9c20cbb2fd', 'sourceURL': 'http://google.com/', 'url': 'https://www.google.com/', 'statusCode': 200}}
