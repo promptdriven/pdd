@@ -48,7 +48,7 @@ def main() -> None:
     # read in the file
     with open('project_dependencies.csv', 'r') as file:
         csv_file = file.read()
-    strength = 0.7
+    strength = 0.97
     temperature = 0.5
     verbose = True
 
