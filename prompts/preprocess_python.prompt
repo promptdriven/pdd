@@ -15,7 +15,12 @@
     'include' - This tag will include the content of the file indicated in the include tag. The 'include tag' will be directly replaced with the content of the file in the prompt, without wrapping it in a new tag.
     'pdd' - This tag indicates a comment and anything in this XML will be deleted from the string including the 'pdd' tags themselves.
     'shell' - This tag indicates that there are shell commands to run. Capture all output of the shell commands and include it in the prompt but remove the shell tags.
-    'web' - This tag indicates that there is a web page to scrape. When scraping the web page, extract only the meaningful content (main text, relevant headers, key information) while filtering out unnecessary data such as CSS, JavaScript, navigation menus, advertisements, and other non-content elements. Include only this cleaned, relevant content in the prompt and remove the web tags themselves.
+    'web' - This tag indicates that there is a web page to scrape. When scraping the web page, extract using Firecrawl the markdown version of the web page and include it in the prompt but remove the web tags themselves.
+
+% Here is how to use the Firecrawl API to scrape the web page:
+<firecrawl_example>
+    <include>./context/firecrawl_example.py</include>
+</firecrawl_example>
 
 % Includes can be nested, that is there can be includes inside of the files of the includes and 'preprocess' should be called recursively on these include files if recursive is True. There are two ways of having includes in the prompt:
     1. Will check to see if the file has any angle brackets in triple backticks. If so, it will read the included file indicated in the angle brackets and replace the angle brackets with the content of the included file. This will be done recursively until there are no more angle brackets in triple backticks. The program will then remove the angle brackets but leave the contents in the triple backticks.
