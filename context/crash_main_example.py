@@ -59,7 +59,7 @@ RecursionError: maximum recursion depth exceeded
 
     # Create a mock Click context with model parameters
     ctx = click.Context(click.Command('crash'))
-    ctx.obj = {'strength': 0.9, 'temperature': 0, 'force': True, 'quiet': False, 'verbose': True}
+    ctx.obj = {'strength': 0.5, 'temperature': 0, 'force': True, 'quiet': False, 'verbose': True}
     # basename = "auto_include"
     # prompt_file= f'prompts/{basename}_python.prompt'
     # code_file= f'pdd/{basename}.py'  
@@ -76,7 +76,7 @@ RecursionError: maximum recursion depth exceeded
         output="output/fixed_factorial.py",
         output_program="output/fixed_main.py",
         loop=True,
-        max_attempts=3,  # Maximum number of fix attempts
+        max_attempts=2,  # Maximum number of fix attempts
         budget=5.0       # Maximum cost in USD
     )
 
