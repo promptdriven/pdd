@@ -683,3 +683,164 @@ def test_template_variable_escaping() -> None:
     assert "{{variable3}}" in result
     # But code blocks should keep JSON braces doubled correctly
     assert '{"key": "value"}' in result or '{{"key": "value"}}' in result
+
+def test_fstring_curly_brackets_in_code_blocks() -> None:
+    """
+    Test that curly brackets in f-strings within code blocks are properly doubled.
+    This specifically tests the bug where f-strings like f"Input Cost: {input_cost}" 
+    weren't getting their curly brackets doubled.
+    """
+    # Create a test string that contains Python code with f-strings
+    test_string = '''```python
+# Print the details of the selected LLM model
+print(f"Selected LLM Model: {model_name}")
+print(f"Input Cost per Million Tokens: {input_cost}")
+print(f"Output Cost per Million Tokens: {output_cost}")
+
+# Example usage of the token counter function
+sample_text: str = "This is a sample text to count tokens."
+token_count: int = token_counter(sample_text)
+print(f"Token Count for Sample Text: {token_count}")
+print(f"model_name: {model_name}")
+```'''
+
+    # Expected output after preprocessing
+    expected_output = '''```python
+# Print the details of the selected LLM model
+print(f"Selected LLM Model: {{model_name}}")
+print(f"Input Cost per Million Tokens: {{input_cost}}")
+print(f"Output Cost per Million Tokens: {{output_cost}}")
+
+# Example usage of the token counter function
+sample_text: str = "This is a sample text to count tokens."
+token_count: int = token_counter(sample_text)
+print(f"Token Count for Sample Text: {{token_count}}")
+print(f"model_name: {{model_name}}")
+```'''
+
+    # Process the test string
+    result = preprocess(test_string, recursive=False, double_curly_brackets=True)
+    
+    # Print the result and expected output for debugging
+    print("\nACTUAL RESULT:")
+    print(result)
+    print("\nEXPECTED OUTPUT:")
+    print(expected_output)
+    
+    # Assert that all f-string variables have their curly brackets doubled
+    assert result == expected_output, \
+        f"F-string curly brackets were not properly doubled.\nExpected:\n{expected_output}\nGot:\n{result}"
+
+def test_fstring_curly_brackets_outside_code_blocks() -> None:
+    """
+    Test that curly brackets in f-strings outside of code blocks are properly doubled.
+    This specifically tests the reported bug where f-strings like f"Input Cost: {input_cost}" 
+    weren't getting their curly brackets doubled in regular Python code.
+    """
+    # Test string resembling actual Python code (NOT in a code block)
+    test_string = '''    # Print the details of the selected LLM model
+    print(f"Selected LLM Model: {model_name}")
+    print(f"Input Cost per Million Tokens: {input_cost}")
+    print(f"Output Cost per Million Tokens: {output_cost}")
+
+    # Example usage of the token counter function
+    sample_text: str = "This is a sample text to count tokens."
+    token_count: int = token_counter(sample_text)
+    print(f"Token Count for Sample Text: {token_count}")
+    print(f"model_name: {model_name}")'''
+
+    # Expected output after preprocessing
+    expected_output = '''    # Print the details of the selected LLM model
+    print(f"Selected LLM Model: {{model_name}}")
+    print(f"Input Cost per Million Tokens: {{input_cost}}")
+    print(f"Output Cost per Million Tokens: {{output_cost}}")
+
+    # Example usage of the token counter function
+    sample_text: str = "This is a sample text to count tokens."
+    token_count: int = token_counter(sample_text)
+    print(f"Token Count for Sample Text: {{token_count}}")
+    print(f"model_name: {{model_name}}")'''
+
+    # Process the test string
+    result = preprocess(test_string, recursive=False, double_curly_brackets=True)
+    
+    # Assert that all f-string variables have their curly brackets doubled
+    assert result == expected_output, \
+        f"F-string curly brackets outside code blocks were not properly doubled.\nExpected:\n{expected_output}\nGot:\n{result}"
+
+def test_process_code_block_bug_with_mixed_brackets() -> None:
+    """
+    Test to reproduce the bug in process_code_block where lines with mixed curly bracket patterns
+    aren't properly processed.
+    
+    The bug is in the condition: "if '{{' in line and '}}' in line:" which:
+    1. Skips lines that have both double opening and closing braces
+    2. Incorrectly processes lines with only one type of double brace, leading to over-doubling
+    """
+    # Create a test string with various bracket patterns in a code block
+    test_string = '''```python
+# Line with single braces - should be doubled
+print(f"Input Cost per Million Tokens: {input_cost}")
+
+# Line with double opening brace but single closing brace - bug will process incorrectly
+data = {{ "key": "value" }
+
+# Line with single opening brace but double closing brace - bug will process incorrectly
+settings = { "logging": true }}
+
+# Line with both double braces - this will be skipped by the current implementation
+result = {{ "status": "success" }}
+```'''
+
+    # What we would expect if the bug didn't exist
+    expected_output = '''```python
+# Line with single braces - should be doubled
+print(f"Input Cost per Million Tokens: {{input_cost}}")
+
+# Line with double opening brace but single closing brace - should be fixed correctly
+data = {{ "key": "value" }}
+
+# Line with single opening brace but double closing brace - should be fixed correctly
+settings = {{ "logging": true }}
+
+# Line with both double braces - should remain unchanged
+result = {{ "status": "success" }}
+```'''
+
+    # What the buggy implementation actually produces
+    actual_buggy_output = '''```python
+# Line with single braces - should be doubled
+print(f"Input Cost per Million Tokens: {{input_cost}}")
+
+# Line with double opening brace but single closing brace - bug will process incorrectly
+data = {{{{ "key": "value" }}
+
+# Line with single opening brace but double closing brace - bug will process incorrectly
+settings = {{ "logging": true }}}}
+
+# Line with both double braces - this will be skipped by the current implementation
+result = {{ "status": "success" }}
+```'''
+
+    # Process the test string
+    result = preprocess(test_string, recursive=False, double_curly_brackets=True)
+    
+    # Check if the result matches the expected output or the buggy output
+    matches_expected = result == expected_output
+    matches_buggy = result == actual_buggy_output
+    
+    # Print detailed debug information
+    print("\nTest case for process_code_block bug with mixed brackets:")
+    print(f"Result matches expected output (bug fixed): {matches_expected}")
+    print(f"Result matches actual buggy output (bug present): {matches_buggy}")
+    
+    if not matches_expected and not matches_buggy:
+        print("\nACTUAL RESULT:")
+        print(result)
+        print("\nEXPECTED RESULT (if bug was fixed):")
+        print(expected_output)
+        print("\nACTUAL BUGGY RESULT (what the current implementation produces):")
+        print(actual_buggy_output)
+    
+    # The test should fail if the bug is present
+    assert result == expected_output, "Bug detected in process_code_block: mixed bracket patterns aren't processed correctly"
