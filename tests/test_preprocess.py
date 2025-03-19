@@ -311,3 +311,123 @@ def test_process_xml_web_tag_scraping_error() -> None:
             with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'fake_api_key'}):
                 result = preprocess(prompt, recursive=False, double_curly_brackets=False)
                 assert result == expected_output
+
+# NEW TESTS FROM test_preprocess2.py
+
+# Test for already doubled brackets
+def test_already_doubled_brackets() -> None:
+    """Test that already doubled brackets aren't doubled again."""
+    prompt = "This is already {{doubled}}."
+    result = preprocess(prompt, recursive=False, double_curly_brackets=True)
+    assert result == "This is already {{doubled}}."
+
+# Test for nested curly brackets
+def test_nested_curly_brackets() -> None:
+    """Test handling of nested curly brackets."""
+    prompt = "This has {outer{inner}} nested brackets."
+    result = preprocess(prompt, recursive=False, double_curly_brackets=True)
+    assert result == "This has {{outer{{inner}}}} nested brackets."
+
+# Test for complex nested curly brackets
+def test_complex_nested_brackets() -> None:
+    """Test deep nesting of curly brackets."""
+    prompt = "Deep {first{second{third}}} nesting"
+    result = preprocess(prompt, recursive=False, double_curly_brackets=True)
+    assert result == "Deep {{first{{second{{third}}}}}} nesting"
+
+# Test for multiline curly brackets
+def test_multiline_curly_brackets() -> None:
+    """Test handling of multiline curly brackets."""
+    prompt = """This has a {
+        multiline
+        variable
+    } with brackets."""
+    
+    expected = """This has a {{
+        multiline
+        variable
+    }} with brackets."""
+    
+    result = preprocess(prompt, recursive=False, double_curly_brackets=True)
+    assert result == expected
+
+# Test for the get_file_path function
+def test_get_file_path() -> None:
+    """Test the get_file_path function."""
+    from pdd.preprocess import get_file_path
+    
+    filename = "test.txt"
+    path = get_file_path(filename)
+    assert path == "./test.txt"
+    
+    # Test with absolute path
+    abs_path = "/absolute/path/test.txt"
+    path = get_file_path(abs_path)
+    assert path == abs_path
+
+# Test for nested XML tags
+def test_nested_xml_tags() -> None:
+    """Test handling of nested XML tags."""
+    prompt = "Nested tags: <pdd><shell>echo 'test'</shell></pdd>"
+    result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    # The entire content inside pdd should be removed
+    assert result == "Nested tags: "
+    
+    prompt = "Nested tags: <shell><pdd>comment</pdd>echo 'test'</shell>"
+    
+    with patch('subprocess.run') as mock_run:
+        mock_run.return_value.stdout = "test output"
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+        # The pdd tag should be processed before executing the shell command
+        assert "comment" not in result
+        assert "test output" in result
+
+# Test for unbalanced curly brackets
+def test_unbalanced_curly_brackets() -> None:
+    """Test handling of unbalanced curly brackets."""
+    prompt = "Unbalanced {opening bracket only"
+    
+    # The function should handle this gracefully without crashing
+    result = preprocess(prompt, recursive=False, double_curly_brackets=True)
+    assert "{" in result or "{{" in result
+    
+    prompt = "Unbalanced closing bracket only}"
+    
+    # The function should handle this gracefully without crashing
+    result = preprocess(prompt, recursive=False, double_curly_brackets=True)
+    assert "}" in result
+
+# Test for circular includes
+def test_circular_includes() -> None:
+    """Test handling of circular includes to prevent infinite recursion."""
+    set_pdd_path('/mock/path')
+    circular1_content = "<include>./circular2.txt</include>"
+    circular2_content = "<include>./circular1.txt</include>"
+    prompt = "<include>./circular1.txt</include>"
+    
+    with patch('builtins.open', mock_open()) as m:
+        def side_effect(file_name, *args, **kwargs):
+            mock_file = MagicMock()
+            if 'circular1.txt' in file_name:
+                mock_file.read.return_value = circular1_content
+            elif 'circular2.txt' in file_name:
+                mock_file.read.return_value = circular2_content
+            return mock_file
+        
+        m.side_effect = side_effect
+        
+        # This should either handle circular dependency gracefully or raise a controlled exception
+        try:
+            result = preprocess(prompt, recursive=True, double_curly_brackets=False)
+            # If it completes, it should have stopped recursion at some point
+            assert "circular" in result
+        except Exception as e:
+            # If it raises an exception, it should be a controlled exception
+            assert "circular" in str(e).lower() or "recursion" in str(e).lower() or "depth" in str(e).lower()
+
+# Test for mix of excluded and nested brackets
+def test_mixed_excluded_nested_brackets() -> None:
+    """Test mix of excluded and nested brackets."""
+    prompt = "Mix of {excluded{inner}} nesting"
+    result = preprocess(prompt, recursive=False, double_curly_brackets=True, exclude_keys=["excluded"])
+    assert result == "Mix of {excluded{{inner}}} nesting"
