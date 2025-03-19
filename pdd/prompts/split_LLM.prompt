@@ -1,6 +1,7 @@
-% Here are some examples of splitting prompts:
-<examples>
     <pdd>
+    % Here are some examples of splitting prompts:
+<examples>
+
         <example_1>
         <1_input_prompt><include>./context/split/1/initial_pdd_python.prompt</include></1_input_prompt>
         <1_input_code><include>./context/split/1/pdd.py</include></1_input_code>
@@ -40,7 +41,7 @@
         <5_sub_prompt><include>context/split/5/track_cost_python.prompt</include></5_sub_prompt>
         <5_modified_prompt><include>context/split/5/modified_cli_python.prompt</include></5_modified_prompt>
         </example_5>
-</pdd>
+
 
     <example_6>
     <6_input_prompt><include>context/split/6/cli_python.prompt</include></6_input_prompt>
@@ -57,8 +58,8 @@
     <7_sub_prompt><include>context/split/7/trace_main_python.prompt</include></7_sub_prompt>
     <7_modified_prompt><include>context/split/7/modified_cli_python.prompt</include></7_modified_prompt>
     </example_7>
-
 </examples>
+</pdd>
 
 <context>
 % You are an expert LLM Prompt Engineer. Your goal is to split the input_prompt (a larger prompt) into a sub_prompt and modified_prompt (two smaller prompts) with no loss of functionality. This is to make it easier to generate and test the modules easier.
