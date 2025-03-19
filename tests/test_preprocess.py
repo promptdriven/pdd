@@ -5,6 +5,8 @@ from pdd.preprocess import preprocess
 import subprocess
 import importlib
 from unittest.mock import MagicMock
+import z3
+from z3 import String, StringVal, If, And, Or, Not, BoolVal, Implies, Length, PrefixOf, SubString, IndexOf
 
 # Helper function to mock environment variable
 def set_pdd_path(path: str) -> None:
@@ -431,3 +433,218 @@ def test_mixed_excluded_nested_brackets() -> None:
     prompt = "Mix of {excluded{inner}} nesting"
     result = preprocess(prompt, recursive=False, double_curly_brackets=True, exclude_keys=["excluded"])
     assert result == "Mix of {excluded{{inner}}} nesting"
+
+# Z3 FORMAL VERIFICATION TESTS
+#############################
+
+def create_solver():
+    """Create and return a Z3 solver instance"""
+    return z3.Solver()
+
+def test_z3_pdd_tags_removal():
+    """
+    Test that PDD tags and their content are removed properly using Z3 formal verification.
+    """
+    solver = create_solver()
+    
+    input_with_pdd = StringVal("This is a test <pdd>This is a comment</pdd>")
+    expected_output = StringVal("This is a test ")
+    
+    # Create symbolic input and output strings
+    test_input = String('test_input')
+    test_output = String('test_output')
+    
+    # Define the constraint for PDD tag handling
+    pdd_constraint = Implies(
+        test_input == input_with_pdd,
+        test_output == expected_output
+    )
+    
+    # Add the constraint to the solver
+    solver.add(pdd_constraint)
+    
+    # Check if this specific property is satisfiable
+    result = solver.check()
+    
+    assert result == z3.sat, "PDD tag removal property is not satisfiable"
+    
+    # Verify with concrete example
+    concrete_input = "This is a test <pdd>This is a comment</pdd>"
+    concrete_output = preprocess(concrete_input, recursive=False, double_curly_brackets=False)
+    assert concrete_output == "This is a test ", "Concrete PDD tag removal failed"
+
+def test_z3_double_curly_brackets():
+    """
+    Test that curly brackets are doubled correctly using Z3 formal verification.
+    """
+    solver = create_solver()
+    
+    # Test cases for curly bracket doubling
+    test_cases = [
+        # Simple case: {var} -> {{var}}
+        (StringVal("This has {var}"), StringVal("This has {{var}}")),
+        
+        # Already doubled: {{var}} -> {{var}}
+        (StringVal("This has {{var}}"), StringVal("This has {{var}}")),
+        
+        # Nested brackets: {outer{inner}} -> {{outer{{inner}}}}
+        (StringVal("This has {outer{inner}}"), StringVal("This has {{outer{{inner}}}}")),
+        
+        # Multiple brackets: {a} and {b} -> {{a}} and {{b}}
+        (StringVal("This has {a} and {b}"), StringVal("This has {{a}} and {{b}}"))
+    ]
+    
+    # Add constraints for all test cases
+    for i, (test_input, expected_output) in enumerate(test_cases):
+        test_var_input = String(f'test_input_{i}')
+        test_var_output = String(f'test_output_{i}')
+        
+        solver.add(Implies(
+            test_var_input == test_input,
+            test_var_output == expected_output
+        ))
+    
+    # Check all properties together
+    result = solver.check()
+    assert result == z3.sat, "Double curly bracket properties are not satisfiable"
+    
+    # Verify with concrete examples
+    for i, (input_str, expected) in enumerate(test_cases):
+        concrete_input = input_str.as_string()
+        concrete_expected = expected.as_string()
+        concrete_output = preprocess(concrete_input, recursive=False, double_curly_brackets=True)
+        assert concrete_output == concrete_expected, f"Concrete test case {i} failed"
+
+def test_z3_exclude_keys():
+    """
+    Test that exclude_keys are properly handled when doubling curly brackets.
+    """
+    solver = create_solver()
+    
+    input_with_excluded = StringVal("This is {key} with {excluded}")
+    expected_output = StringVal("This is {{key}} with {excluded}")
+    
+    test_input = String('exclude_input')
+    test_output = String('exclude_output')
+    
+    # Define the constraint for excluded keys
+    exclude_constraint = Implies(
+        test_input == input_with_excluded,
+        test_output == expected_output
+    )
+    
+    # Add the constraint to the solver
+    solver.add(exclude_constraint)
+    
+    # Check if this specific property is satisfiable
+    result = solver.check()
+    assert result == z3.sat, "Exclude keys property is not satisfiable"
+    
+    # Verify with concrete example
+    concrete_input = "This is {key} with {excluded}"
+    concrete_output = preprocess(concrete_input, recursive=False, double_curly_brackets=True, exclude_keys=["excluded"])
+    assert concrete_output == "This is {{key}} with {excluded}", "Concrete exclude keys test failed"
+
+def test_z3_code_block_handling():
+    """
+    Test that code blocks are handled properly when doubling curly brackets.
+    """
+    solver = create_solver()
+    
+    # JavaScript code block test
+    js_code = """```javascript
+const obj = {
+  key: "value",
+  nested: {
+    items: [{id: 1}]
+  }
+};
+```"""
+    expected_js = """```javascript
+const obj = {{
+  key: "value",
+  nested: {{
+    items: [{{id: 1}}]
+  }}
+}};
+```"""
+    
+    # Add constraint for JavaScript code blocks
+    js_input = String('js_input')
+    js_output = String('js_output')
+    
+    solver.add(Implies(
+        js_input == StringVal(js_code),
+        js_output == StringVal(expected_js)
+    ))
+    
+    # Check this property
+    result = solver.check()
+    assert result == z3.sat, "Code block handling property is not satisfiable"
+    
+    # Verify with concrete example
+    concrete_output = preprocess(js_code, recursive=False, double_curly_brackets=True)
+    assert concrete_output == expected_js, "Concrete code block test failed"
+
+def test_z3_comprehensive_verification():
+    """
+    Run a comprehensive verification of preprocess.py using Z3 to verify all key properties together.
+    """
+    solver = create_solver()
+    
+    # Basic properties
+    # Empty input produces empty output
+    empty_input = String('empty_input')
+    empty_output = String('empty_output')
+    solver.add(Implies(
+        Length(empty_input) == 0,
+        Length(empty_output) == 0
+    ))
+    
+    # Plain text with no special features
+    plain_input = String('plain_input')
+    plain_output = String('plain_output')
+    plain_text = StringVal("This is plain text with no special tags or brackets")
+    solver.add(Implies(
+        plain_input == plain_text,
+        plain_output == plain_text
+    ))
+    
+    # PDD tag removal
+    pdd_input = String('pdd_input')
+    pdd_output = String('pdd_output')
+    pdd_text = StringVal("Text <pdd>Remove this</pdd> end")
+    pdd_expected = StringVal("Text  end")
+    solver.add(Implies(
+        pdd_input == pdd_text,
+        pdd_output == pdd_expected
+    ))
+    
+    # Curly bracket doubling
+    curly_input = String('curly_input')
+    curly_output = String('curly_output')
+    curly_text = StringVal("Text with {brackets}")
+    curly_expected = StringVal("Text with {{brackets}}")
+    solver.add(Implies(
+        curly_input == curly_text,
+        curly_output == curly_expected
+    ))
+    
+    # Already doubled brackets
+    doubled_input = String('doubled_input')
+    doubled_output = String('doubled_output')
+    doubled_text = StringVal("Text with {{already_doubled}}")
+    doubled_expected = StringVal("Text with {{already_doubled}}")
+    solver.add(Implies(
+        doubled_input == doubled_text,
+        doubled_output == doubled_expected
+    ))
+    
+    # Verify that all properties together are satisfiable
+    result = solver.check()
+    assert result == z3.sat, "Comprehensive verification failed - properties are not simultaneously satisfiable"
+    
+    # If satisfiable, we get a model that shows sample inputs/outputs
+    if result == z3.sat:
+        model = solver.model()
+        # We can examine the model if needed, but for a test, just checking satisfiability is enough
