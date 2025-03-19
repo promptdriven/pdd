@@ -648,3 +648,38 @@ def test_z3_comprehensive_verification():
     if result == z3.sat:
         model = solver.model()
         # We can examine the model if needed, but for a test, just checking satisfiability is enough
+
+def test_template_variable_escaping() -> None:
+    """Test that template variables like {final_llm_output} get properly escaped."""
+    prompt = "This is a prompt with {final_llm_output} and {reasoning} variables."
+    result = preprocess(prompt, recursive=False, double_curly_brackets=True)
+    assert result == "This is a prompt with {{final_llm_output}} and {{reasoning}} variables."
+    
+    # Test mixed with already escaped variables
+    prompt = "Here's {{already_escaped}} and {needs_escaping} variables."
+    result = preprocess(prompt, recursive=False, double_curly_brackets=True)
+    assert result == "Here's {{already_escaped}} and {{needs_escaping}} variables."
+    
+    # Test with variables in different contexts
+    prompt = """
+    Here's a prompt with variables:
+    - First: {variable1}
+    - Second: {variable2}
+    
+    And let's add code:
+    ```python
+    def my_function():
+        data = {"key": "value"}
+        return data
+    ```
+    
+    And more variables: {variable3}
+    """
+    result = preprocess(prompt, recursive=False, double_curly_brackets=True)
+    
+    # Check that all variables are properly escaped
+    assert "{{variable1}}" in result
+    assert "{{variable2}}" in result 
+    assert "{{variable3}}" in result
+    # But code blocks should keep JSON braces doubled correctly
+    assert '{"key": "value"}' in result or '{{"key": "value"}}' in result
