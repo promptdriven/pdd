@@ -1,4 +1,5 @@
 # TODO
+- [ ] include in web xml content
 - [ ] Python 3.13 support
 
 ## On Deck
@@ -26,7 +27,6 @@
 - [ ] during fix rather than just have the fix loop check to see if the example crashed, have it use a llm to check if the results are largely correct still
 - [ ] separate out the failing test and then run fix loop on that
 - [ ] Use the prompts that use a certain module to generate tests for that module
-- [ ] include in <web> content</web>
 - [ ] MCP support for better context
 - [ ] debug using pdb in non-interactive mode
 - [ ] show what apis are available for a given module

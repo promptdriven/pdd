@@ -5,7 +5,7 @@
 % Here are the inputs and outputs of the function:
     Inputs:
         'prompt' - A string that is the prompt to preprocess
-        'recursive' - A boolean that is True if the program needs to recursively process the includes in the prompt and False if it does not need to recursively process the prompt. Default is True.
+        'recursive' - A boolean that is True if the program needs to recursively process the includes in the prompt and False if it does not need to recursively process the prompt. Default is False.
         'double_curly_brackets' - A boolean that is True if the curly brackets need to be doubled and False if they do not need to be doubled. Default is True.
         'exclude_keys' - An optional list of strings that are excluded from the curly bracket doubling.
     Outputs:
