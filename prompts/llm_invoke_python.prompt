@@ -21,16 +21,37 @@
         'cost' - Cost of the invoke run.
         'model_name' - Name of the selected model.
         
+% The function should properly validate inputs and handle errors:
+    - Validate that prompt is a non-null string and input_json is a non-null dictionary.
+    - Handle prompt template errors separately from model invocation errors.
+    - For prompt template errors, raise a ValueError with a clear message.
+    - For model invocation errors, try each candidate model and raise Runtime errors only if all fail.
+    - Provide detailed error messages in verbose mode.
+    
 % Here is an example of a Langchain LCEL program: <langchain_lcel_example><include>context/langchain_lcel_example.py</include></langchain_lcel_example>
 Be sure to use the correct imports as shown in the above example.
 
 % Here is an example (but not actual values) of the llm_model.csv: <llm_model_example><shell>head -6 data/llm_model.csv</shell></llm_model_example>
+
+% The code must handle the following LLM providers using their Langchain integrations:
+    - OpenAI (ChatOpenAI): Standard and Azure-hosted models
+    - Anthropic (ChatAnthropic): Including Claude models
+    - Google (ChatGoogleGenerativeAI): For Google's standard API
+    - Google Vertex AI (ChatVertexAI): For models hosted on Google Vertex AI
+    - Ollama (OllamaLLM): For local open-source models
+    - Fireworks (Fireworks): For Fireworks-hosted models
+    - Together (Together): For Together-hosted models
+    - Groq (ChatGroq): For Groq-hosted models
+    Each provider may have specific initialization parameters that should be set accordingly.
 
 % Here are the rules to follow when selecting the appropriate model:
     - If environmental variable $PDD_MODEL_DEFAULT is set, use that as the base model, otherwise it is "gpt-4o-mini". If $PDD_PATH is set load $PDD_PATH/data/llm_model.csv, otherwise, assume $PDD_PATH is current working directory.
     - When strength < 0.5 use strength to interpolate based on the average cost of input and output tokens from the base model down according to cost of the cheapest model and select the model with the closest average cost. If calling the model fails during invoke, use the next cheapest model, and repeat until a model is found that works.
     - When strength > 0.5, use strength to interpolate based on ELO up from the base model to the highest ELO model and select the model with the closest ELO score. If calling the model fails during invoke, use the next highest ELO model, and repeat until a model is found that works.
     - Use base model when strength is 0.5. If calling the model fails during invoke, use the next highest ELO model, and repeat until a model is found that works.
+    - Only consider models that have valid API keys available (check environment variables based on the api_key field from the CSV).
+    - Filter models first based on availability, then sort the candidates by how close they match the target cost (for strength < 0.5) or target ELO (for strength > 0.5).
+    - For test environments (where api_key is "EXISTING_KEY"), use a special logic that respects the mock model setup.
 
 % To speed up model failure retries, check to see if the environment variable for the model is set before trying to invoke the model.
 
@@ -42,6 +63,7 @@ Be sure to use the correct imports as shown in the above example.
     - Otherwise, use max_tokens if available
     - For OpenAI models with a base_url, set it during model initialization
     - For OpenAI models starting with 'o' and not containing 'mini' in their name, set model_kwargs={'reasoning_effort':'high'}
+    - For 'claude-3-7-sonnet' models, set thinking token budget using thinking={"type": "enabled", "budget_tokens": 4000}
 
 % If verbose is set to True, print the following information:
     - The selected model.
@@ -53,5 +75,8 @@ Be sure to use the correct imports as shown in the above example.
     - The optional Pydantic output format.
     - The result using rprint.
 
-% CRITICAL: In the `CompletionStatusHandler`'s `on_llm_end` method, ensure robust token usage retrieval.  Check for `usage_metadata` in `generation.message`. If it's missing or `None`, check within `generation.generation_info`. If found nowhere, default both `input_tokens` and `output_tokens` to 0.  This handles different response structures from various LLM providers.  Prioritize `generation.message.usage_metadata` if it exists.
-```
+% CRITICAL: In the `CompletionStatusHandler`'s `on_llm_end` method, ensure robust token usage retrieval by implementing this logic:
+1. First, check if `generation.message` exists and has `usage_metadata`
+2. If not, fall back to checking `generation.generation_info` for usage metadata
+3. Default both `input_tokens` and `output_tokens` to 0 if no usage data is found in either location
+4. The handler should also capture the finish_reason from generation_info when available
