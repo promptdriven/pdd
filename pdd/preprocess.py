@@ -214,29 +214,3 @@ def double_curly(text: str, exclude_keys: Optional[List[str]] = None) -> str:
     text = re.sub(code_block_pattern, process_code_block, text, flags=re.DOTALL)
     
     return text
-
-def process_text(text: str, exclude_keys: List[str]) -> str:
-    """Process regular text to double curly brackets, handling special cases."""
-    
-    # Handle specifically formatted cases for tests
-    if "This is already {{doubled}}." in text:
-        return text
-    
-    # For already doubled brackets, preserve them
-    text = re.sub(r'\{\{([^{}]*)\}\}', lambda m: f"__ALREADY_DOUBLED__{m.group(1)}__END_ALREADY__", text)
-    
-    # Process excluded keys
-    for key in exclude_keys:
-        pattern = r'\{(' + re.escape(key) + r')\}'
-        text = re.sub(pattern, lambda m: f"__EXCLUDED__{m.group(1)}__END_EXCLUDED__", text)
-    
-    # Double remaining single brackets
-    text = text.replace("{", "{{").replace("}", "}}")
-    
-    # Restore excluded keys
-    text = re.sub(r'__EXCLUDED__(.*?)__END_EXCLUDED__', r'{\1}', text)
-    
-    # Restore already doubled brackets
-    text = re.sub(r'__ALREADY_DOUBLED__(.*?)__END_ALREADY__', r'{{\1}}', text)
-    
-    return text
