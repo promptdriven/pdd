@@ -33,6 +33,7 @@
 ## Bugs
 
 ## Improvements
+- [ ] ask for and store API keys
 - [ ] display model list
 - [ ] read from a csv file the comment 
 - [ ] fix make file production and prepopulate
