@@ -358,9 +358,59 @@ Options:
 - `--double`: Curly brackets will be doubled.
 - `--exclude`: List of keys to exclude from curly bracket doubling.
 
+#### XML-like Tags
+
+PDD supports the following XML-like tags in prompt files:
+
+1. **`include`**: Includes the content of the specified file in the prompt. The tag is replaced directly with the file content.
+   ```xml
+   <include>./path/to/file.txt</include>
+   ```
+
+2. **`pdd`**: Indicates a comment that will be removed from the preprocessed prompt, including the tags themselves.
+   ```xml
+   <pdd>This is a comment that won't appear in the preprocessed output</pdd>
+   ```
+
+3. **`shell`**: Executes shell commands and includes their output in the prompt, removing the shell tags.
+   ```xml
+   <shell>ls -la</shell>
+   ```
+
+4. **`web`**: Scrapes a web page and includes its markdown content in the prompt, removing the web tags.
+   ```xml
+   <web>https://example.com</web>
+   ```
+
+#### Triple Backtick Includes
+
+PDD supports two ways of including external content:
+
+1. **Triple backtick includes**: Replaces angle brackets in triple backticks with the content of the specified file.
+   ````
+   ```
+   <./path/to/file.txt>
+   ```
+   ````
+   This will be recursively processed until there are no more angle brackets in triple backticks.
+
+2. **XML include tags**: As described above.
+
+#### Curly Bracket Handling
+
+When using the `--double` option:
+
+- Single curly brackets are doubled if they're not already doubled
+- Already doubled brackets are preserved
+- Nested curly brackets are properly handled
+- Special handling is applied for code blocks (JSON, JavaScript, TypeScript, Python)
+- Multiline variables with curly brackets receive special handling
+
+Use the `--exclude` option to specify keys that should be excluded from curly bracket doubling.
+
 Example:
 ```
-pdd [GLOBAL OPTIONS] preprocess --output preprocessed/factorial_calculator_python_preprocessed.prompt --xml factorial_calculator_python.prompt 
+pdd [GLOBAL OPTIONS] preprocess --output preprocessed/factorial_calculator_python_preprocessed.prompt --recursive --double --exclude model,temperature factorial_calculator_python.prompt
 ```
 
 ### 5. fix
