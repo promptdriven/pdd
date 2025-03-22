@@ -1,15 +1,31 @@
 from pdd.preprocess import preprocess
 from rich.console import Console   
 console = Console()     
+# prompt = """
+# <prompt>
+#     <include>Makefile</include>
+#     <shell>echo Hello World</shell>
+#     <pdd>This is a comment</pdd>
+
+#     {test}
+#     {test2}
+#     ```<TODO.md>```
+# </prompt>
+# """
+
 prompt = """
 <prompt>
-    <include>Makefile</include>
     <shell>echo Hello World</shell>
     <pdd>This is a comment</pdd>
-    <web>https://python.langchain.com/docs/introduction/</web>
+    <web>https://www.google.com</web>
     {test}
     {test2}
     ```<TODO.md>```
+
+    <pdd>
+        multi-line
+        comment should not show up
+    </pdd>
 </prompt>
 """
 
@@ -24,31 +40,30 @@ processed = preprocess(prompt, recursive, double_curly_brackets, exclude_keys=ex
 console.print("[bold white]Processed Prompt:[/bold white]")
 console.print(processed)
 
-# Debug test without the include tag to see if that's causing the issue
-console.print("\n[bold magenta]Testing without include tag:[/bold magenta]")
-test_prompt = """
-<prompt>
-    <shell>echo Hello World</shell>
-    <pdd>This is a comment</pdd>
-    <web>https://python.langchain.com/docs/introduction/</web>
-    {test}
-    {test2}
-    ```<TODO.md>```
-</prompt>
-"""
-test_processed = preprocess(test_prompt, recursive, double_curly_brackets, exclude_keys=exclude_keys)
-console.print(test_processed)
+# # Debug test without the include tag to see if that's causing the issue
+# console.print("\n[bold magenta]Testing without include tag:[/bold magenta]")
+# test_prompt = """
+# <prompt>
+#     <shell>echo Hello World</shell>
+#     <pdd>This is a comment</pdd>
+#     {test}
+#     {test2}
+#     ```<TODO.md>```
+# </prompt>
+# """
+# test_processed = preprocess(test_prompt, recursive, double_curly_brackets, exclude_keys=exclude_keys)
+# console.print(test_processed)
 
-# Bare minimum test
-console.print("\n[bold magenta]Bare minimum test:[/bold magenta]")
-simple_prompt = """
-<prompt>
-    {test}
-    {test2}
-</prompt>
-"""
-simple_processed = preprocess(simple_prompt, recursive, double_curly_brackets, exclude_keys=exclude_keys)
-console.print(simple_processed)
+# # Bare minimum test
+# console.print("\n[bold magenta]Bare minimum test:[/bold magenta]")
+# simple_prompt = """
+# <prompt>
+#     {test}
+#     {test2}
+# </prompt>
+# """
+# simple_processed = preprocess(simple_prompt, recursive, double_curly_brackets, exclude_keys=exclude_keys)
+# console.print(simple_processed)
 
 # load prompts/change_LLM.prompt
 # with open('prompts/xml/change_LLM.prompt', 'r') as file:
