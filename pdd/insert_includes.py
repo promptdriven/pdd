@@ -60,7 +60,8 @@ def insert_includes(
         processed_prompt = preprocess(
             insert_includes_prompt,
             recursive=False,
-            double_curly_brackets=False
+            double_curly_brackets=True,
+            exclude_keys=["actual_prompt_to_update", "actual_dependencies_to_insert"]
         )
 
         if verbose:
