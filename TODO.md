@@ -1,5 +1,4 @@
 # TODO
-- [ ] include in web xml content
 - [ ] Python 3.13 support
 
 ## On Deck
