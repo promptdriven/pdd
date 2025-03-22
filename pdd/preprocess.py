@@ -34,7 +34,8 @@ def get_file_path(file_name: str) -> str:
     return os.path.join(base_path, file_name)
 
 def process_backtick_includes(text: str, recursive: bool) -> str:
-    pattern = r"```<(.*?)>```"
+    # More specific pattern that doesn't match nested > characters
+    pattern = r"```<([^>]*?)>```"
     def replace_include(match):
         file_path = match.group(1).strip()
         try:
