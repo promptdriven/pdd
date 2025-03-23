@@ -137,10 +137,23 @@ def fix_error_loop(unit_test_file: str,
     iteration = 0
     # Run an initial test to determine starting state
     try:
-        fails, errors, warnings, pytest_output = run_pytest_on_file(unit_test_file)
+        initial_fails, initial_errors, initial_warnings, pytest_output = run_pytest_on_file(unit_test_file)
+        # Store initial state for statistics
+        stats = {
+            "initial_fails": initial_fails,
+            "initial_errors": initial_errors, 
+            "initial_warnings": initial_warnings,
+            "final_fails": 0,
+            "final_errors": 0,
+            "final_warnings": 0,
+            "best_iteration": None,
+            "iterations_info": []
+        }
     except Exception as e:
         rprint(f"[red]Error running initial pytest:[/red] {e}")
         return False, "", "", fix_attempts, total_cost, model_name
+
+    fails, errors, warnings = initial_fails, initial_errors, initial_warnings
 
     while fix_attempts < max_attempts and total_cost < budget:
         iteration += 1
@@ -153,7 +166,20 @@ def fix_error_loop(unit_test_file: str,
             
         # If tests pass initially, no need to fix anything
         if fails == 0 and errors == 0 and warnings == 0:
-            rprint("[green]All tests already pass with no warnings! No fixes needed.[/green]")
+            rprint("[green]All tests already pass with no warnings! No fixes needed on this iteration.[/green]")
+            stats["final_fails"] = fails
+            stats["final_errors"] = errors
+            stats["final_warnings"] = warnings
+            stats["best_iteration"] = 0
+            
+            # Print summary statistics
+            rprint("\n[bold cyan]Summary Statistics:[/bold cyan]")
+            rprint(f"Initial state: {initial_fails} fails, {initial_errors} errors, {initial_warnings} warnings")
+            rprint(f"Final state: {stats['final_fails']} fails, {stats['final_errors']} errors, {stats['final_warnings']} warnings")
+            rprint(f"Best iteration: {stats['best_iteration']}")
+            rprint(f"No fixes needed - all tests already pass")
+            rprint(f"Overall improvement: 100.00%")
+            
             return True, "", "", 0, 0.0, ""
         
         iteration_header = f"=== Attempt iteration {iteration} ==="
@@ -165,6 +191,15 @@ def fix_error_loop(unit_test_file: str,
         rprint(f"[magenta]Pytest output:[/magenta]\n{escape_brackets(pytest_output)}")
         if verbose:
             rprint(f"[cyan]Iteration summary: {fails} failed, {errors} errors, {warnings} warnings[/cyan]")
+
+        # Track this iteration's stats
+        iteration_stats = {
+            "iteration": iteration,
+            "fails": fails,
+            "errors": errors,
+            "warnings": warnings
+        }
+        stats["iterations_info"].append(iteration_stats)
 
         # If tests are fully successful, we break out:
         if fails == 0 and errors == 0 and warnings == 0:
@@ -299,6 +334,15 @@ def fix_error_loop(unit_test_file: str,
         # Run pytest for the next iteration
         try:
             fails, errors, warnings, pytest_output = run_pytest_on_file(unit_test_file)
+            # Update iteration stats with post-fix results
+            stats["iterations_info"][-1].update({
+                "post_fix_fails": fails,
+                "post_fix_errors": errors,
+                "post_fix_warnings": warnings,
+                "improved": (fails < iteration_stats["fails"] or 
+                            errors < iteration_stats["errors"] or 
+                            warnings < iteration_stats["warnings"])
+            })
         except Exception as e:
             rprint(f"[red]Error running pytest for next iteration:[/red] {e}")
             return False, "", "", fix_attempts, total_cost, model_name
@@ -306,10 +350,16 @@ def fix_error_loop(unit_test_file: str,
     # Final test run:
     try:
         final_fails, final_errors, final_warnings, final_output = run_pytest_on_file(unit_test_file)
+        stats["final_fails"] = final_fails
+        stats["final_errors"] = final_errors
+        stats["final_warnings"] = final_warnings
     except Exception as e:
         rprint(f"[red]Error running final pytest:[/red] {e}")
         final_output = f"Error: {e}"
         final_fails = final_errors = final_warnings = sys.maxsize
+        stats["final_fails"] = final_fails
+        stats["final_errors"] = final_errors
+        stats["final_warnings"] = final_warnings
 
     with open(error_log_file, "a") as elog:
         elog.write("\n=== Final Pytest Run ===\n")
@@ -338,8 +388,19 @@ def fix_error_loop(unit_test_file: str,
                     shutil.copy(best_iteration_info["unit_test_backup"], unit_test_file)
                 if best_iteration_info["code_backup"]:
                     shutil.copy(best_iteration_info["code_backup"], code_file)
+                
+                # Update final stats with best iteration stats
+                stats["final_fails"] = best_iteration_info["fails"]
+                stats["final_errors"] = best_iteration_info["errors"]
+                stats["final_warnings"] = best_iteration_info["warnings"]
+                stats["best_iteration"] = best_iteration_info["attempt"]
             except Exception as e:
                 rprint(f"[red]Error restoring best iteration backups:[/red] {e}")
+        else:
+            # Current iteration is the best
+            stats["best_iteration"] = "final"
+    else:
+        stats["best_iteration"] = "final"
 
     # Read final file contents
     try:
@@ -356,6 +417,24 @@ def fix_error_loop(unit_test_file: str,
         rprint("[green]Final tests passed with no warnings.[/green]")
     else:
         rprint("[red]Final tests still failing or producing warnings.[/red]")
+
+    # Calculate improvements
+    stats["improvement"] = {
+        "fails_reduced": initial_fails - stats["final_fails"],
+        "errors_reduced": initial_errors - stats["final_errors"],
+        "warnings_reduced": initial_warnings - stats["final_warnings"],
+        "percent_improvement": 100 if initial_fails + initial_errors + initial_warnings == 0 else 
+                              (1 - (stats["final_fails"] + stats["final_errors"] + stats["final_warnings"]) / 
+                                   (initial_fails + initial_errors + initial_warnings)) * 100
+    }
+
+    # Print summary statistics
+    rprint("\n[bold cyan]Summary Statistics:[/bold cyan]")
+    rprint(f"Initial state: {initial_fails} fails, {initial_errors} errors, {initial_warnings} warnings")
+    rprint(f"Final state: {stats['final_fails']} fails, {stats['final_errors']} errors, {stats['final_warnings']} warnings")
+    rprint(f"Best iteration: {stats['best_iteration']}")
+    rprint(f"Improvement: {stats['improvement']['fails_reduced']} fails, {stats['improvement']['errors_reduced']} errors, {stats['improvement']['warnings_reduced']} warnings")
+    rprint(f"Overall improvement: {stats['improvement']['percent_improvement']:.2f}%")
 
     return success, final_unit_test, final_code, fix_attempts, total_cost, model_name
 
