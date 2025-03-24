@@ -88,7 +88,7 @@ def fix_main(
         # Get parameters from context
         strength = ctx.obj.get('strength', 0.9)
         temperature = ctx.obj.get('temperature', 0)
-
+        verbose = ctx.obj.get('verbose', False)
         if loop:
             # Use fix_error_loop for iterative fixing
             success, fixed_unit_test, fixed_code, attempts, total_cost, model_name = fix_error_loop(
@@ -100,7 +100,8 @@ def fix_main(
                 temperature=temperature,
                 max_attempts=max_attempts,
                 budget=budget,
-                error_log_file=output_file_paths.get("output_results")
+                error_log_file=output_file_paths.get("output_results"),
+                verbose=verbose
             )
         else:
             # Use fix_errors_from_unit_tests for single-pass fixing
@@ -111,7 +112,8 @@ def fix_main(
                 error=input_strings["error_file"],
                 error_file=output_file_paths.get("output_results"),
                 strength=strength,
-                temperature=temperature
+                temperature=temperature,
+                verbose=verbose
             )
             success = update_unit_test or update_code
             attempts = 1
