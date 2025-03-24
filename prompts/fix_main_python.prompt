@@ -16,6 +16,7 @@
             - temperature (float): Model temperature parameter, defaults to 0
             - force (bool): Whether to force overwrite existing files
             - quiet (bool): Whether to suppress output messages
+            - verbose (bool): Whether to enable verbose output for debugging purposes
         - `prompt_file` (str): The filename of the prompt file that generated the code under test.
         - `code_file` (str): The filename of the code file to be fixed.
         - `unit_test_file` (str): The filename of the unit test file.
@@ -87,7 +88,11 @@
       - Headers: Authorization with JWT token
       - Handle response and provide user feedback
 
-4. User Feedback:
+4. Verbose Output:
+   - Add a `verbose` parameter to both `fix_error_loop` and `fix_errors_from_unit_tests` calls.
+   - When `verbose` is True, provide additional debugging information during the fixing process.
+
+5. User Feedback:
    - Use rich.print for formatted output
    - Show success/failure status
    - Display total attempts and cost
