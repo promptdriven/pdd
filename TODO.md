@@ -1,11 +1,11 @@
 # TODO
+- [ ] benchmark fix the prompt based on diffs to the code file
 - [ ] Python 3.13 support
 
 ## On Deck
 
 
 ## Features
-
 - [ ] auto reflect
 - [ ] run lint for context for better reflection
 - [ ] smart includes
@@ -14,7 +14,6 @@
 - [ ] routlellm
 - [ ] online database of examples to reference
 - [ ] auto record which model works for each prompt
-- [ ] benchmark fix the prompt based on diffs to the code file
 - [ ] Use perplexica to automatically find context
 - [ ] use context caching during fixing errors
 - [ ] create a marketplace where people can earn LLM credits for their examples or people can put up bounties for examples
