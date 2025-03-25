@@ -25,3 +25,4 @@ pytest-cov
 pytest-asyncio
 twine
 firecrawl-py
+langgraph==0.3.20
