@@ -314,38 +314,46 @@ async def edit_file(file_path: str, edit_instructions: str) -> tuple[bool, Optio
             
             print(f"Loaded tools: {[t.name for t in tools]}")
 
-            # First, get the current file content and hash
-            get_content_result = await tools[0].ainvoke({
-                "files": [
-                    {
-                        "file_path": abs_file_path,
-                        "ranges": [
-                            {
-                                "start": 1,
-                                "end": None
-                            }
-                        ]
-                    }
-                ]
-            })
-            
-            print(f"Tool response: {get_content_result}")
-            print(f"Response type: {type(get_content_result)}")
+            # First, get the current file content and hash with explicit line range validation
+            try:
+                get_content_result = await tools[0].ainvoke({
+                    "files": [
+                        {
+                            "file_path": abs_file_path,
+                            "ranges": [
+                                {
+                                    "start": 1,  # Always start from line 1
+                                    "end": None,  # Let the tool determine the end
+                                    "validate_range": True  # Add explicit validation flag
+                                }
+                            ]
+                        }
+                    ]
+                })
+                
+                print(f"Tool response: {get_content_result}")
+                print(f"Response type: {type(get_content_result)}")
 
-            if isinstance(get_content_result, dict) and "error" in get_content_result:
-                return False, f"Failed to get file content: {get_content_result['error']}"
+                if isinstance(get_content_result, str):
+                    try:
+                        get_content_result = json.loads(get_content_result)
+                    except json.JSONDecodeError:
+                        return False, "Failed to parse tool response as JSON"
 
-            # Parse the response to get the file hash
-            if isinstance(get_content_result, dict):
+                if not isinstance(get_content_result, dict):
+                    return False, f"Unexpected response type: {type(get_content_result)}"
+
+                if "error" in get_content_result:
+                    return False, f"Failed to get file content: {get_content_result['error']}"
+
                 file_info = get_content_result.get(abs_file_path, {})
                 file_hash = file_info.get("file_hash")
-            else:
-                response_data = json.loads(get_content_result)
-                file_info = response_data.get(abs_file_path, {})
-                file_hash = file_info.get("file_hash")
 
-            if not file_hash:
-                return False, "Could not get file hash"
+                if not file_hash:
+                    return False, "Could not get file hash"
+
+            except Exception as e:
+                return False, f"Error during content retrieval: {str(e)}"
 
             # Create the LLM
             # llm = ChatOpenAI(model="gpt-4", temperature=0)
@@ -390,9 +398,13 @@ Current file hash: {file_hash}
 
 IMPORTANT: When editing the file, please:
 1. Get the current content and hash first
-2. Make one edit at a time
+2. Make one edit at a time, ensuring line numbers are valid:
+   - Start line must be >= 1
+   - End line must be >= start line
+   - When replacing text, specify exact line ranges
 3. Get the new hash after each edit
-4. Use the new hash for the next edit""")
+4. Use the new hash for the next edit
+5. If you encounter a line range error, retry the edit with corrected line numbers""")
                 ]
             }
 
@@ -404,6 +416,7 @@ IMPORTANT: When editing the file, please:
                     events.append(event)
 
                 # Check if any tool execution was successful
+                success = False
                 for event in events:
                     if "tools" in event:
                         tool_result = event["tools"]
@@ -415,16 +428,25 @@ IMPORTANT: When editing the file, please:
                                     if "Content hash mismatch" in error_content:
                                         # This is expected when making multiple edits
                                         continue
+                                    if "End line must be greater than or equal to start line" in error_content:
+                                        # Line range error - let the agent retry with corrected numbers
+                                        continue
                                     return False, f"Tool execution failed: {error_content}"
+                                else:
+                                    success = True  # At least one successful tool execution
 
-                # Check if the file was actually modified
+                # Verify the final state of the file
                 if os.path.exists(abs_file_path):
                     with open(abs_file_path, 'r') as f:
-                        content = f.read()
-                    if "modified" in content and "Line 2" not in content:
+                        final_content = f.read()
+                    
+                    # Check if any changes were made
+                    if final_content != get_content_result[abs_file_path]["ranges"][0]["content"]:
                         return True, None
+                    else:
+                        return False, "No changes were made to the file"
 
-                return False, "File was not modified as expected"
+                return False, "File does not exist after edits"
 
             except Exception as e:
                 print(f"Error during graph execution: {e}")
