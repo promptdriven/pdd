@@ -3,6 +3,10 @@ import os
 import uuid
 from typing import TypedDict, Annotated, Literal, Sequence, Optional
 
+# Enable LangChain caching
+from langchain.cache import SQLiteCache
+from langchain.globals import set_llm_cache
+
 # LangChain and LangGraph imports
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 # from langchain_openai import ChatOpenAI # Or any other chat model supporting tool calling
@@ -472,6 +476,9 @@ async def main():
 
 if __name__ == "__main__":
     import asyncio
+    # Enable LangChain caching with SQLite
+    set_llm_cache(SQLiteCache(database_path=".langchain.db"))
+    
     # Create mcp_config.json with the correct configuration for mcp-text-editor
     if not os.path.exists(MCP_CONFIG_FILE):
         print(f"Creating {MCP_CONFIG_FILE} for mcp-text-editor")
