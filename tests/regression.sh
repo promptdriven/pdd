@@ -136,7 +136,7 @@ fi
 # Run fix commands
 log "Running fix commands"
 python -m pytest "$STAGING_PATH/regression/$EXTENSION_TEST" > "$STAGING_PATH/regression/pytest_output.log"
-run_pdd_command fix --output-test "$STAGING_PATH/regression/fixed_$EXTENSION_TEST" --output-code "$STAGING_PATH/regression/fixed_$EXTENSION_SCRIPT" \
+run_pdd_command fix --output-test "$STAGING_PATH/regression/fixed_$EXTENSION_TEST" --output-code "$STAGING_PATH/regression/fixed_$EXTENSION_SCRIPT"  --output-results "$STAGING_PATH/regression/get_extension_fix_results.log" \
                     "$PROMPTS_PATH/$EXTENSION_PROMPT" "$STAGING_PATH/regression/$EXTENSION_SCRIPT" "$STAGING_PATH/regression/$EXTENSION_TEST" "$STAGING_PATH/regression/pytest_output.log"
 
 # Run fix command with loop

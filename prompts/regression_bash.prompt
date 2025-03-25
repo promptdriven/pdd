@@ -9,34 +9,71 @@
 % Make sure all the functionality of pdd is exercised in the regression script.
 
 % Additional requirements:
-    1. Use consistent variables across different commands. For example, use EXTENSION_SCRIPT and EXTENSION_VERIFICATION_PROGRAM in multiple commands where applicable.
-    2. Remove any unused variables to keep the script clean and efficient.
-    3. For the 'trace' command, use line number 31 as an example.
-    4. In the 'crash' command, use EXTENSION_VERIFICATION_PROGRAM instead of TRACE_PROGRAM.
-    5. For the 'bug' command:
-        - Use EXTENSION_SCRIPT and EXTENSION_VERIFICATION_PROGRAM
-        - Use specific Python extension examples:
-            - Current output: "The file extension for 'Python' is: '.py'"
-            - Desired output: "The file extension for 'Python' is: 'py'"
-        - Include "bug_" in the output filename
-    6. Ensure all commands use appropriate and consistent file paths and variables.
-    7. Use a strength of 0.85 and a temperature of 1.0 for all commands.
-    8. For the update command:
-        - Create a backup of the original extension script
-        - Modify the extension script by adding a print statement
-        - Use both modified and original versions in the update command
-    9. Add comprehensive logging functionality:
-        - Include a timestamped log file (regression.log)
-        - Track the success or failure of each command
-        - Add a verbose output option (enabled by default)
-    10. Implement the 'fix --loop' command:
-        - Include parameters like --max-attempts and --budget
-        - Specify output file locations for test, code, and results
-        - Use the verification program in the command
-    11. Add OS-specific code for the sed command to handle differences between macOS (BSD sed) and Linux (GNU sed)
-    12. Include error handling that checks command success and exits if a command fails
-    13. Add a summary at the end that calculates the total cost from all operations
-    14. After the 'crash' command, check if output files exist before copying them to be used in subsequent commands
+    1. Define common path variables at the start of the script:
+        - STAGING_PATH for output files
+        - PROMPTS_PATH for prompt files
+        - CONTEXT_PATH for context files
+        - LOG_FILE for regression logging
+        - COST_FILE for tracking command costs
+    
+    2. Use consistent variables across different commands:
+        - EXTENSION_SCRIPT, EXTENSION_PROMPT, EXTENSION_TEST for extension-related files
+        - CHANGE_PROMPT, CHANGE_SCRIPT, CHANGE_CONTEXT_PROMPT for change-related files
+        - SPLIT_PROMPT, SPLIT_SCRIPT, SPLIT_EXAMPLE_SCRIPT for split-related files
+    
+    3. Implement a robust logging system:
+        - Create a log() function for verbose output (enabled by default)
+        - Create a log_timestamped() function for regression.log entries
+        - Create a run_pdd_command() function that:
+            - Executes pdd commands with consistent parameters
+            - Logs command execution and results
+            - Handles errors and exits on failure
+    
+    4. For each pdd command, implement the following:
+        - generate: Create extension script from prompt
+        - example: Generate verification program
+        - test: Generate test file
+        - preprocess: Create preprocessed and XML versions of prompts
+        - update: Handle script modifications and updates
+            - Backup original script
+            - Add a print statement using OS-specific sed
+            - Compare original and modified versions
+        - change: Process context-based changes
+        - crash: Handle program crashes and fixes
+        - fix: Implement both regular and loop-based fixes
+            - Regular fix with test and code outputs
+            - Loop fix with max attempts and budget constraints
+        - split: Handle prompt splitting operations
+        - detect: Analyze prompt similarities
+        - conflicts: Check for prompt conflicts
+        - trace: Analyze specific line execution (line 31)
+        - bug: Test specific output scenarios
+            - Compare Python extension outputs
+            - Generate bug-specific tests
+        - auto-deps: Handle dependency analysis
+    
+    5. Configuration settings:
+        - Set PDD_AUTO_UPDATE=false
+        - Use strength=0.85 and temperature=1.0
+        - Enable verbose output by default
+        - Track costs in regression_cost.csv
+    
+    6. Error handling and cleanup:
+        - Remove existing regression.log at start
+        - Check and handle command failures
+        - Verify file existence before operations
+        - Calculate and display total cost at completion
+    
+    7. OS compatibility:
+        - Handle sed differences between BSD (macOS) and GNU (Linux)
+        - Use appropriate path handling for different systems
+        - Ensure consistent line endings and file permissions
+
+% The script should be organized in a clear, logical flow:
+    1. Variable and function definitions
+    2. Setup and cleanup operations
+    3. Command executions in a logical sequence
+    4. Summary and cost reporting
 
 % Set PDD_AUTO_UPDATE to false for the regression script so pdd doesn't ask to update itself.
 
