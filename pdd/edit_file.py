@@ -7,7 +7,8 @@ from contextlib import asynccontextmanager
 # LangChain and LangGraph imports
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_core.tools import tool
-from langchain_openai import ChatOpenAI # Or any other chat model supporting tool calling
+# from langchain_openai import ChatOpenAI # Or any other chat model supporting tool calling
+from langchain_anthropic import ChatAnthropic
 from langgraph.graph import StateGraph, END, START, MessagesState
 from langgraph.prebuilt import ToolNode, tools_condition, chat_agent_executor
 from langgraph.checkpoint.memory import MemorySaver # Optional: If state needs persistence across calls
@@ -347,7 +348,8 @@ async def edit_file(file_path: str, edit_instructions: str) -> tuple[bool, Optio
                 return False, "Could not get file hash"
 
             # Create the LLM
-            llm = ChatOpenAI(model="gpt-4", temperature=0)
+            # llm = ChatOpenAI(model="gpt-4", temperature=0)
+            llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", temperature=0)
             llm_with_tools = llm.bind_tools(tools)
 
             # Create the graph
@@ -383,7 +385,7 @@ async def edit_file(file_path: str, edit_instructions: str) -> tuple[bool, Optio
             initial_state = {
                 "messages": [
                     HumanMessage(content=f"""Please edit the file located at '{abs_file_path}'. 
-Instructions: {edit_instructions}
+Instructions: <edit_instructions>{edit_instructions}</edit_instructions>
 Current file hash: {file_hash}
 
 IMPORTANT: When editing the file, please:
