@@ -126,7 +126,8 @@ async def agent_node(state: EditFileState) -> EditFileState:
     # Configure the LLM - replace with your preferred model
     # Ensure the model supports tool calling
     # Add OPENAI_API_KEY to your environment variables
-    llm = ChatOpenAI(model="gpt-4", temperature=0)
+    # llm = ChatOpenAI(model="gpt-4", temperature=0)
+    llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", temperature=1,  max_tokens=64000, thinking={"type": "enabled", "budget_tokens": 4000})
     llm_with_tools = llm.bind_tools(mcp_tools)
 
     # Invoke the LLM
@@ -231,7 +232,7 @@ def build_graph():
     workflow.add_node("load_mcp_tools", load_mcp_tools_node)
     workflow.add_node("create_initial_prompt", create_initial_prompt_node)
     workflow.add_node("agent", agent_node)
-    # ToolNode is added dynamically within the main function once tools are loaded
+    # ToolNode is added dynamically within the main function once tools are loaded.
     workflow.add_node("set_result", set_result_node)
 
     # Define edges
@@ -357,7 +358,7 @@ async def edit_file(file_path: str, edit_instructions: str) -> tuple[bool, Optio
 
             # Create the LLM
             # llm = ChatOpenAI(model="gpt-4", temperature=0)
-            llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", temperature=0)
+            llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", temperature=1, max_tokens=64000, thinking={"type": "enabled", "budget_tokens": 4000})
             llm_with_tools = llm.bind_tools(tools)
 
             # Create the graph
