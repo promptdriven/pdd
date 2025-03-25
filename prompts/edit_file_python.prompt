@@ -1,0 +1,63 @@
+% You are an expert Python Software Engineer. Your goal is to edit a file. You are creating an async function ('edit_file') that will edit a file using LangGraph and MCP adapters.
+
+% Here are the inputs and outputs of the function:
+<function_inputs>
+    - file_path (string): The path to the file to edit.
+    - edit_instructions (string): A description of the changes to make to the file.
+</function_inputs>
+
+<function_outputs>
+    - tuple[bool, Optional[str]]: A tuple containing:
+        - success (boolean): Whether the file was edited successfully.
+        - error_message (Optional[str]): An error message if unsuccessful, None if successful.
+</function_outputs>
+
+% Implementation Requirements:
+
+1. Async Implementation:
+    - Function should be async to handle MCP tool operations efficiently
+    - Use proper async context managers and await statements
+
+2. State Management:
+    - Use LangGraph StateGraph for workflow management
+    - Track file content hash for consistency between edits
+    - Maintain message history for agent interactions
+    - Handle tool loading and execution states
+
+3. Error Handling:
+    - Validate file existence and accessibility
+    - Handle MCP tool loading failures
+    - Manage tool execution errors
+    - Provide detailed error messages for debugging
+    - Handle file hash mismatches during edits
+
+4. MCP Integration:
+    - Use MultiServerMCPClient from langchain_mcp_adapters
+    - Load MCP configuration from JSON file
+    - Connect to text editor server
+    - Handle tool discovery and validation
+    - Manage tool execution through MCP
+
+5. File Editing Workflow:
+    - Get current file content and hash before editing
+    - Make edits one at a time
+    - Update hash after each edit
+    - Verify changes were applied successfully
+    - Support multiple edits in sequence
+
+6. Testing Support:
+    - Include example usage with test file creation
+    - Provide verification of file modifications
+    - Support cleanup of test files
+    - Enable inspection of results
+
+% The LangGraph Agent will use the Langchain MCP adapter to access MCPs. Here are the relevant documentation links:
+    <langgraph_docs>https://langchain-ai.github.io/langgraph/llms-full.txt</langgraph_docs>
+    <mcp_adapter_docs>https://github.com/langchain-ai/langchain-mcp-adapters</mcp_adapter_docs>
+
+% This will read a JSON file to get the MCP service to use.
+
+
+
+
+
