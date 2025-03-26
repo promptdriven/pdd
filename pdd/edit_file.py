@@ -225,39 +225,83 @@ def should_continue_or_end(state: EditFileState) -> Literal["execute_mcp_tool", 
 # --- Build the Graph ---
 
 def build_graph():
-    """Builds the LangGraph StateGraph."""
+    """Builds and returns an uncompiled StateGraph for the file editing workflow."""
     workflow = StateGraph(EditFileState)
 
     # Add nodes
     workflow.add_node("load_mcp_tools", load_mcp_tools_node)
     workflow.add_node("create_initial_prompt", create_initial_prompt_node)
     workflow.add_node("agent", agent_node)
-    # ToolNode is added dynamically within the main function once tools are loaded.
     workflow.add_node("set_result", set_result_node)
+    
+    # Add a placeholder node for execute_mcp_tool that will be replaced at runtime
+    # This is needed so the graph can compile at discovery time
+    async def placeholder_tool_node(state: EditFileState) -> EditFileState:
+        """Placeholder for the MCP tool execution node."""
+        raise NotImplementedError("This is a placeholder and should be replaced at runtime")
+    
+    workflow.add_node("execute_mcp_tool", placeholder_tool_node)
 
     # Define edges
     workflow.add_edge(START, "load_mcp_tools")
     workflow.add_edge("load_mcp_tools", "create_initial_prompt")
     workflow.add_edge("create_initial_prompt", "agent")
+    
+    # Add edge from tool execution back to agent
+    workflow.add_edge("execute_mcp_tool", "agent")
 
     # Conditional edge after the agent decides
     workflow.add_conditional_edges(
         "agent",
         should_continue_or_end,
         {
-            "execute_mcp_tool": "execute_mcp_tool", # Name will be added dynamically
+            "execute_mcp_tool": "execute_mcp_tool",
             "set_result": "set_result",
         },
     )
-
-    # Edge from tool execution back to agent for processing results
-    # This edge will be added dynamically after ToolNode is created
-    # workflow.add_edge("execute_mcp_tool", "agent") # Added dynamically
 
     # Final edge to end the process
     workflow.add_edge("set_result", END)
 
     return workflow
+
+# Create an instance of the graph for LangGraph CLI
+# Note: This is the uncompiled graph, it will be properly initialized
+# and compiled when running via the CLI with necessary tools
+graph = build_graph()
+
+# A helper function to properly initialize the graph with required tools
+async def get_initialized_graph():
+    """
+    Initializes the graph with required MCP tools and returns the compiled graph.
+    This should be used at runtime, not during CLI graph discovery.
+    """
+    workflow = build_graph()
+    
+    # Create the MCP client and get tools
+    async with MultiServerMCPClient() as client:
+        # Connect to the text editor server
+        await client.connect_to_server(
+            "text_editor",
+            command="uvx",
+            args=["mcp-text-editor"],
+            encoding_error_handler="ignore"
+        )
+        
+        # Get tools
+        tools = client.get_tools()
+        if not tools:
+            raise ValueError("No MCP tools were loaded")
+            
+        # Create a new tool node
+        tool_node = ToolNode(tools)
+        
+        # Replace the placeholder with the real implementation
+        # Instead of removing, just replace the node implementation
+        workflow.update_node("execute_mcp_tool", tool_node)
+        
+        # Compile and return the initialized graph
+        return workflow.compile()
 
 # --- Main Function ---
 
@@ -356,39 +400,43 @@ async def edit_file(file_path: str, edit_instructions: str) -> tuple[bool, Optio
             except Exception as e:
                 return False, f"Error during content retrieval: {str(e)}"
 
-            # Create the LLM
-            # llm = ChatOpenAI(model="gpt-4", temperature=0)
-            llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", temperature=1, max_tokens=64000, thinking={"type": "enabled", "budget_tokens": 4000})
-            llm_with_tools = llm.bind_tools(tools)
+            # Instead of using our LangGraph structure, we'll create a simpler one for direct calls
+            # to maintain backward compatibility
+            try:
+                # Create the LLM
+                llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", temperature=1, max_tokens=64000, thinking={"type": "enabled", "budget_tokens": 4000})
+                llm_with_tools = llm.bind_tools(tools)
 
-            # Create the graph
-            graph_builder = StateGraph(MessagesState)
+                # Create a simple graph for this function call
+                graph_builder = StateGraph(MessagesState)
 
-            # Add nodes
-            async def agent_node(state: MessagesState):
-                messages = state["messages"]
-                response = await llm_with_tools.ainvoke(messages)
-                return {"messages": [response]}
+                # Add nodes
+                async def agent_node(state: MessagesState):
+                    messages = state["messages"]
+                    response = await llm_with_tools.ainvoke(messages)
+                    return {"messages": [response]}
 
-            tool_node = ToolNode(tools)
+                tool_node = ToolNode(tools)
 
-            graph_builder.add_node("agent", agent_node)
-            graph_builder.add_node("tools", tool_node)
+                graph_builder.add_node("agent", agent_node)
+                graph_builder.add_node("tools", tool_node)
 
-            # Add edges
-            graph_builder.add_edge(START, "agent")
-            graph_builder.add_conditional_edges(
-                "agent",
-                tools_condition,
-                {
-                    "tools": "tools",
-                    END: END,
-                }
-            )
-            graph_builder.add_edge("tools", "agent")
+                # Add edges
+                graph_builder.add_edge(START, "agent")
+                graph_builder.add_conditional_edges(
+                    "agent",
+                    tools_condition,
+                    {
+                        "tools": "tools",
+                        END: END,
+                    }
+                )
+                graph_builder.add_edge("tools", "agent")
 
-            # Compile the graph
-            graph = graph_builder.compile()
+                # Compile the graph
+                graph = graph_builder.compile()
+            except Exception as e:
+                return False, f"Error setting up agent: {str(e)}"
 
             # Run the graph with the current file hash
             initial_state = {
