@@ -1,0 +1,9 @@
+{
+  "dependencies": [
+    "."
+  ],
+  "graphs": {
+    "edit_file": "./pdd/edit_file.py:graph"
+  },
+  "env": ".env"
+} 
