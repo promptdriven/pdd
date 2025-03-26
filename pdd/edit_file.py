@@ -56,6 +56,11 @@ async def load_mcp_tools_node(state: EditFileState) -> EditFileState:
     mcp_tools = []
     error_message = None
     success = None
+    
+    # Initialize basic state fields with defaults if not provided
+    file_path = state.get("file_path", "unknown_file.txt")
+    edit_instructions = state.get("edit_instructions", "Please edit the file")
+    
     try:
         if not os.path.exists(MCP_CONFIG_FILE):
             raise FileNotFoundError(f"MCP configuration file not found: {MCP_CONFIG_FILE}")
@@ -92,7 +97,9 @@ async def load_mcp_tools_node(state: EditFileState) -> EditFileState:
     return {
         "mcp_tools": mcp_tools,
         "error_message": error_message,
-        "success": success
+        "success": success,
+        "file_path": file_path,
+        "edit_instructions": edit_instructions
     }
 
 def create_initial_prompt_node(state: EditFileState) -> EditFileState:
@@ -105,7 +112,32 @@ def create_initial_prompt_node(state: EditFileState) -> EditFileState:
          print("Skipping initial prompt creation due to previous error.")
          return {} # No update needed if there was an error loading tools
 
-    # No need to create a message here since it's already in the initial state
+    # Check if file_path and edit_instructions are provided in the state
+    file_path = state.get("file_path")
+    edit_instructions = state.get("edit_instructions")
+    
+    # If messages already exists, don't modify it
+    if "messages" in state:
+        return {}
+        
+    # Create an initial message if we have enough information
+    if file_path and edit_instructions:
+        initial_message = HumanMessage(content=f"""Please edit the file located at '{file_path}'. 
+Instructions: <edit_instructions>{edit_instructions}</edit_instructions>
+
+IMPORTANT: When editing the file, please:
+1. Get the current content and hash first
+2. Make one edit at a time, ensuring line numbers are valid:
+   - Start line must be >= 1
+   - End line must be >= start line
+   - When replacing text, specify exact line ranges
+3. Get the new hash after each edit
+4. Use the new hash for the next edit
+5. If you encounter a line range error, retry the edit with corrected line numbers""")
+        
+        return {"messages": [initial_message]}
+    
+    # If we don't have enough information, return an empty update
     return {}
 
 async def agent_node(state: EditFileState) -> EditFileState:
@@ -120,7 +152,32 @@ async def agent_node(state: EditFileState) -> EditFileState:
          # If tools failed to load, we should end here with failure
          return {"success": False, "error_message": state.get("error_message", "Unknown error during tool loading.")}
 
-    messages = state["messages"]
+    # Handle case where messages may not exist in the state
+    messages = state.get("messages", [])
+    if not messages:
+        # If messages is empty, initialize with a default message using file_path and edit_instructions
+        file_path = state.get("file_path", "unknown_file.txt")
+        edit_instructions = state.get("edit_instructions", "Please edit the file")
+        
+        # Create an initial message
+        messages = [
+            HumanMessage(content=f"""Please edit the file located at '{file_path}'. 
+Instructions: <edit_instructions>{edit_instructions}</edit_instructions>
+
+IMPORTANT: When editing the file, please:
+1. Get the current content and hash first
+2. Make one edit at a time, ensuring line numbers are valid:
+   - Start line must be >= 1
+   - End line must be >= start line
+   - When replacing text, specify exact line ranges
+3. Get the new hash after each edit
+4. Use the new hash for the next edit
+5. If you encounter a line range error, retry the edit with corrected line numbers""")
+        ]
+        # Update the state with the new messages
+        state_update = {"messages": messages}
+        return state_update
+
     mcp_tools = state["mcp_tools"]
 
     # Configure the LLM - replace with your preferred model
@@ -156,7 +213,13 @@ def set_result_node(state: EditFileState) -> EditFileState:
         print(f"Result already set: success={state['success']}, error='{state.get('error_message', '')}'")
         return {"success": state["success"], "error_message": state.get("error_message")}
 
-    messages = state["messages"]
+    # Handle case where messages may not exist in the state
+    messages = state.get("messages", [])
+    if not messages:
+        error_message = "No messages in state, cannot determine result."
+        print(error_message)
+        return {"success": False, "error_message": error_message}
+        
     last_message = messages[-1] if messages else None
     success = False
     error_message = "No edit performed or final result unclear."
@@ -213,7 +276,12 @@ def should_continue_or_end(state: EditFileState) -> Literal["execute_mcp_tool", 
         print("Routing to set_result due to previous error.")
         return "set_result"
 
-    messages = state["messages"]
+    # Handle case where messages may not exist in the state
+    messages = state.get("messages", [])
+    if not messages:
+        print("No messages in state, routing to set_result.")
+        return "set_result"
+        
     last_message = messages[-1]
     if last_message.tool_calls:
         print("Agent requested tool call. Routing to execute_mcp_tool.")
@@ -234,11 +302,25 @@ def build_graph():
     workflow.add_node("agent", agent_node)
     workflow.add_node("set_result", set_result_node)
     
-    # Add a placeholder node for execute_mcp_tool that will be replaced at runtime
-    # This is needed so the graph can compile at discovery time
+    # Add a placeholder node for execute_mcp_tool that will handle minimal operation
+    # This is needed for LangGraph Studio visualization
     async def placeholder_tool_node(state: EditFileState) -> EditFileState:
-        """Placeholder for the MCP tool execution node."""
-        raise NotImplementedError("This is a placeholder and should be replaced at runtime")
+        """Basic implementation of tool execution for visualization purposes."""
+        print("---EXECUTING PLACEHOLDER TOOL NODE---")
+        # When running in LangGraph Studio, just pass through with a tool response message
+        messages = state.get("messages", [])
+        last_message = messages[-1] if messages else None
+        
+        if last_message and hasattr(last_message, "tool_calls") and last_message.tool_calls:
+            # Create a simple tool response message
+            tool_response = ToolMessage(
+                content="This is a visualization placeholder. In real execution, MCP tools would be used.",
+                tool_call_id=last_message.tool_calls[0].id if last_message.tool_calls else "placeholder-id"
+            )
+            return {"messages": messages + [tool_response]}
+        
+        # If there's no tool call or messages, just return the state unchanged
+        return {}
     
     workflow.add_node("execute_mcp_tool", placeholder_tool_node)
 
@@ -472,7 +554,7 @@ IMPORTANT: When editing the file, please:
                         if isinstance(tool_result, dict) and tool_result.get("messages"):
                             last_message = tool_result["messages"][-1]
                             if isinstance(last_message, ToolMessage):
-                                if "error" in last_message.additional_kwargs or "error" in last_message.content.lower():
+                                if "error" in last_message.additional_kwargs or (isinstance(last_message.content, str) and "error" in last_message.content.lower() and not last_message.content.startswith("{")):
                                     error_content = last_message.additional_kwargs.get("error", last_message.content)
                                     if "Content hash mismatch" in error_content:
                                         # This is expected when making multiple edits
