@@ -312,10 +312,20 @@ def build_graph():
         last_message = messages[-1] if messages else None
         
         if last_message and hasattr(last_message, "tool_calls") and last_message.tool_calls:
+            # Get tool call ID - handle both dict and object formats
+            tool_call_id = "placeholder-id"
+            if last_message.tool_calls:
+                tool_call = last_message.tool_calls[0]
+                # Check if it's a dictionary (access via key) or object (access via attribute)
+                if isinstance(tool_call, dict) and "id" in tool_call:
+                    tool_call_id = tool_call["id"]
+                elif hasattr(tool_call, "id"):
+                    tool_call_id = tool_call.id
+            
             # Create a simple tool response message
             tool_response = ToolMessage(
                 content="This is a visualization placeholder. In real execution, MCP tools would be used.",
-                tool_call_id=last_message.tool_calls[0].id if last_message.tool_calls else "placeholder-id"
+                tool_call_id=tool_call_id
             )
             return {"messages": messages + [tool_response]}
         
@@ -485,6 +495,7 @@ async def edit_file(file_path: str, edit_instructions: str) -> tuple[bool, Optio
             # Instead of using our LangGraph structure, we'll create a simpler one for direct calls
             # to maintain backward compatibility
             try:
+                print("simple graph")
                 # Create the LLM
                 llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", temperature=1, max_tokens=64000, thinking={"type": "enabled", "budget_tokens": 4000})
                 llm_with_tools = llm.bind_tools(tools)
