@@ -320,7 +320,7 @@ def decide_next_step(state: EditFileState) -> Literal["execute_edit", "handle_er
     if state.get("error_message"):
         return "handle_error"
     last_message = state['messages'][-1]
-    if isinstance(last_message, AIMessage) and last_message.tool_calls:
+    if last_message.__class__.__name__ == "AIMessage" and hasattr(last_message, "tool_calls") and last_message.tool_calls:
         logger.info("Decision: Execute tool call.")
         return "execute_edit"
     else:
@@ -413,8 +413,14 @@ async def edit_file(file_path: str, edit_instructions: str) -> tuple[bool, Optio
         async with MultiServerMCPClient(mcp_servers_config) as mcp_client:
             logger.info("MCP Client connected.")
             try:
-                # get_tools() returns a list of LangChain-compatible tools directly, not an awaitable
-                available_tools = mcp_client.get_tools()
+                # get_tools() might return a list directly or a coroutine
+                tools_result = mcp_client.get_tools()
+                # Check if the result is awaitable before awaiting it
+                if hasattr(tools_result, "__await__"):
+                    available_tools = await tools_result
+                else:
+                    available_tools = tools_result
+                
                 logger.info(f"Discovered {len(available_tools)} MCP tools.")
                 if not available_tools:
                     logger.warning("No MCP tools discovered. Editing will likely fail.")
