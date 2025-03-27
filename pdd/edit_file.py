@@ -34,7 +34,7 @@ from langgraph.prebuilt import ToolNode
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage
 # Replace with your preferred LLM provider if needed, e.g., langchain_anthropic
 # from langchain_openai import ChatOpenAI
-from langchain_core.pydantic_v1 import BaseModel, Field
+from pydantic import BaseModel, Field
 from langchain_core.tools import BaseTool # Import BaseTool
 
 # Anthropic imports for Claude 3.7
