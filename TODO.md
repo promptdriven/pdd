@@ -29,6 +29,7 @@
 - [ ] debug using pdb in non-interactive mode
 - [ ] show what apis are available for a given module
 - [ ] Cache webscraping results
+- [ ] Retrieve what is most needed from a webscrape and condense it down
 
 ## Bugs
 
