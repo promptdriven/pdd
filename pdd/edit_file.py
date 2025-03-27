@@ -338,6 +338,29 @@ def check_edit_result(state: EditFileState) -> Literal["plan_edits", "handle_err
          logger.info("Edit successful. Routing back to planning.")
          return "plan_edits"
 
+# --- Create the graph at module level for LangGraph to discover ---
+# Build the graph definition
+graph_builder = StateGraph(EditFileState)
+graph_builder.add_node("start_editing", start_editing)
+graph_builder.add_node("plan_edits", plan_edits)
+graph_builder.add_node("execute_edit", execute_edit)
+graph_builder.add_node("handle_error", handle_error)
+
+graph_builder.add_edge(START, "start_editing")
+graph_builder.add_edge("start_editing", "plan_edits")
+graph_builder.add_conditional_edges("plan_edits", decide_next_step, {
+    "execute_edit": "execute_edit",
+    "handle_error": "handle_error",
+    END: END
+})
+graph_builder.add_conditional_edges("execute_edit", check_edit_result, {
+    "plan_edits": "plan_edits",
+    "handle_error": "handle_error"
+})
+graph_builder.add_edge("handle_error", END)
+
+# Compile the graph and expose it as a module-level variable
+graph = graph_builder.compile()
 
 # --- Main Function ---
 
@@ -405,30 +428,8 @@ async def edit_file(file_path: str, edit_instructions: str) -> tuple[bool, Optio
                 return False, f"Failed to load MCP tools: {e}"
 
             # 4. Setup and Run LangGraph
-            graph_builder = StateGraph(EditFileState)
-
-            graph_builder.add_node("start_editing", start_editing)
-            graph_builder.add_node("plan_edits", plan_edits)
-            # Pass tools to the execute_edit node via partial or state injection if needed
-            # For simplicity, execute_edit accesses it from state here.
-            graph_builder.add_node("execute_edit", execute_edit)
-            graph_builder.add_node("handle_error", handle_error)
-
-            graph_builder.add_edge(START, "start_editing")
-            graph_builder.add_edge("start_editing", "plan_edits")
-            graph_builder.add_conditional_edges("plan_edits", decide_next_step, {
-                "execute_edit": "execute_edit",
-                "handle_error": "handle_error",
-                END: END
-            })
-            graph_builder.add_conditional_edges("execute_edit", check_edit_result, {
-                 "plan_edits": "plan_edits",
-                 "handle_error": "handle_error"
-            })
-            graph_builder.add_edge("handle_error", END)
-
-            app = graph_builder.compile()
-            logger.info("LangGraph compiled.")
+            # We're now using the global graph variable defined above
+            app = graph  # Use the globally defined graph
 
             initial_state: EditFileState = {
                 "file_path": file_path,
