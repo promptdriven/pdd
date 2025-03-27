@@ -1,8 +1,11 @@
 import os
 import pytest
 from unittest.mock import patch, MagicMock
+import sys
 from z3 import *
-from pdd import EXTRACTION_STRENGTH
+
+# Ensure the pdd module can be imported
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from pdd.increase_tests import increase_tests
 
@@ -52,7 +55,7 @@ class TestIncreaseTests:
         mock_load_prompt.assert_called_once_with("increase_tests_LLM")
         mock_llm_invoke.assert_called_once()
         mock_postprocess.assert_called_once_with(
-            'Test LLM response', 'python', EXTRACTION_STRENGTH, 0.0, False
+            'Test LLM response', 'python', 0.97, 0.0, False
         )
 
     @patch('pdd.increase_tests.load_prompt_template')
@@ -155,8 +158,7 @@ class TestIncreaseTests:
         assert mock_llm_invoke.call_args[1]['verbose'] is True
         
         mock_postprocess.assert_called_once()
-        # Check 'verbose' as the 5th positional argument (index 4)
-        assert mock_postprocess.call_args[0][4] is True
+        assert mock_postprocess.call_args[1]['verbose'] is True
 
 def test_z3_parameter_constraints():
     """
