@@ -1,406 +1,349 @@
+"""
+File editor module that uses Claude 3.7 to edit files based on natural language instructions.
+
+This module enables editing files through natural language instructions by:
+1. Using a LangGraph workflow to manage the editing process
+2. Leveraging Claude 3.7 Sonnet to understand instructions and plan edits
+3. Using MCP (Model Control Protocol) tools to read and modify file contents
+4. Tracking file state with hashes to ensure safe editing
+
+Requirements:
+- ANTHROPIC_API_KEY environment variable set with a valid Anthropic API key
+- mcp-text-editor package installed (installed via 'pip install mcp-text-editor')
+- A valid mcp_config.json file configured with an editor server
+
+Example usage:
+    success, error_msg = await edit_file("path/to/file.txt", "Replace all occurrences of 'foo' with 'bar'")
+"""
+
+import asyncio
 import json
 import os
-import uuid
-from typing import TypedDict, Annotated, Literal, Sequence, Optional
+import hashlib
+import logging
+from typing import TypedDict, Annotated, Optional, List, Tuple, Union, Sequence, Literal
+import aiofiles
+from pathlib import Path
 
-# Enable LangChain caching
-from langchain.cache import SQLiteCache
-from langchain.globals import set_llm_cache
+# LangGraph imports
+from langgraph.graph import StateGraph, END, START
+from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode
 
-# LangChain and LangGraph imports
-from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
-# from langchain_openai import ChatOpenAI # Or any other chat model supporting tool calling
+# LangChain imports (assuming a model is needed for planning)
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage
+# Replace with your preferred LLM provider if needed, e.g., langchain_anthropic
+# from langchain_openai import ChatOpenAI
+from langchain_core.pydantic_v1 import BaseModel, Field
+from langchain_core.tools import BaseTool # Import BaseTool
+
+# Anthropic imports for Claude 3.7
 from langchain_anthropic import ChatAnthropic
-from langgraph.graph import StateGraph, END, START, MessagesState
-from langgraph.prebuilt import ToolNode, tools_condition, chat_agent_executor
-from langgraph.checkpoint.memory import MemorySaver # Optional: If state needs persistence across calls
+from langchain_core.prompts import ChatPromptTemplate
 
 # MCP Adapter imports
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
-# --- Configuration ---
-# Assume an MCP server is running with a file editing tool.
-# We'll load its details from a JSON config file.
-MCP_CONFIG_FILE = "mcp_config.json"
-DEFAULT_MCP_TOOL_NAME = "text_editor" # The expected name of the MCP tool
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-# --- Define Graph State ---
+# --- State Definition ---
 
 class EditFileState(TypedDict):
     """
-    Represents the state of the file editing agent.
+    Represents the state of the file editing process.
 
     Attributes:
         file_path: The path to the file being edited.
-        edit_instructions: The natural language instructions for editing.
-        messages: The history of messages exchanged within the graph.
-        mcp_tools: A list of loaded MCP tools.
-        success: Boolean indicating if the edit was successful.
-        error_message: String containing an error message if unsuccessful.
+        original_content: The initial content of the file.
+        current_content: The content of the file after the latest edit.
+        original_hash: The SHA256 hash of the original content.
+        current_hash: The SHA256 hash of the current content.
+        edit_instructions: The user-provided instructions for editing.
+        messages: A list of messages tracking the conversation history for the agent.
+        available_tools: List of MCP tools available for editing.
+        error_message: An optional error message if something goes wrong.
+        last_tool_call_successful: Flag to indicate if the last edit was successful.
     """
     file_path: str
+    original_content: str
+    current_content: str
+    original_hash: str
+    current_hash: str
     edit_instructions: str
-    messages: MessagesState # Using prebuilt MessagesState for convenience (includes add_messages reducer)
-    mcp_tools: list
-    success: Optional[bool]
+    messages: Annotated[Sequence[BaseMessage], add_messages]
+    available_tools: list # List[BaseTool] once loaded
     error_message: Optional[str]
+    last_tool_call_successful: bool
 
-# --- Define Graph Nodes ---
 
-async def load_mcp_tools_node(state: EditFileState) -> EditFileState:
-    """
-    Loads MCP tools based on the configuration file.
-    Handles potential errors during loading.
-    """
-    print("---LOADING MCP TOOLS---")
-    mcp_tools = []
-    error_message = None
-    success = None
-    
-    # Initialize basic state fields with defaults if not provided
-    file_path = state.get("file_path", "unknown_file.txt")
-    edit_instructions = state.get("edit_instructions", "Please edit the file")
-    
+# --- Utility Functions ---
+
+def calculate_hash(content: str) -> str:
+    """Calculates the SHA256 hash of the given content."""
+    return hashlib.sha256(content.encode('utf-8')).hexdigest()
+
+async def read_file_content(file_path: str) -> tuple[Optional[str], Optional[str]]:
+    """Asynchronously reads file content and calculates its hash."""
     try:
-        if not os.path.exists(MCP_CONFIG_FILE):
-            raise FileNotFoundError(f"MCP configuration file not found: {MCP_CONFIG_FILE}")
-
-        with open(MCP_CONFIG_FILE, 'r') as f:
-            mcp_config = json.load(f)
-
-        if not isinstance(mcp_config, dict):
-            raise ValueError("Invalid MCP configuration format. Expected a dictionary.")
-
-        # Create the client using async context manager
-        async with MultiServerMCPClient() as client:
-            # Connect to the text editor server
-            await client.connect_to_server(
-                "text_editor",
-                command="uvx",
-                args=["mcp-text-editor"],
-                encoding_error_handler="ignore"
-            )
-            
-            # Get tools
-            mcp_tools = client.get_tools()
-            if not mcp_tools:
-                raise ValueError("No tools were loaded")
-                
-            success = True
-            print(f"Loaded tools: {[t.name for t in mcp_tools]}")
-
+        async with aiofiles.open(file_path, mode='r', encoding='utf-8') as f:
+            content = await f.read()
+            content_hash = calculate_hash(content)
+            return content, content_hash
+    except FileNotFoundError:
+        logger.error(f"File not found: {file_path}")
+        return None, None
+    except IOError as e:
+        logger.error(f"Error reading file {file_path}: {e}")
+        return None, None
     except Exception as e:
-        print(f"Error loading MCP tools: {e}")
-        error_message = f"Failed to load or connect to MCP tools: {e}"
-        success = False
+        logger.error(f"Unexpected error reading file {file_path}: {e}")
+        return None, None
+
+async def write_file_content(file_path: str, content: str) -> bool:
+    """Asynchronously writes content to a file."""
+    try:
+        async with aiofiles.open(file_path, mode='w', encoding='utf-8') as f:
+            await f.write(content)
+        return True
+    except IOError as e:
+        logger.error(f"Error writing file {file_path}: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error writing file {file_path}: {e}")
+        return False
+
+# --- LangGraph Nodes ---
+
+async def start_editing(state: EditFileState) -> EditFileState:
+    """Initializes the state with file content and hash."""
+    logger.info(f"Starting edit process for: {state['file_path']}")
+    content, content_hash = await read_file_content(state['file_path'])
+    if content is None:
+        return {
+            **state,
+            "error_message": f"Failed to read initial file content from {state['file_path']}.",
+        }
+
+    # Initialize messages with user instructions
+    initial_messages = [
+        HumanMessage(
+            content=f"Please edit the file at '{state['file_path']}'. "
+                    f"Here are the instructions: {state['edit_instructions']}\n\n"
+                    f"Current file content:\n```\n{content}\n```"
+        )
+    ]
 
     return {
-        "mcp_tools": mcp_tools,
-        "error_message": error_message,
-        "success": success,
-        "file_path": file_path,
-        "edit_instructions": edit_instructions
+        **state,
+        "original_content": content,
+        "current_content": content,
+        "original_hash": content_hash,
+        "current_hash": content_hash,
+        "messages": initial_messages,
+        "error_message": None,
+        "last_tool_call_successful": True, # Start optimistically
     }
 
-def create_initial_prompt_node(state: EditFileState) -> EditFileState:
+def format_tools_for_claude(tools):
     """
-    Creates the initial user message based on the input file path and instructions.
+    Create a summary of available tools and their proper usage format 
+    to help Claude understand how to use them correctly.
     """
-    print("---CREATING INITIAL PROMPT---")
-    # Only proceed if tools were loaded successfully
-    if state.get("success") is False:
-         print("Skipping initial prompt creation due to previous error.")
-         return {} # No update needed if there was an error loading tools
-
-    # Check if file_path and edit_instructions are provided in the state
-    file_path = state.get("file_path")
-    edit_instructions = state.get("edit_instructions")
+    tool_descriptions = []
     
-    # If messages already exists, don't modify it
-    if "messages" in state:
-        return {}
-        
-    # Create an initial message if we have enough information
-    if file_path and edit_instructions:
-        initial_message = HumanMessage(content=f"""Please edit the file located at '{file_path}'. 
-Instructions: <edit_instructions>{edit_instructions}</edit_instructions>
-
-IMPORTANT: When editing the file, please:
-1. Get the current content and hash first
-2. Make one edit at a time, ensuring line numbers are valid:
-   - Start line must be >= 1
-   - End line must be >= start line
-   - When replacing text, specify exact line ranges
-3. Get the new hash after each edit
-4. Use the new hash for the next edit
-5. If you encounter a line range error, retry the edit with corrected line numbers""")
-        
-        return {"messages": [initial_message]}
+    for tool in tools:
+        description = f"Tool: {tool.name}\nDescription: {tool.description}\n"
+        if hasattr(tool, 'args_schema'):
+            description += f"Required Arguments: {str(tool.args_schema)}\n"
+        tool_descriptions.append(description)
     
-    # If we don't have enough information, return an empty update
-    return {}
+    return "\n".join(tool_descriptions)
 
-async def agent_node(state: EditFileState) -> EditFileState:
+async def plan_edits(state: EditFileState) -> EditFileState:
     """
-    The core agent logic. Calls the LLM with the current message history
-    and the loaded MCP tools to decide the next action (call tool or finish).
+    Uses Claude 3.7 to plan the next edit based on instructions and current content.
+    Outputs an AIMessage with tool calls.
     """
-    print("---CALLING AGENT---")
-    # Only proceed if tools were loaded successfully
-    if state.get("success") is False:
-         print("Skipping agent execution due to previous error.")
-         # If tools failed to load, we should end here with failure
-         return {"success": False, "error_message": state.get("error_message", "Unknown error during tool loading.")}
+    logger.info("Planning next edit with Claude 3.7...")
+    if state.get("error_message"):
+         logger.warning("Skipping planning due to previous error.")
+         return {"messages": []} # No new messages if error occurred
 
-    # Handle case where messages may not exist in the state
-    messages = state.get("messages", [])
-    if not messages:
-        # If messages is empty, initialize with a default message using file_path and edit_instructions
-        file_path = state.get("file_path", "unknown_file.txt")
-        edit_instructions = state.get("edit_instructions", "Please edit the file")
-        
-        # Create an initial message
-        messages = [
-            HumanMessage(content=f"""Please edit the file located at '{file_path}'. 
-Instructions: <edit_instructions>{edit_instructions}</edit_instructions>
-
-IMPORTANT: When editing the file, please:
-1. Get the current content and hash first
-2. Make one edit at a time, ensuring line numbers are valid:
-   - Start line must be >= 1
-   - End line must be >= start line
-   - When replacing text, specify exact line ranges
-3. Get the new hash after each edit
-4. Use the new hash for the next edit
-5. If you encounter a line range error, retry the edit with corrected line numbers""")
-        ]
-        # Update the state with the new messages
-        state_update = {"messages": messages}
-        return state_update
-
-    mcp_tools = state["mcp_tools"]
-
-    # Configure the LLM - replace with your preferred model
-    # Ensure the model supports tool calling
-    # Add OPENAI_API_KEY to your environment variables
-    # llm = ChatOpenAI(model="gpt-4", temperature=0)
-    llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", temperature=1,  max_tokens=64000, thinking={"type": "enabled", "budget_tokens": 4000})
-    llm_with_tools = llm.bind_tools(mcp_tools)
-
-    # Invoke the LLM
+    # Initialize Claude 3.7
     try:
-        # Use await for async method
-        response = await llm_with_tools.ainvoke(messages)
-        # We return a list, because this will get added to the existing list
-        return {"messages": [response]}
-    except Exception as e:
-        print(f"Error during agent LLM call: {e}")
-        return {"success": False, "error_message": f"Agent LLM failed: {e}"}
-
-
-# ToolNode handles the execution of the MCP tool if called by the agent
-# It needs the list of tools available.
-# We create it dynamically within the main function once tools are loaded.
-
-def set_result_node(state: EditFileState) -> EditFileState:
-    """
-    Sets the final success/error status based on the agent's execution.
-    Checks the last message for tool results or errors.
-    """
-    print("---SETTING FINAL RESULT---")
-    # If success/error was already determined (e.g., during tool loading), keep it.
-    if state.get("success") is not None:
-        print(f"Result already set: success={state['success']}, error='{state.get('error_message', '')}'")
-        return {"success": state["success"], "error_message": state.get("error_message")}
-
-    # Handle case where messages may not exist in the state
-    messages = state.get("messages", [])
-    if not messages:
-        error_message = "No messages in state, cannot determine result."
-        print(error_message)
-        return {"success": False, "error_message": error_message}
+        # Use environment variable for API key
+        llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", temperature=0)
         
-    last_message = messages[-1] if messages else None
-    success = False
-    error_message = "No edit performed or final result unclear."
-
-    if isinstance(last_message, AIMessage) and not last_message.tool_calls:
-        # Agent finished without calling a tool or after processing a tool result successfully
-        # Check previous messages for ToolMessage indicating success/failure
-        tool_messages = [msg for msg in reversed(messages) if isinstance(msg, ToolMessage)]
-        if tool_messages:
-            last_tool_message = tool_messages[0]
-            if "error" not in last_tool_message.additional_kwargs and last_tool_message.content and "error" not in last_tool_message.content.lower():
-                 # Assuming successful tool execution if no error in kwargs and content doesn't indicate error
-                 success = True
-                 error_message = None
-                 print("Edit likely succeeded based on last tool message.")
-            else:
-                 error_content = last_tool_message.additional_kwargs.get("error", last_tool_message.content)
-                 error_message = f"MCP tool execution failed: {error_content}"
-                 print(f"Edit failed: {error_message}")
-        else:
-            # Agent finished without any tool interaction, maybe instructions were unclear?
-             error_message = "Agent finished without attempting an edit. Instructions might be unclear or tool not called."
-             print(error_message)
-
-
-    elif isinstance(last_message, ToolMessage):
-         # This case might happen if the graph ends immediately after the tool node
-         if "error" not in last_message.additional_kwargs and last_message.content and "error" not in last_message.content.lower():
-             success = True
-             error_message = None
-             print("Edit likely succeeded (ended after tool message).")
-         else:
-             error_content = last_message.additional_kwargs.get("error", last_message.content)
-             error_message = f"MCP tool execution failed: {error_content}"
-             print(f"Edit failed: {error_message}")
-
-    else:
-        # Handle unexpected end states
-        error_message = f"Graph ended in an unexpected state. Last message: {type(last_message)}"
-        print(error_message)
-
-
-    return {"success": success, "error_message": error_message}
-
-# --- Define Graph Edges ---
-
-def should_continue_or_end(state: EditFileState) -> Literal["execute_mcp_tool", "set_result"]:
-    """
-    Determines the next step after the agent node.
-    If the agent called a tool, execute it. Otherwise, set the final result.
-    Also routes to set_result immediately if an error occurred earlier.
-    """
-    if state.get("success") is False: # Check if an early error occurred (e.g., tool loading)
-        print("Routing to set_result due to previous error.")
-        return "set_result"
-
-    # Handle case where messages may not exist in the state
-    messages = state.get("messages", [])
-    if not messages:
-        print("No messages in state, routing to set_result.")
-        return "set_result"
+        # Prepare the tools and their descriptions
+        tools = state['available_tools']
+        tool_descriptions = format_tools_for_claude(tools)
         
-    last_message = messages[-1]
-    if last_message.tool_calls:
-        print("Agent requested tool call. Routing to execute_mcp_tool.")
-        return "execute_mcp_tool"
-    else:
-        print("Agent did not request tool call or finished processing. Routing to set_result.")
-        return "set_result"
-
-# --- Build the Graph ---
-
-def build_graph():
-    """Builds and returns an uncompiled StateGraph for the file editing workflow."""
-    workflow = StateGraph(EditFileState)
-
-    # Add nodes
-    workflow.add_node("load_mcp_tools", load_mcp_tools_node)
-    workflow.add_node("create_initial_prompt", create_initial_prompt_node)
-    workflow.add_node("agent", agent_node)
-    workflow.add_node("set_result", set_result_node)
-    
-    # Add a placeholder node for execute_mcp_tool that will handle minimal operation
-    # This is needed for LangGraph Studio visualization
-    async def placeholder_tool_node(state: EditFileState) -> EditFileState:
-        """Basic implementation of tool execution for visualization purposes."""
-        print("---EXECUTING PLACEHOLDER TOOL NODE---")
-        # When running in LangGraph Studio, just pass through with a tool response message
-        messages = state.get("messages", [])
-        last_message = messages[-1] if messages else None
-        
-        if last_message and hasattr(last_message, "tool_calls") and last_message.tool_calls:
-            # Get tool call ID - handle both dict and object formats
-            tool_call_id = "placeholder-id"
-            if last_message.tool_calls:
-                tool_call = last_message.tool_calls[0]
-                # Check if it's a dictionary (access via key) or object (access via attribute)
-                if isinstance(tool_call, dict) and "id" in tool_call:
-                    tool_call_id = tool_call["id"]
-                elif hasattr(tool_call, "id"):
-                    tool_call_id = tool_call.id
-            
-            # Create a simple tool response message
-            tool_response = ToolMessage(
-                content="This is a visualization placeholder. In real execution, MCP tools would be used.",
-                tool_call_id=tool_call_id
+        # Add tool descriptions to the first message if this is the first planning step
+        if len(state['messages']) == 1:
+            first_message = state['messages'][0]
+            enhanced_content = (
+                f"{first_message.content}\n\n"
+                f"Available tools:\n{tool_descriptions}\n\n"
+                f"IMPORTANT: Always use absolute file paths. When editing, you need to first get the file contents "
+                f"to obtain the range_hash before you can edit it."
             )
-            return {"messages": messages + [tool_response]}
+            enhanced_messages = [HumanMessage(content=enhanced_content)]
+        else:
+            enhanced_messages = state['messages']
         
-        # If there's no tool call or messages, just return the state unchanged
-        return {}
-    
-    workflow.add_node("execute_mcp_tool", placeholder_tool_node)
+        # Bind available tools to the model
+        llm_with_tools = llm.bind_tools(tools)
+        
+        # Call Claude with the current state and messages
+        response = await llm_with_tools.ainvoke(enhanced_messages)
+        logger.info("Claude 3.7 planning complete.")
+        
+        return {"messages": [response]}
+        
+    except Exception as e:
+        logger.error(f"Error during Claude 3.7 planning: {e}")
+        error_message = AIMessage(content=f"I encountered an error while planning the edit: {str(e)}")
+        return {"messages": [error_message]}
 
-    # Define edges
-    workflow.add_edge(START, "load_mcp_tools")
-    workflow.add_edge("load_mcp_tools", "create_initial_prompt")
-    workflow.add_edge("create_initial_prompt", "agent")
-    
-    # Add edge from tool execution back to agent
-    workflow.add_edge("execute_mcp_tool", "agent")
 
-    # Conditional edge after the agent decides
-    workflow.add_conditional_edges(
-        "agent",
-        should_continue_or_end,
-        {
-            "execute_mcp_tool": "execute_mcp_tool",
-            "set_result": "set_result",
-        },
-    )
-
-    # Final edge to end the process
-    workflow.add_edge("set_result", END)
-
-    return workflow
-
-# Create an instance of the graph for LangGraph CLI
-# Note: This is the uncompiled graph, it will be properly initialized
-# and compiled when running via the CLI with necessary tools
-graph = build_graph()
-
-# A helper function to properly initialize the graph with required tools
-async def get_initialized_graph():
+# ToolNode handles execution. We might need a wrapper for pre/post checks.
+# Let's create a custom node for more control over hash checking and state updates.
+async def execute_edit(state: EditFileState) -> EditFileState:
     """
-    Initializes the graph with required MCP tools and returns the compiled graph.
-    This should be used at runtime, not during CLI graph discovery.
+    Executes the planned edit using MCP tools, verifies hash, and updates state.
     """
-    workflow = build_graph()
-    
-    # Create the MCP client and get tools
-    async with MultiServerMCPClient() as client:
-        # Connect to the text editor server
-        await client.connect_to_server(
-            "text_editor",
-            command="uvx",
-            args=["mcp-text-editor"],
-            encoding_error_handler="ignore"
-        )
-        
-        # Get tools
-        tools = client.get_tools()
-        if not tools:
-            raise ValueError("No MCP tools were loaded")
-            
-        # Create a new tool node
-        tool_node = ToolNode(tools)
-        
-        # Replace the placeholder with the real implementation
-        # Instead of removing, just replace the node implementation
-        workflow.update_node("execute_mcp_tool", tool_node)
-        
-        # Compile and return the initialized graph
-        return workflow.compile()
+    logger.info("Attempting to execute edit...")
+    ai_message = state['messages'][-1]
+    if not isinstance(ai_message, AIMessage) or not ai_message.tool_calls:
+        logger.warning("No tool calls found in the last AI message. Skipping execution.")
+        # This might indicate the planning phase decided to finish.
+        return {**state, "last_tool_call_successful": True} # No tool call, so technically not a failure
+
+    # --- Hash Check Before Edit ---
+    logger.debug("Verifying file hash before edit...")
+    pre_edit_content, pre_edit_hash = await read_file_content(state['file_path'])
+    if pre_edit_content is None:
+         return {
+             **state,
+             "error_message": f"Failed to read file {state['file_path']} before edit.",
+             "last_tool_call_successful": False,
+         }
+    if pre_edit_hash != state['current_hash']:
+        logger.error(f"Hash mismatch for {state['file_path']}! Expected {state['current_hash']}, found {pre_edit_hash}. File may have been modified externally.")
+        return {
+            **state,
+            "error_message": "File content changed unexpectedly before edit.",
+            "last_tool_call_successful": False,
+        }
+    logger.debug("File hash verified.")
+
+    # --- Execute Tool Call(s) via ToolNode logic ---
+    # We'll simulate the ToolNode's core logic here for clarity on state updates
+    tool_node = ToolNode(state['available_tools'])
+    try:
+        # ToolNode expects state['messages'] as input
+        tool_result_state = await tool_node.ainvoke(state)
+        tool_messages = tool_result_state.get("messages", [])
+        logger.info(f"Tool execution completed. Result messages: {tool_messages}")
+
+        # Check for errors within the ToolMessages (ToolNode adds error info)
+        for msg in tool_messages:
+            if isinstance(msg, ToolMessage) and msg.additional_kwargs.get("is_error", False):
+                 error_content = msg.content
+                 logger.error(f"MCP Tool execution failed: {error_content}")
+                 return {
+                     **state,
+                     "messages": tool_messages, # Add tool error message to history
+                     "error_message": f"MCP Tool execution failed: {error_content}",
+                     "last_tool_call_successful": False,
+                 }
+
+    except Exception as e:
+        logger.exception("Error during MCP tool execution.")
+        error_msg = f"Failed to execute MCP tool: {e}"
+        # Create a ToolMessage representing the error for the LLM
+        tool_messages = []
+        for tool_call in ai_message.tool_calls:
+             tool_messages.append(ToolMessage(
+                 content=f"Error executing tool {tool_call['name']}: {e}",
+                 tool_call_id=tool_call['id'],
+                 additional_kwargs={"is_error": True} # Flagging the error
+             ))
+        return {
+            **state,
+            "messages": tool_messages,
+            "error_message": error_msg,
+            "last_tool_call_successful": False,
+        }
+
+    # --- State Update After Successful Edit ---
+    # Assuming the tool modified the file, we need to get the new content and hash.
+    # Some MCP tools might return the new content, others might require a separate 'getContent' call.
+    # For this example, let's assume we need to re-read the file.
+    logger.info("Reading file content after successful edit...")
+    post_edit_content, post_edit_hash = await read_file_content(state['file_path'])
+
+    if post_edit_content is None:
+        # This is problematic - the tool claimed success but we can't read the file
+        error_msg = f"Tool execution seemed successful, but failed to read file {state['file_path']} afterwards."
+        logger.error(error_msg)
+        return {
+            **state,
+            "messages": tool_messages, # Include the successful tool message
+            "error_message": error_msg,
+            "last_tool_call_successful": False, # Mark as failure due to verification issue
+        }
+
+    logger.info(f"File content updated. New hash: {post_edit_hash}")
+    return {
+        **state,
+        "messages": tool_messages, # Add the successful tool output messages
+        "current_content": post_edit_content,
+        "current_hash": post_edit_hash,
+        "error_message": None, # Clear any previous error
+        "last_tool_call_successful": True,
+    }
+
+def handle_error(state: EditFileState) -> EditFileState:
+    """Handles errors encountered during the process."""
+    logger.error(f"Entering error handling state. Error: {state.get('error_message', 'Unknown error')}")
+    # The error message is already set in the state by the node that failed.
+    # This node mainly serves as a terminal point in case of errors.
+    return state # Return state as is, error message is already set
+
+# --- Conditional Edges ---
+
+def decide_next_step(state: EditFileState) -> Literal["execute_edit", "handle_error", END]:
+    """Determines the next step after planning."""
+    if state.get("error_message"):
+        return "handle_error"
+    last_message = state['messages'][-1]
+    if isinstance(last_message, AIMessage) and last_message.tool_calls:
+        logger.info("Decision: Execute tool call.")
+        return "execute_edit"
+    else:
+        logger.info("Decision: No more tool calls planned, ending process.")
+        return END
+
+def check_edit_result(state: EditFileState) -> Literal["plan_edits", "handle_error"]:
+     """Determines the next step after attempting an edit."""
+     if not state.get("last_tool_call_successful", False) or state.get("error_message"):
+         logger.warning("Edit failed or error occurred. Routing to error handler.")
+         return "handle_error"
+     else:
+         # Even after a successful edit, we go back to planning
+         # to see if more edits are needed based on the original instructions.
+         logger.info("Edit successful. Routing back to planning.")
+         return "plan_edits"
+
 
 # --- Main Function ---
 
 async def edit_file(file_path: str, edit_instructions: str) -> tuple[bool, Optional[str]]:
     """
-    Edits a file based on natural language instructions using a LangGraph agent
-    that interacts with an MCP tool.
+    Asynchronously edits a file based on instructions using LangGraph and MCP tools.
 
     Args:
         file_path: The path to the file to edit.
@@ -408,253 +351,232 @@ async def edit_file(file_path: str, edit_instructions: str) -> tuple[bool, Optio
 
     Returns:
         A tuple containing:
-        - success (boolean): Whether the file was edited successfully.
-        - error_message (string | None): An error message if unsuccessful.
+            - success (boolean): Whether the file was edited successfully.
+            - error_message (Optional[str]): An error message if unsuccessful, None otherwise.
     """
-    # Convert to absolute path
-    abs_file_path = os.path.abspath(file_path)
-    print(f"Attempting to edit file: {abs_file_path}")
-    print(f"Instructions: {edit_instructions}")
+    # 1. Initial File Validation
+    if not os.path.exists(file_path):
+        return False, f"File not found: {file_path}"
+    if not os.access(file_path, os.R_OK) or not os.access(file_path, os.W_OK):
+        return False, f"File not accessible (read/write permissions required): {file_path}"
 
-    # Create MCP config if it doesn't exist
-    if not os.path.exists(MCP_CONFIG_FILE):
-        print(f"Warning: {MCP_CONFIG_FILE} not found. Creating configuration.")
-        config = {
-            "text_editor_server": {
+    # 2. Load MCP Configuration
+    mcp_config_path = 'mcp_config.json'
+    mcp_servers_config = {}
+    try:
+        with open(mcp_config_path, 'r') as f:
+            mcp_servers_config = json.load(f)
+        logger.info(f"Loaded MCP configuration from {mcp_config_path}")
+        # Basic validation of config structure
+        if not isinstance(mcp_servers_config, dict) or not mcp_servers_config:
+             raise ValueError("MCP config must be a non-empty dictionary.")
+        # Example: Ensure a 'text_editor' server is defined (adjust key as needed)
+        if 'my_editor_server' not in mcp_servers_config:
+             logger.warning("MCP config doesn't contain a 'my_editor_server' server definition. Ensure your config is correct.")
+             # Depending on requirements, you might want to raise an error here.
+
+    except FileNotFoundError:
+        return False, f"MCP configuration file not found: {mcp_config_path}"
+    except json.JSONDecodeError:
+        return False, f"Error decoding JSON from {mcp_config_path}"
+    except ValueError as e:
+         return False, f"Invalid MCP configuration: {e}"
+    except Exception as e:
+        return False, f"Unexpected error loading MCP config: {e}"
+
+    # 3. MCP Client and Tool Loading
+    available_tools = []
+    try:
+        async with MultiServerMCPClient(mcp_servers_config) as mcp_client:
+            logger.info("MCP Client connected.")
+            try:
+                # get_tools() returns a list of LangChain-compatible tools directly, not an awaitable
+                available_tools = mcp_client.get_tools()
+                logger.info(f"Discovered {len(available_tools)} MCP tools.")
+                if not available_tools:
+                    logger.warning("No MCP tools discovered. Editing will likely fail.")
+                # Add validation for specific required tools if necessary
+                # e.g., tool_names = {t.name for t in available_tools}
+                # if "replace_text_tool_name" not in tool_names:
+                #     return False, "Required MCP tool 'replace_text_tool_name' not found."
+
+            except Exception as e:
+                logger.exception("Failed to load MCP tools.")
+                return False, f"Failed to load MCP tools: {e}"
+
+            # 4. Setup and Run LangGraph
+            graph_builder = StateGraph(EditFileState)
+
+            graph_builder.add_node("start_editing", start_editing)
+            graph_builder.add_node("plan_edits", plan_edits)
+            # Pass tools to the execute_edit node via partial or state injection if needed
+            # For simplicity, execute_edit accesses it from state here.
+            graph_builder.add_node("execute_edit", execute_edit)
+            graph_builder.add_node("handle_error", handle_error)
+
+            graph_builder.add_edge(START, "start_editing")
+            graph_builder.add_edge("start_editing", "plan_edits")
+            graph_builder.add_conditional_edges("plan_edits", decide_next_step, {
+                "execute_edit": "execute_edit",
+                "handle_error": "handle_error",
+                END: END
+            })
+            graph_builder.add_conditional_edges("execute_edit", check_edit_result, {
+                 "plan_edits": "plan_edits",
+                 "handle_error": "handle_error"
+            })
+            graph_builder.add_edge("handle_error", END)
+
+            app = graph_builder.compile()
+            logger.info("LangGraph compiled.")
+
+            initial_state: EditFileState = {
+                "file_path": file_path,
+                "edit_instructions": edit_instructions,
+                "available_tools": available_tools,
+                # Other fields will be populated by start_editing
+                "original_content": "",
+                "current_content": "",
+                "original_hash": "",
+                "current_hash": "",
+                "messages": [],
+                "error_message": None,
+                "last_tool_call_successful": True,
+            }
+
+            try:
+                logger.info("Invoking LangGraph...")
+                final_state = await app.ainvoke(initial_state)
+                logger.info("LangGraph invocation complete.")
+
+                # 5. Process Final State
+                if final_state.get("error_message"):
+                    logger.error(f"Graph finished with error: {final_state['error_message']}")
+                    # Optionally try to restore original content if hash changed?
+                    # For simplicity, just report error for now.
+                    return False, final_state["error_message"]
+                else:
+                    # Check if content actually changed before writing
+                    if final_state["current_hash"] != final_state["original_hash"]:
+                        logger.info("File content changed, writing final version.")
+                        # write_success = await write_file_content(file_path, final_state["current_content"])
+                        # if not write_success:
+                        #     return False, f"Successfully edited in memory, but failed to write final content to {file_path}"
+                        # The execute_edit node already wrote the file via MCP tool
+                        logger.info(f"File '{file_path}' edited successfully.")
+                        return True, None
+                    else:
+                        logger.info("No changes made to the file content.")
+                        return True, None # Success, but no changes needed/made
+
+            except Exception as e:
+                logger.exception("Error during LangGraph invocation.")
+                return False, f"Error during graph execution: {e}"
+
+    except Exception as e:
+        logger.exception("Failed to connect or interact with MCP client.")
+        return False, f"MCP Client error: {e}"
+
+
+# --- Example Usage and Testing ---
+
+async def main():
+    """Main function to run the example."""
+    # Check for required API key
+    if "ANTHROPIC_API_KEY" not in os.environ:
+        logger.error("ANTHROPIC_API_KEY environment variable is not set. Please set it before running this script.")
+        return
+        
+    test_file_path = os.path.abspath("test_edit_file.txt")  # Use absolute path
+    mcp_config_path = "mcp_config.json"
+    initial_content = "This is the initial content.\nIt has multiple lines."
+    edit_instructions = "Replace the word 'initial' with 'edited' and add a new line at the end saying 'Edit complete.'"
+
+    # 1. Create dummy MCP config if it doesn't exist
+    if not os.path.exists(mcp_config_path):
+        logger.info(f"Creating dummy {mcp_config_path} for example run.")
+        # IMPORTANT: Replace with your actual MCP server configuration
+        # This dummy config assumes a server named 'my_editor_server' running via stdio
+        dummy_config = {
+            "my_editor_server": {
                 "command": "uvx",
                 "args": ["mcp-text-editor"],
                 "transport": "stdio"
             }
         }
         try:
-            with open(MCP_CONFIG_FILE, 'w') as f:
-                json.dump(config, f, indent=2)
-            print(f"{MCP_CONFIG_FILE} created.")
-        except IOError as e:
-            return False, f"Failed to create MCP config file: {e}"
+            with open(mcp_config_path, 'w') as f:
+                json.dump(dummy_config, f, indent=2)
+            logger.info(f"Dummy {mcp_config_path} created. Please update it with real server details.")
+        except Exception as e:
+            logger.error(f"Could not create dummy MCP config: {e}")
+            return
 
-    # Load MCP tools
-    try:
-        async with MultiServerMCPClient() as client:
-            # Connect to the text editor server
-            await client.connect_to_server(
-                "text_editor",
-                command="uvx",
-                args=["mcp-text-editor"],
-                encoding_error_handler="ignore"
-            )
-            
-            # Get tools
-            tools = client.get_tools()
-            if not tools:
-                return False, "No tools were loaded"
-            
-            print(f"Loaded tools: {[t.name for t in tools]}")
+    # 2. Create the test file
+    logger.info(f"Creating test file: {test_file_path}")
+    async with aiofiles.open(test_file_path, mode='w', encoding='utf-8') as f:
+        await f.write(initial_content)
+    logger.info("Test file created with initial content.")
 
-            # First, get the current file content and hash with explicit line range validation
-            try:
-                get_content_result = await tools[0].ainvoke({
-                    "files": [
-                        {
-                            "file_path": abs_file_path,
-                            "ranges": [
-                                {
-                                    "start": 1,  # Always start from line 1
-                                    "end": None,  # Let the tool determine the end
-                                    "validate_range": True  # Add explicit validation flag
-                                }
-                            ]
-                        }
-                    ]
-                })
-                
-                print(f"Tool response: {get_content_result}")
-                print(f"Response type: {type(get_content_result)}")
+    # 3. Run the edit function
+    logger.info("Calling edit_file function...")
+    # --- IMPORTANT ---
+    # Ensure your mcp_config.json points to a valid, running MCP server
+    # that provides text editing tools (e.g., replace_text, insert_line, etc.)
+    # The dummy response in plan_edits assumes a tool named 'replace_text_tool_name' exists.
+    # You MUST adapt the dummy response or implement a real LLM planner
+    # based on the actual tools provided by your MCP server.
+    # --- /IMPORTANT ---
+    success, error_msg = await edit_file(test_file_path, edit_instructions)
 
-                if isinstance(get_content_result, str):
-                    try:
-                        get_content_result = json.loads(get_content_result)
-                    except json.JSONDecodeError:
-                        return False, "Failed to parse tool response as JSON"
+    # 4. Verify the result
+    if success:
+        logger.info("edit_file completed successfully.")
+        async with aiofiles.open(test_file_path, mode='r', encoding='utf-8') as f:
+            final_content = await f.read()
+        logger.info(f"Final file content:\n---\n{final_content}\n---")
+        # Add specific checks for expected content if possible
+        expected_content = "This is the edited content.\nIt has multiple lines.\nEdit complete."
+        if final_content.strip() == expected_content.strip():
+             logger.info("File content matches expected output.")
+        else:
+             logger.warning("File content does NOT match expected output.")
+             logger.warning(f"Expected:\n{expected_content}")
+             logger.warning(f"Got:\n{final_content}")
 
-                if not isinstance(get_content_result, dict):
-                    return False, f"Unexpected response type: {type(get_content_result)}"
+    else:
+        logger.error(f"edit_file failed: {error_msg}")
 
-                if "error" in get_content_result:
-                    return False, f"Failed to get file content: {get_content_result['error']}"
-
-                file_info = get_content_result.get(abs_file_path, {})
-                file_hash = file_info.get("file_hash")
-
-                if not file_hash:
-                    return False, "Could not get file hash"
-
-            except Exception as e:
-                return False, f"Error during content retrieval: {str(e)}"
-
-            # Instead of using our LangGraph structure, we'll create a simpler one for direct calls
-            # to maintain backward compatibility
-            try:
-                print("simple graph")
-                # Create the LLM
-                llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", temperature=1, max_tokens=64000, thinking={"type": "enabled", "budget_tokens": 4000})
-                llm_with_tools = llm.bind_tools(tools)
-
-                # Create a simple graph for this function call
-                graph_builder = StateGraph(MessagesState)
-
-                # Add nodes
-                async def agent_node(state: MessagesState):
-                    messages = state["messages"]
-                    response = await llm_with_tools.ainvoke(messages)
-                    return {"messages": [response]}
-
-                tool_node = ToolNode(tools)
-
-                graph_builder.add_node("agent", agent_node)
-                graph_builder.add_node("tools", tool_node)
-
-                # Add edges
-                graph_builder.add_edge(START, "agent")
-                graph_builder.add_conditional_edges(
-                    "agent",
-                    tools_condition,
-                    {
-                        "tools": "tools",
-                        END: END,
-                    }
-                )
-                graph_builder.add_edge("tools", "agent")
-
-                # Compile the graph
-                graph = graph_builder.compile()
-            except Exception as e:
-                return False, f"Error setting up agent: {str(e)}"
-
-            # Run the graph with the current file hash
-            initial_state = {
-                "messages": [
-                    HumanMessage(content=f"""Please edit the file located at '{abs_file_path}'. 
-Instructions: <edit_instructions>{edit_instructions}</edit_instructions>
-Current file hash: {file_hash}
-
-IMPORTANT: When editing the file, please:
-1. Get the current content and hash first
-2. Make one edit at a time, ensuring line numbers are valid:
-   - Start line must be >= 1
-   - End line must be >= start line
-   - When replacing text, specify exact line ranges
-3. Get the new hash after each edit
-4. Use the new hash for the next edit
-5. If you encounter a line range error, retry the edit with corrected line numbers""")
-                ]
-            }
-
-            # Run the graph
-            try:
-                # Run the graph and collect all events
-                events = []
-                async for event in graph.astream(initial_state):
-                    events.append(event)
-
-                # Check if any tool execution was successful
-                success = False
-                for event in events:
-                    if "tools" in event:
-                        tool_result = event["tools"]
-                        if isinstance(tool_result, dict) and tool_result.get("messages"):
-                            last_message = tool_result["messages"][-1]
-                            if isinstance(last_message, ToolMessage):
-                                if "error" in last_message.additional_kwargs or (isinstance(last_message.content, str) and "error" in last_message.content.lower() and not last_message.content.startswith("{")):
-                                    error_content = last_message.additional_kwargs.get("error", last_message.content)
-                                    if "Content hash mismatch" in error_content:
-                                        # This is expected when making multiple edits
-                                        continue
-                                    if "End line must be greater than or equal to start line" in error_content:
-                                        # Line range error - let the agent retry with corrected numbers
-                                        continue
-                                    return False, f"Tool execution failed: {error_content}"
-                                else:
-                                    success = True  # At least one successful tool execution
-
-                # Verify the final state of the file
-                if os.path.exists(abs_file_path):
-                    with open(abs_file_path, 'r') as f:
-                        final_content = f.read()
-                    
-                    # Check if any changes were made
-                    if final_content != get_content_result[abs_file_path]["ranges"][0]["content"]:
-                        return True, None
-                    else:
-                        return False, "No changes were made to the file"
-
-                return False, "File does not exist after edits"
-
-            except Exception as e:
-                print(f"Error during graph execution: {e}")
-                return False, str(e)
-
-    except Exception as e:
-        print(f"Error during execution: {e}")
-        return False, str(e)
-
-# --- Example Usage (requires async context) ---
-async def main():
-    # Create a dummy file for testing
-    test_file = "test_edit_file.txt"
-    with open(test_file, "w") as f:
-        f.write("This is the original content.\nLine 2.\nLine 3.")
-
-    # Define edit instructions
-    instructions = "Change 'original' to 'modified' on the first line and delete line 2."
-
-    # IMPORTANT: Ensure mcp_config.json points to a running MCP server
-    # with a tool named 'file_editor' (or update DEFAULT_MCP_TOOL_NAME)
-    # that accepts 'file_path' and 'edit_instructions'.
-    # For this example to run without a real MCP server, it will fail at the tool loading/execution step.
-    print("\n--- RUNNING edit_file ---")
-    try:
-        success, error = await edit_file(test_file, instructions) # Use await
-        print(f"\n--- edit_file Result ---")
-        print(f"Success: {success}")
-        if error:
-            print(f"Error: {error}")
-
-        # Verify file content (if successful and a real MCP was used)
-        if success and os.path.exists(test_file):
-             print("\n--- Final File Content ---")
-             with open(test_file, "r") as f:
-                 print(f.read())
-        elif not success and os.path.exists(test_file):
-             print("\n--- File Content After Failed Edit ---")
-             with open(test_file, "r") as f:
-                 print(f.read()) # Show original content if edit failed
-
-    finally:
-        # Clean up the dummy file
-        if os.path.exists(test_file):
-            # os.remove(test_file)
-            print(f"\n(Keeping {test_file} for inspection)")
-            pass
-
+    # 5. Cleanup
+    # try:
+    #     os.remove(test_file_path)
+    #     logger.info(f"Test file {test_file_path} removed.")
+    # except OSError as e:
+    #     logger.error(f"Error removing test file {test_file_path}: {e}")
+    # Optionally remove dummy config if it was created just for this test
+    # if os.path.exists(mcp_config_path) and 'dummy_config' in locals():
+    #     try:
+    #         os.remove(mcp_config_path)
+    #         logger.info(f"Dummy config file {mcp_config_path} removed.")
+    #     except OSError as e:
+    #         logger.error(f"Error removing dummy config file {mcp_config_path}: {e}")
 
 if __name__ == "__main__":
-    import asyncio
-    # Enable LangChain caching with SQLite
-    set_llm_cache(SQLiteCache(database_path=".langchain.db"))
-    
-    # Create mcp_config.json with the correct configuration for mcp-text-editor
-    if not os.path.exists(MCP_CONFIG_FILE):
-        print(f"Creating {MCP_CONFIG_FILE} for mcp-text-editor")
-        config = {
-            "text_editor_server": {
-                "command": "uvx",
-                "args": ["mcp-text-editor"],
-                "transport": "stdio"
-            }
-        }
-        with open(MCP_CONFIG_FILE, 'w') as f:
-            json.dump(config, f, indent=2)
-    
-    # Run the async main function
-    asyncio.run(main())
+    # Ensure an event loop is running if executing directly (e.g., in a script)
+    # In environments like Jupyter, this might not be necessary.
+    try:
+        asyncio.run(main())
+    except RuntimeError as e:
+        if "Cannot run the event loop while another loop is running" in str(e):
+            # Handle cases where loop is already running (like in Jupyter)
+            logger.info("Event loop already running, executing main directly.")
+            # This might require adjustments depending on the environment
+            # For simplicity, just calling await main() if loop exists
+            # loop = asyncio.get_event_loop()
+            # loop.run_until_complete(main())
+            import nest_asyncio
+            nest_asyncio.apply()
+            asyncio.run(main())
+
+        else:
+            raise e
