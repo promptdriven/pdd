@@ -34,13 +34,13 @@ def add(a, b):
     error = """AssertionError: assert 0 == 1 
         DeprecationWarning: np.asscalar(a) is deprecated since NumPy v1.16, use 'np.ndarray.item()' instead _ = np.asscalar(np.array([42]))""" # String of the Error message from the unit test
 
-    error_file = "error_logs.txt"       # This is the fix results file
-    strength = 0.5  # LLM strength (0 to 1)
-    temperature = 0.0  # LLM temperature
+    error_file = "error_logs.log"       # This is the fix results file
+    strength = 0.85  # LLM strength (0 to 1)
+    temperature = 1.0  # LLM temperature
 
     # Call the function
     update_unit_test, update_code, fixed_unit_test, fixed_code, total_cost, model_name = fix_errors_from_unit_tests(
-        unit_test, code, prompt, error, error_file, strength, temperature
+        unit_test, code, prompt, error, error_file, strength, temperature, verbose=True
     )
 
     # Print results
