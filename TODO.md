@@ -44,7 +44,6 @@
 - [ ] update prompt for makefile
 - [ ] MLX support for faster local
 - [ ] AWS Nova support
-- [ ] Add Z3Py for formal verification
 - [ ] fix quiet vs. verbose ambiguity
 - [ ] reasoning support, allow strength to go above 1 to allocate more thinking tokens
 
