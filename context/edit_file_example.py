@@ -37,9 +37,9 @@ elif not os.path.isdir(PDD_PATH):
     print(f"Error: PDD_PATH ('{PDD_PATH}') is not a valid directory.")
     sys.exit(1)
 
-# Define the name for the dummy file and config file within the PDD_PATH directory
-TEST_FILE_NAME = "example_file_to_edit.txt"
-TEST_FILE_PATH = os.path.join(PDD_PATH, TEST_FILE_NAME)
+# Define the names for test files
+EXAMPLE_FILE_NAME = "example_file_to_edit.txt"
+PREPROCESS_FILE_NAME = "preprocess.py"
 MCP_CONFIG_FILE_PATH = os.path.join(PDD_PATH, "mcp_config.json") # Config file used by the module
 
 # --- Helper Function to Create Files ---
@@ -47,13 +47,14 @@ MCP_CONFIG_FILE_PATH = os.path.join(PDD_PATH, "mcp_config.json") # Config file u
 def create_example_files():
     """Creates the necessary dummy input file and MCP config file."""
     # 1. Create the dummy text file to be edited
-    print(f"Creating dummy file: {TEST_FILE_PATH}")
+    example_file_path = os.path.join(PDD_PATH, EXAMPLE_FILE_NAME)
+    print(f"Creating dummy file: {example_file_path}")
     initial_content = """Line 1: This is the original text.
 Line 2: Keep this line.
 Line 3: This line will be modified.
 Line 4: Another line.
 """
-    with open(TEST_FILE_PATH, "w") as f:
+    with open(example_file_path, "w") as f:
         f.write(initial_content)
     print("Initial file content:")
     print("-" * 20)
@@ -78,47 +79,81 @@ Line 4: Another line.
         json.dump(mcp_config, f, indent=2)
     print(f"{MCP_CONFIG_FILE_PATH} created.")
 
-# --- Main Example Function ---
-
-async def run_example():
-    """
-    Demonstrates how to use the edit_file async function.
-
-    Prerequisites:
-    1.  `PDD_PATH` environment variable must be set to the 'pdd' directory path.
-    2.  The `edit_file.py` module must be importable (e.g., in the parent directory).
-    3.  Required packages installed (`langchain`, `langgraph`, `langchain-mcp-adapters`,
-        `langchain-openai` or `langchain-anthropic`, `openai` or `anthropic`).
-    4.  LLM API keys (e.g., `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`) must be set as
-        environment variables for the LLM used within `edit_file.py`.
-    5.  The MCP text editor service must be runnable via the command specified in
-        `mcp_config.json` (e.g., `uvx mcp-text-editor`). `uvx` and the package
-        need to be installed/available.
-    """
-    print("--- Starting edit_file Example ---")
-
-    # Create the necessary files in the PDD_PATH directory
-    create_example_files()
-
-    # Define the instructions for editing the file
-    # Note: The effectiveness depends heavily on the LLM's ability to understand
-    # the instructions and use the MCP tool correctly.
-    instructions = """1. Change the word 'original' to 'UPDATED' on Line 1.
+# Define the instructions for each test case
+EXAMPLE_INSTRUCTIONS = """1. Change the word 'original' to 'UPDATED' on Line 1.
 2. Replace Line 3 entirely with 'Line 3: This line has been REPLACED.'
 3. Add a new line at the end: 'Line 5: Added by the agent.'"""
 
-    print("\n--- Calling edit_file ---")
-    print(f"File to edit: {TEST_FILE_PATH}")
-    print(f"Instructions: {instructions}")
+PREPROCESS_INSTRUCTIONS = """To change `get_file_path` to camel case, you need to rename the function and its invocations. Here are the parts that need to be updated:
 
-    # Call the async function from the imported module
-    # It requires the absolute path to the file and the edit instructions.
-    # It returns a tuple: (success_boolean, error_message_or_None)
-    # Note: This example does not use try/except as requested. Errors during
-    # the edit_file execution (like connection issues, LLM errors, tool errors)
-    # will be caught within the function and returned in the result tuple.
+### Function Rename
+Change the function definition from:
+```python
+def get_file_path(file_name: str) -> str:
+```
+to:
+```python
+def getFilePath(file_name: str) -> str:
+```
+
+### Update Invocations
+You need to update the calls to `get_file_path` as follows:
+
+1. In `process_backtick_includes`:
+   Change:
+   ```python
+   full_path = get_file_path(file_path)
+   ```
+   to:
+   ```python
+   full_path = getFilePath(file_path)
+   ```
+
+2. In `process_include_tags`:
+   Change:
+   ```python
+   full_path = get_file_path(file_path)
+   ```
+   to:
+   ```python
+   full_path = getFilePath(file_path)
+   ```
+
+### Summary of Changes
+
+#### Updated Function Definition
+```python
+def getFilePath(file_name: str) -> str:
+```
+
+#### Updated Function Calls
+```python
+full_path = getFilePath(file_path)
+```
+Make these changes in both occurrences where `get_file_path` is referenced."""
+
+async def run_edit_file_test(file_name, instructions, verify_example=False):
+    """
+    Runs the edit_file test on a specific file with given instructions.
+    
+    Args:
+        file_name: Name of the file to edit
+        instructions: Instructions for editing
+        verify_example: Whether to verify specific checks for the example file
+    """
+    file_path = os.path.join(PDD_PATH, file_name)
+    
+    print(f"\n{'=' * 50}")
+    print(f"RUNNING TEST FOR: {file_name}")
+    print(f"{'=' * 50}")
+    
+    print(f"\n--- Calling edit_file ---")
+    print(f"File to edit: {file_path}")
+    print(f"Instructions summary: {instructions.split('\\n')[0]}...")
+
+    # Call the edit_file function
     success, error_message = await edit_file(
-        file_path=TEST_FILE_PATH,
+        file_path=file_path,
         edit_instructions=instructions
     )
 
@@ -131,64 +166,80 @@ async def run_example():
 
     print("\n--- Final File Content ---")
     # Check the content of the file after the operation
-    if os.path.exists(TEST_FILE_PATH):
-        with open(TEST_FILE_PATH, "r") as f:
+    if os.path.exists(file_path):
+        with open(file_path, "r") as f:
             final_content = f.read()
         print("-" * 20)
         print(final_content.strip())
         print("-" * 20)
 
-        # More detailed verification with specific checks
-        verification_results = {
-            "edit_success": success,
-            "file_exists": True,
-            "checks": {
-                "updated_line1": "UPDATED" in final_content,
-                "replaced_line3": "Line 3: This line has been REPLACED." in final_content,
-                "added_line5": "Line 5: Added by the agent." in final_content,
-                "removed_original": "original" not in final_content,
-                "removed_will_be_modified": "will be modified" not in final_content
+        # For the example file, run specific verification checks
+        if verify_example:
+            verification_results = {
+                "edit_success": success,
+                "file_exists": True,
+                "checks": {
+                    "updated_line1": "UPDATED" in final_content,
+                    "replaced_line3": "Line 3: This line has been REPLACED." in final_content,
+                    "added_line5": "Line 5: Added by the agent." in final_content,
+                    "removed_original": "original" not in final_content,
+                    "removed_will_be_modified": "will be modified" not in final_content
+                }
             }
-        }
 
-        print("\n--- Verification Results ---")
-        print(f"Edit operation reported: {'Success' if success else 'Failure'}")
-        if error_message:
-            print(f"Edit operation error: {error_message}")
-        
-        print("\nDetailed Verification:")
-        all_checks_passed = True
-        for check_name, result in verification_results["checks"].items():
-            print(f"- {check_name}: {'✓' if result else '✗'}")
-            if not result:
-                all_checks_passed = False
-        
-        if all_checks_passed and success:
-            print("\nVerification Status: All changes were applied successfully ✓")
-        elif all_checks_passed and not success:
-            print("\nVerification Status: ⚠️ Warning - Content looks correct but edit reported failure")
-            print("This might indicate an internal process issue that didn't affect the final result")
-        elif not all_checks_passed and success:
-            print("\nVerification Status: ⚠️ Warning - Edit reported success but some changes are missing")
-        else:
-            print("\nVerification Status: ✗ Edit failed and changes are incomplete")
+            print("\n--- Verification Results ---")
+            print(f"Edit operation reported: {'Success' if success else 'Failure'}")
+            if error_message:
+                print(f"Edit operation error: {error_message}")
+            
+            print("\nDetailed Verification:")
+            all_checks_passed = True
+            for check_name, result in verification_results["checks"].items():
+                print(f"- {check_name}: {'✓' if result else '✗'}")
+                if not result:
+                    all_checks_passed = False
+            
+            if all_checks_passed and success:
+                print("\nVerification Status: All changes were applied successfully ✓")
+            elif all_checks_passed and not success:
+                print("\nVerification Status: ⚠️ Warning - Content looks correct but edit reported failure")
+                print("This might indicate an internal process issue that didn't affect the final result")
+            elif not all_checks_passed and success:
+                print("\nVerification Status: ⚠️ Warning - Edit reported success but some changes are missing")
+            else:
+                print("\nVerification Status: ✗ Edit failed and changes are incomplete")
     else:
-        print(f"File not found after edit attempt: {TEST_FILE_PATH}")
-        verification_results = {
-            "edit_success": success,
-            "file_exists": False,
-            "checks": {}
-        }
+        print(f"File not found after edit attempt: {file_path}")
 
-    # Clean up the created files (optional)
-    print(f"\nCleaning up {TEST_FILE_PATH} and {MCP_CONFIG_FILE_PATH}")
-    if os.path.exists(TEST_FILE_PATH):
-        os.remove(TEST_FILE_PATH)
-    if os.path.exists(MCP_CONFIG_FILE_PATH):
-        os.remove(MCP_CONFIG_FILE_PATH)
-    print(f"\n(Keeping {TEST_FILE_PATH} and {MCP_CONFIG_FILE_PATH} for inspection)")
+# --- Main Example Function ---
 
-    print("\n--- Example Finished ---")
+async def run_example():
+    """
+    Demonstrates how to use the edit_file async function on two different test cases.
+
+    Prerequisites:
+    1.  `PDD_PATH` environment variable must be set to the 'pdd' directory path.
+    2.  The `edit_file.py` module must be importable (e.g., in the parent directory).
+    3.  Required packages installed (`langchain`, `langgraph`, `langchain-mcp-adapters`,
+        `langchain-openai` or `langchain-anthropic`, `openai` or `anthropic`).
+    4.  LLM API keys (e.g., `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`) must be set as
+        environment variables for the LLM used within `edit_file.py`.
+    5.  The MCP text editor service must be runnable via the command specified in
+        `mcp_config.json` (e.g., `uvx mcp-text-editor`). `uvx` and the package
+        need to be installed/available.
+    """
+    print("--- Starting edit_file Examples ---")
+
+    # Create the necessary files in the PDD_PATH directory
+    create_example_files()
+    
+    # Run test 1: Example file
+    await run_edit_file_test(EXAMPLE_FILE_NAME, EXAMPLE_INSTRUCTIONS, verify_example=True)
+    
+    # Run test 2: Preprocess.py file
+    await run_edit_file_test(PREPROCESS_FILE_NAME, PREPROCESS_INSTRUCTIONS)
+
+    print("\n--- All Examples Finished ---")
 
 # --- Run the Example ---
 
