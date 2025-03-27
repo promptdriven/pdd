@@ -52,8 +52,8 @@
     - Enable inspection of results
 
 % The LangGraph Agent will use the Langchain MCP adapter to access MCPs. Here are the relevant documentation links:
-    <langgraph_docs>https://langchain-ai.github.io/langgraph/llms-full.txt</langgraph_docs>
-    <mcp_adapter_docs>https://github.com/langchain-ai/langchain-mcp-adapters</mcp_adapter_docs>
+    <langgraph_docs><web>https://langchain-ai.github.io/langgraph/llms-full.txt</web></langgraph_docs>
+    <mcp_adapter_docs><web>https://github.com/langchain-ai/langchain-mcp-adapters</web></mcp_adapter_docs>
 
 % This will read a JSON file to get the MCP service to use.
 
