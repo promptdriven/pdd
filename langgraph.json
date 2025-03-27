@@ -3,7 +3,8 @@
     "."
   ],
   "graphs": {
+    "file_editor_agent": "./pdd/edit_file.py:graph",
     "edit_file": "./pdd/edit_file.py:graph"
   },
   "env": ".env"
-} 
+}
