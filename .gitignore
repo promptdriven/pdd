@@ -7,9 +7,12 @@ __pycache__/
 
 # langchain cache
 .langchain.db
+*.pckl
 
 # C extensions
 *.so
+
+output/
 
 # Distribution / packaging
 .Python
