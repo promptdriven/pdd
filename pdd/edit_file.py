@@ -21,6 +21,8 @@ import json
 import os
 import hashlib
 import logging
+import subprocess
+import sys
 from typing import TypedDict, Annotated, Optional, List, Tuple, Union, Sequence, Literal
 import aiofiles
 from pathlib import Path
@@ -41,6 +43,10 @@ from langchain_core.tools import BaseTool # Import BaseTool
 from langchain_anthropic import ChatAnthropic
 from langchain_core.prompts import ChatPromptTemplate
 
+# Import LangChain caching - use community package
+from langchain import globals as langchain_globals
+from langchain_community.cache import SQLiteCache
+
 # MCP Adapter imports
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
@@ -48,8 +54,12 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- State Definition ---
+# Configure the SQLite cache
+cache_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "langchain_cache.db")
+llm_cache = SQLiteCache(database_path=cache_path)
+langchain_globals.set_llm_cache(llm_cache)
 
+# --- State Definition ---
 class EditFileState(TypedDict):
     """
     Represents the state of the file editing process.
@@ -175,6 +185,7 @@ async def plan_edits(state: EditFileState) -> EditFileState:
     try:
         # Use environment variable for API key
         llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", temperature=0)
+        # Cache is set globally now, no need to pass it to the model
         
         # Prepare the tools and their descriptions
         tools = state['available_tools']
@@ -494,6 +505,9 @@ async def main():
         logger.error("ANTHROPIC_API_KEY environment variable is not set. Please set it before running this script.")
         return
         
+    # Initialize and log SQLite cache location
+    logger.info(f"Using SQLite cache at: {cache_path}")
+        
     test_file_path = os.path.abspath("test_edit_file.txt")  # Use absolute path
     mcp_config_path = "mcp_config.json"
     initial_content = "This is the initial content.\nIt has multiple lines."
@@ -554,19 +568,90 @@ async def main():
     else:
         logger.error(f"edit_file failed: {error_msg}")
 
-    # 5. Cleanup
-    # try:
-    #     os.remove(test_file_path)
-    #     logger.info(f"Test file {test_file_path} removed.")
-    # except OSError as e:
-    #     logger.error(f"Error removing test file {test_file_path}: {e}")
-    # Optionally remove dummy config if it was created just for this test
-    # if os.path.exists(mcp_config_path) and 'dummy_config' in locals():
-    #     try:
-    #         os.remove(mcp_config_path)
-    #         logger.info(f"Dummy config file {mcp_config_path} removed.")
-    #     except OSError as e:
-    #         logger.error(f"Error removing dummy config file {mcp_config_path}: {e}")
+def run_edit_in_subprocess(file_path: str, edit_instructions: str) -> Tuple[bool, Optional[str]]:
+    """
+    Run the edit_file function in a separate process to bridge between async and sync worlds.
+    
+    This function allows synchronous callers to use the asynchronous edit_file function without
+    needing to manage async event loops themselves. It runs a child Python process that executes 
+    a small script to run the async function and capture its results.
+    
+    Args:
+        file_path: The path to the file to edit
+        edit_instructions: Instructions for editing the file
+        
+    Returns:
+        A tuple containing:
+            - success (boolean): Whether the edit was successful
+            - error_message (Optional[str]): Error message if unsuccessful, None otherwise
+    """
+    logger.info(f"Running edit_file in subprocess for: {file_path}")
+    
+    # Create a temporary Python script to run the async function
+    script = f"""
+import asyncio
+import json
+import os
+import sys
+
+# Add the parent directory to sys.path to import the edit_file module
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from edit_file import edit_file
+
+async def main():
+    file_path = {repr(file_path)}
+    edit_instructions = {repr(edit_instructions)}
+    
+    # Run the async edit_file function
+    success, error_msg = await edit_file(file_path, edit_instructions)
+    
+    # Return the result as JSON to stdout
+    result = {{"success": success, "error_message": error_msg}}
+    print(json.dumps(result))
+
+if __name__ == "__main__":
+    asyncio.run(main())
+"""
+    
+    # Execute the script in a subprocess
+    try:
+        # Make sure the environment variable is passed to the subprocess
+        env = os.environ.copy()
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            env=env
+        )
+        
+        if result.returncode != 0:
+            logger.error(f"Subprocess failed with return code {result.returncode}")
+            logger.error(f"Stderr: {result.stderr}")
+            return False, f"Subprocess error: {result.stderr}"
+        
+        # Parse the JSON result from stdout
+        try:
+            output = result.stdout.strip()
+            # Find the last line that might be JSON (in case there's logging output)
+            for line in reversed(output.split('\n')):
+                try:
+                    result_data = json.loads(line)
+                    return result_data["success"], result_data["error_message"]
+                except json.JSONDecodeError:
+                    continue
+            
+            # If we get here, we couldn't find valid JSON
+            logger.error(f"Could not parse subprocess output as JSON: {output}")
+            return False, f"Could not parse subprocess output: {output}"
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse subprocess JSON output: {e}")
+            logger.error(f"Output was: {result.stdout}")
+            return False, f"Failed to parse subprocess result: {e}"
+    
+    except Exception as e:
+        logger.exception(f"Error running subprocess: {e}")
+        return False, f"Error running subprocess: {e}"
 
 if __name__ == "__main__":
     # Ensure an event loop is running if executing directly (e.g., in a script)
@@ -586,4 +671,4 @@ if __name__ == "__main__":
             asyncio.run(main())
 
         else:
-            raise e
+            raise e 
