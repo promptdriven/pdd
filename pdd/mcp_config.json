@@ -1,0 +1,9 @@
+{
+  "text_editor_server": {
+    "command": "uvx",
+    "args": [
+      "mcp-text-editor"
+    ],
+    "transport": "stdio"
+  }
+}

@@ -55,7 +55,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # Configure the SQLite cache
-cache_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "langchain_cache.db")
+cache_path = ".langchain.db"
 llm_cache = SQLiteCache(database_path=cache_path)
 langchain_globals.set_llm_cache(llm_cache)
 
