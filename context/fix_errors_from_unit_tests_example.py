@@ -38,8 +38,8 @@ def add(a, b):
     strength = 0.85  # LLM strength (0 to 1)
     temperature = 1.0  # LLM temperature
 
-    # Call the function
-    update_unit_test, update_code, fixed_unit_test, fixed_code, total_cost, model_name = fix_errors_from_unit_tests(
+    # Call the function (now synchronous)
+    update_unit_test, update_code, fixed_unit_test, fixed_code, analysis_results, total_cost, model_name = fix_errors_from_unit_tests(
         unit_test, code, prompt, error, error_file, strength, temperature, verbose=True
     )
 
@@ -49,6 +49,7 @@ def add(a, b):
     rprint(f"Update code: {update_code}")
     rprint(f"Fixed unit test:\n{fixed_unit_test}")
     rprint(f"Fixed code:\n{fixed_code}")
+    rprint(f"Analysis results: {analysis_results}")
     rprint(f"Total cost: ${total_cost:.6f}")
     rprint(f"Model used: {model_name}")
 
