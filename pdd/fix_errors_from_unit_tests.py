@@ -372,21 +372,35 @@ def fix_errors_from_unit_tests(
             - total_cost: Total cost of LLM invocations
             - model_name: Name of the LLM model used
     """
-    # Create event loop if one doesn't exist
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+    # Input validation
+    if not isinstance(unit_test, str) or not isinstance(code, str) or not isinstance(prompt, str) or not isinstance(error, str):
+        raise ValueError("Input parameters must be strings")
     
-    # Run the async function and return results
-    return loop.run_until_complete(_fix_errors_from_unit_tests_async(
-        unit_test=unit_test,
-        code=code,
-        prompt=prompt,
-        error=error,
-        error_file=error_file,
-        strength=strength,
-        temperature=temperature,
-        verbose=verbose
-    ))
+    if not isinstance(error_file, str) or not error_file:
+        raise ValueError("error_file must be a non-empty string")
+    
+    if not isinstance(strength, float) or strength < 0 or strength > 1:
+        strength = max(0, min(strength, 1))  # Clamp to 0-1 range instead of raising error
+    
+    if not isinstance(temperature, float) or temperature < 0 or temperature > 1:
+        temperature = max(0, min(temperature, 1))  # Clamp to 0-1 range instead of raising error
+    
+    # Create and use new event loop instead of trying to get the current one (which causes deprecation warning)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    try:
+        # Run the async function and return results
+        return loop.run_until_complete(_fix_errors_from_unit_tests_async(
+            unit_test=unit_test,
+            code=code,
+            prompt=prompt,
+            error=error,
+            error_file=error_file,
+            strength=strength,
+            temperature=temperature,
+            verbose=verbose
+        ))
+    finally:
+        # Clean up the loop
+        loop.close()
