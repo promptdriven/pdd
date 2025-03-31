@@ -521,7 +521,7 @@ async def main():
     # Initialize and log SQLite cache location
     logger.info(f"Using SQLite cache at: {cache_path}")
         
-    test_file_path = os.path.abspath("test_edit_file.txt")  # Use absolute path
+    test_file_path = os.path.abspath("output/test_edit_file.txt")  # Use absolute path
     
     # Use absolute path for MCP config
     current_dir = os.getcwd()
