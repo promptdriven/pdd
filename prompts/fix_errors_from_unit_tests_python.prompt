@@ -1,7 +1,3 @@
-% Here is an example generation of code from a prompt:
-    <example_prompt>```<./context/generate/1/fix_errors_from_unit_tests_python.prompt>```</example_prompt>
-    <example_generation>```<./context/generate/1/fix_errors_from_unit_tests.py>```</example_generation>
-    
 % You are an expert Python Software Engineer. Your goal is to write a python function, "fix_errors_from_unit_tests", that will fix unit test errors and warnings in a code file and log the process. All output to the console will be pretty printed using the Python rich library.
 
 <include>context/python_preamble.prompt</include>
@@ -20,6 +16,7 @@
         'update_code' - Boolean indicating whether the code under test needs to be updated.
         'fixed_unit_test' - A string that is the fixed unit test.
         'fixed_code' - A string that is the fixed code under test.
+        'analysis_results' - A dictionary containing the detailed analysis of errors and fixes.
         'total_cost' - A float representing the total cost of the LLM invocations.
         'model_name' - A string representing the name of the LLM model used.
 
@@ -38,26 +35,71 @@
         <llm_invoke_example>
             <include>context/llm_invoke_example.py</include>
         </llm_invoke_example>
+
+        For using edit_file to make changes:
+        <edit_file_example>
+            <include>context/edit_file_example.py</include>
+        </edit_file_example>
     </internal_modules>
 
 % This program will do the following:
-    Step 1. Load the 'fix_errors_from_unit_tests_LLM' and 'extract_unit_code_fix_LLM' prompt templates.
-    Step 2. Read contents of error_file. Handle any file I/O errors gracefully.
-    Step 3. Run the first prompt through llm_invoke:
-        3a. Pass the following parameters:
+    Step 1. Load the 'fix_errors_from_unit_tests_LLM' prompt template.
+    
+    Step 2. Initialize the analysis_results dictionary with the following structure:
+        - 'prompt_code_diff': Results of comparing prompt to code
+        - 'prompt_test_diff': Results of comparing prompt to unit test
+        - 'prior_fixes': Analysis of any previous fix attempts
+        - 'root_causes': Detailed explanation of error root causes
+        - 'solution_steps': Step-by-step solutions for each error
+        - 'review_notes': Notes from the final review
+    
+    Step 3. Read contents of error_file and parse any previous fix attempts. Handle any file I/O errors gracefully.
+    
+    Step 4. Run the LLM analysis prompt through llm_invoke:
+        4a. Pass the following parameters:
             - 'unit_test'
             - 'code'
             - 'prompt' (use preprocess function with recursive=False, double_curly_brackets=True, and exclude_keys=['unit_test', 'code', 'unit_test_fix'])
             - 'errors'
-        3b. Append the output to error_file with a clear separator to distinguish it from previous content. Ensure that existing log content is preserved.
-    Step 4. This will pretty print the markdown formatting that is present in the result via the rich Markdown function to both the console and the error_file. It will also pretty print the number of output tokens in the result and the cost. Also, print out the total cost of this run.
-    Step 5. Then this will preprocess the extract_unit_code_fix prompt (with recursive=False, double_curly_brackets=True, and exclude_keys=['unit_test', 'code', 'unit_test_fix'])
-    Step 6. Run the second prompt through llm_invoke with strength=.97:
-        6a. Pass the following parameters:
-            - 'unit_test_fix': Result from Step 3
-            - 'unit_test'
-            - 'code'
-        6b. Extract 'update_unit_test', 'update_code', 'fixed_unit_test', and 'fixed_code' from the Pydantic output.
-    Step 7. Return the tuple containing the extracted values, total_cost, and model_name.
+        4b. Parse the LLM response to populate the analysis_results dictionary
+        4c. Append the output to error_file with a clear separator to distinguish it from previous content
+        4d. Extract the corrected code sections marked with XML tags:
+            - 'corrected_code_under_test' for code fixes
+            - 'corrected_unit_test' for test fixes
+    
+    Step 5. Pretty print the analysis results and markdown formatting via the rich Markdown function to both:
+        - Console (when verbose is True)
+        - error_file (always)
+        Also print the number of output tokens and cost.
+    
+    Step 6. Use edit_file to apply the fixes:
+        6a. For the unit test file:
+            - Extract unit test fix instructions from the corrected_unit_test section
+            - Call edit_file with the instructions and unit test file path
+            - Record whether changes were made (update_unit_test)
+            - Read the modified file to get fixed_unit_test
+        6b. For the code file:
+            - Extract code fix instructions from the corrected_code_under_test section
+            - Call edit_file with the instructions and code file path
+            - Record whether changes were made (update_code)
+            - Read the modified file to get fixed_code
+    
+    Step 7. Clean up temporary files and return the tuple containing:
+            - update_unit_test
+            - update_code
+            - fixed_unit_test
+            - fixed_code
+            - analysis_results
+            - total_cost (sum of LLM and edit_file costs)
+            - model_name
 
-% Ensure that the function handles potential errors and warningsgracefully, such as missing input parameters, issues with the LLM model responses, or file I/O errors when reading from or writing to the error_file. Use the rich library for all console output when verbose is True.
+% Ensure that the function:
+    1. Handles potential errors and warnings gracefully:
+        - Missing input parameters
+        - Issues with LLM model responses
+        - File I/O errors
+        - Invalid XML tags in LLM response
+    2. Maintains a detailed log of the analysis process in error_file
+    3. Uses the rich library for all console output when verbose is True
+    4. Preserves the structured analysis approach from the LLM prompt
+    5. Returns both the fixed code and comprehensive analysis results
