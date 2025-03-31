@@ -1,4 +1,3 @@
-import asyncio
 import os
 import sys
 import json
@@ -19,9 +18,9 @@ if MODULE_DIR not in sys.path:
 # Now import the function from the module
 # The module file name is assumed to be 'edit_file.py'
 try:
-    from pdd.edit_file import edit_file
+    from pdd.edit_file import run_edit_in_subprocess
 except ImportError as e:
-    print(f"Error: Could not import 'edit_file' function from {MODULE_DIR}/edit_file.py")
+    print(f"Error: Could not import 'run_edit_in_subprocess' function from {MODULE_DIR}/edit_file.py")
     print(f"Make sure the module exists and the path is correct.")
     print(f"Original error: {e}")
     sys.exit(1)
@@ -61,23 +60,23 @@ Line 4: Another line.
     print(initial_content.strip())
     print("-" * 20)
 
-    # 2. Create the mcp_config.json file required by the edit_file module
-    #    This configuration tells the module how to launch the MCP text editor service.
-    #    Ensure 'uvx mcp-text-editor' is runnable in your environment.
-    print(f"Creating MCP config file: {MCP_CONFIG_FILE_PATH}")
-    mcp_config = {
-        "text_editor_server": {
-            # Command to launch the MCP server (using uvx runner)
-            "command": "uvx",
-            # Arguments for the command (specifying the text editor package)
-            "args": ["mcp-text-editor"],
-            # Transport mechanism (stdio is common for local processes)
-            "transport": "stdio"
-        }
-    }
-    with open(MCP_CONFIG_FILE_PATH, 'w') as f:
-        json.dump(mcp_config, f, indent=2)
-    print(f"{MCP_CONFIG_FILE_PATH} created.")
+    # # 2. Create the mcp_config.json file required by the edit_file module
+    # #    This configuration tells the module how to launch the MCP text editor service.
+    # #    Ensure 'uvx mcp-text-editor' is runnable in your environment.
+    # print(f"Creating MCP config file: {MCP_CONFIG_FILE_PATH}")
+    # mcp_config = {
+    #     "text_editor_server": {
+    #         # Command to launch the MCP server (using uvx runner)
+    #         "command": "uvx",
+    #         # Arguments for the command (specifying the text editor package)
+    #         "args": ["mcp-text-editor"],
+    #         # Transport mechanism (stdio is common for local processes)
+    #         "transport": "stdio"
+    #     }
+    # }
+    # with open(MCP_CONFIG_FILE_PATH, 'w') as f:
+    #     json.dump(mcp_config, f, indent=2)
+    # print(f"{MCP_CONFIG_FILE_PATH} created.")
 
 # Define the instructions for each test case
 EXAMPLE_INSTRUCTIONS = """1. Change the word 'original' to 'UPDATED' on Line 1.
@@ -132,7 +131,7 @@ full_path = getFilePath(file_path)
 ```
 Make these changes in both occurrences where `get_file_path` is referenced."""
 
-async def run_edit_file_test(file_name, instructions, verify_example=False):
+def run_edit_file_test(file_name, instructions, verify_example=False):
     """
     Runs the edit_file test on a specific file with given instructions.
     
@@ -151,8 +150,8 @@ async def run_edit_file_test(file_name, instructions, verify_example=False):
     print(f"File to edit: {file_path}")
     print(f"Instructions summary: {instructions.split('\\n')[0]}...")
 
-    # Call the edit_file function
-    success, error_message = await edit_file(
+    # Call the run_edit_in_subprocess function (no need for await since it's synchronous)
+    success, error_message = run_edit_in_subprocess(
         file_path=file_path,
         edit_instructions=instructions
     )
@@ -213,7 +212,7 @@ async def run_edit_file_test(file_name, instructions, verify_example=False):
 
 # --- Main Example Function ---
 
-async def run_example():
+def run_example():
     """
     Demonstrates how to use the edit_file async function on two different test cases.
 
@@ -234,10 +233,10 @@ async def run_example():
     create_example_files()
     
     # Run test 1: Example file
-    await run_edit_file_test(EXAMPLE_FILE_NAME, EXAMPLE_INSTRUCTIONS, verify_example=True)
+    run_edit_file_test(EXAMPLE_FILE_NAME, EXAMPLE_INSTRUCTIONS, verify_example=True)
     
     # Run test 2: Preprocess.py file
-    await run_edit_file_test(PREPROCESS_FILE_NAME, PREPROCESS_INSTRUCTIONS)
+    run_edit_file_test(PREPROCESS_FILE_NAME, PREPROCESS_INSTRUCTIONS)
 
     print("\n--- All Examples Finished ---")
 
@@ -249,5 +248,5 @@ if __name__ == "__main__":
         print("Error: PDD_PATH environment variable must be set before running the example.")
         sys.exit(1)
 
-    # Run the async main function
-    asyncio.run(run_example())
+    # Run the main function (no need for asyncio.run anymore)
+    run_example()

@@ -375,19 +375,24 @@ graph = graph_builder.compile()
 
 # --- Main Function ---
 
-async def edit_file(file_path: str, edit_instructions: str) -> tuple[bool, Optional[str]]:
+async def edit_file(file_path: str, edit_instructions: str, mcp_config_path: str = None) -> tuple[bool, Optional[str]]:
     """
     Asynchronously edits a file based on instructions using LangGraph and MCP tools.
 
     Args:
         file_path: The path to the file to edit.
         edit_instructions: A description of the changes to make.
+        mcp_config_path: Optional path to MCP config. If None, will use 'mcp_config.json' in current directory.
 
     Returns:
         A tuple containing:
             - success (boolean): Whether the file was edited successfully.
             - error_message (Optional[str]): An error message if unsuccessful, None otherwise.
     """
+    # Print current working directory
+    current_dir = os.getcwd()
+    logger.info(f"Current working directory: {current_dir}")
+    
     # 1. Initial File Validation
     if not os.path.exists(file_path):
         return False, f"File not found: {file_path}"
@@ -395,12 +400,20 @@ async def edit_file(file_path: str, edit_instructions: str) -> tuple[bool, Optio
         return False, f"File not accessible (read/write permissions required): {file_path}"
 
     # 2. Load MCP Configuration
-    mcp_config_path = 'mcp_config.json'
+    if mcp_config_path is None:
+        mcp_config_path = os.path.join(current_dir, 'mcp_config.json')
+    
+    # Ensure we have an absolute path
+    mcp_config_path = os.path.abspath(mcp_config_path)
+    
     mcp_servers_config = {}
     try:
+        # Log absolute path of config file
+        logger.info(f"Attempting to load MCP config from: {mcp_config_path}")
+        
         with open(mcp_config_path, 'r') as f:
             mcp_servers_config = json.load(f)
-        logger.info(f"Loaded MCP configuration from {mcp_config_path}")
+        logger.info(f"Successfully loaded MCP configuration from {mcp_config_path}")
         # Basic validation of config structure
         if not isinstance(mcp_servers_config, dict) or not mcp_servers_config:
              raise ValueError("MCP config must be a non-empty dictionary.")
@@ -509,13 +522,20 @@ async def main():
     logger.info(f"Using SQLite cache at: {cache_path}")
         
     test_file_path = os.path.abspath("test_edit_file.txt")  # Use absolute path
-    mcp_config_path = "mcp_config.json"
+    
+    # Use absolute path for MCP config
+    current_dir = os.getcwd()
+    mcp_config_path = os.path.join(current_dir, "mcp_config.json")
+    mcp_config_path = os.path.abspath(mcp_config_path)
+    
     initial_content = "This is the initial content.\nIt has multiple lines."
     edit_instructions = "Replace the word 'initial' with 'edited' and add a new line at the end saying 'Edit complete.'"
 
     # 1. Create dummy MCP config if it doesn't exist
     if not os.path.exists(mcp_config_path):
-        logger.info(f"Creating dummy {mcp_config_path} for example run.")
+        # Log absolute path where config will be created
+        logger.info(f"MCP config not found. Creating dummy config at: {mcp_config_path}")
+        
         # IMPORTANT: Replace with your actual MCP server configuration
         # This dummy config assumes a server named 'my_editor_server' running via stdio
         dummy_config = {
@@ -528,7 +548,7 @@ async def main():
         try:
             with open(mcp_config_path, 'w') as f:
                 json.dump(dummy_config, f, indent=2)
-            logger.info(f"Dummy {mcp_config_path} created. Please update it with real server details.")
+            logger.info(f"Dummy MCP config created at: {mcp_config_path}")
         except Exception as e:
             logger.error(f"Could not create dummy MCP config: {e}")
             return
@@ -548,7 +568,7 @@ async def main():
     # You MUST adapt the dummy response or implement a real LLM planner
     # based on the actual tools provided by your MCP server.
     # --- /IMPORTANT ---
-    success, error_msg = await edit_file(test_file_path, edit_instructions)
+    success, error_msg = await edit_file(test_file_path, edit_instructions, mcp_config_path=mcp_config_path)
 
     # 4. Verify the result
     if success:
@@ -590,12 +610,24 @@ def run_edit_in_subprocess(file_path: str, edit_instructions: str) -> Tuple[bool
     # Get the actual directory of this module to pass to the subprocess
     module_dir = os.path.dirname(os.path.abspath(__file__))
     
+    # Create absolute path for mcp_config.json in the current directory
+    current_dir = os.getcwd()
+    mcp_config_abs_path = os.path.join(current_dir, 'mcp_config.json')
+    mcp_config_abs_path = os.path.abspath(mcp_config_abs_path)
+    
+    logger.info(f"Using MCP config at: {mcp_config_abs_path}")
+    
     # Create a temporary Python script to run the async function
     script = f"""
 import asyncio
 import json
 import os
 import sys
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # Add the module directory to sys.path to import the edit_file module
 module_dir = {repr(module_dir)}
@@ -603,11 +635,20 @@ sys.path.append(module_dir)
 from edit_file import edit_file
 
 async def main():
+    # Print current working directory in subprocess
+    current_dir = os.getcwd()
+    print(f"Subprocess working directory: {{current_dir}}")
+    
+    # Use the absolute path for MCP config passed from parent process
+    mcp_config_path = {repr(mcp_config_abs_path)}
+    print(f"Subprocess using MCP config at: {{mcp_config_path}}")
+    print(f"MCP config exists: {{os.path.exists(mcp_config_path)}}")
+    
     file_path = {repr(file_path)}
     edit_instructions = {repr(edit_instructions)}
     
-    # Run the async edit_file function
-    success, error_msg = await edit_file(file_path, edit_instructions)
+    # Run the async edit_file function with explicit MCP config path
+    success, error_msg = await edit_file(file_path, edit_instructions, mcp_config_path=mcp_config_path)
     
     # Return the result as JSON to stdout
     result = {{"success": success, "error_message": error_msg}}
