@@ -29,7 +29,7 @@ async def _fix_errors_from_unit_tests_async(
     strength: float,
     temperature: float = 0.0,
     verbose: bool = False
-) -> Tuple[bool, bool, str, str, Dict[str, Any], float, str]:
+) -> Tuple[bool, bool, str, str, str, float, str]:
     """
     Fix unit test errors and warnings in code files.
     
@@ -49,7 +49,7 @@ async def _fix_errors_from_unit_tests_async(
             - update_code: Boolean indicating if code was updated
             - fixed_unit_test: The fixed unit test code
             - fixed_code: The fixed code under test
-            - analysis_results: Dictionary with detailed analysis
+            - analysis_results: The raw output of the LLM analysis
             - total_cost: Total cost of LLM invocations
             - model_name: Name of the LLM model used
     """
@@ -74,22 +74,9 @@ async def _fix_errors_from_unit_tests_async(
     if verbose:
         console.print("[bold green]Prompt template loaded successfully[/bold green]")
     
-    # Step 2: Initialize analysis_results dictionary
+    # Step 2: Read contents of error_file and parse any previous fix attempts
     if verbose:
-        console.print("[bold blue]Step 2: Initializing analysis results...[/bold blue]")
-    
-    analysis_results = {
-        'prompt_code_diff': "",
-        'prompt_test_diff': "",
-        'prior_fixes': "",
-        'root_causes': "",
-        'solution_steps': "",
-        'review_notes': ""
-    }
-    
-    # Step 3: Read contents of error_file and parse any previous fix attempts
-    if verbose:
-        console.print("[bold blue]Step 3: Reading error file for previous fixes...[/bold blue]")
+        console.print("[bold blue]Step 2: Reading error file for previous fixes...[/bold blue]")
     
     prior_fixes = ""
     try:
@@ -111,9 +98,9 @@ async def _fix_errors_from_unit_tests_async(
             console.print(f"[bold red]Error reading error file: {str(e)}[/bold red]")
         prior_fixes = f"Error reading prior fixes: {str(e)}"
     
-    # Step 4: Run the LLM analysis prompt through llm_invoke
+    # Step 3: Run the LLM analysis prompt through llm_invoke
     if verbose:
-        console.print("[bold blue]Step 4: Running LLM analysis...[/bold blue]")
+        console.print("[bold blue]Step 3: Running LLM analysis...[/bold blue]")
     
     # Preprocess the prompt
     try:
@@ -164,12 +151,12 @@ async def _fix_errors_from_unit_tests_async(
         model_name = llm_response['model_name']
         
         # Extract response
-        analysis_text = llm_response['result']
+        analysis_results = llm_response['result']
         
         # Display response if verbose
         if verbose:
             console.print("\n[bold green]LLM Analysis Complete[/bold green]")
-            console.print(Markdown(analysis_text))
+            console.print(Markdown(analysis_results))
             console.print(f"[bold]Output tokens: {llm_response.get('output_tokens', 'unknown')}[/bold]")
             console.print(f"[bold]Cost: ${llm_response['cost']:.6f}[/bold]")
     
@@ -190,51 +177,36 @@ async def _fix_errors_from_unit_tests_async(
                 console.print(f"[bold red]Failed to write to error file: {str(file_err)}[/bold red]")
         
         # Return default values
-        return False, False, unit_test, code, analysis_results, total_cost, model_name
+        return False, False, unit_test, code, "", total_cost, model_name
     
-    # Parse the LLM response to populate the analysis_results
+    # Extract corrected code sections using regex
     if verbose:
-        console.print("[bold blue]Step 4b: Parsing LLM response...[/bold blue]")
+        console.print("[bold blue]Step 3d: Extracting code sections...[/bold blue]")
     
     # Extract sections using regex
-    sections = {
-        'prompt_code_diff': re.search(r'<prompt_code_diff>(.*?)</prompt_code_diff>', analysis_text, re.DOTALL),
-        'prompt_test_diff': re.search(r'<prompt_test_diff>(.*?)</prompt_test_diff>', analysis_text, re.DOTALL),
-        'root_causes': re.search(r'<root_causes>(.*?)</root_causes>', analysis_text, re.DOTALL),
-        'solution_steps': re.search(r'<solution_steps>(.*?)</solution_steps>', analysis_text, re.DOTALL),
-        'review_notes': re.search(r'<review_notes>(.*?)</review_notes>', analysis_text, re.DOTALL),
-        'corrected_code_under_test': re.search(r'<corrected_code_under_test>(.*?)</corrected_code_under_test>', analysis_text, re.DOTALL),
-        'corrected_unit_test': re.search(r'<corrected_unit_test>(.*?)</corrected_unit_test>', analysis_text, re.DOTALL)
-    }
-    
-    # Update analysis_results with extracted sections
-    for key, match in sections.items():
-        if key in analysis_results and match:
-            analysis_results[key] = match.group(1).strip()
-    
-    # Add prior fixes to analysis_results
-    analysis_results['prior_fixes'] = prior_fixes
+    corrected_code_match = re.search(r'<corrected_code_under_test>(.*?)</corrected_code_under_test>', analysis_results, re.DOTALL)
+    corrected_unit_test_match = re.search(r'<corrected_unit_test>(.*?)</corrected_unit_test>', analysis_results, re.DOTALL)
     
     # Extract corrected code sections from the regex matches
     corrected_code_text = ""
     corrected_unit_test_text = ""
     
-    if sections.get('corrected_code_under_test') and sections['corrected_code_under_test'].group(1):
-        corrected_code_text = sections['corrected_code_under_test'].group(1).strip()
+    if corrected_code_match:
+        corrected_code_text = corrected_code_match.group(1).strip()
     
-    if sections.get('corrected_unit_test') and sections['corrected_unit_test'].group(1):
-        corrected_unit_test_text = sections['corrected_unit_test'].group(1).strip()
+    if corrected_unit_test_match:
+        corrected_unit_test_text = corrected_unit_test_match.group(1).strip()
         
     if verbose:
         console.print(f"[bold yellow]Extracted code text: {bool(corrected_code_text)}[/bold yellow]")
         console.print(f"[bold yellow]Extracted test text: {bool(corrected_unit_test_text)}[/bold yellow]")
     
-    # Step 4c: Append the output to error_file
+    # Step 3c: Append the output to error_file
     if verbose:
-        console.print("[bold blue]Step 4c: Logging analysis results...[/bold blue]")
+        console.print("[bold blue]Step 3c: Logging analysis results...[/bold blue]")
     
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    log_entry = f"\n\n{'='*50}\nANALYSIS LOG - {timestamp}\n{'='*50}\n{analysis_text}\n"
+    log_entry = f"\n\n{'='*50}\nANALYSIS LOG - {timestamp}\n{'='*50}\n{analysis_results}\n"
     
     try:
         with open(error_file, 'a') as f:
@@ -246,17 +218,14 @@ async def _fix_errors_from_unit_tests_async(
         if verbose:
             console.print(f"[bold red]Failed to write to error file: {str(e)}[/bold red]")
     
-    # Step 5: Pretty print the analysis results if verbose
+    # Step 4: Pretty print the analysis results if verbose
     if verbose:
-        console.print("[bold blue]Step 5: Displaying analysis results...[/bold blue]")
-        
-        for key, value in analysis_results.items():
-            if key != 'prior_fixes' and value:  # Skip printing prior_fixes as it could be large
-                console.print(Panel(
-                    Markdown(value),
-                    title=key.replace('_', ' ').title(),
-                    expand=False
-                ))
+        console.print("[bold blue]Step 4: Displaying analysis results...[/bold blue]")
+        console.print(Panel(
+            Markdown(analysis_results),
+            title="Analysis Results",
+            expand=False
+        ))
     
     # Initialize variables for return values
     update_unit_test = False
@@ -264,11 +233,11 @@ async def _fix_errors_from_unit_tests_async(
     fixed_unit_test = unit_test
     fixed_code = code
     
-    # Step 6: Use edit_file to apply the fixes
+    # Step 5: Use edit_file to apply the fixes
     if verbose:
-        console.print("[bold blue]Step 6: Applying fixes...[/bold blue]")
+        console.print("[bold blue]Step 5: Applying fixes...[/bold blue]")
     
-    # Step 6a: Apply unit test fixes if available
+    # Step 5a: Apply unit test fixes if available
     if corrected_unit_test_text:
         try:
             # Create a temporary file for the unit test
@@ -308,7 +277,7 @@ async def _fix_errors_from_unit_tests_async(
         if verbose:
             console.print("[bold yellow]No unit test fixes required or provided[/bold yellow]")
     
-    # Step 6b: Apply code fixes if available
+    # Step 5b: Apply code fixes if available
     if corrected_code_text:
         try:
             # Create a temporary file for the code
@@ -348,9 +317,9 @@ async def _fix_errors_from_unit_tests_async(
         if verbose:
             console.print("[bold yellow]No code fixes required or provided[/bold yellow]")
     
-    # Step 7: Return the results
+    # Step 6: Return the results
     if verbose:
-        console.print("[bold blue]Step 7: Returning results...[/bold blue]")
+        console.print("[bold blue]Step 6: Returning results...[/bold blue]")
         console.print(f"[bold green]Fix process completed[/bold green]")
         console.print(f"[bold]Update unit test: {update_unit_test}[/bold]")
         console.print(f"[bold]Update code: {update_code}[/bold]")
@@ -379,7 +348,7 @@ def fix_errors_from_unit_tests(
     strength: float,
     temperature: float = 0.0,
     verbose: bool = False
-) -> Tuple[bool, bool, str, str, Dict[str, Any], float, str]:
+) -> Tuple[bool, bool, str, str, str, float, str]:
     """
     Synchronous wrapper for fixing unit test errors and warnings in code files.
     
@@ -399,7 +368,7 @@ def fix_errors_from_unit_tests(
             - update_code: Boolean indicating if code was updated
             - fixed_unit_test: The fixed unit test code
             - fixed_code: The fixed code under test
-            - analysis_results: Dictionary with detailed analysis
+            - analysis_results: The raw output of the LLM analysis
             - total_cost: Total cost of LLM invocations
             - model_name: Name of the LLM model used
     """
