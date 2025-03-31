@@ -1,9 +1,7 @@
 {
   "my_editor_server": {
-    "command": "uvx",
-    "args": [
-      "mcp-text-editor"
-    ],
+    "command": "npx",
+    "args": ["-y", "mcp-server-text-editor"],
     "transport": "stdio"
   }
 }
