@@ -587,6 +587,9 @@ def run_edit_in_subprocess(file_path: str, edit_instructions: str) -> Tuple[bool
     """
     logger.info(f"Running edit_file in subprocess for: {file_path}")
     
+    # Get the actual directory of this module to pass to the subprocess
+    module_dir = os.path.dirname(os.path.abspath(__file__))
+    
     # Create a temporary Python script to run the async function
     script = f"""
 import asyncio
@@ -594,8 +597,9 @@ import json
 import os
 import sys
 
-# Add the parent directory to sys.path to import the edit_file module
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add the module directory to sys.path to import the edit_file module
+module_dir = {repr(module_dir)}
+sys.path.append(module_dir)
 from edit_file import edit_file
 
 async def main():
