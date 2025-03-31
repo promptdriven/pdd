@@ -16,7 +16,7 @@
         'update_code' - Boolean indicating whether the code under test needs to be updated.
         'fixed_unit_test' - A string that is the fixed unit test.
         'fixed_code' - A string that is the fixed code under test.
-        'analysis_results' - A dictionary containing the detailed analysis of errors and fixes.
+        'analysis_results' - A string containing the raw output of the LLM analysis.
         'total_cost' - A float representing the total cost of the LLM invocations.
         'model_name' - A string representing the name of the LLM model used.
 
@@ -45,51 +45,43 @@
 % This program will do the following:
     Step 1. Load the 'fix_errors_from_unit_tests_LLM' prompt template.
     
-    Step 2. Initialize the analysis_results dictionary with the following structure:
-        - 'prompt_code_diff': Results of comparing prompt to code
-        - 'prompt_test_diff': Results of comparing prompt to unit test
-        - 'prior_fixes': Analysis of any previous fix attempts
-        - 'root_causes': Detailed explanation of error root causes
-        - 'solution_steps': Step-by-step solutions for each error
-        - 'review_notes': Notes from the final review
+    Step 2. Read contents of error_file and parse any previous fix attempts. Handle any file I/O errors gracefully.
     
-    Step 3. Read contents of error_file and parse any previous fix attempts. Handle any file I/O errors gracefully.
-    
-    Step 4. Run the LLM analysis prompt through llm_invoke:
-        4a. Pass the following parameters:
+    Step 3. Run the LLM prompt from Step 1 through llm_invoke:
+        3a. Pass the following parameters:
             - 'unit_test'
             - 'code'
             - 'prompt' (use preprocess function with recursive=False, double_curly_brackets=True, and exclude_keys=['unit_test', 'code', 'unit_test_fix'])
             - 'errors'
-        4b. Parse the LLM response to populate the analysis_results dictionary
-        4c. Append the output to error_file with a clear separator to distinguish it from previous content
-        4d. Extract the corrected code sections marked with XML tags:
+        3b. Store the full LLM response as analysis_results
+        3c. Append the output to error_file with a clear separator to distinguish it from previous content
+        3d. Extract the corrected code sections marked with XML tags:
             - 'corrected_code_under_test' for code fixes
             - 'corrected_unit_test' for test fixes
     
-    Step 5. Pretty print the analysis results and markdown formatting via the rich Markdown function to both:
+    Step 4. Pretty print the analysis results with markdown formatting via the rich Markdown function to both:
         - Console (when verbose is True)
         - error_file (always)
         Also print the number of output tokens and cost.
     
-    Step 6. Use edit_file to apply the fixes:
-        6a. For the unit test file:
+    Step 5. Use edit_file to apply the fixes:
+        5a. For the unit test file:
             - Extract unit test fix instructions from the corrected_unit_test section
             - Call edit_file with the instructions and unit test file path
             - Record whether changes were made (update_unit_test)
             - Read the modified file to get fixed_unit_test
-        6b. For the code file:
+        5b. For the code file:
             - Extract code fix instructions from the corrected_code_under_test section
             - Call edit_file with the instructions and code file path
             - Record whether changes were made (update_code)
             - Read the modified file to get fixed_code
     
-    Step 7. Clean up temporary files and return the tuple containing:
+    Step 6. Clean up temporary files and return the tuple containing:
             - update_unit_test
             - update_code
             - fixed_unit_test
             - fixed_code
-            - analysis_results
+            - analysis_results (the raw LLM output)
             - total_cost (sum of LLM and edit_file costs)
             - model_name
 
@@ -102,4 +94,4 @@
     2. Maintains a detailed log of the analysis process in error_file
     3. Uses the rich library for all console output when verbose is True
     4. Preserves the structured analysis approach from the LLM prompt
-    5. Returns both the fixed code and comprehensive analysis results
+    5. Returns both the fixed code and the raw LLM analysis output
