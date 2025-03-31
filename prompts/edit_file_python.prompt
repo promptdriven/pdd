@@ -4,6 +4,7 @@
 <function_inputs>
     - file_path (string): The path to the file to edit.
     - edit_instructions (string): A description of the changes to make to the file.
+    - mcp_config_path (string, optional): Path to MCP configuration file. If None, defaults to 'mcp_config.json' in current directory.
 </function_inputs>
 
 <function_outputs>
@@ -50,6 +51,26 @@
     - Provide verification of file modifications
     - Support cleanup of test files
     - Enable inspection of results
+
+7. Caching Implementation:
+    - Implement SQLiteCache from langchain_community.cache
+    - Set up global LLM cache for improved performance
+    - Store cache in a local file (.langchain.db)
+    - Configure caching through langchain_globals
+
+8. Subprocess Bridge:
+    - Implement function to run edit_file in subprocess (run_edit_in_subprocess)
+    - Bridge between async and sync worlds for non-async callers
+    - Pass necessary environment variables to subprocess
+    - Handle subprocess output parsing and error handling
+    - Return same tuple format as edit_file function
+
+9. Model Integration:
+    - Use Claude 3.7 Sonnet specifically for planning edits
+    - Set temperature to 0 for deterministic output
+    - Configure with proper tool binding
+    - Format tools appropriately for Claude's understanding
+    - Handle Claude's message/tool call output structure
 
 % The LangGraph Agent will use the Langchain MCP adapter to access MCPs. Here are the relevant documentation links:
     <langgraph_docs><web>https://langchain-ai.github.io/langgraph/llms-full.txt</web></langgraph_docs>
