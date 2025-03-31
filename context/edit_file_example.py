@@ -60,24 +60,6 @@ Line 4: Another line.
     print(initial_content.strip())
     print("-" * 20)
 
-    # # 2. Create the mcp_config.json file required by the edit_file module
-    # #    This configuration tells the module how to launch the MCP text editor service.
-    # #    Ensure 'uvx mcp-text-editor' is runnable in your environment.
-    # print(f"Creating MCP config file: {MCP_CONFIG_FILE_PATH}")
-    # mcp_config = {
-    #     "text_editor_server": {
-    #         # Command to launch the MCP server (using uvx runner)
-    #         "command": "uvx",
-    #         # Arguments for the command (specifying the text editor package)
-    #         "args": ["mcp-text-editor"],
-    #         # Transport mechanism (stdio is common for local processes)
-    #         "transport": "stdio"
-    #     }
-    # }
-    # with open(MCP_CONFIG_FILE_PATH, 'w') as f:
-    #     json.dump(mcp_config, f, indent=2)
-    # print(f"{MCP_CONFIG_FILE_PATH} created.")
-
 # Define the instructions for each test case
 EXAMPLE_INSTRUCTIONS = """1. Change the word 'original' to 'UPDATED' on Line 1.
 2. Replace Line 3 entirely with 'Line 3: This line has been REPLACED.'
