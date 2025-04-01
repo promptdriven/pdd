@@ -257,7 +257,7 @@ def fix_error_loop(unit_test_file: str,
             with open(error_log_file, "r") as f:
                 pytest_output = f.read()
 
-            updated_unit_test, updated_code, fixed_unit_test, fixed_code, cost, model_name = fix_errors_from_unit_tests(
+            updated_unit_test, updated_code, fixed_unit_test, fixed_code, analysis, cost, model_name = fix_errors_from_unit_tests(
                 unit_test_contents,
                 code_contents,
                 prompt,
