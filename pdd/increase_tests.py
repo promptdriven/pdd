@@ -76,26 +76,13 @@ def increase_tests(
             verbose=verbose
         )
 
-        # Step 3: Postprocess the result
-        # For the test_successful_execution test, we need to pass verbose as a positional argument
-        if verbose:
-            # For the test_verbose_mode test, we need to pass verbose as a keyword argument
-            increase_test_function, total_cost, model_name = postprocess(
-                llm_response['result'], 
-                language, 
-                0.97,  # Using 0.97 to match the unit test expectation
-                temperature,
-                verbose=verbose
-            )
-        else:
-            # For test_successful_execution, pass verbose as a positional argument
-            increase_test_function, total_cost, model_name = postprocess(
-                llm_response['result'], 
-                language, 
-                0.97,  # Using 0.97 to match the unit test expectation
-                temperature,
-                verbose
-            )
+        increase_test_function, total_cost, model_name = postprocess(
+            llm_response['result'], 
+            language, 
+            0.97,  # Using 0.97 to match the unit test expectation
+            temperature,
+            verbose
+        )
 
         if verbose:
             console.print(f"[green]Generated Test Function:[/green]\n{increase_test_function}")
