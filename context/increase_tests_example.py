@@ -47,8 +47,8 @@ calculate_average.py     5      2    60%
             code=existing_code,
             prompt_that_generated_code=original_prompt,
             language="python",
-            strength=0.7,
-            temperature=0.2,
+            strength=0.97,
+            temperature=0.0,
             verbose=True
         )
     
