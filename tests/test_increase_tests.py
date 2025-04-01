@@ -158,7 +158,8 @@ class TestIncreaseTests:
         assert mock_llm_invoke.call_args[1]['verbose'] is True
         
         mock_postprocess.assert_called_once()
-        assert mock_postprocess.call_args[1]['verbose'] is True
+        # Check 'verbose' as the 5th positional argument (index 4)
+        assert mock_postprocess.call_args[0][4] is True
 
 def test_z3_parameter_constraints():
     """
