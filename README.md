@@ -447,7 +447,7 @@ Outputs:
   - Success status (boolean)
   - Total number of fix attempts made
   - Total cost of all fix attempts
-- This will also create versions of the unit test and code files for the different iterations (with suffixes `_failures_errors_attemptnum`) of the fix attempts.
+- This will also create intermediate versions of the unit test and code files for the different iterations with timestamp-based naming (e.g., `basename_1_0_3_0_20250402_124442.py`, `standalone_test_1_0_3_0_20250402_124442.py`).
 
 Example:
 ```
