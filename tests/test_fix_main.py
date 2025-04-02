@@ -65,6 +65,7 @@ def test_fix_main_without_loop(
         False, # update_code
         "Fixed unit test content",
         "",
+        "Analysis results",
         0.75,  # total_cost
         "gpt-4"
     )
@@ -240,5 +241,5 @@ def test_fix_main_handles_exception_and_exits(mocked_construct_paths, mock_ctx):
     assert sys_exit.type == SystemExit
     assert sys_exit.value.code == 1
 
-    # We can’t easily capture rprint output without extra setup, so we just confirm sys.exit was raised.
+    # We can't easily capture rprint output without extra setup, so we just confirm sys.exit was raised.
     mocked_construct_paths.assert_called_once()

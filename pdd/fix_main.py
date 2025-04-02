@@ -105,7 +105,7 @@ def fix_main(
             )
         else:
             # Use fix_errors_from_unit_tests for single-pass fixing
-            update_unit_test, update_code, fixed_unit_test, fixed_code, total_cost, model_name = fix_errors_from_unit_tests(
+            update_unit_test, update_code, fixed_unit_test, fixed_code, analysis_results, total_cost, model_name = fix_errors_from_unit_tests(
                 unit_test=input_strings["unit_test_file"],
                 code=input_strings["code_file"],
                 prompt=input_strings["prompt_file"],
@@ -133,6 +133,10 @@ def fix_main(
             rprint(f"[bold]Total attempts:[/bold] {attempts}")
             rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
             rprint(f"[bold]Model used:[/bold] {model_name}")
+            if verbose and analysis_results:
+                # Log the first 200 characters of analysis if in verbose mode
+                analysis_preview = analysis_results[:200] + "..." if len(analysis_results) > 200 else analysis_results
+                rprint(f"[bold]Analysis preview:[/bold] {analysis_preview}")
             if success:
                 rprint("[bold green]Fixed files saved:[/bold green]")
                 rprint(f"  Test file: {output_file_paths['output_test']}")
@@ -210,11 +214,24 @@ def fix_main(
 
                         # Add analysis if available
                         if output_file_paths.get("output_results"):
-                            with open(output_file_paths["output_results"], 'r') as f:
-                                analysis_content = f.read()
+                            try:
+                                with open(output_file_paths["output_results"], 'r') as f:
+                                    analysis_content = f.read()
+                            except Exception as file_err:
+                                # If unable to read analysis file, use analysis_results from LLM directly
+                                if not ctx.obj.get('quiet', False):
+                                    rprint(f"[bold yellow]Could not read analysis file, using direct LLM output: {str(file_err)}[/bold yellow]")
+                                analysis_content = analysis_results
+                            
                             payload["output"]["analysis"] = [{
                                 "content": analysis_content,
                                 "filename": os.path.basename(output_file_paths["output_results"])
+                            }]
+                        # If no output file but we have analysis results, use them directly
+                        elif analysis_results:
+                            payload["output"]["analysis"] = [{
+                                "content": analysis_results,
+                                "filename": "analysis.log"
                             }]
 
                         # Submit the example to Firebase Cloud Function
