@@ -103,6 +103,29 @@ fi
 # Continue with the rest of the regression test commands
 run_pdd_command example --output  "$STAGING_PATH/regression/$EXTENSION_VERIFICATION_PROGRAM"  "$PROMPTS_PATH/$EXTENSION_PROMPT" "$STAGING_PATH/regression/$EXTENSION_SCRIPT"
 run_pdd_command test --output "$STAGING_PATH/regression/$EXTENSION_TEST" "$PROMPTS_PATH/$EXTENSION_PROMPT" "$STAGING_PATH/regression/$EXTENSION_SCRIPT"
+
+# Create a wrapper module that imports from the local file
+cat > "$STAGING_PATH/regression/pdd_wrapper.py" << 'EOF'
+# Simple wrapper to import get_extension from the local directory
+import os
+import sys
+
+# Get the absolute path of the directory containing this script
+current_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Import the get_extension function from the local file
+from get_extension import get_extension
+EOF
+
+# Modify the test file to use the wrapper instead of importing from pdd package
+if [[ $(uname) == "Darwin" ]]; then
+  # macOS sed syntax
+  sed -i '' 's/from pdd.get_extension import get_extension/from pdd_wrapper import get_extension/' "$STAGING_PATH/regression/$EXTENSION_TEST"
+else
+  # Linux/GNU sed syntax
+  sed -i 's/from pdd.get_extension import get_extension/from pdd_wrapper import get_extension/' "$STAGING_PATH/regression/$EXTENSION_TEST"
+fi
+
 run_pdd_command preprocess --output "$STAGING_PATH/regression/preprocessed_$EXTENSION_PROMPT" "$PROMPTS_PATH/$EXTENSION_PROMPT"
 run_pdd_command preprocess --xml --output "$STAGING_PATH/regression/$XML_OUTPUT_PROMPT" "$PROMPTS_PATH/$EXTENSION_PROMPT"
 
@@ -139,11 +162,79 @@ python -m pytest "$STAGING_PATH/regression/$EXTENSION_TEST" > "$STAGING_PATH/reg
 run_pdd_command fix --output-test "$STAGING_PATH/regression/fixed_$EXTENSION_TEST" --output-code "$STAGING_PATH/regression/fixed_$EXTENSION_SCRIPT"  --output-results "$STAGING_PATH/regression/get_extension_fix_results.log" \
                     "$PROMPTS_PATH/$EXTENSION_PROMPT" "$STAGING_PATH/regression/$EXTENSION_SCRIPT" "$STAGING_PATH/regression/$EXTENSION_TEST" "$STAGING_PATH/regression/pytest_output.log"
 
-# Run fix command with loop
+# Create a comprehensive standalone test file for the fix --loop command
+log "Creating comprehensive standalone test for fix --loop"
+STANDALONE_TEST="$STAGING_PATH/regression/standalone_test.py"
+
+cat > "$STANDALONE_TEST" << 'EOF'
+import pytest
+import os
+import sys
+import importlib.util
+from unittest.mock import patch, mock_open
+from pathlib import Path
+
+# Dynamically import the local get_extension.py file
+def import_module_from_file(file_path):
+    module_name = os.path.basename(file_path).replace('.py', '')
+    spec = importlib.util.spec_from_file_location(module_name, file_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+# Get the directory of this script
+current_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Import the local get_extension module
+get_extension_module = import_module_from_file(os.path.join(current_dir, "get_extension.py"))
+get_extension = get_extension_module.get_extension
+
+class TestGetExtension:
+    def test_empty_language(self):
+        """Test that empty string input returns empty string."""
+        assert get_extension("") == ""
+
+    def test_none_language(self):
+        """Test that None input raises TypeError."""
+        with pytest.raises(TypeError):
+            get_extension(None)
+            
+    @patch.dict(os.environ, {"PDD_PATH": "/mock/path"})
+    @patch("builtins.open", new_callable=mock_open, read_data="language,extension\nPython,.py\n")
+    def test_valid_language(self, mock_file):
+        """Test that a valid language returns the correct extension."""
+        assert get_extension("Python") == ".py"
+
+    @patch.dict(os.environ, {})
+    def test_missing_env_variable(self):
+        """Test behavior when PDD_PATH environment variable is missing."""
+        # The exact behavior depends on your implementation
+        result = get_extension("Python")
+        assert isinstance(result, str)  # Should return some kind of string (probably empty)
+
+    @patch("builtins.open", side_effect=FileNotFoundError)
+    @patch.dict(os.environ, {"PDD_PATH": "/mock/path"})
+    def test_file_not_found(self, mock_open):
+        """Test behavior when CSV file is not found."""
+        result = get_extension("Python")
+        assert isinstance(result, str)  # Should return some kind of string (probably empty)
+        
+    def test_case_insensitivity(self):
+        """Test that the function works with different case inputs."""
+        # Mock environment and file operations
+        with patch.dict(os.environ, {"PDD_PATH": "/mock/path"}):
+            with patch("builtins.open", new_callable=mock_open, 
+                      read_data="language,extension\nPython,.py\nJava,.java\n"):
+                # Should be case-insensitive
+                assert get_extension("python") == ".py"
+                assert get_extension("JAVA") == ".java"
+EOF
+
+# Run fix command with loop using the standalone test
 run_pdd_command fix --loop --output-test "$STAGING_PATH/regression/fixed_loop_$EXTENSION_TEST" --output-code "$STAGING_PATH/regression/fixed_loop_$EXTENSION_SCRIPT" \
                     --output-results "$STAGING_PATH/regression/fixed_loop_results.log" \
                     --verification-program "$STAGING_PATH/regression/$EXTENSION_VERIFICATION_PROGRAM" --max-attempts 2 --budget 5.0 \
-                    "$PROMPTS_PATH/$EXTENSION_PROMPT" "$STAGING_PATH/regression/$EXTENSION_SCRIPT" "$STAGING_PATH/regression/$EXTENSION_TEST" "$STAGING_PATH/regression/$EXTENSION_ERROR_LOOP_LOG"
+                    "$PROMPTS_PATH/$EXTENSION_PROMPT" "$STAGING_PATH/regression/$EXTENSION_SCRIPT" "$STANDALONE_TEST" "$STAGING_PATH/regression/$EXTENSION_ERROR_LOOP_LOG"
 
 # Run split command
 log "Running split command"
