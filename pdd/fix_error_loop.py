@@ -121,6 +121,9 @@ def fix_error_loop(unit_test_file: str,
     fix_attempts = 0
     total_cost = 0.0
     model_name = ""
+    # Initialize these variables now
+    final_unit_test = ""
+    final_code = ""
     best_iteration_info = {
         "attempt": None,
         "fails": sys.maxsize,
@@ -172,7 +175,8 @@ def fix_error_loop(unit_test_file: str,
             stats["final_warnings"] = warnings
             stats["best_iteration"] = 0
             
-            # We're setting success but continuing execution to properly track statistics
+            # No need to read the files later - keep empty strings
+            # We're still setting success but will skip the loop
             success = True
             break
         
@@ -276,8 +280,10 @@ def fix_error_loop(unit_test_file: str,
         # Update unit test file if needed.
         if updated_unit_test:
             try:
+                # Ensure we have valid content even if the returned fixed_unit_test is empty
+                content_to_write = fixed_unit_test if fixed_unit_test else unit_test_contents
                 with open(unit_test_file, "w") as f:
-                    f.write(fixed_unit_test)
+                    f.write(content_to_write)
                 if verbose:
                     rprint("[green]Unit test file updated.[/green]")
             except Exception as e:
@@ -287,8 +293,10 @@ def fix_error_loop(unit_test_file: str,
         # Update code file and run verification if needed.
         if updated_code:
             try:
+                # Ensure we have valid content even if the returned fixed_code is empty
+                content_to_write = fixed_code if fixed_code else code_contents
                 with open(code_file, "w") as f:
-                    f.write(fixed_code)
+                    f.write(content_to_write)
                 if verbose:
                     rprint("[green]Code file updated.[/green]")
             except Exception as e:
@@ -398,10 +406,12 @@ def fix_error_loop(unit_test_file: str,
 
     # Read final file contents
     try:
-        with open(unit_test_file, "r") as f:
-            final_unit_test = f.read()
-        with open(code_file, "r") as f:
-            final_code = f.read()
+        # Only read files if we attempted fixes or tests are still failing
+        if fix_attempts > 0 or not success:
+            with open(unit_test_file, "r") as f:
+                final_unit_test = f.read()
+            with open(code_file, "r") as f:
+                final_code = f.read()
     except Exception as e:
         rprint(f"[red]Error reading final files:[/red] {e}")
         final_unit_test, final_code = "", ""
