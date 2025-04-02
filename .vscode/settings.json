@@ -3,8 +3,10 @@
     "python.testing.pytestArgs": [
         "tests"
     ],
-    "python.testing.unittestEnabled": false,
-    "python.testing.pytestEnabled": true,
+    "python.testing.unittestEnabled": false, 
+    "python.testing.nosetestsEnabled": false,
+    "python.testing.pytestEnabled": false,
+    "pythonTestExplorer.testFramework": "pytest",
     "editor.wordWrap": "on",
     "python.envFile": "${workspaceFolder}/.env"
 }
