@@ -540,8 +540,8 @@ async def main():
         # This dummy config assumes a server named 'my_editor_server' running via stdio
         dummy_config = {
             "my_editor_server": {
-                "command": "uvx",
-                "args": ["mcp-text-editor"],
+                "command": "npx",
+                "args": ["-y", "mcp-server-text-editor"],
                 "transport": "stdio"
             }
         }
