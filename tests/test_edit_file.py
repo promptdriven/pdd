@@ -499,23 +499,19 @@ class TestGetExtension:
         with open(test_file_path, 'r') as f:
             after_content = f.read()
         
-        # Test for the regression issue:
-        # 1. The function should return failure (success=False)
-        # 2. There should be an error message
-        # 3. The file should not be properly modified
+        # The test now expects success since the issue has been fixed
+        assert success == True, "Expected edit to succeed but it reported failure"
+        assert error_msg is None, "Expected no error message but got one"
         
-        assert success == False, "Expected edit to fail but it reported success"
-        assert error_msg is not None, "Expected error message but got None"
+        # Verify the file was correctly modified 
+        assert "@patch(\"pd.read_csv\")" not in after_content, "Original decorator still present"
+        assert "@patch(\"os.path.join\")" not in after_content, "Original decorator still present"
+        assert "@patch(\"pdd_wrapper.pd.read_csv\")" in after_content, "Modified decorator not found"
+        assert "@patch(\"pdd_wrapper.os.path.join\")" in after_content, "Modified decorator not found"
         
-        # Verify the file wasn't properly modified (reproducing the bug)
-        assert "@patch(\"pd.read_csv\")" in after_content, "Original decorator unexpectedly modified"
-        assert "@patch(\"os.path.join\")" in after_content, "Original decorator unexpectedly modified"
-        assert "@patch(\"pdd_wrapper.pd.read_csv\")" not in after_content, "Decorator unexpectedly updated"
-        assert "@patch(\"pdd_wrapper.os.path.join\")" not in after_content, "Decorator unexpectedly updated"
-        
-        print(f"Successfully reproduced the decorator path regression issue:")
+        print(f"Successfully verified that the decorator path issue has been fixed:")
         print(f"Edit function reported: success={success}, error={error_msg}")
-        print(f"File was not properly modified as expected, reproducing the bug.")
+        print(f"File was properly modified as expected, confirming the fix.")
         
     finally:
         # Clean up temporary file
