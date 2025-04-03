@@ -3,12 +3,8 @@ import os
 import sys
 import subprocess
 import shutil
-from datetime import datetime
 import json
-
-# Added for the new pytest-based reporting:
-# import pytest
-# import io
+from datetime import datetime
 
 from rich import print as rprint
 from rich.console import Console
@@ -59,6 +55,46 @@ def run_pytest_on_file(test_file: str) -> (int, int, int, str):
     except Exception as e:
         return 1, 1, 0, f"Error running pytest: {str(e)}"
 
+def format_log_for_output(log_structure):
+    """
+    Format the structured log into a human-readable text format with XML tags.
+    """
+    formatted_text = ""
+    
+    # Initial test output (only for first iteration)
+    if log_structure["iterations"] and "initial_test_output" in log_structure["iterations"][0]:
+        formatted_text += f"<pytest_output iteration=1>\n"
+        formatted_text += f"{log_structure['iterations'][0]['initial_test_output']}\n"
+        formatted_text += f"</pytest_output>\n\n"
+    
+    for i, iteration in enumerate(log_structure["iterations"]):
+        formatted_text += f"=== Attempt iteration {iteration['number']} ===\n\n"
+        
+        # Fix attempt with XML tags
+        if iteration.get("fix_attempt"):
+            formatted_text += f"<fix_attempt iteration={iteration['number']}>\n"
+            formatted_text += f"{iteration['fix_attempt']}\n"
+            formatted_text += f"</fix_attempt>\n\n"
+        
+        # Verification with XML tags
+        if iteration.get("verification"):
+            formatted_text += f"<verification_output iteration={iteration['number']}>\n"
+            formatted_text += f"{iteration['verification']}\n"
+            formatted_text += f"</verification_output>\n\n"
+        
+        # Post-fix test results (except for last iteration to avoid duplication)
+        if i < len(log_structure["iterations"]) - 1 and iteration.get("post_test_output"):
+            formatted_text += f"<pytest_output iteration={iteration['number']+1}>\n"
+            formatted_text += f"{iteration['post_test_output']}\n"
+            formatted_text += f"</pytest_output>\n\n"
+    
+    # Final run (using last iteration's post-test output)
+    if log_structure["iterations"] and log_structure["iterations"][-1].get("post_test_output"):
+        formatted_text += f"=== Final Pytest Run ===\n"
+        formatted_text += f"{log_structure['iterations'][-1]['post_test_output']}\n"
+    
+    return formatted_text
+
 def fix_error_loop(unit_test_file: str,
                    code_file: str,
                    prompt: str,
@@ -75,7 +111,7 @@ def fix_error_loop(unit_test_file: str,
     The tests are re-run in the same iteration after a fix to see if we've succeeded,
     so that 'attempts' matches the number of fix attempts (not the total test runs).
 
-    This updated version uses pytest's API directly to retrieve failures, errors, and warnings.
+    This updated version uses structured logging to avoid redundant entries.
 
     Inputs:
         unit_test_file: Path to the file containing unit tests.
@@ -117,6 +153,11 @@ def fix_error_loop(unit_test_file: str,
             rprint(f"[red]Error:[/red] Could not remove error log file: {e}")
             return False, "", "", 0, 0.0, ""
 
+    # Initialize structured log
+    log_structure = {
+        "iterations": []
+    }
+
     # We use fix_attempts to track how many times we actually call the LLM:
     fix_attempts = 0
     total_cost = 0.0
@@ -146,9 +187,9 @@ def fix_error_loop(unit_test_file: str,
             "initial_fails": initial_fails,
             "initial_errors": initial_errors, 
             "initial_warnings": initial_warnings,
-            "final_fails": 0,
-            "final_errors": 0,
-            "final_warnings": 0,
+            "final_fails": 0,  # Initialize to 0
+            "final_errors": 0,  # Initialize to 0
+            "final_warnings": 0,  # Initialize to 0
             "best_iteration": None,
             "iterations_info": []
         }
@@ -157,34 +198,58 @@ def fix_error_loop(unit_test_file: str,
         return False, "", "", fix_attempts, total_cost, model_name
 
     fails, errors, warnings = initial_fails, initial_errors, initial_warnings
+    
+    # Determine success state immediately
+    success = (fails == 0 and errors == 0 and warnings == 0)
+    
+    # Track if tests were initially passing
+    initially_passing = success
 
     while fix_attempts < max_attempts and total_cost < budget:
         iteration += 1
 
-        # Append to error log:
-        with open(error_log_file, "a") as elog:
-            elog.write(f"<pytest_output iteration={iteration}>\n")
-            elog.write(pytest_output + "\n")
-            elog.write("</pytest_output>\n")
+        # Add this iteration to the structured log
+        if iteration == 1:
+            # For first iteration, include the initial test output
+            iteration_data = {
+                "number": iteration,
+                "initial_test_output": pytest_output,
+                "fix_attempt": None,
+                "verification": None,
+                "post_test_output": None
+            }
+        else:
+            # For subsequent iterations, don't duplicate test output
+            iteration_data = {
+                "number": iteration,
+                "fix_attempt": None,
+                "verification": None,
+                "post_test_output": None
+            }
+        log_structure["iterations"].append(iteration_data)
             
         # If tests pass initially, no need to fix anything
-        if fails == 0 and errors == 0 and warnings == 0:
+        if success:
             rprint("[green]All tests already pass with no warnings! No fixes needed on this iteration.[/green]")
-            stats["final_fails"] = fails
-            stats["final_errors"] = errors
-            stats["final_warnings"] = warnings
+            stats["final_fails"] = 0  # Explicitly set to 0
+            stats["final_errors"] = 0  # Explicitly set to 0
+            stats["final_warnings"] = 0  # Explicitly set to 0
             stats["best_iteration"] = 0
             
-            # No need to read the files later - keep empty strings
-            # We're still setting success but will skip the loop
-            success = True
+            # Update structured log
+            log_structure["iterations"][-1]["post_test_output"] = pytest_output
+            
+            # Write formatted log to file
+            with open(error_log_file, "w") as elog:
+                elog.write(format_log_for_output(log_structure))
+            
+            # Set success to True (already determined)
+            # No need to read the files - keep empty strings for passing cases
             break
         
         iteration_header = f"=== Attempt iteration {iteration} ==="
         rprint(f"[bold blue]{iteration_header}[/bold blue]")
-        with open(error_log_file, "a") as elog:
-            elog.write(f"\n{iteration_header}\n\n")
-            elog.write(f"<fix_attempt iteration={iteration}>\n")
+        
         # Print to console (escaped):
         rprint(f"[magenta]Pytest output:[/magenta]\n{escape_brackets(pytest_output)}")
         if verbose:
@@ -202,6 +267,10 @@ def fix_error_loop(unit_test_file: str,
         # If tests are fully successful, we break out:
         if fails == 0 and errors == 0 and warnings == 0:
             rprint("[green]All tests passed with no warnings! Exiting loop.[/green]")
+            success = True  # Set success flag
+            stats["final_fails"] = 0  # Explicitly set to 0
+            stats["final_errors"] = 0  # Explicitly set to 0
+            stats["final_warnings"] = 0  # Explicitly set to 0
             break
 
         # We only attempt to fix if test is failing or has warnings:
@@ -251,20 +320,22 @@ def fix_error_loop(unit_test_file: str,
 
         # Call fix:
         try:
-            # Read error log file into pytest_output so it has history of all previous attempts:
-            with open(error_log_file, "r") as f:
-                pytest_output = f.read()
-
+            # Format the log for the LLM
+            formatted_log = format_log_for_output(log_structure)
+            
             updated_unit_test, updated_code, fixed_unit_test, fixed_code, analysis, cost, model_name = fix_errors_from_unit_tests(
                 unit_test_contents,
                 code_contents,
                 prompt,
-                pytest_output,
+                formatted_log,  # Use formatted log instead of reading the file
                 error_log_file,
                 strength,
                 temperature,
                 verbose=verbose
             )
+            
+            # Update the fix attempt in the structured log
+            log_structure["iterations"][-1]["fix_attempt"] = analysis
         except Exception as e:
             rprint(f"[red]Error during fix_errors_from_unit_tests call:[/red] {e}")
             break
@@ -311,15 +382,13 @@ def fix_error_loop(unit_test_file: str,
                 verify_stdout = verify_result.stdout or ""
                 verify_stderr = verify_result.stderr or ""
                 verify_output = verify_stdout + "\n" + verify_stderr
+                
+                # Update verification in structured log
+                log_structure["iterations"][-1]["verification"] = verify_output
             except Exception as e:
                 rprint(f"[red]Error running verification program:[/red] {e}")
                 verify_output = f"Verification program error: {e}"
-
-            with open(error_log_file, "a") as elog:
-                elog.write(f"</fix_attempt>\n\n")
-                elog.write(f"\n[Verification attempt at iteration {iteration}]\n<verification_output iteration={iteration}>\n")
-                elog.write(verify_output )
-                elog.write("</verification_output>\n")
+                log_structure["iterations"][-1]["verification"] = verify_output
 
             rprint(f"[blue]Verification program output:[/blue]\n{escape_brackets(verify_output)}")
 
@@ -327,8 +396,7 @@ def fix_error_loop(unit_test_file: str,
                 rprint("[red]Verification failed. Restoring last working code file from backup.[/red]")
                 try:
                     shutil.copy(code_backup, code_file)
-                    with open(error_log_file, "a") as elog:
-                        elog.write(f"Restored code file from backup: {code_backup}, because verification program failed to run.\n")
+                    log_structure["iterations"][-1]["verification"] += f"\nRestored code file from backup: {code_backup}, because verification program failed to run."
                 except Exception as e:
                     rprint(f"[red]Error restoring backup code file:[/red] {e}")
                     break
@@ -336,6 +404,14 @@ def fix_error_loop(unit_test_file: str,
         # Run pytest for the next iteration
         try:
             fails, errors, warnings, pytest_output = run_pytest_on_file(unit_test_file)
+            
+            # Update post-test output in structured log
+            log_structure["iterations"][-1]["post_test_output"] = pytest_output
+            
+            # Write updated structured log to file after each iteration
+            with open(error_log_file, "w") as elog:
+                elog.write(format_log_for_output(log_structure))
+            
             # Update iteration stats with post-fix results
             stats["iterations_info"][-1].update({
                 "post_fix_fails": fails,
@@ -345,40 +421,28 @@ def fix_error_loop(unit_test_file: str,
                             errors < iteration_stats["errors"] or 
                             warnings < iteration_stats["warnings"])
             })
+            
+            # Update success status based on latest results
+            success = (fails == 0 and errors == 0 and warnings == 0)
+            
+            # Update final stats
+            stats["final_fails"] = fails
+            stats["final_errors"] = errors
+            stats["final_warnings"] = warnings
         except Exception as e:
             rprint(f"[red]Error running pytest for next iteration:[/red] {e}")
             return False, "", "", fix_attempts, total_cost, model_name
 
-    # Final test run:
-    try:
-        final_fails, final_errors, final_warnings, final_output = run_pytest_on_file(unit_test_file)
-        stats["final_fails"] = final_fails
-        stats["final_errors"] = final_errors
-        stats["final_warnings"] = final_warnings
-    except Exception as e:
-        rprint(f"[red]Error running final pytest:[/red] {e}")
-        final_output = f"Error: {e}"
-        final_fails = final_errors = final_warnings = sys.maxsize
-        stats["final_fails"] = final_fails
-        stats["final_errors"] = final_errors
-        stats["final_warnings"] = final_warnings
-
-    with open(error_log_file, "a") as elog:
-        elog.write("\n=== Final Pytest Run ===\n")
-        elog.write(final_output + "\n")
-
-    rprint(f"[blue]Final pytest output:[/blue]\n{escape_brackets(final_output)}")
-
     # Possibly restore best iteration if the final run is not as good:
-    if best_iteration_info["attempt"] is not None:
+    if best_iteration_info["attempt"] is not None and not success:
         is_better_final = False
-        if final_errors < best_iteration_info["errors"]:
+        if stats["final_errors"] < best_iteration_info["errors"]:
             is_better_final = True
-        elif final_errors == best_iteration_info["errors"] and final_fails < best_iteration_info["fails"]:
+        elif stats["final_errors"] == best_iteration_info["errors"] and stats["final_fails"] < best_iteration_info["fails"]:
             is_better_final = True
-        elif (final_errors == best_iteration_info["errors"] and 
-              final_fails == best_iteration_info["fails"] and 
-              final_warnings < best_iteration_info["warnings"]):
+        elif (stats["final_errors"] == best_iteration_info["errors"] and 
+              stats["final_fails"] == best_iteration_info["fails"] and 
+              stats["final_warnings"] < best_iteration_info["warnings"]):
             is_better_final = True
         
         if not is_better_final:
@@ -396,6 +460,11 @@ def fix_error_loop(unit_test_file: str,
                 stats["final_errors"] = best_iteration_info["errors"]
                 stats["final_warnings"] = best_iteration_info["warnings"]
                 stats["best_iteration"] = best_iteration_info["attempt"]
+                
+                # Check if the best iteration had passing tests
+                success = (best_iteration_info["fails"] == 0 and 
+                          best_iteration_info["errors"] == 0 and 
+                          best_iteration_info["warnings"] == 0)
             except Exception as e:
                 rprint(f"[red]Error restoring best iteration backups:[/red] {e}")
         else:
@@ -404,10 +473,10 @@ def fix_error_loop(unit_test_file: str,
     else:
         stats["best_iteration"] = "final"
 
-    # Read final file contents
+    # Read final file contents, but only if tests weren't initially passing
+    # For initially passing tests, keep empty strings as required by the test
     try:
-        # Only read files if we attempted fixes or tests are still failing
-        if fix_attempts > 0 or not success:
+        if not initially_passing:
             with open(unit_test_file, "r") as f:
                 final_unit_test = f.read()
             with open(code_file, "r") as f:
@@ -421,12 +490,13 @@ def fix_error_loop(unit_test_file: str,
         # Still return at least 1 attempt to acknowledge the work done
         fix_attempts = 1
         
-    success = (final_fails == 0 and final_errors == 0 and final_warnings == 0)
-    if success:
-        rprint("[green]Final tests passed with no warnings.[/green]")
-    else:
-        rprint("[red]Final tests still failing or producing warnings.[/red]")
-
+    # Print summary statistics
+    rprint("\n[bold cyan]Summary Statistics:[/bold cyan]")
+    rprint(f"Initial state: {initial_fails} fails, {initial_errors} errors, {initial_warnings} warnings")
+    rprint(f"Final state: {stats['final_fails']} fails, {stats['final_errors']} errors, {stats['final_warnings']} warnings")
+    rprint(f"Best iteration: {stats['best_iteration']}")
+    rprint(f"Success: {success}")
+    
     # Calculate improvements
     stats["improvement"] = {
         "fails_reduced": initial_fails - stats["final_fails"],
@@ -436,12 +506,7 @@ def fix_error_loop(unit_test_file: str,
                               (1 - (stats["final_fails"] + stats["final_errors"] + stats["final_warnings"]) / 
                                    (initial_fails + initial_errors + initial_warnings)) * 100
     }
-
-    # Print summary statistics
-    rprint("\n[bold cyan]Summary Statistics:[/bold cyan]")
-    rprint(f"Initial state: {initial_fails} fails, {initial_errors} errors, {initial_warnings} warnings")
-    rprint(f"Final state: {stats['final_fails']} fails, {stats['final_errors']} errors, {stats['final_warnings']} warnings")
-    rprint(f"Best iteration: {stats['best_iteration']}")
+    
     rprint(f"Improvement: {stats['improvement']['fails_reduced']} fails, {stats['improvement']['errors_reduced']} errors, {stats['improvement']['warnings_reduced']} warnings")
     rprint(f"Overall improvement: {stats['improvement']['percent_improvement']:.2f}%")
 
@@ -480,4 +545,3 @@ if __name__ == "__main__":
     rprint(f"Total cost: ${total_cost:.6f}")
     rprint(f"Model used: {model_name}")
     rprint(f"Final unit test contents:\n{final_unit_test}")
-    rprint(f"Final code contents:\n{final_code}")
