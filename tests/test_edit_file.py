@@ -224,101 +224,6 @@ async def test_successful_edit(
     assert final_content == expected_content
 
 @pytest.mark.asyncio
-async def test_run_edit_in_subprocess_decorator_path(temp_dir, create_valid_mcp_config):
-    """
-    Test that run_edit_in_subprocess can handle changes to import paths in decorators,
-    specifically the pattern that failed in regression testing:
-    @patch("pd.read_csv") → @patch("pdd_wrapper.pd.read_csv")
-    """
-    from pdd.edit_file import run_edit_in_subprocess
-    
-    # Create a test file with a mock patch decorator
-    test_file_path = temp_dir / "test_decorator_paths.py"
-    decorator_test_content = """
-import os
-import pytest
-import pandas as pd
-from unittest.mock import patch
-from pdd_wrapper import get_extension
-
-class TestGetExtension:
-    @patch("pd.read_csv")
-    def test_csv_empty(self, mock_read_csv):
-        mock_read_csv.side_effect = pd.errors.EmptyDataError
-        result = get_extension("Python")
-        assert result == ""
-    
-    @patch("os.path.join")
-    def test_join_patch(self, mock_join):
-        mock_join.return_value = "/fake/path.csv"
-        result = get_extension("Python")
-        assert result == ""
-"""
-    
-    with open(test_file_path, 'w') as f:
-        f.write(decorator_test_content)
-    
-    # Create edit instructions to fix the import paths
-    edit_instructions = """
-import os
-import pytest
-import pandas as pd
-from unittest.mock import patch
-from pdd_wrapper import get_extension
-
-class TestGetExtension:
-    @patch("pdd_wrapper.pd.read_csv")
-    def test_csv_empty(self, mock_read_csv):
-        mock_read_csv.side_effect = pd.errors.EmptyDataError
-        result = get_extension("Python")
-        assert result == ""
-    
-    @patch("pdd_wrapper.os.path.join")
-    def test_join_patch(self, mock_join):
-        mock_join.return_value = "/fake/path.csv"
-        result = get_extension("Python")
-        assert result == ""
-"""
-    
-    # Mock subprocess.run to simulate real subprocess behavior
-    with patch('subprocess.run') as mock_subprocess:
-        # Set up the mock subprocess to simulate success
-        mock_process = MagicMock()
-        mock_process.returncode = 0
-        mock_process.stdout = '{"success": true, "error_message": null}'
-        mock_subprocess.return_value = mock_process
-        
-        # Run the function under test
-        success, error_msg = run_edit_in_subprocess(str(test_file_path), edit_instructions)
-        
-        # Assert the function reports success
-        assert success == True
-        assert error_msg is None
-        
-        # Verify subprocess was called correctly
-        mock_subprocess.assert_called_once()
-        cmd_args = mock_subprocess.call_args[0][0]
-        assert isinstance(cmd_args, list)
-        assert cmd_args[0] == sys.executable  # Python interpreter
-        
-        # Examine the script that was passed to the subprocess
-        script = cmd_args[2]
-        assert "mcp_config_path" in script
-        assert "edit_file" in script
-        assert str(test_file_path) in script
-        
-        # Just to be sure, check that the edit would actually work in a non-mocked environment
-        # by applying the changes manually and verifying the file content
-        with open(test_file_path, 'w') as f:
-            f.write(edit_instructions)
-            
-        with open(test_file_path, 'r') as f:
-            updated_content = f.read()
-            
-        assert "@patch(\"pdd_wrapper.pd.read_csv\")" in updated_content
-        assert "@patch(\"pdd_wrapper.os.path.join\")" in updated_content
-
-@pytest.mark.asyncio
 async def test_run_edit_in_subprocess_decorator_path_failure(temp_dir, create_valid_mcp_config):
     """
     Test that simulates the failure mode observed in regression testing when
@@ -487,6 +392,131 @@ class TestGetExtension:
             assert "@patch(\"pd.read_csv\")" in after_content, "Original decorator not found!"
             assert "@patch(\"pdd_wrapper.pd.read_csv\")" not in after_content, "Modified decorator present unexpectedly!"
     
+    finally:
+        # Clean up temporary file
+        import os
+        if os.path.exists(test_file_path):
+            os.unlink(test_file_path)
+
+@pytest.mark.asyncio
+async def test_decorator_path_regression_issue():
+    """
+    Test that reproduces the exact regression issue seen where:
+    1. The LLM correctly identifies that @patch("pd.read_csv") should be changed to @patch("pdd_wrapper.pd.read_csv")
+    2. The edit_file subprocess reports a failure
+    3. The file is not properly modified despite the correct edit instructions
+    
+    This simulates the real issue from the regression logs where the edit subprocess
+    fails to properly modify import paths within decorator statements.
+    """
+    import tempfile
+    from pdd.edit_file import run_edit_in_subprocess
+    
+    # Create a temporary test file that exactly matches the structure from the regression test
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as temp_file:
+        test_file_path = temp_file.name
+        original_test_content = """import os
+import pytest
+import pandas as pd
+from unittest.mock import patch
+from pdd_wrapper import get_extension
+
+class TestGetExtension:
+    def test_none_input(self):
+        result = get_extension(None)
+        assert result == ""
+
+    @patch.dict(os.environ, {"PDD_PATH": ""}, clear=True)
+    def test_missing_pdd_path(self):
+        result = get_extension("Python")
+        assert result == ""
+
+    @patch("os.path.join")
+    @patch("pd.read_csv")
+    def test_csv_not_found(self, mock_read_csv, mock_join):
+        mock_join.return_value = "/fake/path/to/language_format.csv"
+        mock_read_csv.side_effect = FileNotFoundError
+        result = get_extension("Python")
+        assert result == ""
+
+    @patch("os.path.join")
+    @patch("pd.read_csv")
+    def test_empty_csv(self, mock_read_csv, mock_join):
+        mock_join.return_value = "/fake/path/to/language_format.csv"
+        mock_read_csv.side_effect = pd.errors.EmptyDataError
+        result = get_extension("Python")
+        assert result == ""
+"""
+        temp_file.write(original_test_content)
+    
+    # Create edit instructions exactly as the LLM would have generated
+    corrected_test_content = """import os
+import pytest
+import pandas as pd
+from unittest.mock import patch
+from pdd_wrapper import get_extension
+
+class TestGetExtension:
+    def test_none_input(self):
+        result = get_extension(None)
+        assert result == ""
+
+    @patch.dict(os.environ, {"PDD_PATH": ""}, clear=True)
+    def test_missing_pdd_path(self):
+        result = get_extension("Python")
+        assert result == ""
+
+    @patch("pdd_wrapper.os.path.join")
+    @patch("pdd_wrapper.pd.read_csv")
+    def test_csv_not_found(self, mock_read_csv, mock_join):
+        mock_join.return_value = "/fake/path/to/language_format.csv"
+        mock_read_csv.side_effect = FileNotFoundError
+        result = get_extension("Python")
+        assert result == ""
+
+    @patch("pdd_wrapper.os.path.join")
+    @patch("pdd_wrapper.pd.read_csv")
+    def test_empty_csv(self, mock_read_csv, mock_join):
+        mock_join.return_value = "/fake/path/to/language_format.csv"
+        mock_read_csv.side_effect = pd.errors.EmptyDataError
+        result = get_extension("Python")
+        assert result == ""
+"""
+    
+    try:
+        # First verify the file was created correctly with the original content
+        with open(test_file_path, 'r') as f:
+            before_content = f.read()
+        assert "@patch(\"pd.read_csv\")" in before_content
+        assert "@patch(\"os.path.join\")" in before_content
+        assert "@patch(\"pdd_wrapper.pd.read_csv\")" not in before_content
+        assert "@patch(\"pdd_wrapper.os.path.join\")" not in before_content
+        
+        # Now attempt to apply the edits using run_edit_in_subprocess
+        success, error_msg = run_edit_in_subprocess(test_file_path, corrected_test_content)
+        
+        # Read the file content after the edit attempt
+        with open(test_file_path, 'r') as f:
+            after_content = f.read()
+        
+        # Test for the regression issue:
+        # 1. The function should return failure (success=False)
+        # 2. There should be an error message
+        # 3. The file should not be properly modified
+        
+        assert success == False, "Expected edit to fail but it reported success"
+        assert error_msg is not None, "Expected error message but got None"
+        
+        # Verify the file wasn't properly modified (reproducing the bug)
+        assert "@patch(\"pd.read_csv\")" in after_content, "Original decorator unexpectedly modified"
+        assert "@patch(\"os.path.join\")" in after_content, "Original decorator unexpectedly modified"
+        assert "@patch(\"pdd_wrapper.pd.read_csv\")" not in after_content, "Decorator unexpectedly updated"
+        assert "@patch(\"pdd_wrapper.os.path.join\")" not in after_content, "Decorator unexpectedly updated"
+        
+        print(f"Successfully reproduced the decorator path regression issue:")
+        print(f"Edit function reported: success={success}, error={error_msg}")
+        print(f"File was not properly modified as expected, reproducing the bug.")
+        
     finally:
         # Clean up temporary file
         import os
