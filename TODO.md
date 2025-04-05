@@ -1,5 +1,4 @@
 # TODO
-- [ ] benchmark fix the prompt based on diffs to the code file
 - [ ] Python 3.13 support
 
 ## On Deck
@@ -25,11 +24,12 @@
 - [ ] during fix rather than just have the fix loop check to see if the example crashed, have it use a llm to check if the results are largely correct still
 - [ ] separate out the failing test and then run fix loop on that
 - [ ] Use the prompts that use a certain module to generate tests for that module
-- [ ] MCP support for better context
 - [ ] debug using pdb in non-interactive mode
 - [ ] show what apis are available for a given module
 - [ ] Cache webscraping results
 - [ ] Retrieve what is most needed from a webscrape and condense it down
+- [ ] test out anthropic think tool
+- [ ] autogenerate the model.csv file and print out the strength of each model
 
 ## Bugs
 
