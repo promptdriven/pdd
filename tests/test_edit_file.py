@@ -518,3 +518,173 @@ class TestGetExtension:
         import os
         if os.path.exists(test_file_path):
             os.unlink(test_file_path)
+
+@pytest.mark.asyncio
+async def test_edit_file_preprocess_example(temp_dir):
+    """
+    Test that run_edit_in_subprocess can create content in an initially empty file,
+    based on the 'preprocess' example previously in edit_file_example.py.
+    """
+    preprocess_file_name = "foo.py"
+    preprocess_file_path = temp_dir / preprocess_file_name
+
+    # Expected content (originally PREPROCESS_INSTRUCTIONS)
+    expected_content = """import os
+import pytest
+import pandas as pd
+from unittest.mock import patch
+from pdd_wrapper import get_extension
+
+class TestGetExtension:
+    def test_none_input(self):
+        result = get_extension(None)
+        assert result == ""
+        # TESTTEST
+
+    def test_non_string_input(self):
+        assert get_extension(123) == ""
+        assert get_extension(True) == ""
+        assert get_extension([]) == ""
+
+    def test_empty_string_input(self):
+        result = get_extension("")
+        assert result == ""
+
+    def test_whitespace_input(self):
+        result = get_extension("   ")
+        assert result == ""
+
+    @patch.dict(os.environ, {"PDD_PATH": ""}, clear=True)
+    def test_missing_pdd_path(self):
+        result = get_extension("Python")
+        assert result == ""
+
+    @patch("pdd_wrapper.os.path.join")
+    @patch("pdd_wrapper.pd.read_csv")
+    def test_csv_not_found(self, mock_read_csv, mock_join):
+        mock_join.return_value = "/fake/path/to/language_format.csv"
+        mock_read_csv.side_effect = FileNotFoundError
+        result = get_extension("Python")
+        assert result == ""
+
+    @patch("pdd_wrapper.os.path.join")
+    @patch("pdd_wrapper.pd.read_csv")
+    def test_empty_csv(self, mock_read_csv, mock_join):
+        mock_join.return_value = "/fake/path/to/language_format.csv"
+        mock_read_csv.side_effect = pd.errors.EmptyDataError
+        result = get_extension("Python")
+        assert result == ""
+
+    @patch("pdd_wrapper.os.path.join")
+    @patch("pdd_wrapper.pd.read_csv")
+    def test_malformed_csv(self, mock_read_csv, mock_join):
+        mock_join.return_value = "/fake/path/to/language_format.csv"
+        mock_read_csv.side_effect = pd.errors.ParserError
+        result = get_extension("Python")
+        assert result == ""
+
+    @patch("pdd_wrapper.pd.read_csv")
+    def test_missing_required_columns(self, mock_read_csv, mock_join):
+        mock_join.return_value = "/fake/path/to/language_format.csv"
+        mock_df = pd.DataFrame({"language": ["Python"], "comment": ["#"]})
+        mock_read_csv.return_value = mock_df
+        result = get_extension("Python")
+        assert result == ""
+
+    @patch("pdd_wrapper.pd.read_csv")
+    def test_language_found(self, mock_read_csv, mock_join):
+        mock_join.return_value = "/fake/path/to/language_format.csv"
+        mock_df = pd.DataFrame({
+            "language": ["Python", "Java"],
+            "comment": ["#", "//"],
+            "extension": [".py", ".java"]
+        })
+        mock_read_csv.return_value = mock_df
+        result = get_extension("Python")
+        assert result == ".py"
+
+    @patch("pdd_wrapper.os.path.join")
+    @patch("pdd_wrapper.pd.read_csv")
+    def test_language_case_insensitivity(self, mock_read_csv, mock_join):
+        mock_join.return_value = "/fake/path/to/language_format.csv"
+        mock_df = pd.DataFrame({
+            "language": ["Python", "Java"],
+            "comment": ["#", "//"],
+            "extension": [".py", ".java"]
+        })
+        mock_read_csv.return_value = mock_df
+        assert get_extension("python") == ".py"
+        assert get_extension("PYTHON") == ".py"
+        assert get_extension("Python") == ".pya"
+        assert get_extension("pYtHoN") == ".py"
+
+    @patch("pdd_wrapper.os.path.join")
+    @patch("pdd_wrapper.pd.read_csv")
+    def test_language_not_found(self, mock_read_csv, mock_join):
+        mock_join.return_value = "/fake/path/to/language_format.csv"
+        mock_df = pd.DataFrame({
+            "language": ["Python", "Java"],
+            "comment": ["#", "//"],
+            "extension": [".py", ".java"]
+        })
+        mock_read_csv.return_value = mock_df
+        result = get_extension("Ruby")
+        assert result == ""
+
+    @patch("pdd_wrapper.os.path.join")
+    @patch("pdd_wrapper.pd.read_csv")
+    def test_invalid_extension(self, mock_read_csv, mock_join):
+        mock_join.return_value = "/fake/path/to/language_format.csv"
+        mock_df = pd.DataFrame({
+            "language": ["Python", "Invalid"],
+            "comment": ["#", "//"],
+            "extension": [".py", ""]
+        })
+        mock_read_csv.return_value = mock_df
+        result = get_extension("Invalid")
+        assert result == ""
+
+    @patch("pdd_wrapper.os.path.join")
+    @patch("pdd_wrapper.pd.read_csv")
+    def test_duplicate_language_entries(self, mock_read_csv, mock_join):
+        mock_join.return_value = "/fake/path/to/language_format.csv"
+        mock_df = pd.DataFrame({
+            "language": ["Python", "Python"],
+            "comment": ["#", "#"],
+            "extension": [".py", ".pyw"]
+        })
+        mock_read_csv.return_value = mock_df
+        result = get_extension("Python")
+        assert result == ".py"
+
+    def test_with_real_csv(self):
+        result = get_extension("Python")
+        assert result == ".py"
+
+if __name__ == "__main__":
+    pytest.main()
+"""
+
+    # Create an empty file first
+    with open(preprocess_file_path, 'w') as f:
+        f.write("")
+
+    # Use run_edit_in_subprocess to populate the file
+    success, error_msg = run_edit_in_subprocess(str(preprocess_file_path), expected_content)
+
+    # Assert success
+    assert success is True, f"run_edit_in_subprocess failed: {error_msg}"
+    assert error_msg is None
+
+    # Verify the final content
+    with open(preprocess_file_path, 'r') as f:
+        final_content = f.read()
+
+    # Compare content, normalizing line endings for cross-platform compatibility
+    expected_normalized = os.linesep.join(expected_content.splitlines())
+    final_normalized = os.linesep.join(final_content.splitlines())
+
+    assert final_normalized == expected_normalized, "File content does not match expected content"
+
+    # Clean up the created file (optional, as temp_dir handles it)
+    # os.unlink(preprocess_file_path)
