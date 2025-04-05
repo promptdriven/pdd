@@ -38,15 +38,20 @@ elif not os.path.isdir(PDD_PATH):
 
 # Define the names for test files
 EXAMPLE_FILE_NAME = "example_file_to_edit.txt"
-PREPROCESS_FILE_NAME = "preprocess.py"
+# PREPROCESS_FILE_NAME = "/Users/gregtanaka/pdd/staging/regression/foo.py" # Removed
 MCP_CONFIG_FILE_PATH = os.path.join(PDD_PATH, "mcp_config.json") # Config file used by the module
 
 # --- Helper Function to Create Files ---
 
 def create_example_files():
     """Creates the necessary dummy input file and MCP config file."""
-    # 1. Create the dummy text file to be edited
-    example_file_path = os.path.join(PDD_PATH, EXAMPLE_FILE_NAME)
+    # 1. Define the output directory path
+    output_dir = os.path.join(PDD_PATH, "output")
+    # Create the output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # 2. Create the dummy text file to be edited within the output directory
+    example_file_path = os.path.join(output_dir, EXAMPLE_FILE_NAME)
     print(f"Creating dummy file: {example_file_path}")
     initial_content = """Line 1: This is the original text.
 Line 2: Keep this line.
@@ -65,53 +70,7 @@ EXAMPLE_INSTRUCTIONS = """1. Change the word 'original' to 'UPDATED' on Line 1.
 2. Replace Line 3 entirely with 'Line 3: This line has been REPLACED.'
 3. Add a new line at the end: 'Line 5: Added by the agent.'"""
 
-PREPROCESS_INSTRUCTIONS = """To change `get_file_path` to camel case, you need to rename the function and its invocations. Here are the parts that need to be updated:
-
-### Function Rename
-Change the function definition from:
-```python
-def get_file_path(file_name: str) -> str:
-```
-to:
-```python
-def getFilePath(file_name: str) -> str:
-```
-
-### Update Invocations
-You need to update the calls to `get_file_path` as follows:
-
-1. In `process_backtick_includes`:
-   Change:
-   ```python
-   full_path = get_file_path(file_path)
-   ```
-   to:
-   ```python
-   full_path = getFilePath(file_path)
-   ```
-
-2. In `process_include_tags`:
-   Change:
-   ```python
-   full_path = get_file_path(file_path)
-   ```
-   to:
-   ```python
-   full_path = getFilePath(file_path)
-   ```
-
-### Summary of Changes
-
-#### Updated Function Definition
-```python
-def getFilePath(file_name: str) -> str:
-```
-
-#### Updated Function Calls
-```python
-full_path = getFilePath(file_path)
-```
-Make these changes in both occurrences where `get_file_path` is referenced."""
+# PREPROCESS_INSTRUCTIONS = """ ... """ # Removed
 
 def run_edit_file_test(file_name, instructions, verify_example=False):
     """
@@ -214,11 +173,12 @@ def run_example():
     # Create the necessary files in the PDD_PATH directory
     create_example_files()
     
-    # Run test 1: Example file
-    run_edit_file_test(EXAMPLE_FILE_NAME, EXAMPLE_INSTRUCTIONS, verify_example=True)
+    # Run test 1: Example file (now located in the output directory)
+    example_file_rel_path = os.path.join("output", EXAMPLE_FILE_NAME)
+    run_edit_file_test(example_file_rel_path, EXAMPLE_INSTRUCTIONS, verify_example=True)
     
-    # Run test 2: Preprocess.py file
-    run_edit_file_test(PREPROCESS_FILE_NAME, PREPROCESS_INSTRUCTIONS)
+    # Run test 2: Preprocess.py file # Removed
+    # run_edit_file_test(PREPROCESS_FILE_NAME, PREPROCESS_INSTRUCTIONS) # Removed
 
     print("\n--- All Examples Finished ---")
 
