@@ -1,3 +1,4 @@
+import os
 from pdd.summarize_directory import summarize_directory
 
 
@@ -36,8 +37,15 @@ context/click_example.py,"This is an old summary",2023-01-01T10:00:00"""
         print(f"\nTotal cost: ${total_cost:.4f}")  # Cost in USD
         print(f"Model used: {model_name}")
 
-        # save csv file
-        with open('output.csv', 'w') as file:
+        # Ensure the output directory exists
+        output_dir = 'output'
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Define the output file path
+        output_file_path = os.path.join(output_dir, 'output.csv')
+
+        # save csv file to the output directory
+        with open(output_file_path, 'w') as file:
             file.write(csv_output)
 
     except Exception as e:
