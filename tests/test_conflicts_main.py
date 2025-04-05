@@ -268,7 +268,7 @@ def test_quiet_mode(mock_rprint, mock_construct_paths, mock_conflicts_in_prompts
             'prompt2': 'Content of prompt2'
         },
         {
-            'output': 'output.csv'
+            'output': 'output/output.csv'
         },
         'some_language'
     )
@@ -296,10 +296,12 @@ def test_quiet_mode(mock_rprint, mock_construct_paths, mock_conflicts_in_prompts
     mock_rprint.assert_any_call("No conflicts detected or changes suggested.")
 
 
+@patch('csv.DictWriter')
 @patch('pdd.conflicts_main.conflicts_in_prompts')
 @patch('pdd.conflicts_main.construct_paths')
 @patch('pdd.conflicts_main.rprint')
-def test_force_option(mock_rprint, mock_construct_paths, mock_conflicts_in_prompts, mock_ctx):
+@patch('builtins.open', new_callable=mock_open)
+def test_force_option(mock_file, mock_rprint, mock_construct_paths, mock_conflicts_in_prompts, mock_dict_writer, mock_ctx):
     """Test conflicts_main with the force option enabled."""
     # Modify context to have force=True
     mock_ctx.obj['force'] = True
@@ -311,7 +313,7 @@ def test_force_option(mock_rprint, mock_construct_paths, mock_conflicts_in_promp
             'prompt2': 'Content of prompt2'
         },
         {
-            'output': 'output.csv'
+            'output': 'output/output.csv'
         },
         'some_language'
     )
@@ -322,12 +324,16 @@ def test_force_option(mock_rprint, mock_construct_paths, mock_conflicts_in_promp
     ]
     mock_conflicts_in_prompts.return_value = (sample_conflicts, 0.789012, 'model_force')
     
+    # Create a mock writer instance
+    mock_writer_instance = MagicMock()
+    mock_dict_writer.return_value = mock_writer_instance
+    
     # Call the function under test
     conflicts, total_cost, model_name = conflicts_main(
         ctx=mock_ctx,
         prompt1='path/to/prompt1',
         prompt2='path/to/prompt2',
-        output='path/to/output.csv'
+        output='output/output.csv'
     )
     
     # Assertions
@@ -346,14 +352,26 @@ def test_force_option(mock_rprint, mock_construct_paths, mock_conflicts_in_promp
         force=True,
         quiet=False,
         command='conflicts',
-        command_options={'output': 'path/to/output.csv'}
+        command_options={'output': 'output/output.csv'}
+    )
+    
+    # Ensure CSV file was opened correctly
+    mock_file.assert_called_once_with('output/output.csv', 'w', newline='')
+    
+    # Ensure DictWriter was instantiated correctly
+    mock_dict_writer.assert_called_once_with(mock_file.return_value, fieldnames=['prompt_name', 'change_instructions'])
+    
+    # Ensure writer methods were called correctly
+    mock_writer_instance.writeheader.assert_called_once()
+    mock_writer_instance.writerow.assert_called_once_with(
+        {'prompt_name': 'path/to/prompt1', 'change_instructions': 'Force Change A'}
     )
     
     # Ensure rprint was called for user feedback
     mock_rprint.assert_any_call("[bold green]Conflict analysis completed successfully.[/bold green]")
     mock_rprint.assert_any_call("[bold]Model used:[/bold] model_force")
     mock_rprint.assert_any_call("[bold]Total cost:[/bold] $0.789012")
-    mock_rprint.assert_any_call("[bold]Results saved to:[/bold] output.csv")
+    mock_rprint.assert_any_call("[bold]Results saved to:[/bold] output/output.csv")
 
 
 @patch('pdd.conflicts_main.conflicts_in_prompts')
@@ -368,7 +386,7 @@ def test_replace_prompt_names(mock_rprint, mock_construct_paths, mock_conflicts_
             'prompt2': 'Content of prompt2'
         },
         {
-            'output': 'output.csv'
+            'output': 'output/output.csv'
         },
         'some_language'
     )
