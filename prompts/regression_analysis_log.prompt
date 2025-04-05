@@ -42,12 +42,13 @@
 
 % Follow these instructions:
     <instructions>
-        1. Output an analysis of potential errors in the log files based on what the regression script does.
-        2. Output an analysis of potential errors in the generated prompt files.
-        3. Output an analysis of potential errors in the generated python files.
-        4. Output an analysis of potential errors in the generated csv files.
-        5. Output an analysis of potential errors in the generated text files.
-        6. Explain in detail what errors need to be fixed and conclusion on the regression run.
+        1. For each command, based on the regression script, write out a step by step process of how each can be determined to be correct or incorrect.
+        2. Output an analysis of potential errors in the log files based on what the regression script does.
+        3. Output an analysis of potential errors in the generated prompt files.
+        4. Output an analysis of potential errors in the generated python files.
+        5. Output an analysis of potential errors in the generated csv files.
+        6. Output an analysis of potential errors in the generated text files.
+        7. Explain in detail what errors need to be fixed and conclusion on the regression run.
     </instructions>
 
 % The output should be in Markdown format
