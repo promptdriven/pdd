@@ -60,6 +60,9 @@ def fix_main(
     # Check verification program requirement before any file operations
     if loop and not verification_program:
         raise click.UsageError("--verification-program is required when using --loop")
+    
+    # Initialize analysis_results to None to prevent reference errors
+    analysis_results = None
 
     try:
         # Construct file paths
