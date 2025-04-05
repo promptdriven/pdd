@@ -273,7 +273,7 @@ class TestGetExtension:
     # Create a mock MCP editor response indicating failure
     subprocess_output = """
 Subprocess working directory: /Users/gregtanaka/pdd
-Subprocess using MCP config at: /Users/gregtanaka/pdd/mcp_config.json
+Subprocess using MCP config at: /Users/gregtanaka/pdd/pdd/mcp_config.json
 MCP config exists: True
 Error: Failed to parse edit instructions for decorator pattern "@patch("pd.read_csv")" to "@patch("pdd_wrapper.pd.read_csv")"
 {"success": false, "error_message": "MCP editor failed to apply edit to decorator pattern"}
