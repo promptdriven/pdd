@@ -184,7 +184,7 @@ async def plan_edits(state: EditFileState) -> EditFileState:
     # Initialize Claude 3.7
     try:
         # Use environment variable for API key
-        llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", temperature=0)
+        llm = ChatAnthropic(model="claude-3-7-sonnet-20250219", temperature=1, max_tokens=64000, thinking={"type": "enabled", "budget_tokens": 1024})
         # Cache is set globally now, no need to pass it to the model
         
         # Prepare the tools and their descriptions
