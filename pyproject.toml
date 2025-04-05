@@ -71,6 +71,7 @@ include = ["pdd*"]
 "pdd" = [
     "prompts/*_LLM.prompt",
     "data/*",
+    "mcp_config.json",
     "*.zsh",
     "*.fish",
     "*.sh"
