@@ -59,17 +59,20 @@ log_timestamped() {
 run_pdd_command() {
     local command=$1
     local args="${@:2}"
-    log "Running: $PDD_SCRIPT --force --strength $STRENGTH --temperature $TEMPERATURE --output-cost $STAGING_PATH/regression/$COST_FILE $command $args"
-    $PDD_SCRIPT --force --strength $STRENGTH --temperature $TEMPERATURE --output-cost $STAGING_PATH/regression/$COST_FILE $command $args >> "$LOG_FILE" 2>&1
+    local full_command="$PDD_SCRIPT --force --strength $STRENGTH --temperature $TEMPERATURE --output-cost $STAGING_PATH/regression/$COST_FILE $command $args"
+    log_timestamped "----------------------------------------" # Separator before command start
+    log_timestamped "Starting command: $full_command" # Log the command starting
+    log "Running: $full_command"
+    $full_command >> "$LOG_FILE" 2>&1
     if [ $? -eq 0 ]; then
         log "Command completed successfully."
-        log_timestamped "Command: $PDD_SCRIPT --force --strength $STRENGTH --temperature $TEMPERATURE --output-cost $STAGING_PATH/regression/$COST_FILE $command $args - Completed successfully."
+        log_timestamped "Command: $full_command - Completed successfully."
     else
         log "Command failed."
-        log_timestamped "Command: $PDD_SCRIPT --force --strength $STRENGTH --temperature $TEMPERATURE --output-cost $STAGING_PATH/regression/$COST_FILE $command $args - Failed."
+        log_timestamped "Command: $full_command - Failed."
         exit 1
     fi
-    log "----------------------------------------"
+    # Removed separator from the end as it's now at the start
 }
 
 # Create regression test directory
