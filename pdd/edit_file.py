@@ -26,6 +26,7 @@ import sys
 from typing import TypedDict, Annotated, Optional, List, Tuple, Union, Sequence, Literal
 import aiofiles
 from pathlib import Path
+import importlib.resources
 
 # LangGraph imports
 from langgraph.graph import StateGraph, END, START
@@ -382,7 +383,7 @@ async def edit_file(file_path: str, edit_instructions: str, mcp_config_path: str
     Args:
         file_path: The path to the file to edit.
         edit_instructions: A description of the changes to make.
-        mcp_config_path: Optional path to MCP config. If None, will use 'mcp_config.json' in current directory.
+        mcp_config_path: Optional path to MCP config. If None, will look for 'pdd/mcp_config.json' within the package.
 
     Returns:
         A tuple containing:
@@ -401,11 +402,41 @@ async def edit_file(file_path: str, edit_instructions: str, mcp_config_path: str
 
     # 2. Load MCP Configuration
     if mcp_config_path is None:
-        mcp_config_path = os.path.join(current_dir, 'mcp_config.json')
+        # Default to looking inside the package directory
+        try:
+            # Use importlib.resources to find the file within the 'pdd' package
+            mcp_config_path_obj = importlib.resources.files('pdd').joinpath('mcp_config.json')
+            # Check if the resource exists and is a file
+            if mcp_config_path_obj.is_file():
+                 mcp_config_path = str(mcp_config_path_obj)
+                 logger.info(f"Using default MCP config from package: {mcp_config_path}")
+            else:
+                 # Handle case where default config isn't found in package
+                 # Try CWD as a fallback (or raise error?)
+                 fallback_path = os.path.join(os.getcwd(), 'pdd', 'mcp_config.json')
+                 if os.path.exists(fallback_path):
+                     mcp_config_path = fallback_path
+                     logger.warning(f"Default MCP config not found in package, using fallback: {fallback_path}")
+                 else:
+                     return False, f"Default MCP configuration 'pdd/mcp_config.json' not found in package or current directory."
+
+        except (ImportError, FileNotFoundError, Exception) as e:
+             # Handle errors during resource discovery (e.g., package not found)
+             logger.warning(f"Could not find default MCP config using importlib.resources: {e}. Trying CWD.")
+             fallback_path = os.path.join(os.getcwd(), 'pdd', 'mcp_config.json')
+             if os.path.exists(fallback_path):
+                 mcp_config_path = fallback_path
+                 logger.warning(f"Using fallback MCP config: {fallback_path}")
+             else:
+                return False, f"MCP configuration 'pdd/mcp_config.json' not found using importlib.resources or in current directory."
     
-    # Ensure we have an absolute path
-    mcp_config_path = os.path.abspath(mcp_config_path)
-    
+    # Ensure we have an absolute path if it's not None
+    if mcp_config_path:
+        mcp_config_path = os.path.abspath(mcp_config_path)
+    else:
+        # This case should ideally not be reached if the logic above is correct
+        return False, "MCP configuration path could not be determined."
+
     mcp_servers_config = {}
     try:
         # Log absolute path of config file
@@ -523,19 +554,34 @@ async def main():
         
     test_file_path = os.path.abspath("output/test_edit_file.txt")  # Use absolute path
     
-    # Use absolute path for MCP config
-    current_dir = os.getcwd()
-    mcp_config_path = os.path.join(current_dir, "mcp_config.json")
-    mcp_config_path = os.path.abspath(mcp_config_path)
-    
+    # --- Determine MCP Config Path for Example ---
+    # Option 1: Assume running from project root during development
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) # Get project root (assuming script is in pdd/)
+    mcp_config_path_example = os.path.join(project_root, 'pdd', 'mcp_config.json')
+
+    # Option 2: Try using importlib.resources (might work if package installed editable)
+    try:
+        mcp_config_path_obj = importlib.resources.files('pdd').joinpath('mcp_config.json')
+        if mcp_config_path_obj.is_file():
+            mcp_config_path_example = str(mcp_config_path_obj)
+        # else: keep the project root relative path
+    except Exception:
+        pass # Keep the project root relative path if importlib fails
+
+    mcp_config_path_example = os.path.abspath(mcp_config_path_example)
+    # --- /Determine MCP Config Path ---
+
     initial_content = "This is the initial content.\nIt has multiple lines."
     edit_instructions = "Replace the word 'initial' with 'edited' and add a new line at the end saying 'Edit complete.'"
 
-    # 1. Create dummy MCP config if it doesn't exist
-    if not os.path.exists(mcp_config_path):
+    # 1. Create dummy MCP config if it doesn't exist (using the determined path)
+    if not os.path.exists(mcp_config_path_example):
         # Log absolute path where config will be created
-        logger.info(f"MCP config not found. Creating dummy config at: {mcp_config_path}")
-        
+        logger.info(f"MCP config not found. Creating dummy config at: {mcp_config_path_example}")
+
+        # Ensure parent directory exists
+        os.makedirs(os.path.dirname(mcp_config_path_example), exist_ok=True)
+
         # IMPORTANT: Replace with your actual MCP server configuration
         # This dummy config assumes a server named 'my_editor_server' running via stdio
         dummy_config = {
@@ -546,9 +592,9 @@ async def main():
             }
         }
         try:
-            with open(mcp_config_path, 'w') as f:
+            with open(mcp_config_path_example, 'w') as f:
                 json.dump(dummy_config, f, indent=2)
-            logger.info(f"Dummy MCP config created at: {mcp_config_path}")
+            logger.info(f"Dummy MCP config created at: {mcp_config_path_example}")
         except Exception as e:
             logger.error(f"Could not create dummy MCP config: {e}")
             return
@@ -562,13 +608,13 @@ async def main():
     # 3. Run the edit function
     logger.info("Calling edit_file function...")
     # --- IMPORTANT ---
-    # Ensure your mcp_config.json points to a valid, running MCP server
+    # Ensure your pdd/mcp_config.json points to a valid, running MCP server
     # that provides text editing tools (e.g., replace_text, insert_line, etc.)
     # The dummy response in plan_edits assumes a tool named 'replace_text_tool_name' exists.
     # You MUST adapt the dummy response or implement a real LLM planner
     # based on the actual tools provided by your MCP server.
     # --- /IMPORTANT ---
-    success, error_msg = await edit_file(test_file_path, edit_instructions, mcp_config_path=mcp_config_path)
+    success, error_msg = await edit_file(test_file_path, edit_instructions, mcp_config_path=mcp_config_path_example) # Use example path
 
     # 4. Verify the result
     if success:
@@ -606,17 +652,35 @@ def run_edit_in_subprocess(file_path: str, edit_instructions: str) -> Tuple[bool
             - error_message (Optional[str]): Error message if unsuccessful, None otherwise
     """
     logger.info(f"Running edit_file in subprocess for: {file_path}")
-    
+
+    # --- Determine MCP Config Path for Subprocess ---
+    # Default to package location unless specified otherwise (though this func doesn't take it as arg)
+    mcp_config_abs_path = None
+    try:
+        mcp_config_path_obj = importlib.resources.files('pdd').joinpath('mcp_config.json')
+        if mcp_config_path_obj.is_file():
+             mcp_config_abs_path = str(mcp_config_path_obj)
+             logger.info(f"Subprocess using default MCP config from package: {mcp_config_abs_path}")
+        # else: # Fallback or error if needed, similar to edit_file function
+        # For simplicity, assume it exists in package or was handled by caller
+    except Exception as e:
+         logger.warning(f"Could not find default MCP config for subprocess via importlib: {e}. Trying CWD relative path.")
+         fallback_path = os.path.join(os.getcwd(), 'pdd', 'mcp_config.json')
+         if os.path.exists(fallback_path):
+             mcp_config_abs_path = fallback_path
+             logger.warning(f"Subprocess using fallback MCP config: {fallback_path}")
+
+    # Ensure we have an absolute path
+    if mcp_config_abs_path:
+        mcp_config_abs_path = os.path.abspath(mcp_config_abs_path)
+    else:
+        # Handle error: config path couldn't be determined
+        logger.error("MCP config path could not be determined for subprocess.")
+        return False, "MCP config path could not be determined for subprocess."
+
     # Get the actual directory of this module to pass to the subprocess
     module_dir = os.path.dirname(os.path.abspath(__file__))
-    
-    # Create absolute path for mcp_config.json in the current directory
-    current_dir = os.getcwd()
-    mcp_config_abs_path = os.path.join(current_dir, 'mcp_config.json')
-    mcp_config_abs_path = os.path.abspath(mcp_config_abs_path)
-    
-    logger.info(f"Using MCP config at: {mcp_config_abs_path}")
-    
+
     # Create a temporary Python script to run the async function
     script = f"""
 import asyncio
