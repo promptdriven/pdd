@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pdd-cli"
-version = "0.0.21"
+version = "0.0.22"
 description = "PDD (Prompt-Driven Development) Command Line Interface"
 readme = {file = "pypi_description.rst", content-type = "text/x-rst"}
 authors = [
@@ -34,26 +34,33 @@ keywords = [
 dependencies = [
     "GitPython==3.1.44",
     "Requests==2.32.3",
+    "aiofiles==24.1.0",
     "click==8.1.7",
+    "firecrawl-py",
+    "firebase_admin==6.6.0",
     "keyring==25.6.0",
-    "langchain==0.3.19",
-    "langchain_anthropic==0.3.8",
-    "langchain_community==0.3.18",
-    "langchain_core==0.3.40",
-    "langchain_fireworks==0.2.7",
-    "langchain_google_genai==2.0.11",
-    "langchain_google_vertexai==2.0.13",
-    "langchain_groq==0.2.4",
-    "langchain_ollama==0.2.3",
-    "langchain_openai==0.3.7",
+    "langchain==0.3.23",
+    "langchain_anthropic==0.3.10",
+    "langchain_community==0.3.21",
+    "langchain_core==0.3.51",
+    "langchain_fireworks==0.2.9",
+    "langchain_google_genai==2.1.2",
+    "langchain_google_vertexai==2.0.19",
+    "langchain_groq==0.3.2",
+    "langchain_mcp_adapters==0.0.7",
+    "langchain_ollama==0.3.0",
+    "langchain_openai==0.3.12",
     "langchain_together==0.3.0",
+    "langgraph==0.3.25",
+    "nest_asyncio==1.6.0",
     "pandas==2.2.3",
-    "pydantic==2.10.6",
-    "rich==13.9.4",
+    "psutil==5.9.0",
+    "pydantic==2.11.2",
+
+    "rich==14.0.0",
     "semver==3.0.2",
-    "setuptools==75.1.0",
-    "python-Levenshtein",
-]
+    "setuptools",
+    "python-Levenshtein"]
 requires-python = ">=3.11"
 
 [project.urls]
