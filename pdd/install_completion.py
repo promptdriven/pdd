@@ -19,11 +19,11 @@ def get_local_pdd_path() -> str:
         return os.environ["PDD_PATH"]
     else:
         try:
-            with importlib.resources.path("pdd", "cli.py") as p:
-                fallback_path = str(p.parent)
-                # Also set it back into the environment for consistency
-                os.environ["PDD_PATH"] = fallback_path
-                return fallback_path
+            p = importlib.resources.files("pdd").joinpath("cli.py")
+            fallback_path = str(p.parent)
+            # Also set it back into the environment for consistency
+            os.environ["PDD_PATH"] = fallback_path
+            return fallback_path
         except ImportError:
             rprint(
                 "[red]Error: Could not determine the path to the 'pdd' package. "
@@ -90,9 +90,9 @@ def get_completion_script_extension(shell: str) -> str:
 
 def install_completion():
     """
-    Install shell completion for the PDD CLI by detecting the user’s shell,
+    Install shell completion for the PDD CLI by detecting the user's shell,
     copying the relevant completion script, and appending a source command
-    to the user’s shell RC file if not already present.
+    to the user's shell RC file if not already present.
     """
     shell = get_current_shell()
     rc_file = get_shell_rc_path(shell)
