@@ -142,6 +142,12 @@ build:
 	@rm dist/*.tar.gz #don't upload source distribution
 	@twine upload --repository pypi dist/*.whl
 
+release:
+	@echo "Bumping version with commitizen"
+	@python -m commitizen bump
+	@echo "Building and uploading package"
+	@$(MAKE) build
+
 analysis:
 	@echo "Running regression analysis"
 	@mkdir -p staging/regression
