@@ -4,6 +4,36 @@
 # ZSH Completion for PDD CLI (Prompt-Driven Development)
 #
 # Save this file as "pdd_completion.zsh" and source it from your ~/.zshrc:
+#   source /path/to/pdd_completion.zsh
+#
+# The script will handle completion initialization automatically.
+#
+# After installation, typing:
+#   pdd <Tab>
+# will offer completions for subcommands and options as described in the PDD CLI README.
+##
+
+# First, make sure we're using zsh
+if [ -z "$ZSH_VERSION" ]; then
+   echo >&2 "pdd completion requires zsh."
+   return 1
+fi
+
+# Add this directory to fpath so ZSH can find our completion function
+script_dir=${0:A:h}
+fpath=($script_dir $fpath)
+
+# Check if we need to initialize completion system
+# Use command -v to check if compdef function exists
+if ! command -v compdef >/dev/null 2>&1; then
+    autoload -U compinit
+    compinit
+fi
+
+##
+# ZSH Completion for PDD CLI (Prompt-Driven Development)
+#
+# Save this file as "pdd_completion.zsh" and source it from your ~/.zshrc:
 #   autoload -U compinit && compinit
 #   fpath=(/path/to/this/file $fpath)
 #   source /path/to/pdd_completion.zsh
@@ -413,6 +443,13 @@ _pdd() {
   esac
 }
 
-compdef _pdd pdd
+# Register the _pdd function as a completion for pdd command
+# Use command -v to safely check if compdef is available again
+# (in case something went wrong with the initialization)
+if command -v compdef >/dev/null 2>&1; then
+  compdef _pdd pdd
+else
+  echo >&2 "Warning: Could not register pdd completion. Make sure ZSH completion system is working."
+fi
 
 # End of pdd_completion.zsh
