@@ -12,6 +12,7 @@ from rich.panel import Panel
 
 from .install_completion import install_completion as install_completion_main
 import pdd.install_completion
+from pdd import __version__
 
 pdd.install_completion.get_local_pdd_path()
 # ----------------------------------------------------------------------
@@ -46,7 +47,7 @@ console = Console()
 @click.option("--review-examples", is_flag=True,
               help="Review and optionally exclude few-shot examples before command execution.")
 @click.option('--local', is_flag=True, help='Run commands locally instead of in the cloud.')
-@click.version_option(version="0.0.22")
+@click.version_option(version=__version__)
 @click.pass_context
 def cli(
     ctx,
@@ -374,9 +375,9 @@ def crash(
 @cli.command(name="install_completion")
 def install_completion():
     """
-    Install shell completion for the PDD CLI by detecting the user’s shell,
+    Install shell completion for the PDD CLI by detecting the user's shell,
     copying the relevant completion script, and appending a source command
-    to the user’s shell RC file if not already present.
+    to the user's shell RC file if not already present.
     """
     return install_completion_main()
 
