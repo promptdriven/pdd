@@ -11,12 +11,10 @@
 - [ ] auto split modules into another sub module
 - [ ] auto check inconsistencies between modules
 - [ ] routlellm
-- [ ] online database of examples to reference
 - [ ] auto record which model works for each prompt
 - [ ] Use perplexica to automatically find context
 - [ ] use context caching during fixing errors
 - [ ] create a marketplace where people can earn LLM credits for their examples or people can put up bounties for examples
-- [ ] ability to check in known good examples
 - [ ] take a chat conversation and collapse down into a single prompt
 - [ ] warming option for temperature increase
 - [ ] strength option for strength increase
@@ -52,4 +50,3 @@
 
 - [ ] Update README with usage
 - [ ] Model support
-- [ ] prompt xml support

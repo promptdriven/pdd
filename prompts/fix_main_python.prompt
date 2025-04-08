@@ -1,9 +1,3 @@
-% Here is an example prompt generate as a reference:
-<example>
-   <example_prompt><include>context/generate/6/conflicts_main_python.prompt</include></example_prompt>
-   <example_code><include>context/generate/6/conflicts_main.py</include></example_code>
-</example>
-
 % You are an expert Python engineer. Your goal is to write a Python function, 'fix_main', that will be the CLI wrapper for fixing errors in code and unit tests. This function will handle the error fixing process using either the fix_errors_from_unit_tests function or fix_error_loop function depending on whether the --loop option is used.
 
 <include>./context/python_preamble.prompt</include>

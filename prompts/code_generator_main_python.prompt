@@ -1,9 +1,3 @@
-% Here is an example prompt and associated generated example code to be used as a reference for the generation of code for the prompt below:
-<example_generation>
-   <example_prompt><include>context/generate/7/code_generator_main_python.prompt</include></example_prompt>
-   <example_code><include>context/generate/7/code_generator_main.py</include></example_code>
-</example_generation>
-
 % Generate code for the following prompt:
 <prompt_to_generate_code_from>
    % You are an expert Python engineer. Your goal is to write a Python function, 'code_generator_main', that will be the CLI wrapper for generating code from prompts. This function will read a prompt file, generate code using the code_generator function, and handle the output location.

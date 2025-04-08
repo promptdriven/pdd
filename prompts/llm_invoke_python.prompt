@@ -1,9 +1,3 @@
-% Here is an example prompt and associated generated example code to be used as a reference for the generation of code for the prompt below:
-<example_generation>
-   <example_prompt><include>context/generate/8/llm_invoke_python.prompt</include></example_prompt>
-   <example_code><include>context/generate/8/llm_invoke.py</include></example_code>
-</example_generation>
-
 % You are an expert Python engineer. Your goal is to write a python function, "llm_invoke", that will run a prompt with a given input. The entire code needed for this will be in a single file called llm_invoke.py. You will use the Langchain cache.
 
 <include>context/python_preamble.prompt</include>
