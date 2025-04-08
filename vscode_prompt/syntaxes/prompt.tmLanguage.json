@@ -1,0 +1,288 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "PDD Prompt",
+  "scopeName": "text.prompt",
+  "fileTypes": [
+    "prompt"
+  ],
+  "patterns": [
+    {
+      "include": "#pdd-comment"
+    },
+    {
+      "include": "#xml-like-tag"
+    },
+    {
+      "include": "#triple-backtick-include"
+    },
+    {
+      "include": "#placeholder"
+    }
+  ],
+  "repository": {
+    "pdd-comment": {
+      "begin": "(<)(pdd)(>)",
+      "end": "(</)(pdd)(>)",
+      "name": "comment.block.pdd.prompt",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.definition.tag.begin.prompt"
+        },
+        "2": {
+          "name": "entity.name.tag.comment.prompt"
+        },
+        "3": {
+          "name": "punctuation.definition.tag.end.prompt"
+        }
+      },
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.definition.tag.begin.prompt"
+        },
+        "2": {
+          "name": "entity.name.tag.comment.prompt"
+        },
+        "3": {
+          "name": "punctuation.definition.tag.end.prompt"
+        }
+      }
+    },
+    "xml-like-tag": {
+      "patterns": [
+        {
+          "include": "#shell-tag-block"
+        },
+        {
+          "include": "#web-tag-block"
+        },
+        {
+          "include": "#include-tag"
+        }
+      ]
+    },
+    "shell-tag-block": {
+      "begin": "(<)(shell)(\\s+[^>]*)?(>)",
+      "end": "(</)(shell)\\s*(>)",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.definition.tag.begin.prompt"
+        },
+        "2": {
+          "name": "entity.name.tag.shell.prompt"
+        },
+        "3": {
+          "patterns": [
+            {
+              "include": "#tag-attributes"
+            }
+          ]
+        },
+        "4": {
+          "name": "punctuation.definition.tag.end.prompt"
+        }
+      },
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.definition.tag.begin.prompt"
+        },
+        "2": {
+          "name": "entity.name.tag.shell.prompt"
+        },
+        "3": {
+          "name": "punctuation.definition.tag.end.prompt"
+        }
+      },
+      "name": "meta.tag.block.shell.prompt",
+      "contentName": "markup.raw.shell.prompt"
+    },
+    "web-tag-block": {
+      "begin": "(<)(web)(\\s+[^>]*)?(>)",
+      "end": "(</)(web)\\s*(>)",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.definition.tag.begin.prompt"
+        },
+        "2": {
+          "name": "entity.name.tag.web.prompt"
+        },
+        "3": {
+          "patterns": [
+            {
+              "include": "#tag-attributes"
+            }
+          ]
+        },
+        "4": {
+          "name": "punctuation.definition.tag.end.prompt"
+        }
+      },
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.definition.tag.begin.prompt"
+        },
+        "2": {
+          "name": "entity.name.tag.web.prompt"
+        },
+        "3": {
+          "name": "punctuation.definition.tag.end.prompt"
+        }
+      },
+      "name": "meta.tag.block.web.prompt",
+      "contentName": "markup.raw.web.prompt"
+    },
+    "include-tag": {
+      "patterns": [
+        {
+          "match": "(<)(include)(\\s+[^>]*?)(\\s*/)(>)",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.tag.begin.prompt"
+            },
+            "2": {
+              "name": "entity.name.tag.include.prompt"
+            },
+            "3": {
+              "patterns": [
+                {
+                  "include": "#tag-attributes"
+                }
+              ]
+            },
+            "4": {
+              "name": "punctuation.definition.tag.self-closing.prompt"
+            },
+            "5": {
+              "name": "punctuation.definition.tag.end.prompt"
+            }
+          },
+          "name": "meta.tag.include.prompt"
+        },
+        {
+          "begin": "(<)(include)(\\s+[^>]*)?(>)",
+          "end": "(</)(include)\\s*(>)",
+          "beginCaptures": {
+            "1": {
+              "name": "punctuation.definition.tag.begin.prompt"
+            },
+            "2": {
+              "name": "entity.name.tag.include.prompt"
+            },
+            "3": {
+              "patterns": [
+                {
+                  "include": "#tag-attributes"
+                }
+              ]
+            },
+            "4": {
+              "name": "punctuation.definition.tag.end.prompt"
+            }
+          },
+          "endCaptures": {
+            "1": {
+              "name": "punctuation.definition.tag.begin.prompt"
+            },
+            "2": {
+              "name": "entity.name.tag.include.prompt"
+            },
+            "3": {
+              "name": "punctuation.definition.tag.end.prompt"
+            }
+          },
+          "name": "meta.tag.block.include.prompt",
+          "contentName": "markup.raw.include.prompt"
+        }
+      ]
+    },
+    "tag-attributes": {
+      "patterns": [
+        {
+          "match": "\\b([a-zA-Z0-9\\-]+)\\s*(=)",
+          "captures": {
+            "1": {
+              "name": "entity.other.attribute-name.prompt"
+            },
+            "2": {
+              "name": "punctuation.separator.key-value.prompt"
+            }
+          }
+        },
+        {
+          "include": "#string-double-quoted"
+        },
+        {
+          "include": "#string-single-quoted"
+        }
+      ]
+    },
+    "triple-backtick-include": {
+      "begin": "```",
+      "end": "```",
+      "name": "markup.raw.code.prompt",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.prompt"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.prompt"
+        }
+      },
+      "patterns": [
+        {
+          "match": "(<)([^>]+)(>)",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.angle-brackets.begin.prompt"
+            },
+            "2": {
+              "name": "string.interpolated.include.path.prompt"
+            },
+            "3": {
+              "name": "punctuation.definition.angle-brackets.end.prompt"
+            }
+          },
+          "name": "string.interpolated.include.prompt"
+        }
+      ]
+    },
+    "placeholder": {
+      "match": "(\\{)([^\\{\\}]+)(\\})",
+      "captures": {
+        "1": {
+          "name": "punctuation.definition.variable.begin.prompt"
+        },
+        "2": {
+          "name": "variable.parameter.content.prompt"
+        },
+        "3": {
+          "name": "punctuation.definition.variable.end.prompt"
+        }
+      },
+      "name": "variable.parameter.prompt"
+    },
+    "string-double-quoted": {
+      "begin": "\"",
+      "end": "\"",
+      "name": "string.quoted.double.prompt",
+      "patterns": [
+        {
+          "match": "\\\\.",
+          "name": "constant.character.escape.prompt"
+        }
+      ]
+    },
+    "string-single-quoted": {
+      "begin": "'",
+      "end": "'",
+      "name": "string.quoted.single.prompt",
+      "patterns": [
+        {
+          "match": "\\\\.",
+          "name": "constant.character.escape.prompt"
+        }
+      ]
+    }
+  }
+}
