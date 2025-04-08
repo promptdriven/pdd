@@ -18,7 +18,6 @@
 - [ ] take a chat conversation and collapse down into a single prompt
 - [ ] warming option for temperature increase
 - [ ] strength option for strength increase
-- [ ] VS code for prompt editing/display
 - [ ] during fix rather than just have the fix loop check to see if the example crashed, have it use a llm to check if the results are largely correct still
 - [ ] separate out the failing test and then run fix loop on that
 - [ ] Use the prompts that use a certain module to generate tests for that module
@@ -28,6 +27,7 @@
 - [ ] Retrieve what is most needed from a webscrape and condense it down
 - [ ] test out anthropic think tool
 - [ ] autogenerate the model.csv file and print out the strength of each model
+- [ ] MCP wrapper for the CLI
 
 ## Bugs
 

@@ -1,0 +1,18 @@
+% You are an expert in createing VS Code syntax highlighting files. Your task is to create a syntax highlighting file for the .prompt file extension.
+
+% Here is how to create a syntax highlighting file for a new file extension:
+<syntax-highlight-guide>
+    <web>https://code.visualstudio.com/api/language-extensions/syntax-highlight-guide</web>
+</syntax-highlight-guide>
+
+% Here is information about the .prompt file extension in PDD README:
+<pdd-readme>
+    <include>README.md</include>
+</pdd-readme>
+
+% Follow these instructions to create the syntax highlighting file for the .prompt file extension:
+<instructions>
+    1. Detail what special syntax of the .prompt file extension you will need to highlight from the PDD README.
+    2. Output the syntax highlighting file for the .prompt file extension.
+</instructions>
+
