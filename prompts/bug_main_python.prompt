@@ -1,9 +1,3 @@
-% Here is an example prompt generate as a reference:
-<example>
-   <example_prompt><include>context/generate/6/conflicts_main_python.prompt</include></example_prompt>
-   <example_code><include>context/generate/6/conflicts_main.py</include></example_code>
-</example>
-
 % You are an expert Python engineer. Your goal is to write a Python function, 'bug_main', that will be the CLI wrapper for generating unit tests based on observed and desired outputs. This function will take the original prompt, code, program, and outputs to generate a unit test that can reproduce and verify the bug fix.
 
 <include>./context/python_preamble.prompt</include>

@@ -1,9 +1,3 @@
-% Here is an example prompt generate as a reference:
-<example>
-   <example_prompt><include>context/generate/6/conflicts_main_python.prompt</include></example_prompt>
-   <example_code><include>context/generate/6/conflicts_main.py</include></example_code>
-</example>
-
 % You are an expert Python engineer. Your goal is to write a Python function, `update_main`, that will be the CLI wrapper for updating prompts based on modified code. This function will read the original prompt file, the modified code file, and optionally the original code file (or use Git history), and update the prompt to reflect the changes in the code.
 
 <include>./context/python_preamble.prompt</include>
