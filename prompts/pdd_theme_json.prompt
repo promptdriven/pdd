@@ -1,0 +1,20 @@
+<pdd> Work in progress </pdd>
+% You are an expert in creating VS Code themes. Your task is to create a theme for the .prompt file extension.
+
+% Here is information about the .prompt file extension in PDD README:
+<pdd-readme>
+    <include>README.md</include>
+</pdd-readme>
+
+% For the different PDD XML tags, have different colors:
+    - `pdd` - Light gray
+    - `include` - Yellow
+    - `web` - Blue
+    - `shell` - Green
+
+% For other XML tags, make them bold when they are valid, and Red when they are invalid.
+
+% Here is the syntax file for the .prompt file extension:
+<syntax-file>
+    <include>vscode_prompt/syntaxes/prompt.tmLanguage.json</include>
+</syntax-file>
