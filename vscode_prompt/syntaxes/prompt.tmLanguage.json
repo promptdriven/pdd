@@ -2,286 +2,274 @@
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
   "name": "PDD Prompt",
   "scopeName": "text.prompt",
-  "fileTypes": [
-    "prompt"
-  ],
   "patterns": [
     {
-      "include": "#pdd-comment"
+      "include": "#xml_tags"
     },
     {
-      "include": "#xml-like-tag"
+      "include": "#triple_backtick_include"
     },
     {
-      "include": "#triple-backtick-include"
+      "include": "#placeholders"
     },
     {
-      "include": "#placeholder"
+      "include": "#special_markers"
     }
   ],
   "repository": {
-    "pdd-comment": {
-      "begin": "(<)(pdd)(>)",
-      "end": "(</)(pdd)(>)",
-      "name": "comment.block.pdd.prompt",
-      "beginCaptures": {
-        "1": {
-          "name": "punctuation.definition.tag.begin.prompt"
-        },
-        "2": {
-          "name": "entity.name.tag.comment.prompt"
-        },
-        "3": {
-          "name": "punctuation.definition.tag.end.prompt"
-        }
-      },
-      "endCaptures": {
-        "1": {
-          "name": "punctuation.definition.tag.begin.prompt"
-        },
-        "2": {
-          "name": "entity.name.tag.comment.prompt"
-        },
-        "3": {
-          "name": "punctuation.definition.tag.end.prompt"
-        }
-      }
-    },
-    "xml-like-tag": {
+    "placeholders": {
       "patterns": [
         {
-          "include": "#shell-tag-block"
-        },
-        {
-          "include": "#web-tag-block"
-        },
-        {
-          "include": "#include-tag"
-        }
-      ]
-    },
-    "shell-tag-block": {
-      "begin": "(<)(shell)(\\s+[^>]*)?(>)",
-      "end": "(</)(shell)\\s*(>)",
-      "beginCaptures": {
-        "1": {
-          "name": "punctuation.definition.tag.begin.prompt"
-        },
-        "2": {
-          "name": "entity.name.tag.shell.prompt"
-        },
-        "3": {
-          "patterns": [
-            {
-              "include": "#tag-attributes"
-            }
-          ]
-        },
-        "4": {
-          "name": "punctuation.definition.tag.end.prompt"
-        }
-      },
-      "endCaptures": {
-        "1": {
-          "name": "punctuation.definition.tag.begin.prompt"
-        },
-        "2": {
-          "name": "entity.name.tag.shell.prompt"
-        },
-        "3": {
-          "name": "punctuation.definition.tag.end.prompt"
-        }
-      },
-      "name": "meta.tag.block.shell.prompt",
-      "contentName": "markup.raw.shell.prompt"
-    },
-    "web-tag-block": {
-      "begin": "(<)(web)(\\s+[^>]*)?(>)",
-      "end": "(</)(web)\\s*(>)",
-      "beginCaptures": {
-        "1": {
-          "name": "punctuation.definition.tag.begin.prompt"
-        },
-        "2": {
-          "name": "entity.name.tag.web.prompt"
-        },
-        "3": {
-          "patterns": [
-            {
-              "include": "#tag-attributes"
-            }
-          ]
-        },
-        "4": {
-          "name": "punctuation.definition.tag.end.prompt"
-        }
-      },
-      "endCaptures": {
-        "1": {
-          "name": "punctuation.definition.tag.begin.prompt"
-        },
-        "2": {
-          "name": "entity.name.tag.web.prompt"
-        },
-        "3": {
-          "name": "punctuation.definition.tag.end.prompt"
-        }
-      },
-      "name": "meta.tag.block.web.prompt",
-      "contentName": "markup.raw.web.prompt"
-    },
-    "include-tag": {
-      "patterns": [
-        {
-          "match": "(<)(include)(\\s+[^>]*?)(\\s*/)(>)",
-          "captures": {
-            "1": {
-              "name": "punctuation.definition.tag.begin.prompt"
-            },
-            "2": {
-              "name": "entity.name.tag.include.prompt"
-            },
-            "3": {
-              "patterns": [
-                {
-                  "include": "#tag-attributes"
-                }
-              ]
-            },
-            "4": {
-              "name": "punctuation.definition.tag.self-closing.prompt"
-            },
-            "5": {
-              "name": "punctuation.definition.tag.end.prompt"
-            }
-          },
-          "name": "meta.tag.include.prompt"
-        },
-        {
-          "begin": "(<)(include)(\\s+[^>]*)?(>)",
-          "end": "(</)(include)\\s*(>)",
+          "name": "variable.parameter.pdd",
+          "begin": "{{",
+          "end": "}}",
           "beginCaptures": {
-            "1": {
-              "name": "punctuation.definition.tag.begin.prompt"
-            },
-            "2": {
-              "name": "entity.name.tag.include.prompt"
-            },
-            "3": {
-              "patterns": [
-                {
-                  "include": "#tag-attributes"
-                }
-              ]
-            },
-            "4": {
-              "name": "punctuation.definition.tag.end.prompt"
-            }
+            "0": { "name": "punctuation.definition.template-expression.begin.pdd" }
           },
           "endCaptures": {
-            "1": {
-              "name": "punctuation.definition.tag.begin.prompt"
-            },
-            "2": {
-              "name": "entity.name.tag.include.prompt"
-            },
-            "3": {
-              "name": "punctuation.definition.tag.end.prompt"
-            }
-          },
-          "name": "meta.tag.block.include.prompt",
-          "contentName": "markup.raw.include.prompt"
-        }
-      ]
-    },
-    "tag-attributes": {
-      "patterns": [
-        {
-          "match": "\\b([a-zA-Z0-9\\-]+)\\s*(=)",
-          "captures": {
-            "1": {
-              "name": "entity.other.attribute-name.prompt"
-            },
-            "2": {
-              "name": "punctuation.separator.key-value.prompt"
-            }
+            "0": { "name": "punctuation.definition.template-expression.end.pdd" }
           }
         },
         {
-          "include": "#string-double-quoted"
-        },
-        {
-          "include": "#string-single-quoted"
+          "name": "variable.parameter.pdd",
+          "begin": "{",
+          "end": "}",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.template-expression.begin.pdd" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.template-expression.end.pdd" }
+          }
         }
       ]
     },
-    "triple-backtick-include": {
-      "begin": "```",
-      "end": "```",
-      "name": "markup.raw.code.prompt",
-      "beginCaptures": {
-        "0": {
-          "name": "punctuation.definition.string.begin.prompt"
+    "special_markers": {
+      "patterns": [
+        {
+          "name": "constant.language.marker.pdd",
+          "match": "\\b(__ALREADY_DOUBLED__|__END_ALREADY__)\\b"
         }
+      ]
+    },
+    "triple_backtick_include": {
+      "begin": "```\\s*<",
+      "end": ">\\s*```",
+      "name": "markup.raw.block.markdown",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.raw.begin.markdown" }
       },
       "endCaptures": {
-        "0": {
-          "name": "punctuation.definition.string.end.prompt"
-        }
+        "0": { "name": "punctuation.definition.raw.end.markdown" }
       },
       "patterns": [
         {
-          "match": "(<)([^>]+)(>)",
+          "name": "variable.other.include.backticks.pdd",
+          "match": "[^>]+"
+        }
+      ]
+    },
+    "xml_tags": {
+      "patterns": [
+        {
+          "include": "#pdd_tag"
+        },
+        {
+          "include": "#include_tag"
+        },
+        {
+          "include": "#web_tag"
+        },
+        {
+          "include": "#shell_tag"
+        },
+        {
+          "include": "#generic_xml_tag"
+        }
+      ]
+    },
+    "pdd_tag": {
+      "begin": "(<)(pdd)(>)",
+      "end": "(</)(pdd)(>)",
+      "name": "comment.block.xml.pdd",
+      "beginCaptures": {
+        "1": { "name": "punctuation.definition.tag.begin.xml.pdd" },
+        "2": { "name": "entity.name.tag.localname.xml.pdd" },
+        "3": { "name": "punctuation.definition.tag.end.xml.pdd" }
+      },
+      "endCaptures": {
+        "1": { "name": "punctuation.definition.tag.begin.xml.pdd" },
+        "2": { "name": "entity.name.tag.localname.xml.pdd" },
+        "3": { "name": "punctuation.definition.tag.end.xml.pdd" }
+      },
+      "patterns": [
+        {
+          "include": "#xml_content"
+        }
+      ]
+    },
+    "include_tag": {
+      "begin": "(<)(include)(>)",
+      "end": "(</)(include)(>)",
+      "name": "meta.tag.include.xml.pdd",
+      "contentName": "variable.other.include.content.xml.pdd",
+      "beginCaptures": {
+        "1": { "name": "punctuation.definition.tag.begin.xml.pdd" },
+        "2": { "name": "entity.name.tag.localname.xml.pdd variable.language.include.tag.xml.pdd" },
+        "3": { "name": "punctuation.definition.tag.end.xml.pdd" }
+      },
+      "endCaptures": {
+        "1": { "name": "punctuation.definition.tag.begin.xml.pdd" },
+        "2": { "name": "entity.name.tag.localname.xml.pdd variable.language.include.tag.xml.pdd" },
+        "3": { "name": "punctuation.definition.tag.end.xml.pdd" }
+      },
+      "patterns": [
+        {
+          "include": "#xml_content"
+        }
+      ]
+    },
+    "web_tag": {
+      "begin": "(<)(web)(>)",
+      "end": "(</)(web)(>)",
+      "name": "meta.tag.web.xml.pdd",
+      "beginCaptures": {
+        "1": { "name": "punctuation.definition.tag.begin.xml.pdd" },
+        "2": { "name": "entity.name.tag.localname.xml.pdd markup.tag.web.xml.pdd" },
+        "3": { "name": "punctuation.definition.tag.end.xml.pdd" }
+      },
+      "endCaptures": {
+        "1": { "name": "punctuation.definition.tag.begin.xml.pdd" },
+        "2": { "name": "entity.name.tag.localname.xml.pdd markup.tag.web.xml.pdd" },
+        "3": { "name": "punctuation.definition.tag.end.xml.pdd" }
+      },
+      "patterns": [
+        {
+          "name": "markup.underline.link.xml.pdd",
+          "match": "[^<]+"
+        },
+        {
+          "include": "#xml_content"
+        }
+      ]
+    },
+    "shell_tag": {
+      "begin": "(<)(shell)(>)",
+      "end": "(</)(shell)(>)",
+      "name": "meta.tag.shell.xml.pdd",
+      "beginCaptures": {
+        "1": { "name": "punctuation.definition.tag.begin.xml.pdd" },
+        "2": { "name": "entity.name.tag.localname.xml.pdd keyword.control.shell.tag.xml.pdd" },
+        "3": { "name": "punctuation.definition.tag.end.xml.pdd" }
+      },
+      "endCaptures": {
+        "1": { "name": "punctuation.definition.tag.begin.xml.pdd" },
+        "2": { "name": "entity.name.tag.localname.xml.pdd keyword.control.shell.tag.xml.pdd" },
+        "3": { "name": "punctuation.definition.tag.end.xml.pdd" }
+      },
+      "patterns": [
+        {
+          "name": "keyword.control.shell.content.xml.pdd",
+          "match": "[^<]+"
+        },
+        {
+          "include": "#xml_content"
+        }
+      ]
+    },
+    "generic_xml_tag": {
+      "patterns": [
+        {
+          "name": "meta.tag.xml.pdd",
+          "match": "(<)([^\\s>/]+)([^>]*?)(\\s*/)(>)",
           "captures": {
-            "1": {
-              "name": "punctuation.definition.angle-brackets.begin.prompt"
-            },
-            "2": {
-              "name": "string.interpolated.include.path.prompt"
-            },
-            "3": {
-              "name": "punctuation.definition.angle-brackets.end.prompt"
-            }
+            "1": { "name": "punctuation.definition.tag.begin.xml.pdd" },
+            "2": { "name": "entity.name.tag.localname.xml.pdd" },
+            "3": { "patterns": [{ "include": "#tag_attributes" }] },
+            "4": { "name": "punctuation.definition.tag.xml.pdd" },
+            "5": { "name": "punctuation.definition.tag.end.xml.pdd" }
+          }
+        },
+        {
+          "name": "meta.tag.xml.pdd",
+          "match": "(</)([^\\s>]+)(\\s*)(>)",
+          "captures": {
+            "1": { "name": "punctuation.definition.tag.begin.xml.pdd" },
+            "2": { "name": "entity.name.tag.localname.xml.pdd" },
+            "3": { "name": "invalid.illegal.unexpected-whitespace-in-closing-tag.xml" },
+            "4": { "name": "punctuation.definition.tag.end.xml.pdd" }
+          }
+        },
+        {
+          "begin": "(<)([^\\s>/]+)",
+          "end": "(>)",
+          "name": "meta.tag.xml.pdd",
+          "beginCaptures": {
+            "1": { "name": "punctuation.definition.tag.begin.xml.pdd" },
+            "2": { "name": "entity.name.tag.localname.xml.pdd" }
           },
-          "name": "string.interpolated.include.prompt"
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.tag.end.xml.pdd" }
+          },
+          "patterns": [
+            { "include": "#tag_attributes" },
+            {
+              "match": "$",
+              "name": "invalid.illegal.unclosed-tag.xml"
+            }
+          ]
+        },
+        {
+          "begin": "(<\\?)",
+          "end": "(\\?>)",
+          "name": "meta.tag.preprocessor.xml.pdd",
+          "beginCaptures": {
+            "1": { "name": "punctuation.definition.tag.begin.xml.pdd" }
+          },
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.tag.end.xml.pdd" }
+          }
+        },
+        {
+          "begin": "<!\\[CDATA\\[",
+          "end": "\\]\\]>",
+          "name": "string.unquoted.cdata.xml.pdd",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.xml.pdd" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.xml.pdd" }
+          }
+        },
+        {
+          "begin": "<!--",
+          "end": "-->",
+          "name": "comment.block.xml.pdd",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.comment.begin.xml.pdd" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.comment.end.xml.pdd" }
+          }
         }
       ]
     },
-    "placeholder": {
-      "match": "(\\{)([^\\{\\}]+)(\\})",
-      "captures": {
-        "1": {
-          "name": "punctuation.definition.variable.begin.prompt"
-        },
-        "2": {
-          "name": "variable.parameter.content.prompt"
-        },
-        "3": {
-          "name": "punctuation.definition.variable.end.prompt"
-        }
-      },
-      "name": "variable.parameter.prompt"
-    },
-    "string-double-quoted": {
-      "begin": "\"",
-      "end": "\"",
-      "name": "string.quoted.double.prompt",
+    "tag_attributes": {
       "patterns": [
         {
-          "match": "\\\\.",
-          "name": "constant.character.escape.prompt"
+          "match": "([^\\s=]+)\\s*(=)\\s*(\"[^\"]*\"|'[^']*'|[^\\s>]+)",
+          "captures": {
+            "1": { "name": "entity.other.attribute-name.localname.xml.pdd" },
+            "2": { "name": "punctuation.separator.key-value.xml.pdd" },
+            "3": { "name": "string.quoted.double.xml.pdd" }
+          }
         }
       ]
     },
-    "string-single-quoted": {
-      "begin": "'",
-      "end": "'",
-      "name": "string.quoted.single.prompt",
+    "xml_content": {
       "patterns": [
-        {
-          "match": "\\\\.",
-          "name": "constant.character.escape.prompt"
-        }
+        { "include": "#xml_tags" },
+        { "include": "#placeholders" },
+        { "include": "#special_markers" }
       ]
     }
   }

@@ -1,4 +1,4 @@
-% You are an expert in createing VS Code syntax highlighting files. Your task is to create a syntax highlighting file for the .prompt file extension.
+% You are an expert in creating VS Code syntax files. Your task is to create a syntax file for the .prompt file extension.
 
 % Here is how to create a syntax highlighting file for a new file extension:
 <syntax-highlight-guide>
@@ -10,9 +10,16 @@
     <include>README.md</include>
 </pdd-readme>
 
+% For the different PDD XML tags, have different scopes so that the syntax highlighting will be different for each tag:
+    - `pdd` - comment scope
+    - `include` or triple backticks - variable scope
+    - `web` - markup scope
+    - `shell` - keyword scope
+
+% For other XML tags, indicate when they are valid/complete, and when they are invalid/incomplete.
+
 % Follow these instructions to create the syntax highlighting file for the .prompt file extension:
 <instructions>
     1. Detail what special syntax of the .prompt file extension you will need to highlight from the PDD README.
     2. Output the syntax highlighting file for the .prompt file extension.
 </instructions>
-

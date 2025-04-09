@@ -31,6 +31,3 @@ Initial release of the PDD extension with basic syntax highlighting support.
 
 If you'd like to contribute to this extension, please visit our repository and submit a pull request.
 
-## License
-
-[Add your license here]
