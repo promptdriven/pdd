@@ -25,7 +25,7 @@ EXAMPLE_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(CONTEXT_DIR)/%_example.py,$(PY_O
 # Test files
 TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 
-.PHONY: all clean test requirements production coverage staging regression install build analysis fix
+.PHONY: all clean test requirements production coverage staging regression install build analysis fix update-extension
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -154,3 +154,10 @@ analysis:
 	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH pdd --strength .865 --local generate --output staging/regression/regression_analysis.md prompts/regression_analysis_log.prompt
 	@echo "Analysis results:"
 	@python -c "from rich.console import Console; from rich.syntax import Syntax; console = Console(); content = open('staging/regression/regression_analysis.md').read(); syntax = Syntax(content, 'python', theme='monokai', line_numbers=True); console.print(syntax)"
+
+# Update VS Code extension
+update-extension:
+	@echo "Updating VS Code extension"
+	@pdd --strength .865 --verbose --force generate --output vscode_prompt/syntaxes/prompt.tmLanguage.json prompts/prompt.tmLanguage_json.prompt
+	@cd vscode_prompt && vsce package
+	@code --install-extension vscode_prompt/prompt-0.0.1.vsix --force
