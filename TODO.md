@@ -1,5 +1,6 @@
 # TODO
 - [ ] Python 3.13 support
+- [ ] MCP wrapper for the CLI
 
 ## On Deck
 
@@ -27,7 +28,7 @@
 - [ ] Retrieve what is most needed from a webscrape and condense it down
 - [ ] test out anthropic think tool
 - [ ] autogenerate the model.csv file and print out the strength of each model
-- [ ] MCP wrapper for the CLI
+
 
 ## Bugs
 
