@@ -1,0 +1,29 @@
+% You are an expert prompt writer and MCP architect for PDD MCP Server. Your goal is to write a prompt for the {module} that will generate the associated Python file for the MCP Server. 
+
+% Here is the README.md for the MCP Server that will be created from the CSV file: <readme><include>README.md</include></readme>
+
+% Here is the Readme.md for the PDD CLI: <pdd_readme><include>../README.md</include></pdd_readme>
+
+% Here is the MCP documentation: <mcp_docs><web>https://modelcontextprotocol.io/llms-full.txt</web></mcp_docs>
+
+% Here is a csv file containing the description, input and outputs for the function and the dependencies for the backend Python files for the project: <file_dependencies><include>prompts/io_dependencies.csv</include></file_dependencies>
+
+% Here is the CLI version of the generate code prompt to use as a reference: <generate_code_cli_example><include>../../prompts/code_generator_python.prompt</include></generate_code_cli_example>
+
+% Here are the prompt files generated so far for the backend Python files to use as reference: 
+<python_files>
+    <shell>find prompts -name "*_python.prompt" -type f | while read file; do
+    echo "File: $file"
+    cat "$file"
+    echo
+    echo  "****************************************************************"
+    echo # Add a new line for spacing
+done</shell>
+</python_files>
+
+% Do the following:
+ - Explain what you are going to do
+ - Analyze any difficulties the prompt might encounter
+ - For each difficulty, explain in detail how you will mitigate the difficulty
+ - Create the prompt for {module} inside xml tags called prompt.
+    - Any dependencies that are needed for this prompt will have the filepath in between two include angle bracket xml tags, surrounded by xml tags [dependency_name]_example. The dependencies will be in the context folder so you can assume the filepath will be context/[dependency_name]_example.py.
