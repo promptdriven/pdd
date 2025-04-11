@@ -1,12 +1,16 @@
+# --- Start of handlers.py ---
 """
-MCP tool handlers for executing PDD CLI commands.
+MCP tool handlers for executing PDD CLI commands via the runner module.
+
+This module translates incoming MCP tool requests into PDD command-line
+invocations, executes them, and formats the results back into MCP format.
 """
 
 import logging
 import mcp.types as types
 from typing import Dict, List, Any
 
-# Assume runner module provides these (adjust import path if necessary)
+# Import from the sibling runner module
 from .runner import run_pdd_command, PddResult
 
 logger = logging.getLogger(__name__)
@@ -16,26 +20,41 @@ logger = logging.getLogger(__name__)
 async def handle_pdd_generate(arguments: Dict[str, Any]) -> types.CallToolResult:
     """
     Handles the 'pdd-generate' MCP tool call by executing the 'pdd generate' command.
+
+    Args:
+        arguments: A dictionary containing the validated arguments passed from the MCP client,
+                   matching the 'pdd-generate' tool schema. Expected keys include
+                   'prompt_file' (required), and optionals like 'output', 'strength',
+                   'temperature', 'local', 'force', 'verbose', 'quiet', 'output_cost',
+                   'review_examples'.
+
+    Returns:
+        An MCP CallToolResult object containing the stdout or stderr of the command execution.
     """
     logger.info("Handling pdd-generate tool call with arguments: %s", arguments)
-    cmd_list = ['pdd', 'generate']
+    cmd_list: List[str] = ['pdd', 'generate']
 
-    # Required arguments
+    # --- Argument Parsing (Specific to 'pdd generate') ---
+
+    # Required positional arguments
     prompt_file = arguments.get('prompt_file')
     if not prompt_file:
-         # This ideally shouldn't happen if schema validation works
-         return types.CallToolResult(isError=True, content=[types.TextContent(text="Missing required argument: prompt_file")])
-    cmd_list.append(prompt_file) # Positional argument
+         # Schema validation should prevent this, but handle defensively
+         logger.error("Missing required argument 'prompt_file' for pdd-generate.")
+         return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Server Error: Missing required argument prompt_file")])
+    cmd_list.append(prompt_file) # Add positional argument
 
-    # Optional arguments
+    # Optional arguments with values
     if arguments.get('output'):
         cmd_list.extend(['--output', arguments['output']])
     if arguments.get('strength') is not None:
         cmd_list.extend(['--strength', str(arguments['strength'])])
     if arguments.get('temperature') is not None:
         cmd_list.extend(['--temperature', str(arguments['temperature'])])
+    if arguments.get('output_cost'):
+        cmd_list.extend(['--output-cost', arguments['output_cost']]) # Assume output_cost is str if present
 
-    # Boolean flags / Global Options
+    # Boolean flags / Global Options handled as flags
     if arguments.get('local'):
         cmd_list.append('--local')
     if arguments.get('force'):
@@ -43,136 +62,33 @@ async def handle_pdd_generate(arguments: Dict[str, Any]) -> types.CallToolResult
     if arguments.get('verbose'):
          cmd_list.append('--verbose')
     if arguments.get('quiet'):
+         # Note: Runner might handle verbosity, but pass flag if defined
          cmd_list.append('--quiet')
-    if arguments.get('output_cost'):
-         cmd_list.extend(['--output-cost', arguments['output_cost']])
     if arguments.get('review_examples'):
          cmd_list.append('--review-examples')
 
+    # --- Command Execution ---
+    logger.debug("Constructed command list: %s", cmd_list)
+    try:
+        pdd_result: PddResult = await run_pdd_command(cmd_list)
+    except Exception as e:
+        logger.exception("An unexpected error occurred while running pdd command: %s", cmd_list)
+        return types.CallToolResult(isError=True, content=[types.TextContent(text=f"Internal Server Error: {e}")])
 
-    # Execute the command
-    pdd_result: PddResult = await run_pdd_command(cmd_list)
-
-    # Format the result
+    # --- Result Formatting ---
     if pdd_result.success:
+        logger.info("pdd generate command succeeded.")
         content = [types.TextContent(text=pdd_result.stdout)]
         is_error = False
-        logger.info("pdd generate succeeded.")
     else:
-        error_text = f"PDD command failed with exit code {{pdd_result.exit_code}}.\nSTDERR:\n{{pdd_result.stderr}}"
-        # Optionally include stdout for context on failure
-        # if pdd_result.stdout:
-        #    error_text = f"STDOUT:\n{{pdd_result.stdout}}\n\n{{error_text}}"
+        logger.warning("pdd generate command failed with exit code %d.", pdd_result.exit_code)
+        error_text = f"PDD command 'generate' failed with exit code {pdd_result.exit_code}.\n"
+        if pdd_result.stdout: # Include stdout context if available on error
+             error_text += f"\n--- STDOUT ---\n{pdd_result.stdout}\n"
+        error_text += f"\n--- STDERR ---\n{pdd_result.stderr}"
         content = [types.TextContent(text=error_text)]
         is_error = True
-        logger.error("pdd generate failed.")
 
     return types.CallToolResult(content=content, isError=is_error)
 
-# --- Add handlers for ALL other PDD commands below ---
-# handle_pdd_example
-# handle_pdd_test
-# handle_pdd_preprocess
-# handle_pdd_fix
-# handle_pdd_split
-# handle_pdd_change
-# handle_pdd_update
-# handle_pdd_detect
-# handle_pdd_conflicts
-# handle_pdd_crash
-# handle_pdd_trace
-# handle_pdd_bug
-# handle_pdd_auto_deps
-# ... (implement each following the pattern above, adapting arg parsing based on pdd_readme)
-
-# Consider creating a helper function for common argument processing if patterns emerge
-# def _build_common_cmd_list(base_cmd: list[str], arguments: dict[str, Any]) -> list[str]:
-#     # Handles global options like --local, --force, --verbose etc.
-#     pass
-
-
-# Example for a command with different arg types (like fix)
-# async def handle_pdd_fix(arguments: Dict[str, Any]) -> types.CallToolResult:
-#     logger.info("Handling pdd-fix tool call with arguments: %s", arguments)
-#     cmd_list = ['pdd', 'fix']
-#     # Positional Args
-#     cmd_list.append(arguments['prompt_file'])
-#     cmd_list.append(arguments['code_file'])
-#     cmd_list.append(arguments['unit_test_file'])
-#     if arguments.get('error_file'): # Optional positional
-#         cmd_list.append(arguments['error_file'])
-#     # Optional Flags with values
-#     if arguments.get('output_test'): cmd_list.extend(['--output-test', arguments['output_test']])
-#     if arguments.get('output_code'): cmd_list.extend(['--output-code', arguments['output_code']])
-#     if arguments.get('output_results'): cmd_list.extend(['--output-results', arguments['output_results']])
-#     if arguments.get('verification_program'): cmd_list.extend(['--verification-program', arguments['verification_program']])
-#     if arguments.get('max_attempts') is not None: cmd_list.extend(['--max-attempts', str(arguments['max_attempts'])])
-#     if arguments.get('budget') is not None: cmd_list.extend(['--budget', str(arguments['budget'])])
-#     # Boolean flags
-#     if arguments.get('loop'): cmd_list.append('--loop')
-#     if arguments.get('auto_submit'): cmd_list.append('--auto-submit')
-#     # Add global options if needed
-#     # ...
-#     pdd_result = await run_pdd_command(cmd_list)
-#     # ... format CallToolResult ...
-#     return types.CallToolResult(...)
-
-```
-
-**Dependencies for Generation:**
-
-The generation process for `handlers.py` will need the context of `runner.py`. Include it as follows:
-
-```xml
-<runner_example>
-import asyncio
-import logging
-from pdd_mcp_server.tools.runner import run_pdd_command, PddResult
-
-# Configure logging
-logging.basicConfig(level=logging.INFO, 
-                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("pdd_example")
-
-async def main():
-    """Asynchronous main function demonstrating PDD CLI command usage."""
-    # Example 1: Basic usage - run a simple command
-    result = await run_pdd_command(['pdd', 'version'])
-    # Handle the result
-    if result.success:
-        logger.info(f"PDD version command succeeded with output:\n{{result.stdout}}")
-    else:
-        logger.error(f"PDD version command failed: {{result.stderr}}")
-    
-    # Example 2: Run a command with arguments
-    result = await run_pdd_command(['pdd', 'generate', '--project-path', './my_project', 
-                                   '--output-dir', './output'])
-    # Check the result
-    if result.success:
-        logger.info("Generation completed successfully")
-        logger.info(f"Output: {{result.stdout}}")
-    else:
-        logger.error(f"Generation failed with exit code {{result.exit_code}}")
-        logger.error(f"Error message: {{result.stderr}}")
-    
-    # Example 3: Run a command with a custom timeout (30 seconds)
-    try:
-        result = await run_pdd_command(['pdd', 'complex-operation', '--large-dataset'], 
-                                      timeout=30)
-        if result.success:
-            logger.info("Complex operation completed successfully")
-        else:
-            logger.warning(f"Complex operation failed or timed out: {{result.stderr}}")
-            logger.warning(f"Exit code: {{result.exit_code}}")
-    except FileNotFoundError:
-        logger.critical("PDD executable not found in PATH. Please install PDD CLI.")
-    
-    # Example 4: How to access all results
-    result = await run_pdd_command(['pdd', 'analyze', '--project', './source'])
-    print(f"Command successful: {{result.success}}")
-    print(f"Exit code: {{result.exit_code}}")
-    print(f"Standard output:\n{{result.stdout}}")
-    print(f"Standard error:\n{{result.stderr}}")
-
-if __name__ == "__main__":
-    asyncio.run(main())
+# --- End of handlers.py ---
