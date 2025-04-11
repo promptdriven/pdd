@@ -8,8 +8,7 @@ from pdd_mcp_server.tools.handlers import (
     handle_pdd_generate,
     handle_pdd_test,
     handle_pdd_fix,
-    get_handler,
-    TOOL_HANDLERS
+    get_handler
 )
 
 # Set up logging
@@ -83,7 +82,23 @@ async def demonstrate_handlers():
     
     # Example 5: List all available handlers
     logger.info("\n=== Example 5: Available PDD command handlers ===")
-    for tool_name in TOOL_HANDLERS.keys():
+    handler_names = [
+        "pdd-generate",
+        "pdd-example",
+        "pdd-test",
+        "pdd-preprocess",
+        "pdd-fix",
+        "pdd-split",
+        "pdd-change",
+        "pdd-update",
+        "pdd-detect",
+        "pdd-conflicts",
+        "pdd-crash",
+        "pdd-trace",
+        "pdd-bug",
+        "pdd-auto-deps"
+    ]
+    for tool_name in handler_names:
         logger.info(f"  - {tool_name}")
 
 def process_result(result: types.CallToolResult, command: str):

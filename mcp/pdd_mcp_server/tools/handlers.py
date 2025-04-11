@@ -43,7 +43,7 @@ def _add_global_options(cmd_list: List[str], arguments: Dict[str, Any]):
 def _format_result(pdd_result: PddResult, command_name: str) -> types.CallToolResult:
     """Formats the PddResult into an MCP CallToolResult."""
     if pdd_result.success:
-        content = [types.TextContent(text=pdd_result.stdout)]
+        content = [types.TextContent(text=pdd_result.stdout, type="text")]
         is_error = False
         logger.info("pdd %s succeeded.", command_name)
     else:
@@ -55,7 +55,7 @@ def _format_result(pdd_result: PddResult, command_name: str) -> types.CallToolRe
         else:
              error_text += "\nNo STDERR output."
 
-        content = [types.TextContent(text=error_text)]
+        content = [types.TextContent(text=error_text, type="text")]
         is_error = True
         logger.error("pdd %s failed. Exit code: %d. Stderr: %s", command_name, pdd_result.exit_code, pdd_result.stderr)
 
