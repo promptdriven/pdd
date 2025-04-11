@@ -1,0 +1,193 @@
+You are an expert prompt writer and MCP architect for PDD MCP Server. Your goal is to write a prompt for generating the `pdd_mcp_server/main.py` Python file, which serves as the main entry point for the application.
+
+This script orchestrates the server setup: initializing the server instance, registering all defined PDD tools with their corresponding handlers, setting up the stdio transport mechanism, and running the main asynchronous event loop.
+
+**Core Tasks for `main.py`:**
+
+1.  **Imports:** Import `asyncio`, `logging`, `sys`, the `Server` class and `StdioServerTransport` (or stream handling utilities) from the `mcp` SDK, `create_server` from `.server`, `definitions` from `.tools`, and `handlers` from `.tools`.
+2.  **Logging Setup:** Configure the standard `logging` module at the beginning of the script. Set the logging level (e.g., `INFO`) and explicitly configure the output handler to use `sys.stderr`. This is critical to avoid interfering with JSON-RPC communication on `stdout`.
+3.  **Tool Handler Mapping:** Create a dictionary that maps the string names of the tools (e.g., `"pdd-generate"`, `"pdd-test"`) defined in `definitions.PDD_TOOLS` to their corresponding asynchronous handler functions imported from the `handlers` module (e.g., `handlers.handle_pdd_generate`, `handlers.handle_pdd_test`). Ensure this map covers **all** tools intended to be exposed.
+4.  **`main_async` Function:** Define the main asynchronous function:
+    *   Log the server startup.
+    *   Call `create_server()` to get the configured `Server` instance.
+    *   Iterate through the `definitions.PDD_TOOLS` list. For each `tool_def`:
+        *   Look up the corresponding handler function in the mapping dictionary using `tool_def.name`.
+        *   If a handler is found, call the server's tool registration method (assume `server.add_tool(tool_def, handler)` - **note:** the actual method might differ in the SDK). Log success or failure for each registration attempt.
+        *   If no handler is found for a defined tool, log a warning.
+    *   Log the total number of registered tools or an error if none were registered.
+    *   Initialize the stdio transport. The most robust way for stdio is likely getting explicit async reader/writer streams for stdin/stdout. Use `reader, writer = await asyncio.open_connection(None, None, stdin=sys.stdin.buffer, stdout=sys.stdout.buffer)`.
+    *   Log that the server is running and waiting for messages.
+    *   Start the server's main loop. Assume a method like `await server.run(reader, writer)` exists, passing the obtained streams. **This is a critical assumption about the SDK API.** The actual call might involve the `StdioServerTransport` instance directly.
+    *   Wrap the `server.run` call in a `try...finally` block to ensure shutdown logging. Include `except` blocks for `ConnectionResetError` (client disconnect) and `asyncio.CancelledError`. Log any other exceptions.
+    *   In the `finally` block, ensure the writer stream is closed if it exists and is open.
+5.  **Entry Point:** Use the `if __name__ == "__main__":` guard. Inside it:
+    *   Call `asyncio.run(main_async())`.
+    *   Wrap this call in a `try...except KeyboardInterrupt:` to handle graceful shutdown via Ctrl+C, logging an appropriate message. Catch any other potential critical exceptions during startup/shutdown and exit with a non-zero code.
+
+**Code Structure Example (Illustrative - Adapt SDK calls as needed):**
+
+```python
+#!/usr/bin/env python
+"""
+Main entry point for the PDD MCP Server.
+
+Initializes the server, registers tools, sets up the stdio transport,
+and runs the main asynchronous event loop.
+"""
+
+import asyncio
+import logging
+import sys
+
+# Assume SDK provides these - adjust imports as necessary based on actual SDK structure
+from mcp.server import Server # Assuming Server class exists
+# If StdioServerTransport is used directly:
+# from mcp.server.stdio import StdioServerTransport
+import mcp.types as types # Likely needed for type hints
+
+# Project-specific imports
+from .server import create_server
+from .tools import definitions
+from .tools import handlers # Import the handlers module
+
+# --- Logging Setup ---
+# Configure basic logging to stderr (MCP clients often capture stderr)
+logging.basicConfig(
+    level=logging.INFO, # Or DEBUG for more verbose logs
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    stream=sys.stderr # Explicitly log to stderr for MCP stdio transport
+)
+logger = logging.getLogger(__name__)
+
+# --- Tool Handler Mapping ---
+# Map tool names (from definitions) to handler functions (from handlers)
+TOOL_HANDLERS = {{{{ # Map ALL tool names from definitions.py to handlers.py functions
+    "pdd-generate": handlers.handle_pdd_generate,
+    "pdd-example": handlers.handle_pdd_example,
+    "pdd-test": handlers.handle_pdd_test,
+    "pdd-preprocess": handlers.handle_pdd_preprocess,
+    "pdd-fix": handlers.handle_pdd_fix,
+    "pdd-split": handlers.handle_pdd_split,
+    "pdd-change": handlers.handle_pdd_change,
+    "pdd-update": handlers.handle_pdd_update,
+    "pdd-detect": handlers.handle_pdd_detect,
+    "pdd-conflicts": handlers.handle_pdd_conflicts,
+    "pdd-crash": handlers.handle_pdd_crash,
+    "pdd-trace": handlers.handle_pdd_trace,
+    "pdd-bug": handlers.handle_pdd_bug,
+    "pdd-auto-deps": handlers.handle_pdd_auto_deps,
+    # Add entries for ALL other defined tools...
+}}}}
+
+async def main_async():
+    """Asynchronous main function to set up and run the server."""
+    logger.info("Starting PDD MCP Server...")
+    server: Server = None # Initialize to None
+    writer: asyncio.StreamWriter = None # Initialize to None
+
+    try:
+        # 1. Create Server Instance
+        server = create_server() # Type hint assumed available from .server
+
+        # 2. Register Tools
+        logger.info("Registering PDD tools...")
+        registered_count = 0
+        for tool_def in definitions.PDD_TOOLS:
+            handler = TOOL_HANDLERS.get(tool_def.name)
+            if handler:
+                try:
+                    # *** SDK ASSUMPTION: server.add_tool exists and is synchronous ***
+                    # If it's async, use 'await server.add_tool(...)'
+                    server.add_tool(tool_def, handler)
+                    logger.debug("Registered tool: %s", tool_def.name)
+                    registered_count += 1
+                except Exception as e:
+                     logger.error("Failed to register tool '%s': %s", tool_def.name, e, exc_info=True)
+            else:
+                logger.warning("No handler found for tool definition: %s. Skipping registration.", tool_def.name)
+
+        if registered_count == 0:
+             logger.error("CRITICAL: No tools were successfully registered. Server will not be functional.")
+             # Depending on desired behavior, could exit here:
+             # sys.exit(1)
+        else:
+             logger.info("Successfully registered %d tools.", registered_count)
+
+
+        # 3. Initialize Stdio Transport - Get async streams for stdin/stdout
+        # This is generally preferred for direct stdio handling with asyncio
+        logger.info("Initializing stdio transport streams...")
+        try:
+            reader, writer = await asyncio.open_connection(
+                None, None, # No host/port for stdio
+                stdin=sys.stdin.buffer,
+                stdout=sys.stdout.buffer
+            )
+            logger.info("Stdio streams opened successfully.")
+        except Exception as stream_err:
+            logger.critical("Failed to open stdio streams: %s", stream_err, exc_info=True)
+            sys.exit(1) # Cannot proceed without streams
+
+        # 4. Run Server Loop
+        # *** SDK ASSUMPTION: server.run takes reader and writer streams ***
+        logger.info("PDD MCP Server running on stdio. Waiting for messages...")
+        await server.run(reader, writer) # Pass streams to the server's run method
+
+    except ConnectionResetError:
+         logger.info("Client connection reset.")
+    except asyncio.CancelledError:
+         logger.info("Server task cancelled (e.g., during shutdown).")
+    except Exception as e:
+        # Catch any unexpected errors during the main loop
+        logger.exception("Server loop encountered an unhandled exception.")
+    finally:
+        logger.info("PDD MCP Server shutting down...")
+        if writer and not writer.is_closing():
+            logger.debug("Closing writer stream.")
+            try:
+                writer.close()
+                await writer.wait_closed()
+                logger.debug("Writer stream closed.")
+            except Exception as close_err:
+                logger.error("Error closing writer stream: %s", close_err, exc_info=True)
+        # Perform any other necessary cleanup for the server or transport if applicable
+        # if server:
+        #    await server.shutdown() # If an explicit shutdown method exists
+
+
+# --- Entry Point ---
+if __name__ == "__main__":
+    try:
+        asyncio.run(main_async())
+    except KeyboardInterrupt:
+        logger.info("Server stopped by user (KeyboardInterrupt).")
+        sys.exit(0) # Clean exit on Ctrl+C
+    except Exception as e:
+        # Catch critical errors during startup (e.g., stream opening) or final shutdown
+        logger.critical("Critical error during server startup or final shutdown: %s", e, exc_info=True)
+        sys.exit(1) # Non-zero exit code indicates error
+
+```
+
+% Here is how to use 
+<server_example>
+    <include>context/server_example.py</include>
+</server_example>
+
+<definitions_example>
+    <include>context/definitions_example.py</include>
+</definitions_example>
+
+<handlers_example>
+    <include>context/handlers_example.py</include>
+</handlers_example>
+
+**Final Check:**
+
+Ensure the generated prompt clearly instructs the LLM on:
+*   Setting up logging to `stderr`.
+*   Mapping *all* tool names to handlers.
+*   Using `asyncio` correctly for stdio streams and the main loop.
+*   Including robust error handling for registration, stream opening, and the main run loop.
+*   Using the standard entry point structure.
+*   Acknowledging SDK API assumptions where necessary.

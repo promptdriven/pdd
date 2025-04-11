@@ -34,7 +34,7 @@ echo "Directory path: $DIR_PATH"
 
 # Step 3: Generate code from the prompt
 echo "Generating code for module: $MODULE..."
-pdd --strength .865 --temperature 1 generate --output "$PATH_COLUMN" "prompts/${MODULE}_python.prompt"
+pdd --strength .865 --temperature 0 generate --output "$PATH_COLUMN" "prompts/${MODULE}_python.prompt"
 
 # Step 4: Generate example code
 echo "Generating example code for module: $MODULE..."
