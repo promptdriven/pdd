@@ -4,7 +4,7 @@ OpenAI,"grok-2-1212",2,10,1255,"https://api.x.ai/v1",XAI_API_KEY,tiktoken,o200k_
 Anthropic,"claude-3-5-haiku-20241022",1,5,1259,,ANTHROPIC_API_KEY,anthropic,claude-3-sonnet-20240229,8192,,False
 OpenAI,"deepseek-coder",0.14,0.28,1279,https://api.deepseek.com/beta,DEEPSEEK_API_KEY,autotokenizer,deepseek-coder-7b-instruct-v1.5,8192,,False
 Google,"gemini-2.0-flash-thinking-exp-01-21",.1,.4,1291,,GOOGLE_API_KEY,,,8192,,False
-GoogleVertexAI,"gemini-2.0-pro-exp-02-05",1.25,5,1299,,VERTEX_AI_API_KEY,,,8192,,False
+GoogleVertexAI,"gemini-2.5-pro-exp-03-25",1.25,5,1299,,VERTEX_AI_API_KEY,,,8192,,False
 Anthropic,claude-3-7-sonnet-20250219,3,15,1312,,ANTHROPIC_API_KEY,anthropic,claude-3-sonnet-20240229,64000,,False
 Google,gemini-2.5-pro-exp-03-25,1.25,5,1313,,GOOGLE_API_KEY,,,8192,,False
 OpenAI,"deepseek-r1-distill-llama-70b-specdec",5,5,1314,https://api.groq.com/openai/v1,GROQ_API_KEY,autotokenizer,deepseek-coder-7b-instruct-v1.5,16384,,False

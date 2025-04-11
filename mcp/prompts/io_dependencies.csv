@@ -1,0 +1,66 @@
+filename,description,inputs,outputs,dependencies,sequence
+"pdd_mcp_server/__init__.py","Standard Python package marker. Makes the 'pdd_mcp_server' directory importable as a Python package. This file is typically empty and serves only to indicate 
+that the directory should be treated as a package.","Inputs: None","Outputs: None (Marks directory as a package)","",1
+"pdd_mcp_server/tools/__init__.py","Tools sub-package marker. Makes the 'pdd_mcp_server/tools' directory importable as a Python sub-package. This file is typically empty but could 
+potentially be used to expose a consolidated list of tools or a registration function for convenience, importing elements from sibling modules like definitions.py and handlers.py.","Inputs: 
+None","Outputs: None (Marks directory as a sub-package)","",2
+"pyproject.toml","Project configuration and build file using the TOML format. Defines essential project metadata such as the package name ('pdd-mcp-server'), version, author, license (MIT), 
+and description. Specifies runtime dependencies required for the server to function (e.g., 'mcp', potentially 'httpx' if runner uses it, though subprocess is more likely) and development 
+dependencies (e.g., 'pytest'). Configures the build backend (e.g., 'hatchling', 'setuptools'). Crucially, it defines the script entry point for tools like 'uvx' or console scripts, mapping a
+command name (e.g., 'pdd-mcp-server') to the main execution function (likely in 'pdd_mcp_server.main'). Uses standard TOML syntax.","Inputs: Project structure, Metadata (name, version, 
+author, license, description), List of runtime dependencies (e.g., 'mcp'), List of development dependencies (e.g., 'pytest'), Entry point definition (e.g., `pdd-mcp-server = 
+pdd_mcp_server.main:main_func`)","Outputs: Configuration for build tools (pip, uv, hatch), Definition of installable package, Definition of executable script entry point for uvx/pip 
+install.","",3
+"pdd_mcp_server/server.py","Defines and configures the core MCP server instance using the 'mcp' Python SDK. This involves instantiating `mcp.server.Server` with the server's identity (name 
+like 'pdd-mcp-server', version read from package metadata perhaps) and declaring its capabilities to connecting clients. The primary capability declared here will be 'tools' set to True, 
+indicating it can list and execute tools. It might also enable 'logging' if the server intends to send log messages via MCP notifications. This module focuses solely on creating and 
+configuring the server object itself, abstracting away the transport and execution loop which are handled in main.py. Uses `mcp.server.Server` and `mcp.types`.","Inputs: Server Name (str), 
+Server Version (str), Server Capabilities (dict, e.g., `{'tools': {'listChanged': False}, 'logging': {}}`)","Outputs: An initialized instance of `mcp.server.Server` configured with name, 
+version, and capabilities.","mcp.server, mcp.types",4
+"pdd_mcp_server/tools/definitions.py","Defines the static structure and schema for all PDD commands exposed as MCP tools. It imports `mcp.types` and potentially `pydantic` for schema 
+generation. It iterates through the list of desired PDD commands (generate, test, fix, etc., based on the README) and creates an `mcp.types.Tool` object for each. Each `Tool` object 
+contains: `name` (e.g., 'pdd-generate'), `description` (human-readable explanation), and `inputSchema` (a dictionary representing the JSON Schema for the tool's arguments). The `inputSchema`
+meticulously defines each parameter corresponding to a `pdd <command>` option/argument (e.g., 'prompt_file', 'output', 'strength', 'loop'), specifying its type ('string', 'number', 
+'boolean', 'array'), description, and whether it's required. This file acts as the authoritative source for how clients should interact with the tools.","Inputs: Implicit knowledge of all 
+relevant `pdd-cli` commands and their specific arguments, types, defaults, and descriptions (from pdd_readme).","Outputs: A list or dictionary containing configured `mcp.types.Tool` 
+instances, one for each exposed PDD command.","mcp.types, typing, pydantic (optional)",5
+"pdd_mcp_server/tools/runner.py","Provides a dedicated utility function or class for executing `pdd-cli` commands as subprocesses. This module abstracts the complexities of interacting with 
+the external CLI. It likely defines a function like `run_pdd_command(cmd_list: list, timeout: int = 60) -> PddResult`. This function takes a list of strings (the command and its arguments, 
+e.g., ['pdd', 'generate', 'in.prompt']), uses `shutil.which('pdd')` to find the executable path, and then executes it using `subprocess.run` (or an async equivalent like 
+`asyncio.create_subprocess_exec`). It captures stdout and stderr (decoded as UTF-8), waits for completion (with a timeout), and checks the return code. It handles potential errors like 
+`FileNotFoundError` (if pdd isn't found) or `TimeoutExpired`. It returns a structured object (e.g., a dataclass `PddResult`) containing the success status (bool, based on return code), 
+stdout (str), stderr (str), and exit_code (int). This module should be entirely independent of MCP concepts. Uses `subprocess`, `typing`, `shutil`, potentially `asyncio`.","Inputs: 
+`cmd_list` (list): A list containing the 'pdd' command and all its arguments/options. `timeout` (int, optional): Maximum execution time in seconds.","Outputs: A structured result, likely a 
+dataclass or named tuple (e.g., `PddResult(success: bool, stdout: str, stderr: str, exit_code: int)`), representing the outcome of the subprocess execution.","subprocess, typing, shutil, 
+asyncio (optional)",6
+"pdd_mcp_server/tools/handlers.py","Contains the Python functions that handle the logic for each MCP tool invocation (`tools/call` requests). It imports `mcp.types` and the runner function 
+from `tools/runner.py`. For each tool defined in `definitions.py`, there's a corresponding async handler function (e.g., `async def handle_pdd_generate(arguments: dict) -> 
+mcp.types.CallToolResult:`). This function receives the validated `arguments` dictionary from the MCP client. Its primary job is to translate these arguments into a command-line list 
+suitable for `pdd-cli` (e.g., `['pdd', 'generate', '--output', arguments['output'], arguments['prompt_file']]`). It handles boolean flags (e.g., adding '--loop' if `arguments['loop']` is 
+true) and optional arguments. It then calls `runner.run_pdd_command` with the constructed list. Based on the `PddResult` returned by the runner (success status, stdout, stderr), it 
+constructs and returns an `mcp.types.CallToolResult`. If the runner indicates success, the result contains the relevant output (usually stdout) as `mcp.types.TextContent` and 
+`isError=False`. If the runner indicates failure, the result contains the error message (usually stderr) and `isError=True`.","Inputs: `arguments` (dict): A dictionary containing the 
+validated arguments for the specific tool being called, matching the `inputSchema` from definitions.py. Passed by the MCP SDK.","Outputs: Returns an `mcp.types.CallToolResult` instance 
+containing `content` (list of `TextContent` or potentially `ResourceContent`) and `isError` (bool) indicating the success or failure of the underlying PDD command execution.","mcp.types, 
+typing, .runner",7
+"pdd_mcp_server/main.py","The main entry point for the MCP server application, particularly when run via `uvx pdd-mcp-server` or `python -m pdd_mcp_server`. It orchestrates the server setup 
+and execution. It imports the configured `Server` instance from `server.py`, the tool definitions from `tools/definitions.py`, and the handler functions from `tools/handlers.py`. It iterates
+through the defined tools, registering each tool's handler function with the server instance (e.g., `server.add_tool(tool_definition, handler_function)` or using decorators if the SDK 
+supports it). It then initializes the `StdioServerTransport` provided by the `mcp` SDK. It connects the configured server instance to this transport. Finally, it starts the server's main 
+asynchronous event loop (e.g., using `asyncio.run(server.run(transport.reader, transport.writer, ...))`) to listen for incoming JSON-RPC messages on stdin and send responses/notifications on
+stdout. Uses `mcp`, `asyncio`, `.server`, `.tools.definitions`, `.tools.handlers`.","Inputs: Stdin stream containing JSON-RPC messages from the MCP client. Environment variables (passed 
+implicitly, potentially used by pdd-cli).","Outputs: Stdout stream sending JSON-RPC messages to the MCP client. Stderr stream for logging (can be configured via MCP logging or direct 
+prints). Process exit code.","asyncio, mcp, .server, .tools.definitions, .tools.handlers",8
+"README.md","Project documentation file in Markdown format. Provides essential information for users and developers. Covers: Project purpose (PDD CLI to MCP bridge), Features (Exposes PDD 
+commands), Prerequisites (Python, uv, pdd-cli installation and authentication), Installation (via uvx, or pip for development), Usage (running with uvx, configuring clients like Claude 
+Desktop with JSON example), Authentication Notes (handled by pdd-cli), Exposed Tools (table mapping MCP tools to PDD commands), Architecture overview, Development setup, Troubleshooting 
+tips, Contribution guidelines link, License information. (Content provided in the initial prompt).","Inputs: Project details, Usage instructions, Configuration examples, List of PDD commands
+to expose.","Outputs: Human-readable documentation for the project repository and package distribution.","",9
+"LICENSE","Contains the full legal text of the MIT License, as specified in the README.md. This file ensures clarity on the permissions and limitations associated with using and distributing
+the software.","Inputs: Standard MIT License text.","Outputs: Legal license document for the software.","",10
+".gitignore","Specifies intentionally untracked files and directories that Git should ignore. This typically includes Python virtual environment directories (e.g., `.venv/`), bytecode cache 
+files (`__pycache__/`, `*.pyc`), build artifacts (`build/`, `dist/`, `*.egg-info/`), test reports (`.pytest_cache/`, `htmlcov/`), environment files (`.env`), and OS-specific files (e.g., 
+`.DS_Store`). Uses standard .gitignore pattern syntax.","Inputs: Patterns for files/directories to ignore.","Outputs: Configuration for the Git version control system.","",11
+"CONTRIBUTING.md","(Optional but recommended) A Markdown file outlining guidelines for contributing to the project. It might cover topics like: How to report bugs (issue tracker), How to 
+suggest features, Code style guidelines (e.g., PEP 8, using black/ruff), Pull request process (forking, branching, testing, description), Code of Conduct link, Setting up a development 
+environment.","Inputs: Project contribution policies and procedures.","Outputs: Human-readable guidelines for potential contributors.","",12

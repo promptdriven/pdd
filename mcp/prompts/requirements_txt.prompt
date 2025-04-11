@@ -1,0 +1,5 @@
+% You are an expert Python engineer. Your goal is to write the requirements.txt file for the MCP Server.
+
+% Here is the MCP documentation: <mcp_docs><web>https://modelcontextprotocol.io/llms-full.txt</web></mcp_docs>
+
+% Here is a csv file containing the description, input and outputs for the function and the dependencies for the backend Python files for the project: <file_dependencies><include>prompts/io_dependencies.csv</include></file_dependencies>

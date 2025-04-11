@@ -1,0 +1,157 @@
+# PDD MCP Server - Subprocess Runner Module
+
+This prompt directs the generation of the `pdd_mcp_server/tools/runner.py` module. This module is responsible for abstracting the execution of `pdd-cli` commands as external subprocesses.
+
+## Purpose
+
+The `runner.py` module should:
+1.  Provide a single, reliable asynchronous function to execute arbitrary `pdd-cli` commands.
+2.  Dynamically locate the `pdd` executable.
+3.  Capture standard output (stdout) and standard error (stderr) from the command.
+4.  Handle execution timeouts gracefully.
+5.  Report execution success or failure based on the command's exit code.
+6.  Return the results (stdout, stderr, exit code, success status) in a structured format.
+7.  Be completely independent of MCP concepts and other `pdd_mcp_server` modules (except potentially for type hinting if needed, though standard types should suffice).
+
+## Implementation Details
+
+Create the `pdd_mcp_server/tools/runner.py` file with the following:
+
+1.  **Imports:** Import necessary standard libraries: `asyncio`, `subprocess`, `shutil`, `typing`, `dataclasses`, `logging`.
+2.  **Result Dataclass:** Define a `dataclass` named `PddResult` to structure the output:
+    ```python
+    @dataclasses.dataclass
+    class PddResult:
+        success: bool
+        stdout: str
+        stderr: str
+        exit_code: int
+    ```
+3.  **Runner Function:** Implement an asynchronous function `run_pdd_command`:
+    *   **Signature:** `async def run_pdd_command(cmd_list: list[str], timeout: int = 60) -> PddResult:`
+    *   **Functionality:**
+        *   Use `logging` for informative messages (e.g., command being run, errors).
+        *   Use `shutil.which('pdd')` to find the absolute path to the `pdd` executable. If not found, log an error and raise `FileNotFoundError`. Replace the first element of `cmd_list` (which should be 'pdd') with this absolute path.
+        *   Use `asyncio.create_subprocess_exec` to start the `pdd` command asynchronously. Redirect `stdout` and `stderr` to `asyncio.subprocess.PIPE`.
+        *   Use `asyncio.wait_for` to enforce the `timeout`.
+        *   Inside the `wait_for` block, use `process.communicate()` to wait for the process to finish and capture stdout/stderr bytes.
+        *   Decode stdout and stderr bytes using UTF-8, handling potential decoding errors gracefully (e.g., using `errors='replace'` or `errors='ignore'`).
+        *   Determine `success` based on whether `process.returncode` is `0`.
+        *   Instantiate and return a `PddResult` object containing `success`, decoded `stdout`, decoded `stderr`, and `process.returncode`.
+    *   **Error Handling:**
+        *   Wrap the subprocess execution in a `try...except asyncio.TimeoutError:` block. If a timeout occurs, log the error and return a `PddResult` indicating failure (success=False, appropriate stderr message, non-zero exit code like -1).
+        *   Handle `FileNotFoundError` from `shutil.which` as described above (log and re-raise or return a failure `PddResult`).
+        *   Handle any other potential exceptions during subprocess creation or communication, logging them and returning a failure `PddResult`.
+
+## Code Structure Example
+
+```python
+import asyncio
+import dataclasses
+import logging
+import shutil
+import subprocess
+from typing import List
+
+logger = logging.getLogger(__name__)
+
+@dataclasses.dataclass
+class PddResult:
+    """Represents the result of a PDD CLI command execution."""
+    success: bool
+    stdout: str
+    stderr: str
+    exit_code: int
+
+async def run_pdd_command(cmd_list: List[str], timeout: int = 60) -> PddResult:
+    """
+    Executes a PDD CLI command as an asynchronous subprocess.
+
+    Args:
+        cmd_list: A list representing the command and its arguments (e.g., ['pdd', 'generate', ...]).
+        timeout: Maximum execution time in seconds.
+
+    Returns:
+        A PddResult object containing the execution outcome.
+
+    Raises:
+        FileNotFoundError: If the 'pdd' executable cannot be found.
+    """
+    pdd_executable = shutil.which('pdd')
+    if not pdd_executable:
+        logger.error("PDD CLI executable ('pdd') not found in PATH.")
+        raise FileNotFoundError("PDD CLI executable ('pdd') not found in PATH.")
+
+    # Replace 'pdd' with the full path
+    cmd_list[0] = pdd_executable
+    command_str = ' '.join(cmd_list) # For logging purposes
+    logger.info("Running PDD command: %s", command_str)
+
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *cmd_list,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+
+        stdout_bytes, stderr_bytes = await asyncio.wait_for(
+            process.communicate(), timeout=timeout
+        )
+
+        stdout = stdout_bytes.decode('utf-8', errors='replace')
+        stderr = stderr_bytes.decode('utf-8', errors='replace')
+        exit_code = process.returncode
+
+        if exit_code == 0:
+            logger.info("PDD command succeeded (exit code 0).")
+            if stderr: # Log stderr even on success, as it might contain warnings
+                 logger.warning("PDD command stderr (even though successful):\n%s", stderr)
+            return PddResult(success=True, stdout=stdout, stderr=stderr, exit_code=exit_code)
+        else:
+            logger.error("PDD command failed (exit code %d):\nStderr: %s\nStdout: %s", exit_code, stderr, stdout)
+            return PddResult(success=False, stdout=stdout, stderr=stderr, exit_code=exit_code)
+
+    except asyncio.TimeoutError:
+        logger.error("PDD command timed out after %d seconds: %s", timeout, command_str)
+        try:
+             if process.returncode is None: # Check if process hasn't terminated yet
+                  process.terminate() # Attempt graceful termination
+                  await asyncio.wait_for(process.wait(), timeout=5) # Wait briefly
+        except ProcessLookupError:
+             pass # Process already gone
+        except asyncio.TimeoutError:
+             logger.warning("Failed to terminate timed-out process, attempting kill.")
+             try:
+                  process.kill() # Force kill
+                  await process.wait() # Ensure it's dead
+             except ProcessLookupError:
+                  pass # Process already gone
+             except Exception as kill_err:
+                  logger.error("Error killing process: %s", kill_err)
+
+        return PddResult(
+            success=False,
+            stdout="",
+            stderr=f"Command timed out after {timeout} seconds.",
+            exit_code=-1 # Use a distinct exit code for timeout
+        )
+    except FileNotFoundError:
+         # This specific error should be caught before subprocess creation by shutil.which
+         # but kept here for robustness in case of race conditions or other issues.
+         logger.error("PDD executable path '%s' became invalid after check?", pdd_executable)
+         raise # Re-raise the FileNotFoundError caught by shutil.which earlier
+    except Exception as e:
+        logger.exception("An unexpected error occurred while running PDD command: %s", command_str)
+        return PddResult(
+            success=False,
+            stdout="",
+            stderr=f"Unexpected error: {str(e)}",
+            exit_code=-2 # Use a distinct exit code for unexpected errors
+        )
+
+```
+
+## Notes
+- Ensure thorough logging is implemented, especially for error conditions.
+- The function should reliably return a `PddResult` even in timeout or unexpected error scenarios.
+- Standard library imports only. No `mcp` or other project-specific imports.

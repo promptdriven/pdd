@@ -1,0 +1,176 @@
+You are an expert prompt writer and MCP architect for PDD MCP Server. Your goal is to write a prompt for generating the `pdd_mcp_server/tools/handlers.py` Python file.
+
+This `handlers.py` module is crucial as it contains the logic that gets executed when an MCP client invokes a tool corresponding to a PDD CLI command. It acts as the bridge between the MCP framework and the actual execution of `pdd` commands via the `runner.py` module.
+
+**Context:**
+
+*   PDD CLI README: `<pdd_readme>` (Defines `pdd` commands, arguments, options)
+*   MCP Server README: `<readme>` (Defines project scope, lists exposed tools)
+*   MCP Documentation: `<mcp_docs>` (Defines MCP concepts, types like `CallToolResult`)
+*   File Dependencies CSV: `<file_dependencies>` (Describes `handlers.py` role and dependencies)
+*   Existing Generated Prompts: `<python_files>` (Shows structure of `definitions.py`, `runner.py`, `server.py`)
+*   Generate Code CLI Example: `<generate_code_cli_example>` (Reference for code generation style)
+
+**Core Task for `handlers.py`:**
+
+The primary responsibility of `handlers.py` is to:
+1.  Import necessary types and functions (`mcp.types`, `PddResult`, `run_pdd_command` from `.runner`).
+2.  Define an `async` handler function for **each** PDD command exposed as an MCP tool (e.g., `handle_pdd_generate`, `handle_pdd_test`, `handle_pdd_fix`, etc.). The full list of commands to handle can be derived from the PDD CLI README and the MCP Server README tool table: `generate`, `example`, `test`, `preprocess`, `fix`, `split`, `change`, `update`, `detect`, `conflicts`, `crash`, `trace`, `bug`, `auto-deps`.
+3.  Each handler function will accept a single argument: `arguments: dict`, which contains the validated parameters passed by the MCP client (matching the schema defined in `definitions.py`).
+4.  Inside each handler, translate the `arguments` dictionary into a `list[str]` representing the command-line invocation for the *specific* `pdd` command (e.g., `['pdd', 'generate', '--output', arguments['output'], arguments['prompt_file']]`). This involves:
+    *   Starting with the base command (e.g., `['pdd', 'generate']`).
+    *   Appending required positional arguments based on the `arguments` dict.
+    *   Checking for *optional* arguments in the `arguments` dict. If an optional argument key exists and its value is not `None`, append the corresponding command-line flag and its value (if applicable) to the list. For example, if `arguments.get('output')` is not `None`, append `['--output', arguments['output']]`.
+    *   Handling boolean flags: If a boolean argument key exists and its value is `True`, append the corresponding flag (e.g., if `arguments.get('loop')` is `True`, append `'--loop'`).
+    *   Carefully consider the order and format required by the specific `pdd` command as documented in `<pdd_readme>`. Handle global options like `--local`, `--strength`, `--temperature`, `--force`, `--verbose`, `--quiet`, `--output-cost`, `--review-examples` if they are included in the tool definitions and passed in the `arguments` dict.
+5.  Call the imported `run_pdd_command` function from the `.runner` module, passing the constructed command list and `await`ing the result.
+6.  Receive the `PddResult` object from `run_pdd_command`.
+7.  Construct an `mcp.types.CallToolResult` object:
+    *   Set `isError` to `not pdd_result.success`.
+    *   If `pdd_result.success` is `True`, set the `content` field to a list containing one `mcp.types.TextContent` object whose `text` field is `pdd_result.stdout`.
+    *   If `pdd_result.success` is `False`, set the `content` field to a list containing one `mcp.types.TextContent` object whose `text` field is `pdd_result.stderr`. You might consider prepending `stdout` to the error message if it provides useful context (e.g., `f"STDOUT:\n{pdd_result.stdout}\n\nSTDERR:\n{pdd_result.stderr}"`).
+8.  Return the created `mcp.types.CallToolResult` object.
+9.  Include clear type hints and docstrings for each handler function explaining its purpose and arguments.
+
+**Code Structure Example (Illustrative):**
+
+```python
+"""
+MCP tool handlers for executing PDD CLI commands.
+"""
+
+import logging
+import mcp.types as types
+from typing import Dict, List, Any
+
+# Assume runner module provides these (adjust import path if necessary)
+from .runner import run_pdd_command, PddResult
+
+logger = logging.getLogger(__name__)
+
+# --- Tool Handlers ---
+
+async def handle_pdd_generate(arguments: Dict[str, Any]) -> types.CallToolResult:
+    """
+    Handles the 'pdd-generate' MCP tool call by executing the 'pdd generate' command.
+    """
+    logger.info("Handling pdd-generate tool call with arguments: %s", arguments)
+    cmd_list = ['pdd', 'generate']
+
+    # Required arguments
+    prompt_file = arguments.get('prompt_file')
+    if not prompt_file:
+         # This ideally shouldn't happen if schema validation works
+         return types.CallToolResult(isError=True, content=[types.TextContent(text="Missing required argument: prompt_file")])
+    cmd_list.append(prompt_file) # Positional argument
+
+    # Optional arguments
+    if arguments.get('output'):
+        cmd_list.extend(['--output', arguments['output']])
+    if arguments.get('strength') is not None:
+        cmd_list.extend(['--strength', str(arguments['strength'])])
+    if arguments.get('temperature') is not None:
+        cmd_list.extend(['--temperature', str(arguments['temperature'])])
+
+    # Boolean flags / Global Options
+    if arguments.get('local'):
+        cmd_list.append('--local')
+    if arguments.get('force'):
+        cmd_list.append('--force')
+    if arguments.get('verbose'):
+         cmd_list.append('--verbose')
+    if arguments.get('quiet'):
+         cmd_list.append('--quiet')
+    if arguments.get('output_cost'):
+         cmd_list.extend(['--output-cost', arguments['output_cost']])
+    if arguments.get('review_examples'):
+         cmd_list.append('--review-examples')
+
+
+    # Execute the command
+    pdd_result: PddResult = await run_pdd_command(cmd_list)
+
+    # Format the result
+    if pdd_result.success:
+        content = [types.TextContent(text=pdd_result.stdout)]
+        is_error = False
+        logger.info("pdd generate succeeded.")
+    else:
+        error_text = f"PDD command failed with exit code {pdd_result.exit_code}.\nSTDERR:\n{pdd_result.stderr}"
+        # Optionally include stdout for context on failure
+        # if pdd_result.stdout:
+        #    error_text = f"STDOUT:\n{pdd_result.stdout}\n\n{error_text}"
+        content = [types.TextContent(text=error_text)]
+        is_error = True
+        logger.error("pdd generate failed.")
+
+    return types.CallToolResult(content=content, isError=is_error)
+
+# --- Add handlers for ALL other PDD commands below ---
+# handle_pdd_example
+# handle_pdd_test
+# handle_pdd_preprocess
+# handle_pdd_fix
+# handle_pdd_split
+# handle_pdd_change
+# handle_pdd_update
+# handle_pdd_detect
+# handle_pdd_conflicts
+# handle_pdd_crash
+# handle_pdd_trace
+# handle_pdd_bug
+# handle_pdd_auto_deps
+# ... (implement each following the pattern above, adapting arg parsing based on pdd_readme)
+
+# Consider creating a helper function for common argument processing if patterns emerge
+# def _build_common_cmd_list(base_cmd: list[str], arguments: dict[str, Any]) -> list[str]:
+#     # Handles global options like --local, --force, --verbose etc.
+#     pass
+
+
+# Example for a command with different arg types (like fix)
+# async def handle_pdd_fix(arguments: Dict[str, Any]) -> types.CallToolResult:
+#     logger.info("Handling pdd-fix tool call with arguments: %s", arguments)
+#     cmd_list = ['pdd', 'fix']
+#     # Positional Args
+#     cmd_list.append(arguments['prompt_file'])
+#     cmd_list.append(arguments['code_file'])
+#     cmd_list.append(arguments['unit_test_file'])
+#     if arguments.get('error_file'): # Optional positional
+#         cmd_list.append(arguments['error_file'])
+#     # Optional Flags with values
+#     if arguments.get('output_test'): cmd_list.extend(['--output-test', arguments['output_test']])
+#     if arguments.get('output_code'): cmd_list.extend(['--output-code', arguments['output_code']])
+#     if arguments.get('output_results'): cmd_list.extend(['--output-results', arguments['output_results']])
+#     if arguments.get('verification_program'): cmd_list.extend(['--verification-program', arguments['verification_program']])
+#     if arguments.get('max_attempts') is not None: cmd_list.extend(['--max-attempts', str(arguments['max_attempts'])])
+#     if arguments.get('budget') is not None: cmd_list.extend(['--budget', str(arguments['budget'])])
+#     # Boolean flags
+#     if arguments.get('loop'): cmd_list.append('--loop')
+#     if arguments.get('auto_submit'): cmd_list.append('--auto-submit')
+#     # Add global options if needed
+#     # ...
+#     pdd_result = await run_pdd_command(cmd_list)
+#     # ... format CallToolResult ...
+#     return types.CallToolResult(...)
+
+```
+
+**Dependencies for Generation:**
+
+The generation process for `handlers.py` will need the context of `runner.py`. Include it as follows:
+
+```xml
+<runner_example>
+<include>context/runner_example.py</include>
+</runner_example>
+```
+
+Also include the tool definitions for reference on arguments:
+```xml
+<definitions_example>
+<include>context/definitions_example.py</include>
+</definitions_example>
+```
+
+Make sure to generate a handler function for *every* PDD command intended to be exposed as an MCP tool, adapting the argument parsing logic based on the command's specific signature found in the PDD CLI README.
