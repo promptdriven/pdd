@@ -9,7 +9,9 @@
         "/Users/gregtanaka/pdd/mcp/pdd_mcp_server/main.py"
       ],
       "env": {
-        "PYTHONPATH": "/Users/gregtanaka/pdd"
+        "PYTHONPATH": "/Users/gregtanaka/pdd",
+        "LOGLEVEL": "DEBUG",
+        "PYTHONUNBUFFERED": "1"
       }
     }
   }

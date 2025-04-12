@@ -9,17 +9,37 @@ schema that defines its input parameters.
 import mcp.types as types
 from typing import Dict, List
 
+# Common example template for LLMs
+LLM_PARAMETER_GUIDANCE = """
+IMPORTANT FOR CLAUDE, GPT, AND OTHER LLMs:
+
+- ALWAYS provide parameters as direct key-value pairs in your tool call
+- DO NOT nest parameters under a "kwargs" key
+- DO NOT use CLI-style arguments with dashes (like --file=/path/to/file)
+
+✅ CORRECT FORMAT: {"param1": "value1", "param2": "value2"}
+❌ INCORRECT FORMAT: {"kwargs": {"param1": "value1"}}
+❌ INCORRECT FORMAT: {"kwargs": "--param1 value1 --param2 value2"}
+"""
+
 # Generate Command Tool
 #----------------------
 PDD_GENERATE = types.Tool(
     name="pdd-generate",
-    description="Generate code from a prompt file",
+    description=f"""Generate code from a prompt file.
+{LLM_PARAMETER_GUIDANCE}
+Examples:
+- ✅ CORRECT: {{"prompt_file": "/path/to/prompt.txt", "output": "/path/to/output.py"}}
+- ❌ INCORRECT: {{"kwargs": {{"prompt_file": "/path/to/prompt.txt"}}}}
+- ❌ INCORRECT: {{"kwargs": "--file=/path/to/prompt.txt"}}
+
+The prompt file should contain instructions for the code you want to generate.""",
     inputSchema={
         "type": "object",
         "properties": {
             "prompt_file": {
                 "type": "string",
-                "description": "The filename of the prompt file used to generate the code"
+                "description": "REQUIRED: Full path to the prompt file. Must be provided as a direct parameter, not inside a 'kwargs' object."
             },
             "output": {
                 "type": "string",
@@ -50,7 +70,8 @@ PDD_GENERATE = types.Tool(
                 "description": "Decrease output verbosity for minimal information"
             }
         },
-        "required": ["prompt_file"]
+        "required": ["prompt_file"],
+        "additionalProperties": False
     }
 )
 
@@ -58,21 +79,47 @@ PDD_GENERATE = types.Tool(
 #------------------
 PDD_TEST = types.Tool(
     name="pdd-test",
-    description="Generate test files for a source file",
+    description=f"""Generate test files for a source file.
+{LLM_PARAMETER_GUIDANCE}    
+Examples:
+- ✅ CORRECT: {{"source_file": "/path/to/source.py", "prompt_file": "/path/to/prompt.txt"}}
+- ❌ INCORRECT: {{"kwargs": {{"source_file": "/path/to/source.py"}}}}
+    
+This tool generates test files for the provided source file, optionally guided by a prompt file.""",
     inputSchema={
         "type": "object",
         "properties": {
             "source_file": {
                 "type": "string",
-                "description": "The source file to generate tests for"
+                "description": "IMPORTANT: Provide just the full path to the source file, without any prefix"
             },
             "prompt_file": {
                 "type": "string",
-                "description": "Optional prompt file to guide test generation"
+                "description": "Optional: Full path to a prompt file to guide test generation (no prefix)"
             },
             "output": {
                 "type": "string",
                 "description": "Specify where to save the generated tests"
+            },
+            "language": {
+                "type": "string",
+                "description": "Explicitly specify the programming language (normally auto-detected from file extension)"
+            },
+            "coverage_report": {
+                "type": "string",
+                "description": "Path to a coverage report file to help focus test generation"
+            },
+            "existing_tests": {
+                "type": "string",
+                "description": "Path to existing test files to enhance or extend"
+            },
+            "target_coverage": {
+                "type": "number", 
+                "description": "Target coverage percentage to aim for (0-100)"
+            },
+            "merge": {
+                "type": "boolean",
+                "description": "Merge new tests with existing tests"
             },
             "strength": {
                 "type": "number",
@@ -99,7 +146,8 @@ PDD_TEST = types.Tool(
                 "description": "Decrease output verbosity for minimal information"
             }
         },
-        "required": ["source_file"]
+        "required": ["source_file"],
+        "additionalProperties": False
     }
 )
 
@@ -107,21 +155,27 @@ PDD_TEST = types.Tool(
 #-----------------
 PDD_FIX = types.Tool(
     name="pdd-fix",
-    description="Fix issues in a source file using AI",
+    description="""Fix issues in a source file using AI.
+    
+Examples:
+- ✅ CORRECT: {"prompt_file": "/path/to/prompt.txt", "source_file": "/path/to/source.py", "test_file": "/path/to/test.py"}
+- ❌ INCORRECT: Do NOT use CLI-style arguments like "--prompt=/path/to/prompt.txt"
+    
+This tool attempts to fix issues in source code using AI, guided by a prompt file and validated by tests.""",
     inputSchema={
         "type": "object",
         "properties": {
             "prompt_file": {
                 "type": "string",
-                "description": "The prompt file describing the code to be fixed"
+                "description": "IMPORTANT: Full path to the prompt file describing the code to be fixed (no prefix)"
             },
             "source_file": {
                 "type": "string",
-                "description": "The source file to be fixed"
+                "description": "IMPORTANT: Full path to the source file to be fixed (no prefix)"
             },
             "test_file": {
                 "type": "string",
-                "description": "Optional test file to validate fixes"
+                "description": "Optional: Full path to test file to validate fixes (no prefix)"
             },
             "output_code": {
                 "type": "string",
@@ -164,7 +218,8 @@ PDD_FIX = types.Tool(
                 "description": "Increase output verbosity for more detailed information"
             }
         },
-        "required": ["prompt_file", "source_file"]
+        "required": ["prompt_file", "source_file"],
+        "additionalProperties": False
     }
 )
 
@@ -172,13 +227,19 @@ PDD_FIX = types.Tool(
 #---------------------
 PDD_EXAMPLE = types.Tool(
     name="pdd-example",
-    description="Generate example code that demonstrates how to use a module",
+    description="""Generate example code that demonstrates how to use a module.
+    
+Examples:
+- ✅ CORRECT: {"source_file": "/path/to/source.py", "output": "/path/to/output.py"}
+- ❌ INCORRECT: Do NOT use CLI-style arguments like "--file=/path/to/source.py"
+    
+This tool creates example code showing how to use the specified module or source file.""",
     inputSchema={
         "type": "object",
         "properties": {
             "source_file": {
                 "type": "string",
-                "description": "The source file to generate examples for"
+                "description": "IMPORTANT: Full path to the source file to generate examples for (no prefix)"
             },
             "output": {
                 "type": "string",
@@ -203,9 +264,14 @@ PDD_EXAMPLE = types.Tool(
             "verbose": {
                 "type": "boolean",
                 "description": "Increase output verbosity for more detailed information"
+            },
+            "quiet": {
+                "type": "boolean",
+                "description": "Decrease output verbosity for minimal information"
             }
         },
-        "required": ["source_file"]
+        "required": ["source_file"],
+        "additionalProperties": False
     }
 )
 
@@ -213,17 +279,23 @@ PDD_EXAMPLE = types.Tool(
 #----------------------
 PDD_CONTINUE = types.Tool(
     name="pdd-continue",
-    description="Continue generation of partially completed output",
+    description="""Continue generation of partially completed output.
+    
+Examples:
+- ✅ CORRECT: {"prompt_file": "/path/to/prompt.txt", "output_file": "/path/to/partial.py"}
+- ❌ INCORRECT: Do NOT use CLI-style arguments like "--prompt=/path/to/prompt.txt"
+    
+This tool continues code generation from a partially completed file.""",
     inputSchema={
         "type": "object",
         "properties": {
             "prompt_file": {
                 "type": "string",
-                "description": "The original prompt file"
+                "description": "IMPORTANT: Full path to the original prompt file (no prefix)"
             },
             "output_file": {
                 "type": "string",
-                "description": "The partially generated output file to continue"
+                "description": "IMPORTANT: Full path to the partially generated output file to continue (no prefix)"
             },
             "result_file": {
                 "type": "string",
@@ -250,7 +322,8 @@ PDD_CONTINUE = types.Tool(
                 "description": "Increase output verbosity for more detailed information"
             }
         },
-        "required": ["prompt_file", "output_file"]
+        "required": ["prompt_file", "output_file"],
+        "additionalProperties": False
     }
 )
 
@@ -258,13 +331,19 @@ PDD_CONTINUE = types.Tool(
 #-----------------------
 PDD_PREPROCESS = types.Tool(
     name="pdd-preprocess",
-    description="Preprocess prompt files for code generation",
+    description="""Preprocess prompt files for code generation.
+    
+Examples:
+- ✅ CORRECT: {"prompt_file": "/path/to/prompt.txt", "output": "/path/to/output.txt"}
+- ❌ INCORRECT: Do NOT use CLI-style arguments like "--file=/path/to/prompt.txt"
+    
+This tool preprocesses prompt files to prepare them for code generation.""",
     inputSchema={
         "type": "object",
         "properties": {
             "prompt_file": {
                 "type": "string",
-                "description": "The prompt file to preprocess"
+                "description": "IMPORTANT: Full path to the prompt file to preprocess (no prefix)"
             },
             "output": {
                 "type": "string", 
@@ -288,7 +367,8 @@ PDD_PREPROCESS = types.Tool(
                 "description": "Exclude files matching these patterns"
             }
         },
-        "required": ["prompt_file"]
+        "required": ["prompt_file"],
+        "additionalProperties": False
     }
 )
 
@@ -296,13 +376,19 @@ PDD_PREPROCESS = types.Tool(
 #---------------------
 PDD_ANALYZE = types.Tool(
     name="pdd-analyze",
-    description="Analyze code to provide insights and recommendations",
+    description="""Analyze code to provide insights and recommendations.
+    
+Examples:
+- ✅ CORRECT: {"source_file": "/path/to/source.py", "output": "/path/to/output.md"}
+- ❌ INCORRECT: Do NOT use CLI-style arguments like "--file=/path/to/source.py"
+    
+This tool analyzes code and generates insights, recommendations, and potential improvements.""",
     inputSchema={
         "type": "object",
         "properties": {
             "source_file": {
                 "type": "string",
-                "description": "The source file to analyze"
+                "description": "IMPORTANT: Full path to the source file to analyze (no prefix)"
             },
             "output": {
                 "type": "string",
@@ -330,7 +416,8 @@ PDD_ANALYZE = types.Tool(
                 "description": "Increase output verbosity for more detailed information"
             }
         },
-        "required": ["source_file"]
+        "required": ["source_file"],
+        "additionalProperties": False
     }
 )
 

@@ -71,14 +71,17 @@ async def run_pdd_command(cmd_list: List[str], timeout: int = 900) -> PddResult:
     
     try:
         # Start the process
+        logger.info("Starting subprocess...")
         process = await asyncio.create_subprocess_exec(
             *cmd_list,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
+        logger.info("Subprocess started with PID: %s", process.pid if process else "unknown")
 
         # Wait for the process to complete with timeout
         try:
+            logger.info("Waiting for process to complete...")
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
                 process.communicate(), timeout=timeout
             )
@@ -87,6 +90,10 @@ async def run_pdd_command(cmd_list: List[str], timeout: int = 900) -> PddResult:
             stdout = stdout_bytes.decode('utf-8', errors='replace')
             stderr = stderr_bytes.decode('utf-8', errors='replace')
             exit_code = process.returncode
+            
+            logger.info("Process completed with exit code: %d", exit_code)
+            logger.info("Stdout length: %d bytes, Stderr length: %d bytes", 
+                       len(stdout_bytes), len(stderr_bytes))
 
             # Determine success based on exit code
             if exit_code == 0:
