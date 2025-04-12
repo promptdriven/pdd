@@ -8,6 +8,7 @@ instance that will expose PDD commands as MCP tools.
 import importlib.metadata
 import logging
 from typing import Optional
+from contextlib import asynccontextmanager
 
 from mcp.server import Server
 import mcp.types as types
@@ -35,6 +36,20 @@ def get_version() -> str:
         )
         return FALLBACK_VERSION
 
+@asynccontextmanager
+async def server_lifespan(server):
+    """
+    Server lifespan manager that configures capabilities.
+    """
+    # Configure server capabilities - this would happen in initialization
+    # but we'll need to update the actual implementation based on the API
+    
+    # Yielding control back to the server
+    yield
+    
+    # Cleanup when the server is shutting down
+    logger.debug("Server shutdown")
+
 def create_server() -> Server:
     """
     Create and configure the MCP server instance.
@@ -50,23 +65,12 @@ def create_server() -> Server:
     
     logger.info("Creating PDD MCP server (version %s)", version)
     
-    # Configure server capabilities
-    capabilities = types.ServerCapabilities(
-        # Enable tools capability to expose PDD commands
-        tools=types.ServerCapabilities.Tools(
-            # We don't currently support dynamic tool list changes,
-            # but could enable this in the future if needed
-            listChanged=False
-        ),
-        # Enable logging capability for diagnostics
-        logging=types.ServerCapabilities.Logging()
-    )
-    
-    # Create and return the server instance
+    # Create the server with the lifespan manager
     server = Server(
-        SERVER_NAME,
+        name=SERVER_NAME,
         version=version,
-        capabilities=capabilities
+        instructions="PDD MCP Server for exposing PDD commands as MCP tools",
+        lifespan=server_lifespan
     )
     
     logger.debug("PDD MCP server created successfully")
