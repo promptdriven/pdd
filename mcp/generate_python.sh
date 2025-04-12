@@ -43,7 +43,7 @@ pdd --strength .85 --temperature 1 example --output context "prompts/${MODULE}_p
 # Step 5: Verify the generated code using the crash command
 echo "Verifying the generated code for module: $MODULE..."
 python context/${MODULE}_example.py >& crash_error.log
-pdd --strength .85 --temperature 1 crash --output "$PATH_COLUMN" --output-program context/${MODULE}_example.py "prompts/${MODULE}_python.prompt" "$PATH_COLUMN" context/${MODULE}_example.py crash_error.log
+pdd --strength .85 --temperature 1 crash --loop --output "$PATH_COLUMN" --output-program context/${MODULE}_example.py "prompts/${MODULE}_python.prompt" "$PATH_COLUMN" context/${MODULE}_example.py crash_error.log
 
 # Step 6: Generate unit tests
 echo "Generating unit tests for module: $MODULE..."

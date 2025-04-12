@@ -10,8 +10,30 @@ except ImportError:
     logger = logging.getLogger(__name__)
     logger.warning("MCP SDK components not found. Using placeholder types.")
     class Server:
-        def add_tool(self, tool_def: Any, handler: Any) -> None: pass
-        async def run(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None: pass
+        def __init__(self, name=None, version=None, instructions=None, lifespan=None):
+            self.name = name
+            self.version = version
+            self.instructions = instructions
+            self.lifespan = lifespan
+            self.tools = {}
+            
+        def call_tool(self, name, parameters):
+            """Placeholder for the call_tool method in the MCP SDK."""
+            if name in self.tools:
+                return self.tools[name](parameters)
+            raise ValueError(f"Tool '{name}' not found")
+            
+        def register_tool(self, tool_def, handler):
+            """Register a tool with its handler function."""
+            self.tools[tool_def.name] = handler
+            return True
+            
+        async def run(self, reader, writer, initialization_options=None):
+            """Placeholder for the run method in the MCP SDK."""
+            logger.info(f"Server '{self.name}' v{self.version} running with {len(self.tools)} tools")
+            logger.info("Initialization options: %s", initialization_options)
+            await asyncio.sleep(0.1)  # Just to make it async
+            
     class Tool:
         name: str
         description: str
@@ -35,7 +57,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-TOOL_HANDLERS: Dict[str, Callable[[types.JsonObject], Awaitable[types.CallToolResult]]] = {
+TOOL_HANDLERS: Dict[str, Callable[[Dict[str, Any]], Awaitable[types.CallToolResult]]] = {
     definitions.PDD_GENERATE.name: handlers.handle_pdd_generate,
     definitions.PDD_EXAMPLE.name: handlers.handle_pdd_example,
     definitions.PDD_TEST.name: handlers.handle_pdd_test,
@@ -70,7 +92,7 @@ async def main_async():
             handler = TOOL_HANDLERS.get(tool_def.name)
             if handler:
                 try:
-                    server.add_tool(tool_def, handler)
+                    server.register_tool(tool_def, handler)
                     logger.debug(f"Successfully registered tool: {tool_def.name}")
                     registered_count += 1
                 except Exception as e:
@@ -88,18 +110,25 @@ async def main_async():
 
         logger.info("Initializing stdio transport streams...")
         try:
-            reader, writer = await asyncio.open_connection(
-                None, None,
-                stdin=sys.stdin.buffer,
-                stdout=sys.stdout.buffer
+            # Use standard streams instead of trying to pass them as parameters
+            reader = asyncio.StreamReader()
+            protocol = asyncio.StreamReaderProtocol(reader)
+            
+            loop = asyncio.get_event_loop()
+            await loop.connect_read_pipe(lambda: protocol, sys.stdin.buffer)
+            
+            transport, protocol = await loop.connect_write_pipe(
+                asyncio.streams.FlowControlMixin, sys.stdout.buffer
             )
+            writer = asyncio.StreamWriter(transport, protocol, reader, loop)
+            
             logger.info("Stdio streams opened successfully (stdin/stdout).")
         except Exception as stream_err:
             logger.critical(f"Failed to open stdio streams: {stream_err}", exc_info=True)
             sys.exit(1)
 
         logger.info("PDD MCP Server running on stdio. Waiting for messages...")
-        await server.run(reader, writer)
+        await server.run(reader, writer, initialization_options={})
 
     except ConnectionResetError:
         logger.info("Client connection reset. Connection closed.")
