@@ -4,6 +4,7 @@ import logging
 import json
 from typing import Dict, Any
 import os
+import argparse
 
 # Add the parent directory to sys.path so we can import pdd_mcp_server
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 async def run_server():
     """
-    Run the PDD MCP Server in its own process.
+    Run the PDD MCP Server using the proper MCP stdio transport.
     """
     await main.main_async()
 
@@ -86,7 +87,16 @@ def display_available_tools():
             print(f"  - {param} [{param_type}] {required_mark}: {desc}")
 
 if __name__ == "__main__":
-    # Display the tools instead of running the server
-    #asyncio.run(run_server())
-    #asyncio.run(client_example())
-    display_available_tools()
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description="PDD MCP Server Example")
+    parser.add_argument("--mode", choices=["run", "client", "list"], default="list",
+                        help="Mode to run (run=start server, client=test client, list=display tools)")
+    args = parser.parse_args()
+    
+    # Run the appropriate function based on the mode
+    if args.mode == "run":
+        asyncio.run(run_server())
+    elif args.mode == "client":
+        asyncio.run(client_example())
+    else:  # Default to list
+        display_available_tools()
