@@ -11,8 +11,19 @@ except ImportError:
     logger.error("MCP SDK not found. Please install it with: pip install mcp")
     sys.exit(1)
 
-from .tools import definitions
-from .tools import handlers
+# Use direct imports from the local package
+try:
+    from tools import definitions
+    from tools import handlers
+except ImportError:
+    try:
+        # Alternative: try relative imports
+        from .tools import definitions
+        from .tools import handlers
+    except ImportError:
+        logger = logging.getLogger(__name__)
+        logger.error("Failed to import tools modules. Check that tools/ directory exists with __init__.py")
+        sys.exit(1)
 
 # Configure logging
 logging.basicConfig(
