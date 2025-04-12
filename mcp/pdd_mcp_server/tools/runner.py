@@ -10,7 +10,15 @@ import dataclasses
 import logging
 import shutil
 import subprocess
+import os
 from typing import List, Optional
+
+try:
+    from .api_key_check import ensure_api_keys
+except ImportError:
+    # If the module doesn't exist yet, define a simple version of the function
+    def ensure_api_keys() -> bool:
+        return True
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +30,7 @@ class PddResult:
     stderr: str
     exit_code: int
 
-async def run_pdd_command(cmd_list: List[str], timeout: int = 60) -> PddResult:
+async def run_pdd_command(cmd_list: List[str], timeout: int = 900) -> PddResult:
     """
     Executes a PDD CLI command as an asynchronous subprocess.
 
@@ -44,7 +52,7 @@ async def run_pdd_command(cmd_list: List[str], timeout: int = 60) -> PddResult:
             stderr="Empty command list provided",
             exit_code=-2
         )
-        
+    
     # Locate the pdd executable
     pdd_executable = shutil.which('pdd')
     if not pdd_executable:
@@ -56,6 +64,8 @@ async def run_pdd_command(cmd_list: List[str], timeout: int = 60) -> PddResult:
     cmd_list[0] = pdd_executable
     command_str = ' '.join(cmd_list)  # For logging purposes
     logger.info("Running PDD command: %s", command_str)
+    logger.info("Using PDD executable at: %s", pdd_executable)
+    logger.info("Command timeout set to %d seconds", timeout)
 
     process: Optional[asyncio.subprocess.Process] = None
     
