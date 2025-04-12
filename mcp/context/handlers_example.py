@@ -2,6 +2,10 @@ import asyncio
 import logging
 import mcp.types as types
 from typing import Dict, Any
+import os
+import sys
+import subprocess
+import importlib.util
 
 # Import handler functions and utilities
 from pdd_mcp_server.tools.handlers import (
@@ -16,18 +20,87 @@ logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("pdd_handlers_demo")
 
+# Path to the output directory
+OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'output')
+
+def ensure_test_files_exist():
+    """
+    Check if required test files exist, and regenerate them if needed.
+    """
+    # List of required test files
+    required_files = [
+        "my_prompt.prompt",
+        "api_prompt.prompt",
+        "api.py",
+        "buggy_api.py",
+        "existing_tests.py",
+        "test_weather_api.py",
+        "error_output.log",
+        "coverage.xml",
+        "complex_prompt.prompt"
+    ]
+    
+    # Check if all required files exist
+    all_files_exist = True
+    for file in required_files:
+        if not os.path.exists(os.path.join(OUTPUT_DIR, file)):
+            logger.warning(f"Required file {file} is missing")
+            all_files_exist = False
+            break
+    
+    # If any files are missing, run the regenerate script
+    if not all_files_exist:
+        logger.info("Some required test files are missing. Running regenerate_test_files.py...")
+        
+        # Path to the regenerate script
+        regenerate_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'regenerate_test_files.py')
+        
+        # Check if the script exists
+        if not os.path.exists(regenerate_script):
+            logger.error(f"Regenerate script not found at {regenerate_script}")
+            sys.exit(1)
+            
+        try:
+            # Method 1: Run the script as a module
+            spec = importlib.util.spec_from_file_location("regenerate_module", regenerate_script)
+            if spec and spec.loader:
+                regenerate_module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(regenerate_module)
+                if hasattr(regenerate_module, 'main'):
+                    regenerate_module.main()
+                    logger.info("Test files regenerated successfully using module import")
+                else:
+                    logger.warning("No main function found in regenerate script, falling back to subprocess")
+                    # Method 2: Run the script as a subprocess
+                    subprocess.run([sys.executable, regenerate_script], check=True)
+                    logger.info("Test files regenerated successfully using subprocess")
+            else:
+                # Method 2: Run the script as a subprocess
+                subprocess.run([sys.executable, regenerate_script], check=True)
+                logger.info("Test files regenerated successfully using subprocess")
+                
+        except Exception as e:
+            logger.error(f"Failed to regenerate test files: {e}")
+            sys.exit(1)
+    else:
+        logger.info("All required test files exist")
+
 async def demonstrate_handlers():
     """Demonstrate using different PDD handlers."""
+    
+    # Ensure test files exist before running examples
+    ensure_test_files_exist()
     
     # Example 1: Using handle_pdd_generate directly
     logger.info("=== Example 1: Using handle_pdd_generate ===")
     generate_args = {
-        "prompt_file": "my_prompt.pdd",
-        "output": "generated_code.py",
-        "strength": 0.8,
-        "temperature": 0.2,
-        "local": True,
-        "verbose": True
+        "prompt_file": os.path.join(OUTPUT_DIR, "my_prompt.prompt"),
+        "output": os.path.join(OUTPUT_DIR, "generated_code.py"),
+        "strength": 0.3,  # Lower strength for faster processing
+        "temperature": 0.0,  # Lower temperature for more deterministic results
+        "local": True,  # Run locally instead of in the cloud
+        "verbose": True,
+        "force": True   # Force overwrite without prompting
     }
     
     result = await handle_pdd_generate(generate_args)
@@ -36,14 +109,16 @@ async def demonstrate_handlers():
     # Example 2: Using handle_pdd_test
     logger.info("\n=== Example 2: Using handle_pdd_test ===")
     test_args = {
-        "prompt_file": "api_prompt.pdd",
-        "code_file": "api.py",
-        "output": "test_api.py",
+        "prompt_file": os.path.join(OUTPUT_DIR, "api_prompt.prompt"),
+        "code_file": os.path.join(OUTPUT_DIR, "api.py"),
+        "output": os.path.join(OUTPUT_DIR, "test_api.py"),
         "language": "python",
-        "coverage_report": "coverage.xml",
-        "existing_tests": "existing_tests.py",
-        "target_coverage": 90,
-        "merge": True
+        "coverage_report": os.path.join(OUTPUT_DIR, "coverage.xml"),
+        "existing_tests": os.path.join(OUTPUT_DIR, "existing_tests.py"),
+        "target_coverage": 80,  # Lower target coverage for faster processing
+        "merge": True,
+        "local": True,  # Run locally instead of in the cloud
+        "force": True   # Force overwrite without prompting
     }
     
     result = await handle_pdd_test(test_args)
@@ -52,14 +127,16 @@ async def demonstrate_handlers():
     # Example 3: Using handle_pdd_fix
     logger.info("\n=== Example 3: Using handle_pdd_fix ===")
     fix_args = {
-        "prompt_file": "api_prompt.pdd",
-        "code_file": "buggy_api.py",
-        "unit_test_file": "test_api.py",
-        "error_file": "error_output.log",
-        "output_code": "fixed_api.py",
-        "output_test": "updated_tests.py",
-        "loop": True,
-        "max_attempts": 3
+        "prompt_file": os.path.join(OUTPUT_DIR, "api_prompt.prompt"),
+        "code_file": os.path.join(OUTPUT_DIR, "buggy_api.py"),
+        "unit_test_file": os.path.join(OUTPUT_DIR, "test_weather_api.py"),
+        "error_file": os.path.join(OUTPUT_DIR, "error_output.log"),
+        "output_code": os.path.join(OUTPUT_DIR, "fixed_api.py"),
+        "output_test": os.path.join(OUTPUT_DIR, "updated_tests.py"),
+        "local": True,  # Run locally instead of in the cloud
+        "strength": 0.3,  # Lower strength for faster processing
+        "max_attempts": 2,  # Reduce max attempts from 3 to 2
+        "force": True   # Force overwrite without prompting
     }
     
     result = await handle_pdd_fix(fix_args)
@@ -71,10 +148,15 @@ async def demonstrate_handlers():
     handler = get_handler(tool_name)
     
     preprocess_args = {
-        "prompt_file": "complex_prompt.pdd",
-        "output": "processed_prompt.pdd",
-        "recursive": True,
-        "exclude": ["excluded_file1.txt", "excluded_file2.txt"]
+        "prompt_file": os.path.join(OUTPUT_DIR, "complex_prompt.prompt"),
+        "output": os.path.join(OUTPUT_DIR, "processed_prompt.prompt"),
+        "local": True,  # Run locally instead of in the cloud
+        "xml": True,   # Use XML mode which is faster than recursive mode
+        "exclude": [
+            "file1",
+            "file2"
+        ],
+        "force": True   # Force overwrite without prompting
     }
     
     result = await handler(preprocess_args)

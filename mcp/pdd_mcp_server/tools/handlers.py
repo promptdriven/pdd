@@ -37,6 +37,10 @@ def _add_global_options(cmd_list: List[str], arguments: Dict[str, Any]):
         cmd_list.extend(['--output-cost', arguments['output_cost']])
     if arguments.get('review_examples'):
         cmd_list.append('--review-examples')
+    
+    # Additional debugging info
+    logger.debug("Global options added to command: %s", 
+                 " ".join([opt for opt in cmd_list if opt.startswith('--')]))
 
 # --- Helper Function for Result Formatting ---
 
