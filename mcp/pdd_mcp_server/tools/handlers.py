@@ -11,13 +11,80 @@ invocation, executes it using the runner, and formats the result for MCP.
 import logging
 import mcp.types as types
 from typing import Dict, List, Any, Optional
+import shlex
+import re
 
 # Import the runner function and result type
 from .runner import run_pdd_command, PddResult
 
 logger = logging.getLogger(__name__)
 
-# --- Helper Function for Global Options ---
+# --- Helper Functions ---
+
+def _handle_cli_style_args(arguments: Dict[str, Any], cmd_name: str) -> List[str]:
+    """
+    Process CLI-style string arguments passed via kwargs.
+    
+    Args:
+        arguments: The arguments dictionary which might contain a 'kwargs' string
+        cmd_name: The PDD command name to check for in the args list
+        
+    Returns:
+        A list of command arguments if kwargs was found and processed,
+        or an empty list if no kwargs was present
+    """
+    if 'kwargs' in arguments and isinstance(arguments['kwargs'], str):
+        cli_args = arguments['kwargs']
+        logger.info("Processing CLI-style arguments: %s", cli_args)
+        
+        # Split the string into a list, preserving quotes
+        args_list = shlex.split(cli_args)
+        
+        # Build the command list with 'pdd' at the start
+        cmd_list = ['pdd']
+        
+        # Extract prompt_file from various flags
+        prompt_file = None
+        
+        # Check for --file=value format
+        for i, arg in enumerate(args_list):
+            if arg.startswith("--file="):
+                parts = arg.split("=", 1)
+                if len(parts) > 1:
+                    prompt_file = parts[1]
+                    # Store for validation
+                    arguments['prompt_file'] = prompt_file
+                    # Replace with standard PDD CLI format
+                    args_list[i] = "-p"
+                    args_list.insert(i+1, prompt_file)
+                break
+        
+        # If we didn't find --file=, check for -p/--prompt flags
+        if not prompt_file:
+            prompt_index = -1
+            for i, arg in enumerate(args_list):
+                if arg == '-p' or arg == '--prompt':
+                    prompt_index = i
+                    break
+            
+            if prompt_index >= 0 and prompt_index + 1 < len(args_list):
+                # Store the prompt file value for later validation
+                arguments['prompt_file'] = args_list[prompt_index + 1]
+        
+        logger.info("Extracted prompt file: %s", arguments.get('prompt_file'))
+        
+        # Add all args, with modifications we may have made
+        cmd_list.extend(args_list)
+        
+        # If the command name appears at the end, remove it (it will be added later)
+        if len(cmd_list) > 1 and cmd_list[-1] == cmd_name:
+            cmd_list.pop()
+            
+        logger.info("Final command list: %s", cmd_list)
+        return cmd_list
+    
+    # No kwargs found, return empty list
+    return []
 
 def _add_global_options(cmd_list: List[str], arguments: Dict[str, Any]):
     """Appends global PDD options to the command list if present in arguments."""
@@ -62,9 +129,58 @@ def _format_result(pdd_result: PddResult, command_name: str) -> types.CallToolRe
         content = [types.TextContent(text=error_text, type="text")]
         is_error = True
         logger.error("pdd %s failed. Exit code: %d. Stderr: %s", command_name, pdd_result.exit_code, pdd_result.stderr)
-
+    
+    logger.info("Final result for pdd %s: isError=%s, content_length=%d", 
+                command_name, is_error, len(content[0].text) if content else 0)
+    
     return types.CallToolResult(content=content, isError=is_error)
 
+def _check_parameter_issues(arguments: Dict[str, Any], command_name: str) -> Optional[types.CallToolResult]:
+    """
+    Checks for parameter issues and returns an error result if problems are found.
+    
+    Args:
+        arguments: Dictionary of parameters to check
+        command_name: Name of the command for error messages
+        
+    Returns:
+        CallToolResult with error message if issues found, None if parameters are good
+    """
+    # Check for empty parameters
+    if not arguments:
+        return types.CallToolResult(
+            isError=True,
+            content=[types.TextContent(
+                text=f"Error: No parameters provided for pdd-{command_name}. Please specify required parameters.",
+                type="text"
+            )]
+        )
+    
+    # Check for kwargs parameter - only if it wasn't already processed upstream
+    if 'kwargs' in arguments:
+        helpful_message = f"""
+Error: Please provide parameters directly, not as 'kwargs'.
+
+INCORRECT WAY:
+{{
+  "kwargs": {{
+    "prompt_file": "/path/to/prompt.txt"
+  }}
+}}
+
+CORRECT WAY:
+{{
+  "prompt_file": "/path/to/prompt.txt"
+}}
+
+For pdd-{command_name}, the required parameters are documented in the tool schema.
+"""
+        return types.CallToolResult(
+            isError=True,
+            content=[types.TextContent(text=helpful_message, type="text")]
+        )
+        
+    return None  # No issues found
 
 # --- Tool Handlers ---
 
@@ -75,25 +191,66 @@ async def handle_pdd_generate(arguments: Dict[str, Any]) -> types.CallToolResult
     Args:
         arguments: Dictionary containing validated parameters from the MCP client.
                    Expected keys: 'prompt_file', 'output' (optional), global options.
+                   Alternative format: 'kwargs' containing a string of CLI arguments
+                   with formats like: "--file=/path/to/file" or "-p /path/to/file"
 
     Returns:
         An MCP CallToolResult containing the stdout or stderr of the command.
     """
     command_name = "generate"
     logger.info("Handling %s tool call with arguments: %s", f"pdd-{command_name}", arguments)
-    cmd_list = ['pdd']
-    _add_global_options(cmd_list, arguments)
-    cmd_list.append(command_name)
+    
+    # Check for parameter issues
+    param_issues = _check_parameter_issues(arguments, command_name)
+    if param_issues:
+        return param_issues
+        
+    # Special logic for kwargs string with --file=
+    if 'kwargs' in arguments and isinstance(arguments['kwargs'], str) and '--file=' in arguments['kwargs']:
+        logger.info("Detected --file= format in kwargs, handling specially")
+        cli_args = arguments['kwargs']
+        
+        # Extract the file path from --file=
+        file_match = re.search(r'--file=([^\s]+)', cli_args)
+        if file_match:
+            file_path = file_match.group(1)
+            arguments['prompt_file'] = file_path
+            logger.info(f"Extracted file path from --file=: {file_path}")
+            
+            # Convert to standard pdd format
+            cmd_list = ['pdd', 'generate', '-p', file_path]
+            logger.info(f"Using command: {cmd_list}")
+            
+            # Execute and return
+            pdd_result: PddResult = await run_pdd_command(cmd_list)
+            return _format_result(pdd_result, command_name)
+    
+    # Standard handling for other formats
+    cmd_list = _handle_cli_style_args(arguments, command_name)
+    
+    if not cmd_list:
+        # Only do the standard argument processing if we didn't get CLI arguments
+        _add_global_options(cmd_list, arguments)
+        cmd_list.append(command_name)
 
-    # Required arguments
-    prompt_file = arguments.get('prompt_file')
-    if not prompt_file:
-         return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required argument 'prompt_file' after validation.")])
-    cmd_list.append(prompt_file) # Positional argument
+        # Required arguments
+        prompt_file = arguments.get('prompt_file')
+        if not prompt_file:
+             return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required argument 'prompt_file' after validation.")])
+        cmd_list.append(prompt_file) # Positional argument
 
-    # Optional arguments
-    if arguments.get('output'):
-        cmd_list.extend(['--output', arguments['output']])
+        # Optional arguments
+        if arguments.get('output'):
+            cmd_list.extend(['--output', arguments['output']])
+    else:
+        # If we processed CLI args, still check for required parameters
+        if 'generate' not in cmd_list and 'gen' not in cmd_list:
+            cmd_list.append('generate')
+        
+        # Check if we already have a prompt file (could be from -p/--prompt extraction)
+        prompt_file = arguments.get('prompt_file')
+        if not prompt_file:
+            return types.CallToolResult(isError=True, content=[types.TextContent(text="Missing required prompt file. Use -p or --prompt to specify the prompt file.")])
 
     logger.debug("Executing command: %s", " ".join(cmd_list))
     pdd_result: PddResult = await run_pdd_command(cmd_list)
@@ -112,21 +269,23 @@ async def handle_pdd_example(arguments: Dict[str, Any]) -> types.CallToolResult:
     """
     command_name = "example"
     logger.info("Handling %s tool call with arguments: %s", f"pdd-{command_name}", arguments)
-    cmd_list = ['pdd']
-    _add_global_options(cmd_list, arguments)
-    cmd_list.append(command_name)
+    cmd_list = _handle_cli_style_args(arguments, command_name)
+    
+    if not cmd_list:
+        _add_global_options(cmd_list, arguments)
+        cmd_list.append(command_name)
 
-    # Required arguments
-    prompt_file = arguments.get('prompt_file')
-    code_file = arguments.get('code_file')
-    if not prompt_file or not code_file:
-         return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required arguments 'prompt_file' or 'code_file' after validation.")])
-    cmd_list.append(prompt_file) # Positional
-    cmd_list.append(code_file)   # Positional
+        # Required arguments
+        prompt_file = arguments.get('prompt_file')
+        code_file = arguments.get('code_file')
+        if not prompt_file or not code_file:
+             return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required arguments 'prompt_file' or 'code_file' after validation.")])
+        cmd_list.append(prompt_file) # Positional
+        cmd_list.append(code_file)   # Positional
 
-    # Optional arguments
-    if arguments.get('output'):
-        cmd_list.extend(['--output', arguments['output']])
+        # Optional arguments
+        if arguments.get('output'):
+            cmd_list.extend(['--output', arguments['output']])
 
     logger.debug("Executing command: %s", " ".join(cmd_list))
     pdd_result: PddResult = await run_pdd_command(cmd_list)
@@ -142,39 +301,42 @@ async def handle_pdd_test(arguments: Dict[str, Any]) -> types.CallToolResult:
                    'language' (optional), 'coverage_report' (optional),
                    'existing_tests' (optional), 'target_coverage' (optional),
                    'merge' (optional, bool), global options.
+                   Alternative format: 'kwargs' containing a string of CLI arguments
 
     Returns:
         An MCP CallToolResult containing the stdout or stderr of the command.
     """
     command_name = "test"
     logger.info("Handling %s tool call with arguments: %s", f"pdd-{command_name}", arguments)
-    cmd_list = ['pdd']
-    _add_global_options(cmd_list, arguments)
-    cmd_list.append(command_name)
+    cmd_list = _handle_cli_style_args(arguments, command_name)
+    
+    if not cmd_list:
+        _add_global_options(cmd_list, arguments)
+        cmd_list.append(command_name)
 
-    # Required arguments
-    prompt_file = arguments.get('prompt_file')
-    code_file = arguments.get('code_file')
-    if not prompt_file or not code_file:
-         return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required arguments 'prompt_file' or 'code_file' after validation.")])
-    cmd_list.append(prompt_file) # Positional
-    cmd_list.append(code_file)   # Positional
+        # Required arguments
+        prompt_file = arguments.get('prompt_file')
+        code_file = arguments.get('code_file')
+        if not prompt_file or not code_file:
+             return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required arguments 'prompt_file' or 'code_file' after validation.")])
+        cmd_list.append(prompt_file) # Positional
+        cmd_list.append(code_file)   # Positional
 
-    # Optional arguments
-    if arguments.get('output'):
-        cmd_list.extend(['--output', arguments['output']])
-    if arguments.get('language'):
-        cmd_list.extend(['--language', arguments['language']])
-    if arguments.get('coverage_report'):
-        cmd_list.extend(['--coverage-report', arguments['coverage_report']])
-    if arguments.get('existing_tests'):
-        cmd_list.extend(['--existing-tests', arguments['existing_tests']])
-    if arguments.get('target_coverage') is not None:
-        cmd_list.extend(['--target-coverage', str(arguments['target_coverage'])])
+        # Optional arguments
+        if arguments.get('output'):
+            cmd_list.extend(['--output', arguments['output']])
+        if arguments.get('language'):
+            cmd_list.extend(['--language', arguments['language']])
+        if arguments.get('coverage_report'):
+            cmd_list.extend(['--coverage-report', arguments['coverage_report']])
+        if arguments.get('existing_tests'):
+            cmd_list.extend(['--existing-tests', arguments['existing_tests']])
+        if arguments.get('target_coverage') is not None:
+            cmd_list.extend(['--target-coverage', str(arguments['target_coverage'])])
 
-    # Boolean flags
-    if arguments.get('merge'):
-        cmd_list.append('--merge')
+        # Boolean flags
+        if arguments.get('merge'):
+            cmd_list.append('--merge')
 
     logger.debug("Executing command: %s", " ".join(cmd_list))
     pdd_result: PddResult = await run_pdd_command(cmd_list)
@@ -195,32 +357,34 @@ async def handle_pdd_preprocess(arguments: Dict[str, Any]) -> types.CallToolResu
     """
     command_name = "preprocess"
     logger.info("Handling %s tool call with arguments: %s", f"pdd-{command_name}", arguments)
-    cmd_list = ['pdd']
-    _add_global_options(cmd_list, arguments)
-    cmd_list.append(command_name)
+    cmd_list = _handle_cli_style_args(arguments, command_name)
+    
+    if not cmd_list:
+        _add_global_options(cmd_list, arguments)
+        cmd_list.append(command_name)
 
-    # Required arguments
-    prompt_file = arguments.get('prompt_file')
-    if not prompt_file:
-         return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required argument 'prompt_file' after validation.")])
-    cmd_list.append(prompt_file) # Positional
+        # Required arguments
+        prompt_file = arguments.get('prompt_file')
+        if not prompt_file:
+             return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required argument 'prompt_file' after validation.")])
+        cmd_list.append(prompt_file) # Positional
 
-    # Optional arguments
-    if arguments.get('output'):
-        cmd_list.extend(['--output', arguments['output']])
-    exclude_list = arguments.get('exclude')
-    if exclude_list:
-        # Click expects multiple --exclude options
-        for item in exclude_list:
-             cmd_list.extend(['--exclude', item])
+        # Optional arguments
+        if arguments.get('output'):
+            cmd_list.extend(['--output', arguments['output']])
+        exclude_list = arguments.get('exclude')
+        if exclude_list:
+            # Click expects multiple --exclude options
+            for item in exclude_list:
+                 cmd_list.extend(['--exclude', item])
 
-    # Boolean flags
-    if arguments.get('xml'):
-        cmd_list.append('--xml')
-    if arguments.get('recursive'):
-        cmd_list.append('--recursive')
-    if arguments.get('double'):
-        cmd_list.append('--double')
+        # Boolean flags
+        if arguments.get('xml'):
+            cmd_list.append('--xml')
+        if arguments.get('recursive'):
+            cmd_list.append('--recursive')
+        if arguments.get('double'):
+            cmd_list.append('--double')
 
     logger.debug("Executing command: %s", " ".join(cmd_list))
     pdd_result: PddResult = await run_pdd_command(cmd_list)
@@ -244,45 +408,47 @@ async def handle_pdd_fix(arguments: Dict[str, Any]) -> types.CallToolResult:
     """
     command_name = "fix"
     logger.info("Handling %s tool call with arguments: %s", f"pdd-{command_name}", arguments)
-    cmd_list = ['pdd']
-    _add_global_options(cmd_list, arguments)
-    cmd_list.append(command_name)
+    cmd_list = _handle_cli_style_args(arguments, command_name)
+    
+    if not cmd_list:
+        _add_global_options(cmd_list, arguments)
+        cmd_list.append(command_name)
 
-    # Required arguments
-    prompt_file = arguments.get('prompt_file')
-    code_file = arguments.get('code_file')
-    unit_test_file = arguments.get('unit_test_file')
-    # error_file is optional in the command itself if --loop is used, but required by schema if not looping? Check definition. Assuming required for now.
-    error_file = arguments.get('error_file') # Optional positional arg
+        # Required arguments
+        prompt_file = arguments.get('prompt_file')
+        code_file = arguments.get('code_file')
+        unit_test_file = arguments.get('unit_test_file')
+        # error_file is optional in the command itself if --loop is used, but required by schema if not looping? Check definition. Assuming required for now.
+        error_file = arguments.get('error_file') # Optional positional arg
 
-    if not prompt_file or not code_file or not unit_test_file:
-         return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required arguments 'prompt_file', 'code_file', or 'unit_test_file' after validation.")])
+        if not prompt_file or not code_file or not unit_test_file:
+             return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required arguments 'prompt_file', 'code_file', or 'unit_test_file' after validation.")])
 
-    cmd_list.append(prompt_file)    # Positional
-    cmd_list.append(code_file)      # Positional
-    cmd_list.append(unit_test_file) # Positional
-    if error_file: # Only add if provided
-        cmd_list.append(error_file) # Positional (optional)
+        cmd_list.append(prompt_file)    # Positional
+        cmd_list.append(code_file)      # Positional
+        cmd_list.append(unit_test_file) # Positional
+        if error_file: # Only add if provided
+            cmd_list.append(error_file) # Positional (optional)
 
-    # Optional arguments
-    if arguments.get('output_test'):
-        cmd_list.extend(['--output-test', arguments['output_test']])
-    if arguments.get('output_code'):
-        cmd_list.extend(['--output-code', arguments['output_code']])
-    if arguments.get('output_results'):
-        cmd_list.extend(['--output-results', arguments['output_results']])
-    if arguments.get('verification_program'):
-        cmd_list.extend(['--verification-program', arguments['verification_program']])
-    if arguments.get('max_attempts') is not None:
-        cmd_list.extend(['--max-attempts', str(arguments['max_attempts'])])
-    if arguments.get('budget') is not None:
-        cmd_list.extend(['--budget', str(arguments['budget'])])
+        # Optional arguments
+        if arguments.get('output_test'):
+            cmd_list.extend(['--output-test', arguments['output_test']])
+        if arguments.get('output_code'):
+            cmd_list.extend(['--output-code', arguments['output_code']])
+        if arguments.get('output_results'):
+            cmd_list.extend(['--output-results', arguments['output_results']])
+        if arguments.get('verification_program'):
+            cmd_list.extend(['--verification-program', arguments['verification_program']])
+        if arguments.get('max_attempts') is not None:
+            cmd_list.extend(['--max-attempts', str(arguments['max_attempts'])])
+        if arguments.get('budget') is not None:
+            cmd_list.extend(['--budget', str(arguments['budget'])])
 
-    # Boolean flags
-    if arguments.get('loop'):
-        cmd_list.append('--loop')
-    if arguments.get('auto_submit'):
-        cmd_list.append('--auto-submit')
+        # Boolean flags
+        if arguments.get('loop'):
+            cmd_list.append('--loop')
+        if arguments.get('auto_submit'):
+            cmd_list.append('--auto-submit')
 
     logger.debug("Executing command: %s", " ".join(cmd_list))
     pdd_result: PddResult = await run_pdd_command(cmd_list)
@@ -302,25 +468,27 @@ async def handle_pdd_split(arguments: Dict[str, Any]) -> types.CallToolResult:
     """
     command_name = "split"
     logger.info("Handling %s tool call with arguments: %s", f"pdd-{command_name}", arguments)
-    cmd_list = ['pdd']
-    _add_global_options(cmd_list, arguments)
-    cmd_list.append(command_name)
+    cmd_list = _handle_cli_style_args(arguments, command_name)
+    
+    if not cmd_list:
+        _add_global_options(cmd_list, arguments)
+        cmd_list.append(command_name)
 
-    # Required arguments
-    input_prompt = arguments.get('input_prompt')
-    input_code = arguments.get('input_code')
-    example_code = arguments.get('example_code')
-    if not input_prompt or not input_code or not example_code:
-         return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required arguments 'input_prompt', 'input_code', or 'example_code' after validation.")])
-    cmd_list.append(input_prompt) # Positional
-    cmd_list.append(input_code)   # Positional
-    cmd_list.append(example_code) # Positional
+        # Required arguments
+        input_prompt = arguments.get('input_prompt')
+        input_code = arguments.get('input_code')
+        example_code = arguments.get('example_code')
+        if not input_prompt or not input_code or not example_code:
+             return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required arguments 'input_prompt', 'input_code', or 'example_code' after validation.")])
+        cmd_list.append(input_prompt) # Positional
+        cmd_list.append(input_code)   # Positional
+        cmd_list.append(example_code) # Positional
 
-    # Optional arguments
-    if arguments.get('output_sub'):
-        cmd_list.extend(['--output-sub', arguments['output_sub']])
-    if arguments.get('output_modified'):
-        cmd_list.extend(['--output-modified', arguments['output_modified']])
+        # Optional arguments
+        if arguments.get('output_sub'):
+            cmd_list.extend(['--output-sub', arguments['output_sub']])
+        if arguments.get('output_modified'):
+            cmd_list.extend(['--output-modified', arguments['output_modified']])
 
     logger.debug("Executing command: %s", " ".join(cmd_list))
     pdd_result: PddResult = await run_pdd_command(cmd_list)
@@ -341,40 +509,42 @@ async def handle_pdd_change(arguments: Dict[str, Any]) -> types.CallToolResult:
     """
     command_name = "change"
     logger.info("Handling %s tool call with arguments: %s", f"pdd-{command_name}", arguments)
-    cmd_list = ['pdd']
-    _add_global_options(cmd_list, arguments)
-    cmd_list.append(command_name)
+    cmd_list = _handle_cli_style_args(arguments, command_name)
+    
+    if not cmd_list:
+        _add_global_options(cmd_list, arguments)
+        cmd_list.append(command_name)
 
-    # Required arguments
-    change_prompt_file = arguments.get('change_prompt_file')
-    input_code = arguments.get('input_code')
-    if not change_prompt_file or not input_code:
-         return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required arguments 'change_prompt_file' or 'input_code' after validation.")])
-    cmd_list.append(change_prompt_file) # Positional
-    cmd_list.append(input_code)         # Positional
+        # Required arguments
+        change_prompt_file = arguments.get('change_prompt_file')
+        input_code = arguments.get('input_code')
+        if not change_prompt_file or not input_code:
+             return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required arguments 'change_prompt_file' or 'input_code' after validation.")])
+        cmd_list.append(change_prompt_file) # Positional
+        cmd_list.append(input_code)         # Positional
 
-    # Optional positional argument (only if --csv is NOT used)
-    input_prompt_file = arguments.get('input_prompt_file')
-    use_csv = arguments.get('csv', False)
-    if not use_csv and input_prompt_file:
-        cmd_list.append(input_prompt_file) # Positional (optional)
-    elif not use_csv and not input_prompt_file:
-        # This case might need clarification based on CLI behavior.
-        # If input_prompt_file is truly optional *only* when --csv is used,
-        # this check might be redundant due to schema validation.
-        # If it's optional even without --csv, this is correct.
-        pass
-    elif use_csv and input_prompt_file:
-        logger.warning("Ignoring 'input_prompt_file' because '--csv' flag is set.")
+        # Optional positional argument (only if --csv is NOT used)
+        input_prompt_file = arguments.get('input_prompt_file')
+        use_csv = arguments.get('csv', False)
+        if not use_csv and input_prompt_file:
+            cmd_list.append(input_prompt_file) # Positional (optional)
+        elif not use_csv and not input_prompt_file:
+            # This case might need clarification based on CLI behavior.
+            # If input_prompt_file is truly optional *only* when --csv is used,
+            # this check might be redundant due to schema validation.
+            # If it's optional even without --csv, this is correct.
+            pass
+        elif use_csv and input_prompt_file:
+            logger.warning("Ignoring 'input_prompt_file' because '--csv' flag is set.")
 
 
-    # Optional arguments
-    if arguments.get('output'):
-        cmd_list.extend(['--output', arguments['output']])
+        # Optional arguments
+        if arguments.get('output'):
+            cmd_list.extend(['--output', arguments['output']])
 
-    # Boolean flags
-    if use_csv:
-        cmd_list.append('--csv')
+        # Boolean flags
+        if use_csv:
+            cmd_list.append('--csv')
 
     logger.debug("Executing command: %s", " ".join(cmd_list))
     pdd_result: PddResult = await run_pdd_command(cmd_list)
@@ -395,38 +565,40 @@ async def handle_pdd_update(arguments: Dict[str, Any]) -> types.CallToolResult:
     """
     command_name = "update"
     logger.info("Handling %s tool call with arguments: %s", f"pdd-{command_name}", arguments)
-    cmd_list = ['pdd']
-    _add_global_options(cmd_list, arguments)
-    cmd_list.append(command_name)
+    cmd_list = _handle_cli_style_args(arguments, command_name)
+    
+    if not cmd_list:
+        _add_global_options(cmd_list, arguments)
+        cmd_list.append(command_name)
 
-    # Required arguments
-    input_prompt_file = arguments.get('input_prompt_file')
-    modified_code_file = arguments.get('modified_code_file')
-    if not input_prompt_file or not modified_code_file:
-         return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required arguments 'input_prompt_file' or 'modified_code_file' after validation.")])
-    cmd_list.append(input_prompt_file)  # Positional
-    cmd_list.append(modified_code_file) # Positional
+        # Required arguments
+        input_prompt_file = arguments.get('input_prompt_file')
+        modified_code_file = arguments.get('modified_code_file')
+        if not input_prompt_file or not modified_code_file:
+             return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required arguments 'input_prompt_file' or 'modified_code_file' after validation.")])
+        cmd_list.append(input_prompt_file)  # Positional
+        cmd_list.append(modified_code_file) # Positional
 
-    # Optional positional argument (only if --git is NOT used)
-    input_code_file = arguments.get('input_code_file')
-    use_git = arguments.get('git', False)
-    if not use_git and input_code_file:
-        cmd_list.append(input_code_file) # Positional (optional)
-    elif not use_git and not input_code_file:
-         # According to README, input_code_file is optional *only* when --git is used.
-         # Schema validation should enforce this. If it gets here, it's an issue.
-         return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing 'input_code_file' when '--git' is not used.")])
-    elif use_git and input_code_file:
-        logger.warning("Ignoring 'input_code_file' because '--git' flag is set.")
+        # Optional positional argument (only if --git is NOT used)
+        input_code_file = arguments.get('input_code_file')
+        use_git = arguments.get('git', False)
+        if not use_git and input_code_file:
+            cmd_list.append(input_code_file) # Positional (optional)
+        elif not use_git and not input_code_file:
+             # According to README, input_code_file is optional *only* when --git is used.
+             # Schema validation should enforce this. If it gets here, it's an issue.
+             return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing 'input_code_file' when '--git' is not used.")])
+        elif use_git and input_code_file:
+            logger.warning("Ignoring 'input_code_file' because '--git' flag is set.")
 
 
-    # Optional arguments
-    if arguments.get('output'):
-        cmd_list.extend(['--output', arguments['output']])
+        # Optional arguments
+        if arguments.get('output'):
+            cmd_list.extend(['--output', arguments['output']])
 
-    # Boolean flags
-    if use_git:
-        cmd_list.append('--git')
+        # Boolean flags
+        if use_git:
+            cmd_list.append('--git')
 
     logger.debug("Executing command: %s", " ".join(cmd_list))
     pdd_result: PddResult = await run_pdd_command(cmd_list)
@@ -446,22 +618,24 @@ async def handle_pdd_detect(arguments: Dict[str, Any]) -> types.CallToolResult:
     """
     command_name = "detect"
     logger.info("Handling %s tool call with arguments: %s", f"pdd-{command_name}", arguments)
-    cmd_list = ['pdd']
-    _add_global_options(cmd_list, arguments)
-    cmd_list.append(command_name)
+    cmd_list = _handle_cli_style_args(arguments, command_name)
+    
+    if not cmd_list:
+        _add_global_options(cmd_list, arguments)
+        cmd_list.append(command_name)
 
-    # Required arguments (positional, variable length first)
-    prompt_files = arguments.get('prompt_files')
-    change_file = arguments.get('change_file')
-    if not prompt_files or not isinstance(prompt_files, list) or not change_file:
-         return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing or invalid required arguments 'prompt_files' (list) or 'change_file' after validation.")])
+        # Required arguments (positional, variable length first)
+        prompt_files = arguments.get('prompt_files')
+        change_file = arguments.get('change_file')
+        if not prompt_files or not isinstance(prompt_files, list) or not change_file:
+             return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing or invalid required arguments 'prompt_files' (list) or 'change_file' after validation.")])
 
-    cmd_list.extend(prompt_files) # Positional (variable length)
-    cmd_list.append(change_file)  # Positional (last)
+        cmd_list.extend(prompt_files) # Positional (variable length)
+        cmd_list.append(change_file)  # Positional (last)
 
-    # Optional arguments
-    if arguments.get('output'):
-        cmd_list.extend(['--output', arguments['output']])
+        # Optional arguments
+        if arguments.get('output'):
+            cmd_list.extend(['--output', arguments['output']])
 
     logger.debug("Executing command: %s", " ".join(cmd_list))
     pdd_result: PddResult = await run_pdd_command(cmd_list)
@@ -480,21 +654,23 @@ async def handle_pdd_conflicts(arguments: Dict[str, Any]) -> types.CallToolResul
     """
     command_name = "conflicts"
     logger.info("Handling %s tool call with arguments: %s", f"pdd-{command_name}", arguments)
-    cmd_list = ['pdd']
-    _add_global_options(cmd_list, arguments)
-    cmd_list.append(command_name)
+    cmd_list = _handle_cli_style_args(arguments, command_name)
+    
+    if not cmd_list:
+        _add_global_options(cmd_list, arguments)
+        cmd_list.append(command_name)
 
-    # Required arguments
-    prompt1 = arguments.get('prompt1')
-    prompt2 = arguments.get('prompt2')
-    if not prompt1 or not prompt2:
-         return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required arguments 'prompt1' or 'prompt2' after validation.")])
-    cmd_list.append(prompt1) # Positional
-    cmd_list.append(prompt2) # Positional
+        # Required arguments
+        prompt1 = arguments.get('prompt1')
+        prompt2 = arguments.get('prompt2')
+        if not prompt1 or not prompt2:
+             return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required arguments 'prompt1' or 'prompt2' after validation.")])
+        cmd_list.append(prompt1) # Positional
+        cmd_list.append(prompt2) # Positional
 
-    # Optional arguments
-    if arguments.get('output'):
-        cmd_list.extend(['--output', arguments['output']])
+        # Optional arguments
+        if arguments.get('output'):
+            cmd_list.extend(['--output', arguments['output']])
 
     logger.debug("Executing command: %s", " ".join(cmd_list))
     pdd_result: PddResult = await run_pdd_command(cmd_list)
@@ -516,35 +692,37 @@ async def handle_pdd_crash(arguments: Dict[str, Any]) -> types.CallToolResult:
     """
     command_name = "crash"
     logger.info("Handling %s tool call with arguments: %s", f"pdd-{command_name}", arguments)
-    cmd_list = ['pdd']
-    _add_global_options(cmd_list, arguments)
-    cmd_list.append(command_name)
+    cmd_list = _handle_cli_style_args(arguments, command_name)
+    
+    if not cmd_list:
+        _add_global_options(cmd_list, arguments)
+        cmd_list.append(command_name)
 
-    # Required arguments
-    prompt_file = arguments.get('prompt_file')
-    code_file = arguments.get('code_file')
-    program_file = arguments.get('program_file')
-    error_file = arguments.get('error_file')
-    if not prompt_file or not code_file or not program_file or not error_file:
-         return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required arguments 'prompt_file', 'code_file', 'program_file', or 'error_file' after validation.")])
-    cmd_list.append(prompt_file)    # Positional
-    cmd_list.append(code_file)      # Positional
-    cmd_list.append(program_file)   # Positional
-    cmd_list.append(error_file)     # Positional
+        # Required arguments
+        prompt_file = arguments.get('prompt_file')
+        code_file = arguments.get('code_file')
+        program_file = arguments.get('program_file')
+        error_file = arguments.get('error_file')
+        if not prompt_file or not code_file or not program_file or not error_file:
+             return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required arguments 'prompt_file', 'code_file', 'program_file', or 'error_file' after validation.")])
+        cmd_list.append(prompt_file)    # Positional
+        cmd_list.append(code_file)      # Positional
+        cmd_list.append(program_file)   # Positional
+        cmd_list.append(error_file)     # Positional
 
-    # Optional arguments
-    if arguments.get('output'):
-        cmd_list.extend(['--output', arguments['output']])
-    if arguments.get('output_program'):
-        cmd_list.extend(['--output-program', arguments['output_program']])
-    if arguments.get('max_attempts') is not None:
-        cmd_list.extend(['--max-attempts', str(arguments['max_attempts'])])
-    if arguments.get('budget') is not None:
-        cmd_list.extend(['--budget', str(arguments['budget'])])
+        # Optional arguments
+        if arguments.get('output'):
+            cmd_list.extend(['--output', arguments['output']])
+        if arguments.get('output_program'):
+            cmd_list.extend(['--output-program', arguments['output_program']])
+        if arguments.get('max_attempts') is not None:
+            cmd_list.extend(['--max-attempts', str(arguments['max_attempts'])])
+        if arguments.get('budget') is not None:
+            cmd_list.extend(['--budget', str(arguments['budget'])])
 
-    # Boolean flags
-    if arguments.get('loop'):
-        cmd_list.append('--loop')
+        # Boolean flags
+        if arguments.get('loop'):
+            cmd_list.append('--loop')
 
     logger.debug("Executing command: %s", " ".join(cmd_list))
     pdd_result: PddResult = await run_pdd_command(cmd_list)
@@ -564,23 +742,25 @@ async def handle_pdd_trace(arguments: Dict[str, Any]) -> types.CallToolResult:
     """
     command_name = "trace"
     logger.info("Handling %s tool call with arguments: %s", f"pdd-{command_name}", arguments)
-    cmd_list = ['pdd']
-    _add_global_options(cmd_list, arguments)
-    cmd_list.append(command_name)
+    cmd_list = _handle_cli_style_args(arguments, command_name)
+    
+    if not cmd_list:
+        _add_global_options(cmd_list, arguments)
+        cmd_list.append(command_name)
 
-    # Required arguments
-    prompt_file = arguments.get('prompt_file')
-    code_file = arguments.get('code_file')
-    code_line = arguments.get('code_line') # Should be validated as int by schema
-    if not prompt_file or not code_file or code_line is None:
-         return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required arguments 'prompt_file', 'code_file', or 'code_line' after validation.")])
-    cmd_list.append(prompt_file)    # Positional
-    cmd_list.append(code_file)      # Positional
-    cmd_list.append(str(code_line)) # Positional
+        # Required arguments
+        prompt_file = arguments.get('prompt_file')
+        code_file = arguments.get('code_file')
+        code_line = arguments.get('code_line') # Should be validated as int by schema
+        if not prompt_file or not code_file or code_line is None:
+             return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required arguments 'prompt_file', 'code_file', or 'code_line' after validation.")])
+        cmd_list.append(prompt_file)    # Positional
+        cmd_list.append(code_file)      # Positional
+        cmd_list.append(str(code_line)) # Positional
 
-    # Optional arguments
-    if arguments.get('output'):
-        cmd_list.extend(['--output', arguments['output']])
+        # Optional arguments
+        if arguments.get('output'):
+            cmd_list.extend(['--output', arguments['output']])
 
     logger.debug("Executing command: %s", " ".join(cmd_list))
     pdd_result: PddResult = await run_pdd_command(cmd_list)
@@ -600,23 +780,25 @@ async def handle_pdd_bug(arguments: Dict[str, Any]) -> types.CallToolResult:
     """
     command_name = "bug"
     logger.info("Handling %s tool call with arguments: %s", f"pdd-{command_name}", arguments)
-    cmd_list = ['pdd']
-    _add_global_options(cmd_list, arguments)
-    cmd_list.append(command_name)
+    cmd_list = _handle_cli_style_args(arguments, command_name)
+    
+    if not cmd_list:
+        _add_global_options(cmd_list, arguments)
+        cmd_list.append(command_name)
 
-    # Required arguments
-    prompt_file = arguments.get('prompt_file')
-    code_file = arguments.get('code_file')
-    bug_description = arguments.get('bug_description')
-    if not prompt_file or not code_file or not bug_description:
-         return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required arguments 'prompt_file', 'code_file', or 'bug_description' after validation.")])
-    cmd_list.append(prompt_file)      # Positional
-    cmd_list.append(code_file)        # Positional
-    cmd_list.append(bug_description)  # Positional
+        # Required arguments
+        prompt_file = arguments.get('prompt_file')
+        code_file = arguments.get('code_file')
+        bug_description = arguments.get('bug_description')
+        if not prompt_file or not code_file or not bug_description:
+             return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required arguments 'prompt_file', 'code_file', or 'bug_description' after validation.")])
+        cmd_list.append(prompt_file)      # Positional
+        cmd_list.append(code_file)        # Positional
+        cmd_list.append(bug_description)  # Positional
 
-    # Optional arguments
-    if arguments.get('output'):
-        cmd_list.extend(['--output', arguments['output']])
+        # Optional arguments
+        if arguments.get('output'):
+            cmd_list.extend(['--output', arguments['output']])
 
     logger.debug("Executing command: %s", " ".join(cmd_list))
     pdd_result: PddResult = await run_pdd_command(cmd_list)
@@ -637,21 +819,23 @@ async def handle_pdd_continue(arguments: Dict[str, Any]) -> types.CallToolResult
     """
     command_name = "continue"
     logger.info("Handling %s tool call with arguments: %s", f"pdd-{command_name}", arguments)
-    cmd_list = ['pdd']
-    _add_global_options(cmd_list, arguments)
-    cmd_list.append(command_name)
+    cmd_list = _handle_cli_style_args(arguments, command_name)
+    
+    if not cmd_list:
+        _add_global_options(cmd_list, arguments)
+        cmd_list.append(command_name)
 
-    # Required arguments
-    prompt_file = arguments.get('prompt_file')
-    output_file = arguments.get('output_file')
-    if not prompt_file or not output_file:
-         return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required arguments 'prompt_file' or 'output_file' after validation.")])
-    cmd_list.append(prompt_file)  # Positional
-    cmd_list.append(output_file)  # Positional
+        # Required arguments
+        prompt_file = arguments.get('prompt_file')
+        output_file = arguments.get('output_file')
+        if not prompt_file or not output_file:
+             return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required arguments 'prompt_file' or 'output_file' after validation.")])
+        cmd_list.append(prompt_file)  # Positional
+        cmd_list.append(output_file)  # Positional
 
-    # Optional arguments
-    if arguments.get('result_file'):
-        cmd_list.append(arguments['result_file'])  # Positional (optional third argument)
+        # Optional arguments
+        if arguments.get('result_file'):
+            cmd_list.append(arguments['result_file'])  # Positional (optional third argument)
 
     logger.debug("Executing command: %s", " ".join(cmd_list))
     pdd_result: PddResult = await run_pdd_command(cmd_list)
@@ -672,21 +856,23 @@ async def handle_pdd_analyze(arguments: Dict[str, Any]) -> types.CallToolResult:
     """
     command_name = "analyze"
     logger.info("Handling %s tool call with arguments: %s", f"pdd-{command_name}", arguments)
-    cmd_list = ['pdd']
-    _add_global_options(cmd_list, arguments)
-    cmd_list.append(command_name)
+    cmd_list = _handle_cli_style_args(arguments, command_name)
+    
+    if not cmd_list:
+        _add_global_options(cmd_list, arguments)
+        cmd_list.append(command_name)
 
-    # Required arguments
-    source_file = arguments.get('source_file')
-    if not source_file:
-         return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required argument 'source_file' after validation.")])
-    cmd_list.append(source_file)  # Positional
+        # Required arguments
+        source_file = arguments.get('source_file')
+        if not source_file:
+             return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required argument 'source_file' after validation.")])
+        cmd_list.append(source_file)  # Positional
 
-    # Optional arguments
-    if arguments.get('output'):
-        cmd_list.extend(['--output', arguments['output']])
-    if arguments.get('format'):
-        cmd_list.extend(['--format', arguments['format']])
+        # Optional arguments
+        if arguments.get('output'):
+            cmd_list.extend(['--output', arguments['output']])
+        if arguments.get('format'):
+            cmd_list.extend(['--format', arguments['format']])
 
     logger.debug("Executing command: %s", " ".join(cmd_list))
     pdd_result: PddResult = await run_pdd_command(cmd_list)
@@ -705,27 +891,29 @@ async def handle_pdd_auto_deps(arguments: Dict[str, Any]) -> types.CallToolResul
     """
     command_name = "auto-deps"
     logger.info("Handling %s tool call with arguments: %s", f"pdd-{command_name}", arguments)
-    cmd_list = ['pdd']
-    _add_global_options(cmd_list, arguments)
-    cmd_list.append(command_name)
+    cmd_list = _handle_cli_style_args(arguments, command_name)
+    
+    if not cmd_list:
+        _add_global_options(cmd_list, arguments)
+        cmd_list.append(command_name)
 
-    # Required arguments
-    prompt_file = arguments.get('prompt_file')
-    directory_path = arguments.get('directory_path')
-    if not prompt_file or not directory_path:
-         return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required arguments 'prompt_file' or 'directory_path' after validation.")])
-    cmd_list.append(prompt_file)    # Positional
-    cmd_list.append(directory_path) # Positional
+        # Required arguments
+        prompt_file = arguments.get('prompt_file')
+        directory_path = arguments.get('directory_path')
+        if not prompt_file or not directory_path:
+             return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required arguments 'prompt_file' or 'directory_path' after validation.")])
+        cmd_list.append(prompt_file)    # Positional
+        cmd_list.append(directory_path) # Positional
 
-    # Optional arguments
-    if arguments.get('output'):
-        cmd_list.extend(['--output', arguments['output']])
-    if arguments.get('csv'):
-        cmd_list.extend(['--csv', arguments['csv']])
+        # Optional arguments
+        if arguments.get('output'):
+            cmd_list.extend(['--output', arguments['output']])
+        if arguments.get('csv'):
+            cmd_list.extend(['--csv', arguments['csv']])
 
-    # Boolean flags
-    if arguments.get('force_scan'):
-        cmd_list.append('--force-scan')
+        # Boolean flags
+        if arguments.get('force_scan'):
+            cmd_list.append('--force-scan')
 
     logger.debug("Executing command: %s", " ".join(cmd_list))
     pdd_result: PddResult = await run_pdd_command(cmd_list)

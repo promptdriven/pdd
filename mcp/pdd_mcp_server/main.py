@@ -1,11 +1,13 @@
 import asyncio
 import logging
 import sys
+import os
 from typing import Dict, Any
 
 # Import MCP SDK - use FastMCP which is more declarative and simpler
 try:
     from mcp.server.fastmcp import FastMCP
+    import mcp.types as types
 except ImportError:
     logger = logging.getLogger(__name__)
     logger.error("MCP SDK not found. Please install it with: pip install mcp")
@@ -26,13 +28,16 @@ except ImportError:
         sys.exit(1)
 
 # Configure logging
+log_level = os.environ.get("LOGLEVEL", "INFO").upper()
+numeric_level = getattr(logging, log_level, logging.INFO)
 logging.basicConfig(
-    level=logging.INFO,
+    level=numeric_level,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     stream=sys.stderr,
     force=True
 )
 logger = logging.getLogger(__name__)
+logger.info("Log level set to %s", log_level)
 
 # Create a FastMCP server instance
 mcp = FastMCP(
@@ -53,9 +58,31 @@ def register_tool(tool_def):
         
     try:
         # Create a wrapper for the handler that accepts typed parameters
-        @mcp.tool(name=tool_def.name, description=tool_def.description)
+        # and explicitly forbids 'kwargs' parameter to force proper usage
+        @mcp.tool(
+            name=tool_def.name, 
+            description=tool_def.description
+        )
         async def wrapped_handler(**kwargs):
             """Tool wrapper that sends parameters to the appropriate handler."""
+            # If 'kwargs' contains a dictionary of proper parameters, extract and use them directly
+            if 'kwargs' in kwargs and isinstance(kwargs['kwargs'], dict):
+                # Extract the inner parameters from kwargs
+                inner_params = kwargs.pop('kwargs')
+                # Merge with any other explicitly provided parameters
+                kwargs.update(inner_params)
+                logger.info(f"Extracted parameters from 'kwargs' dictionary for {tool_def.name}")
+            # Prevent usage of 'kwargs' parameter as a CLI string
+            elif 'kwargs' in kwargs and isinstance(kwargs['kwargs'], str):
+                logger.warning(f"Rejected attempt to use 'kwargs' parameter with {tool_def.name}. Clients should use proper parameter structure.")
+                return types.CallToolResult(
+                    isError=True,
+                    content=[types.TextContent(
+                        text=f"Error: Please use proper parameter structure for {tool_def.name}. Example: {{\"prompt_file\": \"/path/to/file.txt\"}} NOT {{\"kwargs\": \"--file=/path/to/file.txt\"}}",
+                        type="text"
+                    )]
+                )
+                
             return await handler(kwargs)
         
         logger.info(f"Registered tool: {tool_def.name}")
