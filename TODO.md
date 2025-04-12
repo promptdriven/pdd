@@ -28,7 +28,8 @@
 - [ ] Retrieve what is most needed from a webscrape and condense it down
 - [ ] test out anthropic think tool
 - [ ] autogenerate the model.csv file and print out the strength of each model
-
+- [ ] agentic prompt to code
+- [ ] agentic additional context inclusion
 
 ## Bugs
 
