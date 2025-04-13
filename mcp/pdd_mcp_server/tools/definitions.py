@@ -13,11 +13,16 @@ from typing import Dict, List
 LLM_PARAMETER_GUIDANCE = """
 IMPORTANT FOR CLAUDE, GPT, AND OTHER LLMs:
 
+CLAUDE CODE SPECIFIC INSTRUCTIONS:
+For Claude Code integration, parameters must be wrapped in a "kwargs" JSON string:
+✅ CORRECT FORMAT FOR CLAUDE CODE: {"kwargs": "{\\"param1\\": \\"value1\\", \\"param2\\": \\"value2\\"}"}
+
+For direct API calls:
 - ALWAYS provide parameters as direct key-value pairs in your tool call
 - DO NOT nest parameters under a "kwargs" key
 - DO NOT use CLI-style arguments with dashes (like --file=/path/to/file)
 
-✅ CORRECT FORMAT: {"param1": "value1", "param2": "value2"}
+✅ CORRECT FORMAT FOR DIRECT API: {"param1": "value1", "param2": "value2"}
 ❌ INCORRECT FORMAT: {"kwargs": {"param1": "value1"}}
 ❌ INCORRECT FORMAT: {"kwargs": "--param1 value1 --param2 value2"}
 """
@@ -29,7 +34,8 @@ PDD_GENERATE = types.Tool(
     description=f"""Generate code from a prompt file.
 {LLM_PARAMETER_GUIDANCE}
 Examples:
-- ✅ CORRECT: {{"prompt_file": "/path/to/prompt.txt", "output": "/path/to/output.py"}}
+- ✅ CORRECT FOR CLAUDE CODE: {{"kwargs": "{{\\"prompt_file\\": \\"/path/to/prompt.txt\\", \\"output\\": \\"/path/to/output.py\\"}}"}}
+- ✅ CORRECT FOR DIRECT API: {{"prompt_file": "/path/to/prompt.txt", "output": "/path/to/output.py"}}
 - ❌ INCORRECT: {{"kwargs": {{"prompt_file": "/path/to/prompt.txt"}}}}
 - ❌ INCORRECT: {{"kwargs": "--file=/path/to/prompt.txt"}}
 
@@ -670,6 +676,28 @@ PDD_AUTO_DEPS = types.Tool(
     }
 )
 
+# Simplest possible tool for testing
+PDD_TEST_TOOL = types.Tool(
+    name="pdd-test-tool",
+    description=f"""A simple test tool that returns a static response.
+{LLM_PARAMETER_GUIDANCE}    
+Examples:
+- ✅ CORRECT FORMAT FOR CLAUDE CODE: {{"kwargs": "{{\\"message\\": \\"Hello from Claude\\"}}"}}
+- ✅ CORRECT FORMAT FOR DIRECT API: {{"message": "Hello from Claude"}}
+""",
+    inputSchema={
+        "type": "object",
+        "properties": {
+            "message": {
+                "type": "string",
+                "description": "A message to include in the response"
+            }
+        },
+        "required": [],
+        "additionalProperties": False
+    }
+)
+
 # Collection of all PDD tools
 PDD_TOOLS = [
     PDD_GENERATE,
@@ -687,7 +715,8 @@ PDD_TOOLS = [
     PDD_CRASH,
     PDD_TRACE,
     PDD_BUG,
-    PDD_AUTO_DEPS
+    PDD_AUTO_DEPS,
+    PDD_TEST_TOOL
 ]
 
 # Dictionary mapping tool names to tool objects for easy lookup

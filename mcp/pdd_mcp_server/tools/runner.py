@@ -53,12 +53,33 @@ async def run_pdd_command(cmd_list: List[str], timeout: int = 900) -> PddResult:
             exit_code=-2
         )
     
-    # Locate the pdd executable
-    pdd_executable = shutil.which('pdd')
-    if not pdd_executable:
-        error_msg = "PDD CLI executable ('pdd') not found in PATH."
-        logger.error(error_msg)
-        raise FileNotFoundError(error_msg)
+    # Simplified environment logging
+    logger.info(f"Using PATH: {os.environ.get('PATH', 'Not Set')[:100]}...")
+    logger.info(f"Using PYTHONPATH: {os.environ.get('PYTHONPATH', 'Not Set')}")
+    if 'OPENAI_API_KEY' in os.environ:
+        logger.info("OPENAI_API_KEY is set")
+    if 'ANTHROPIC_API_KEY' in os.environ:
+        logger.info("ANTHROPIC_API_KEY is set")
+    
+    # Find pdd executable
+    try:
+        pdd_executable = shutil.which('pdd')
+        if not pdd_executable:
+            logger.error("PDD CLI executable not found in PATH")
+            return PddResult(
+                success=False,
+                stdout="",
+                stderr="PDD CLI executable ('pdd') not found in PATH. Please install it with: pip install pdd-cli",
+                exit_code=127
+            )
+    except Exception as e:
+        logger.exception(f"Error finding pdd executable: {str(e)}")
+        return PddResult(
+            success=False,
+            stdout="",
+            stderr=f"Error finding pdd executable: {str(e)}",
+            exit_code=1
+        )
 
     # Replace 'pdd' with the full path
     cmd_list[0] = pdd_executable
@@ -75,52 +96,55 @@ async def run_pdd_command(cmd_list: List[str], timeout: int = 900) -> PddResult:
         process = await asyncio.create_subprocess_exec(
             *cmd_list,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
+            env=os.environ.copy()
         )
-        logger.info("Subprocess started with PID: %s", process.pid if process else "unknown")
-
-        # Wait for the process to complete with timeout
+        
+        # Wait for the process to complete
+        logger.info("Waiting for process to complete...")
         try:
-            logger.info("Waiting for process to complete...")
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
                 process.communicate(), timeout=timeout
             )
             
-            # Decode the output, handling potential encoding issues
+            # Decode the output
             stdout = stdout_bytes.decode('utf-8', errors='replace')
             stderr = stderr_bytes.decode('utf-8', errors='replace')
             exit_code = process.returncode
             
-            logger.info("Process completed with exit code: %d", exit_code)
-            logger.info("Stdout length: %d bytes, Stderr length: %d bytes", 
-                       len(stdout_bytes), len(stderr_bytes))
-
-            # Determine success based on exit code
+            # Log completion
+            logger.info(f"Process completed with exit code: {exit_code}")
+            
+            # Return result
             if exit_code == 0:
-                logger.info("PDD command succeeded (exit code 0)")
-                if stderr:
-                    logger.warning("PDD command stderr (even though successful):\n%s", stderr)
                 return PddResult(success=True, stdout=stdout, stderr=stderr, exit_code=exit_code)
             else:
-                logger.error("PDD command failed (exit code %d):\nStderr: %s\nStdout: %s", 
-                             exit_code, stderr, stdout)
                 return PddResult(success=False, stdout=stdout, stderr=stderr, exit_code=exit_code)
                 
         except asyncio.TimeoutError:
-            logger.error("PDD command timed out after %d seconds: %s", timeout, command_str)
-            return await _handle_timeout(process, timeout)
+            logger.error(f"Process timed out after {timeout} seconds")
             
-    except FileNotFoundError:
-        logger.error("PDD executable path '%s' became invalid during execution", pdd_executable)
-        raise
-        
+            # Try to kill the process
+            if process and process.returncode is None:
+                try:
+                    process.kill()
+                except Exception as e:
+                    logger.error(f"Error killing process: {str(e)}")
+            
+            return PddResult(
+                success=False,
+                stdout="",
+                stderr=f"Command timed out after {timeout} seconds",
+                exit_code=-1
+            )
+            
     except Exception as e:
-        logger.exception("An unexpected error occurred while running PDD command: %s", command_str)
+        logger.exception(f"Error running command: {str(e)}")
         return PddResult(
             success=False,
             stdout="",
-            stderr=f"Unexpected error: {str(e)}",
-            exit_code=-2  # Distinct code for unexpected errors
+            stderr=f"Error running command: {str(e)}",
+            exit_code=-1
         )
 
 async def _handle_timeout(process: asyncio.subprocess.Process, timeout: int) -> PddResult:

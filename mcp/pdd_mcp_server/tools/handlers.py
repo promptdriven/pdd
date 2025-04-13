@@ -13,6 +13,8 @@ import mcp.types as types
 from typing import Dict, List, Any, Optional
 import shlex
 import re
+import os
+import json
 
 # Import the runner function and result type
 from .runner import run_pdd_command, PddResult
@@ -118,13 +120,39 @@ def _format_result(pdd_result: PddResult, command_name: str) -> types.CallToolRe
         is_error = False
         logger.info("pdd %s succeeded.", command_name)
     else:
+        # Enhanced error formatting with more detail
         error_text = f"PDD command '{command_name}' failed with exit code {pdd_result.exit_code}."
+        
+        # Add troubleshooting information
+        if pdd_result.exit_code == 127:  # Command not found
+            error_text += "\n\nTROUBLESHOOTING: The 'pdd' command was not found. Make sure it's installed and in your PATH."
+        elif pdd_result.exit_code == 126:  # Permission denied
+            error_text += "\n\nTROUBLESHOOTING: Permission denied when executing 'pdd'. Check file permissions."
+        elif pdd_result.exit_code == -1:  # Timeout
+            error_text += "\n\nTROUBLESHOOTING: The command timed out. Consider simplifying your request or checking for network issues."
+        elif pdd_result.exit_code == 1:  # Generic error
+            error_text += "\n\nTROUBLESHOOTING: Check if the prompt file exists and has the correct format."
+        
+        # Add stdout and stderr for debugging
         if pdd_result.stdout:
             error_text += f"\n\nSTDOUT:\n-------\n{pdd_result.stdout}"
         if pdd_result.stderr:
             error_text += f"\n\nSTDERR:\n-------\n{pdd_result.stderr}"
         else:
-             error_text += "\nNo STDERR output."
+            error_text += "\nNo STDERR output."
+            
+        # Add example of correct tool usage
+        error_text += f"""
+
+TOOL USAGE EXAMPLE:
+To use the pdd-{command_name} tool correctly, provide parameters directly:
+
+{{
+  "prompt_file": "/absolute/path/to/your/prompt_file.prompt"
+}}
+
+Make sure the prompt file exists at the specified path.
+"""
 
         content = [types.TextContent(text=error_text, type="text")]
         is_error = True
@@ -186,75 +214,134 @@ For pdd-{command_name}, the required parameters are documented in the tool schem
 
 async def handle_pdd_generate(arguments: Dict[str, Any]) -> types.CallToolResult:
     """
-    Handles the 'pdd-generate' MCP tool call by executing the 'pdd generate' command.
-
-    Args:
-        arguments: Dictionary containing validated parameters from the MCP client.
-                   Expected keys: 'prompt_file', 'output' (optional), global options.
-                   Alternative format: 'kwargs' containing a string of CLI arguments
-                   with formats like: "--file=/path/to/file" or "-p /path/to/file"
-
-    Returns:
-        An MCP CallToolResult containing the stdout or stderr of the command.
+    Super simplified handler for pdd-generate using direct subprocess calls.
     """
-    command_name = "generate"
-    logger.info("Handling %s tool call with arguments: %s", f"pdd-{command_name}", arguments)
-    
-    # Check for parameter issues
-    param_issues = _check_parameter_issues(arguments, command_name)
-    if param_issues:
-        return param_issues
+    try:
+        import subprocess
+        import os
         
-    # Special logic for kwargs string with --file=
-    if 'kwargs' in arguments and isinstance(arguments['kwargs'], str) and '--file=' in arguments['kwargs']:
-        logger.info("Detected --file= format in kwargs, handling specially")
-        cli_args = arguments['kwargs']
+        # Log what we received
+        logger.info(f"handle_pdd_generate called with arguments: {arguments}")
         
-        # Extract the file path from --file=
-        file_match = re.search(r'--file=([^\s]+)', cli_args)
-        if file_match:
-            file_path = file_match.group(1)
-            arguments['prompt_file'] = file_path
-            logger.info(f"Extracted file path from --file=: {file_path}")
+        # Handle kwargs in JSON string format (from Claude Code)
+        if 'kwargs' in arguments and isinstance(arguments['kwargs'], str):
+            try:
+                # Parse the JSON string into a dict
+                kwargs_dict = json.loads(arguments['kwargs'])
+                if isinstance(kwargs_dict, dict):
+                    # Update arguments with parsed values
+                    arguments.update(kwargs_dict)
+                    # Remove the original kwargs to avoid confusion
+                    del arguments['kwargs']
+                    logger.info(f"Parsed kwargs JSON string into: {kwargs_dict}")
+                else:
+                    return types.CallToolResult(
+                        isError=True,
+                        content=[types.TextContent(
+                            text="Error: kwargs is not a valid JSON object",
+                            type="text"
+                        )]
+                    )
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse kwargs JSON: {arguments['kwargs']}")
+                return types.CallToolResult(
+                    isError=True,
+                    content=[types.TextContent(
+                        text=f"Error parsing kwargs JSON: {str(e)}",
+                        type="text"
+                    )]
+                )
+        
+        # Basic validation
+        if not arguments or 'prompt_file' not in arguments:
+            logger.error("Missing prompt_file parameter")
+            return types.CallToolResult(
+                isError=True,
+                content=[types.TextContent(
+                    text="""Error: Missing required 'prompt_file' parameter
+                    
+For Claude Code integration, use this format:
+{"kwargs": "{\\"prompt_file\\": \\"/Users/gregtanaka/pdd/examples/hello.prompt\\"}"}
+
+For direct API usage:
+{"prompt_file": "/Users/gregtanaka/pdd/examples/hello.prompt"}
+""",
+                    type="text"
+                )]
+            )
+        
+        prompt_file = arguments['prompt_file']
+        if not os.path.exists(prompt_file):
+            logger.error(f"Prompt file not found: {prompt_file}")
+            return types.CallToolResult(
+                isError=True,
+                content=[types.TextContent(
+                    text=f"Error: Prompt file not found: {prompt_file}",
+                    type="text"
+                )]
+            )
+        
+        # Build command as a list of arguments
+        cmd = ['pdd', 'generate', prompt_file]
+        
+        # Add output if specified
+        if 'output' in arguments:
+            output = arguments['output']
+            cmd.extend(['--output', output])
+        
+        # Log the command we're about to run
+        logger.info(f"Running command: {' '.join(cmd)}")
+        
+        # Use subprocess directly for maximum simplicity
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False
+            )
             
-            # Convert to standard pdd format
-            cmd_list = ['pdd', 'generate', '-p', file_path]
-            logger.info(f"Using command: {cmd_list}")
+            # Log the result
+            logger.info(f"Command completed with exit code: {result.returncode}")
+            logger.info(f"Stdout: {result.stdout}")
+            if result.stderr:
+                logger.warning(f"Stderr: {result.stderr}")
             
-            # Execute and return
-            pdd_result: PddResult = await run_pdd_command(cmd_list)
-            return _format_result(pdd_result, command_name)
-    
-    # Standard handling for other formats
-    cmd_list = _handle_cli_style_args(arguments, command_name)
-    
-    if not cmd_list:
-        # Only do the standard argument processing if we didn't get CLI arguments
-        _add_global_options(cmd_list, arguments)
-        cmd_list.append(command_name)
-
-        # Required arguments
-        prompt_file = arguments.get('prompt_file')
-        if not prompt_file:
-             return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required argument 'prompt_file' after validation.")])
-        cmd_list.append(prompt_file) # Positional argument
-
-        # Optional arguments
-        if arguments.get('output'):
-            cmd_list.extend(['--output', arguments['output']])
-    else:
-        # If we processed CLI args, still check for required parameters
-        if 'generate' not in cmd_list and 'gen' not in cmd_list:
-            cmd_list.append('generate')
-        
-        # Check if we already have a prompt file (could be from -p/--prompt extraction)
-        prompt_file = arguments.get('prompt_file')
-        if not prompt_file:
-            return types.CallToolResult(isError=True, content=[types.TextContent(text="Missing required prompt file. Use -p or --prompt to specify the prompt file.")])
-
-    logger.debug("Executing command: %s", " ".join(cmd_list))
-    pdd_result: PddResult = await run_pdd_command(cmd_list)
-    return _format_result(pdd_result, command_name)
+            # Return success or failure
+            if result.returncode == 0:
+                return types.CallToolResult(
+                    isError=False,
+                    content=[types.TextContent(
+                        text=result.stdout,
+                        type="text"
+                    )]
+                )
+            else:
+                return types.CallToolResult(
+                    isError=True,
+                    content=[types.TextContent(
+                        text=f"Command failed with exit code {result.returncode}\n\n{result.stderr}",
+                        type="text"
+                    )]
+                )
+        except Exception as e:
+            logger.exception(f"Error executing command: {e}")
+            return types.CallToolResult(
+                isError=True,
+                content=[types.TextContent(
+                    text=f"Error executing command: {str(e)}",
+                    type="text"
+                )]
+            )
+    except Exception as e:
+        logger.exception(f"Unexpected error in handler: {e}")
+        return types.CallToolResult(
+            isError=True,
+            content=[types.TextContent(
+                text=f"Internal server error: {str(e)}",
+                type="text"
+            )]
+        )
 
 async def handle_pdd_example(arguments: Dict[str, Any]) -> types.CallToolResult:
     """
@@ -919,6 +1006,61 @@ async def handle_pdd_auto_deps(arguments: Dict[str, Any]) -> types.CallToolResul
     pdd_result: PddResult = await run_pdd_command(cmd_list)
     return _format_result(pdd_result, command_name)
 
+async def handle_pdd_test_tool(arguments: Dict[str, Any]) -> types.CallToolResult:
+    """
+    Super simple handler that just returns a static response.
+    This can be used to test that the MCP communication is working.
+    """
+    # Handle both direct format and string kwargs format
+    logger.info(f"Test tool received arguments: {arguments}")
+    
+    try:
+        # Check if we have 'kwargs' string format (from Claude Code)
+        if 'kwargs' in arguments and isinstance(arguments['kwargs'], str):
+            import json
+            try:
+                # Parse the JSON string into a dict
+                kwargs_dict = json.loads(arguments['kwargs'])
+                if isinstance(kwargs_dict, dict):
+                    message = kwargs_dict.get('message', 'No message provided in kwargs dict')
+                else:
+                    message = 'kwargs is not a valid JSON object'
+            except json.JSONDecodeError:
+                message = 'Invalid JSON in kwargs string'
+                logger.error(f"Failed to parse kwargs JSON: {arguments['kwargs']}")
+        else:
+            # Direct parameter format
+            message = arguments.get('message', 'No message provided')
+            
+        logger.info(f"Test tool called with message: {message}")
+        
+        # Include parameter format guidance in the response
+        return types.CallToolResult(
+            isError=False,
+            content=[types.TextContent(
+                text=f"""Test tool called successfully. Message: {message}
+                
+For future reference, this tool requires parameters in one of these formats:
+
+1. For Claude Code integration:
+{{"kwargs": "{{\\"message\\": \\"Hello from Claude\\"}}"}}
+
+2. For direct API usage:
+{{"message": "Hello from Claude"}}
+""",
+                type="text"
+            )]
+        )
+    except Exception as e:
+        logger.exception(f"Error in test tool: {str(e)}")
+        return types.CallToolResult(
+            isError=True,
+            content=[types.TextContent(
+                text=f"Error in test tool: {str(e)}",
+                type="text"
+            )]
+        )
+
 # --- Mapping from tool name to handler function ---
 # This could be defined here or in another module (like __init__.py or definitions.py)
 # depending on project structure preference.
@@ -939,6 +1081,7 @@ TOOL_HANDLERS = {
     "pdd-auto-deps": handle_pdd_auto_deps,
     "pdd-continue": handle_pdd_continue,
     "pdd-analyze": handle_pdd_analyze,
+    "pdd-test-tool": handle_pdd_test_tool,
 }
 
 def get_handler(tool_name: str):
