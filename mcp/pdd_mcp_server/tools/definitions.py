@@ -11,19 +11,10 @@ from typing import Dict, List
 
 # Common example template for LLMs
 LLM_PARAMETER_GUIDANCE = """
-IMPORTANT FOR CLAUDE, GPT, AND OTHER LLMs:
-
-CLAUDE CODE SPECIFIC INSTRUCTIONS:
-For Claude Code integration, parameters must be wrapped in a "kwargs" JSON string:
-✅ CORRECT FORMAT FOR CLAUDE CODE: {"kwargs": "{\\"param1\\": \\"value1\\", \\"param2\\": \\"value2\\"}"}
-
-For direct API calls:
 - ALWAYS provide parameters as direct key-value pairs in your tool call
-- DO NOT nest parameters under a "kwargs" key
 - DO NOT use CLI-style arguments with dashes (like --file=/path/to/file)
 
-✅ CORRECT FORMAT FOR DIRECT API: {"param1": "value1", "param2": "value2"}
-❌ INCORRECT FORMAT: {"kwargs": {"param1": "value1"}}
+✅ CORRECT FORMAT: {"param1": "value1", "param2": "value2"}
 ❌ INCORRECT FORMAT: {"kwargs": "--param1 value1 --param2 value2"}
 """
 
@@ -39,8 +30,7 @@ creating a full implementation of code described in a prompt file. This creates
 comprehensive implementation details that other code can use.
 
 Examples:
-- ✅ CORRECT FOR CLAUDE CODE: {{"kwargs": "{{\\"prompt_file\\": \\"/path/to/prompt.txt\\", \\"output\\": \\"/path/to/output.py\\", \\"force\\": true}}"}}
-- ✅ CORRECT FOR DIRECT API: {{"prompt_file": "/path/to/prompt.txt", "output": "/path/to/output.py", "force": true}}
+- ✅ CORRECT: {{"prompt_file": "/path/to/prompt.txt", "output": "/path/to/output.py", "force": true}}
 - ❌ INCORRECT: {{"kwargs": {{"prompt_file": "/path/to/prompt.txt"}}}}
 - ❌ INCORRECT: {{"kwargs": "--file=/path/to/prompt.txt"}}
 
@@ -256,8 +246,7 @@ produces minimal, token-efficient code that shows the interface without implemen
 details. This is more token-efficient than including full implementations.
 
 Examples:
-- ✅ CORRECT FOR CLAUDE CODE: {{"kwargs": "{{\\"prompt_file\\": \\"/path/to/prompt.txt\\", \\"code_file\\": \\"/path/to/source.py\\", \\"output\\": \\"/path/to/output.py\\", \\"force\\": true}}"}}
-- ✅ CORRECT FOR DIRECT API: {{"prompt_file": "/path/to/prompt.txt", "code_file": "/path/to/source.py", "output": "/path/to/output.py", "force": true}}
+- ✅ CORRECT: {{"prompt_file": "/path/to/prompt.txt", "code_file": "/path/to/source.py", "output": "/path/to/output.py", "force": true}}
 - ❌ INCORRECT: {{"source_file": "/path/to/source.py"}} (missing prompt_file)
 - ❌ INCORRECT: {{"code_file": "/path/to/source.py"}} (missing prompt_file)
 - ❌ INCORRECT: Do NOT use CLI-style arguments like "--file=/path/to/source.py"
