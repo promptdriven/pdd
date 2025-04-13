@@ -676,28 +676,6 @@ PDD_AUTO_DEPS = types.Tool(
     }
 )
 
-# Simplest possible tool for testing
-PDD_TEST_TOOL = types.Tool(
-    name="pdd-test-tool",
-    description=f"""A simple test tool that returns a static response.
-{LLM_PARAMETER_GUIDANCE}    
-Examples:
-- ✅ CORRECT FORMAT FOR CLAUDE CODE: {{"kwargs": "{{\\"message\\": \\"Hello from Claude\\"}}"}}
-- ✅ CORRECT FORMAT FOR DIRECT API: {{"message": "Hello from Claude"}}
-""",
-    inputSchema={
-        "type": "object",
-        "properties": {
-            "message": {
-                "type": "string",
-                "description": "A message to include in the response"
-            }
-        },
-        "required": [],
-        "additionalProperties": False
-    }
-)
-
 # Collection of all PDD tools
 PDD_TOOLS = [
     PDD_GENERATE,
@@ -715,8 +693,7 @@ PDD_TOOLS = [
     PDD_CRASH,
     PDD_TRACE,
     PDD_BUG,
-    PDD_AUTO_DEPS,
-    PDD_TEST_TOOL
+    PDD_AUTO_DEPS
 ]
 
 # Dictionary mapping tool names to tool objects for easy lookup
