@@ -1006,61 +1006,6 @@ async def handle_pdd_auto_deps(arguments: Dict[str, Any]) -> types.CallToolResul
     pdd_result: PddResult = await run_pdd_command(cmd_list)
     return _format_result(pdd_result, command_name)
 
-async def handle_pdd_test_tool(arguments: Dict[str, Any]) -> types.CallToolResult:
-    """
-    Super simple handler that just returns a static response.
-    This can be used to test that the MCP communication is working.
-    """
-    # Handle both direct format and string kwargs format
-    logger.info(f"Test tool received arguments: {arguments}")
-    
-    try:
-        # Check if we have 'kwargs' string format (from Claude Code)
-        if 'kwargs' in arguments and isinstance(arguments['kwargs'], str):
-            import json
-            try:
-                # Parse the JSON string into a dict
-                kwargs_dict = json.loads(arguments['kwargs'])
-                if isinstance(kwargs_dict, dict):
-                    message = kwargs_dict.get('message', 'No message provided in kwargs dict')
-                else:
-                    message = 'kwargs is not a valid JSON object'
-            except json.JSONDecodeError:
-                message = 'Invalid JSON in kwargs string'
-                logger.error(f"Failed to parse kwargs JSON: {arguments['kwargs']}")
-        else:
-            # Direct parameter format
-            message = arguments.get('message', 'No message provided')
-            
-        logger.info(f"Test tool called with message: {message}")
-        
-        # Include parameter format guidance in the response
-        return types.CallToolResult(
-            isError=False,
-            content=[types.TextContent(
-                text=f"""Test tool called successfully. Message: {message}
-                
-For future reference, this tool requires parameters in one of these formats:
-
-1. For Claude Code integration:
-{{"kwargs": "{{\\"message\\": \\"Hello from Claude\\"}}"}}
-
-2. For direct API usage:
-{{"message": "Hello from Claude"}}
-""",
-                type="text"
-            )]
-        )
-    except Exception as e:
-        logger.exception(f"Error in test tool: {str(e)}")
-        return types.CallToolResult(
-            isError=True,
-            content=[types.TextContent(
-                text=f"Error in test tool: {str(e)}",
-                type="text"
-            )]
-        )
-
 # --- Mapping from tool name to handler function ---
 # This could be defined here or in another module (like __init__.py or definitions.py)
 # depending on project structure preference.
@@ -1081,7 +1026,6 @@ TOOL_HANDLERS = {
     "pdd-auto-deps": handle_pdd_auto_deps,
     "pdd-continue": handle_pdd_continue,
     "pdd-analyze": handle_pdd_analyze,
-    "pdd-test-tool": handle_pdd_test_tool,
 }
 
 def get_handler(tool_name: str):
