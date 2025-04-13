@@ -34,10 +34,13 @@ PDD_GENERATE = types.Tool(
     description=f"""Generate code from a prompt file.
 {LLM_PARAMETER_GUIDANCE}
 Examples:
-- ✅ CORRECT FOR CLAUDE CODE: {{"kwargs": "{{\\"prompt_file\\": \\"/path/to/prompt.txt\\", \\"output\\": \\"/path/to/output.py\\"}}"}}
-- ✅ CORRECT FOR DIRECT API: {{"prompt_file": "/path/to/prompt.txt", "output": "/path/to/output.py"}}
+- ✅ CORRECT FOR CLAUDE CODE: {{"kwargs": "{{\\"prompt_file\\": \\"/path/to/prompt.txt\\", \\"output\\": \\"/path/to/output.py\\", \\"force\\": true}}"}}
+- ✅ CORRECT FOR DIRECT API: {{"prompt_file": "/path/to/prompt.txt", "output": "/path/to/output.py", "force": true}}
 - ❌ INCORRECT: {{"kwargs": {{"prompt_file": "/path/to/prompt.txt"}}}}
 - ❌ INCORRECT: {{"kwargs": "--file=/path/to/prompt.txt"}}
+
+IMPORTANT: ALWAYS include "force": true when there's a possibility the output file already exists.
+Without it, the command will hang waiting for user confirmation to overwrite files.
 
 The prompt file should contain instructions for the code you want to generate.""",
     inputSchema={
@@ -88,9 +91,12 @@ PDD_TEST = types.Tool(
     description=f"""Generate test files for a source file.
 {LLM_PARAMETER_GUIDANCE}    
 Examples:
-- ✅ CORRECT: {{"source_file": "/path/to/source.py", "prompt_file": "/path/to/prompt.txt"}}
+- ✅ CORRECT: {{"source_file": "/path/to/source.py", "prompt_file": "/path/to/prompt.txt", "force": true}}
 - ❌ INCORRECT: {{"kwargs": {{"source_file": "/path/to/source.py"}}}}
     
+IMPORTANT: ALWAYS include "force": true when there's a possibility the output file already exists.
+Without it, the command will hang waiting for user confirmation to overwrite files.
+
 This tool generates test files for the provided source file, optionally guided by a prompt file.""",
     inputSchema={
         "type": "object",
@@ -164,9 +170,12 @@ PDD_FIX = types.Tool(
     description="""Fix issues in a source file using AI.
     
 Examples:
-- ✅ CORRECT: {"prompt_file": "/path/to/prompt.txt", "source_file": "/path/to/source.py", "test_file": "/path/to/test.py"}
+- ✅ CORRECT: {"prompt_file": "/path/to/prompt.txt", "source_file": "/path/to/source.py", "test_file": "/path/to/test.py", "force": true}
 - ❌ INCORRECT: Do NOT use CLI-style arguments like "--prompt=/path/to/prompt.txt"
     
+IMPORTANT: ALWAYS include "force": true when there's a possibility the output file already exists.
+Without it, the command will hang waiting for user confirmation to overwrite files.
+
 This tool attempts to fix issues in source code using AI, guided by a prompt file and validated by tests.""",
     inputSchema={
         "type": "object",
@@ -236,9 +245,12 @@ PDD_EXAMPLE = types.Tool(
     description="""Generate example code that demonstrates how to use a module.
     
 Examples:
-- ✅ CORRECT: {"source_file": "/path/to/source.py", "output": "/path/to/output.py"}
+- ✅ CORRECT: {"source_file": "/path/to/source.py", "output": "/path/to/output.py", "force": true}
 - ❌ INCORRECT: Do NOT use CLI-style arguments like "--file=/path/to/source.py"
     
+IMPORTANT: ALWAYS include "force": true when there's a possibility the output file already exists.
+Without it, the command will hang waiting for user confirmation to overwrite files.
+
 This tool creates example code showing how to use the specified module or source file.""",
     inputSchema={
         "type": "object",
@@ -288,9 +300,12 @@ PDD_CONTINUE = types.Tool(
     description="""Continue generation of partially completed output.
     
 Examples:
-- ✅ CORRECT: {"prompt_file": "/path/to/prompt.txt", "output_file": "/path/to/partial.py"}
+- ✅ CORRECT: {"prompt_file": "/path/to/prompt.txt", "output_file": "/path/to/partial.py", "force": true}
 - ❌ INCORRECT: Do NOT use CLI-style arguments like "--prompt=/path/to/prompt.txt"
     
+IMPORTANT: ALWAYS include "force": true when there's a possibility the output file already exists.
+Without it, the command will hang waiting for user confirmation to overwrite files.
+
 This tool continues code generation from a partially completed file.""",
     inputSchema={
         "type": "object",
@@ -340,9 +355,12 @@ PDD_PREPROCESS = types.Tool(
     description="""Preprocess prompt files for code generation.
     
 Examples:
-- ✅ CORRECT: {"prompt_file": "/path/to/prompt.txt", "output": "/path/to/output.txt"}
+- ✅ CORRECT: {"prompt_file": "/path/to/prompt.txt", "output": "/path/to/output.txt", "force": true}
 - ❌ INCORRECT: Do NOT use CLI-style arguments like "--file=/path/to/prompt.txt"
     
+IMPORTANT: ALWAYS include "force": true when there's a possibility the output file already exists.
+Without it, the command will hang waiting for user confirmation to overwrite files.
+
 This tool preprocesses prompt files to prepare them for code generation.""",
     inputSchema={
         "type": "object",
@@ -385,9 +403,12 @@ PDD_ANALYZE = types.Tool(
     description="""Analyze code to provide insights and recommendations.
     
 Examples:
-- ✅ CORRECT: {"source_file": "/path/to/source.py", "output": "/path/to/output.md"}
+- ✅ CORRECT: {"source_file": "/path/to/source.py", "output": "/path/to/output.md", "force": true}
 - ❌ INCORRECT: Do NOT use CLI-style arguments like "--file=/path/to/source.py"
     
+IMPORTANT: ALWAYS include "force": true when there's a possibility the output file already exists.
+Without it, the command will hang waiting for user confirmation to overwrite files.
+
 This tool analyzes code and generates insights, recommendations, and potential improvements.""",
     inputSchema={
         "type": "object",
@@ -431,7 +452,16 @@ This tool analyzes code and generates insights, recommendations, and potential i
 #------------------
 PDD_SPLIT = types.Tool(
     name="pdd-split",
-    description="Split a prompt into sub-prompts",
+    description="""Split a prompt into sub-prompts.
+    
+Examples:
+- ✅ CORRECT: {"input_prompt": "/path/to/prompt.txt", "input_code": "/path/to/code.py", "example_code": "/path/to/example.py", "force": true}
+- ❌ INCORRECT: Do NOT use CLI-style arguments with dashes
+
+IMPORTANT: ALWAYS include "force": true when there's a possibility the output file already exists.
+Without it, the command will hang waiting for user confirmation to overwrite files.
+
+This tool splits large prompt files into smaller, more manageable prompt files.""",
     inputSchema={
         "type": "object",
         "properties": {
@@ -464,7 +494,16 @@ PDD_SPLIT = types.Tool(
 #------------------
 PDD_CHANGE = types.Tool(
     name="pdd-change",
-    description="Change code based on a change prompt",
+    description="""Change code based on a change prompt.
+    
+Examples:
+- ✅ CORRECT: {"change_prompt_file": "/path/to/change.txt", "input_code": "/path/to/code.py", "force": true}
+- ❌ INCORRECT: Do NOT use CLI-style arguments with dashes
+
+IMPORTANT: ALWAYS include "force": true when there's a possibility the output file already exists.
+Without it, the command will hang waiting for user confirmation to overwrite files.
+
+This tool modifies an input prompt file based on a change prompt and the corresponding input code.""",
     inputSchema={
         "type": "object",
         "properties": {
@@ -497,7 +536,16 @@ PDD_CHANGE = types.Tool(
 #------------------
 PDD_UPDATE = types.Tool(
     name="pdd-update",
-    description="Update code based on new requirements",
+    description="""Update code based on new requirements.
+    
+Examples:
+- ✅ CORRECT: {"prompt_file": "/path/to/prompt.txt", "code_file": "/path/to/code.py", "new_prompt_file": "/path/to/new_prompt.txt", "force": true}
+- ❌ INCORRECT: Do NOT use CLI-style arguments with dashes
+
+IMPORTANT: ALWAYS include "force": true when there's a possibility the output file already exists.
+Without it, the command will hang waiting for user confirmation to overwrite files.
+
+This tool updates the original prompt file based on the modified code.""",
     inputSchema={
         "type": "object",
         "properties": {
@@ -580,7 +628,16 @@ PDD_CONFLICTS = types.Tool(
 #-----------------
 PDD_CRASH = types.Tool(
     name="pdd-crash",
-    description="Analyze and fix crashing code",
+    description="""Analyze and fix crashing code.
+    
+Examples:
+- ✅ CORRECT: {"prompt_file": "/path/to/prompt.txt", "code_file": "/path/to/code.py", "crash_file": "/path/to/crash_log.txt", "force": true}
+- ❌ INCORRECT: Do NOT use CLI-style arguments with dashes
+
+IMPORTANT: ALWAYS include "force": true when there's a possibility the output file already exists.
+Without it, the command will hang waiting for user confirmation to overwrite files.
+
+This tool fixes errors in a code module and its calling program that caused a program to crash.""",
     inputSchema={
         "type": "object",
         "properties": {
@@ -630,7 +687,16 @@ PDD_TRACE = types.Tool(
 #---------------
 PDD_BUG = types.Tool(
     name="pdd-bug",
-    description="Find and fix bugs in code",
+    description="""Find and fix bugs in code.
+    
+Examples:
+- ✅ CORRECT: {"prompt_file": "/path/to/prompt.txt", "code_file": "/path/to/code.py", "bug_description": "/path/to/bug.txt", "force": true}
+- ❌ INCORRECT: Do NOT use CLI-style arguments with dashes
+
+IMPORTANT: ALWAYS include "force": true when there's a possibility the output file already exists.
+Without it, the command will hang waiting for user confirmation to overwrite files.
+
+This tool generates a unit test based on observed and desired outputs, given the original prompt and code.""",
     inputSchema={
         "type": "object",
         "properties": {
