@@ -65,25 +65,30 @@ def register_tool(tool_def):
         )
         async def wrapped_handler(**kwargs):
             """Tool wrapper that sends parameters to the appropriate handler."""
-            # If 'kwargs' contains a dictionary of proper parameters, extract and use them directly
-            if 'kwargs' in kwargs and isinstance(kwargs['kwargs'], dict):
-                # Extract the inner parameters from kwargs
-                inner_params = kwargs.pop('kwargs')
-                # Merge with any other explicitly provided parameters
-                kwargs.update(inner_params)
-                logger.info(f"Extracted parameters from 'kwargs' dictionary for {tool_def.name}")
-            # Prevent usage of 'kwargs' parameter as a CLI string
-            elif 'kwargs' in kwargs and isinstance(kwargs['kwargs'], str):
-                logger.warning(f"Rejected attempt to use 'kwargs' parameter with {tool_def.name}. Clients should use proper parameter structure.")
-                return types.CallToolResult(
-                    isError=True,
-                    content=[types.TextContent(
-                        text=f"Error: Please use proper parameter structure for {tool_def.name}. Example: {{\"prompt_file\": \"/path/to/file.txt\"}} NOT {{\"kwargs\": \"--file=/path/to/file.txt\"}}",
-                        type="text"
-                    )]
-                )
+            try:
+                # Process kwargs in various formats
                 
-            return await handler(kwargs)
+                # 1. Handle nested kwargs dict (API client might send this)
+                if 'kwargs' in kwargs and isinstance(kwargs['kwargs'], dict):
+                    inner_params = kwargs.pop('kwargs')
+                    kwargs.update(inner_params)
+                    logger.debug(f"Processed nested kwargs dict for {tool_def.name}")
+                
+                # 2. Handle JSON string kwargs (Claude Code sends this)
+                # Note: We now process this in each handler as well for redundancy
+                elif 'kwargs' in kwargs and isinstance(kwargs['kwargs'], str):
+                    # We'll let the individual handler function process this format
+                    # for better error handling specific to each tool
+                    logger.debug(f"Found kwargs JSON string for {tool_def.name}, passing to handler")
+                
+                # Call the handler
+                return await handler(kwargs)
+            except Exception as e:
+                logger.exception(f"Error in {tool_def.name}: {str(e)}")
+                return types.CallToolResult(
+                    isError=True, 
+                    content=[types.TextContent(text=f"Tool error: {str(e)}", type="text")]
+                )
         
         logger.info(f"Registered tool: {tool_def.name}")
         return True
