@@ -242,22 +242,32 @@ This tool attempts to fix issues in source code using AI, guided by a prompt fil
 #---------------------
 PDD_EXAMPLE = types.Tool(
     name="pdd-example",
-    description="""Generate example code that demonstrates how to use a module.
-    
+    description=f"""Generate example code that demonstrates how to use a module.
+{LLM_PARAMETER_GUIDANCE}
 Examples:
-- ✅ CORRECT: {"source_file": "/path/to/source.py", "output": "/path/to/output.py", "force": true}
+- ✅ CORRECT FOR CLAUDE CODE: {{"kwargs": "{{\\"prompt_file\\": \\"/path/to/prompt.txt\\", \\"code_file\\": \\"/path/to/source.py\\", \\"output\\": \\"/path/to/output.py\\", \\"force\\": true}}"}}
+- ✅ CORRECT FOR DIRECT API: {{"prompt_file": "/path/to/prompt.txt", "code_file": "/path/to/source.py", "output": "/path/to/output.py", "force": true}}
+- ❌ INCORRECT: {{"source_file": "/path/to/source.py"}} (missing prompt_file)
+- ❌ INCORRECT: {{"code_file": "/path/to/source.py"}} (missing prompt_file)
 - ❌ INCORRECT: Do NOT use CLI-style arguments like "--file=/path/to/source.py"
     
-IMPORTANT: ALWAYS include "force": true when there's a possibility the output file already exists.
-Without it, the command will hang waiting for user confirmation to overwrite files.
+IMPORTANT: 
+1. ALWAYS include "force": true when there's a possibility the output file already exists.
+   Without it, the command will hang waiting for user confirmation to overwrite files.
+2. BOTH prompt_file AND code_file are required parameters.
+3. Parameter order matters - they will be passed to PDD CLI in this order: prompt_file, then code_file.
 
 This tool creates example code showing how to use the specified module or source file.""",
     inputSchema={
         "type": "object",
         "properties": {
-            "source_file": {
+            "prompt_file": {
                 "type": "string",
-                "description": "IMPORTANT: Full path to the source file to generate examples for (no prefix)"
+                "description": "REQUIRED: Full path to the prompt file that originally generated the code"
+            },
+            "code_file": {
+                "type": "string",
+                "description": "REQUIRED: Full path to the source file to generate examples for"
             },
             "output": {
                 "type": "string",
@@ -288,7 +298,7 @@ This tool creates example code showing how to use the specified module or source
                 "description": "Decrease output verbosity for minimal information"
             }
         },
-        "required": ["source_file"],
+        "required": ["prompt_file", "code_file"],
         "additionalProperties": False
     }
 )
