@@ -33,6 +33,11 @@ PDD_GENERATE = types.Tool(
     name="pdd-generate",
     description=f"""Generate code from a prompt file.
 {LLM_PARAMETER_GUIDANCE}
+
+WHEN TO USE: Choose this tool when implementing new functionality from scratch or 
+creating a full implementation of code described in a prompt file. This creates 
+comprehensive implementation details that other code can use.
+
 Examples:
 - ✅ CORRECT FOR CLAUDE CODE: {{"kwargs": "{{\\"prompt_file\\": \\"/path/to/prompt.txt\\", \\"output\\": \\"/path/to/output.py\\", \\"force\\": true}}"}}
 - ✅ CORRECT FOR DIRECT API: {{"prompt_file": "/path/to/prompt.txt", "output": "/path/to/output.py", "force": true}}
@@ -244,6 +249,12 @@ PDD_EXAMPLE = types.Tool(
     name="pdd-example",
     description=f"""Generate example code that demonstrates how to use a module.
 {LLM_PARAMETER_GUIDANCE}
+
+WHEN TO USE: Choose this tool when creating compact, reusable references that other 
+prompts can efficiently import. Similar to a header file or API documentation, this 
+produces minimal, token-efficient code that shows the interface without implementation 
+details. This is more token-efficient than including full implementations.
+
 Examples:
 - ✅ CORRECT FOR CLAUDE CODE: {{"kwargs": "{{\\"prompt_file\\": \\"/path/to/prompt.txt\\", \\"code_file\\": \\"/path/to/source.py\\", \\"output\\": \\"/path/to/output.py\\", \\"force\\": true}}"}}
 - ✅ CORRECT FOR DIRECT API: {{"prompt_file": "/path/to/prompt.txt", "code_file": "/path/to/source.py", "output": "/path/to/output.py", "force": true}}

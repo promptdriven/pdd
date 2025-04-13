@@ -243,7 +243,7 @@ Here are the main commands provided by PDD:
 
 ### 1. generate
 
-Create runnable code from a prompt file.
+Create runnable code from a prompt file. This command produces the full implementation code that fulfills all requirements in the prompt.
 
 ```bash
 # Cloud execution (default)
@@ -259,6 +259,8 @@ Arguments:
 Options:
 - `--output LOCATION`: Specify where to save the generated code. The default file name is `<basename>.<language_file_extension>`. If an environment variable `PDD_GENERATE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 
+**When to use**: Choose this command when implementing new functionality from scratch or creating comprehensive implementation details. Use this when you need the complete functional code that other code can use.
+
 Example:
 ```
 pdd [GLOBAL OPTIONS] generate --output src/factorial_calculator.py factorial_calculator_python.prompt 
@@ -266,7 +268,7 @@ pdd [GLOBAL OPTIONS] generate --output src/factorial_calculator.py factorial_cal
 
 ### 2. example
 
-Create an example file from an existing code file and the prompt that generated the code file.
+Create a compact example demonstrating how to use functionality defined in a prompt. Similar to a header file or API documentation, this produces minimal, token-efficient code that shows the interface without implementation details.
 
 ```
 pdd [GLOBAL OPTIONS] example [OPTIONS] PROMPT_FILE CODE_FILE
@@ -278,6 +280,8 @@ Arguments:
 
 Options:
 - `--output LOCATION`: Specify where to save the generated example code. The default file name is `<basename>_example.<language_file_extension>`. If an environment variable `PDD_EXAMPLE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+
+**When to use**: Choose this command when creating reusable references that other prompts can efficiently import. This produces token-efficient examples that are easier to reuse across multiple prompts compared to including full implementations.
 
 Example:
 ```
