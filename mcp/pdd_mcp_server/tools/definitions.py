@@ -83,26 +83,27 @@ The prompt file should contain instructions for the code you want to generate.""
 #------------------
 PDD_TEST = types.Tool(
     name="pdd-test",
-    description=f"""Generate test files for a source file.
+    description=f"""Generate or enhance unit tests for a given code file and its corresponding prompt file.
 {LLM_PARAMETER_GUIDANCE}    
 Examples:
-- ✅ CORRECT: {{"source_file": "/path/to/source.py", "prompt_file": "/path/to/prompt.txt", "force": true}}
-- ❌ INCORRECT: {{"kwargs": {{"source_file": "/path/to/source.py"}}}}
+- ✅ CORRECT: {{"prompt_file": "/path/to/prompt.txt", "code_file": "/path/to/source.py", "output": "/path/to/test_output.py", "force": true}}
+- ❌ INCORRECT: {{"source_file": "/path/to/source.py"}} (missing prompt_file)
+- ❌ INCORRECT: {{"kwargs": {{"prompt_file": "/path/to/prompt.txt"}}}}
     
 IMPORTANT: ALWAYS include "force": true when there's a possibility the output file already exists.
 Without it, the command will hang waiting for user confirmation to overwrite files.
 
-This tool generates test files for the provided source file, optionally guided by a prompt file.""",
+This tool generates test files for the provided code file, guided by the prompt file that generated the code.""",
     inputSchema={
         "type": "object",
         "properties": {
-            "source_file": {
-                "type": "string",
-                "description": "IMPORTANT: Provide just the full path to the source file, without any prefix"
-            },
             "prompt_file": {
                 "type": "string",
-                "description": "Optional: Full path to a prompt file to guide test generation (no prefix)"
+                "description": "REQUIRED: Full path to the prompt file that generated the code"
+            },
+            "code_file": {
+                "type": "string",
+                "description": "REQUIRED: Full path to the code file to be tested"
             },
             "output": {
                 "type": "string",
@@ -153,7 +154,7 @@ This tool generates test files for the provided source file, optionally guided b
                 "description": "Decrease output verbosity for minimal information"
             }
         },
-        "required": ["source_file"],
+        "required": ["prompt_file", "code_file"],
         "additionalProperties": False
     }
 )
@@ -162,30 +163,34 @@ This tool generates test files for the provided source file, optionally guided b
 #-----------------
 PDD_FIX = types.Tool(
     name="pdd-fix",
-    description="""Fix issues in a source file using AI.
-    
+    description=f"""Fix errors in code and unit tests based on error messages and the original prompt file.
+{LLM_PARAMETER_GUIDANCE}    
 Examples:
-- ✅ CORRECT: {"prompt_file": "/path/to/prompt.txt", "source_file": "/path/to/source.py", "test_file": "/path/to/test.py", "force": true}
-- ❌ INCORRECT: Do NOT use CLI-style arguments like "--prompt=/path/to/prompt.txt"
+- ✅ CORRECT: {{"prompt_file": "/path/to/prompt.txt", "code_file": "/path/to/source.py", "unit_test_file": "/path/to/test.py", "error_file": "/path/to/errors.log", "force": true}}
+- ❌ INCORRECT: {{"source_file": "/path/to/source.py"}} (missing other required parameters)
     
 IMPORTANT: ALWAYS include "force": true when there's a possibility the output file already exists.
 Without it, the command will hang waiting for user confirmation to overwrite files.
 
-This tool attempts to fix issues in source code using AI, guided by a prompt file and validated by tests.""",
+This tool attempts to fix errors in code based on error messages and the original prompt file.""",
     inputSchema={
         "type": "object",
         "properties": {
             "prompt_file": {
                 "type": "string",
-                "description": "IMPORTANT: Full path to the prompt file describing the code to be fixed (no prefix)"
+                "description": "REQUIRED: Full path to the prompt file that generated the code under test"
             },
-            "source_file": {
+            "code_file": {
                 "type": "string",
-                "description": "IMPORTANT: Full path to the source file to be fixed (no prefix)"
+                "description": "REQUIRED: Full path to the code file to be fixed"
             },
-            "test_file": {
+            "unit_test_file": {
                 "type": "string",
-                "description": "Optional: Full path to test file to validate fixes (no prefix)"
+                "description": "REQUIRED: Full path to the unit test file"
+            },
+            "error_file": {
+                "type": "string",
+                "description": "Full path to the file containing unit test runtime error messages (optional if using --loop)"
             },
             "output_code": {
                 "type": "string",
@@ -195,17 +200,29 @@ This tool attempts to fix issues in source code using AI, guided by a prompt fil
                 "type": "string",
                 "description": "Where to save the fixed tests"
             },
+            "output_results": {
+                "type": "string",
+                "description": "Where to save the results of the error fixing process"
+            },
             "verification_program": {
                 "type": "string",
-                "description": "Program to verify the fix works correctly"
+                "description": "Program to verify the fix works correctly (used with --loop)"
             },
             "loop": {
                 "type": "boolean",
-                "description": "Keep generating fixes until successful or max attempts reached"
+                "description": "Enable iterative fixing process"
             },
             "max_attempts": {
                 "type": "integer",
-                "description": "Maximum number of fix attempts (default: 5)"
+                "description": "Maximum number of fix attempts (default: 3)"
+            },
+            "budget": {
+                "type": "number",
+                "description": "Maximum cost allowed for the fixing process (default: $5.0)"
+            },
+            "auto_submit": {
+                "type": "boolean",
+                "description": "Automatically submit the example if all unit tests pass during the fix loop"
             },
             "strength": {
                 "type": "number",
@@ -228,7 +245,7 @@ This tool attempts to fix issues in source code using AI, guided by a prompt fil
                 "description": "Increase output verbosity for more detailed information"
             }
         },
-        "required": ["prompt_file", "source_file"],
+        "required": ["prompt_file", "code_file", "unit_test_file"],
         "additionalProperties": False
     }
 )
@@ -462,10 +479,10 @@ This tool analyzes code and generates insights, recommendations, and potential i
 #------------------
 PDD_SPLIT = types.Tool(
     name="pdd-split",
-    description="""Split a prompt into sub-prompts.
-    
+    description=f"""Split large complex prompt files into smaller, more manageable prompt files.
+{LLM_PARAMETER_GUIDANCE}    
 Examples:
-- ✅ CORRECT: {"input_prompt": "/path/to/prompt.txt", "input_code": "/path/to/code.py", "example_code": "/path/to/example.py", "force": true}
+- ✅ CORRECT: {{"input_prompt": "/path/to/prompt.txt", "input_code": "/path/to/code.py", "example_code": "/path/to/example.py", "force": true}}
 - ❌ INCORRECT: Do NOT use CLI-style arguments with dashes
 
 IMPORTANT: ALWAYS include "force": true when there's a possibility the output file already exists.
@@ -477,23 +494,27 @@ This tool splits large prompt files into smaller, more manageable prompt files."
         "properties": {
             "input_prompt": {
                 "type": "string",
-                "description": "The input prompt file to split"
+                "description": "REQUIRED: The filename of the large prompt file to be split"
             },
             "input_code": {
                 "type": "string",
-                "description": "The input code file"
+                "description": "REQUIRED: The filename of the code generated from the input prompt"
             },
             "example_code": {
                 "type": "string",
-                "description": "The example code file"
+                "description": "REQUIRED: The filename of the example code that serves as the interface to the sub-module prompt file"
             },
             "output_sub": {
                 "type": "string",
-                "description": "Where to save the sub-prompts"
+                "description": "Specify where to save the generated sub-prompt file"
             },
             "output_modified": {
                 "type": "string",
-                "description": "Where to save the modified code"
+                "description": "Specify where to save the modified prompt file"
+            },
+            "force": {
+                "type": "boolean",
+                "description": "Overwrite existing files without asking for confirmation"
             }
         },
         "required": ["input_prompt", "input_code", "example_code"]
@@ -504,11 +525,12 @@ This tool splits large prompt files into smaller, more manageable prompt files."
 #------------------
 PDD_CHANGE = types.Tool(
     name="pdd-change",
-    description="""Change code based on a change prompt.
-    
+    description=f"""Modify an input prompt file based on a change prompt and the corresponding input code.
+{LLM_PARAMETER_GUIDANCE}    
 Examples:
-- ✅ CORRECT: {"change_prompt_file": "/path/to/change.txt", "input_code": "/path/to/code.py", "force": true}
-- ❌ INCORRECT: Do NOT use CLI-style arguments with dashes
+- ✅ CORRECT: {{"change_prompt_file": "/path/to/change.txt", "input_code": "/path/to/code.py", "input_prompt_file": "/path/to/prompt.txt", "force": true}}
+- ✅ CORRECT with CSV: {{"change_prompt_file": "/path/to/change.txt", "input_code": "/path/to/code_dir", "csv": true, "force": true}}
+- ❌ INCORRECT: {{"prompt_file": "/path/to/prompt.txt"}} (using incorrect parameter names)
 
 IMPORTANT: ALWAYS include "force": true when there's a possibility the output file already exists.
 Without it, the command will hang waiting for user confirmation to overwrite files.
@@ -519,23 +541,27 @@ This tool modifies an input prompt file based on a change prompt and the corresp
         "properties": {
             "change_prompt_file": {
                 "type": "string",
-                "description": "The change prompt file"
+                "description": "REQUIRED: The filename containing the instructions on how to modify the input prompt file"
             },
             "input_code": {
                 "type": "string",
-                "description": "The input code file to modify"
+                "description": "REQUIRED: The filename of the code that was generated from the input prompt file, or the directory containing the code files when used with the '--csv' option"
             },
             "input_prompt_file": {
                 "type": "string",
-                "description": "The original prompt file (optional when using --csv)"
+                "description": "The filename of the prompt file that will be modified (not required when using the '--csv' option)"
             },
             "output": {
                 "type": "string",
-                "description": "Where to save the changed code"
+                "description": "Specify where to save the modified prompt file"
             },
             "csv": {
                 "type": "boolean",
-                "description": "Use CSV format for input"
+                "description": "Use a CSV file for the change prompts instead of a single change prompt file"
+            },
+            "force": {
+                "type": "boolean",
+                "description": "Overwrite existing files without asking for confirmation"
             }
         },
         "required": ["change_prompt_file", "input_code"]
@@ -546,37 +572,46 @@ This tool modifies an input prompt file based on a change prompt and the corresp
 #------------------
 PDD_UPDATE = types.Tool(
     name="pdd-update",
-    description="""Update code based on new requirements.
-    
+    description=f"""Update the original prompt file based on the modified code and optionally the original code.
+{LLM_PARAMETER_GUIDANCE}    
 Examples:
-- ✅ CORRECT: {"prompt_file": "/path/to/prompt.txt", "code_file": "/path/to/code.py", "new_prompt_file": "/path/to/new_prompt.txt", "force": true}
-- ❌ INCORRECT: Do NOT use CLI-style arguments with dashes
+- ✅ CORRECT: {{"input_prompt_file": "/path/to/prompt.txt", "modified_code_file": "/path/to/modified.py", "input_code_file": "/path/to/original.py", "force": true}}
+- ✅ CORRECT with git: {{"input_prompt_file": "/path/to/prompt.txt", "modified_code_file": "/path/to/modified.py", "git": true, "force": true}}
+- ❌ INCORRECT: {{"prompt_file": "/path/to/prompt.txt"}} (using incorrect parameter names)
 
 IMPORTANT: ALWAYS include "force": true when there's a possibility the output file already exists.
 Without it, the command will hang waiting for user confirmation to overwrite files.
 
-This tool updates the original prompt file based on the modified code.""",
+This tool updates the original prompt file based on the modified code and optionally the original code.""",
     inputSchema={
         "type": "object",
         "properties": {
-            "prompt_file": {
+            "input_prompt_file": {
                 "type": "string",
-                "description": "The original prompt file"
+                "description": "REQUIRED: The filename of the prompt file that generated the original code"
             },
-            "code_file": {
+            "modified_code_file": {
                 "type": "string",
-                "description": "The original code file"
+                "description": "REQUIRED: The filename of the code that was modified by the user"
             },
-            "new_prompt_file": {
+            "input_code_file": {
                 "type": "string",
-                "description": "The new prompt file with updated requirements"
+                "description": "The filename of the original code that was generated from the input prompt file (not required when using --git)"
             },
             "output": {
                 "type": "string",
-                "description": "Where to save the updated code"
+                "description": "Specify where to save the modified prompt file"
+            },
+            "git": {
+                "type": "boolean", 
+                "description": "Use git history to find the original code file, eliminating the need for the input_code_file argument"
+            },
+            "force": {
+                "type": "boolean",
+                "description": "Overwrite existing files without asking for confirmation"
             }
         },
-        "required": ["prompt_file", "code_file", "new_prompt_file"]
+        "required": ["input_prompt_file", "modified_code_file"]
     }
 )
 
@@ -584,20 +619,38 @@ This tool updates the original prompt file based on the modified code.""",
 #------------------
 PDD_DETECT = types.Tool(
     name="pdd-detect",
-    description="Detect code issues and vulnerabilities",
+    description=f"""Analyze a list of prompt files and a change description to determine which prompts need to be changed.
+{LLM_PARAMETER_GUIDANCE}    
+Examples:
+- ✅ CORRECT: {{"prompt_files": ["/path/to/prompt1.txt", "/path/to/prompt2.txt"], "change_file": "/path/to/changes.txt", "force": true}}
+- ❌ INCORRECT: {{"input_file": "/path/to/prompt.txt"}} (using incorrect parameter names)
+
+IMPORTANT: ALWAYS include "force": true when there's a possibility the output file already exists.
+Without it, the command will hang waiting for user confirmation to overwrite files.
+
+This tool analyzes a list of prompt files and a change description to determine which prompts need to be changed.""",
     inputSchema={
         "type": "object",
         "properties": {
-            "input_file": {
-                "type": "string",
-                "description": "The file to check for issues"
+            "prompt_files": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "REQUIRED: A list of filenames of prompts that may need to be changed"
             },
-            "csv": {
+            "change_file": {
+                "type": "string",
+                "description": "REQUIRED: Filename whose content describes the changes that need to be analyzed and potentially applied to the prompts"
+            },
+            "output": {
+                "type": "string",
+                "description": "Specify where to save the CSV file containing the analysis results"
+            },
+            "force": {
                 "type": "boolean",
-                "description": "Output in CSV format"
+                "description": "Overwrite existing files without asking for confirmation"
             }
         },
-        "required": ["input_file"]
+        "required": ["prompt_files", "change_file"]
     }
 )
 
@@ -605,32 +658,37 @@ PDD_DETECT = types.Tool(
 #---------------------
 PDD_CONFLICTS = types.Tool(
     name="pdd-conflicts",
-    description="Detect and resolve conflicts in code",
+    description=f"""Analyze two prompt files to find conflicts between them and suggest how to resolve those conflicts.
+{LLM_PARAMETER_GUIDANCE}    
+Examples:
+- ✅ CORRECT: {{"prompt1": "/path/to/prompt1.txt", "prompt2": "/path/to/prompt2.txt", "force": true}}
+- ❌ INCORRECT: {{"prompt_file": "/path/to/prompt.txt"}} (using incorrect parameter names)
+
+IMPORTANT: ALWAYS include "force": true when there's a possibility the output file already exists.
+Without it, the command will hang waiting for user confirmation to overwrite files.
+
+This tool analyzes two prompt files to find conflicts between them and suggest how to resolve those conflicts.""",
     inputSchema={
         "type": "object",
         "properties": {
-            "prompt_file": {
+            "prompt1": {
                 "type": "string",
-                "description": "The prompt file"
+                "description": "REQUIRED: First prompt in the pair of prompts we are comparing"
             },
-            "base": {
+            "prompt2": {
                 "type": "string",
-                "description": "The base version of the code"
-            },
-            "ours": {
-                "type": "string",
-                "description": "Our version of the code"
-            },
-            "theirs": {
-                "type": "string",
-                "description": "Their version of the code"
+                "description": "REQUIRED: Second prompt in the pair of prompts we are comparing"
             },
             "output": {
                 "type": "string",
-                "description": "Where to save the resolved code"
+                "description": "Specify where to save the CSV file containing the conflict analysis results"
+            },
+            "force": {
+                "type": "boolean",
+                "description": "Overwrite existing files without asking for confirmation"
             }
         },
-        "required": ["prompt_file", "base", "ours", "theirs"]
+        "required": ["prompt1", "prompt2"]
     }
 )
 
@@ -638,11 +696,11 @@ PDD_CONFLICTS = types.Tool(
 #-----------------
 PDD_CRASH = types.Tool(
     name="pdd-crash",
-    description="""Analyze and fix crashing code.
-    
+    description=f"""Fix errors in a code module and its calling program that caused a program to crash.
+{LLM_PARAMETER_GUIDANCE}    
 Examples:
-- ✅ CORRECT: {"prompt_file": "/path/to/prompt.txt", "code_file": "/path/to/code.py", "crash_file": "/path/to/crash_log.txt", "force": true}
-- ❌ INCORRECT: Do NOT use CLI-style arguments with dashes
+- ✅ CORRECT: {{"prompt_file": "/path/to/prompt.txt", "code_file": "/path/to/code.py", "program_file": "/path/to/program.py", "error_file": "/path/to/errors.log", "force": true}}
+- ❌ INCORRECT: {{"prompt_file": "/path/to/prompt.txt", "code_file": "/path/to/code.py"}} (missing required parameters)
 
 IMPORTANT: ALWAYS include "force": true when there's a possibility the output file already exists.
 Without it, the command will hang waiting for user confirmation to overwrite files.
@@ -653,43 +711,46 @@ This tool fixes errors in a code module and its calling program that caused a pr
         "properties": {
             "prompt_file": {
                 "type": "string",
-                "description": "The prompt file describing the code"
+                "description": "REQUIRED: Filename of the prompt file that generated the code module"
             },
             "code_file": {
                 "type": "string",
-                "description": "The code file that's crashing"
+                "description": "REQUIRED: Filename of the code module that caused the crash and will be modified"
             },
-            "crash_file": {
+            "program_file": {
                 "type": "string",
-                "description": "File containing the crash information"
+                "description": "REQUIRED: Filename of the program that was running the code module"
             },
-            "output": {
+            "error_file": {
                 "type": "string",
-                "description": "Where to save the fixed code"
-            }
-        },
-        "required": ["prompt_file", "code_file", "crash_file"]
-    }
-)
-
-# Trace Command Tool
-#-----------------
-PDD_TRACE = types.Tool(
-    name="pdd-trace",
-    description="Analyze execution trace data",
-    inputSchema={
-        "type": "object",
-        "properties": {
-            "trace_file": {
-                "type": "string",
-                "description": "The trace file to analyze"
+                "description": "REQUIRED: Filename of the file containing the errors from the program run"
             },
             "output": {
                 "type": "string",
-                "description": "Where to save the analysis results"
+                "description": "Where to save the fixed code file"
+            },
+            "output_program": {
+                "type": "string",
+                "description": "Where to save the fixed program file"
+            },
+            "loop": {
+                "type": "boolean",
+                "description": "Enable iterative fixing process"
+            },
+            "max_attempts": {
+                "type": "integer",
+                "description": "Maximum number of fix attempts (default: 3)"
+            },
+            "budget": {
+                "type": "number",
+                "description": "Maximum cost allowed for the fixing process (default: $5.0)"
+            },
+            "force": {
+                "type": "boolean",
+                "description": "Overwrite existing files without asking for confirmation"
             }
         },
-        "required": ["trace_file"]
+        "required": ["prompt_file", "code_file", "program_file", "error_file"]
     }
 )
 
@@ -697,11 +758,11 @@ PDD_TRACE = types.Tool(
 #---------------
 PDD_BUG = types.Tool(
     name="pdd-bug",
-    description="""Find and fix bugs in code.
-    
+    description=f"""Generate a unit test based on observed and desired outputs.
+{LLM_PARAMETER_GUIDANCE}    
 Examples:
-- ✅ CORRECT: {"prompt_file": "/path/to/prompt.txt", "code_file": "/path/to/code.py", "bug_description": "/path/to/bug.txt", "force": true}
-- ❌ INCORRECT: Do NOT use CLI-style arguments with dashes
+- ✅ CORRECT: {{"prompt_file": "/path/to/prompt.txt", "code_file": "/path/to/code.py", "program_file": "/path/to/program.py", "current_output_file": "/path/to/current.txt", "desired_output_file": "/path/to/desired.txt", "force": true}}
+- ❌ INCORRECT: {{"prompt_file": "/path/to/prompt.txt"}} (missing required parameters)
 
 IMPORTANT: ALWAYS include "force": true when there's a possibility the output file already exists.
 Without it, the command will hang waiting for user confirmation to overwrite files.
@@ -712,22 +773,38 @@ This tool generates a unit test based on observed and desired outputs, given the
         "properties": {
             "prompt_file": {
                 "type": "string",
-                "description": "The prompt file describing the code"
+                "description": "REQUIRED: Filename of the prompt file that generated the code"
             },
             "code_file": {
                 "type": "string",
-                "description": "The code file with bugs"
+                "description": "REQUIRED: Filename of the code file being tested"
             },
-            "bug_description": {
+            "program_file": {
                 "type": "string",
-                "description": "File containing bug description"
+                "description": "REQUIRED: Filename of the program used to run the code under test"
+            },
+            "current_output_file": {
+                "type": "string",
+                "description": "REQUIRED: File containing the current (incorrect) output of the program"
+            },
+            "desired_output_file": {
+                "type": "string",
+                "description": "REQUIRED: File containing the desired (correct) output of the program"
             },
             "output": {
                 "type": "string",
-                "description": "Where to save the fixed code"
+                "description": "Where to save the generated unit test"
+            },
+            "language": {
+                "type": "string",
+                "description": "Specify the programming language for the unit test (default is 'Python')"
+            },
+            "force": {
+                "type": "boolean",
+                "description": "Overwrite existing files without asking for confirmation"
             }
         },
-        "required": ["prompt_file", "code_file", "bug_description"]
+        "required": ["prompt_file", "code_file", "program_file", "current_output_file", "desired_output_file"]
     }
 )
 
@@ -735,20 +812,87 @@ This tool generates a unit test based on observed and desired outputs, given the
 #-----------------------------
 PDD_AUTO_DEPS = types.Tool(
     name="pdd-auto-deps",
-    description="Automatically detect and add dependencies",
+    description=f"""Analyze a prompt file and a directory of potential dependencies.
+{LLM_PARAMETER_GUIDANCE}    
+Examples:
+- ✅ CORRECT: {{"prompt_file": "/path/to/prompt.txt", "directory_path": "context/*.py", "force": true}}
+- ❌ INCORRECT: {{"input_file": "/path/to/prompt.txt"}} (using incorrect parameter name)
+
+IMPORTANT: ALWAYS include "force": true when there's a possibility the output file already exists.
+Without it, the command will hang waiting for user confirmation to overwrite files.
+
+This tool analyzes a prompt file and a directory of potential dependencies to determine and insert needed dependencies into the prompt.""",
     inputSchema={
         "type": "object",
         "properties": {
-            "input_file": {
+            "prompt_file": {
                 "type": "string",
-                "description": "The file to analyze for dependencies"
+                "description": "REQUIRED: Filename of the prompt file that needs dependencies analyzed and inserted"
+            },
+            "directory_path": {
+                "type": "string",
+                "description": "REQUIRED: Path to the directory containing potential dependency files (should include glob patterns)"
             },
             "output": {
                 "type": "string",
-                "description": "Where to save the dependency information"
+                "description": "Where to save the modified prompt file with dependencies inserted"
+            },
+            "csv": {
+                "type": "string",
+                "description": "Specify the CSV file that contains or will contain dependency information"
+            },
+            "force_scan": {
+                "type": "boolean",
+                "description": "Force rescanning of all potential dependency files even if they exist in the CSV file"
+            },
+            "force": {
+                "type": "boolean",
+                "description": "Overwrite existing files without asking for confirmation"
             }
         },
-        "required": ["input_file"]
+        "required": ["prompt_file", "directory_path"]
+    }
+)
+
+# Trace Command Tool
+#-----------------
+PDD_TRACE = types.Tool(
+    name="pdd-trace",
+    description=f"""Find the associated line number between a prompt file and the generated code.
+{LLM_PARAMETER_GUIDANCE}    
+Examples:
+- ✅ CORRECT: {{"prompt_file": "/path/to/prompt.txt", "code_file": "/path/to/code.py", "code_line": 42, "force": true}}
+- ❌ INCORRECT: {{"trace_file": "/path/to/trace.txt"}} (using incorrect parameter name)
+
+IMPORTANT: ALWAYS include "force": true when there's a possibility the output file already exists.
+Without it, the command will hang waiting for user confirmation to overwrite files.
+
+This tool traces code lines back to prompt lines.""",
+    inputSchema={
+        "type": "object",
+        "properties": {
+            "prompt_file": {
+                "type": "string",
+                "description": "REQUIRED: Filename of the prompt file that generated the code"
+            },
+            "code_file": {
+                "type": "string",
+                "description": "REQUIRED: Filename of the code file to be analyzed"
+            },
+            "code_line": {
+                "type": "integer",
+                "description": "REQUIRED: Line number in the code file that the debugger trace line is on"
+            },
+            "output": {
+                "type": "string",
+                "description": "Where to save the trace analysis results"
+            },
+            "force": {
+                "type": "boolean",
+                "description": "Overwrite existing files without asking for confirmation"
+            }
+        },
+        "required": ["prompt_file", "code_file", "code_line"]
     }
 )
 
