@@ -321,61 +321,6 @@ This tool creates example code showing how to use the specified module or source
     }
 )
 
-# Continue Command Tool
-#----------------------
-PDD_CONTINUE = types.Tool(
-    name="pdd-continue",
-    description="""Continue generation of partially completed output.
-    
-Examples:
-- ✅ CORRECT: {"prompt_file": "/path/to/prompt.txt", "output_file": "/path/to/partial.py", "force": true}
-- ❌ INCORRECT: Do NOT use CLI-style arguments like "--prompt=/path/to/prompt.txt"
-    
-IMPORTANT: ALWAYS include "force": true when there's a possibility the output file already exists.
-Without it, the command will hang waiting for user confirmation to overwrite files.
-
-This tool continues code generation from a partially completed file.""",
-    inputSchema={
-        "type": "object",
-        "properties": {
-            "prompt_file": {
-                "type": "string",
-                "description": "IMPORTANT: Full path to the original prompt file (no prefix)"
-            },
-            "output_file": {
-                "type": "string",
-                "description": "IMPORTANT: Full path to the partially generated output file to continue (no prefix)"
-            },
-            "result_file": {
-                "type": "string",
-                "description": "Where to save the continued output"
-            },
-            "strength": {
-                "type": "number",
-                "description": "Set the strength of the AI model (0.0 to 1.0, default is 0.5)"
-            },
-            "temperature": {
-                "type": "number",
-                "description": "Set the temperature of the AI model (default is 0.0)"
-            },
-            "local": {
-                "type": "boolean",
-                "description": "Run the generation locally instead of in the cloud"
-            },
-            "force": {
-                "type": "boolean",
-                "description": "Overwrite existing files without asking for confirmation"
-            },
-            "verbose": {
-                "type": "boolean",
-                "description": "Increase output verbosity for more detailed information"
-            }
-        },
-        "required": ["prompt_file", "output_file"],
-        "additionalProperties": False
-    }
-)
-
 # Preprocess Command Tool
 #-----------------------
 PDD_PREPROCESS = types.Tool(
@@ -420,58 +365,6 @@ This tool preprocesses prompt files to prepare them for code generation.""",
             }
         },
         "required": ["prompt_file"],
-        "additionalProperties": False
-    }
-)
-
-# Analyze Command Tool
-#---------------------
-PDD_ANALYZE = types.Tool(
-    name="pdd-analyze",
-    description="""Analyze code to provide insights and recommendations.
-    
-Examples:
-- ✅ CORRECT: {"source_file": "/path/to/source.py", "output": "/path/to/output.md", "force": true}
-- ❌ INCORRECT: Do NOT use CLI-style arguments like "--file=/path/to/source.py"
-    
-IMPORTANT: ALWAYS include "force": true when there's a possibility the output file already exists.
-Without it, the command will hang waiting for user confirmation to overwrite files.
-
-This tool analyzes code and generates insights, recommendations, and potential improvements.""",
-    inputSchema={
-        "type": "object",
-        "properties": {
-            "source_file": {
-                "type": "string",
-                "description": "IMPORTANT: Full path to the source file to analyze (no prefix)"
-            },
-            "output": {
-                "type": "string",
-                "description": "Where to save the analysis results"
-            },
-            "format": {
-                "type": "string",
-                "enum": ["text", "json", "html", "markdown"],
-                "description": "Output format for the analysis (default: markdown)"
-            },
-            "strength": {
-                "type": "number",
-                "description": "Set the strength of the AI model (0.0 to 1.0, default is 0.5)"
-            },
-            "temperature": {
-                "type": "number",
-                "description": "Set the temperature of the AI model (default is 0.0)"
-            },
-            "local": {
-                "type": "boolean",
-                "description": "Run the analysis locally instead of in the cloud"
-            },
-            "verbose": {
-                "type": "boolean",
-                "description": "Increase output verbosity for more detailed information"
-            }
-        },
-        "required": ["source_file"],
         "additionalProperties": False
     }
 )
@@ -903,9 +796,7 @@ PDD_TOOLS = [
     PDD_TEST,
     PDD_FIX,
     PDD_EXAMPLE,
-    PDD_CONTINUE,
     PDD_PREPROCESS,
-    PDD_ANALYZE,
     PDD_SPLIT,
     PDD_CHANGE,
     PDD_UPDATE,
