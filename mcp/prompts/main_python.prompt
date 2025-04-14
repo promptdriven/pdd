@@ -75,8 +75,7 @@ TOOL_HANDLERS = {{{{ # Map ALL tool names from definitions.py to handlers.py fun
     "pdd-crash": handlers.handle_pdd_crash,
     "pdd-trace": handlers.handle_pdd_trace,
     "pdd-bug": handlers.handle_pdd_bug,
-    "pdd-auto-deps": handlers.handle_pdd_auto_deps,
-    # Add entries for ALL other defined tools...
+    "pdd-auto-deps": handlers.handle_pdd_auto_deps
 }}}}
 
 async def main_async():

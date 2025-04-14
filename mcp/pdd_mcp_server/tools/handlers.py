@@ -921,72 +921,6 @@ async def handle_pdd_bug(arguments: Dict[str, Any]) -> types.CallToolResult:
     pdd_result: PddResult = await run_pdd_command(cmd_list)
     return _format_result(pdd_result, command_name)
 
-async def handle_pdd_continue(arguments: Dict[str, Any]) -> types.CallToolResult:
-    """
-    Handles the 'pdd-continue' MCP tool call by executing the 'pdd continue' command.
-
-    Args:
-        arguments: Dictionary containing validated parameters from the MCP client.
-                   Expected keys: 'prompt_file', 'output_file', 'result_file' (optional),
-                   'strength' (optional), 'temperature' (optional), 'local' (optional),
-                   'force' (optional), 'verbose' (optional).
-
-    Returns:
-        An MCP CallToolResult containing the stdout or stderr of the command.
-    """
-    command_name = "continue"
-    logger.info("Handling %s tool call with arguments: %s", f"pdd-{command_name}", arguments)
-    cmd_list = _create_pdd_command(arguments, command_name)
-    
-    # Required arguments
-    prompt_file = arguments.get('prompt_file')
-    output_file = arguments.get('output_file')
-    if not prompt_file or not output_file:
-         return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required arguments 'prompt_file' or 'output_file' after validation.", type="text")])
-    cmd_list.append(prompt_file)  # Positional
-    cmd_list.append(output_file)  # Positional
-
-    # Optional arguments
-    if arguments.get('result_file'):
-        cmd_list.append(arguments['result_file'])  # Positional (optional third argument)
-
-    logger.debug("Executing command: %s", " ".join(cmd_list))
-    pdd_result: PddResult = await run_pdd_command(cmd_list)
-    return _format_result(pdd_result, command_name)
-
-async def handle_pdd_analyze(arguments: Dict[str, Any]) -> types.CallToolResult:
-    """
-    Handles the 'pdd-analyze' MCP tool call by executing the 'pdd analyze' command.
-
-    Args:
-        arguments: Dictionary containing validated parameters from the MCP client.
-                   Expected keys: 'source_file', 'output' (optional), 'format' (optional),
-                   'strength' (optional), 'temperature' (optional), 'local' (optional),
-                   'verbose' (optional).
-
-    Returns:
-        An MCP CallToolResult containing the stdout or stderr of the command.
-    """
-    command_name = "analyze"
-    logger.info("Handling %s tool call with arguments: %s", f"pdd-{command_name}", arguments)
-    cmd_list = _create_pdd_command(arguments, command_name)
-    
-    # Required arguments
-    source_file = arguments.get('source_file')
-    if not source_file:
-         return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required argument 'source_file' after validation.", type="text")])
-    cmd_list.append(source_file)  # Positional
-
-    # Optional arguments
-    if arguments.get('output'):
-        cmd_list.extend(['--output', arguments['output']])
-    if arguments.get('format'):
-        cmd_list.extend(['--format', arguments['format']])
-
-    logger.debug("Executing command: %s", " ".join(cmd_list))
-    pdd_result: PddResult = await run_pdd_command(cmd_list)
-    return _format_result(pdd_result, command_name)
-
 async def handle_pdd_auto_deps(arguments: Dict[str, Any]) -> types.CallToolResult:
     """
     Handles the 'pdd-auto-deps' MCP tool call by executing the 'pdd auto-deps' command.
@@ -1041,9 +975,7 @@ TOOL_HANDLERS = {
     "pdd-crash": handle_pdd_crash,
     "pdd-trace": handle_pdd_trace,
     "pdd-bug": handle_pdd_bug,
-    "pdd-auto-deps": handle_pdd_auto_deps,
-    "pdd-continue": handle_pdd_continue,
-    "pdd-analyze": handle_pdd_analyze,
+    "pdd-auto-deps": handle_pdd_auto_deps
 }
 
 def get_handler(tool_name: str):
