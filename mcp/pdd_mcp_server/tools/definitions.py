@@ -11,10 +11,11 @@ from typing import Dict, List
 
 # Common example template for LLMs
 LLM_PARAMETER_GUIDANCE = """
-- ALWAYS provide parameters as direct key-value pairs in your tool call
+- Parameters can be provided either as direct key-value pairs or as a JSON string in the 'kwargs' field
 - DO NOT use CLI-style arguments with dashes (like --file=/path/to/file)
 
-✅ CORRECT FORMAT: {"param1": "value1", "param2": "value2"}
+✅ CORRECT FORMAT (direct): {"param1": "value1", "param2": "value2"}
+✅ CORRECT FORMAT (JSON string): {"kwargs": "{\\"param1\\": \\"value1\\", \\"param2\\": \\"value2\\"}"}
 ❌ INCORRECT FORMAT: {"kwargs": "--param1 value1 --param2 value2"}
 """
 
@@ -30,8 +31,8 @@ creating a full implementation of code described in a prompt file. This creates
 comprehensive implementation details that other code can use.
 
 Examples:
-- ✅ CORRECT: {{"prompt_file": "/path/to/prompt.txt", "output": "/path/to/output.py", "force": true}}
-- ❌ INCORRECT: {{"kwargs": {{"prompt_file": "/path/to/prompt.txt"}}}}
+- ✅ CORRECT (direct): {{"prompt_file": "/path/to/prompt.txt", "output": "/path/to/output.py", "force": true}}
+- ✅ CORRECT (JSON string): {{"kwargs": "{{\\"prompt_file\\": \\"/path/to/prompt.txt\\", \\"output\\": \\"/path/to/output.py\\", \\"force\\": true}}"}}
 - ❌ INCORRECT: {{"kwargs": "--file=/path/to/prompt.txt"}}
 
 IMPORTANT: ALWAYS include "force": true when there's a possibility the output file already exists.

@@ -75,11 +75,22 @@ def register_tool(tool_def):
                     logger.debug(f"Processed nested kwargs dict for {tool_def.name}")
                 
                 # 2. Handle JSON string kwargs (Claude Code sends this)
-                # Note: We now process this in each handler as well for redundancy
                 elif 'kwargs' in kwargs and isinstance(kwargs['kwargs'], str):
-                    # We'll let the individual handler function process this format
-                    # for better error handling specific to each tool
-                    logger.debug(f"Found kwargs JSON string for {tool_def.name}, passing to handler")
+                    try:
+                        # Parse the JSON string into a dict
+                        import json
+                        json_kwargs = kwargs['kwargs']
+                        inner_params = json.loads(json_kwargs)
+                        if isinstance(inner_params, dict):
+                            # Update the kwargs with the parsed values
+                            kwargs.pop('kwargs')  # Remove the original kwargs
+                            kwargs.update(inner_params)
+                            logger.debug(f"Successfully parsed JSON kwargs for {tool_def.name}: {inner_params}")
+                        else:
+                            logger.warning(f"JSON kwargs for {tool_def.name} is not a dict: {inner_params}")
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"Failed to parse JSON kwargs for {tool_def.name}: {str(e)}")
+                        # Continue with the original kwargs
                 
                 # Call the handler
                 return await handler(kwargs)

@@ -260,35 +260,6 @@ async def handle_pdd_generate(arguments: Dict[str, Any]) -> types.CallToolResult
         # Log what we received
         logger.info(f"handle_pdd_generate called with arguments: {arguments}")
         
-        # Handle kwargs in JSON string format (from Claude Code)
-        if 'kwargs' in arguments and isinstance(arguments['kwargs'], str):
-            try:
-                # Parse the JSON string into a dict
-                kwargs_dict = json.loads(arguments['kwargs'])
-                if isinstance(kwargs_dict, dict):
-                    # Update arguments with parsed values
-                    arguments.update(kwargs_dict)
-                    # Remove the original kwargs to avoid confusion
-                    del arguments['kwargs']
-                    logger.info(f"Parsed kwargs JSON string into: {kwargs_dict}")
-                else:
-                    return types.CallToolResult(
-                        isError=True,
-                        content=[types.TextContent(
-                            text="Error: kwargs is not a valid JSON object",
-                            type="text"
-                        )]
-                    )
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse kwargs JSON: {arguments['kwargs']}")
-                return types.CallToolResult(
-                    isError=True,
-                    content=[types.TextContent(
-                        text=f"Error parsing kwargs JSON: {str(e)}",
-                        type="text"
-                    )]
-                )
-        
         # Basic validation
         if not arguments or 'prompt_file' not in arguments:
             logger.error("Missing prompt_file parameter")
