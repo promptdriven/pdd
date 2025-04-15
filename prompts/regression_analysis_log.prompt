@@ -48,7 +48,8 @@
         4. Output an analysis of potential errors in the generated python files.
         5. Output an analysis of potential errors in the generated csv files.
         6. Output an analysis of potential errors in the generated text files.
-        7. Explain in detail what errors need to be fixed and conclusion on the regression run.
+        7. For each command follow the process outlined in step 1 to determine if the command is correct or incorrect.
+        8. Explain in detail what errors need to be fixed and conclusion on the regression run.
     </instructions>
 
 % The output should be in Markdown format
