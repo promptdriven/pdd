@@ -7,8 +7,8 @@ from .preprocess import preprocess
 from .llm_invoke import llm_invoke
 
 class PromptSplit(BaseModel):
-    sub_prompt: str = Field(description="The extracted sub-prompt")
-    modified_prompt: str = Field(description="The modified original prompt")
+    extracted_functionality: str = Field(description="The extracted functionality as a sub-module prompt")
+    remaining_prompt: str = Field(description="The modified original prompt that will import the extracted functionality")
 
 def split(
     input_prompt: str,
@@ -19,7 +19,7 @@ def split(
     verbose: bool = False
 ) -> Tuple[str, str, str, float]:
     """
-    Split a prompt into a sub_prompt and modified_prompt.
+    Split a prompt into extracted functionality and remaining prompt.
 
     Args:
         input_prompt (str): The prompt to split.
@@ -30,7 +30,7 @@ def split(
         verbose (bool): Whether to print detailed information.
 
     Returns:
-        Tuple[str, str, str, float]: (sub_prompt, modified_prompt, model_name, total_cost)
+        Tuple[str, str, str, float]: (extracted_functionality, remaining_prompt, model_name, total_cost)
             where model_name is the name of the model used (returned as the second to last tuple element)
             and total_cost is the aggregated cost from all LLM invocations.
     """
@@ -100,19 +100,19 @@ def split(
 
         # Extract results
         result: PromptSplit = extract_response["result"]
-        sub_prompt = result.sub_prompt
-        modified_prompt = result.modified_prompt
+        extracted_functionality = result.extracted_functionality
+        remaining_prompt = result.remaining_prompt
 
         # 5. Print verbose output if requested
         if verbose:
             rprint("\n[bold green]Final Results:[/bold green]")
-            rprint(Markdown(f"### Sub Prompt\n{sub_prompt}"))
-            rprint(Markdown(f"### Modified Prompt\n{modified_prompt}"))
+            rprint(Markdown(f"### Extracted Functionality\n{extracted_functionality}"))
+            rprint(Markdown(f"### Remaining Prompt\n{remaining_prompt}"))
             rprint(f"[bold cyan]Total Cost: ${total_cost:.6f}[/bold cyan]")
             rprint(f"[bold cyan]Model used: {model_name}[/bold cyan]")
 
         # 6. Return results (model_name is the 2nd to last element)
-        return sub_prompt, modified_prompt, model_name, total_cost
+        return extracted_functionality, remaining_prompt, model_name, total_cost
 
     except Exception as e:
         # Print an error message, then raise an exception that includes

@@ -45,8 +45,8 @@ def test_split_main_success(mock_ctx, quiet_mode, capsys):
     }
     mock_language = "python"
 
-    sub_prompt_result = "sub prompt result"
-    modified_prompt_result = "modified prompt result"
+    extracted_functionality_result = "sub prompt result"
+    remaining_prompt_result = "modified prompt result"
     total_cost_result = 0.123456
     mock_model_name = "mock_model" # Added mock model name
 
@@ -56,10 +56,10 @@ def test_split_main_success(mock_ctx, quiet_mode, capsys):
 
         # Set up our patched functions
         mock_construct_paths.return_value = (mock_input_strings, mock_output_paths, mock_language)
-        mock_split.return_value = (sub_prompt_result, modified_prompt_result, mock_model_name, total_cost_result) # Corrected mock return
+        mock_split.return_value = (extracted_functionality_result, remaining_prompt_result, mock_model_name, total_cost_result) # Corrected mock return
 
         # Act
-        sub_prompt, modified_prompt, total_cost, model_name = split_main( # Corrected unpacking
+        extracted_functionality, remaining_prompt, total_cost, model_name = split_main( # Corrected unpacking
             mock_ctx,
             "input_prompt_file.prompt",
             "input_code_file.py",
@@ -69,8 +69,8 @@ def test_split_main_success(mock_ctx, quiet_mode, capsys):
         )
 
         # Assert
-        assert sub_prompt == sub_prompt_result
-        assert modified_prompt == modified_prompt_result
+        assert extracted_functionality == extracted_functionality_result
+        assert remaining_prompt == remaining_prompt_result
         assert total_cost == total_cost_result
         assert model_name == mock_model_name # Added model name assertion
 
@@ -98,7 +98,7 @@ def test_split_main_success(mock_ctx, quiet_mode, capsys):
         if quiet_mode:
             # No success message should appear in quiet mode
             assert "Successfully split the prompt!" not in captured.out
-            assert "Sub-prompt saved to:" not in captured.out
+            assert "Extracted functionality saved to:" not in captured.out
         else:
             # Success messages should appear
             assert "Successfully split the prompt!" in captured.out
@@ -152,7 +152,7 @@ def test_split_main_io_error_during_write(mock_ctx, capsys):
          pytest.raises(SystemExit) as exc_info:
 
         mock_construct_paths.return_value = (mock_input_strings, mock_output_paths, mock_language)
-        mock_split.return_value = ("sub prompt", "modified prompt", mock_model_name, 0.5)
+        mock_split.return_value = ("extracted functionality", "remaining prompt", mock_model_name, 0.5)
 
         split_main(
             mock_ctx,
@@ -227,7 +227,7 @@ def test_split_main_quiet_mode(mock_ctx, capsys):
          patch("pdd.split_main.split") as mock_split, \
          patch("builtins.open", mock_open()):
         mock_construct_paths.return_value = (mock_input_strings, mock_output_paths, None)
-        mock_split.return_value = ("sub prompt", "modified prompt", mock_model_name, 1.234) # Corrected Mock
+        mock_split.return_value = ("extracted functionality", "remaining prompt", mock_model_name, 1.234) # Corrected Mock
 
         # Call function
         split_main(
