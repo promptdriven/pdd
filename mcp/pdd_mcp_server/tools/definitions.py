@@ -373,16 +373,28 @@ This tool preprocesses prompt files to prepare them for code generation.""",
 #------------------
 PDD_SPLIT = types.Tool(
     name="pdd-split",
-    description=f"""Split large complex prompt files into smaller, more manageable prompt files.
+    description=f"""Split large complex prompt files into smaller, more manageable prompt files by extracting specific functionality into a separate sub-module.
 {LLM_PARAMETER_GUIDANCE}    
+
+WHEN TO USE: Choose this tool when you need to extract specific functionality from a large prompt into a separate sub-prompt that can be independently maintained and imported.
+
+HOW IT WORKS:
+1. The tool analyzes your original prompt and its generated code
+2. It extracts the functionality specified by your interface file into a new sub-prompt
+3. It modifies the original prompt to now import the extracted functionality
+
 Examples:
-- ✅ CORRECT: {{"input_prompt": "/path/to/prompt.txt", "input_code": "/path/to/code.py", "example_code": "/path/to/example.py", "force": true}}
+- ✅ CORRECT: {{"input_prompt": "/path/to/prompt.txt", "input_code": "/path/to/code.py", "example_code": "/path/to/interface.py", "force": true}}
 - ❌ INCORRECT: Do NOT use CLI-style arguments with dashes
 
-IMPORTANT: ALWAYS include "force": true when there's a possibility the output file already exists.
-Without it, the command will hang waiting for user confirmation to overwrite files.
+IMPORTANT: 
+1. ALWAYS include "force": true when there's a possibility the output file already exists.
+2. The example_code must be an INTERFACE FILE that defines the specific functionality you want to extract, not just any example usage.
+3. The interface file should contain function signatures, class definitions, or other code that clearly defines the boundary of what should be extracted.
 
-This tool splits large prompt files into smaller, more manageable prompt files.""",
+This tool produces two outputs:
+- output_sub: Will contain the EXTRACTED FUNCTIONALITY as a self-contained prompt (the part defined by your interface file)
+- output_modified: Will contain the REMAINING PROMPT that imports the extracted functionality""",
     inputSchema={
         "type": "object",
         "properties": {
@@ -396,15 +408,15 @@ This tool splits large prompt files into smaller, more manageable prompt files."
             },
             "example_code": {
                 "type": "string",
-                "description": "REQUIRED: The filename of the example code that serves as the interface to the sub-module prompt file"
+                "description": "REQUIRED: The filename of an interface file that defines exactly what functionality to extract into the sub-module. This should contain function signatures, class definitions, or other code that clearly defines the boundary of what should be extracted."
             },
             "output_sub": {
                 "type": "string",
-                "description": "Specify where to save the generated sub-prompt file"
+                "description": "Specify where to save the new sub-prompt file containing the extracted functionality (the part defined in your example_code)"
             },
             "output_modified": {
                 "type": "string",
-                "description": "Specify where to save the modified prompt file"
+                "description": "Specify where to save the modified version of the original prompt file that now imports the extracted functionality"
             },
             "force": {
                 "type": "boolean",

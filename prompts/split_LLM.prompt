@@ -69,12 +69,12 @@
     Input: 
         'input_prompt' - A string contains the prompt that will be split into a sub_prompt and modified_prompt.
         'input_code' - A string that contains the code that was generated from the input_prompt.
-        'example_code' - A string that contains the code example of how the code generated from the sub_prompt would be used by the code generated from the modified_prompt.
+        'example_code' - A string that contains an interface defining the specific functionality to extract into the sub_prompt. The sub_prompt will generate code that implements this interface.
     </input_definitions>
     <output_definitions>
     Output: 
-        'sub_prompt' - A string that contains the sub_prompt that was split from the input_prompt.
-        'modified_prompt' - A string that contains the modified prompt from input_prompt split from the above sub_prompt.
+        'sub_prompt' - A string that contains the extracted functionality as defined by the example_code interface that was split from the input_prompt.
+        'modified_prompt' - A string that contains the modified original prompt that will import and use the functionality defined in the sub_prompt.
     </output_definitions>
 </context>
 
