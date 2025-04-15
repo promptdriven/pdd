@@ -3,6 +3,7 @@ import sys
 from typing import Tuple, Optional
 import click
 from rich import print as rprint
+from pathlib import Path
 
 from .construct_paths import construct_paths
 from .bug_to_unit_test import bug_to_unit_test
@@ -74,9 +75,22 @@ def bug_main(
 
         # Save results if output path is provided
         if output_file_paths.get("output"):
+            output_path = output_file_paths["output"]
+            # Additional check to ensure the path is not empty
+            if not output_path or output_path.strip() == '':
+                # Use a default output path in the current directory
+                output_path = f"test_{Path(code_file).stem}_bug.{language.lower()}"
+                if not ctx.obj.get('quiet', False):
+                    rprint(f"[yellow]Warning: Empty output path detected. Using default: {output_path}[/yellow]")
+                output_file_paths["output"] = output_path
+            
             # Create directory if it doesn't exist
-            os.makedirs(os.path.dirname(output_file_paths["output"]), exist_ok=True)
-            with open(output_file_paths["output"], 'w') as f:
+            dir_path = os.path.dirname(output_path)
+            if dir_path:  # Only create directory if there's a directory part in the path
+                os.makedirs(dir_path, exist_ok=True)
+            
+            # Write the file
+            with open(output_path, 'w') as f:
                 f.write(unit_test)
 
         # Provide user feedback
