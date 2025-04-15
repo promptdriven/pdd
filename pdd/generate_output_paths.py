@@ -180,8 +180,13 @@ def get_output_path(user_path, env_var, default_filename):
             pass
         return path
     else:
+        # Check for environment variable
         env_path = os.environ.get(env_var)
         if env_path:
+            # Ensure env_path is not empty
+            if not env_path.strip():
+                return default_filename
+                
             path = os.path.join(env_path, default_filename)
             try:
                 # Create parent directory if needed
@@ -191,4 +196,5 @@ def get_output_path(user_path, env_var, default_filename):
                 pass
             return path
         else:
+            # Always return a valid filename, never an empty string
             return default_filename
