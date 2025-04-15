@@ -893,7 +893,8 @@ async def handle_pdd_bug(arguments: Dict[str, Any]) -> types.CallToolResult:
 
     Args:
         arguments: Dictionary containing validated parameters from the MCP client.
-                   Expected keys: 'prompt_file', 'code_file', 'bug_description',
+                   Expected keys: 'prompt_file', 'code_file', 'program_file',
+                   'current_output_file', 'desired_output_file',
                    'output' (optional), global options.
 
     Returns:
@@ -906,16 +907,24 @@ async def handle_pdd_bug(arguments: Dict[str, Any]) -> types.CallToolResult:
     # Required arguments
     prompt_file = arguments.get('prompt_file')
     code_file = arguments.get('code_file')
-    bug_description = arguments.get('bug_description')
-    if not prompt_file or not code_file or not bug_description:
-         return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required arguments 'prompt_file', 'code_file', or 'bug_description' after validation.", type="text")])
-    cmd_list.append(prompt_file)      # Positional
-    cmd_list.append(code_file)        # Positional
-    cmd_list.append(bug_description)  # Positional
+    program_file = arguments.get('program_file')
+    current_output_file = arguments.get('current_output_file')
+    desired_output_file = arguments.get('desired_output_file')
+    
+    if not prompt_file or not code_file or not program_file or not current_output_file or not desired_output_file:
+         return types.CallToolResult(isError=True, content=[types.TextContent(text="Internal Error: Missing required arguments 'prompt_file', 'code_file', 'program_file', 'current_output_file', or 'desired_output_file' after validation.", type="text")])
+    
+    cmd_list.append(prompt_file)           # Positional
+    cmd_list.append(code_file)             # Positional
+    cmd_list.append(program_file)          # Positional
+    cmd_list.append(current_output_file)   # Positional
+    cmd_list.append(desired_output_file)   # Positional
 
     # Optional arguments
     if arguments.get('output'):
         cmd_list.extend(['--output', arguments['output']])
+    if arguments.get('language'):
+        cmd_list.extend(['--language', arguments['language']])
 
     logger.debug("Executing command: %s", " ".join(cmd_list))
     pdd_result: PddResult = await run_pdd_command(cmd_list)
