@@ -123,17 +123,16 @@ print("=" * 40)
 # 'fixed_code': String - The potentially modified code module.
 # 'total_cost': Float - Estimated cost of the LLM calls in dollars.
 # 'model_name': String - Name of the LLM model used (can vary based on strength).
-# 'explanation': List of issues found and their explanations (if any).
 
-print(f"[cyan]Issues Found:[/cyan] {len(results['explanation']) > 1}")
-print(f"[cyan]Program Updated:[/cyan] {results['fixed_program'] != program_code}")
-print(f"[cyan]Code Module Updated:[/cyan] {results['fixed_code'] != buggy_code_module}")
+print(f"[cyan]Issues Found by LLM:[/cyan] {results['issues_found']}")
+print(f"[cyan]Program Updated:[/cyan] {results['update_program']}")
+print(f"[cyan]Code Module Updated:[/cyan] {results['update_code']}")
 print(f"[cyan]LLM Model Used:[/cyan] {results['model_name']}")
 print(f"[cyan]Total LLM Cost:[/cyan] ${results['total_cost']:.6f}") # Cost in dollars
 
 print("\n[bold yellow]--- Details ---[/bold yellow]")
 
-if results['fixed_program'] != program_code:
+if results['update_program']:
     print("\n[bold magenta]--- Fixed Program ---[/bold magenta]")
     print(results['fixed_program'])
 else:
@@ -141,15 +140,12 @@ else:
     # Optionally print the original program_code again if needed for comparison
     # print(program_code)
 
-if results['fixed_code'] != buggy_code_module:
+if results['update_code']:
     print("\n[bold magenta]--- Fixed Code Module ---[/bold magenta]")
     print(results['fixed_code'])
 else:
     print("\n[bold magenta]--- Original Code Module (Unchanged) ---[/bold magenta]")
     # Optionally print the buggy_code_module again if needed for comparison
     # print(buggy_code_module)
-
-# print the number of issues found
-print(f"[cyan]Issues Found:[/cyan] {results['verification_issues_count']}")
 
 print("\n[bold blue]Example finished.[/bold blue]")
