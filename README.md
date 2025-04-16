@@ -138,6 +138,118 @@ Examples:
 - `responsive_layout_css.prompt` (basename: responsive_layout, language: css)
 - `data_processing_pipeline_python.prompt` (basename: data_processing_pipeline, language: python)
 
+## Prompt-Driven Development Philosophy
+
+### Core Concepts
+
+Prompt-Driven Development (PDD) inverts traditional software development by treating prompts as the primary artifact - not code. This paradigm shift has profound implications:
+
+1. **Prompts as Source of Truth**: 
+   In traditional development, source code is the ground truth that defines system behavior. In PDD, the prompts are authoritative, with code being a generated artifact.
+
+2. **Natural Language Over Code**:
+   Prompts are written primarily in natural language, making them more accessible to non-programmers and clearer in expressing intent.
+
+3. **Regenerative Development**:
+   When changes are needed, you modify the prompt and regenerate code, rather than directly editing the code. This maintains the conceptual integrity between requirements and implementation.
+
+4. **Intent Preservation**:
+   Prompts capture the "why" behind code in addition to the "what" - preserving design rationale in a way that comments often fail to do.
+
+### Mental Model
+
+To work effectively with PDD, adopt these mental shifts:
+
+1. **Prompt-First Thinking**:
+   Always start by defining what you want in a prompt before generating any code.
+
+2. **Bidirectional Flow**:
+   - Prompt → Code: The primary direction (generation)
+   - Code → Prompt: Secondary but crucial (keeping prompts in sync with code changes)
+
+3. **Modular Prompts**:
+   Just as you modularize code, you should modularize prompts into self-contained units that can be composed.
+
+4. **Integration via Examples**:
+   Modules integrate through their examples, which serve as interfaces, allowing for token-efficient references.
+
+### PDD Workflows: Conceptual Understanding
+
+Each workflow in PDD addresses a fundamental development need:
+
+1. **Initial Development Workflow**
+   - **Purpose**: Creating functionality from scratch
+   - **Conceptual Flow**: Define dependencies → Generate implementation → Create interfaces → Ensure runtime functionality → Verify correctness
+   
+   This workflow embodies the prompt-to-code pipeline, moving from concept to tested implementation.
+
+2. **Code-to-Prompt Update Workflow**
+   - **Purpose**: Maintaining prompt as source of truth when code changes
+   - **Conceptual Flow**: Sync code changes to prompt → Identify impacts → Propagate changes
+   
+   This workflow ensures the information flow from code back to prompts, preserving prompts as the source of truth.
+
+3. **Debugging Workflows**
+   - **Purpose**: Resolving different types of issues
+   - **Conceptual Types**:
+     - **Context Issues**: Addressing misunderstandings in prompt interpretation
+     - **Runtime Issues**: Fixing execution failures
+     - **Logical Issues**: Correcting incorrect behavior
+     - **Traceability Issues**: Connecting code problems back to prompt sections
+   
+   These workflows recognize that different errors require different resolution approaches.
+
+4. **Refactoring Workflow**
+   - **Purpose**: Improving prompt organization and reusability
+   - **Conceptual Flow**: Extract functionality → Ensure dependencies → Create interfaces
+   
+   This workflow parallels code refactoring but operates at the prompt level.
+
+5. **Multi-Prompt Architecture Workflow**
+   - **Purpose**: Coordinating systems with multiple prompts
+   - **Conceptual Flow**: Detect conflicts → Resolve incompatibilities → Regenerate code → Update interfaces → Verify system
+   
+   This workflow addresses the complexity of managing multiple interdependent prompts.
+
+### Workflow Selection Principles
+
+The choice of workflow should be guided by your current development phase:
+
+1. **Creation Phase**: Use Initial Development when building new functionality.
+
+2. **Maintenance Phase**: Use Code-to-Prompt Update when existing code changes.
+
+3. **Problem-Solving Phase**: Choose the appropriate Debugging workflow based on the issue type:
+   - Preprocess → Generate for prompt interpretation issues
+   - Crash for runtime errors
+   - Bug → Fix for logical errors
+   - Trace for locating problematic prompt sections
+
+4. **Restructuring Phase**: Use Refactoring when prompts grow too large or complex.
+
+5. **System Design Phase**: Use Multi-Prompt Architecture when coordinating multiple components.
+
+6. **Enhancement Phase**: Use Feature Enhancement when adding capabilities to existing modules.
+
+### PDD Design Patterns
+
+Effective PDD employs these recurring patterns:
+
+1. **Dependency Injection via Auto-deps**:
+   Automatically including relevant dependencies in prompts.
+
+2. **Interface Extraction via Example**:
+   Creating minimal reference implementations for reuse.
+
+3. **Bidirectional Traceability**:
+   Maintaining connections between prompt sections and generated code.
+
+4. **Test-Driven Prompt Fixing**:
+   Using tests to guide prompt improvements when fixing issues.
+
+5. **Hierarchical Prompt Organization**:
+   Structuring prompts from high-level architecture to detailed implementations.
+
 ## Basic Usage
 
 ```
@@ -892,24 +1004,130 @@ Additionally:
 
 ## Workflow Integration
 
-PDD can be integrated into various development workflows. Here are some typical use cases:
+PDD can be integrated into various development workflows. Here are the conceptual models for key workflow patterns:
 
-1. **Initial Development**: Use `generate` to create initial code from prompts, then `example` and `test` to build out the project structure.
+### Initial Development 
 
-2. **Maintenance**: Use `update` to keep prompts in sync with code changes, and `fix` to address issues that arise during development.
+**Conceptual Flow**: `auto-deps → generate → example → crash → test → fix`
 
-3. **Refactoring**: Use `split` to break down large prompts, and `conflicts` to manage potential issues when working with multiple prompts.
+**Purpose**: Create new functionality from scratch with proper testing.
 
-4. **Continuous Integration**: Incorporate PDD commands into CI/CD pipelines to automate code generation, testing, and maintenance tasks.
+**Process**:
+1. Identify and inject dependencies for your prompt
+2. Generate full implementation code from the prompt
+3. Create reusable interface examples for other prompts to reference
+4. Verify code runs correctly and fix runtime errors
+5. Generate comprehensive tests for the implementation
+6. Fix any issues revealed by the tests
 
-5. **Debugging**: Use `crash` to quickly address runtime errors and generate fixes for failing modules.
+**Key Insight**: This workflow follows a linear progression from concept to verified implementation, with each step building on the previous one.
 
-6. **Code Analysis**: Use `trace` to analyze the relationship between prompts and generated code, helping to improve prompt quality and code consistency.
+### Code-to-Prompt Update 
 
-7. **Bug Fixing**: Use `bug` to generate targeted unit tests based on observed bugs, facilitating the debugging process.
+**Conceptual Flow**: `update → detect → change`
 
-8. **Dependency Management**: Use `auto-deps` to automatically identify and include relevant dependencies when working with complex prompts that build upon existing examples or modules.
+**Purpose**: Maintain prompt as source of truth after code changes.
 
+**Process**:
+1. Synchronize direct code changes back to the original prompt
+2. Detect other prompts that might be affected by these changes
+3. Apply necessary changes to dependent prompts
+
+**Key Insight**: This bidirectional flow ensures prompts remain the source of truth even when code changes happen first.
+
+### Refactoring 
+
+**Conceptual Flow**: `split → auto-deps → example`
+
+**Purpose**: Break large prompts into modular components.
+
+**Process**:
+1. Extract specific functionality from a large prompt into a separate prompt
+2. Ensure the new prompt has all dependencies it needs
+3. Create interface examples for the extracted functionality
+
+**Key Insight**: Just as code should be modular, prompts benefit from decomposition into focused, reusable components.
+
+### Debugging Workflows
+
+#### Prompt Context Issues
+**Conceptual Flow**: `preprocess → generate`
+
+**Purpose**: Resolve issues with prompt interpretation or preprocessing.
+
+**Process**:
+1. Examine how the prompt is being preprocessed
+2. Regenerate code with improved prompt clarity
+
+#### Runtime Crash Debugging
+**Conceptual Flow**: `generate → example → crash`
+
+**Purpose**: Fix code that fails to execute.
+
+**Process**:
+1. Generate initial code from prompt
+2. Create examples and test programs
+3. Fix runtime errors to make code executable
+
+#### Logical Bug Fixing
+**Conceptual Flow**: `bug → fix`
+
+**Purpose**: Correct code that runs but produces incorrect results.
+
+**Process**:
+1. Generate test cases that demonstrate the bug
+2. Fix the code to pass the tests
+
+#### Debugger-Guided Analysis
+**Conceptual Flow**: `trace → [edit prompt]`
+
+**Purpose**: Identify which prompt sections produce problematic code.
+
+**Process**:
+1. Locate the relationship between code lines and prompt sections
+2. Update relevant prompt sections
+
+### Multi-Prompt Architecture 
+
+**Conceptual Flow**: `conflicts/detect → change → generate → example → test`
+
+**Purpose**: Coordinate multiple prompts derived from higher-level requirements.
+
+**Process**:
+1. Identify conflicts or dependencies between prompts
+2. Harmonize the prompts to work together
+3. Regenerate code from updated prompts
+4. Update interface examples after changes
+5. Verify system integration with tests
+
+**Key Insight**: Complex systems require coordination between prompts, just as they do between code modules.
+
+### Feature Enhancement 
+
+**Conceptual Flow**: `change → generate → example → test → fix`
+
+**Purpose**: Add new capabilities to existing functionality.
+
+**Process**:
+1. Modify prompts to describe new features
+2. Regenerate code with enhanced functionality
+3. Update examples to demonstrate new features
+4. Test to verify correct implementation
+5. Fix any issues that arise
+
+**Key Insight**: Feature additions should flow from prompt changes rather than direct code modifications.
+
+### Critical Dependencies
+
+When using these workflows, remember these crucial tool dependencies:
+
+- 'generate' must be done before 'example' or 'test'
+- 'crash' is used to fix runtime errors and make code runnable
+- 'fix' requires runnable code created/verified by 'crash'
+- 'test' must be created before using 'fix'
+- Always update 'example' after major prompt interface changes
+
+For detailed command examples for each workflow, see the respective command documentation sections.
 
 ## Conclusion
 
