@@ -39,12 +39,119 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 logger.info("Log level set to %s", log_level)
 
+# Define server initialization message and workflow prompt
+INITIALIZATION_MESSAGE = """
+PDD MCP Server v1.0.0: Prompt-Driven Development Tools
+
+CORE CONCEPT:
+In Prompt-Driven Development (PDD), prompts are the primary artifact, while code is generated. 
+When changes are needed, modify prompts rather than directly editing code.
+
+TOOL CATEGORIES:
+- Code Generation: pdd-generate, pdd-example
+- Testing & Debugging: pdd-test, pdd-fix, pdd-bug, pdd-crash
+- Maintenance: pdd-update, pdd-change, pdd-trace
+- Refactoring: pdd-split, pdd-auto-deps, pdd-conflicts, pdd-detect
+- Preprocessing: pdd-preprocess
+
+CRITICAL NOTES:
+- 'force': true required for all file-writing operations
+- After prompt changes, 'example' must be updated to reflect interfaces
+
+For detailed workflow guidance, see the 'pdd-workflows' prompt.
+"""
+
 # Create a FastMCP server instance
 mcp = FastMCP(
     name="pdd-mcp-server",
     version="0.1.0",  
-    description="PDD MCP Server for exposing PDD commands as MCP tools"
+    description="PDD MCP Server for exposing PDD commands as MCP tools",
+    instructions=INITIALIZATION_MESSAGE
 )
+
+# Define the workflow prompt
+WORKFLOW_PROMPT = {
+    "id": "pdd-workflows",
+    "name": "PDD Workflow Guide",
+    "description": "Detailed guide for PDD tool workflows and dependencies",
+    "content": """
+# PDD Workflow Dependencies
+
+## Critical Tool Dependencies
+- 'generate' must be done before 'example' or 'test'
+- 'crash' is used to fix runtime errors and make code runnable
+- 'fix' requires runnable code created/verified by 'crash'
+- 'test' must be created before using 'fix'
+- After major prompt changes, 'example' must be updated to reflect interface changes
+
+## Parameters to Remember
+- 'force': true required for all file-writing operations to prevent hangs waiting for user confirmation
+
+## Key Tool Distinctions
+- 'generate': Complete implementation code (larger, comprehensive)
+- 'example': Interface/usage examples only (smaller, token-efficient)
+- 'crash': Fixes runtime errors in code to make it executable
+- 'fix': Resolves test failures in already-runnable code
+- 'update': Sync code changes back to prompts (prompt is source of truth)
+- 'split': Extract modular functionality while preserving imports
+
+## Recommended Workflows
+
+1. Initial Development Pipeline:
+   auto-deps → generate → example → crash → test → fix
+   *Creates new functionality from scratch with proper testing*
+
+2. Code-to-Prompt Update Pipeline:
+   update → detect → change
+   *Maintains prompt as source of truth after code changes*
+
+3. Refactoring Pipeline:
+   split → auto-deps → example
+   *Breaks large prompts into modular components*
+
+## Debugging Workflows
+
+1. Prompt Context Issues:
+   preprocess → generate
+   *When generating incorrect code due to prompt preprocessing issues*
+
+2. Runtime Crash Debugging:
+   generate → example → crash
+   *When initial code has syntax errors or crashes on execution*
+
+3. Logical Bug Fixing:
+   bug → fix
+   *When code runs but produces incorrect results*
+
+4. Debugger-Guided Analysis:
+   trace → [edit prompt directly]
+   *When stepping through code with a debugger to identify issues*
+
+5. Widespread Changes:
+   trace → detect → change
+   *When issues affect multiple prompts*
+
+## Architecture & Integration Workflows
+
+1. Multi-Prompt Architecture:
+   conflicts/detect → change → generate → example → test
+   *When multiple prompts are created from PRD/architecture docs and need alignment*
+   *Example must be updated after major prompt changes to reflect interface changes*
+
+2. Feature Enhancement:
+   change → generate → example → test → fix
+   *Adds new features to existing functionality*
+"""
+}
+
+# Register the workflow prompt using decorator pattern
+@mcp.prompt(
+    name=WORKFLOW_PROMPT["name"],
+    description=WORKFLOW_PROMPT["description"]
+)
+def pdd_workflows():
+    """PDD workflow guidance prompt"""
+    return WORKFLOW_PROMPT["content"]
 
 # Create a simple function to register a tool - we'll use this to handle the schema difference
 def register_tool(tool_def):
@@ -122,6 +229,8 @@ async def main_async():
     else:
         logger.error("CRITICAL: No tools were successfully registered. Server will not be functional.")
         return
+    
+    # The prompt is now registered via decorator, no need for explicit registration
     
     try:
         # Run the server with stdio transport
