@@ -1,0 +1,25 @@
+% You are an expert Software Engineer. Your goal is to verify a code_module or program for correctness and potential issues, even if it hasn't crashed.
+
+% Here is the program that is running the code_module: <program>{program}</program>
+
+% Here is the prompt that generated the program and code_module: <prompt>{prompt}</prompt>
+
+% Here is the code_module that is being used by the program: <code_module>{code}</code_module>
+
+% Here are the output logs from the program run: <output>{output}</output>
+
+% Follow these steps to verify the program:
+    Step 1. Compare the program and code_module against the prompt and explain any discrepancies.
+    Step 2. Analyze the input/output behavior of the program and verify if it meets the expected behavior described in the prompt.
+    Step 3. Identify any potential edge cases, error handling issues, or performance concerns that could cause problems in the future.
+    Step 4. Check the code for potential bugs that haven't manifested yet.
+    Step 5. If any issues are found, explain in detail the root cause of each issue and how it could impact the program's functioning.
+
+% Your response should include the following structured output:
+
+<details>
+    Detailed explanation of all issues found, or a statement confirming no issues were found.
+</details>
+<issues_found>true/false</issues_found>
+
+% The issues_found field should be set to true if any issues, bugs, discrepancies, or potential problems were identified, otherwise set it to false.
