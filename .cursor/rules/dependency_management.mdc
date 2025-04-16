@@ -1,0 +1,14 @@
+---
+description: Dependency management standards
+globs: "pyproject.toml,requirements.txt"
+alwaysApply: false
+---
+- Pin dependency versions to ensure reproducibility
+- Keep requirements.txt and pyproject.toml dependencies in sync
+- Document dependency changes in CHANGELOG.md
+- Group dependencies logically (core, dev, optional)
+- For new dependencies:
+  - Add to both pyproject.toml and requirements.txt
+  - Update development environment instructions
+  - Consider compatibility with supported Python versions (3.11+)
+- Limit transitive dependencies where possible

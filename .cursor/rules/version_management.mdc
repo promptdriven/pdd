@@ -1,0 +1,15 @@
+---
+description: Version and metadata management
+globs: "pyproject.toml,pdd/__init__.py,CHANGELOG.md"
+alwaysApply: false
+---
+- Follow semantic versioning (major.minor.patch)
+- Keep version numbers synchronized across:
+  - pyproject.toml
+  - pdd/__init__.py
+  - README.md
+  - shell completion scripts
+  - Other version references
+- Use commitizen for version bumping
+- Document all significant changes in CHANGELOG.md
+- Include appropriate metadata in package information

@@ -1,0 +1,12 @@
+---
+description: Standards for file I/O and data handling
+globs: "**/*.py"
+alwaysApply: false
+---
+- Use appropriate error handling for file operations
+- Support both relative and absolute paths
+- Validate file existence before reading
+- Create parent directories when writing to new paths
+- Use context managers (with statements) for file handles
+- Handle encoding issues gracefully (especially for cross-platform use)
+- Implement appropriate backup strategies before overwriting files

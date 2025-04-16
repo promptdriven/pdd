@@ -1,0 +1,11 @@
+---
+description: Project structure and file organization
+globs: "**/*"
+alwaysApply: false
+---
+- Main CLI commands should be defined in pdd/cli.py
+- Implementation of each command should be in separate *_main.py files
+- Prompt files should be stored in the prompts/ directory
+- Test files should mirror the structure of the implementation files
+- Shared utilities should be placed in appropriate modules for reuse
+- Follow the established pattern for new features: implementation → test → CLI integration

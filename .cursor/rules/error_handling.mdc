@@ -1,0 +1,11 @@
+---
+description: Error handling conventions
+globs: "**/*.py"
+alwaysApply: false
+---
+- Use rich for user-facing error messages
+- Include descriptive error messages with actionable information
+- Log detailed error information when verbose mode is enabled
+- For external API errors (e.g., LLM API calls), implement appropriate retries
+- For CLI commands, return appropriate exit codes on failure
+- Validate user inputs early to provide clear validation errors

@@ -1,0 +1,11 @@
+---
+description: Standards for working with environment variables
+globs: "**/*.py"
+alwaysApply: false
+---
+- Use os.environ.get() with default values for environment variables
+- Prefix PDD-specific environment variables with "PDD_"
+- Document environment variables in README.md
+- For API keys, check for environment variables using consistent patterns
+- Support both explicit configuration and fallback to environment variables
+- When adding new environment variables, update .env.example

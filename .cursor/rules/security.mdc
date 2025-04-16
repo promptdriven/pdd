@@ -1,0 +1,12 @@
+---
+description: Security best practices for the PDD project
+globs: "**/*.py"
+alwaysApply: false
+---
+- Never hardcode API keys or sensitive information in code
+- Use keyring for secure credential storage when appropriate
+- Sanitize user inputs before processing
+- Validate file paths to prevent path traversal issues
+- Use secure defaults for all configurable options
+- Be cautious with executing user-provided code or commands
+- Limit file permissions when creating new files

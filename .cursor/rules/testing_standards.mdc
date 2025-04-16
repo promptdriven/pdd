@@ -1,0 +1,13 @@
+---
+description: Testing guidelines for the PDD project
+globs: "tests/**/*.py"
+alwaysApply: false
+---
+- Use pytest for all tests
+- Mock external API calls and LLM responses in tests
+- Structure test files to mirror the module structure (test_x.py for x.py)
+- Use pytest fixtures for common test setup
+- Test both success paths and error/edge cases
+- Include appropriate assertions with descriptive messages
+- When testing LLM functionality, use MockLLM pattern from test_llm_invoke.py
+- For CLI tests, use Click's testing utilities

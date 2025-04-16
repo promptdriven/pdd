@@ -1,0 +1,9 @@
+---
+description: Python style guide
+globs: "**/*.py"
+alwaysApply: false
+---
+- Use PEP 8 style conventions
+- Limit line length to 88 characters (Black default)
+- Use meaningful variable and function names
+- Add docstrings for all public functions and classes
