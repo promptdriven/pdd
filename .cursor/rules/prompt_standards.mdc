@@ -1,0 +1,12 @@
+---
+description: Standards for working with prompt files
+globs: "**/*.prompt"
+alwaysApply: false
+---
+- Follow the naming convention: <basename>_<language>.prompt or <basename>_LLM.prompt
+  - Use _LLM suffix for model-specific prompts
+  - Use _python, _bash, etc. for language-specific prompts
+- Structure prompt files clearly with consistent sections
+- When referencing variables in prompt templates, use {placeholders} format
+- Test prompt changes with the `pdd preprocess` command before committing
+- For complex prompts that require structured output, consider using XML tags

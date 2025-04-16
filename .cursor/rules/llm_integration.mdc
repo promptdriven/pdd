@@ -1,0 +1,13 @@
+---
+description: Standards for LLM integration
+globs: "**/llm_*.py"
+alwaysApply: false
+---
+- Use langchain abstractions for all LLM interactions
+- Always include temperature parameter in LLM calls
+- Use the strength parameter (0.0 to 1.0) to control model selection
+- Implement appropriate error handling and retry logic
+- Use appropriate output parsers (StrOutputParser or PydanticOutputParser)
+- Support both structured and unstructured output formats
+- Always track token usage for cost monitoring
+- Support both cloud and local execution modes

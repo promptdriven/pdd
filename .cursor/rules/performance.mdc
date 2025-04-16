@@ -1,0 +1,12 @@
+---
+description: Performance considerations
+globs: "**/*.py"
+alwaysApply: false
+---
+- Use caching for expensive operations, especially LLM calls
+- Consider pagination for large datasets or responses
+- Optimize prompt sizes to reduce token usage
+- Use async patterns for I/O-bound operations where appropriate
+- Profile and optimize code paths that handle large files
+- Implement appropriate timeouts for external API calls
+- Consider memory usage when processing large datasets

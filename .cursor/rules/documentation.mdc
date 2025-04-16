@@ -1,0 +1,11 @@
+---
+description: Documentation standards
+globs: "**/*"
+alwaysApply: false
+---
+- Document public interfaces with clear docstrings
+- Use README.md for high-level documentation and user guides
+- Include examples in documentation where applicable
+- Update CHANGELOG.md for all significant changes
+- Maintain proper versioning across all version references (pyproject.toml, __init__.py, etc.)
+- For complex functionality, include comments explaining the reasoning

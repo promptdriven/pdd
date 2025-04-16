@@ -1,0 +1,11 @@
+---
+description: Standards for supporting both cloud and local execution
+globs: "**/*.py"
+alwaysApply: false
+---
+- Support both cloud (default) and local (--local flag) execution modes
+- Handle authentication appropriately for each mode
+- Abstract provider-specific code to support multiple LLM providers
+- When working with API keys, follow secure handling practices
+- Include appropriate logging for both modes
+- Design features to work in both environments when possible

@@ -1,0 +1,13 @@
+---
+description: Python development standards for the PDD project
+globs: "**/*.py"
+alwaysApply: false
+---
+- Always use Python 3.11+ compatible code
+- Use type hints for function parameters and return values
+- Follow the existing structure of return types, especially Tuple[...] patterns in CLI commands
+- Include docstrings for all public functions and classes
+- For Click-based CLI commands, add help text for all options and arguments
+- When working with LLM APIs, use the langchain abstractions
+- Import order: standard library, third-party, local modules
+- When adding new functionality, create corresponding tests in the tests/ directory

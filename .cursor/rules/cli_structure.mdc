@@ -1,0 +1,16 @@
+---
+description: CLI command implementation guidelines
+globs: "pdd/cli.py"
+alwaysApply: false
+---
+- Use Click for all CLI commands
+- Follow consistent command structure pattern from existing commands:
+  - Command name should be descriptive and use snake_case
+  - All commands should use @track_cost decorator
+  - Add appropriate type hints including return types
+  - All commands should have help text
+  - Use @click.pass_context for context passing
+- When adding a new command:
+  - Update the completion scripts (pdd_completion.zsh, pdd_completion.sh, pdd_completion.fish)
+  - Add appropriate tests in tests/test_<command_name>.py
+  - Document the command in README.md
