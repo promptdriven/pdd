@@ -30,6 +30,7 @@
 - [ ] autogenerate the model.csv file and print out the strength of each model
 - [ ] agentic prompt to code
 - [ ] agentic additional context inclusion
+- [ ] Have test and example use the cloud option
 
 ## Bugs
 

@@ -230,7 +230,7 @@ When using the loop option, it will run multiple fix attempts until tests pass o
             },
             "auto_submit": {
                 "type": "boolean",
-                "description": "Automatically submit the example if all unit tests pass during the fix loop"
+                "description": "Automatically submit the example if all unit tests pass during the fix loop. During loop mode it is generally best to use this option so that the subsequent generation can use the example as context."
             },
             "strength": {
                 "type": "number",
