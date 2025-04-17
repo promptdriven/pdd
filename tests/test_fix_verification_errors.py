@@ -66,6 +66,22 @@ def test_missing_input_code(mock_dependencies):
 
 # Add similar tests for prompt, output if needed
 
+def test_missing_input_prompt(mock_dependencies):
+    with pytest.raises(ValueError, match="Missing one or more required string inputs"):
+        fix_verification_errors(
+            program=SAMPLE_PROGRAM, prompt="", code=SAMPLE_CODE, output=SAMPLE_OUTPUT,
+            strength=SAMPLE_STRENGTH, temperature=SAMPLE_TEMP
+        )
+
+def test_missing_input_output(mock_dependencies):
+    with pytest.raises(ValueError, match="Missing one or more required string inputs"):
+        fix_verification_errors(
+            program=SAMPLE_PROGRAM, prompt=SAMPLE_PROMPT, code=SAMPLE_CODE, output="",
+            strength=SAMPLE_STRENGTH, temperature=SAMPLE_TEMP
+        )
+
+# Add tests for verbose output and other edge cases as needed
+
 def test_invalid_strength_low(mock_dependencies):
     with pytest.raises(ValueError, match="'strength' must be between 0 and 1"):
         fix_verification_errors(
