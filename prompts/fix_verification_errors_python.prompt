@@ -29,6 +29,11 @@
         <llm_invoke_example>
             <include>context/llm_invoke_example.py</include>
         </llm_invoke_example>
+
+        % For using edit_file to make changes:
+        <edit_file_example>
+            <include>context/edit_file_example.py</include>
+        </edit_file_example>
     </internal_modules>
 
 % This program will do the following:
@@ -58,6 +63,8 @@
         - 'fixed_code'
         - 'explanation'
     Step 7. If verbose is True, print the total cost of the run(s).
-    Step 8. Return explanation, fixed_program, fixed_code, total_cost, and model_name.
+    Step 8. Use edit_file to make the changes to the program and code module according to the fixed_program and fixed_code extracted in Step 6.
+    Step 9. Return explanation, fixed_program (from step 8), fixed_code (from step 8
+    ), total_cost, and model_name.
 
 % Ensure that the function handles potential issues gracefully, even when no critical errors have occurred but improvements are still possible.

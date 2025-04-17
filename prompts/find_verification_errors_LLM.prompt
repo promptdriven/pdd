@@ -18,7 +18,7 @@
 % Your response should include the following structured output:
 
 <details>
-    Detailed explanation of all issues found, or a statement confirming no issues were found.
+    The detailed output of steps 1-5
 </details>
 <issues_found>true/false</issues_found>
 
