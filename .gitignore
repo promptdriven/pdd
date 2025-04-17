@@ -14,7 +14,7 @@ __pycache__/
 *.so
 
 output/
-mcp/manual_testing/
+utils/mcp/manual_testing/
 
 # Distribution / packaging
 .Python
