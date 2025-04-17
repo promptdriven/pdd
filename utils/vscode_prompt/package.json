@@ -1,159 +1,31 @@
 {
-  "name": "prompt-highlighter",
-  "displayName": "Prompt Driven Development",
-  "description": "PDD CLI installation and syntax highlighting for .prompt files.",
-  "version": "0.0.3",
+  "name": "prompt",
+  "displayName": "prompt",
+  "description": "For Prompt Driven Development",
+  "version": "0.0.1",
   "engines": {
     "vscode": "^1.96.0"
   },
   "categories": [
-    "Programming Languages",
-    "Machine Learning",
-    "Other"
-  ],
-  "main": "./out/extension.js",
-  "activationEvents": [
-    "onStartupFinished"
+    "Programming Languages"
   ],
   "contributes": {
-    "languages": [
-      {
-        "id": "prompt",
-        "aliases": [
-          "PDD Prompt",
-          "prompt",
-          "Prompt",
-          "pdd",
-          "PromptDriven",
-          "Prompt-Driven Development",
-          "prompt driven development",
-          "Prompt Engineering",
-          "AI Prompt",
-          "LLM Prompt"
-        ],
-        "extensions": [
-          ".prompt"
-        ],
-        "configuration": "./language-configuration.json"
-      }
-    ],
-    "grammars": [
-      {
-        "language": "prompt",
-        "scopeName": "text.prompt",
-        "path": "./syntaxes/prompt.tmLanguage.json"
-      }
-    ],
-    "commands": [
-      {
-        "command": "pdd.installCli",
-        "title": "Install PDD CLI",
-        "category": "PDD"
-      },
-      {
-        "command": "pdd.checkCli",
-        "title": "Check PDD CLI Installation",
-        "category": "PDD"
-      },
-      {
-        "command": "pdd.runSetup",
-        "title": "Run PDD Setup",
-        "category": "PDD"
-      },
-      {
-        "command": "pdd.upgradeToUv",
-        "title": "Upgrade PDD to uv Installation",
-        "category": "PDD"
-      }
-    ],
-    "configuration": {
-      "title": "PDD",
-      "properties": {
-        "pdd.promptForInstallation": {
-          "type": "boolean",
-          "default": true,
-          "description": "Prompt to install PDD CLI if not found"
-        }
-      }
-    }
+    "languages": [{
+      "id": "prompt",
+      "aliases": ["PDD Prompt", "prompt"],
+      "extensions": [".prompt"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "prompt",
+      "scopeName": "text.prompt",
+      "path": "./syntaxes/prompt.tmLanguage.json"
+    }]
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/promptdriven/pdd.git",
-    "directory": "utils/vscode_prompt"
+    "url": "https://github.com/gltanaka/pdd.git",
+    "directory": "prompt"
   },
-  "publisher": "PromptDriven",
-  "homepage": "https://github.com/promptdriven/pdd/tree/main/utils/vscode_prompt#readme",
-  "bugs": {
-    "url": "https://github.com/promptdriven/pdd/issues"
-  },
-  "license": "MIT",
-  "galleryBanner": {
-    "color": "#061c22",
-    "theme": "dark"
-  },
-  "extensionKind": [
-    "ui"
-  ],
-  "keywords": [
-    "prompt",
-    "pdd",
-    "prompt engineering",
-    "prompt-driven development",
-    "ai",
-    "llm",
-    "syntax highlighting",
-    "language support",
-    "textmate",
-    "vs code",
-    "vscode",
-    "dsl",
-    "spec",
-    "agent",
-    "rag",
-    "openai",
-    "anthropic",
-    "gemini",
-    "chatgpt",
-    "cursor",
-    "openvsx",
-    "vscodium",
-    "gitpod",
-    "kiro",
-    "windsurf",
-    "compatible ide",
-    "uv",
-    "pip",
-    "python",
-    "cli",
-    "installation",
-    "automatic",
-    "cross-platform"
-  ],
-  "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
-    "test": "mocha --require ts-node/register 'tests/**/*.ts'",
-    "package": "vsce package",
-    "publish": "vsce publish",
-    "render-icon": "node scripts/render-icon.mjs",
-    "build-video-thumb": "node scripts/generate-video-thumb.mjs"
-  },
-  "icon": "images/icon.png",
-  "devDependencies": {
-    "@resvg/resvg-js": "^2.6.2",
-    "@types/chai": "^5.2.2",
-    "@types/mocha": "^10.0.10",
-    "@types/node": "16.x",
-    "@types/proxyquire": "^1.3.31",
-    "@types/sinon": "^17.0.4",
-    "@types/vscode": "^1.96.0",
-    "chai": "^6.2.0",
-    "mocha": "^11.7.4",
-    "proxyquire": "^2.1.3",
-    "sinon": "^21.0.0",
-    "ts-node": "^10.9.2",
-    "typescript": "^4.9.4"
-  }
+  "publisher": "gltanaka"
 }
