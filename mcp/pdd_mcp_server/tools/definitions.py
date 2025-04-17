@@ -167,13 +167,20 @@ PDD_FIX = types.Tool(
     description=f"""Fix errors in code and unit tests based on error messages and the original prompt file.
 {LLM_PARAMETER_GUIDANCE}    
 Examples:
-- ✅ CORRECT: {{"prompt_file": "/path/to/prompt.txt", "code_file": "/path/to/source.py", "unit_test_file": "/path/to/test.py", "error_file": "/path/to/errors.log", "force": true}}
+- ✅ CORRECT WITHOUT LOOP: {{"prompt_file": "/path/to/prompt.txt", "code_file": "/path/to/source.py", "unit_test_file": "/path/to/test.py", "error_file": "/path/to/errors.log", "force": true}}
+- ✅ CORRECT WITH LOOP: {{"prompt_file": "/path/to/prompt.txt", "code_file": "/path/to/source.py", "unit_test_file": "/path/to/test.py", "error_file": "/path/to/errors.log", "loop": true, "verification_program": "/path/to/example.py", "force": true}}
 - ❌ INCORRECT: {{"source_file": "/path/to/source.py"}} (missing other required parameters)
     
-IMPORTANT: ALWAYS include "force": true when there's a possibility the output file already exists.
-Without it, the command will hang waiting for user confirmation to overwrite files.
+IMPORTANT: 
+1. ALWAYS include "force": true when there's a possibility the output file already exists.
+   Without it, the command will hang waiting for user confirmation to overwrite files.
+2. LOOP MODE vs STANDARD MODE:
+   - LOOP MODE: Use "loop": true to enable iterative fixing that automatically runs tests, fixes issues, and retries
+   - ERROR_FILE is always required due to CLI constraints, but when using loop=true, it can be a path to a non-existent file
+   - When using loop=true, "verification_program" is required to verify if fixes work correctly
 
-This tool attempts to fix errors in code based on error messages and the original prompt file.""",
+This tool attempts to fix errors in code based on error messages and the original prompt file.
+When using the loop option, it will run multiple fix attempts until tests pass or max attempts is reached.""",
     inputSchema={
         "type": "object",
         "properties": {
@@ -191,7 +198,7 @@ This tool attempts to fix errors in code based on error messages and the origina
             },
             "error_file": {
                 "type": "string",
-                "description": "Full path to the file containing unit test runtime error messages (optional if using --loop)"
+                "description": "REQUIRED: Full path to the file containing unit test runtime error messages (with loop=true, this can be a path to a non-existent file)"
             },
             "output_code": {
                 "type": "string",
@@ -207,19 +214,19 @@ This tool attempts to fix errors in code based on error messages and the origina
             },
             "verification_program": {
                 "type": "string",
-                "description": "Program to verify the fix works correctly (used with --loop)"
+                "description": "IMPORTANT: Required when using loop=true. Program that verifies if fixed code runs correctly during iterative fixing. Typically it is the _example.py file which is often in the context directory."
             },
             "loop": {
                 "type": "boolean",
-                "description": "Enable iterative fixing process"
+                "description": "Enable iterative fixing process that automatically runs tests, fixes issues, and retries until successful or max attempts reached"
             },
             "max_attempts": {
                 "type": "integer",
-                "description": "Maximum number of fix attempts (default: 3)"
+                "description": "Maximum number of fix attempts when using loop=true (default: 3)"
             },
             "budget": {
                 "type": "number",
-                "description": "Maximum cost allowed for the fixing process (default: $5.0)"
+                "description": "Maximum cost allowed for the fixing process when using loop=true (default: $5.0)"
             },
             "auto_submit": {
                 "type": "boolean",
@@ -246,7 +253,7 @@ This tool attempts to fix errors in code based on error messages and the origina
                 "description": "Increase output verbosity for more detailed information"
             }
         },
-        "required": ["prompt_file", "code_file", "unit_test_file"],
+        "required": ["prompt_file", "code_file", "unit_test_file", "error_file"],
         "additionalProperties": False
     }
 )
