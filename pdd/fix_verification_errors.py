@@ -1,23 +1,39 @@
-# -*- coding: utf-8 -*-
-"""
-Function to fix verification errors in a code module using LLMs.
-"""
-
+import os
 import re
-from typing import Dict, Tuple, Optional
+import tempfile
+import traceback
+from typing import Dict, Any, Tuple, Optional, List
 
 from pydantic import BaseModel, Field
-from rich import print as rprint
+from rich import print
 from rich.markdown import Markdown
 
 # Use relative imports for internal modules within the package
 try:
     from .load_prompt_template import load_prompt_template
     from .llm_invoke import llm_invoke
+    # Assuming edit_file provides run_edit_in_subprocess
+    from .edit_file import run_edit_in_subprocess
 except ImportError:
-    # Handle cases where the script might be run directly
-    from load_prompt_template import load_prompt_template # type: ignore
-    from llm_invoke import llm_invoke # type: ignore
+    # Handle cases where the script might be run directly or package structure is different
+    # This is less ideal for package structure but provides fallback for testing
+    print("[yellow]Warning:[/yellow] Could not perform relative imports. Trying absolute imports.")
+    from load_prompt_template import load_prompt_template
+    from llm_invoke import llm_invoke
+    from edit_file import run_edit_in_subprocess
+
+# Define Pydantic model for structured output from the fixing LLM call
+class VerificationFixOutput(BaseModel):
+    """Structure for the output of the fix_verification_errors_LLM."""
+    explanation: List[str] = Field(
+        description="List of issues found and explanations/fixes applied. Empty list if no changes were made."
+    )
+    edit_instructions_program: str = Field(
+        description="Natural language instructions for editing the program file. Empty string if no changes needed."
+    )
+    edit_instructions_code: str = Field(
+        description="Natural language instructions for editing the code module file. Empty string if no changes needed."
+    )
 
 def fix_verification_errors(
     program: str,
@@ -27,7 +43,7 @@ def fix_verification_errors(
     strength: float,
     temperature: float = 0.0,
     verbose: bool = False,
-) -> Dict[str, any]:
+) -> Dict[str, Any]:
     """
     Fixes issues in a code module identified during verification using LLMs.
 
@@ -37,242 +53,306 @@ def fix_verification_errors(
         code: The code module to be fixed.
         output: The output logs from the program run containing verification details.
         strength: The strength of the LLM model to use (0 to 1).
-        temperature: The temperature for the LLM model (default: 0).
-        verbose: Whether to print detailed output (default: False).
+        temperature: The temperature for the LLM model (default 0.0).
+        verbose: Whether to print detailed execution information (default False).
 
     Returns:
         A dictionary containing:
-        'issues_found': Boolean indicating if issues were found.
-        'update_program': Boolean indicating if the program needs updating.
-        'update_code': Boolean indicating if the code module needs updating.
-        'fixed_program': The fixed program code.
-        'fixed_code': The fixed code module.
+        'explanation': List of issues found and their explanations (if any).
+        'fixed_program': The fixed program code (or original if no changes/errors).
+        'fixed_code': The fixed code module (or original if no changes/errors).
         'total_cost': The total cost of the LLM calls.
-        'model_name': The name of the LLM model used.
-
-    Raises:
-        ValueError: If required inputs are missing or invalid.
-        FileNotFoundError: If prompt templates cannot be loaded.
-        Exception: For errors during LLM invocation or processing.
+        'model_name': The name of the LLM model used for fixing (or identification if no fix needed).
     """
-    if not all([program, prompt, code, output]):
-        raise ValueError("Missing required inputs: 'program', 'prompt', 'code', or 'output'.")
-    if not 0.0 <= strength <= 1.0:
-        raise ValueError("'strength' must be between 0.0 and 1.0.")
+    total_cost = 0.0
+    model_name_identify = None
+    model_name_fix = None
+    explanation: List[str] = []
+    fixed_program = program # Default to original
+    fixed_code = code       # Default to original
+    issues_details = ""
+    issues_found = False
 
-    total_cost: float = 0.0
-    model_name: Optional[str] = None
-    issues_found: bool = False
-    update_program: bool = False
-    update_code: bool = False
-    fixed_program: str = program
-    fixed_code: str = code
+    # --- Input Validation ---
+    if not all([program, prompt, code, output]):
+        raise ValueError("Missing one or more required string inputs: 'program', 'prompt', 'code', 'output'.")
+    if not (0 <= strength <= 1):
+        raise ValueError("'strength' must be between 0 and 1.")
 
     try:
-        # Step 1: Load prompt templates
+        # --- Step 1: Load Prompt Templates ---
         if verbose:
-            rprint("[bold blue]Step 1: Loading prompt templates...[/bold blue]")
-        try:
-            find_issues_prompt_template = load_prompt_template("find_verification_errors_LLM")
-            fix_issues_prompt_template = load_prompt_template("fix_verification_errors_LLM")
-            if verbose:
-                rprint("[green]Prompt templates loaded successfully.[/green]")
-        except FileNotFoundError as e:
-            rprint(f"[bold red]Error loading prompt template: {e}[/bold red]")
-            raise
-        except Exception as e:
-            rprint(f"[bold red]An unexpected error occurred loading prompts: {e}[/bold red]")
-            raise
-
-        # Step 2: Run LLM to find verification issues
+            print("[cyan]Step 1: Loading prompt templates...[/cyan]")
+        find_issues_prompt_template = load_prompt_template("find_verification_errors_LLM")
+        fix_issues_prompt_template = load_prompt_template("fix_verification_errors_LLM")
+        if not find_issues_prompt_template or not fix_issues_prompt_template:
+            raise FileNotFoundError("Could not load required prompt templates.")
         if verbose:
-            rprint(f"\n[bold blue]Step 2: Running 'find_verification_errors_LLM' (Strength: {strength}, Temp: {temperature})...[/bold blue]")
+            print("[green]Prompt templates loaded successfully.[/green]")
 
-        find_issues_input = {
+        # --- Step 2: Identify Issues (First LLM Call) ---
+        if verbose:
+            print(f"\n[cyan]Step 2: Running 'find_verification_errors_LLM' (Strength: {strength}, Temp: {temperature})...[/cyan]")
+
+        identify_input_json = {
             "program": program,
             "prompt": prompt,
             "code": code,
             "output": output,
         }
 
-        try:
-            verification_response = llm_invoke(
-                prompt=find_issues_prompt_template,
-                input_json=find_issues_input,
-                strength=strength,
-                temperature=temperature,
-                verbose=verbose, # Pass verbose to llm_invoke for its internal printing
-                output_pydantic=None # No structured output needed for this step
-            )
-            total_cost += verification_response.get('cost', 0.0)
-            if model_name is None: # Capture model name from the first call
-                 model_name = verification_response.get('model_name')
-            verification_result_text = verification_response['result']
+        identify_response = llm_invoke(
+            prompt=find_issues_prompt_template,
+            input_json=identify_input_json,
+            strength=strength,
+            temperature=temperature,
+            verbose=verbose  # Pass verbose to llm_invoke for its internal printing
+        )
+        total_cost += identify_response.get('cost', 0.0)
+        model_name_identify = identify_response.get('model_name', 'unknown')
+        verification_result = identify_response.get('result', '')
 
-            # Step 3: Verbose output for verification result
-            if verbose:
-                rprint("[bold blue]Verification Result:[/bold blue]")
-                rprint(Markdown(verification_result_text))
-                rprint(f"Cost for verification step: ${verification_response.get('cost', 0.0):.6f}")
+        if not verification_result:
+             raise ValueError("LLM invocation for finding issues returned an empty result.")
 
-        except Exception as e:
-            rprint(f"[bold red]Error during 'find_verification_errors_LLM' invocation: {e}[/bold red]")
-            # Return default values indicating no fix was applied due to error
-            return {
-                'issues_found': False,
-                'update_program': False,
-                'update_code': False,
-                'fixed_program': program,
-                'fixed_code': code,
-                'total_cost': total_cost,
-                'model_name': model_name or "N/A",
-            }
-
-        # Step 4: Analyze verification result
+        # --- Step 3: Verbose Output (First LLM Call Result) ---
         if verbose:
-            rprint("\n[bold blue]Step 4: Analyzing verification result...[/bold blue]")
+            print("\n[blue]Verification Result (Markdown):[/blue]")
+            print(Markdown(verification_result))
+            # llm_invoke already prints cost/tokens if verbose is True
 
-        issues_found_match = re.search(r"<issues_found>(true|false)</issues_found>", verification_result_text, re.IGNORECASE)
+        # --- Step 4: Analyze Verification Result ---
+        if verbose:
+            print("\n[cyan]Step 4: Analyzing verification result...[/cyan]")
 
+        # Extract <issues_found> tag
+        issues_found_match = re.search(r"<issues_found>(.*?)</issues_found>", verification_result, re.IGNORECASE | re.DOTALL)
         if issues_found_match:
-            issues_found = issues_found_match.group(1).lower() == "true"
-            if verbose:
-                rprint(f"Issues found based on <issues_found> tag: {issues_found}")
-        else:
-            issues_found = False # Default to false if tag is missing or malformed
-            if verbose:
-                rprint("[yellow]Warning: Could not find or parse <issues_found> tag. Assuming no issues found.[/yellow]")
+            issues_found_val = issues_found_match.group(1).strip().lower()
+            if issues_found_val == "true":
+                issues_found = True
+                if verbose:
+                    print("[yellow]Issues found based on verification output.[/yellow]")
+                # Extract <details> tag only if issues were found
+                details_match = re.search(r"<details>(.*?)</details>", verification_result, re.IGNORECASE | re.DOTALL)
+                if details_match:
+                    issues_details = details_match.group(1).strip()
+                    if verbose:
+                        print("[blue]Extracted Issue Details:[/blue]")
+                        print(f"[dim]{issues_details}[/dim]")
+                else:
+                    if verbose:
+                        print("[yellow]Warning:[/yellow] <issues_found> was true, but <details> tag was not found in the result.")
+                    # Proceed without details, the next LLM might still work or fail gracefully
+                    issues_details = "Issues were indicated, but details could not be extracted."
+            elif issues_found_val == "false":
+                issues_found = False
+                if verbose:
+                    print("[green]No issues found based on verification output.[/green]")
+                explanation = ["No issues found during verification."]
+                # Return early as per Step 4b
+                return {
+                    "explanation": explanation,
+                    "fixed_program": fixed_program, # Original program
+                    "fixed_code": fixed_code,       # Original code
+                    "total_cost": total_cost,
+                    "model_name": model_name_identify,
+                }
+            else:
+                if verbose:
+                    print(f"[yellow]Warning:[/yellow] Unexpected value in <issues_found> tag: '{issues_found_val}'. Assuming no issues found.")
+                issues_found = False
+                explanation = [f"Could not determine if issues were found (unexpected tag value: {issues_found_val}). Assuming no issues."]
 
-        if not issues_found:
+        else:
             if verbose:
-                rprint("[green]No verification issues identified that require fixing.[/green]")
-            # Return early as no fixes are needed
+                print("[yellow]Warning:[/yellow] <issues_found> tag not found in the verification result. Assuming no issues found.")
+            issues_found = False
+            explanation = ["Could not determine if issues were found (<issues_found> tag missing). Assuming no issues."]
+            # Optionally return early here too, or proceed cautiously
             return {
-                'issues_found': False,
-                'update_program': False,
-                'update_code': False,
-                'fixed_program': program,
-                'fixed_code': code,
-                'total_cost': total_cost,
-                'model_name': model_name or "N/A",
+                "explanation": explanation,
+                "fixed_program": fixed_program, # Original program
+                "fixed_code": fixed_code,       # Original code
+                "total_cost": total_cost,
+                "model_name": model_name_identify,
             }
 
-        # Extract details if issues were found
-        details_match = re.search(r"<details>(.*?)</details>", verification_result_text, re.DOTALL | re.IGNORECASE)
-        if details_match:
-            issues_details = details_match.group(1).strip()
+
+        # --- Step 5: Generate Fixes (Second LLM Call - Conditional) ---
+        if issues_found:
             if verbose:
-                rprint("[cyan]Extracted Issue Details:[/cyan]")
-                rprint(issues_details)
-        else:
-            issues_details = "No specific details extracted, but issues were indicated."
-            if verbose:
-                rprint("[yellow]Warning: <issues_found> was true, but could not find or parse <details> tag.[/yellow]")
+                print(f"\n[cyan]Step 5: Running 'fix_verification_errors_LLM' to generate fixes (Strength: {strength}, Temp: {temperature})...[/cyan]")
 
-        # Step 5: Run LLM to fix verification issues
-        if verbose:
-            rprint(f"\n[bold blue]Step 5: Running 'fix_verification_errors_LLM' (Strength: {strength}, Temp: {temperature})...[/bold blue]") # Using same strength/temp as find
+            fix_input_json = {
+                "program": program,
+                "prompt": prompt,
+                "code": code,
+                "output": output,
+                "issues": issues_details, # Pass the extracted details
+            }
 
-        fix_issues_input = {
-            "program": program,
-            "prompt": prompt,
-            "code": code,
-            "output": output,
-            "issues": issues_details,
-        }
-
-        try:
+            # We expect structured output (Pydantic model) for the fix
             fix_response = llm_invoke(
                 prompt=fix_issues_prompt_template,
-                input_json=fix_issues_input,
-                strength=strength, # Use the same strength for consistency or adjust if needed
+                input_json=fix_input_json,
+                strength=strength, # Use the same strength as identification, per prompt interpretation
                 temperature=temperature,
                 verbose=verbose, # Pass verbose to llm_invoke
-                output_pydantic=None # Expecting tagged text output, not Pydantic model
+                output_pydantic=VerificationFixOutput
             )
             total_cost += fix_response.get('cost', 0.0)
-            # Update model_name if it changed (unlikely if strength is same, but possible)
-            model_name = fix_response.get('model_name', model_name)
-            fix_result_text = fix_response['result']
+            model_name_fix = fix_response.get('model_name', model_name_identify) # Use fix model name if available
+
+            fix_result_data: Optional[VerificationFixOutput] = fix_response.get('result')
+
+            if not fix_result_data or not isinstance(fix_result_data, VerificationFixOutput):
+                 raise ValueError("LLM invocation for fixing issues did not return the expected structured output.")
+
+            # --- Step 6: Extract Fixes (Instructions) ---
+            if verbose:
+                print("\n[cyan]Step 6: Extracting fix instructions from LLM result...[/cyan]")
+
+            explanation = fix_result_data.explanation
+            edit_instructions_program = fix_result_data.edit_instructions_program
+            edit_instructions_code = fix_result_data.edit_instructions_code
 
             if verbose:
-                rprint("[bold blue]Fix Result:[/bold blue]")
-                # Use Markdown for potentially formatted LLM output
-                rprint(Markdown(fix_result_text))
-                rprint(f"Cost for fix step: ${fix_response.get('cost', 0.0):.6f}")
+                print("[blue]Extracted Explanation:[/blue]")
+                for line in explanation:
+                    print(f"- {line}")
+                print("[blue]Extracted Program Edit Instructions:[/blue]")
+                print(f"[dim]{edit_instructions_program or 'None'}[/dim]")
+                print("[blue]Extracted Code Module Edit Instructions:[/blue]")
+                print(f"[dim]{edit_instructions_code or 'None'}[/dim]")
 
-        except Exception as e:
-            rprint(f"[bold red]Error during 'fix_verification_errors_LLM' invocation: {e}[/bold red]")
-            # Return indicating issues were found but fixing failed
-            return {
-                'issues_found': True,
-                'update_program': False,
-                'update_code': False,
-                'fixed_program': program,
-                'fixed_code': code,
-                'total_cost': total_cost,
-                'model_name': model_name or "N/A",
-            }
 
-        # Step 6: Extract fixes and determine updates
-        if verbose:
-            rprint("\n[bold blue]Step 6: Extracting fixes and determining updates...[/bold blue]")
-
-        # Extract fixed program
-        fixed_program_match = re.search(r"<fixed_program>(.*?)</fixed_program>", fix_result_text, re.DOTALL | re.IGNORECASE)
-        if fixed_program_match:
-            fixed_program = fixed_program_match.group(1).strip()
+            # --- Step 8: Apply Edits using edit_file ---
             if verbose:
-                rprint("[green]Successfully extracted fixed program.[/green]")
-        else:
-            fixed_program = program # Fallback to original
-            if verbose:
-                rprint("[yellow]Warning: Could not find or parse <fixed_program> tag. Using original program.[/yellow]")
+                print("\n[cyan]Step 8: Applying edits using edit_file...[/cyan]")
 
-        # Extract fixed code module
-        fixed_code_match = re.search(r"<fixed_code>(.*?)</fixed_code>", fix_result_text, re.DOTALL | re.IGNORECASE)
-        if fixed_code_match:
-            fixed_code = fixed_code_match.group(1).strip()
-            if verbose:
-                rprint("[green]Successfully extracted fixed code module.[/green]")
-        else:
-            fixed_code = code # Fallback to original
-            if verbose:
-                rprint("[yellow]Warning: Could not find or parse <fixed_code> tag. Using original code module.[/yellow]")
+            # Create temporary files to hold the original content
+            temp_files_to_clean = []
+            edit_errors = []
 
-        # Determine if updates occurred
-        update_program = fixed_program != program
-        update_code = fixed_code != code
+            try:
+                # Edit Program
+                if edit_instructions_program:
+                    with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix=".py") as temp_prog_file:
+                        temp_prog_file.write(program)
+                        temp_prog_file.flush()
+                        temp_prog_path = temp_prog_file.name
+                        temp_files_to_clean.append(temp_prog_path)
 
-        if verbose:
-            rprint(f"Program needs update: {update_program}")
-            rprint(f"Code module needs update: {update_code}")
+                    if verbose:
+                        print(f"Attempting to edit program file: {temp_prog_path}")
+                    prog_success, prog_error_msg = run_edit_in_subprocess(
+                        file_path=temp_prog_path,
+                        edit_instructions=edit_instructions_program
+                    )
+                    if prog_success:
+                        if verbose:
+                            print("[green]Program edit successful.[/green]")
+                        with open(temp_prog_path, 'r') as f:
+                            fixed_program = f.read()
+                    else:
+                        error_msg = f"Failed to apply edits to program: {prog_error_msg or 'Unknown error'}"
+                        if verbose:
+                            print(f"[red]Error:[/red] {error_msg}")
+                        edit_errors.append(error_msg)
+                        # Keep original program content if edit failed
+                        fixed_program = program
+                else:
+                     if verbose:
+                        print("[yellow]No edit instructions provided for the program.[/yellow]")
 
-        # Step 7: Verbose output for total cost
-        if verbose:
-            rprint(f"\n[bold blue]Step 7: Total Cost[/bold blue]")
-            rprint(f"Total cost for the run: ${total_cost:.6f}")
+                # Edit Code Module
+                if edit_instructions_code:
+                    with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix=".py") as temp_code_file:
+                        temp_code_file.write(code)
+                        temp_code_file.flush()
+                        temp_code_path = temp_code_file.name
+                        temp_files_to_clean.append(temp_code_path)
 
-        # Step 8: Return results
-        return {
-            'issues_found': True, # Issues were found and fixing was attempted
-            'update_program': update_program,
-            'update_code': update_code,
-            'fixed_program': fixed_program,
-            'fixed_code': fixed_code,
-            'total_cost': total_cost,
-            'model_name': model_name or "N/A",
-        }
+                    if verbose:
+                        print(f"Attempting to edit code module file: {temp_code_path}")
+                    code_success, code_error_msg = run_edit_in_subprocess(
+                        file_path=temp_code_path,
+                        edit_instructions=edit_instructions_code
+                    )
+                    if code_success:
+                        if verbose:
+                            print("[green]Code module edit successful.[/green]")
+                        with open(temp_code_path, 'r') as f:
+                            fixed_code = f.read()
+                    else:
+                        error_msg = f"Failed to apply edits to code module: {code_error_msg or 'Unknown error'}"
+                        if verbose:
+                            print(f"[red]Error:[/red] {error_msg}")
+                        edit_errors.append(error_msg)
+                        # Keep original code content if edit failed
+                        fixed_code = code
+                else:
+                     if verbose:
+                        print("[yellow]No edit instructions provided for the code module.[/yellow]")
 
+            finally:
+                # Clean up temporary files
+                for temp_path in temp_files_to_clean:
+                    try:
+                        os.remove(temp_path)
+                        if verbose:
+                            print(f"Cleaned up temporary file: {temp_path}")
+                    except OSError as e:
+                        if verbose:
+                            print(f"[yellow]Warning:[/yellow] Could not remove temporary file {temp_path}: {e}")
+
+            # Append any edit errors to the explanation
+            if edit_errors:
+                explanation.append("--- Edit Errors ---")
+                explanation.extend(edit_errors)
+
+        # If no issues were found initially, steps 5, 6, 8 were skipped.
+        # explanation, fixed_program, fixed_code retain their initial values.
+
+    except FileNotFoundError as e:
+        print(f"[bold red]Error:[/bold red] Prompt template file not found: {e}")
+        raise
+    except ValueError as e:
+        print(f"[bold red]Error:[/bold red] Input validation or LLM result processing error: {e}")
+        raise
+    except ImportError as e:
+         print(f"[bold red]Error:[/bold red] Failed to import internal modules: {e}")
+         print("Please ensure the package structure is correct and dependencies are installed.")
+         raise
     except Exception as e:
-        rprint(f"[bold red]An unexpected error occurred in fix_verification_errors: {e}[/bold red]")
-        # Return default/error state
+        print(f"[bold red]An unexpected error occurred:[/bold red] {e}")
+        print(traceback.format_exc())
+        # Return potentially partial results or raise
+        explanation.append(f"An unexpected error occurred during processing: {e}")
+        # Depending on where the error occurred, fixed_program/code might be original or partially updated
+        # Returning original state is safer if unsure
         return {
-            'issues_found': False,
-            'update_program': False,
-            'update_code': False,
-            'fixed_program': program,
-            'fixed_code': code,
-            'total_cost': total_cost,
-            'model_name': model_name or "N/A",
+            "explanation": explanation,
+            "fixed_program": program,
+            "fixed_code": code,
+            "total_cost": total_cost,
+            "model_name": model_name_fix or model_name_identify or "unknown",
         }
+
+
+    # --- Step 7: Verbose Output (Total Cost) ---
+    if verbose:
+        print(f"\n[cyan]Step 7: Calculation Complete.[/cyan]")
+        print(f"Total Cost: ${total_cost:.6f}")
+
+    # --- Step 9: Return Results ---
+    final_model_name = model_name_fix or model_name_identify # Prefer fix model name if fix ran
+
+    return {
+        "explanation": explanation,
+        "fixed_program": fixed_program,
+        "fixed_code": fixed_code,
+        "total_cost": total_cost,
+        "model_name": final_model_name,
+    }
