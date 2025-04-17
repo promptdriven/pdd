@@ -17,4 +17,4 @@
     Step 4. Provide the complete fixed code_module and program with explanations for each significant change made.
     Step 5. Verify that the fixed code meets all requirements from the original prompt and addresses all identified issues.
 
-% Write the fixed code_module in a <fixed_code> XML tag, the fixed program in a <fixed_program> XML tag, and the explanation for each significant change made in a <explanation> XML tag.
+% Write the detail explanation for each step above in a <explanation> XML tag, the fixed code_module in a <fixed_code> XML tag and the fixed program in a <fixed_program> XML tag
