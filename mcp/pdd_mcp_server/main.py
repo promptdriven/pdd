@@ -57,6 +57,8 @@ TOOL CATEGORIES:
 CRITICAL NOTES:
 - 'force': true required for all file-writing operations
 - After prompt changes, 'example' must be updated to reflect interfaces
+- pdd-fix supports loop mode (automated iterative fixing) by setting 'loop': true
+- ERROR_FILE is always required for pdd-fix (even with loop=true), but can be a path to a non-existent file when using loop mode
 
 For detailed workflow guidance, see the 'pdd-workflows' prompt.
 """
@@ -86,14 +88,47 @@ WORKFLOW_PROMPT = {
 
 ## Parameters to Remember
 - 'force': true required for all file-writing operations to prevent hangs waiting for user confirmation
+- When using 'fix' with loop=true, make sure to include 'verification_program'
 
 ## Key Tool Distinctions
 - 'generate': Complete implementation code (larger, comprehensive)
 - 'example': Interface/usage examples only (smaller, token-efficient)
 - 'crash': Fixes runtime errors in code to make it executable
 - 'fix': Resolves test failures in already-runnable code
+  - Standard mode: Requires error_file with test failures
+  - Loop mode: Automatically runs tests and fixes issues iteratively until success
 - 'update': Sync code changes back to prompts (prompt is source of truth)
 - 'split': Extract modular functionality while preserving imports
+
+## Fix Loop Mode
+The fix command supports an iterative fixing process with the 'loop' parameter:
+
+1. How it works:
+   - Runs the verification program to generate error output
+   - Analyzes errors and makes fixes to both code and tests
+   - Repeats until all tests pass or max attempts reached
+
+2. Required parameters:
+   - prompt_file, code_file, unit_test_file: Standard required parameters
+   - error_file: Required by CLI constraints, but can be a non-existent file path when using loop mode
+   - verification_program: Program to run for validation (REQUIRED with loop)
+   - loop: Set to true to enable iterative fixing
+
+3. Optional parameters:
+   - max_attempts: Maximum fix iterations (default: 3)
+   - budget: Maximum cost allowed for the process (default: $5.0)
+   - output_code, output_test: Where to save fixed files
+
+4. Example:
+   {
+     "prompt_file": "/path/to/prompt.txt", 
+     "code_file": "/path/to/code.py", 
+     "unit_test_file": "/path/to/test.py", 
+     "error_file": "/path/to/errors.log",
+     "loop": true,
+     "verification_program": "/path/to/example.py",
+     "force": true
+   }
 
 ## Recommended Workflows
 
