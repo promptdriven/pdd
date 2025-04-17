@@ -6,7 +6,7 @@
       "command": "/opt/anaconda3/envs/pdd/bin/python",
       "args": [
         "-u",
-        "/Users/gregtanaka/pdd/mcp/pdd_mcp_server/main.py"
+        "/Users/gregtanaka/pdd/utils/mcp/pdd_mcp_server/main.py"
       ],
       "env": {
         "PYTHONPATH": "/Users/gregtanaka/pdd",

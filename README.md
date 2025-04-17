@@ -1167,6 +1167,18 @@ When using these workflows, remember these crucial tool dependencies:
 
 For detailed command examples for each workflow, see the respective command documentation sections.
 
+## Integrations
+
+PDD offers integrations to streamline its use within your development environment:
+
+### VS Code Extension
+
+A dedicated VS Code extension (`utils/vscode_prompt`) provides syntax highlighting, snippets, and potentially other features for working with `.prompt` files directly within the editor. Refer to the [extension's README](utils/vscode_prompt/README.md) for installation and usage details.
+
+### MCP Server (for Agentic Clients)
+
+The `pdd-mcp-server` (`utils/mcp`) acts as a bridge using the Model Context Protocol (MCP). This allows agentic clients like Cursor, Claude Desktop, Continue.dev, and others to invoke `pdd-cli` commands programmatically. See the [MCP Server README](utils/mcp/README.md) for configuration and usage instructions.
+
 ## Conclusion
 
 PDD (Prompt-Driven Development) CLI provides a comprehensive set of tools for managing prompt files, generating code, creating examples, running tests, and handling various aspects of prompt-driven development. By leveraging the power of AI models and iterative processes, PDD aims to streamline the development workflow and improve code quality.
