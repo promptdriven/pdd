@@ -175,15 +175,25 @@ def test_issues_found_tag_invalid(mock_dependencies):
 
 def test_identify_llm_call_fails(mock_dependencies):
     mock_load, mock_invoke, _, _, _ = mock_dependencies
-    mock_invoke.side_effect = Exception("LLM API Error")
+    error_message = "LLM API Error"
+    mock_invoke.side_effect = Exception(error_message)
 
-    with pytest.raises(Exception, match="LLM API Error"): # Or check for graceful handling if implemented
-         fix_verification_errors(
-            program=SAMPLE_PROGRAM, prompt=SAMPLE_PROMPT, code=SAMPLE_CODE, output=SAMPLE_OUTPUT,
-            strength=SAMPLE_STRENGTH, temperature=SAMPLE_TEMP
-        )
-    # Depending on exact error handling, might return partial results instead of raising
-    # Adjust assertion based on the desired behavior in case of LLM failure
+    # Call the function - it should catch the exception and return an error dict
+    result = fix_verification_errors(
+        program=SAMPLE_PROGRAM, prompt=SAMPLE_PROMPT, code=SAMPLE_CODE, output=SAMPLE_OUTPUT,
+        strength=SAMPLE_STRENGTH, temperature=SAMPLE_TEMP
+    )
+
+    # Assert that the function returned the expected error structure
+    assert isinstance(result, dict)
+    assert "explanation" in result
+    assert isinstance(result["explanation"], list)
+    # Check that the specific error message is included in the explanation
+    assert any(f"An unexpected error occurred during processing: {error_message}" in exp for exp in result["explanation"])
+    assert result["fixed_program"] == SAMPLE_PROGRAM # Should return original program on error
+    assert result["fixed_code"] == SAMPLE_CODE       # Should return original code on error
+    assert result["total_cost"] == 0.0               # Error occurred before cost could be added
+    assert result["model_name"] == "unknown"         # Default model name on error
 
 def test_identify_llm_returns_empty(mock_dependencies):
     mock_load, mock_invoke, _, _, _ = mock_dependencies
