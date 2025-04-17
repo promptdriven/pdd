@@ -1,0 +1,75 @@
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "fix_verification_errors_loop", that will attempt to fix errors in a code file based on the output of an executing program compared against the original prompt's intent, through multiple iterations. The function should include an optional verbose mode for detailed logging. Additionally, the function should track and report detailed statistics about the fixing process, including initial and final verification states, improvements made, and the best iteration.
+
+<include>context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        'program_file' - A string containing the path to the Python program file that exercises the code_file according to the prompt's intent.
+        'code_file' - A string containing the path to the code file being tested/verified.
+        'prompt' - A string containing the prompt that generated the code under test, defining the intended behavior.
+        'verification_program' - A string containing the path to a secondary Python program that verifies if the code_file still runs correctly after modifications (e.g., checks for syntax errors or basic functionality).
+        'strength' - A float between or equal to 0 and 1 that represents the strength of the LLM model to use for fixing.
+        'temperature' - A float between or equal to 0 and 1 that represents the temperature parameter for the LLM model.
+        'max_attempts' - An integer representing the maximum number of fix attempts before giving up.
+        'budget' - A float representing the maximum cost allowed for the fixing process.
+        'verification_log_file' - A string containing the path to the verification log file (default: "verification_log.txt").
+        'verbose' - A boolean indicating whether to enable verbose logging (default: False).
+    Outputs:
+        'success' - A boolean indicating whether the code was successfully fixed to meet the prompt's intent based on program execution.
+        'final_program' - A string containing the contents of the final program file (potentially modified if `fix_verification_errors` suggests changes).
+        'final_code' - A string containing the contents of the final code file.
+        'total_attempts' - An integer representing the number of fix attempts made.
+        'total_cost' - A float representing the total cost of all fix attempts.
+        'model_name' - A string representing the name of the LLM model used.
+
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+    % Here is an example of the fix_verification_errors function that will be used:
+    <fix_verification_errors_example>
+        <include>context/fix_verification_errors_example.py</include>
+    </fix_verification_errors_example>
+</internal_example_modules>
+
+% This function will do the following:
+    Step 1. Remove the existing verification log file specified by 'verification_log_file' if it exists.
+    Step 2. Initialize variables:
+        - Counter for the number of fix attempts.
+        - Total cost accumulator.
+        - Best iteration tracker (This stores the state of the iteration where the program execution output most closely matched the prompt's intent, potentially based on analysis from `fix_verification_errors`. If multiple iterations achieve the same level of correctness, the one with the lowest attempt number is preferred).
+        - A statistics tracker to record the initial verification state, final state, and improvements made during the fixing process.
+    Step 3. Run an initial execution of the `program_file` using `subprocess` to determine the starting verification state (capture stdout/stderr) and store the results in the statistics tracker.
+    Step 4. Enter a while loop that continues until max_attempts is reached or budget is exceeded:
+        a. Print out to console and the verification log file the current attempt iteration number.
+        b. Run the `program_file` using `subprocess`, capturing its standard output and standard error into `program_output`.
+        c. Analyze `program_output`. Determine if the execution was successful (i.e., the output aligns with the `prompt`'s intent). This might involve a simple check or require analysis from the `fix_verification_errors` function in the next step. If successful, break the loop and update the statistics tracker with the final state.
+        d. If verification fails (output deviates from prompt intent):
+           - Print the captured `program_output` to the console and append it to the `verification_log_file`, escaping square brackets for proper Rich console display.
+           - Create backup copies of the `program_file` and `code_file` in their respective directories, appending the current iteration number and a marker indicating verification failure (e.g., `_iteration_3_failed_verification`) to the filenames.
+           - Read the contents of the `program_file` and `code_file`.
+           - Call `fix_verification_errors` with the `program_output`, `code_contents`, `prompt`, `verification_log_file`, and the provided strength, temperature, and verbose flag. This function is expected to return whether updates were made, the fixed content, analysis, cost, and model name.
+           - Add the returned `cost` to the total cost accumulator.
+           - If the total cost exceeds the `budget`, break the loop.
+           - If both `updated_program` and `updated_code` returned by the fix function are False, break the loop as no changes were suggested.
+           - If `updated_code` is True:
+              * Write the `fixed_code` back to the `code_file`.
+              * Run the secondary `verification_program` to check if the `code_file` is still runnable.
+              * If the secondary verification fails, restore the `code_file` from the last known working backup, log this event (including verification output) to the `verification_log_file`, and continue to the next iteration (or potentially retry the fix).
+              * If the secondary verification succeeds, update the best iteration tracker if this iteration's result (based on `fix_verification_errors` analysis) is better than the current best.
+           - If `updated_program` is True:
+              * Write the `fixed_program` back to the `program_file`.
+           - Increment the fix attempt counter.
+           - Run the `program_file` again using `subprocess` to check if the fixes improved the outcome. Capture the new output.
+           - Update the statistics tracker with the results of the current iteration, including whether the fixes improved the verification outcome.
+    Step 5. After the loop ends, run the `program_file` one final time using `subprocess`, append the output to the `verification_log_file`, escape square brackets, and print it to the console. Update the statistics tracker with the final state.
+    Step 6. If the final run's state isn't the best recorded state, copy back the `program_file` and `code_file` from the best iteration's backup. Print which iteration was restored. Update the statistics tracker accordingly.
+    Step 7. Calculate and print summary statistics, including the initial verification state, final state, best iteration, and overall improvement in aligning program output with the prompt.
+    Step 8. Return the `success` status, `final_program` contents, `final_code` contents, `total_attempts`, `total_cost`, and `model_name`.
+
+% The function should run the `program_file` using `subprocess`, capturing both stdout and stderr. This combined output should be used for logging and as input to the `fix_verification_errors` function.
+
+% Finally, ensure that the function tracks and reports detailed statistics about the fixing process, including:
+    - Initial verification state (based on initial program execution output).
+    - Final verification state (based on final program execution output).
+    - Improvements made during the process (reduction in deviation from prompt intent).
+    - The best iteration and its corresponding verification results.
+    - Overall improvement percentage based on verification success.
