@@ -25,7 +25,7 @@ EXAMPLE_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(CONTEXT_DIR)/%_example.py,$(PY_O
 # Test files
 TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 
-.PHONY: all clean test requirements production coverage staging regression install build analysis fix update-extension
+.PHONY: all clean test requirements production coverage staging regression install build analysis fix crash update-extension generate
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -51,13 +51,42 @@ $(DATA_DIR)/%.csv: $(PROMPTS_DIR)/%_csv.prompt
 $(CONTEXT_DIR)/%_example.py: $(PDD_DIR)/%.py
 	@echo "Generating example for $<"
 	@mkdir -p $(CONTEXT_DIR)
-	@PYTHONPATH=$(PROD_DIR) pdd example --output $@ $<
+	@PYTHONPATH=$(PROD_DIR) pdd --strength .8 example --output $@ $< $(PY_PROMPT)
 
 # Generate test files
 $(TESTS_DIR)/test_%.py: $(PDD_DIR)/%.py $(PROMPTS_DIR)/%_python.prompt
 	@echo "Generating test for $<"
 	@mkdir -p $(TESTS_DIR)
 	@PYTHONPATH=$(PROD_DIR) pdd --strength 1 test --output $@ $^
+
+# Generate specific module or all files
+generate:
+ifdef MODULE
+	@echo "Generating files for module: $(MODULE)"
+	@# Define file paths based on MODULE
+	$(eval PY_FILE := $(PDD_DIR)/$(MODULE).py)
+	$(eval PY_PROMPT := $(PROMPTS_DIR)/$(MODULE)_python.prompt)
+	$(eval EXAMPLE_FILE := $(CONTEXT_DIR)/$(MODULE)_example.py)
+	$(eval TEST_FILE := $(TESTS_DIR)/test_$(MODULE).py)
+
+	@# Generate Python file
+	@echo "Generating $(PY_FILE)"
+	@mkdir -p $(PDD_DIR)
+	-@PYTHONPATH=$(PROD_DIR) pdd --strength .8 generate --output $(PY_FILE) $(PY_PROMPT)
+
+	@# Generate example file
+	@echo "Generating example for $(PY_FILE)"
+	@mkdir -p $(CONTEXT_DIR)
+	-@PYTHONPATH=$(PROD_DIR) pdd --strength .8 --verbose example --output $(EXAMPLE_FILE) $(PY_PROMPT) $(PY_FILE)
+
+	@# Generate test file
+	@echo "Generating test for $(PY_FILE)"
+	@mkdir -p $(TESTS_DIR)
+	-@PYTHONPATH=$(PROD_DIR) pdd --strength .8 test --output $(TEST_FILE) $(PY_PROMPT) $(PY_FILE)
+else
+	@echo "Generating all Python files, examples, and tests"
+	@$(MAKE) $(PY_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
+endif
 
 # Run tests
 test:
@@ -71,8 +100,40 @@ coverage:
 	@cd $(STAGING_DIR)
 	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH pytest --cov=$(PDD_DIR) --cov-report=term-missing --cov-report=html $(TESTS_DIR)
 
+# Fix crashes in code
+crash:
+ifdef MODULE
+	@echo "Attempting to fix crashes for module: $(MODULE)"
+	@# Define file paths based on MODULE
+	$(eval PY_FILE := $(PDD_DIR)/$(MODULE).py)
+	$(eval PY_PROMPT := $(PROMPTS_DIR)/$(MODULE)_python.prompt)
+	$(eval PROGRAM_FILE := $(CONTEXT_DIR)/$(MODULE)_example.py)
+	$(eval ERROR_FILE := $(MODULE)_crash.log)
+	
+	@echo "Running $(PROGRAM_FILE) to capture crash output..."
+	@mkdir -p $(shell dirname $(ERROR_FILE))
+	@-PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python $(PROGRAM_FILE) 2> $(ERROR_FILE) || true
+	
+	@echo "Fixing crashes in $(PY_FILE)"
+	-@PYTHONPATH=$(PROD_DIR) pdd --strength .8 --verbose crash --loop --max-attempts 3 --budget 5.0 --output $(PDD_DIR)/$(MODULE)_fixed.py --output-program $(CONTEXT_DIR)/$(MODULE)_example_fixed.py $(PY_PROMPT) $(PY_FILE) $(PROGRAM_FILE) $(ERROR_FILE)
+else
+	@echo "Please specify a MODULE to fix crashes"
+	@echo "Usage: make crash MODULE=<module_name>"
+endif
+
 # Fix prompts command
 fix:
+ifdef MODULE
+	@echo "Attempting to fix module: $(MODULE)"
+	@name=$(MODULE); \
+	prompt="$(PROMPTS_DIR)/$${name}_python.prompt"; \
+	echo "Fixing $$name"; \
+	if [ -f "$(CONTEXT_DIR)/$${name}_example.py" ]; then \
+		pdd --strength .8 --temperature 0 --verbose --force fix --loop --auto-submit  --output-test output/ --output-code output/ --verification-program $(CONTEXT_DIR)/$${name}_example.py $$prompt $(PDD_DIR)/$${name}.py $(TESTS_DIR)/test_$${name}.py $${name}.log; \
+	else \
+		echo "Warning: No verification program found for $$name"; \
+	fi;
+else
 	@echo "Attempting to fix all prompts"
 	@for prompt in $(wildcard $(PROMPTS_DIR)/*_python.prompt); do \
 		name=$$(basename $$prompt _python.prompt); \
@@ -83,6 +144,7 @@ fix:
 			echo "Warning: No verification program found for $$name"; \
 		fi; \
 	done
+endif
 
 # Generate requirements.txt
 requirements:
