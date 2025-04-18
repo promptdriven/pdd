@@ -14,7 +14,7 @@ Usage:
     # result is a dict with keys: 'result', 'cost', 'model_name'
     
 Environment:
-    - PDD_MODEL_DEFAULT: if set, used as the base model name. Otherwise defaults to "gpt-4o-mini".
+    - PDD_MODEL_DEFAULT: if set, used as the base model name. Otherwise defaults to "gpt-4.1-nano".
     - PDD_PATH: if set, models are loaded from $PDD_PATH/data/llm_model.csv; otherwise from ./data/llm_model.csv.
     - Models that require an API key will check the corresponding environment variable (name provided in the CSV).
 """
@@ -218,10 +218,10 @@ def create_llm_instance(selected_model, temperature, handler):
                              openai_api_key=api_key, callbacks=[handler],
                              openai_api_base=base_url)
         else:
-            if model_name.startswith('o') and 'mini' not in model_name:
+            if model_name.startswith('o'):
                 llm = ChatOpenAI(model=model_name, temperature=temperature,
                                  openai_api_key=api_key, callbacks=[handler],
-                                 reasoning_effort='high')
+                                 reasoning={"effort": "high","summary": "auto"})
             else:
                 llm = ChatOpenAI(model=model_name, temperature=temperature,
                                  openai_api_key=api_key, callbacks=[handler])
@@ -301,7 +301,7 @@ def llm_invoke(prompt, input_json, strength, temperature, verbose=False, output_
         raise ValueError("Input JSON must be a dictionary.")
 
     set_llm_cache(SQLiteCache(database_path=".langchain.db"))
-    base_model_name = os.environ.get('PDD_MODEL_DEFAULT', 'gpt-4o-mini')
+    base_model_name = os.environ.get('PDD_MODEL_DEFAULT', 'gpt-4.1-nano')
     models = load_models()
     
     try:
@@ -326,7 +326,6 @@ def llm_invoke(prompt, input_json, strength, temperature, verbose=False, output_
             llm = create_llm_instance(model, temperature, handler)
             if output_pydantic:
                 if model.structured_output:
-                    llm.cache = False # TODO: remove this fix once langchain cache is fixed https://github.com/langchain-ai/langchain/issues/29003
                     llm = llm.with_structured_output(output_pydantic)
                     chain = prompt_template | llm
                 else:
