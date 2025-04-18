@@ -12,7 +12,7 @@
         'temperature' - A float between or equal to 0 and 1 that represents the temperature parameter for the LLM model.
         'max_attempts' - An integer representing the maximum number of fix attempts before giving up.
         'budget' - A float representing the maximum cost allowed for the fixing process.
-        'verification_log_file' - A string containing the path where this loop function will write detailed XML-formatted logs for each attempt (default: "verification_log.xml").
+        'verification_log_file' - A string containing the path where this loop function will write detailed XML-formatted logs for each attempt (default: "verification.log").
         'verbose' - A boolean indicating whether to enable verbose logging (default: False).
     Outputs:
         'success' - A boolean indicating whether the code was successfully fixed to meet the prompt's intent based on program execution.
@@ -39,7 +39,7 @@
         - A statistics tracker to record the initial verification state, final state, and improvements made during the fixing process.
     Step 3. Determine the initial state:
         a. Run the `program_file` using `subprocess` to get initial output (capture stdout/stderr). Store this output.
-        b. Append an XML entry to the `verification_log_file` tagged `<InitialState>` containing the timestamp and the captured output within a CDATA section.
+        b. Append an XML entry to the `verification_log_file` tagged `<InitialState>` containing the timestamp and the captured output. Ensure the output is properly XML-escaped (replace `<`, `>`, `&`, `'`, `"` with `&lt;`, `&gt;`, `&amp;`, `&apos;`, `&quot;`).
         c. Read the initial contents of the `program_file` and `code_file`.
         d. Call `fix_verification_errors` with the initial program/code contents, prompt, and initial output (strength/temp can be minimal or 0 if only getting the count matters initially, but respect budget). Store the result (`initial_fix_result`).
         e. Add the cost (`initial_fix_result['total_cost']`) to the total cost accumulator.
@@ -54,7 +54,7 @@
         e. Call `fix_verification_errors` with the `program_contents`, `code_contents`, `prompt`, `program_output`, strength, temperature, and verbose flag. Store the returned dictionary (containing 'explanation', 'fixed_program', 'fixed_code', 'total_cost', 'model_name', 'verification_issues_count'). Let's call this `fix_result`.
         f. Add the returned `cost` (`fix_result['total_cost']`) to the total cost accumulator.
         g. Prepare an XML block for the current iteration, tagged `<Iteration attempt="{attempt_number}" timestamp="{current_time}">`.
-           - Inside, include tags like `<ProgramOutputBeforeFix>` (containing `program_output` within CDATA), `<InputsToFixer>` (containing `program_contents`, `code_contents`, `prompt`, `program_output` within CDATA), and `<FixerResult>` (containing `explanation`, `fixed_program`, `fixed_code`, `total_cost`, `model_name`, `verification_issues_count` within CDATA or as attributes/subtags).
+           - Inside, include tags like `<ProgramOutputBeforeFix>` (containing the XML-escaped `program_output`), `<InputsToFixer>` (containing XML-escaped `program_contents`, `code_contents`, `prompt`, `program_output`), and `<FixerResult>` (containing XML-escaped `explanation`, `fixed_program`, `fixed_code`, and other fields like `total_cost`, `model_name`, `verification_issues_count` as attributes or sub-tags). Remember to escape special XML characters in all embedded text content.
         h. If the total cost exceeds the `budget`, add a `<Status>Budget Exceeded</Status>` tag to the XML block, append the block to `verification_log_file`, set overall success flag to False, and break the loop.
         i. If `fix_result['verification_issues_count']` is 0:
            - Add a `<Status>Success - 0 Issues Found</Status>` tag to the XML block.
@@ -72,7 +72,7 @@
            * Temporarily write `fix_result['fixed_code']` to a temporary file or pass it directly to the verification program if possible.
            * Run the secondary `verification_program` against the proposed code change. Capture its output (`secondary_verification_output`) and determine the success/failure outcome.
            * Set `secondary_verification_passed` based on the outcome.
-           * Add a `<SecondaryVerification>` tag to the XML block containing the outcome and the `secondary_verification_output` (within CDATA).
+           * Add a `<SecondaryVerification>` tag to the XML block containing the outcome and the XML-escaped `secondary_verification_output`.
            * Clean up the temporary file if used.
 
         o. If `secondary_verification_passed` is True:

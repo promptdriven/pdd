@@ -1,166 +1,80 @@
 import os
-import sys
-import subprocess
 import shutil
+import subprocess
 import datetime
-import tempfile
-import xml.etree.ElementTree as ET
-from xml.dom import minidom
+import time
 from pathlib import Path
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Tuple, Any, Optional
+from xml.sax.saxutils import escape
 
-# Use Rich for pretty printing
 from rich.console import Console
-from rich.panel import Panel
-from rich.syntax import Syntax
-from rich.table import Table
 
-# Assume fix_verification_errors is in the same package directory
-# Use relative import
+# Use relative import assuming fix_verification_errors is in the same package
 try:
+    # Attempt relative import for package context
     from .fix_verification_errors import fix_verification_errors
 except ImportError:
-    # Fallback for scenarios where the script might be run directly
-    # or the package structure isn't fully set up during testing.
-    # This assumes fix_verification_errors.py is in the same directory.
-    print("Warning: Relative import failed. Attempting direct import.", file=sys.stderr)
-    # In a real package, this fallback might not be desirable.
-    # It's included here for potential standalone execution context.
-    from fix_verification_errors import fix_verification_errors
+    # Fallback for direct script execution (e.g., testing)
+    # This assumes 'pdd' package structure exists relative to the script
+    try:
+        from pdd.fix_verification_errors import fix_verification_errors
+    except ImportError:
+        raise ImportError(
+            "Could not import 'fix_verification_errors'. "
+            "Ensure it's available via relative import or in the 'pdd' package."
+        )
 
-
-# Initialize Rich Console
+# Initialize Rich Console for pretty printing
 console = Console()
 
-# --- Helper Functions ---
-
-def _run_subprocess(command: List[str], verbose: bool = False) -> Dict[str, Any]:
+def _run_program(
+    program_path: Path,
+    args: Optional[list[str]] = None,
+    timeout: int = 60
+) -> Tuple[int, str]:
     """
-    Runs a subprocess command, captures stdout/stderr, and returns results.
+    Runs a Python program using subprocess, capturing combined stdout and stderr.
 
     Args:
-        command: A list of strings representing the command and its arguments.
-        verbose: If True, print command being executed.
+        program_path: Path to the Python program to run.
+        args: Optional list of command-line arguments for the program.
+        timeout: Timeout in seconds for the subprocess.
 
     Returns:
-        A dictionary containing:
-            'output': Combined stdout and stderr as a string.
-            'returncode': The exit code of the process.
-            'success': Boolean indicating if return code was 0.
-            'error': Error message if subprocess fails to start, else None.
+        A tuple containing the return code (int) and the combined output (str).
+        Returns (-1, error_message) if the program is not found or other execution error occurs.
     """
-    if verbose:
-        console.print(f"[dim]Executing: {' '.join(command)}[/dim]")
+    if not program_path.is_file():
+        return -1, f"Error: Program file not found at {program_path}"
+
+    command = ["python", str(program_path)]
+    if args:
+        command.extend(args)
+
     try:
-        process = subprocess.run(
+        result = subprocess.run(
             command,
             capture_output=True,
             text=True,
-            check=False, # Don't raise exception on non-zero exit
-            encoding='utf-8',
-            errors='replace' # Handle potential encoding issues
+            timeout=timeout,
+            check=False,  # Don't raise exception for non-zero exit codes
         )
-        output = process.stdout + process.stderr
-        success = process.returncode == 0
-        if verbose and not success:
-             console.print(f"[yellow]Subprocess finished with non-zero exit code: {process.returncode}[/yellow]")
-        elif verbose:
-             console.print(f"[dim]Subprocess finished successfully (exit code 0).[/dim]")
-
-        return {
-            "output": output.strip(),
-            "returncode": process.returncode,
-            "success": success,
-            "error": None,
-        }
+        combined_output = result.stdout + result.stderr
+        return result.returncode, combined_output
     except FileNotFoundError:
-        error_msg = f"Error: Command not found: '{command[0]}'. Please ensure it's installed and in PATH."
-        console.print(f"[bold red]{error_msg}[/bold red]")
-        return {"output": "", "returncode": -1, "success": False, "error": error_msg}
+        return -1, f"Error: Python interpreter not found or '{program_path}' not found."
+    except subprocess.TimeoutExpired:
+        return -1, f"Error: Program execution timed out after {timeout} seconds."
     except Exception as e:
-        error_msg = f"Subprocess execution failed: {e}"
-        console.print(f"[bold red]{error_msg}[/bold red]")
-        return {"output": "", "returncode": -1, "success": False, "error": error_msg}
+        return -1, f"Error: An unexpected error occurred while running the program: {e}"
 
-def _read_file(file_path: str, verbose: bool = False) -> Optional[str]:
-    """Reads a file and returns its content, handling errors."""
+def _write_log_entry(log_file_path: Path, xml_content: str):
+    """Appends XML content to the log file."""
     try:
-        return Path(file_path).read_text(encoding='utf-8')
-    except FileNotFoundError:
-        console.print(f"[bold red]Error: File not found: {file_path}[/bold red]")
-        return None
+        with open(log_file_path, "a", encoding="utf-8") as f:
+            f.write(xml_content + "\n")
     except IOError as e:
-        console.print(f"[bold red]Error reading file {file_path}: {e}[/bold red]")
-        return None
-
-def _write_file(file_path: str, content: str, verbose: bool = False) -> bool:
-    """Writes content to a file, handling errors."""
-    try:
-        Path(file_path).write_text(content, encoding='utf-8')
-        if verbose:
-            console.print(f"[dim]Successfully wrote to {file_path}[/dim]")
-        return True
-    except IOError as e:
-        console.print(f"[bold red]Error writing file {file_path}: {e}[/bold red]")
-        return False
-    except Exception as e:
-        console.print(f"[bold red]An unexpected error occurred writing to {file_path}: {e}[/bold red]")
-        return False
-
-def _create_backup(file_path_str: str, iteration: int, verbose: bool = False) -> Optional[str]:
-    """Creates a backup copy of a file with iteration number."""
-    file_path = Path(file_path_str)
-    backup_path = file_path.with_name(f"{file_path.stem}_iteration_{iteration}{file_path.suffix}")
-    try:
-        shutil.copy2(file_path, backup_path) # copy2 preserves metadata
-        if verbose:
-            console.print(f"[dim]Created backup: {backup_path}[/dim]")
-        return str(backup_path)
-    except FileNotFoundError:
-        console.print(f"[yellow]Warning: Could not create backup for non-existent file: {file_path_str}[/yellow]")
-        return None
-    except Exception as e:
-        console.print(f"[bold red]Error creating backup for {file_path_str}: {e}[/bold red]")
-        return None
-
-def _restore_from_backup(backup_path_str: str, original_path_str: str, verbose: bool = False) -> bool:
-    """Restores a file from its backup."""
-    if not backup_path_str or not Path(backup_path_str).exists():
-        console.print(f"[bold red]Error: Cannot restore, backup file not found: {backup_path_str}[/bold red]")
-        return False
-    try:
-        shutil.copy2(backup_path_str, original_path_str)
-        if verbose:
-            console.print(f"[cyan]Restored '{original_path_str}' from '{backup_path_str}'[/cyan]")
-        return True
-    except Exception as e:
-        console.print(f"[bold red]Error restoring {original_path_str} from {backup_path_str}: {e}[/bold red]")
-        return False
-
-def _append_xml_log_entry(root: ET.Element, entry: ET.Element, log_file: str, verbose: bool = False):
-    """Appends an XML entry to the log file with pretty printing."""
-    root.append(entry)
-    try:
-        # Use minidom for pretty printing
-        rough_string = ET.tostring(root, 'utf-8')
-        reparsed = minidom.parseString(rough_string)
-        pretty_xml_as_string = reparsed.toprettyxml(indent="  ", encoding='utf-8')
-
-        with open(log_file, "wb") as f: # Write bytes
-            f.write(pretty_xml_as_string)
-        if verbose:
-            console.print(f"[dim]Appended entry to log file: {log_file}[/dim]")
-    except Exception as e:
-        console.print(f"[bold red]Error writing XML log file {log_file}: {e}[/bold red]")
-
-def _create_cdata_element(parent: ET.Element, tag_name: str, text: Optional[str]):
-    """Creates an element with CDATA content."""
-    element = ET.SubElement(parent, tag_name)
-    # ET doesn't natively support CDATA easily, wrap manually for clarity in XML
-    element.text = f"<![CDATA[\n{text or ''}\n]]>"
-
-
-# --- Main Function ---
+        console.print(f"[bold red]Error writing to log file {log_file_path}: {e}[/bold red]")
 
 def fix_verification_errors_loop(
     program_file: str,
@@ -171,610 +85,724 @@ def fix_verification_errors_loop(
     temperature: float,
     max_attempts: int,
     budget: float,
-    verification_log_file: str = "verification_log.xml",
+    verification_log_file: str = "verification.log",
     verbose: bool = False,
+    program_args: Optional[list[str]] = None,
 ) -> Dict[str, Any]:
     """
-    Attempts to fix errors in a code file iteratively based on program execution.
+    Attempts to fix errors in a code file based on program execution output
+    against the prompt's intent, iterating multiple times with secondary verification.
 
     Args:
-        program_file: Path to the Python program exercising the code_file.
+        program_file: Path to the Python program exercising the code.
         code_file: Path to the code file being tested/verified.
-        prompt: The prompt that generated the code under test.
-        verification_program: Path to a secondary Python program for basic code verification.
-        strength: LLM strength parameter (0.0 to 1.0).
-        temperature: LLM temperature parameter (>= 0.0).
+        prompt: The prompt defining the intended behavior.
+        verification_program: Path to a secondary program to verify code changes.
+        strength: LLM model strength (0.0 to 1.0).
+        temperature: LLM temperature (0.0 to 1.0).
         max_attempts: Maximum number of fix attempts.
-        budget: Maximum allowed cost for LLM calls.
-        verification_log_file: Path for detailed XML logging (default: "verification_log.xml").
-        verbose: Enable detailed console logging (default: False).
+        budget: Maximum allowed cost in USD.
+        verification_log_file: Path for detailed XML logging (default: "verification.log").
+        verbose: Enable verbose logging (default: False).
+        program_args: Optional list of command-line arguments for the program_file.
 
     Returns:
         A dictionary containing:
-            'success': Boolean indicating if the code was successfully fixed.
-            'final_program': Contents of the final program file.
-            'final_code': Contents of the final code file.
-            'total_attempts': Number of fix attempts made.
-            'total_cost': Total cost incurred.
-            'model_name': Name of the LLM model used (last successful call).
-            'statistics': Dictionary with detailed statistics.
+            'success': bool - Whether the code was successfully fixed.
+            'final_program': str - Contents of the final program file.
+            'final_code': str - Contents of the final code file.
+            'total_attempts': int - Number of fix attempts made.
+            'total_cost': float - Total cost of LLM calls.
+            'model_name': str | None - Name of the LLM model used.
+            'statistics': dict - Detailed statistics about the process.
     """
-    console.print(Panel(f"Starting Verification Fix Loop for [cyan]{code_file}[/cyan]", title="[bold blue]Process Start[/bold blue]", expand=False))
+    program_path = Path(program_file).resolve()
+    code_path = Path(code_file).resolve()
+    verification_program_path = Path(verification_program).resolve()
+    log_path = Path(verification_log_file).resolve()
 
-    # --- Step 1: Initialize Log File ---
-    log_file_path = Path(verification_log_file)
+    # --- Validate Inputs ---
+    if not program_path.is_file():
+        console.print(f"[bold red]Error: Program file not found: {program_path}[/bold red]")
+        return {"success": False, "final_program": "", "final_code": "", "total_attempts": 0, "total_cost": 0.0, "model_name": None, "statistics": {}}
+    if not code_path.is_file():
+        console.print(f"[bold red]Error: Code file not found: {code_path}[/bold red]")
+        return {"success": False, "final_program": "", "final_code": "", "total_attempts": 0, "total_cost": 0.0, "model_name": None, "statistics": {}}
+    if not verification_program_path.is_file():
+        console.print(f"[bold red]Error: Verification program not found: {verification_program_path}[/bold red]")
+        return {"success": False, "final_program": "", "final_code": "", "total_attempts": 0, "total_cost": 0.0, "model_name": None, "statistics": {}}
+    if not 0.0 <= strength <= 1.0:
+        console.print(f"[bold red]Error: Strength must be between 0.0 and 1.0.[/bold red]")
+        return {"success": False, "final_program": "", "final_code": "", "total_attempts": 0, "total_cost": 0.0, "model_name": None, "statistics": {}}
+    if not 0.0 <= temperature <= 1.0:
+         console.print(f"[bold red]Error: Temperature must be between 0.0 and 1.0.[/bold red]")
+         return {"success": False, "final_program": "", "final_code": "", "total_attempts": 0, "total_cost": 0.0, "model_name": None, "statistics": {}}
+    if max_attempts <= 0:
+        console.print(f"[bold red]Error: Max attempts must be positive.[/bold red]")
+        return {"success": False, "final_program": "", "final_code": "", "total_attempts": 0, "total_cost": 0.0, "model_name": None, "statistics": {}}
+    if budget < 0:
+        console.print(f"[bold red]Error: Budget cannot be negative.[/bold red]")
+        return {"success": False, "final_program": "", "final_code": "", "total_attempts": 0, "total_cost": 0.0, "model_name": None, "statistics": {}}
+
+
+    # Step 1: Remove existing verification log file
     try:
-        if log_file_path.exists():
-            log_file_path.unlink()
+        if log_path.exists():
+            os.remove(log_path)
             if verbose:
-                console.print(f"[dim]Removed existing log file: {verification_log_file}[/dim]")
+                console.print(f"Removed existing log file: {log_path}")
     except OSError as e:
-        console.print(f"[bold red]Error removing existing log file {verification_log_file}: {e}[/bold red]")
-        # Continue execution, but logging might be appended if file couldn't be deleted
+        console.print(f"[bold red]Error removing log file {log_path}: {e}[/bold red]")
+        # Continue execution, but logging might fail
 
-    # Initialize XML root
-    xml_root = ET.Element("VerificationLog", timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat())
-
-    # --- Step 2: Initialize Variables ---
-    total_attempts = 0
+    # Step 2: Initialize variables
+    attempts = 0
     total_cost = 0.0
-    model_name = "N/A" # Default if no LLM call is made
+    model_name: Optional[str] = None
     overall_success = False
-    program_file_path = Path(program_file)
-    code_file_path = Path(code_file)
-
-    # Best iteration tracker (stores state *before* the fix attempt)
-    # Attempt 0 represents the initial state
     best_iteration = {
-        'attempt': 0, # Start with initial state as potential best
-        'issues': float('inf'),
-        'program_backup': str(program_file_path.resolve()), # Original path
-        'code_backup': str(code_file_path.resolve()),       # Original path
+        'attempt': -1,
+        'program_backup': None,
+        'code_backup': None,
+        'issues': float('inf')
     }
-
     stats = {
         'initial_issues': -1,
         'final_issues': -1,
-        'best_iteration_attempt': -1,
+        'best_iteration_num': -1,
         'best_iteration_issues': float('inf'),
         'improvement_issues': 0,
         'improvement_percent': 0.0,
-        'budget_exceeded': False,
-        'max_attempts_reached': False,
-        'no_changes_suggested': False,
-        'secondary_verification_failures': 0,
+        'status_message': 'Initialization',
     }
+    initial_program_content = ""
+    initial_code_content = ""
 
     # --- Step 3: Determine Initial State ---
     if verbose:
-        console.print("[cyan]Step 3: Determining Initial State...[/cyan]")
+        console.print("[bold cyan]Step 3: Determining Initial State...[/bold cyan]")
 
-    # 3a: Run initial program
-    initial_program_contents = _read_file(program_file, verbose)
-    initial_code_contents = _read_file(code_file, verbose)
+    try:
+        initial_program_content = program_path.read_text(encoding="utf-8")
+        initial_code_content = code_path.read_text(encoding="utf-8")
+    except IOError as e:
+        console.print(f"[bold red]Error reading initial program/code files: {e}[/bold red]")
+        return {"success": False, "final_program": "", "final_code": "", "total_attempts": 0, "total_cost": 0.0, "model_name": None, "statistics": stats}
 
-    if initial_program_contents is None or initial_code_contents is None:
-        console.print("[bold red]Error: Cannot proceed without initial program and code files.[/bold red]")
-        _append_xml_log_entry(xml_root, ET.Element("Error", text="Initial program or code file missing"), verification_log_file, verbose)
-        return {
-            'success': False, 'final_program': initial_program_contents or "", 'final_code': initial_code_contents or "",
-            'total_attempts': 0, 'total_cost': 0.0, 'model_name': model_name, 'statistics': stats
-        }
-
-    initial_run_result = _run_subprocess([sys.executable, program_file], verbose)
-    initial_output = initial_run_result["output"]
+    # 3a: Run initial program with args
+    initial_return_code, initial_output = _run_program(program_path, args=program_args)
+    if verbose:
+        console.print(f"Initial program run exit code: {initial_return_code}")
+        console.print(f"Initial program output:\n{initial_output}")
 
     # 3b: Log initial state
-    initial_state_entry = ET.Element("InitialState", timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat())
-    _create_cdata_element(initial_state_entry, "ProgramOutput", initial_output)
-    _create_cdata_element(initial_state_entry, "ProgramFileContent", initial_program_contents)
-    _create_cdata_element(initial_state_entry, "CodeFileContent", initial_code_contents)
-    _append_xml_log_entry(xml_root, initial_state_entry, verification_log_file, verbose)
+    timestamp = datetime.datetime.now().isoformat()
+    initial_log_entry = f'<InitialState timestamp="{timestamp}">\n'
+    initial_log_entry += f'  <ProgramFile>{escape(str(program_path))}</ProgramFile>\n'
+    initial_log_entry += f'  <CodeFile>{escape(str(code_path))}</CodeFile>\n'
+    initial_log_entry += f'  <ExitCode>{initial_return_code}</ExitCode>\n'
+    initial_log_entry += f'  <Output>{escape(initial_output)}</Output>\n'
+    initial_log_entry += '</InitialState>'
+    _write_log_entry(log_path, initial_log_entry)
 
     # 3d: Call fix_verification_errors for initial assessment
-    if verbose:
-        console.print("[dim]Calling fix_verification_errors for initial assessment...[/dim]")
     try:
+        if verbose:
+            console.print("Running initial assessment with fix_verification_errors...")
+        # Use minimal strength/temp if only count is needed? No, use provided ones.
         initial_fix_result = fix_verification_errors(
-            program=initial_program_contents,
+            program=initial_program_content,
             prompt=prompt,
-            code=initial_code_contents,
+            code=initial_code_content,
             output=initial_output,
-            strength=strength, # Use provided strength for consistency
-            temperature=temperature, # Use provided temp
+            strength=strength, # Use actual strength for realistic initial assessment
+            temperature=temperature,
             verbose=verbose
         )
-    except Exception as e:
-        console.print(f"[bold red]Error calling fix_verification_errors during initial assessment: {e}[/bold red]")
-        error_entry = ET.SubElement(initial_state_entry, "Error", text=f"fix_verification_errors call failed: {e}")
-        _append_xml_log_entry(xml_root, initial_state_entry, verification_log_file, verbose) # Update log with error
-        return {
-            'success': False, 'final_program': initial_program_contents, 'final_code': initial_code_contents,
-            'total_attempts': 0, 'total_cost': total_cost, 'model_name': model_name, 'statistics': stats
+        # 3e: Add cost
+        initial_cost = initial_fix_result.get('total_cost', 0.0)
+        total_cost += initial_cost
+        model_name = initial_fix_result.get('model_name') # Capture model name early
+        if verbose:
+             console.print(f"Initial assessment cost: ${initial_cost:.6f}, Total cost: ${total_cost:.6f}")
+
+        # 3f: Extract initial issues
+        initial_issues_count = initial_fix_result.get('verification_issues_count', -1)
+        stats['initial_issues'] = initial_issues_count
+        if verbose:
+            console.print(f"Initial verification issues found: {initial_issues_count}")
+            if initial_fix_result.get('explanation'):
+                 console.print("Initial assessment explanation:")
+                 console.print(initial_fix_result['explanation'])
+
+
+        # 3g: Initialize best iteration tracker
+        # Store original paths as the 'backup' for iteration 0
+        best_iteration = {
+            'attempt': 0,
+            'program_backup': str(program_path), # Path to original
+            'code_backup': str(code_path),       # Path to original
+            'issues': initial_issues_count if initial_issues_count != -1 else float('inf')
         }
+        stats['best_iteration_num'] = 0
+        stats['best_iteration_issues'] = best_iteration['issues']
+
+        # 3h: Check for immediate success
+        if initial_issues_count == 0:
+            console.print("[bold green]Initial check found 0 verification issues. No fixing loop needed.[/bold green]")
+            overall_success = True
+            stats['final_issues'] = 0
+            stats['status_message'] = 'Success on initial check'
+            stats['improvement_issues'] = 0
+            stats['improvement_percent'] = 100.0 # Reached target of 0 issues
+            # Step 7 (early exit): Print stats
+            console.print("\n[bold]--- Final Statistics ---[/bold]")
+            console.print(f"Initial Issues: {stats['initial_issues']}")
+            console.print(f"Final Issues: {stats['final_issues']}")
+            console.print(f"Best Iteration: {stats['best_iteration_num']} (Issues: {stats['best_iteration_issues']})")
+            console.print(f"Improvement (Issues Reduced): {stats['improvement_issues']}")
+            console.print(f"Improvement (Percent Towards 0 Issues): {stats['improvement_percent']:.2f}%")
+            console.print(f"Overall Status: {stats['status_message']}")
+            console.print(f"Total Attempts: {attempts}")
+            console.print(f"Total Cost: ${total_cost:.6f}")
+            console.print(f"Model Used: {model_name or 'N/A'}")
+            # Step 8 (early exit): Return
+            return {
+                "success": overall_success,
+                "final_program": initial_program_content,
+                "final_code": initial_code_content,
+                "total_attempts": attempts,
+                "total_cost": total_cost,
+                "model_name": model_name,
+                "statistics": stats,
+            }
+        elif total_cost >= budget:
+             console.print(f"[bold yellow]Budget ${budget:.2f} exceeded during initial assessment (Cost: ${total_cost:.2f}). Aborting.[/bold yellow]")
+             stats['status_message'] = 'Budget exceeded on initial check'
+             # No changes made, return initial state
+             return {
+                 "success": False,
+                 "final_program": initial_program_content,
+                 "final_code": initial_code_content,
+                 "total_attempts": 0,
+                 "total_cost": total_cost,
+                 "model_name": model_name,
+                 "statistics": stats,
+             }
 
 
-    # 3e: Add initial cost
-    initial_cost = initial_fix_result.get('total_cost', 0.0)
-    total_cost += initial_cost
-    model_name = initial_fix_result.get('model_name', model_name) # Capture model name
+    except Exception as e:
+        console.print(f"[bold red]Error during initial assessment with fix_verification_errors: {e}[/bold red]")
+        stats['status_message'] = f'Error during initial assessment: {e}'
+        # Cannot proceed without initial assessment
+        return {"success": False, "final_program": initial_program_content, "final_code": initial_code_content, "total_attempts": 0, "total_cost": total_cost, "model_name": model_name, "statistics": stats}
 
-    # 3f: Extract initial issues
-    initial_issues = initial_fix_result.get('verification_issues_count', float('inf'))
-    if initial_issues == float('inf'):
-         console.print("[yellow]Warning: Could not determine initial issue count from fix_verification_errors.[/yellow]")
-         initial_issues = -1 # Indicate unknown
 
-    stats['initial_issues'] = initial_issues
-    initial_state_entry.set("issues_found", str(initial_issues)) # Add to XML
-    initial_state_entry.set("cost", f"{initial_cost:.6f}")
-    initial_state_entry.set("model_name", model_name)
-    _append_xml_log_entry(xml_root, initial_state_entry, verification_log_file, verbose) # Update log
+    # --- Step 4: Enter the Fixing Loop ---
+    if verbose:
+        console.print("\n[bold cyan]Step 4: Starting Fixing Loop...[/bold cyan]")
 
-    # 3g: Initialize best iteration tracker
-    best_iteration['issues'] = initial_issues
-    stats['best_iteration_attempt'] = 0
-    stats['best_iteration_issues'] = initial_issues
-    console.print(f"Initial verification issues found: [bold yellow]{initial_issues if initial_issues >= 0 else 'Unknown'}[/bold yellow]")
+    while attempts < max_attempts and total_cost < budget:
+        current_attempt = attempts + 1
+        timestamp = datetime.datetime.now().isoformat()
+        iteration_log_xml = f'<Iteration attempt="{current_attempt}" timestamp="{timestamp}">\n'
 
-    # 3h: Check for initial success
-    if initial_issues == 0:
-        console.print("[bold green]Initial state already meets verification criteria (0 issues). No loop needed.[/bold green]")
-        overall_success = True
-        stats['final_issues'] = 0
-        stats['improvement_percent'] = 100.0
-        # No attempts made in the loop
-    elif total_cost >= budget:
-         console.print(f"[bold red]Budget Exceeded ({total_cost:.4f} >= {budget:.4f}) during initial assessment.[/bold red]")
-         stats['budget_exceeded'] = True
-         stats['final_issues'] = initial_issues # Final state is initial state
-         # No attempts made in the loop
+        # 4a: Print attempt number
+        console.print(f"\n[bold]Attempt {current_attempt}/{max_attempts} (Cost: ${total_cost:.4f}/{budget:.4f})[/bold]")
 
-    # --- Step 4: Iteration Loop ---
-    current_program_contents = initial_program_contents
-    current_code_contents = initial_code_contents
-
-    while total_attempts < max_attempts and total_cost < budget and not overall_success:
-        total_attempts += 1
-        iteration_start_time = datetime.datetime.now(datetime.timezone.utc)
-        console.print(f"\n--- Starting Attempt {total_attempts}/{max_attempts} ---")
+        # 4b: Run the program file with args
         if verbose:
-            console.print(f"Current Total Cost: ${total_cost:.4f} / Budget: ${budget:.4f}")
-
-        iteration_entry = ET.Element("Iteration",
-                                     attempt=str(total_attempts),
-                                     timestamp=iteration_start_time.isoformat())
-
-        # 4b: Run program
+            console.print(f"Running program: {program_path} with args: {program_args}")
+        return_code, program_output = _run_program(program_path, args=program_args)
+        iteration_log_xml += f'  <ProgramExecution>\n'
+        iteration_log_xml += f'    <ExitCode>{return_code}</ExitCode>\n'
+        iteration_log_xml += f'    <OutputBeforeFix>{escape(program_output)}</OutputBeforeFix>\n'
+        iteration_log_xml += f'  </ProgramExecution>\n'
         if verbose:
-            console.print(f"[dim]Running program: {program_file}[/dim]")
-        run_result = _run_subprocess([sys.executable, str(program_file_path)], verbose)
-        program_output = run_result["output"]
-        _create_cdata_element(iteration_entry, "ProgramOutputBeforeFix", program_output)
+            console.print(f"Program exit code: {return_code}")
+            # console.print(f"Program output:\n{program_output}") # Can be long
 
-        # 4c: Read current contents (redundant if tracking internally, but safer from file)
-        current_program_contents = _read_file(str(program_file_path), verbose)
-        current_code_contents = _read_file(str(code_file_path), verbose)
-        if current_program_contents is None or current_code_contents is None:
-             console.print("[bold red]Error reading program/code file during loop. Aborting.[/bold red]")
-             ET.SubElement(iteration_entry, "Status", text="Error Reading Files")
-             _append_xml_log_entry(xml_root, iteration_entry, verification_log_file, verbose)
-             break # Exit loop on file read error
+        # 4c: Read current contents
+        try:
+            program_contents = program_path.read_text(encoding="utf-8")
+            code_contents = code_path.read_text(encoding="utf-8")
+        except IOError as e:
+            console.print(f"[bold red]Error reading program/code file during attempt {current_attempt}: {e}[/bold red]")
+            iteration_log_xml += f'  <Status>Error Reading Files</Status>\n</Iteration>'
+            _write_log_entry(log_path, iteration_log_xml)
+            stats['status_message'] = f'Error reading files on attempt {current_attempt}'
+            break # Cannot proceed
 
-        # 4d: Create backups *before* calling the fixer
-        program_backup_path = _create_backup(str(program_file_path), total_attempts, verbose)
-        code_backup_path = _create_backup(str(code_file_path), total_attempts, verbose)
+        # 4d: Create backups
+        program_backup_path = program_path.with_stem(f"{program_path.stem}_iteration_{current_attempt}").with_suffix(program_path.suffix)
+        code_backup_path = code_path.with_stem(f"{code_path.stem}_iteration_{current_attempt}").with_suffix(code_path.suffix)
+        try:
+            shutil.copy2(program_path, program_backup_path)
+            shutil.copy2(code_path, code_backup_path)
+            if verbose:
+                console.print(f"Created backups: {program_backup_path}, {code_backup_path}")
+            iteration_log_xml += f'  <Backups>\n'
+            iteration_log_xml += f'    <Program>{escape(str(program_backup_path))}</Program>\n'
+            iteration_log_xml += f'    <Code>{escape(str(code_backup_path))}</Code>\n'
+            iteration_log_xml += f'  </Backups>\n'
+        except OSError as e:
+            console.print(f"[bold red]Error creating backup files during attempt {current_attempt}: {e}[/bold red]")
+            iteration_log_xml += f'  <Status>Error Creating Backups</Status>\n</Iteration>'
+            _write_log_entry(log_path, iteration_log_xml)
+            stats['status_message'] = f'Error creating backups on attempt {current_attempt}'
+            break # Don't proceed without backups
 
         # 4e: Call fix_verification_errors
-        if verbose:
-            console.print("[dim]Calling fix_verification_errors...[/dim]")
+        iteration_log_xml += f'  <InputsToFixer>\n'
+        iteration_log_xml += f'    <Program>{escape(program_contents)}</Program>\n'
+        iteration_log_xml += f'    <Code>{escape(code_contents)}</Code>\n'
+        iteration_log_xml += f'    <Prompt>{escape(prompt)}</Prompt>\n'
+        iteration_log_xml += f'    <ProgramOutput>{escape(program_output)}</ProgramOutput>\n'
+        iteration_log_xml += f'  </InputsToFixer>\n'
+
+        fix_result = {}
         try:
+            if verbose:
+                console.print("Calling fix_verification_errors...")
             fix_result = fix_verification_errors(
-                program=current_program_contents,
+                program=program_contents,
                 prompt=prompt,
-                code=current_code_contents,
+                code=code_contents,
                 output=program_output,
                 strength=strength,
                 temperature=temperature,
-                verbose=verbose
+                verbose=verbose # Pass verbose flag down
             )
+
+            # 4f: Add cost
+            attempt_cost = fix_result.get('total_cost', 0.0)
+            total_cost += attempt_cost
+            model_name = fix_result.get('model_name', model_name) # Update if available
+            current_issues_count = fix_result.get('verification_issues_count', -1)
+
+            if verbose:
+                console.print(f"Fixer cost: ${attempt_cost:.6f}, Total cost: ${total_cost:.6f}")
+                console.print(f"Fixer issues found: {current_issues_count}")
+                if fix_result.get('explanation'):
+                    console.print("Fixer explanation:")
+                    console.print(fix_result['explanation'])
+
+
+            # 4g: Log fixer result
+            iteration_log_xml += f'  <FixerResult '
+            iteration_log_xml += f'total_cost="{attempt_cost:.6f}" '
+            iteration_log_xml += f'model_name="{escape(model_name or "N/A")}" '
+            iteration_log_xml += f'verification_issues_count="{current_issues_count}">\n'
+            iteration_log_xml += f'    <Explanation>{escape(str(fix_result.get("explanation", "N/A")))}</Explanation>\n'
+            iteration_log_xml += f'    <FixedProgram>{escape(fix_result.get("fixed_program", ""))}</FixedProgram>\n'
+            iteration_log_xml += f'    <FixedCode>{escape(fix_result.get("fixed_code", ""))}</FixedCode>\n'
+            iteration_log_xml += f'  </FixerResult>\n'
+
         except Exception as e:
-            console.print(f"[bold red]Error calling fix_verification_errors in attempt {total_attempts}: {e}[/bold red]")
-            ET.SubElement(iteration_entry, "Status", text=f"Fixer Error: {e}")
-            _append_xml_log_entry(xml_root, iteration_entry, verification_log_file, verbose)
-            # Decide whether to continue or break? Let's break for safety.
-            break
-
-        # 4f: Add cost
-        attempt_cost = fix_result.get('total_cost', 0.0)
-        total_cost += attempt_cost
-        model_name = fix_result.get('model_name', model_name) # Update model name
-
-        # 4g: Log inputs and results to XML
-        inputs_entry = ET.SubElement(iteration_entry, "InputsToFixer")
-        _create_cdata_element(inputs_entry, "ProgramContent", current_program_contents)
-        _create_cdata_element(inputs_entry, "CodeContent", current_code_contents)
-        _create_cdata_element(inputs_entry, "Prompt", prompt)
-        _create_cdata_element(inputs_entry, "ProgramOutput", program_output)
-
-        fixer_result_entry = ET.SubElement(iteration_entry, "FixerResult")
-        fixer_result_entry.set("cost", f"{attempt_cost:.6f}")
-        fixer_result_entry.set("model_name", model_name)
-        fixer_result_entry.set("issues_found", str(fix_result.get('verification_issues_count', 'N/A')))
-        _create_cdata_element(fixer_result_entry, "Explanation", "\n".join(fix_result.get('explanation', [])))
-        _create_cdata_element(fixer_result_entry, "FixedProgramSuggestion", fix_result.get('fixed_program'))
-        _create_cdata_element(fixer_result_entry, "FixedCodeSuggestion", fix_result.get('fixed_code'))
+            console.print(f"[bold red]Error calling fix_verification_errors on attempt {current_attempt}: {e}[/bold red]")
+            iteration_log_xml += f'  <Status>Error in Fixer Call: {escape(str(e))}</Status>\n</Iteration>'
+            _write_log_entry(log_path, iteration_log_xml)
+            stats['status_message'] = f'Error in fixer call on attempt {current_attempt}'
+            # Optionally break or continue to next attempt
+            attempts += 1
+            continue # Try next attempt if possible
 
         # 4h: Check budget
         if total_cost >= budget:
-            console.print(f"[bold red]Budget Exceeded ({total_cost:.4f} >= {budget:.4f}) after attempt {total_attempts}.[/bold red]")
-            ET.SubElement(iteration_entry, "Status", text="Budget Exceeded")
-            _append_xml_log_entry(xml_root, iteration_entry, verification_log_file, verbose)
-            stats['budget_exceeded'] = True
+            console.print(f"[bold yellow]Budget ${budget:.2f} exceeded after attempt {current_attempt} (Cost: ${total_cost:.2f}). Stopping.[/bold yellow]")
+            iteration_log_xml += f'  <Status>Budget Exceeded</Status>\n</Iteration>'
+            _write_log_entry(log_path, iteration_log_xml)
+            stats['status_message'] = 'Budget Exceeded'
             break
 
         # 4i: Check for success (0 issues)
-        current_issues = fix_result.get('verification_issues_count', float('inf'))
-        if current_issues == 0:
-            console.print(f"[bold green]Success! 0 verification issues found in attempt {total_attempts}.[/bold green]")
-            ET.SubElement(iteration_entry, "Status", text="Success - 0 Issues Found")
+        if current_issues_count == 0:
+            console.print(f"[bold green]Success! 0 verification issues found after attempt {current_attempt}.[/bold green]")
+            iteration_log_xml += f'  <Status>Success - 0 Issues Found</Status>\n'
             overall_success = True
             stats['final_issues'] = 0
-            stats['improvement_percent'] = 100.0
+            stats['status_message'] = f'Success on attempt {current_attempt}'
 
-            # Update best iteration (this is definitively the best)
+            # Update best iteration (this is the best possible outcome)
             best_iteration = {
-                'attempt': total_attempts,
-                'issues': 0,
-                'program_backup': program_backup_path, # Backup *before* this successful fix
-                'code_backup': code_backup_path,
+                'attempt': current_attempt,
+                'program_backup': str(program_backup_path), # Backup before successful fix
+                'code_backup': str(code_backup_path),       # Backup before successful fix
+                'issues': 0
             }
-            stats['best_iteration_attempt'] = total_attempts
+            stats['best_iteration_num'] = current_attempt
             stats['best_iteration_issues'] = 0
 
-            # Write the successful code/program
-            fixed_program = fix_result.get('fixed_program', current_program_contents)
-            fixed_code = fix_result.get('fixed_code', current_code_contents)
-            program_updated = fixed_program != current_program_contents
-            code_updated = fixed_code != current_code_contents
+            # Apply the successful changes
+            fixed_program = fix_result.get('fixed_program', program_contents)
+            fixed_code = fix_result.get('fixed_code', code_contents)
+            program_updated = fixed_program != program_contents
+            code_updated = fixed_code != code_contents
 
-            if program_updated:
-                 _write_file(str(program_file_path), fixed_program, verbose)
-            if code_updated:
-                 _write_file(str(code_file_path), fixed_code, verbose)
+            try:
+                if program_updated:
+                    if verbose: console.print("Applying program changes...")
+                    program_path.write_text(fixed_program, encoding="utf-8")
+                    iteration_log_xml += f'  <Action>Applied program changes.</Action>\n'
+                if code_updated:
+                    if verbose: console.print("Applying code changes...")
+                    code_path.write_text(fixed_code, encoding="utf-8")
+                    iteration_log_xml += f'  <Action>Applied code changes.</Action>\n'
+            except IOError as e:
+                 console.print(f"[bold red]Error writing successful changes: {e}[/bold red]")
+                 iteration_log_xml += f'  <Action>Error writing successful changes: {escape(str(e))}</Action>\n'
+                 overall_success = False # Cannot guarantee success if write failed
+                 stats['status_message'] = 'Error writing successful changes'
 
-            _append_xml_log_entry(xml_root, iteration_entry, verification_log_file, verbose)
+
+            iteration_log_xml += '</Iteration>'
+            _write_log_entry(log_path, iteration_log_xml)
             break # Exit loop on success
 
         # 4j: Check if changes were suggested
-        fixed_program = fix_result.get('fixed_program', current_program_contents)
-        fixed_code = fix_result.get('fixed_code', current_code_contents)
-        program_updated = fixed_program != current_program_contents
-        code_updated = fixed_code != current_code_contents
+        fixed_program = fix_result.get('fixed_program', program_contents)
+        fixed_code = fix_result.get('fixed_code', code_contents)
+        program_updated = fixed_program != program_contents
+        code_updated = fixed_code != code_contents
 
         if not program_updated and not code_updated:
-            console.print(f"[yellow]No changes suggested by the fixer in attempt {total_attempts}. Stopping.[/yellow]")
-            ET.SubElement(iteration_entry, "Status", text="No Changes Suggested")
-            _append_xml_log_entry(xml_root, iteration_entry, verification_log_file, verbose)
-            stats['no_changes_suggested'] = True
-            # Keep overall_success as False
+            console.print("[yellow]No changes suggested by the fixer. Stopping.[/yellow]")
+            iteration_log_xml += f'  <Status>No Changes Suggested</Status>\n</Iteration>'
+            _write_log_entry(log_path, iteration_log_xml)
+            stats['status_message'] = f'No changes suggested on attempt {current_attempt}'
+            # Success is False because we didn't reach 0 issues
             break
 
-        # 4l: Log fix attempt
-        fix_attempt_entry = ET.SubElement(iteration_entry, "FixAttempted")
-        fix_attempt_entry.set("program_change_suggested", str(program_updated))
-        fix_attempt_entry.set("code_change_suggested", str(code_updated))
+        # 4k, 4l: Log fix attempt
+        iteration_log_xml += f'  <FixAttempted program_updated="{program_updated}" code_updated="{code_updated}"/>\n'
 
-        # 4m, 4n: Secondary Verification
-        secondary_verification_passed = True # Assume pass if code not updated or no verifier
-        if code_updated and verification_program:
+        # 4m, 4n: Secondary Verification (only if code was changed)
+        secondary_verification_passed = True # Assume pass if code wasn't touched
+        if code_updated:
             if verbose:
-                console.print(f"[dim]Running secondary verification: {verification_program}[/dim]")
-
-            # Use a temporary file for the proposed code change
+                console.print("Code change suggested, running secondary verification...")
             try:
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as temp_code_file:
-                    temp_code_file.write(fixed_code)
-                    temp_code_file_path = temp_code_file.name
+                # Temporarily write the proposed code change
+                code_path.write_text(fixed_code, encoding="utf-8")
 
-                # Run verification program against the temp file
-                verify_cmd = [sys.executable, verification_program, temp_code_file_path]
-                verify_result = _run_subprocess(verify_cmd, verbose)
+                # Run verification program
+                verify_ret_code, verify_output = _run_program(verification_program_path)
 
-                secondary_verification_passed = verify_result["success"] # Assume exit code 0 is success
+                # Determine pass/fail (simple: exit code 0 = pass)
+                secondary_verification_passed = (verify_ret_code == 0)
 
-                # Log secondary verification result
-                sec_verify_entry = ET.SubElement(iteration_entry, "SecondaryVerification")
-                sec_verify_entry.set("passed", str(secondary_verification_passed))
-                sec_verify_entry.set("return_code", str(verify_result["returncode"]))
-                _create_cdata_element(sec_verify_entry, "Output", verify_result["output"])
+                if verbose:
+                    console.print(f"Secondary verification exit code: {verify_ret_code}")
+                    console.print(f"Secondary verification passed: {secondary_verification_passed}")
+                    # console.print(f"Secondary verification output:\n{verify_output}")
+
+                iteration_log_xml += f'  <SecondaryVerification passed="{secondary_verification_passed}">\n'
+                iteration_log_xml += f'    <ExitCode>{verify_ret_code}</ExitCode>\n'
+                iteration_log_xml += f'    <Output>{escape(verify_output)}</Output>\n'
+                iteration_log_xml += f'  </SecondaryVerification>\n'
 
                 if not secondary_verification_passed:
-                    console.print(f"[yellow]Secondary verification failed for attempt {total_attempts}. Discarding changes.[/yellow]")
-                    stats['secondary_verification_failures'] += 1
+                    # Restore original code if verification failed
+                    if verbose: console.print("[yellow]Secondary verification failed. Restoring code file.[/yellow]")
+                    code_path.write_text(code_contents, encoding="utf-8") # Restore from memory
 
-            except Exception as e:
-                console.print(f"[bold red]Error during secondary verification: {e}[/bold red]")
-                secondary_verification_passed = False # Treat error as failure
-                ET.SubElement(iteration_entry, "SecondaryVerification", passed="False", error=f"Exception: {e}")
-            finally:
-                # Clean up temporary file
-                if 'temp_code_file_path' in locals() and Path(temp_code_file_path).exists():
-                    try:
-                        Path(temp_code_file_path).unlink()
-                    except OSError:
-                        pass # Ignore cleanup error
-
-        elif code_updated and not verification_program:
-             if verbose:
-                 console.print("[dim]Code updated, but no secondary verification program provided. Skipping check.[/dim]")
-             ET.SubElement(iteration_entry, "SecondaryVerification", passed="True", status="Skipped - No verification program provided")
+            except IOError as e:
+                console.print(f"[bold red]Error during secondary verification I/O: {e}[/bold red]")
+                iteration_log_xml += f'  <Status>Error during secondary verification I/O: {escape(str(e))}</Status>\n'
+                secondary_verification_passed = False # Treat I/O error as failure
+                # Attempt to restore original code just in case
+                try:
+                    code_path.write_text(code_contents, encoding="utf-8")
+                except IOError:
+                    console.print(f"[bold red]Failed to restore code file after I/O error.[/bold red]")
 
 
-        # 4o, 4p: Apply or Discard Changes based on Secondary Verification
+        # 4o: Apply changes if secondary verification passed (or wasn't needed)
         if secondary_verification_passed:
-            console.print(f"[green]Attempt {total_attempts}: Changes passed secondary verification (or not needed). Applying.[/green]")
-            console.print(f"Issues found by fixer in this attempt: [bold yellow]{current_issues if current_issues != float('inf') else 'Unknown'}[/bold yellow]")
+            # Update best iteration if current attempt is better
+            if current_issues_count != -1 and current_issues_count < best_iteration['issues']:
+                 if verbose:
+                     console.print(f"[green]New best iteration found: Attempt {current_attempt} (Issues: {current_issues_count})[/green]")
+                 best_iteration = {
+                     'attempt': current_attempt,
+                     'program_backup': str(program_backup_path),
+                     'code_backup': str(code_backup_path),
+                     'issues': current_issues_count
+                 }
+                 stats['best_iteration_num'] = current_attempt
+                 stats['best_iteration_issues'] = current_issues_count
 
-            # Update best iteration if this one is better
-            if current_issues < best_iteration['issues']:
-                console.print(f"[cyan]Improvement found! Issues reduced from {best_iteration['issues']} to {current_issues}. Updating best iteration.[/cyan]")
-                best_iteration = {
-                    'attempt': total_attempts,
-                    'issues': current_issues,
-                    'program_backup': program_backup_path, # Backup *before* this fix
-                    'code_backup': code_backup_path,
-                }
-                stats['best_iteration_attempt'] = total_attempts
-                stats['best_iteration_issues'] = current_issues
+            # Apply changes (code was already written if updated and verified)
+            applied_changes = False
+            try:
+                if program_updated:
+                    if verbose: console.print("Applying program changes...")
+                    program_path.write_text(fixed_program, encoding="utf-8")
+                    iteration_log_xml += f'  <Action>Applied program changes.</Action>\n'
+                    applied_changes = True
+                # Code changes were already applied *before* verification if code_updated was true
+                if code_updated:
+                     iteration_log_xml += f'  <Action>Kept code changes (passed secondary verification).</Action>\n'
+                     applied_changes = True
 
-            # Apply changes to files
-            write_success = True
-            if code_updated:
-                if not _write_file(str(code_file_path), fixed_code, verbose):
-                    write_success = False
-            if program_updated:
-                 if not _write_file(str(program_file_path), fixed_program, verbose):
-                     write_success = False
+                if applied_changes:
+                     iteration_log_xml += f'  <Status>Changes Applied (Secondary Verification Passed or Not Needed)</Status>\n'
+                else:
+                     iteration_log_xml += f'  <Status>No changes needed to apply (Secondary Verification Passed or Not Needed)</Status>\n'
 
-            if write_success:
-                 ET.SubElement(iteration_entry, "Status", text="Changes Applied (Secondary Verification Passed/Skipped)")
-                 # Update internal tracking of content
-                 current_program_contents = fixed_program
-                 current_code_contents = fixed_code
-            else:
-                 console.print("[bold red]Failed to write updated files after successful verification. Stopping.[/bold red]")
-                 ET.SubElement(iteration_entry, "Status", text="Error Writing Applied Changes")
-                 _append_xml_log_entry(xml_root, iteration_entry, verification_log_file, verbose)
-                 break # Stop if we can't write the files
+            except IOError as e:
+                 console.print(f"[bold red]Error writing applied changes: {e}[/bold red]")
+                 iteration_log_xml += f'  <Action>Error writing applied changes: {escape(str(e))}</Action>\n'
+                 iteration_log_xml += f'  <Status>Error Applying Changes</Status>\n'
 
-        else: # Secondary verification failed
-            ET.SubElement(iteration_entry, "Action", text="Changes Discarded Due To Secondary Verification Failure")
-            # Do not update files, do not update best_iteration based on this attempt's issue count
+        # 4p: Log if changes were discarded
+        else: # secondary_verification_passed is False
+            iteration_log_xml += f'  <Action>Changes Discarded Due To Secondary Verification Failure</Action>\n'
+            iteration_log_xml += f'  <Status>Changes Discarded</Status>\n'
+            if verbose:
+                console.print("[yellow]Changes from this iteration were discarded.[/yellow]")
 
-        # 4q: Append iteration log entry
-        _append_xml_log_entry(xml_root, iteration_entry, verification_log_file, verbose)
 
-        # Loop continues (check max_attempts, budget)
+        # 4q: Append iteration log
+        iteration_log_xml += '</Iteration>'
+        _write_log_entry(log_path, iteration_log_xml)
+
+        # 4r: Increment attempt counter
+        attempts += 1
+
+        # Small delay to avoid hitting rate limits if applicable
+        time.sleep(0.5)
 
     # --- End of Loop ---
-    if not overall_success and total_attempts >= max_attempts:
-        console.print(f"[bold yellow]Maximum attempts ({max_attempts}) reached.[/bold yellow]")
-        stats['max_attempts_reached'] = True
-        action_entry = ET.Element("Action", timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(), text="Max attempts reached")
-        _append_xml_log_entry(xml_root, action_entry, verification_log_file, verbose)
 
+    # --- Step 5: Determine Final State ---
+    if verbose:
+        console.print("\n[bold cyan]Step 5: Determining Final State...[/bold cyan]")
 
-    # --- Step 5: Determine Final State and Restore if Necessary ---
+    final_log_entry = "<FinalActions>\n"
+
     if not overall_success:
-        console.print("[yellow]Fixing process did not result in 0 issues.[/yellow]")
-        # Check if any iteration *ever* resulted in a verified improvement (even if not 0 issues)
-        if stats['best_iteration_attempt'] > 0 and stats['best_iteration_issues'] < stats['initial_issues']:
-            console.print(f"[cyan]Restoring state from best recorded iteration: Attempt {stats['best_iteration_attempt']} (Issues: {stats['best_iteration_issues']})[/cyan]")
-            restored_program = _restore_from_backup(best_iteration['program_backup'], str(program_file_path), verbose)
-            restored_code = _restore_from_backup(best_iteration['code_backup'], str(code_file_path), verbose)
-
-            action_entry = ET.Element("Action", timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat())
-            action_entry.text = f"Restored Best Iteration {stats['best_iteration_attempt']} (Issues: {stats['best_iteration_issues']})"
-            action_entry.set("program_restored", str(restored_program))
-            action_entry.set("code_restored", str(restored_code))
-            _append_xml_log_entry(xml_root, action_entry, verification_log_file, verbose)
-
-            # Final issue count is the best recorded one
-            stats['final_issues'] = stats['best_iteration_issues']
-
-        elif stats['initial_issues'] != float('inf') and stats['initial_issues'] <= stats['best_iteration_issues']:
-             # Initial state was the best (or equal best), restore originals if loop ran
-             if total_attempts > 0:
-                 console.print(f"[cyan]Initial state (Issues: {stats['initial_issues']}) was the best or only valid state. Restoring original files.[/cyan]")
-                 # Best iteration still holds original paths if attempt is 0
-                 restored_program = _restore_from_backup(best_iteration['program_backup'], str(program_file_path), verbose)
-                 restored_code = _restore_from_backup(best_iteration['code_backup'], str(code_file_path), verbose)
-                 action_entry = ET.Element("Action", timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat())
-                 action_entry.text = f"Restored Original State (Issues: {stats['initial_issues']})"
-                 action_entry.set("program_restored", str(restored_program))
-                 action_entry.set("code_restored", str(restored_code))
-                 _append_xml_log_entry(xml_root, action_entry, verification_log_file, verbose)
-             else:
-                 console.print(f"[cyan]Initial state (Issues: {stats['initial_issues']}) was the best. No changes applied.[/cyan]")
-
-             stats['final_issues'] = stats['initial_issues']
+        if attempts == max_attempts:
+            console.print(f"[bold yellow]Maximum attempts ({max_attempts}) reached.[/bold yellow]")
+            stats['status_message'] = f'Max attempts ({max_attempts}) reached'
+            final_log_entry += f'  <Action>Max attempts ({max_attempts}) reached.</Action>\n'
+        elif total_cost >= budget and stats['status_message'] == 'Budget Exceeded':
+             # Already logged budget exceeded status
+             pass # Status message already set
+        elif stats['status_message'].startswith('No changes suggested'):
+             pass # Status message already set
         else:
-            # No successful verification passed, or initial state was unknown/worse
-            console.print("[yellow]No verified improvement found. Final state is the result of the last attempted change (or initial state if no attempts made/verified).[/yellow]")
-            action_entry = ET.Element("Action", timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat())
-            action_entry.text = "No successful iteration found or restored; final state is from last attempt/initial."
-            _append_xml_log_entry(xml_root, action_entry, verification_log_file, verbose)
-            # Final issues remain as the best recorded (could be inf if nothing worked)
-            stats['final_issues'] = stats['best_iteration_issues'] if stats['best_iteration_issues'] != float('inf') else stats['initial_issues']
+             # Loop likely exited due to an error or unexpected break
+             if not stats['status_message'].startswith('Error'):
+                 stats['status_message'] = 'Loop finished without success for unknown reason'
+             final_log_entry += f'  <Action>Loop finished without reaching success state.</Action>\n'
 
+
+        # 5b: Restore best iteration if one exists and is better than initial
+        if best_iteration['attempt'] > 0 and best_iteration['issues'] < stats['initial_issues']:
+            console.print(f"[yellow]Restoring state from best iteration: Attempt {best_iteration['attempt']} (Issues: {best_iteration['issues']})[/yellow]")
+            final_log_entry += f'  <Action>Restored Best Iteration {best_iteration["attempt"]} (Issues: {best_iteration["issues"]})</Action>\n'
+            stats['status_message'] += f' - Restored best iteration {best_iteration["attempt"]}'
+            try:
+                best_program_path = Path(best_iteration['program_backup'])
+                best_code_path = Path(best_iteration['code_backup'])
+                if best_program_path.is_file() and best_code_path.is_file():
+                    shutil.copy2(best_program_path, program_path)
+                    shutil.copy2(best_code_path, code_path)
+                    if verbose:
+                        console.print(f"Restored {program_path} from {best_program_path}")
+                        console.print(f"Restored {code_path} from {best_code_path}")
+                    # Final issues count is the best achieved count
+                    stats['final_issues'] = best_iteration['issues']
+                else:
+                    console.print(f"[bold red]Error: Backup files for best iteration not found![/bold red]")
+                    final_log_entry += f'  <Error>Backup files for best iteration not found.</Error>\n'
+                    stats['status_message'] += ' - Error restoring best iteration (files missing)'
+                    # Keep the last state, final issues remain unknown or last attempted
+                    stats['final_issues'] = -1 # Indicate uncertainty
+
+            except OSError as e:
+                console.print(f"[bold red]Error restoring files from best iteration: {e}[/bold red]")
+                final_log_entry += f'  <Error>Error restoring files from best iteration: {escape(str(e))}</Error>\n'
+                stats['status_message'] += f' - Error restoring best iteration: {e}'
+                stats['final_issues'] = -1 # Indicate uncertainty
+        elif best_iteration['attempt'] == 0:
+             console.print("[yellow]No improvement made over the initial state. Keeping original files.[/yellow]")
+             final_log_entry += f'  <Action>No improvement found; keeping original state.</Action>\n'
+             stats['final_issues'] = stats['initial_issues']
+             # Ensure original files are restored if they were modified in a failed attempt
+             try:
+                 program_path.write_text(initial_program_content, encoding='utf-8')
+                 code_path.write_text(initial_code_content, encoding='utf-8')
+             except IOError as e:
+                 console.print(f"[bold red]Error restoring initial files: {e}[/bold red]")
+                 final_log_entry += f'  <Error>Error restoring initial files: {escape(str(e))}</Error>\n'
+
+        else: # No best iteration found (e.g., secondary verification always failed)
+            console.print("[yellow]No fully verified successful iteration found. Final state is from the last attempt.[/yellow]")
+            final_log_entry += f'  <Action>No successful iteration found; final state is from last attempt.</Action>\n'
+            stats['status_message'] += ' - No verified improvement found'
+            # Final issues are unknown, could be the last attempt's count if available
+            # For simplicity, mark as unknown or keep initial if no progress
+            stats['final_issues'] = best_iteration['issues'] if best_iteration['issues'] != float('inf') else stats['initial_issues']
+
+
+    else: # overall_success is True
+        final_log_entry += f'  <Action>Process finished successfully.</Action>\n'
+        stats['final_issues'] = 0 # Success means 0 issues
+
+    final_log_entry += "</FinalActions>"
+    _write_log_entry(log_path, final_log_entry)
 
     # --- Step 6: Read Final Contents ---
-    final_program = _read_file(str(program_file_path), verbose)
-    final_code = _read_file(str(code_file_path), verbose)
-    if final_program is None: final_program = "Error reading final program file."
-    if final_code is None: final_code = "Error reading final code file."
+    if verbose:
+        console.print("\n[bold cyan]Step 6: Reading Final File Contents...[/bold cyan]")
+    try:
+        final_program_content = program_path.read_text(encoding="utf-8")
+        final_code_content = code_path.read_text(encoding="utf-8")
+    except IOError as e:
+        console.print(f"[bold red]Error reading final program/code files: {e}[/bold red]")
+        # Return potentially stale content if read fails
+        final_program_content = program_contents if 'program_contents' in locals() else initial_program_content
+        final_code_content = code_contents if 'code_contents' in locals() else initial_code_content
+        stats['status_message'] += ' - Error reading final files'
 
-    # --- Step 7: Calculate Final Statistics ---
-    if stats['initial_issues'] >= 0 and stats['final_issues'] >= 0:
-         stats['improvement_issues'] = stats['initial_issues'] - stats['final_issues']
-    # Improvement percentage based on reaching 0 issues
-    stats['improvement_percent'] = 100.0 if overall_success else 0.0
 
-    # --- Print Summary ---
-    summary_table = Table(title="Verification Fix Loop Summary", show_header=True, header_style="bold magenta")
-    summary_table.add_column("Metric", style="dim", width=30)
-    summary_table.add_column("Value")
+    # --- Step 7: Calculate and Print Summary Statistics ---
+    if verbose:
+        console.print("\n[bold cyan]Step 7: Calculating Final Statistics...[/bold cyan]")
 
-    summary_table.add_row("Overall Success", "[bold green]True[/bold green]" if overall_success else "[bold red]False[/bold red]")
-    summary_table.add_row("Total Attempts Made", str(total_attempts))
-    summary_table.add_row("Total LLM Cost", f"${total_cost:.6f}")
-    summary_table.add_row("LLM Model Used (Last)", model_name)
-    summary_table.add_row("Initial Issues", str(stats['initial_issues']) if stats['initial_issues'] >= 0 else "Unknown")
-    summary_table.add_row("Final Issues", str(stats['final_issues']) if stats['final_issues'] >= 0 else ("Unknown" if stats['final_issues'] == float('inf') else str(stats['final_issues'])))
-    summary_table.add_row("Best Iteration Attempt", str(stats['best_iteration_attempt']) if stats['best_iteration_attempt'] >= 0 else "N/A")
-    summary_table.add_row("Best Iteration Issues", str(stats['best_iteration_issues']) if stats['best_iteration_issues'] != float('inf') else "N/A")
-    summary_table.add_row("Issue Reduction", str(stats['improvement_issues']) if stats['initial_issues'] >= 0 and stats['final_issues'] >= 0 else "N/A")
-    summary_table.add_row("Improvement % (Reached 0 Issues)", f"{stats['improvement_percent']:.1f}%")
-    summary_table.add_row("Budget Exceeded", "[bold red]Yes[/bold red]" if stats['budget_exceeded'] else "No")
-    summary_table.add_row("Max Attempts Reached", "[bold yellow]Yes[/bold yellow]" if stats['max_attempts_reached'] else "No")
-    summary_table.add_row("Stopped - No Changes Suggested", "[bold yellow]Yes[/bold yellow]" if stats['no_changes_suggested'] else "No")
-    summary_table.add_row("Secondary Verification Failures", str(stats['secondary_verification_failures']))
-    summary_table.add_row("Log File", verification_log_file)
+    if stats['initial_issues'] > 0:
+        if stats['final_issues'] == 0: # Successful fix
+            stats['improvement_issues'] = stats['initial_issues']
+            stats['improvement_percent'] = 100.0
+        elif stats['final_issues'] != -1 and stats['final_issues'] < stats['initial_issues']: # Partial improvement
+            stats['improvement_issues'] = stats['initial_issues'] - stats['final_issues']
+            # % improvement towards reaching 0
+            stats['improvement_percent'] = (stats['improvement_issues'] / stats['initial_issues']) * 100.0
+        else: # No improvement or regression
+            stats['improvement_issues'] = 0
+            stats['improvement_percent'] = 0.0
+    elif stats['initial_issues'] == 0: # Started perfect
+         stats['improvement_issues'] = 0
+         stats['improvement_percent'] = 100.0 # Already at target
+    else: # Initial state unknown (-1)
+         stats['improvement_issues'] = 'N/A'
+         stats['improvement_percent'] = 'N/A'
 
-    console.print(summary_table)
+
+    console.print("\n[bold]--- Final Statistics ---[/bold]")
+    console.print(f"Initial Issues: {stats['initial_issues'] if stats['initial_issues'] != -1 else 'Unknown'}")
+    console.print(f"Final Issues: {stats['final_issues'] if stats['final_issues'] != -1 else 'Unknown'}")
+    console.print(f"Best Iteration Found: {stats['best_iteration_num'] if stats['best_iteration_num'] != -1 else 'N/A'} (Issues: {stats['best_iteration_issues'] if stats['best_iteration_issues'] != float('inf') else 'N/A'})")
+    console.print(f"Improvement (Issues Reduced): {stats['improvement_issues']}")
+    improvement_percent_str = f"{stats['improvement_percent']:.2f}%" if isinstance(stats['improvement_percent'], float) else stats['improvement_percent']
+    console.print(f"Improvement (Percent Towards 0 Issues): {improvement_percent_str}")
+    console.print(f"Overall Status: {stats['status_message']}")
+    console.print(f"Total Attempts Made: {attempts}")
+    console.print(f"Total Cost: ${total_cost:.6f}")
+    console.print(f"Model Used: {model_name or 'N/A'}")
 
     # --- Step 8: Return Results ---
     return {
-        'success': overall_success,
-        'final_program': final_program,
-        'final_code': final_code,
-        'total_attempts': total_attempts,
-        'total_cost': total_cost,
-        'model_name': model_name,
-        'statistics': stats,
+        "success": overall_success,
+        "final_program": final_program_content,
+        "final_code": final_code_content,
+        "total_attempts": attempts,
+        "total_cost": total_cost,
+        "model_name": model_name,
+        "statistics": stats,
     }
 
-# Example Usage (requires setting up dummy files and potentially the pdd package)
-if __name__ == '__main__':
-    # This example requires dummy files and the 'fix_verification_errors' function
-    # to be available (either via package or direct import fallback).
-    # You would need to create:
-    # 1. dummy_program.py (e.g., imports dummy_code and prints output)
-    # 2. dummy_code.py (e.g., a simple function, maybe with a bug)
-    # 3. dummy_verifier.py (e.g., checks syntax of a given file path argument)
-    # 4. A prompt string.
-
-    console.print(Panel("[bold yellow]Running Example Usage[/bold yellow]", expand=False))
-
+# Example usage (requires setting up dummy files and potentially mocking fix_verification_errors)
+if __name__ == "__main__":
     # Create dummy files for demonstration
-    dummy_dir = Path("./dummy_fix_loop_test")
-    dummy_dir.mkdir(exist_ok=True)
+    # In a real scenario, these files would exist and contain actual code/programs.
+    console.print("[yellow]Setting up dummy files for demonstration...[/yellow]")
+    temp_dir = Path("./temp_fix_verification_loop")
+    temp_dir.mkdir(exist_ok=True)
 
-    program_file = dummy_dir / "dummy_program.py"
-    code_file = dummy_dir / "dummy_code.py"
-    verifier_file = dummy_dir / "dummy_verifier.py"
+    program_file = temp_dir / "my_program.py"
+    code_file = temp_dir / "my_code_module.py"
+    verification_program_file = temp_dir / "verify_syntax.py"
 
-    # Dummy Program (tries to use the code)
-    program_content = """
-import dummy_code
+    program_file.write_text("""
+import my_code_module
 import sys
-try:
-    result = dummy_code.buggy_multiply(5, 3)
-    expected = 15
-    print(f"Input: 5, 3")
-    print(f"Expected: {expected}")
-    print(f"Actual: {result}")
-    if result == expected:
-        print("VERIFICATION_SUCCESS: Correct result!")
-    else:
-        print(f"VERIFICATION_FAILURE: Incorrect result! Got {result}, expected {expected}")
-        sys.exit(1) # Indicate failure via exit code too
-except Exception as e:
-    print(f"VERIFICATION_FAILURE: Error during execution: {e}")
-    sys.exit(1)
-"""
-    program_file.write_text(program_content)
+# Simulate using the module and checking output
+val = int(sys.argv[1]) if len(sys.argv) > 1 else 5
+result = my_code_module.process(val)
+expected = val * 2
+print(f"Input: {val}")
+print(f"Result: {result}")
+print(f"Expected: {expected}")
+if result == expected:
+    print("VERIFICATION_SUCCESS")
+else:
+    print(f"VERIFICATION_FAILURE: Expected {expected}, got {result}")
+""", encoding="utf-8")
 
-    # Dummy Code (with a bug)
-    code_content_buggy = """
-# Dummy code module
-def buggy_multiply(a, b):
-    '''Intended to multiply, but adds instead.'''
-    print("Running buggy_multiply...") # Add some output
-    return a + b # Bug: should be a * b
-"""
-    code_file.write_text(code_content_buggy)
+    # Initial code with a bug
+    code_file.write_text("""
+# my_code_module.py
+def process(x):
+    # Bug: should be x * 2
+    return x + 2
+""", encoding="utf-8")
 
-    # Dummy Verifier (simple syntax check)
-    verifier_content = """
+    # Simple verification program (e.g., syntax check)
+    verification_program_file.write_text("""
 import sys
-import ast
-
-if len(sys.argv) < 2:
-    print("Verifier Error: No file path provided.")
-    sys.exit(2)
-
-file_path = sys.argv[1]
-print(f"Verifier: Checking syntax of {file_path}")
+import py_compile
+import os
+# Check syntax of the code file (passed as argument, but we'll hardcode for simplicity here)
+code_to_check = os.environ.get("CODE_FILE_TO_CHECK", "temp_fix_verification_loop/my_code_module.py")
+print(f"Checking syntax of: {code_to_check}")
 try:
-    with open(file_path, 'r') as f:
-        source = f.read()
-    ast.parse(source)
-    print("Verifier: Syntax OK.")
+    py_compile.compile(code_to_check, doraise=True)
+    print("Syntax OK.")
     sys.exit(0) # Success
-except FileNotFoundError:
-    print(f"Verifier Error: File not found: {file_path}")
-    sys.exit(3)
-except SyntaxError as e:
-    print(f"Verifier Error: Syntax error in {file_path}: {e}")
+except py_compile.PyCompileError as e:
+    print(f"Syntax Error: {e}")
     sys.exit(1) # Failure
 except Exception as e:
-    print(f"Verifier Error: Unexpected error checking {file_path}: {e}")
-    sys.exit(4)
-"""
-    verifier_file.write_text(verifier_content)
+    print(f"Verification Error: {e}")
+    sys.exit(1) # Failure
+""", encoding="utf-8")
+    # Set environment variable for the verification script
+    os.environ["CODE_FILE_TO_CHECK"] = str(code_file.resolve())
 
-    # Dummy Prompt
-    prompt_text = "Create a Python module 'dummy_code.py' with a function `buggy_multiply(a, b)` that returns the product of a and b."
 
     # --- Mock fix_verification_errors ---
-    # In a real scenario, this would be the actual LLM call function.
-    # Here, we mock it to simulate behavior for the example.
-    _original_fix_verification_errors = fix_verification_errors # Keep original if exists
-    _fix_call_count = 0
+    # This is crucial for testing without actual LLM calls / costs
+    # In a real test suite, use unittest.mock
+    _original_fix_verification_errors = fix_verification_errors
+    _call_count = 0
+
     def mock_fix_verification_errors(program, prompt, code, output, strength, temperature, verbose):
-        global _fix_call_count
-        _fix_call_count += 1
-        cost = 0.001 * strength + 0.0005 # Dummy cost calculation
-        model = f"mock-model-s{strength:.1f}"
-        explanation = ["Analysis based on output."]
-        issues_count = 1 # Default to 1 issue found
+        global _call_count
+        _call_count += 1
+        cost = 0.001 * _call_count # Simulate increasing cost
+        model = "mock_model_v1"
+        explanation = ["Detected deviation: Output shows 'Result: 7', 'Expected: 10'.", "Issue seems to be in the `process` function calculation."]
+        issues_count = 1 # Assume 1 issue initially
 
         fixed_program = program # Assume program doesn't need fixing
-        fixed_code = code # Default to no change
+        fixed_code = code
 
-        if "VERIFICATION_FAILURE" in output:
-            explanation.append("Detected verification failure in output.")
-            if "Incorrect result" in output and "a + b" in code:
-                 explanation.append("Identified potential addition bug instead of multiplication.")
-                 # Suggest the fix on the first few calls
-                 if _fix_call_count <= 2:
-                     fixed_code = code.replace("a + b", "a * b", 1)
-                     explanation.append("Suggested fix: Changed '+' to '*'.")
-                     issues_count = 0 # Assume fix resolves the issue
-                 else:
-                     explanation.append("Previously suggested fix, but assuming it didn't work.")
-                     issues_count = 1 # Keep issues count > 0 if fix keeps failing
-            else:
-                 explanation.append("Could not pinpoint specific fix.")
-                 issues_count = 1
+        # Simulate fixing the code on the first *real* attempt (call_count == 2, as first is initial)
+        if "VERIFICATION_FAILURE" in output and _call_count >= 2:
+             explanation = ["Identified incorrect addition `x + 2`.", "Corrected to multiplication `x * 2` based on prompt intent and output mismatch."]
+             fixed_code = """
+# my_code_module.py
+def process(x):
+    # Fixed: should be x * 2
+    return x * 2
+"""
+             issues_count = 0 # Fixed!
         elif "VERIFICATION_SUCCESS" in output:
-            explanation.append("Detected verification success.")
-            issues_count = 0
-        else:
-            explanation.append("Output does not contain clear SUCCESS/FAILURE markers.")
-            issues_count = 1 # Assume issues if unclear
+             explanation = ["Output indicates VERIFICATION_SUCCESS."]
+             issues_count = 0 # Already correct
 
         return {
             'explanation': explanation,
@@ -782,49 +810,51 @@ except Exception as e:
             'fixed_code': fixed_code,
             'total_cost': cost,
             'model_name': model,
-            'verification_issues_count': issues_count
+            'verification_issues_count': issues_count,
         }
 
-    # Replace the actual function with the mock for this example run
-    fix_verification_errors = mock_fix_verification_errors
+    # Replace the real function with the mock
+    # In package context, you might need to patch differently
+    # For this script execution:
+    # Note: This direct replacement might not work if the function is imported
+    # using `from .fix_verification_errors import fix_verification_errors`.
+    # A proper mock framework (`unittest.mock.patch`) is better.
+    # Let's assume for this example run, we can modify the global scope *before* the loop calls it.
+    # This is fragile. A better approach involves dependency injection or mocking frameworks.
+    # HACK: Re-assigning the imported name in the global scope of this script
+    globals()['fix_verification_errors'] = mock_fix_verification_errors
 
-    # --- Run the Loop ---
-    try:
-        results = fix_verification_errors_loop(
-            program_file=str(program_file),
-            code_file=str(code_file),
-            prompt=prompt_text,
-            verification_program=str(verifier_file),
-            strength=0.5,
-            temperature=0.1,
-            max_attempts=5,
-            budget=0.10, # Set a budget
-            verification_log_file=str(dummy_dir / "fix_loop_log.xml"),
-            verbose=True
-        )
 
-        console.print("\n[bold magenta]--- Final Results ---[/bold magenta]")
-        console.print(f"Success: {results['success']}")
-        console.print(f"Total Attempts: {results['total_attempts']}")
-        console.print(f"Total Cost: ${results['total_cost']:.6f}")
-        console.print(f"Model Name: {results['model_name']}")
+    console.print("\n[bold blue]--- Running fix_verification_errors_loop (with mock) ---[/bold blue]")
 
-        console.print("\n[bold magenta]--- Final Code ---[/bold magenta]")
-        console.print(Syntax(results['final_code'], "python", theme="default", line_numbers=True))
+    results = fix_verification_errors_loop(
+        program_file=str(program_file),
+        code_file=str(code_file),
+        prompt="Create a module 'my_code_module.py' with a function 'process(x)' that returns the input multiplied by 2.",
+        verification_program=str(verification_program_file),
+        strength=0.5,
+        temperature=0.1,
+        max_attempts=3,
+        budget=0.10, # Set a budget
+        verification_log_file=str(temp_dir / "test_verification.log"),
+        verbose=True,
+        program_args=["10", "5"] # Added example program arguments
+    )
 
-        console.print("\n[bold magenta]--- Statistics ---[/bold magenta]")
-        console.print(results['statistics'])
+    console.print("\n[bold blue]--- Loop Finished ---[/bold blue]")
+    console.print(f"Success: {results['success']}")
+    console.print(f"Total Attempts: {results['total_attempts']}")
+    console.print(f"Total Cost: ${results['total_cost']:.6f}")
+    console.print(f"Model Name: {results['model_name']}")
+    # console.print(f"Final Program:\n{results['final_program']}") # Can be long
+    console.print(f"Final Code:\n{results['final_code']}")
+    console.print(f"Statistics:\n{results['statistics']}")
 
-    except Exception as e:
-        console.print(f"\n[bold red]An error occurred during the example run: {e}[/bold red]")
-        import traceback
-        traceback.print_exc()
-    finally:
-        # Clean up dummy files
-        # shutil.rmtree(dummy_dir)
-        # console.print(f"\n[dim]Cleaned up dummy directory: {dummy_dir}[/dim]")
-        # Restore original function if it was mocked
-        if '_original_fix_verification_errors' in locals():
-             fix_verification_errors = _original_fix_verification_errors
-        pass # Keep files for inspection
+    # Restore original function if needed elsewhere
+    globals()['fix_verification_errors'] = _original_fix_verification_errors
 
+    # Clean up dummy files
+    # console.print("\n[yellow]Cleaning up dummy files...[/yellow]")
+    # shutil.rmtree(temp_dir)
+    console.print(f"\n[yellow]Dummy files and logs are in: {temp_dir}[/yellow]")
+    console.print("[yellow]Please review the log file 'test_verification.log' inside that directory.[/yellow]")
