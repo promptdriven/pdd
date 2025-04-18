@@ -56,7 +56,7 @@ def test_fix_code_module_errors_success(mock_load_prompt_template_success, mock_
     """
     Test the successful execution of fix_code_module_errors with valid inputs.
     """
-    update_program, update_code, fixed_program, fixed_code, total_cost, model_name = fix_code_module_errors(
+    update_program, update_code, fixed_program, fixed_code, program_code_fix, total_cost, model_name = fix_code_module_errors(
         program=VALID_PROGRAM,
         prompt=VALID_PROMPT,
         code=VALID_CODE,
@@ -70,6 +70,7 @@ def test_fix_code_module_errors_success(mock_load_prompt_template_success, mock_
     assert update_code is True
     assert fixed_program == "print('Hello, Universe!')"
     assert fixed_code == "def greet():\n    print('Hello, Universe!')"
+    assert program_code_fix == "Error analysis result"
     assert total_cost == 0.03  # Sum of both costs
     assert model_name == "gpt-3.5-turbo"
 

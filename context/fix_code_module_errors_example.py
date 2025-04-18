@@ -29,7 +29,7 @@ TypeError: unsupported operand type(s) for +: 'int' and 'str'
 """
 
     # Call the function to fix the errors
-    update_program, update_code, fixed_program, fixed_code, total_cost, model_name = fix_code_module_errors(
+    update_program, update_code, fixed_program, fixed_code, program_code_fix, total_cost, model_name = fix_code_module_errors(
         program=program_with_error,    # The program containing the error (str)
         prompt=original_prompt,        # The original prompt used to generate the code (str)
         code=code_module,             # The code module containing the error (str)
@@ -45,6 +45,7 @@ TypeError: unsupported operand type(s) for +: 'int' and 'str'
         update_code (bool): Whether the code module needs updating
         fixed_program (str): The fixed program code
         fixed_code (str): The fixed code module
+        program_code_fix (str): The raw output of the first LLM invoke which attempts to fix the program crash
         total_cost (float): Total cost in USD for the API calls
         model_name (str): Name of the model used for fixing
     """
@@ -54,6 +55,7 @@ TypeError: unsupported operand type(s) for +: 'int' and 'str'
     print(f"Code needs update: {update_code}")
     print(f"\nFixed program:\n{fixed_program}")
     print(f"\nFixed code module:\n{fixed_code}")
+    print(f"\nProgram code fix raw output:\n{program_code_fix}")
     print(f"\nTotal cost: ${total_cost:.4f}")
     print(f"Model used: {model_name}")
 

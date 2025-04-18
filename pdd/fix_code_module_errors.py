@@ -37,7 +37,7 @@ def fix_code_module_errors(
     strength: float,
     temperature: float = 0,
     verbose: bool = False
-) -> Tuple[bool, bool, str, str, float, str]:
+) -> Tuple[bool, bool, str, str, str, float, str]:
     """
     Fix errors in a code module that caused a program to crash and/or have errors.
     """
@@ -76,15 +76,16 @@ def fix_code_module_errors(
 
         total_cost += first_response.get('cost', 0)
         model_name = first_response.get('model_name', '')
+        program_code_fix = first_response['result']
 
         if verbose:
             print("[green]Error analysis complete[/green]")
-            print(Markdown(first_response['result']))
+            print(Markdown(program_code_fix))
             print(f"[yellow]Current cost: ${total_cost:.6f}[/yellow]")
 
         # Step 4: Second LLM invoke for code extraction
         extract_input = {
-            "program_code_fix": first_response['result'],
+            "program_code_fix": program_code_fix,
             "program": program,
             "code": code
         }
@@ -128,6 +129,7 @@ def fix_code_module_errors(
             result.update_code,
             result.fixed_program,
             result.fixed_code,
+            program_code_fix,
             total_cost,
             model_name
         )

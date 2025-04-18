@@ -137,6 +137,7 @@ def troublesome_function():
         return (True, True,  # update_program, update_code
                 "print('Fixed verification!')",  # fixed_program
                 "def troublesome_function(): return 'All good now!'",  # fixed_code
+                "LLM analysis of the error and fix suggestions",  # program_code_fix
                 0.5,  # cost
                 "mock-model-v1"  # model_name
                )
@@ -193,6 +194,7 @@ def expensive_problem():
             True,
             "raise RuntimeError('Still broken verification')",
             "def expensive_problem(): raise Exception('Still not fixed')",
+            "Detailed error analysis from LLM",  # program_code_fix
             6.0,  # cost each time
             "expensive-model"
         )
@@ -246,7 +248,7 @@ def test_fix_code_loop_exceed_max_attempts(temp_workspace):
     # We patch fix_code_module_errors to do nothing or return no changes repeatedly
     with patch("pdd.fix_code_loop.fix_code_module_errors") as mock_fix:
         # Always return no changes needed - to simulate repeated attempts with no improvement
-        mock_fix.return_value = (False, False, "", "", 1.0, "mocked_model")
+        mock_fix.return_value = (False, False, "", "", "No changes recommended", 1.0, "mocked_model")
 
         success, final_program, final_code, total_attempts, total_cost, model_name = fix_code_loop(
             code_file=code_file_path,
