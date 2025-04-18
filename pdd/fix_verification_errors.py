@@ -102,7 +102,7 @@ def fix_verification_errors(
             input_json=verification_input_json,
             strength=strength,
             temperature=temperature,
-            verbose=False,
+            verbose=False, # Keep internal llm_invoke verbose off unless needed
         )
         total_cost += verification_response.get('cost', 0.0)
         model_name = verification_response.get('model_name', model_name)
@@ -126,17 +126,36 @@ def fix_verification_errors(
 
     if verbose:
         rprint("\n[blue]Verification Result:[/blue]")
+        # Markdown object handles its own rendering, no extra needed here
         rprint(Markdown(verification_result))
 
     issues_found = False
     try:
+        # Attempt to match and extract digits directly
         count_match = re.search(r"<issues_count>(\d+)</issues_count>", verification_result)
         if count_match:
-            verification_issues_count = int(count_match.group(1))
+            verification_issues_count = int(count_match.group(1)) # Safe due to \d+
         else:
-            rprint("[yellow]Warning:[/yellow] Could not find <issues_count> tag in verification result. Assuming 0 issues.")
-            verification_issues_count = 0
+            # Specific match failed, check if tag exists with invalid content or is missing
+            generic_count_match = re.search(r"<issues_count>(.*?)</issues_count>", verification_result, re.DOTALL)
+            if generic_count_match:
+                # Tag found, but content is not \d+ -> Parsing Error
+                rprint("[bold red]Error:[/bold red] Could not parse integer value from <issues_count> tag.")
+                # Return the specific error structure for parsing errors after verification call
+                return {
+                    "explanation": None,
+                    "fixed_program": program,
+                    "fixed_code": code,
+                    "total_cost": total_cost, # Cost incurred so far
+                    "model_name": model_name, # Model used so far
+                    "verification_issues_count": 0, # Reset count on parsing error
+                }
+            else:
+                # Tag truly not found -> Warning
+                rprint("[yellow]Warning:[/yellow] Could not find <issues_count> tag in verification result. Assuming 0 issues.")
+                verification_issues_count = 0
 
+        # Proceed to check for details tag if count > 0
         if verification_issues_count > 0:
             details_match = re.search(r"<details>(.*?)</details>", verification_result, re.DOTALL)
             if details_match:
@@ -146,26 +165,21 @@ def fix_verification_errors(
                     if verbose:
                         rprint(f"\n[yellow]Found {verification_issues_count} potential issues. Proceeding to fix step.[/yellow]")
                 else:
+                    # Count > 0, but details empty -> Warning
                     rprint("[yellow]Warning:[/yellow] <issues_count> is > 0, but <details> tag is empty. Treating as no issues found.")
-                    verification_issues_count = 0
+                    verification_issues_count = 0 # Reset count
             else:
+                # Count > 0, but no details tag -> Warning
                 rprint("[yellow]Warning:[/yellow] <issues_count> is > 0, but could not find <details> tag. Treating as no issues found.")
-                verification_issues_count = 0
+                verification_issues_count = 0 # Reset count
         else:
+            # verification_issues_count is 0 (either parsed as 0 or defaulted after warning)
             if verbose:
                 rprint("\n[green]No issues found during verification.[/green]")
 
-    except ValueError:
-        rprint("[bold red]Error:[/bold red] Could not parse integer value from <issues_count> tag.")
-        return {
-            "explanation": None,
-            "fixed_program": program,
-            "fixed_code": code,
-            "total_cost": total_cost,
-            "model_name": model_name,
-            "verification_issues_count": 0,
-        }
+    # Removed ValueError catch as it's handled by the logic above
     except Exception as e:
+        # Generic catch for other potential parsing issues
         rprint(f"[bold red]Error parsing verification result:[/bold red] {e}")
         return {
             "explanation": None,
@@ -173,7 +187,7 @@ def fix_verification_errors(
             "fixed_code": code,
             "total_cost": total_cost,
             "model_name": model_name,
-            "verification_issues_count": 0,
+            "verification_issues_count": 0, # Reset count on parsing error
         }
 
     if issues_found and verification_details:
@@ -194,10 +208,10 @@ def fix_verification_errors(
                 input_json=fix_input_json,
                 strength=strength,
                 temperature=temperature,
-                verbose=False,
+                verbose=False, # Keep internal llm_invoke verbose off unless needed
             )
             total_cost += fix_response.get('cost', 0.0)
-            model_name = fix_response.get('model_name', model_name)
+            model_name = fix_response.get('model_name', model_name) # Update model name to the last one used
             fix_result = fix_response.get('result', '')
 
             if verbose:
@@ -205,6 +219,7 @@ def fix_verification_errors(
                 rprint(f"  [dim]Model Used:[/dim] {fix_response.get('model_name', 'N/A')}")
                 rprint(f"  [dim]Cost:[/dim] ${fix_response.get('cost', 0.0):.6f}")
                 rprint("\n[blue]Fix Result:[/blue]")
+                # Markdown object handles its own rendering, no extra needed here
                 rprint(Markdown(fix_result))
 
             fixed_program_match = re.search(r"<fixed_program>(.*?)</fixed_program>", fix_result, re.DOTALL)
@@ -232,22 +247,31 @@ def fix_verification_errors(
 
         except Exception as e:
             rprint(f"[bold red]Error during fix LLM call or extraction:[/bold red] {e}")
-            if verification_details and fix_explanation is None:
+            # Combine verification details with the error message if fix failed
+            final_explanation = f"<error>Error during fix generation: {str(e)}</error>\n"
+            if verification_details:
                 fix_explanation = f"[Error during fix generation: {e}]"
+            # Note: verification_issues_count should retain its value from the verification step
 
     if verbose:
         rprint(f"\n[bold blue]Total Cost for fix_verification_errors run:[/bold blue] ${total_cost:.6f}")
 
-    if issues_found and verification_details and fix_explanation:
-        final_explanation = (
-            f"<verification_details>{verification_details}</verification_details>\n"
-            f"<fix_explanation>{fix_explanation}</fix_explanation>"
-        )
-    elif issues_found and verification_details:
-        final_explanation = (
-            f"<verification_details>{verification_details}</verification_details>\n"
-            f"<fix_explanation>[Fix explanation not available or extraction failed]</fix_explanation>"
-        )
+    # Construct final explanation only if issues were initially found and processed
+    if verification_details:
+        if fix_explanation:
+             final_explanation = (
+                 f"<verification_details>{verification_details}</verification_details>\n"
+                 f"<fix_explanation>{fix_explanation}</fix_explanation>"
+             )
+        else:
+             # This case might occur if fix step wasn't run due to parsing issues after verification,
+             # or if fix_explanation extraction failed silently (though we added a default).
+             # Let's ensure we always provide some context if details were found.
+             final_explanation = (
+                 f"<verification_details>{verification_details}</verification_details>\n"
+                 f"<fix_explanation>[Fix explanation not available or fix step skipped]</fix_explanation>"
+             )
+    # If no issues were found initially (verification_details is None), final_explanation remains None
 
     return {
         "explanation": final_explanation,

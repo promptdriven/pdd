@@ -214,7 +214,7 @@ When using the loop option, it will run multiple fix attempts until tests pass o
             },
             "verification_program": {
                 "type": "string",
-                "description": "IMPORTANT: Required when using loop=true. Program that verifies if fixed code runs correctly during iterative fixing. Typically it is the _example.py file which is often in the context directory."
+                "description": "IMPORTANT: Required when using loop=true. Path to program file that verifies if fixed code runs correctly during iterative fixing. Typically it is the _example.py file which is often in the context directory."
             },
             "loop": {
                 "type": "boolean",
