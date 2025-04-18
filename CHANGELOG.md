@@ -1,3 +1,57 @@
+## v0.0.24 (2025-04-17)
+
+### Feat
+
+- update model configurations and enhance prompt documentation
+- enhance verification error handling and output reporting
+- implement iterative error fixing loop for code verification
+- restructure MCP server and enhance documentation
+- introduce `verify` command for functional correctness validation
+- enhance pdd-fix functionality with loop mode support
+- add fix_verification_errors functionality and example script
+- add new guidelines for project standards and best practices
+- expand README and server initialization with PDD workflows and concepts
+- improve output path handling in bug_main and generate_output_paths
+- update handle_pdd_bug function to include additional required parameters
+- enhance prompt splitting functionality and update documentation
+- enhance JSON kwargs handling in main.py and update tool definitions
+- update tool definitions in definitions.py for improved clarity and parameter requirements
+- enhance README and definitions with usage guidance for PDD commands
+- enhance tool definitions and command handling in PDD MCP server
+- update tool definitions to enforce 'force' parameter for file overwrites
+- enhance PDD MCP server with improved parameter handling and new test tool
+- enhance PDD MCP server with logging improvements and parameter validation
+- add initial PDD MCP server structure and tool imports
+- enhance PDD MCP server with command-line argument parsing and FastMCP integration
+- enhance PDD MCP server functionality and add new tools
+- update server example and core server functionality
+- enhance PDD command execution and API key management
+- add script to regenerate test files for weather API
+- enhance handler examples with file existence checks and improved argument handling
+- enhance PDD MCP handlers with multiple command implementations
+- implement main server functionality and example client for PDD MCP
+- add example handler for PDD code generation
+- implement core MCP server functionality and tool definitions
+- add README.md and prompt file for MCP server implementation
+- add PDD theme prompt file for .prompt extension
+- update Makefile and enhance VS Code extension for PDD
+- add initial VS Code extension for Prompt Driven Development
+- enhance ZSH completion script for PDD CLI
+- add release target to Makefile for version bump and package upload
+
+### Fix
+
+- update llm_model.csv and regression_analysis_log.prompt for accuracy
+
+### Refactor
+
+- enhance fix_verification_errors functionality and output structure
+- remove unused PDD tools and their handlers from definitions and handlers
+- simplify parameter guidance in definitions.py
+- remove PDD_TEST_TOOL and its handler from PDD MCP server
+- update handler examples and result formatting in PDD MCP
+- clean up prompt files by removing example references
+
 ## v0.0.23 (2025-04-06)
 
 ### Feat
