@@ -1,9 +1,11 @@
 import os
 import subprocess
 import shutil
+import xml.sax.saxutils as xmlutils
 from rich.console import Console
 from rich import print as rprint
 from pdd.fix_code_module_errors import fix_code_module_errors
+from rich.markdown import Markdown
 
 def fix_code_loop(
     code_file: str,
@@ -49,6 +51,8 @@ def fix_code_loop(
     total_attempts = 0
     total_cost = 0.0
     model_name = ""
+    # Initialize history log for tracking attempts with XML structure
+    history_log = ""
 
     # Check if verification program exists
     if not os.path.exists(verification_program):
@@ -83,9 +87,40 @@ def fix_code_loop(
                 f.write(result.stdout)
                 f.write(result.stderr)
 
+            # Record verification results in structured XML format
+            stdout_escaped = xmlutils.escape(result.stdout) if result.stdout else "None"
+            stderr_escaped = xmlutils.escape(result.stderr) if result.stderr else "None"
+            status = "Success" if result.returncode == 0 else f"Failed (Return Code: {result.returncode})"
+            
+            # Add verification information to history log
+            history_log += f'''
+<attempt number="{total_attempts + 1}">
+  <verification>
+    <status>{status}</status>
+    <output>
+{stdout_escaped}
+    </output>
+    <error>
+{stderr_escaped}
+    </error>
+  </verification>
+'''
             # Check for successful execution
             if result.returncode == 0:
                 rprint("[bold green]Code ran successfully![/bold green]")
+                # Close the final attempt tag
+                history_log += '''
+  <fixing>
+    <llm_analysis>
+No fixing required - execution succeeded.
+    </llm_analysis>
+    <decision>
+      update_program: false
+      update_code: false
+    </decision>
+  </fixing>
+</attempt>
+'''
                 success = True
                 break
 
@@ -133,27 +168,48 @@ def fix_code_loop(
             success = False
             break
 
-        # Call fix_code_module_errors
-        temp_console = Console(file=open(os.devnull, "w"), record=True)
-        with temp_console.capture() as capture:
-            update_program, update_code, fixed_program, fixed_code, cost, model_name = fix_code_module_errors(
-                program=program_content,
-                prompt=prompt,
-                code=code_content,
-                errors=error_message,
-                strength=strength,
-                temperature=temperature,
-                verbose=verbose,
-            )
-        captured_output = temp_console.export_text()
-        rprint(captured_output)
+        # Create the combined error message with history and current error
+        errors_input_for_llm = history_log + f'''
+<current_error>
+{error_message}
+</current_error>
+'''
+
+        # Call fix_code_module_errors with the history-enriched error log
+        update_program, update_code, fixed_program, fixed_code, program_code_fix, cost, model_name = fix_code_module_errors(
+            program=program_content,
+            prompt=prompt,
+            code=code_content,
+            errors=errors_input_for_llm,  # Pass the enriched error input
+            strength=strength,
+            temperature=temperature,
+            verbose=verbose,
+        )
+        
+        # Display the LLM analysis
+        rprint(Markdown(program_code_fix))
         with open(error_log_file, "a") as f:
-            f.write(captured_output)
+            f.write(f"LLM Analysis:\n{program_code_fix}\n")
 
         # Add the cost of this fix attempt
         total_cost += cost
 
-        # Now increment attempts right after we’ve incurred cost
+        # Record fixing results in XML format
+        program_code_fix_escaped = xmlutils.escape(program_code_fix)
+        history_log += f'''
+  <fixing>
+    <llm_analysis>
+{program_code_fix_escaped}
+    </llm_analysis>
+    <decision>
+      update_program: {update_program}
+      update_code: {update_code}
+    </decision>
+  </fixing>
+</attempt>
+'''
+
+        # Now increment attempts right after we've incurred cost
         total_attempts += 1
 
         # Check budget after fix
@@ -208,5 +264,12 @@ def fix_code_loop(
             with open(error_log_file, "a") as f:
                 f.write(f"Error reading final files: {e}\n")
             return False, "", "", total_attempts, total_cost, model_name
+
+    # Write the final history log to a separate file for debugging
+    try:
+        with open(error_log_file + ".history.xml", "w") as f:
+            f.write(history_log)
+    except Exception as e:
+        rprint(f"[bold red]Error writing history log: {e}[/bold red]")
 
     return success, final_program, final_code, total_attempts, total_cost, model_name

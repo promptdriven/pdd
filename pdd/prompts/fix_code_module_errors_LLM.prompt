@@ -8,6 +8,27 @@
 
 % Here are the error log(s) from the program run and potentially from prior program run fixes: <errors>{errors}</errors>
 
+% NOTE: The errors field may contain an XML-structured history of previous fixing attempts. If present, it will be formatted as follows:
+    <attempt number="..."> - Contains information about a specific fixing attempt
+    <verification> - Results from running and testing the code
+        <status> - Success/failure status with return code
+        <o> - Standard output from the verification run
+        <e> - Error messages from the verification run
+    </verification>
+    <fixing> - Details of the attempt to fix the error
+        <llm_analysis> - Analysis and reasoning from previous fixing attempts
+        <decision> - Which files were updated in the previous attempt
+    </fixing>
+    </attempt>
+    
+    <current_error> - Contains the most recent error that needs to be fixed now </current_error>
+ 
+% When analyzing errors, you should:
+  1. Review the history of previous attempts to understand what has been tried
+  2. Pay attention to which fixes worked partially or not at all
+  3. Avoid repeating approaches that failed in previous attempts
+  4. Focus on solving the current error found within the <current_error> tags
+
 % Follow these steps to solve these errors:
     Step 1. Compare the prompt to the code_module and explain differences, if any.
     Step 2. Compare the prompt to the program and explain differences, if any.
