@@ -78,10 +78,13 @@ max_attempts = 5
 budget = 10.0  # Example budget
 
 # 9. verification_log_file: Path for the verification log file.
-verification_log_file = "output/verification_log.txt"
+verification_log_file = "output/verification.log"
 
 # 10. verbose: Enable detailed logging.
 verbose = True
+
+# 11. program_args: List of arguments to pass to the program file.
+program_args = ["5", "3"] # Example arguments
 
 # --- Execute the Function ---
 results = fix_verification_errors_loop(
@@ -94,7 +97,8 @@ results = fix_verification_errors_loop(
     max_attempts=max_attempts,
     budget=budget,
     verification_log_file=verification_log_file,
-    verbose=verbose
+    verbose=verbose,
+    program_args=program_args # Pass the arguments here
 )
 
 # --- Display Results ---
