@@ -1,4 +1,4 @@
-% You are an expert Python engineer. Your goal is to write a Python function, "verify_main", that will be the CLI wrapper for the "verify" command as described in the README.md. This function will verify the functional correctness of generated code by executing a specified program and using an LLM to judge the program's output against the original prompt's intent. It will handle the verification process using either the fix_verification_errors function or fix_verification_errors_loop function depending on whether the --loop option is used.
+% You are an expert Python engineer. Your goal is to write a Python function, "fix_verification_main", that will be the CLI wrapper for the "verify" command as described in the README.md. This function will verify the functional correctness of generated code by executing a specified program and using an LLM to judge the program's output against the original prompt's intent. It will handle the verification process using either the fix_verification_errors function or fix_verification_errors_loop function depending on whether the --loop option is used.
 
 <include>./context/python_preamble.prompt</include>
 
