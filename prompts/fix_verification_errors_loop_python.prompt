@@ -14,6 +14,7 @@
         'budget' - A float representing the maximum cost allowed for the fixing process.
         'verification_log_file' - A string containing the path where this loop function will write detailed XML-formatted logs for each attempt (default: "verification.log").
         'verbose' - A boolean indicating whether to enable verbose logging (default: False).
+        'program_args' - An optional list of strings containing command-line arguments to pass to the 'program_file' when executed.
     Outputs:
         'success' - A boolean indicating whether the code was successfully fixed to meet the prompt's intent based on program execution.
         'final_program' - A string containing the contents of the final program file (potentially modified if `fix_verification_errors` suggests changes).
@@ -38,7 +39,7 @@
         - Best iteration tracker (This stores the state of the iteration with the minimum number of verification issues found by `fix_verification_errors`. If multiple iterations have the same minimum count, the one with the lowest attempt number is preferred. Store the attempt number, program backup path, code backup path, and the issue count).
         - A statistics tracker to record the initial verification state, final state, and improvements made during the fixing process.
     Step 3. Determine the initial state:
-        a. Run the `program_file` using `subprocess` to get initial output (capture stdout/stderr). Store this output.
+        a. Run the `program_file` using `subprocess`, passing the optional `program_args` if provided, to get initial output (capture stdout/stderr). Store this output.
         b. Append an XML entry to the `verification_log_file` tagged `<InitialState>` containing the timestamp and the captured output. Ensure the output is properly XML-escaped (replace `<`, `>`, `&`, `'`, `"` with `&lt;`, `&gt;`, `&amp;`, `&apos;`, `&quot;`).
         c. Read the initial contents of the `program_file` and `code_file`.
         d. Call `fix_verification_errors` with the initial program/code contents, prompt, and initial output (strength/temp can be minimal or 0 if only getting the count matters initially, but respect budget). Store the result (`initial_fix_result`).
@@ -48,7 +49,7 @@
         h. If `initial_fix_result['verification_issues_count']` is 0, set overall success flag to True, skip to Step 7 (bypassing the loop).
     Step 4. Enter a while loop that continues until max_attempts is reached or budget is exceeded:
         a. Print out to console the current attempt iteration number.
-        b. Run the `program_file` using `subprocess`, capturing its standard output and standard error into `program_output`.
+        b. Run the `program_file` using `subprocess`, passing the optional `program_args` if provided, capturing its standard output and standard error into `program_output`.
         c. Read the current contents of the `program_file` and `code_file` into `program_contents` and `code_contents` respectively.
         d. Create backup copies of the `program_file` and `code_file` in their respective directories, appending the current iteration number (e.g., `_iteration_{N}`) to the filenames. Store these backup paths.
         e. Call `fix_verification_errors` with the `program_contents`, `code_contents`, `prompt`, `program_output`, strength, temperature, and verbose flag. Store the returned dictionary (containing 'explanation', 'fixed_program', 'fixed_code', 'total_cost', 'model_name', 'verification_issues_count'). Let's call this `fix_result`.
