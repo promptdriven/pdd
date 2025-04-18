@@ -115,7 +115,7 @@ ifdef MODULE
 	@-PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python $(PROGRAM_FILE) 2> $(ERROR_FILE) || true
 	
 	@echo "Fixing crashes in $(PY_FILE)"
-	-@PYTHONPATH=$(PROD_DIR) pdd --strength .8 --verbose crash --loop --max-attempts 3 --budget 5.0 --output $(PDD_DIR)/$(MODULE)_fixed.py --output-program $(CONTEXT_DIR)/$(MODULE)_example_fixed.py $(PY_PROMPT) $(PY_FILE) $(PROGRAM_FILE) $(ERROR_FILE)
+	-@PYTHONPATH=$(PROD_DIR) pdd --strength .8 --verbose crash --loop --max-attempts 3 --budget 5.0 --output $(PDD_DIR)/$(MODULE).py --output-program $(CONTEXT_DIR)/$(MODULE)_example.py $(PY_PROMPT) $(PY_FILE) $(PROGRAM_FILE) $(ERROR_FILE)
 else
 	@echo "Please specify a MODULE to fix crashes"
 	@echo "Usage: make crash MODULE=<module_name>"
