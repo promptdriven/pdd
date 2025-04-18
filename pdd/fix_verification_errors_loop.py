@@ -552,7 +552,9 @@ def fix_verification_errors_loop(
                     console.print(f"Secondary verification passed: {secondary_verification_passed}")
                     # console.print(f"Secondary verification output:\n{verify_output}")
 
-                iteration_log_xml += f'  <SecondaryVerification passed="{secondary_verification_passed}">\n'
+                # FIX: Convert boolean to lowercase string for XML attribute
+                passed_str = str(secondary_verification_passed).lower()
+                iteration_log_xml += f'  <SecondaryVerification passed="{passed_str}">\n'
                 iteration_log_xml += f'    <ExitCode>{verify_ret_code}</ExitCode>\n'
                 iteration_log_xml += f'    <Output>{escape(verify_output)}</Output>\n'
                 iteration_log_xml += f'  </SecondaryVerification>\n'
