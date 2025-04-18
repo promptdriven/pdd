@@ -83,7 +83,7 @@ def crash_main(
         else:
             # Use single fix attempt
             from .fix_code_module_errors import fix_code_module_errors
-            update_program, update_code, final_program, final_code, cost, model = fix_code_module_errors(
+            update_program, update_code, final_program, final_code, program_code_fix, cost, model = fix_code_module_errors(
                 program_content, prompt_content, code_content, error_content, strength, temperature, verbose
             )
             success = True
