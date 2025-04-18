@@ -20,6 +20,6 @@
 <details>
     The detailed output of steps 1-5
 </details>
-<issues_found>true/false</issues_found>
+<issues_count>N</issues_count>
 
-% The issues_found field should be set to true if any issues, bugs, discrepancies, or potential problems were identified, otherwise set it to false.
+% The issues_count field should be set to the number of issues, bugs, discrepancies, or potential problems identified (an integer >= 0). Set it to 0 if no issues are found.
