@@ -23,7 +23,7 @@ def mock_load_models():
         mock_models = [
             MockModelInfo(
                 provider='OpenAI',
-                model='gpt-4o-mini',
+                model='gpt-4.1-nano',
                 input_cost=0.02,
                 output_cost=0.03,
                 coding_arena_elo=1500,
@@ -127,7 +127,7 @@ def test_llm_invoke_valid_input(mock_load_models, mock_set_llm_cache):
             0.5, 0.7, False
         )
 
-        assert response['model_name'] == 'gpt-4o-mini'
+        assert response['model_name'] == 'gpt-4.1-nano'
 
 def test_llm_invoke_missing_prompt(mock_load_models, mock_create_llm_instance, mock_select_model, mock_set_llm_cache):
     input_json = {"topic": "cats"}
@@ -215,7 +215,7 @@ def test_llm_invoke_output_pydantic(mock_load_models, mock_set_llm_cache):
 
         expected_result = SampleOutputModel(field1="value1", field2=123)
         assert response['result'] == expected_result
-        assert response['model_name'] == 'gpt-4o-mini'
+        assert response['model_name'] == 'gpt-4.1-nano'
 
 def test_llm_invoke_llm_error(mock_load_models, mock_set_llm_cache):
     class FaultyLLM:
@@ -257,7 +257,7 @@ def test_llm_invoke_verbose(mock_load_models, mock_set_llm_cache, capsys):
                 response = llm_invoke(prompt, input_json, strength, temperature, verbose, output_pydantic)
 
             captured = capsys.readouterr()
-            assert "Selected model: gpt-4o-mini" in captured.out
+            assert "Selected model: gpt-4.1-nano" in captured.out
             assert "Per input token cost: $0.02 per million tokens" in captured.out
             assert "Per output token cost: $0.03 per million tokens" in captured.out
             assert "Number of input tokens: None" in captured.out
@@ -271,7 +271,7 @@ def test_llm_invoke_verbose(mock_load_models, mock_set_llm_cache, capsys):
 def test_llm_invoke_with_env_variables(mock_load_models, mock_set_llm_cache):
     # Mock environment variables
     with patch.dict(os.environ, {
-        'PDD_MODEL_DEFAULT': 'gpt-4o-mini',
+        'PDD_MODEL_DEFAULT': 'gpt-4.1-nano',
         'PDD_PATH': '/fake/path'
     }):
         with patch('pdd.llm_invoke.create_llm_instance') as mock_create:
@@ -290,7 +290,7 @@ def test_llm_invoke_with_env_variables(mock_load_models, mock_set_llm_cache):
             mock_load_models.assert_called_once()
 
             assert response['result'] == "Mocked LLM response"
-            assert response['model_name'] == 'gpt-4o-mini'
+            assert response['model_name'] == 'gpt-4.1-nano'
 
 def test_llm_invoke_with_structured_output_not_supported(mock_load_models, mock_create_llm_instance, mock_set_llm_cache):
     # Select a model that does not support structured output
