@@ -149,10 +149,18 @@ def test_input_missing(mock_rprint, missing_arg):
     result = fix_verification_errors(**inputs)
     # Adjust expected return to match the specific input used
     expected_return = EXPECTED_ERROR_RETURN.copy()
-    expected_return['fixed_program'] = inputs['program']
-    expected_return['fixed_code'] = inputs['code']
+    # Update expected return based on which input was missing
+    if missing_arg == "program":
+        expected_return['fixed_program'] = ""
+    elif missing_arg == "code":
+        expected_return['fixed_code'] = ""
+    # If prompt or output is missing, fixed_program/fixed_code remain STD_PROGRAM/STD_CODE
+
     assert result == expected_return
-    mock_rprint.assert_called_once_with("[bold red]Error:[/bold red] Missing one or more required inputs (program, prompt, code, output).")
+    # Check that rprint was called once with the correct message
+    mock_rprint.assert_called_once_with(
+        "[bold red]Error:[/bold red] Missing one or more required inputs (program, prompt, code, output)."
+    )
 
 
 @patch('pdd.fix_verification_errors.rprint')
@@ -168,7 +176,10 @@ def test_input_invalid_strength(mock_rprint, invalid_strength):
         temperature=STD_TEMP
     )
     assert result == EXPECTED_ERROR_RETURN
-    mock_rprint.assert_called_once_with(f"[bold red]Error:[/bold red] Strength must be between 0.0 and 1.0, got {invalid_strength}.")
+    # Check that rprint was called once with the correct message
+    mock_rprint.assert_called_once_with(
+        f"[bold red]Error:[/bold red] Strength must be between 0.0 and 1.0, got {invalid_strength}."
+    )
 
 
 @patch('pdd.fix_verification_errors.rprint')
@@ -183,12 +194,16 @@ def test_load_template_failure(mock_rprint):
             code=STD_CODE,
             output=STD_OUTPUT,
             strength=STD_STRENGTH,
-            temperature=STD_TEMP
+            temperature=STD_TEMP,
+            verbose=False # Explicitly set verbose=False for clarity
         )
 
     assert result == EXPECTED_ERROR_RETURN
-    mock_rprint.assert_any_call("[blue]Loading prompt templates...[/blue]", extra={"markup": True}) # Assuming verbose=False, this might not print, adjust if needed or test verbose=True
-    mock_rprint.assert_any_call("[bold red]Error loading prompt templates:[/bold red] Template not found", extra={"markup": True})
+    # Only check for the error message, not the verbose one
+    mock_rprint.assert_any_call("[bold red]Error loading prompt templates:[/bold red] Template not found")
+    # Ensure the verbose message was NOT called
+    verbose_call = call("[blue]Loading prompt templates...[/blue]")
+    assert verbose_call not in mock_rprint.call_args_list
 
 
 @patch('pdd.fix_verification_errors.rprint')
@@ -213,7 +228,7 @@ def test_verification_llm_invoke_failure(mock_rprint):
     expected_return['total_cost'] = 0.0 # Error before cost is assigned
     expected_return['model_name'] = None
     assert result == expected_return
-    mock_rprint.assert_any_call("[bold red]Error during verification LLM call:[/bold red] API Error", extra={"markup": True})
+    mock_rprint.assert_any_call("[bold red]Error during verification LLM call:[/bold red] API Error")
 
 
 @patch('pdd.fix_verification_errors.rprint')
@@ -249,7 +264,7 @@ def test_fix_llm_invoke_failure(mock_rprint):
         "model_name": 'model-A', # Model from verification call
         "verification_issues_count": 1,
     }
-    mock_rprint.assert_any_call("[bold red]Error during fix LLM call or extraction:[/bold red] Fix API Error", extra={"markup": True})
+    mock_rprint.assert_any_call("[bold red]Error during fix LLM call or extraction:[/bold red] Fix API Error")
 
 
 @patch('pdd.fix_verification_errors.rprint')
@@ -273,7 +288,7 @@ def test_parsing_verification_no_issues_count_tag(mock_rprint):
     assert result['explanation'] is None
     assert result['total_cost'] == 0.01
     mock_llm_invoke.assert_called_once() # Fix should not be called
-    mock_rprint.assert_any_call("[yellow]Warning:[/yellow] Could not find <issues_count> tag in verification result. Assuming 0 issues.", extra={"markup": True})
+    mock_rprint.assert_any_call("[yellow]Warning:[/yellow] Could not find <issues_count> tag in verification result. Assuming 0 issues.")
 
 
 @patch('pdd.fix_verification_errors.rprint')
@@ -294,7 +309,11 @@ def test_parsing_verification_invalid_issues_count_value(mock_rprint):
         )
 
     assert result == expected_parse_error_return(cost=0.01, model='model-A')
-    mock_rprint.assert_any_call("[bold red]Error:[/bold red] Could not parse integer value from <issues_count> tag.", extra={"markup": True})
+    # Check that the specific error message was printed
+    mock_rprint.assert_any_call("[bold red]Error:[/bold red] Could not parse integer value from <issues_count> tag.")
+    # Ensure the warning message was NOT printed in this case
+    warning_call = call("[yellow]Warning:[/yellow] Could not find <issues_count> tag in verification result. Assuming 0 issues.")
+    assert warning_call not in mock_rprint.call_args_list
 
 
 @patch('pdd.fix_verification_errors.rprint')
@@ -318,7 +337,7 @@ def test_parsing_verification_no_details_tag(mock_rprint):
     assert result['explanation'] is None
     assert result['total_cost'] == 0.01
     mock_llm_invoke.assert_called_once() # Fix should not be called
-    mock_rprint.assert_any_call("[yellow]Warning:[/yellow] <issues_count> is > 0, but could not find <details> tag. Treating as no issues found.", extra={"markup": True})
+    mock_rprint.assert_any_call("[yellow]Warning:[/yellow] <issues_count> is > 0, but could not find <details> tag. Treating as no issues found.")
 
 
 @patch('pdd.fix_verification_errors.rprint')
@@ -342,7 +361,7 @@ def test_parsing_verification_empty_details_tag(mock_rprint):
     assert result['explanation'] is None
     assert result['total_cost'] == 0.01
     mock_llm_invoke.assert_called_once() # Fix should not be called
-    mock_rprint.assert_any_call("[yellow]Warning:[/yellow] <issues_count> is > 0, but <details> tag is empty. Treating as no issues found.", extra={"markup": True})
+    mock_rprint.assert_any_call("[yellow]Warning:[/yellow] <issues_count> is > 0, but <details> tag is empty. Treating as no issues found.")
 
 
 @patch('pdd.fix_verification_errors.rprint')
@@ -366,7 +385,7 @@ def test_parsing_fix_missing_program_tag(mock_rprint):
     assert result['explanation'] == "<verification_details>Issue details</verification_details>\n<fix_explanation>Fix explanation</fix_explanation>"
     assert result['verification_issues_count'] == 1
     assert result['total_cost'] == 0.03
-    mock_rprint.assert_any_call("[yellow]Warning:[/yellow] Could not find <fixed_program> tag in fix result. Using original program.", extra={"markup": True})
+    mock_rprint.assert_any_call("[yellow]Warning:[/yellow] Could not find <fixed_program> tag in fix result. Using original program.")
 
 
 @patch('pdd.fix_verification_errors.rprint')
@@ -390,7 +409,7 @@ def test_parsing_fix_missing_code_tag(mock_rprint):
     assert result['explanation'] == "<verification_details>Issue details</verification_details>\n<fix_explanation>Fix explanation</fix_explanation>"
     assert result['verification_issues_count'] == 1
     assert result['total_cost'] == 0.03
-    mock_rprint.assert_any_call("[yellow]Warning:[/yellow] Could not find <fixed_code> tag in fix result. Using original code module.", extra={"markup": True})
+    mock_rprint.assert_any_call("[yellow]Warning:[/yellow] Could not find <fixed_code> tag in fix result. Using original code module.")
 
 
 @patch('pdd.fix_verification_errors.rprint')
@@ -415,7 +434,7 @@ def test_parsing_fix_missing_explanation_tag(mock_rprint):
     assert result['explanation'] == expected_explanation
     assert result['verification_issues_count'] == 1
     assert result['total_cost'] == 0.03
-    mock_rprint.assert_any_call("[yellow]Warning:[/yellow] Could not find <explanation> tag in fix result.", extra={"markup": True})
+    mock_rprint.assert_any_call("[yellow]Warning:[/yellow] Could not find <explanation> tag in fix result.")
 
 
 @patch('pdd.fix_verification_errors.rprint')

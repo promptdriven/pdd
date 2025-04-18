@@ -41,11 +41,10 @@ logger.info("Log level set to %s", log_level)
 
 # Define server initialization message and workflow prompt
 INITIALIZATION_MESSAGE = """
-PDD MCP Server v1.0.0: Prompt-Driven Development Tools
+PDD MCP Server: Prompt-Driven Development Tools
 
 CORE CONCEPT:
-In Prompt-Driven Development (PDD), prompts are the primary artifact, while code is generated. 
-When changes are needed, modify prompts rather than directly editing code.
+In Prompt-Driven Development (PDD), prompts are the primary artifact, while code is generated. When changes are needed, modify prompts rather than directly editing code. All the code updates and modifications are done by this MCP Server.
 
 TOOL CATEGORIES:
 - Code Generation: pdd-generate, pdd-example
@@ -59,6 +58,7 @@ CRITICAL NOTES:
 - After prompt changes, 'example' must be updated to reflect interfaces
 - pdd-fix supports loop mode (automated iterative fixing) by setting 'loop': true
 - ERROR_FILE is always required for pdd-fix (even with loop=true), but can be a path to a non-existent file when using loop mode
+- Default a strength of 0.8 unless otherwise specified
 
 For detailed workflow guidance, see the 'pdd-workflows' prompt.
 """
