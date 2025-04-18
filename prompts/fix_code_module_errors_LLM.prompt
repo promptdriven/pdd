@@ -11,13 +11,13 @@
 % NOTE: The errors field may contain an XML-structured history of previous fixing attempts. If present, it will be formatted as follows:
     <attempt number="..."> - Contains information about a specific fixing attempt
     <verification> - Results from running and testing the code
-        <status> - Success/failure status with return code
-        <o> - Standard output from the verification run
-        <e> - Error messages from the verification run
+        <status> - Success/failure status with return code </status>
+        <output> - Standard output from the verification run </output>
+        <error> - Error messages from the verification run </error>
     </verification>
     <fixing> - Details of the attempt to fix the error
-        <llm_analysis> - Analysis and reasoning from previous fixing attempts
-        <decision> - Which files were updated in the previous attempt
+        <llm_analysis> - Analysis and reasoning from previous fixing attempts </llm_analysis>   
+        <decision> - Which files were updated in the previous attempt </decision>
     </fixing>
     </attempt>
     
