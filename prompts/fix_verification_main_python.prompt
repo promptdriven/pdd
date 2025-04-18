@@ -1,0 +1,102 @@
+% You are an expert Python engineer. Your goal is to write a Python function, "verify_main", that will be the CLI wrapper for the "verify" command as described in the README.md. This function will verify the functional correctness of generated code by executing a specified program and using an LLM to judge the program's output against the original prompt's intent. It will handle the verification process using either the fix_verification_errors function or fix_verification_errors_loop function depending on whether the --loop option is used.
+
+<include>./context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        - `ctx` (`click.Context`): The Click context object containing CLI options and parameters.
+            Context parameters used:
+            - strength (float): Model strength parameter, defaults to 0.9
+            - temperature (float): Model temperature parameter, defaults to 0
+            - force (bool): Whether to force overwrite existing files
+            - quiet (bool): Whether to suppress output messages
+            - verbose (bool): Whether to enable verbose output for debugging purposes
+        - `prompt_file` (str): The filename of the prompt file that generated the code being verified.
+        - `code_file` (str): The filename of the code file to be verified and potentially fixed.
+        - `program_file` (str): The filename of the executable program to run for verification.
+        - `output_results` (Optional[str]): Path where to save the verification and fixing results log.
+        - `output_code` (Optional[str]): Path where to save the successfully verified code file.
+        - `loop` (bool): If True, perform iterative verification with error fixing.
+        - `verification_program` (Optional[str]): Path to a Python program that verifies if the code still runs correctly after modifications. Required if --loop is used.
+        - `max_attempts` (int): Maximum number of verification attempts before giving up. Default is 3.
+        - `budget` (float): Maximum cost allowed for the verification process. Default is $5.0.
+    Outputs:
+        - Returns a tuple containing:
+            - `bool`: Success status of verification (True if program verified successfully)
+            - `str`: The final program code after verification attempts
+            - `str`: The final code file content after verification attempts
+            - `int`: Total number of attempts made
+            - `float`: Total cost of verification process
+            - `str`: Name of the model used
+
+% Important Implementation Notes:
+1. File Path Handling:
+   - When calling fix_verification_errors_loop, pass prompt_file, code_file, program_file, and verification_program as separate arguments
+   - When calling fix_verification_errors, read the contents of the files first and pass them as strings
+   - Use construct_paths to generate default output paths when not explicitly provided
+
+2. Error Handling Requirements:
+   - Validate verification program:
+     * Raise click.UsageError if --loop is used without --verification-program
+   - Handle file operations:
+     * Use try/except blocks for file reading/writing
+     * Provide formatted error messages using rich.print
+   - Exit with sys.exit(1) on critical errors
+
+3. Verification Process:
+   - For loop=True:
+     * Call fix_verification_errors_loop with all parameters including max_attempts and budget
+     * This handles the entire iterative verification and fixing process
+   - For loop=False:
+     * Call fix_verification_errors once with the prompt, code, and program output
+     * If issues are found, it will generate a single round of fixes
+
+4. Verbose Output:
+   - Add a `verbose` parameter to both function calls.
+   - When `verbose` is True, provide additional debugging information during the verification process.
+
+5. User Feedback:
+   - Use rich.print for formatted output
+   - Show success/failure status
+   - Display total attempts and cost
+   - Show model name used
+   - List saved file paths
+   - Summarize verification results and any improvements made
+
+6. Return Values:
+   - Return a tuple with (success_status, final_program, final_code, attempts, total_cost, model_name)
+
+<examples>
+   % Here is how to use the Python Click library to create a command line program:
+   <click_example>
+   <include>context/click_example.py</include>
+   </click_example>
+
+   % Here are examples of how to use internal modules:
+   <internal_example_modules>
+      - Here is an example of how to use the `construct_paths` function:
+      <construct_paths_example>
+      <include>context/construct_paths_example.py</include>
+      </construct_paths_example>
+
+      - Here is an example of how to use the `fix_verification_errors` function:
+      <fix_verification_errors_example>
+      <include>context/fix_verification_errors_example.py</include>
+      </fix_verification_errors_example>
+
+      - Here is an example of how to use the `fix_verification_errors_loop` function:
+      <fix_verification_errors_loop_example>
+      <include>context/fix_verification_errors_loop_example.py</include>
+      </fix_verification_errors_loop_example>
+
+      - Here is how to get the language:
+      <get_language_example>
+      <include>context/get_language_example.py</include>
+      </get_language_example>
+   </internal_example_modules>
+</examples>
+
+% Here is the pdd README for the 'verify' command that describes how it should work:
+<cli_command_readme>
+   <include>./README.md</include>
+</cli_command_readme>
