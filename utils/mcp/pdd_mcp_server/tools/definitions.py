@@ -218,7 +218,7 @@ When using the loop option, it will run multiple fix attempts until tests pass o
             },
             "loop": {
                 "type": "boolean",
-                "description": "Enable iterative fixing process that automatically runs tests, fixes issues, and retries until successful or max attempts reached"
+                "description": "Enable iterative fixing process that automatically runs tests, fixes issues, and retries until successful or max attempts reached. In general this should default to true."
             },
             "max_attempts": {
                 "type": "integer",
