@@ -2,48 +2,25 @@ import sys
 import os
 import subprocess
 import click
-import logging
-import json
-from pathlib import Path
 from typing import Optional, Tuple, List, Dict, Any
-
-import requests
 
 # Use Rich for pretty printing to the console
 from rich import print as rich_print
 from rich.panel import Panel
 from rich.syntax import Syntax
-from rich.text import Text
-from rich.console import Console
 
 # Internal imports using relative paths
 from .construct_paths import construct_paths
 from .fix_verification_errors import fix_verification_errors
 from .fix_verification_errors_loop import fix_verification_errors_loop
-# Import DEFAULT_STRENGTH from the main package
-from . import DEFAULT_STRENGTH, DEFAULT_TIME
-from .python_env_detector import detect_host_python_executable
-from .core.cloud import CloudConfig, get_cloud_timeout
+# Assuming get_language might be needed to determine how to run the program_file
+# from .get_language import get_language # Not strictly required by prompt, but likely needed for robust program execution
 
 # Default values from the README
-DEFAULT_TEMPERATURE = 0.0
 DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_BUDGET = 5.0
-
-# Configure logging
-logger = logging.getLogger(__name__)
-console = Console()
-
-
-def _env_flag_enabled(name: str) -> bool:
-    """Return True when an env var is set to a truthy value."""
-    value = os.environ.get(name)
-    if value is None:
-        return False
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
-
-# Define a constant for the verification program name
-VERIFICATION_PROGRAM_NAME = "verification_program.py" # Example, adjust if needed
+DEFAULT_STRENGTH = 0.9 # Higher default for verification/fixing tasks
+DEFAULT_TEMPERATURE = 0.0
 
 def run_program(program_path: str, args: List[str] = []) -> Tuple[bool, str, str]:
     """
@@ -64,7 +41,7 @@ def run_program(program_path: str, args: List[str] = []) -> Tuple[bool, str, str
         # A more robust solution might use the 'language' from construct_paths
         interpreter = []
         if program_path.endswith(".py"):
-            interpreter = [detect_host_python_executable()] # Use environment-aware Python executable
+            interpreter = [sys.executable] # Use the current Python interpreter
         elif program_path.endswith(".js"):
             interpreter = ["node"]
         elif program_path.endswith(".sh"):
@@ -73,21 +50,13 @@ def run_program(program_path: str, args: List[str] = []) -> Tuple[bool, str, str
 
         command = interpreter + [program_path] + args
         rich_print(f"[dim]Running command:[/dim] {' '.join(command)}")
-        rich_print(f"[dim]Working directory:[/dim] {os.path.dirname(program_path) if program_path else 'None'}")
-        rich_print(f"[dim]Environment PYTHONPATH:[/dim] {os.environ.get('PYTHONPATH', 'Not set')}")
 
-        # Create a copy of environment with PYTHONUNBUFFERED set
-        env = os.environ.copy()
-        env['PYTHONUNBUFFERED'] = '1'  # Force unbuffered output
-        
         process = subprocess.run(
             command,
             capture_output=True,
             text=True,
             check=False, # Don't raise exception on non-zero exit code
-            timeout=60, # Add a timeout to prevent hangs
-            env=env, # Pass modified environment variables
-            cwd=os.path.dirname(program_path) if program_path else None # Set working directory
+            timeout=60 # Add a timeout to prevent hangs
         )
 
         success = process.returncode == 0
@@ -95,17 +64,11 @@ def run_program(program_path: str, args: List[str] = []) -> Tuple[bool, str, str
         stderr = process.stderr
 
         if not success:
-            rich_print(f"[yellow]Warning:[/yellow] Program '{os.path.basename(program_path)}' exited with code {process.returncode}.")
-            
-            # Check for syntax errors specifically
-            if "SyntaxError" in stderr:
-                rich_print("[bold red]Syntax Error Detected:[/bold red]")
-                rich_print(Panel(stderr, border_style="red", title="Python Syntax Error"))
-                # Return with special indicator for syntax errors
-                return False, stdout, f"SYNTAX_ERROR: {stderr}"
-            elif stderr:
-                rich_print("[yellow]Stderr:[/yellow]")
-                rich_print(Panel(stderr, border_style="yellow"))
+             rich_print(f"[yellow]Warning:[/yellow] Program '{os.path.basename(program_path)}' exited with code {process.returncode}.")
+             if stderr:
+                 rich_print("[yellow]Stderr:[/yellow]")
+                 rich_print(Panel(stderr, border_style="yellow"))
+
 
         return success, stdout, stderr
 
@@ -116,8 +79,8 @@ def run_program(program_path: str, args: List[str] = []) -> Tuple[bool, str, str
         rich_print(f"[bold red]Error:[/bold red] Program execution timed out: '{program_path}'")
         return False, "", f"Program execution timed out: {program_path}"
     except Exception as e:
-        logger.error(f"An unexpected error occurred while running {program_path}: {e}")
-        return False, "", f"An unexpected error occurred: {e}"
+        rich_print(f"[bold red]Error:[/bold red] Failed to run program '{program_path}': {e}")
+        return False, "", f"Failed to run program: {e}"
 
 def fix_verification_main(
     ctx: click.Context,
@@ -126,14 +89,10 @@ def fix_verification_main(
     program_file: str,
     output_results: Optional[str],
     output_code: Optional[str],
-    output_program: Optional[str],
     loop: bool,
-    verification_program: Optional[str],  # Only used if loop=True
+    verification_program: Optional[str], # Only used if loop=True
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     budget: float = DEFAULT_BUDGET,
-    agentic_fallback: bool = True,
-    strength: Optional[float] = None,
-    temperature: Optional[float] = None,
 ) -> Tuple[bool, str, str, int, float, str]:
     """
     CLI wrapper for the 'verify' command. Verifies code correctness by running
@@ -147,7 +106,6 @@ def fix_verification_main(
         program_file (str): Path to the program to run for verification.
         output_results (Optional[str]): Path to save verification results log.
         output_code (Optional[str]): Path to save the verified code file.
-        output_program (Optional[str]): Path to save the verified program file.
         loop (bool): If True, perform iterative verification and fixing.
         verification_program (Optional[str]): Path to a verification program (required if loop=True).
         max_attempts (int): Max attempts for the loop.
@@ -162,13 +120,13 @@ def fix_verification_main(
             - total_cost (float): Total cost incurred.
             - model_name (str): Name of the LLM used.
     """
-    # Extract global options from context (prefer passed parameters over ctx.obj)
-    strength: float = strength if strength is not None else ctx.obj.get('strength', DEFAULT_STRENGTH)
-    temperature: float = temperature if temperature is not None else ctx.obj.get('temperature', DEFAULT_TEMPERATURE)
-    force: bool = ctx.obj.get('force', False)
-    quiet: bool = ctx.obj.get('quiet', False)
-    verbose: bool = ctx.obj.get('verbose', False)
-    time: float = ctx.obj.get('time', DEFAULT_TIME) # Get time from context, default 0.25
+    # Extract global options from context
+    params = ctx.params
+    strength: float = params.get('strength', DEFAULT_STRENGTH)
+    temperature: float = params.get('temperature', DEFAULT_TEMPERATURE)
+    force: bool = params.get('force', False)
+    quiet: bool = params.get('quiet', False)
+    verbose: bool = params.get('verbose', False)
 
     # --- Input Validation ---
     if loop and not verification_program:
@@ -188,7 +146,7 @@ def fix_verification_main(
             rich_print(f"  Mode: [yellow]Single Pass[/yellow]")
         rich_print(f"  Strength: {strength}, Temperature: {temperature}")
 
-    # ------------------- File-path handling -------------------
+    # --- File Path Handling ---
     input_file_paths: Dict[str, str] = {
         "prompt_file": prompt_file,
         "code_file": code_file,
@@ -204,159 +162,80 @@ def fix_verification_main(
     command_options: Dict[str, Optional[str]] = {
         "output_results": output_results,
         "output_code": output_code,
-        "output_program": output_program,
     }
 
-    # Initial default values (in case we need the manual fallback)
-    input_strings: Dict[str, str] = {}
-    output_code_path: Optional[str] = output_code
-    output_results_path: Optional[str] = output_results
-    output_program_path: Optional[str] = output_program
-    language: str = ""
-
     try:
-        # First try the official helper.
-        resolved_config, input_strings, output_file_paths, language = construct_paths(
+        input_strings, output_file_paths, language = construct_paths(
             input_file_paths=input_file_paths,
             force=force,
             quiet=quiet,
-            command="verify",
-            command_options=command_options,
-            context_override=ctx.obj.get('context'),
-            confirm_callback=ctx.obj.get('confirm_callback')
+            command="verify", # Use 'verify' command type
+            command_options=command_options
         )
+        # Extract resolved output paths
         output_code_path = output_file_paths.get("output_code")
         output_results_path = output_file_paths.get("output_results")
-        output_program_path = output_file_paths.get("output_program")
 
         if verbose:
-            rich_print("[dim]Resolved output paths via construct_paths.[/dim]")
+            rich_print("[dim]Resolved Output Paths:[/dim]")
+            rich_print(f"  Code: {output_code_path}")
+            rich_print(f"  Results: {output_results_path}")
+            rich_print(f"  Detected Language: {language}")
 
-    except click.Abort:
-        # User cancelled - re-raise to stop the sync loop
-        raise
+    except FileNotFoundError as e:
+        rich_print(f"[bold red]Error:[/bold red] Input file not found: {e}")
+        sys.exit(1)
     except Exception as e:
-        # If the helper does not understand the "verify" command fall back.
-        if "invalid command" in str(e).lower():
-            if verbose:
-                rich_print(
-                    "[yellow]construct_paths does not recognise "
-                    "'verify'. Falling back to manual path handling.[/yellow]"
-                )
-            try:
-                # Manually read the three mandatory files
-                with open(prompt_file, "r") as f:
-                    input_strings["prompt_file"] = f.read()
-                with open(code_file, "r") as f:
-                    input_strings["code_file"] = f.read()
-                with open(program_file, "r") as f:
-                    input_strings["program_file"] = f.read()
-            except FileNotFoundError as fe:
-                rich_print(f"[bold red]Error:[/bold red] {fe}")
-                # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
-                return False, "", "", 0, 0.0, f"FileNotFoundError: {fe}"
-
-            # Pick or build output paths
-            if output_code_path is None:
-                base, ext = os.path.splitext(code_file)
-                output_code_path = f"{base}_verified{ext}"
-            if output_results_path is None:
-                base, _ = os.path.splitext(program_file)
-                output_results_path = f"{base}_verify_results.log"
-            if output_program_path is None:
-                base_prog, ext_prog = os.path.splitext(program_file)
-                output_program_path = f"{base_prog}_verified{ext_prog}"
-
-            if program_file.endswith(".py"): language = "python"
-            elif program_file.endswith(".js"): language = "javascript"
-            elif program_file.endswith(".sh"): language = "bash"
-        else:
-            # Some other error – re‑raise / abort
-            rich_print(f"[bold red]Error:[/bold red] Failed during path construction: {e}")
-            if verbose:
-                import traceback
-                rich_print(Panel(traceback.format_exc(), title="Traceback", border_style="red"))
-            # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
-            return False, "", "", 0, 0.0, f"Error: {e}"
+        rich_print(f"[bold red]Error:[/bold red] Failed during path construction: {e}")
+        sys.exit(1)
 
     # --- Core Logic ---
     success: bool = False
-    final_program: str = input_strings.get("program_file", "")
-    final_code: str = input_strings.get("code_file", "")
+    final_program: str = input_strings.get("program_file", "") # Initialize with input content
+    final_code: str = input_strings.get("code_file", "")     # Initialize with input content
     attempts: int = 0
     total_cost: float = 0.0
     model_name: str = "N/A"
-    results_log_content: str = ""
-
-    # Determine cloud vs local execution preference
-    is_local_execution_preferred = ctx.obj.get('local', False)
-    cloud_only = _env_flag_enabled("PDD_CLOUD_ONLY") or _env_flag_enabled("PDD_NO_LOCAL_FALLBACK")
-    current_execution_is_local = is_local_execution_preferred and not cloud_only
-
-    # Cloud execution tracking
-    cloud_execution_attempted = False
-    cloud_execution_succeeded = False
+    results_log_content: str = "" # To store content for the results file
 
     try:
         if loop:
-            # Determine if loop should use cloud for LLM calls (hybrid mode)
-            # Local verification execution stays local, but LLM fix calls can go to cloud
-            use_cloud_for_loop = not is_local_execution_preferred and not cloud_only
-
-            # If cloud_only is set but we're in loop mode, we still use hybrid approach
-            if cloud_only and not is_local_execution_preferred:
-                use_cloud_for_loop = True
-
-            if verbose:
-                mode_desc = "hybrid (local execution + cloud LLM)" if use_cloud_for_loop else "local"
-                console.print(Panel(f"Performing {mode_desc} verification loop...", title="[blue]Mode[/blue]", expand=False))
-
             if not quiet:
-                rich_print("[dim]Running Iterative Verification (fix_verification_errors_loop)...[/dim]")
-            try:
-                # Build kwargs for fix_verification_errors_loop
-                loop_kwargs = {
-                    "program_file": program_file,
-                    "code_file": code_file,
-                    "prompt": input_strings["prompt_file"],
-                    "prompt_file": prompt_file,
-                    "verification_program": verification_program,
-                    "strength": strength,
-                    "temperature": temperature,
-                    "llm_time": time,
-                    "max_attempts": max_attempts,
-                    "budget": budget,
-                    "verification_log_file": output_results_path,
-                    "verbose": verbose,
-                    "program_args": [],
-                    "agentic_fallback": agentic_fallback,
-                }
-                # Only pass use_cloud when explicitly True (cloud not ready for prod yet)
-                if use_cloud_for_loop:
-                    loop_kwargs["use_cloud"] = True
+                rich_print("\n[bold blue]Running Iterative Verification (fix_verification_errors_loop)...[/bold blue]")
 
-                # Call fix_verification_errors_loop for iterative fixing
-                loop_results = fix_verification_errors_loop(**loop_kwargs)
-                success = loop_results.get('success', False)
-                final_program = loop_results.get('final_program', "") # Use .get for safety
-                final_code = loop_results.get('final_code', "")       # Use .get for safety
-                attempts = loop_results.get('total_attempts', 0)    # Use .get for safety
-                total_cost = loop_results.get('total_cost', 0.0)    # Use .get for safety
-                model_name = loop_results.get('model_name', "N/A")  # Use .get for safety
-                # Capture full statistics if available
-                # statistics = loop_results.get('statistics', {})
-            except Exception as e:
-                rich_print(f"[bold red]Error during loop execution:[/bold red] {e}")
-                if verbose:
-                    import traceback
-                    rich_print(Panel(traceback.format_exc(), title="Traceback", border_style="red"))
-                success = False
+            # fix_verification_errors_loop handles file I/O internally
+            # Pass file paths directly
+            # TODO: How are program_args passed? Assuming empty list for now. Needs CLI option.
+            program_args: List[str] = []
+
+            loop_results = fix_verification_errors_loop(
+                program_file=program_file,
+                code_file=code_file,
+                prompt=input_strings["prompt_file"], # Prompt content is needed
+                verification_program=verification_program, # Path is needed
+                strength=strength,
+                temperature=temperature,
+                max_attempts=max_attempts,
+                budget=budget,
+                verification_log_file=output_results_path, # Pass path for internal logging
+                verbose=verbose,
+                program_args=program_args
+            )
+            success = loop_results['success']
+            final_program = loop_results['final_program'] # Loop function returns final content
+            final_code = loop_results['final_code']       # Loop function returns final content
+            attempts = loop_results['total_attempts']
+            total_cost = loop_results['total_cost']
+            model_name = loop_results['model_name']
+            # The loop function writes its own detailed log, so we don't need to build one here.
+            # We just need to ensure the path was passed correctly.
+
         else: # Single pass verification
             if not quiet:
                 rich_print("\n[bold blue]Running Single Pass Verification (fix_verification_errors)...[/bold blue]")
             attempts = 1 # Single pass is one attempt
 
-            # 1. Run the program file to get its output (always local)
+            # 1. Run the program file to get its output
             if not quiet:
                 rich_print(f"Executing program: [cyan]{program_file}[/cyan]")
             run_success, program_stdout, program_stderr = run_program(program_file)
@@ -367,215 +246,69 @@ def fix_verification_main(
                  rich_print(Panel(program_output if program_output else "[No Output]", border_style="dim"))
                  rich_print("[dim]--- End Program Output ---[/dim]")
 
-            # 2. Attempt cloud verification first if not local preferred
-            if not current_execution_is_local:
-                if verbose:
-                    console.print(Panel("Attempting cloud verification execution...", title="[blue]Mode[/blue]", expand=False))
+            # Check if program ran successfully before calling LLM (optional, but good practice)
+            # if not run_success:
+            #     rich_print("[yellow]Warning:[/yellow] Program execution failed. LLM verification might be less effective.")
 
-                jwt_token = CloudConfig.get_jwt_token(verbose=verbose)
+            # 2. Call fix_verification_errors with content and program output
+            if not quiet:
+                rich_print("Calling LLM to verify program output against prompt...")
 
-                if not jwt_token:
-                    if cloud_only:
-                        console.print("[red]Cloud authentication failed.[/red]")
-                        raise click.UsageError("Cloud authentication failed")
-                    console.print("[yellow]Cloud authentication failed. Falling back to local execution.[/yellow]")
-                    current_execution_is_local = True
+            fix_results = fix_verification_errors(
+                program=input_strings["program_file"],
+                prompt=input_strings["prompt_file"],
+                code=input_strings["code_file"],
+                output=program_output, # Pass the captured output
+                strength=strength,
+                temperature=temperature,
+                verbose=verbose
+            )
 
-                if jwt_token and not current_execution_is_local:
-                    cloud_execution_attempted = True
-                    # Build cloud payload
-                    payload = {
-                        "programContent": input_strings["program_file"],
-                        "promptContent": input_strings["prompt_file"],
-                        "codeContent": input_strings["code_file"],
-                        "outputContent": program_output,
-                        "language": language,
-                        "strength": strength,
-                        "temperature": temperature,
-                        "time": time if time is not None else 0.25,
-                        "verbose": verbose,
-                    }
+            # Determine success: If no issues were found OR if fixes were applied
+            # The definition of 'success' here means the *final* state is verified.
+            issues_found = fix_results['verification_issues_count'] > 0
+            code_updated = fix_results['fixed_code'] != input_strings["code_file"]
+            program_updated = fix_results['fixed_program'] != input_strings["program_file"]
 
-                    headers = {
-                        "Authorization": f"Bearer {jwt_token}",
-                        "Content-Type": "application/json"
-                    }
-                    cloud_url = CloudConfig.get_endpoint_url("verifyCode")
-
-                    try:
-                        response = requests.post(
-                            cloud_url,
-                            json=payload,
-                            headers=headers,
-                            timeout=get_cloud_timeout()
-                        )
-                        response.raise_for_status()
-
-                        response_data = response.json()
-                        fixed_code = response_data.get("fixedCode", "")
-                        fixed_program = response_data.get("fixedProgram", "")
-                        explanation = response_data.get("explanation", "")
-                        issues_count = response_data.get("issuesCount", 0)
-                        total_cost = float(response_data.get("totalCost", 0.0))
-                        model_name = response_data.get("modelName", "cloud_model")
-
-                        cloud_execution_succeeded = True
-
-                        # Determine success based on issues count
-                        code_updated = fixed_code != input_strings["code_file"]
-                        program_updated = fixed_program != input_strings["program_file"]
-
-                        if issues_count == 0:
-                            success = True
-                            if not quiet: rich_print("[green]Verification Passed:[/green] Cloud found no discrepancies.")
-                        elif code_updated or program_updated:
-                            success = True
-                            if not quiet: rich_print("[yellow]Verification Issues Found:[/yellow] Cloud proposed fixes.")
-                        else:
-                            success = False
-                            if not quiet: rich_print("[red]Verification Failed:[/red] Cloud found discrepancies but proposed no fixes.")
-
-                        final_program = fixed_program
-                        final_code = fixed_code
-
-                        # Build results log content for cloud execution
-                        results_log_content = "PDD Verify Results (Cloud Single Pass)\n"
-                        results_log_content += f"Prompt File: {prompt_file}\n"
-                        results_log_content += f"Code File: {code_file}\n"
-                        results_log_content += f"Program File: {program_file}\n"
-                        results_log_content += f"Success: {success}\n"
-                        results_log_content += f"Issues Found Count: {issues_count}\n"
-                        results_log_content += f"Code Updated: {code_updated}\n"
-                        results_log_content += f"Program Updated: {program_updated}\n"
-                        results_log_content += f"Model Used: {model_name}\n"
-                        results_log_content += f"Total Cost: ${total_cost:.6f}\n"
-                        results_log_content += "\n--- LLM Explanation ---\n"
-                        results_log_content += explanation or 'N/A'
-                        results_log_content += "\n\n--- Program Output Used for Verification ---\n"
-                        results_log_content += program_output
-
-                        if verbose:
-                            console.print(Panel(
-                                f"Cloud verification completed. Model: {model_name}, Cost: ${total_cost:.6f}",
-                                title="[green]Cloud Success[/green]",
-                                expand=False
-                            ))
-
-                    except requests.exceptions.Timeout:
-                        if cloud_only:
-                            console.print(f"[red]Cloud execution timed out ({get_cloud_timeout()}s).[/red]")
-                            raise click.UsageError("Cloud execution timed out")
-                        console.print(f"[yellow]Cloud execution timed out ({get_cloud_timeout()}s). Falling back to local.[/yellow]")
-                        current_execution_is_local = True
-
-                    except requests.exceptions.HTTPError as e:
-                        status_code = e.response.status_code if e.response else 0
-                        err_content = e.response.text[:200] if e.response else "No response content"
-
-                        # Non-recoverable errors: do NOT fall back to local
-                        if status_code == 402:  # Insufficient credits
-                            try:
-                                error_data = e.response.json()
-                                current_balance = error_data.get("currentBalance", "unknown")
-                                estimated_cost = error_data.get("estimatedCost", "unknown")
-                                console.print(f"[red]Insufficient credits. Current balance: {current_balance}, estimated cost: {estimated_cost}[/red]")
-                            except Exception:
-                                console.print(f"[red]Insufficient credits: {err_content}[/red]")
-                            raise click.UsageError("Insufficient credits for cloud verification")
-                        elif status_code == 401:  # Authentication error
-                            console.print(f"[red]Authentication failed: {err_content}[/red]")
-                            raise click.UsageError("Cloud authentication failed")
-                        elif status_code == 403:  # Authorization error (not approved)
-                            console.print(f"[red]Access denied: {err_content}[/red]")
-                            raise click.UsageError("Access denied - user not approved")
-                        elif status_code == 400:  # Validation error
-                            console.print(f"[red]Invalid request: {err_content}[/red]")
-                            raise click.UsageError(f"Invalid request: {err_content}")
-                        else:
-                            # Recoverable errors (5xx, unexpected errors): fall back to local
-                            if cloud_only:
-                                console.print(f"[red]Cloud HTTP error ({status_code}): {err_content}[/red]")
-                                raise click.UsageError(f"Cloud HTTP error ({status_code}): {err_content}")
-                            console.print(f"[yellow]Cloud HTTP error ({status_code}): {err_content}. Falling back to local.[/yellow]")
-                            current_execution_is_local = True
-
-                    except requests.exceptions.RequestException as e:
-                        if cloud_only:
-                            console.print(f"[red]Cloud network error: {e}[/red]")
-                            raise click.UsageError(f"Cloud network error: {e}")
-                        console.print(f"[yellow]Cloud network error: {e}. Falling back to local.[/yellow]")
-                        current_execution_is_local = True
-
-                    except json.JSONDecodeError:
-                        if cloud_only:
-                            console.print("[red]Cloud returned invalid JSON.[/red]")
-                            raise click.UsageError("Cloud returned invalid JSON")
-                        console.print("[yellow]Cloud returned invalid JSON. Falling back to local.[/yellow]")
-                        current_execution_is_local = True
-
-            # Local execution path (when cloud failed/skipped or local preferred)
-            if not cloud_execution_succeeded:
-                if verbose:
-                    console.print(Panel("Performing local verification...", title="[blue]Mode[/blue]", expand=False))
-
-                # Call fix_verification_errors with content and program output
+            if not issues_found:
+                success = True
                 if not quiet:
-                    rich_print("Calling LLM to verify program output against prompt...")
-                fix_results = fix_verification_errors(
-                    program=input_strings["program_file"],
-                    prompt=input_strings["prompt_file"],
-                    code=input_strings["code_file"],
-                    output=program_output,
-                    strength=strength,
-                    temperature=temperature,
-                    verbose=verbose,
-                    time=time # Pass time to single pass function
-                )
-
-                # Determine success: If no issues were found OR if fixes were applied
-                # The definition of 'success' here means the *final* state is verified.
-                issues_found = fix_results['verification_issues_count'] > 0
-                code_updated = fix_results['fixed_code'] != input_strings["code_file"]
-                program_updated = fix_results['fixed_program'] != input_strings["program_file"]
-
-                if not issues_found:
-                    success = True
-                    if not quiet: rich_print("[green]Verification Passed:[/green] LLM found no discrepancies.")
-                elif code_updated or program_updated:
-                     # If issues were found AND fixes were made, assume success for this single pass.
-                     # A more robust check might re-run the program with fixed code, but that's the loop's job.
-                     success = True
-                     if not quiet: rich_print("[yellow]Verification Issues Found:[/yellow] LLM proposed fixes.")
-                else:
-                     success = False
-                     if not quiet: rich_print("[red]Verification Failed:[/red] LLM found discrepancies but proposed no fixes.")
-
-                final_program = fix_results['fixed_program']
-                final_code = fix_results['fixed_code']
-                total_cost = fix_results['total_cost']
-                model_name = fix_results['model_name']
-
-                # Build results log content for single pass
-                results_log_content = "PDD Verify Results (Single Pass)\n"
-                results_log_content += f"Timestamp: {os.path.getmtime(prompt_file)}\n"
-                results_log_content += f"Prompt File: {prompt_file}\n"
-                results_log_content += f"Code File: {code_file}\n"
-                results_log_content += f"Program File: {program_file}\n"
-                results_log_content += f"Success: {success}\n"
-                results_log_content += f"Issues Found Count: {fix_results['verification_issues_count']}\n"
-                results_log_content += f"Code Updated: {code_updated}\n"
-                results_log_content += f"Program Updated: {program_updated}\n"
-                results_log_content += f"Model Used: {model_name}\n"
-                results_log_content += f"Total Cost: ${total_cost:.6f}\n"
-                results_log_content += "\n--- LLM Explanation ---\n"
-                results_log_content += fix_results.get('explanation') or 'N/A'
-                results_log_content += "\n\n--- Program Output Used for Verification ---\n"
-                results_log_content += program_output
+                    rich_print("[green]Verification Passed:[/green] LLM found no discrepancies.")
+            elif code_updated or program_updated:
+                 # If issues were found AND fixes were made, assume success for this single pass.
+                 # A more robust check might re-run the program with fixed code, but that's the loop's job.
+                 success = True
+                 if not quiet:
+                     rich_print("[yellow]Verification Issues Found:[/yellow] LLM proposed fixes.")
+            else:
+                 success = False # Issues found, but no fixes proposed
+                 if not quiet:
+                     rich_print("[red]Verification Failed:[/red] LLM found discrepancies but proposed no fixes.")
 
 
-    except click.UsageError:
-        # Re-raise UsageError for proper CLI handling (e.g., cloud auth failures, insufficient credits)
-        raise
+            final_program = fix_results['fixed_program']
+            final_code = fix_results['fixed_code']
+            total_cost = fix_results['total_cost']
+            model_name = fix_results['model_name']
+
+            # Build results log content for single pass
+            results_log_content = f"PDD Verify Results (Single Pass)\n"
+            results_log_content += f"Timestamp: {os.path.getmtime(prompt_file)}\n" # Use prompt timestamp as reference
+            results_log_content += f"Prompt File: {prompt_file}\n"
+            results_log_content += f"Code File: {code_file}\n"
+            results_log_content += f"Program File: {program_file}\n"
+            results_log_content += f"Success: {success}\n"
+            results_log_content += f"Issues Found Count: {fix_results['verification_issues_count']}\n"
+            results_log_content += f"Code Updated: {code_updated}\n"
+            results_log_content += f"Program Updated: {program_updated}\n"
+            results_log_content += f"Model Used: {model_name}\n"
+            results_log_content += f"Total Cost: ${total_cost:.6f}\n"
+            results_log_content += "\n--- LLM Explanation ---\n"
+            results_log_content += "\n".join(fix_results.get('explanation', ['N/A']))
+            results_log_content += "\n\n--- Program Output Used for Verification ---\n"
+            results_log_content += program_output
+
+
     except Exception as e:
         success = False
         rich_print(f"[bold red]Error during verification process:[/bold red] {e}")
@@ -589,57 +322,21 @@ def fix_verification_main(
     # --- Output File Writing ---
     saved_code_path: Optional[str] = None
     saved_results_path: Optional[str] = None
-    saved_program_path: Optional[str] = None
 
-    if verbose:
-        rich_print(f"[cyan bold DEBUG] In fix_verification_main, BEFORE save attempt for CODE:")
-        rich_print(f"  success: {success}")
-        rich_print(f"  output_code_path: {output_code_path!r}")
-        rich_print(f"  final_code is None: {final_code is None}")
-        if final_code is not None:
-            rich_print(f"  len(final_code): {len(final_code)}")
-
-    if output_code_path and final_code is not None:
+    if success and output_code_path:
         try:
-            if verbose:
-                rich_print(f"[cyan bold DEBUG] In fix_verification_main, ATTEMPTING to write code to: {output_code_path!r}")
-            output_code_path_obj = Path(output_code_path)
-            output_code_path_obj.parent.mkdir(parents=True, exist_ok=True)
-            with open(output_code_path_obj, "w") as f:
+            with open(output_code_path, "w") as f:
                 f.write(final_code)
             saved_code_path = output_code_path
             if not quiet:
                 rich_print(f"Successfully verified code saved to: [green]{output_code_path}[/green]")
-        except Exception as e:
-            rich_print(f"[bold red]Error:[/bold red] Failed to write code file '{output_code_path}': {type(e).__name__} - {e}")
+        except IOError as e:
+            rich_print(f"[bold red]Error:[/bold red] Failed to write verified code file '{output_code_path}': {e}")
 
-    if verbose:
-        rich_print(f"[cyan bold DEBUG] In fix_verification_main, BEFORE save attempt for PROGRAM:")
-        rich_print(f"  success: {success}")
-        rich_print(f"  output_program_path: {output_program_path!r}")
-        rich_print(f"  final_program is None: {final_program is None}")
-        if final_program is not None:
-            rich_print(f"  len(final_program): {len(final_program)}")
-
-    if output_program_path and final_program is not None:
-        try:
-            if verbose:
-                rich_print(f"[cyan bold DEBUG] In fix_verification_main, ATTEMPTING to write program to: {output_program_path!r}")
-            output_program_path_obj = Path(output_program_path)
-            output_program_path_obj.parent.mkdir(parents=True, exist_ok=True)
-            with open(output_program_path_obj, "w") as f:
-                f.write(final_program)
-            saved_program_path = output_program_path
-            if not quiet:
-                rich_print(f"Successfully verified program saved to: [green]{output_program_path}[/green]")
-        except Exception as e:
-            rich_print(f"[bold red]Error:[/bold red] Failed to write program file '{output_program_path}': {type(e).__name__} - {e}")
-
+    # Write results log (only for single pass, loop writes its own)
     if not loop and output_results_path:
         try:
-            output_results_path_obj = Path(output_results_path)
-            output_results_path_obj.parent.mkdir(parents=True, exist_ok=True)
-            with open(output_results_path_obj, "w") as f:
+            with open(output_results_path, "w") as f:
                 f.write(results_log_content)
             saved_results_path = output_results_path
             if not quiet:
@@ -650,40 +347,28 @@ def fix_verification_main(
         # For loop, just confirm the path where the loop function *should* have saved the log
         saved_results_path = output_results_path
         if not quiet:
-            # We assume fix_verification_errors_loop handles its own logging confirmation.
-            # This message confirms the path was passed.
-            rich_print(f"Verification results log (from loop) expected at: [green]{output_results_path}[/green]")
+            rich_print(f"Verification results log (from loop) should be at: [green]{output_results_path}[/green]")
 
 
     # --- Final User Feedback ---
-    if verbose:
-        rich_print(f"[cyan bold DEBUG] Before summary - saved_code_path: {saved_code_path!r}, output_code_path: {output_code_path!r}[/cyan bold DEBUG]")
-        rich_print(f"[cyan bold DEBUG] Before summary - saved_program_path: {saved_program_path!r}, output_program_path: {output_program_path!r}[/cyan bold DEBUG]")
-
     if not quiet:
         rich_print("\n" + "="*40)
         title = "[bold green]Verification Complete[/bold green]" if success else "[bold red]Verification Failed[/bold red]"
-        summary_panel_content = (
+        summary_panel = Panel(
             f"Status: {'[green]Success[/green]' if success else '[red]Failure[/red]'}\n"
             f"Attempts: {attempts}\n"
             f"Total Cost: ${total_cost:.6f}\n"
             f"Model Used: {model_name}\n"
-            f"Verified Code Saved: {saved_code_path or 'N/A (Not saved on failure or no path)'}\n"
-            f"Verified Program Saved: {saved_program_path or 'N/A (Not saved on failure or no path)'}\n"
-            f"Results Log Saved: {saved_results_path or 'N/A'}"
-        )
-        summary_panel = Panel(
-            summary_panel_content,
+            f"Verified Code Saved: {saved_code_path or 'N/A'}\n"
+            f"Results Log Saved: {saved_results_path or 'N/A'}",
             title=title,
             border_style="green" if success else "red"
         )
         rich_print(summary_panel)
 
-        if verbose and not success and not loop: # Only show final code if verbose, failed, and single pass
-             rich_print("[bold yellow]Final Code (after failed single pass, not saved):[/bold yellow]")
+        if verbose and not success and not loop:
+             rich_print("[bold yellow]Final Code (after failed single pass):[/bold yellow]")
              rich_print(Syntax(final_code, language or "python", theme="default", line_numbers=True))
-             rich_print("[bold yellow]Final Program (after failed single pass, not saved):[/bold yellow]")
-             rich_print(Syntax(final_program, language or "python", theme="default", line_numbers=True))
 
 
     return success, final_program, final_code, attempts, total_cost, model_name
