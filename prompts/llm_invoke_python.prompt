@@ -39,7 +39,7 @@ Be sure to use the correct imports as shown in the above example.
     Each provider may have specific initialization parameters that should be set accordingly.
 
 % Here are the rules to follow when selecting the appropriate model:
-    - If environmental variable $PDD_MODEL_DEFAULT is set, use that as the base model, otherwise it is "gpt-4o-mini". If $PDD_PATH is set load $PDD_PATH/data/llm_model.csv, otherwise, assume $PDD_PATH is current working directory.
+    - If environmental variable $PDD_MODEL_DEFAULT is set, use that as the base model, otherwise it is "gpt-4.1-nano". If $PDD_PATH is set load $PDD_PATH/data/llm_model.csv, otherwise, assume $PDD_PATH is current working directory.
     - When strength < 0.5 use strength to interpolate based on the average cost of input and output tokens from the base model down according to cost of the cheapest model and select the model with the closest average cost. If calling the model fails during invoke, use the next cheapest model, and repeat until a model is found that works.
     - When strength > 0.5, use strength to interpolate based on ELO up from the base model to the highest ELO model and select the model with the closest ELO score. If calling the model fails during invoke, use the next highest ELO model, and repeat until a model is found that works.
     - Use base model when strength is 0.5. If calling the model fails during invoke, use the next highest ELO model, and repeat until a model is found that works.
@@ -56,7 +56,7 @@ Be sure to use the correct imports as shown in the above example.
     - When max_completion_tokens is available, set it in model_kwargs
     - Otherwise, use max_tokens if available
     - For OpenAI models with a base_url, set it during model initialization
-    - For OpenAI models starting with 'o' and not containing 'mini' in their name, set model_kwargs={'reasoning_effort':'high'}
+    - For OpenAI models starting with 'o', set reasoning={"effort": "high", "summary": "auto"}
     - For 'claude-3-7-sonnet' models, set thinking token budget using thinking={"type": "enabled", "budget_tokens": 4000}
 
 % If verbose is set to True, print the following information:
