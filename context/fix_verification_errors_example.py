@@ -149,4 +149,7 @@ else:
     # Optionally print the buggy_code_module again if needed for comparison
     # print(buggy_code_module)
 
+# print the number of issues found
+print(f"[cyan]Issues Found:[/cyan] {results['verification_issues_count']}")
+
 print("\n[bold blue]Example finished.[/bold blue]")

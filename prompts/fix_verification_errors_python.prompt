@@ -12,11 +12,12 @@
         'temperature' - A float that is the temperature of the LLM model to use. Default is 0.
         'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
     Outputs:
-        'explanation': List of issues found and their explanations (if any).
+        'explanation': A string containing the verification details and the fix explanation, formatted with XML tags: `<verification_details>...</verification_details>\n<fix_explanation>...</fix_explanation>`, or an empty list/None if no issues were found.
         'fixed_program' - A string that is the fixed program.
         'fixed_code' - A string that is the fixed code module.
         'total_cost' - A float that is the total cost of the run.
         'model_name' - A string that is the name of the selected LLM model.
+        'verification_issues_count' - An integer representing the number of issues found by the verification step (0 if none).
 
 % Here is how to use the internal modules:
     <internal_modules>
@@ -38,7 +39,7 @@
 
 % This program will do the following:
     Step 1. Load the 'find_verification_errors_LLM' and 'fix_verification_errors_LLM' prompt templates.
-    Step 2. Run the code through the model using llm_invoke with the provided strength and temperature to identify issues. 
+    Step 2. Run the code through the model using llm_invoke with the provided strength and temperature to identify issues.
         2a. Pass the following string parameters to the 'find_verification_errors_LLM' prompt during invoke:
             - 'program'
             - 'prompt'
@@ -47,24 +48,23 @@
         2b. If verbose is True, pretty print a message letting the user know it is running and how many tokens are in the prompt and the cost.
     Step 3. If verbose is True, pretty print the markdown formatting that is present in the result via the rich Markdown function. Also pretty print the number of tokens in the result and the cost.
     Step 4. Analyze the verification result to determine if issues were found.
-        4a. Extract the value of the <issues_found> tag from the verification result, which will be either "true" or "false".
-        4b. If <issues_found> is "false", set issues_found to False and return with default values for update_program (False), update_code (False), fixed_program (original program), and fixed_code (original code).
-        4c. If <issues_found> is "true", set issues_found to True and proceed to Step 5. Also extract the <details> section to pass as the issues in Step 5.
+        4a. Extract the integer value of the <issues_count> tag from the verification result. Store this as `verification_issues_count`.
+        4b. If `verification_issues_count` is 0, set issues_found to False and return with 'explanation' as None, update_program (False), update_code (False), fixed_program (original program), fixed_code (original code), and `verification_issues_count`.
+        4c. If `verification_issues_count` is greater than 0, set issues_found to True. Extract the content within the `<details>` tag from the verification result and store it as `verification_details`. Proceed to Step 5, passing `verification_details` as the 'issues' parameter.
     Step 5. Only if issues were found, run a second llm_invoke with the 'fix_verification_errors_LLM' prompt to generate fixes.
         5a. Pass the following string parameters to the prompt during invoke:
             - 'program': The original program
             - 'prompt': The original prompt
             - 'code': The original code module
             - 'output': The original output
-            - 'issues': The verification result's <details> section containing identified issues
+            - 'issues': The `verification_details` extracted in Step 4c.
         5b. If verbose is True, pretty print a message letting the user know it is running and how many tokens are in the prompt and the cost.
     Step 6. Extract the following values from the fix result:
         - 'fixed_program'
         - 'fixed_code'
-        - 'explanation'
+        - Store the extracted `explanation` content as `fix_explanation`.
     Step 7. If verbose is True, print the total cost of the run(s).
     Step 8. Use edit_file to make the changes to the program and code module according to the fixed_program and fixed_code extracted in Step 6.
-    Step 9. Return explanation, fixed_program (from step 8), fixed_code (from step 8
-    ), total_cost, and model_name.
+    Step 9. Construct the final `explanation` string by combining the stored `verification_details` and `fix_explanation` using XML tags: `<verification_details>{verification_details}</verification_details>\n<fix_explanation>{fix_explanation}</fix_explanation>`. Return the final `explanation`, `fixed_program` (from step 8), `fixed_code` (from step 8), `total_cost`, `model_name`, and the stored `verification_issues_count`.
 
 % Ensure that the function handles potential issues gracefully, even when no critical errors have occurred but improvements are still possible.
