@@ -2,6 +2,7 @@ from typing import Tuple, Optional
 from rich import print
 from rich.markdown import Markdown
 from rich.console import Console
+from . import EXTRACTION_STRENGTH, DEFAULT_STRENGTH
 from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
 from .unfinished_prompt import unfinished_prompt
@@ -17,7 +18,7 @@ def bug_to_unit_test(
     prompt_used_to_generate_the_code: str,
     code_under_test: str,
     program_used_to_run_code_under_test: str,
-    strength: float = 0.97,
+    strength: float = DEFAULT_STRENGTH,
     temperature: float = 0.0,
     language: str = "python"
 ) -> Tuple[str, float, str]:
@@ -30,7 +31,7 @@ def bug_to_unit_test(
         prompt_used_to_generate_the_code (str): Original prompt used to generate the code
         code_under_test (str): Code to be tested
         program_used_to_run_code_under_test (str): Program used to run the code
-        strength (float, optional): Strength of the LLM model. Must be between 0 and 1. Defaults to 0.97.
+        strength (float, optional): Strength of the LLM model. Must be between 0 and 1. Defaults to DEFAULT_STRENGTH.
         temperature (float, optional): Temperature of the LLM model. Defaults to 0.0.
         language (str, optional): Programming language. Defaults to "python".
 
@@ -85,7 +86,7 @@ def bug_to_unit_test(
         
         reasoning, is_finished, unfinished_cost, unfinished_model = unfinished_prompt(
             prompt_text=last_600_chars,
-            strength=0.97,
+            strength=strength,
             temperature=temperature,
             verbose=False
         )
@@ -111,7 +112,7 @@ def bug_to_unit_test(
         final_code, postprocess_cost, postprocess_model = postprocess(
             result,
             language,
-            strength=0.97,
+            strength=EXTRACTION_STRENGTH,
             temperature=temperature,
             verbose=True
         )

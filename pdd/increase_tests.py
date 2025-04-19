@@ -1,6 +1,6 @@
 from typing import Tuple
 from rich.console import Console
-
+from . import EXTRACTION_STRENGTH
 from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
 from .postprocess import postprocess
@@ -79,7 +79,7 @@ def increase_tests(
         increase_test_function, total_cost, model_name = postprocess(
             llm_response['result'], 
             language, 
-            0.97,  # Using 0.97 to match the unit test expectation
+            EXTRACTION_STRENGTH,  # Fixed strength for extraction
             temperature,
             verbose
         )

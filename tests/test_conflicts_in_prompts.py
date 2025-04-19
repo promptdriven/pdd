@@ -1,6 +1,7 @@
 import pytest
 from pdd.conflicts_in_prompts import conflicts_in_prompts
 from unittest.mock import patch, MagicMock
+from pdd import EXTRACTION_STRENGTH
 
 # Test data
 VALID_PROMPT1 = "Write a formal business email in a serious tone."
@@ -125,5 +126,5 @@ def test_correct_llm_parameters(mock_dependencies):
     
     # Check second LLM call
     second_call = mock_dependencies['llm_invoke'].call_args_list[1][1]
-    assert second_call['strength'] == .97  # Fixed strength for second call
+    assert second_call['strength'] == EXTRACTION_STRENGTH  # Fixed strength for extraction
     assert second_call['temperature'] == temperature

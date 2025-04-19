@@ -1,5 +1,7 @@
 import os
 import pandas as pd
+from typing import List, Dict, Tuple
+from pdd import DEFAULT_STRENGTH
 from pdd.auto_include import auto_include
 
 def main() -> None:
@@ -48,7 +50,7 @@ def main() -> None:
     # read in the file
     with open('project_dependencies.csv', 'r') as file:
         csv_file = file.read()
-    strength = 0.97
+    strength = DEFAULT_STRENGTH
     temperature = 0.5
     verbose = True
 

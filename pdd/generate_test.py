@@ -2,6 +2,7 @@ from typing import Tuple, Optional
 from rich import print
 from rich.markdown import Markdown
 from rich.console import Console
+from . import EXTRACTION_STRENGTH
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
 from .llm_invoke import llm_invoke
@@ -76,7 +77,7 @@ def generate_test(
         last_600_chars = result[-600:] if len(result) > 600 else result
         reasoning, is_finished, check_cost, check_model = unfinished_prompt(
             prompt_text=last_600_chars,
-            strength=0.97,
+            strength=strength,
             temperature=temperature,
             verbose=verbose
         )
@@ -101,7 +102,7 @@ def generate_test(
         processed_result, post_cost, post_model = postprocess(
             result,
             language=language,
-            strength=.97,
+            strength=EXTRACTION_STRENGTH,
             temperature=temperature,
             verbose=verbose
         )

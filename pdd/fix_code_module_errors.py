@@ -4,6 +4,7 @@ from rich import print
 from rich.markdown import Markdown
 from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
+from . import EXTRACTION_STRENGTH
 import json
 
 class CodeFix(BaseModel):
@@ -96,7 +97,7 @@ def fix_code_module_errors(
         second_response = llm_invoke(
             prompt=extract_prompt,
             input_json=extract_input,
-            strength=0.97,  # Fixed strength as specified
+            strength=EXTRACTION_STRENGTH,  # Fixed strength for extraction
             temperature=temperature,
             verbose=verbose,
             output_pydantic=CodeFix
