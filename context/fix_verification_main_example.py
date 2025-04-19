@@ -11,7 +11,7 @@ from pdd.fix_verification_main import fix_verification_main
 # Define default values matching the module's defaults for clarity
 DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_BUDGET = 5.0
-DEFAULT_STRENGTH = 0.9
+DEFAULT_STRENGTH = 0.5
 DEFAULT_TEMPERATURE = 0.0
 
 def create_dummy_context(params: Dict[str, Any]) -> click.Context:
