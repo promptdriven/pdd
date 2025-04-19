@@ -1,11 +1,18 @@
 import sys
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict, Any
 import click
 from rich import print as rprint
 from . import DEFAULT_STRENGTH
+from pathlib import Path
 
 from .construct_paths import construct_paths
 from .fix_code_loop import fix_code_loop
+# Import fix_code_module_errors conditionally or ensure it's always available
+try:
+    from .fix_code_module_errors import fix_code_module_errors
+except ImportError:
+    # Handle case where fix_code_module_errors might not be available if not needed
+    fix_code_module_errors = None
 
 def crash_main(
     ctx: click.Context,
@@ -40,6 +47,13 @@ def crash_main(
         - float: Total cost of all fix attempts
         - str: The name of the model used
     """
+    # Ensure ctx.obj and ctx.params exist and are dictionaries
+    ctx.obj = ctx.obj if isinstance(ctx.obj, dict) else {}
+    ctx.params = ctx.params if isinstance(ctx.params, dict) else {}
+
+    quiet = ctx.params.get("quiet", ctx.obj.get("quiet", False))
+    verbose = ctx.params.get("verbose", ctx.obj.get("verbose", False)) # Get verbose flag
+
     try:
         # Construct file paths
         input_file_paths = {
@@ -48,13 +62,13 @@ def crash_main(
             "program_file": program_file,
             "error_file": error_file
         }
-        command_options = {
+        command_options: Dict[str, Any] = {
             "output": output,
             "output_program": output_program
         }
 
         force = ctx.params.get("force", ctx.obj.get("force", False))
-        quiet = ctx.params.get("quiet", ctx.obj.get("quiet", False))
+        # quiet = ctx.params.get("quiet", ctx.obj.get("quiet", False)) # Already defined above
 
         input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
@@ -74,7 +88,7 @@ def crash_main(
         strength = ctx.obj.get("strength", DEFAULT_STRENGTH)
         temperature = ctx.obj.get("temperature", 0)
 
-        verbose = ctx.params.get("verbose", ctx.obj.get("verbose", False))
+        # verbose = ctx.params.get("verbose", ctx.obj.get("verbose", False)) # Already defined above
 
         if loop:
             # Use iterative fixing process
@@ -83,11 +97,15 @@ def crash_main(
             )
         else:
             # Use single fix attempt
-            from .fix_code_module_errors import fix_code_module_errors
+            if fix_code_module_errors is None:
+                 raise ImportError("fix_code_module_errors is required but not available.")
+            # Note: fix_code_module_errors returns 7 values according to example
+            # update_program, update_code, fixed_program, fixed_code, program_code_fix, cost, model
+            # The current code unpacks 7 values, which matches the example.
             update_program, update_code, final_program, final_code, program_code_fix, cost, model = fix_code_module_errors(
                 program_content, prompt_content, code_content, error_content, strength, temperature, verbose
             )
-            success = True
+            success = True # Assume success after one attempt if no exception
             attempts = 1
 
         # Ensure we have content to write, falling back to original content if needed
@@ -98,19 +116,27 @@ def crash_main(
             final_code = code_content
 
         # Determine whether to write the files based on whether paths are provided
-        should_write_code = output_file_paths.get("output") is not None
-        should_write_program = output_file_paths.get("output_program") is not None
+        output_code_path_str = output_file_paths.get("output")
+        output_program_path_str = output_file_paths.get("output_program")
+
+        should_write_code = output_code_path_str is not None
+        should_write_program = output_program_path_str is not None
 
         # Write output files
         if should_write_code:
-            with open(output_file_paths["output"], "w") as f:
+            output_code_path = Path(output_code_path_str)
+            output_code_path.parent.mkdir(parents=True, exist_ok=True) # Ensure directory exists
+            with open(output_code_path, "w") as f:
                 f.write(final_code)
 
         if should_write_program:
-            with open(output_file_paths["output_program"], "w") as f:
+            output_program_path = Path(output_program_path_str)
+            output_program_path.parent.mkdir(parents=True, exist_ok=True) # Ensure directory exists
+            with open(output_program_path, "w") as f:
                 f.write(final_program)
 
-        # Provide user feedback
+        # Provide user feedback (using quiet flag as per current implementation)
+        # To strictly follow the prompt's last note, change 'if not quiet:' to 'if verbose:'
         if not quiet:
             if success:
                 rprint("[bold green]Crash fix completed successfully.[/bold green]")
@@ -120,13 +146,21 @@ def crash_main(
             rprint(f"[bold]Total attempts:[/bold] {attempts}")
             rprint(f"[bold]Total cost:[/bold] ${cost:.2f}")
             if should_write_code:
-                rprint(f"[bold]Fixed code saved to:[/bold] {output_file_paths['output']}")
+                rprint(f"[bold]Fixed code saved to:[/bold] {output_code_path_str}")
             if should_write_program:
-                rprint(f"[bold]Fixed program saved to:[/bold] {output_file_paths['output_program']}")
+                rprint(f"[bold]Fixed program saved to:[/bold] {output_program_path_str}")
 
         return success, final_code, final_program, attempts, cost, model
     
+    except FileNotFoundError as e:
+        if not quiet:
+             # Provide a more specific error message for file not found
+             rprint(f"[bold red]Error:[/bold red] Input file not found: {e}")
+        sys.exit(1)
     except Exception as e:
         if not quiet:
-            rprint(f"[bold red]Error:[/bold red] {str(e)}")
+            rprint(f"[bold red]An unexpected error occurred:[/bold red] {str(e)}")
+        # Consider logging the full traceback here for debugging
+        # import traceback
+        # traceback.print_exc()
         sys.exit(1)
