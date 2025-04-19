@@ -1,5 +1,6 @@
 import os
 import click
+import textwrap                 #  ← added
 from pathlib import Path
 from typing import Tuple, Dict, Any
 
@@ -33,15 +34,18 @@ def run_fix_verification_example():
     output_dir.mkdir(exist_ok=True)
 
     prompt_content = "Create a Python module 'calculator.py' with a function 'add(a, b)' that returns the sum of two integers."
-    # Intentionally buggy code (subtracts instead of adds)
-    code_content_buggy = """
+    # Intentionally buggy code (subtracts instead of adds) –‑ outer quotes
+    #   switched to triple single quotes so the inner triple double quotes are
+    #   perfectly legal.
+    code_content_buggy = textwrap.dedent('''\
 # calculator.py
 def add(a: int, b: int) -> int:
     """Returns the difference of two integers (intentionally wrong)."""
     return a - b
-"""
+''')
+
     # Program to run the code and produce output for verification
-    program_content = """
+    program_content = textwrap.dedent("""\
 import calculator
 import sys
 
@@ -54,10 +58,10 @@ b = int(sys.argv[2])
 
 result = calculator.add(a, b)
 print(f"Input: ({a}, {b})")
-print(f"Result: {result}") # Output will be judged by LLM against the prompt
-"""
+print(f"Result: {result}")  # Output will be judged by LLM against the prompt
+""")
     # Verification program for the loop mode (simple assertion)
-    verification_program_content = """
+    verification_program_content = textwrap.dedent("""\
 import calculator
 import sys
 
@@ -66,11 +70,11 @@ try:
     assert calculator.add(5, 3) == 8, "Verification Failed: 5 + 3 != 8"
     assert calculator.add(-1, 1) == 0, "Verification Failed: -1 + 1 != 0"
     print("Verification Succeeded!")
-    sys.exit(0) # Exit code 0 indicates success
+    sys.exit(0)  # Exit code 0 indicates success
 except AssertionError as e:
     print(e)
-    sys.exit(1) # Non-zero exit code indicates failure
-"""
+    sys.exit(1)  # Non‑zero exit code indicates failure
+""")
 
     prompt_file = output_dir / "calc.prompt"
     code_file = output_dir / "calculator.py"

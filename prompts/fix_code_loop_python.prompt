@@ -34,31 +34,42 @@
   Step 2. Initialize variables:
     - Counter for the number of attempts.
     - Total cost accumulator.
-    - Best iteration tracker (to restore the iteration with the fewest errors if necessary).
+    - Initialize history log for tracking attempts with structured XML format.
   Step 3. Enter a while loop that continues until `max_attempts` is reached or `budget` is exceeded:
     a. Print out to console and error log file the attempt iteration.
-    b. Run the `verification_program` to test the `code_file`, capturing its output and errors, appending them to the specified error log file.
+    b. Run the `verification_program` to test the `code_file`, capturing its output and errors.
     c. If the program runs without errors, break the loop.
     d. If the program fails:
-       - Read and print the error message from the error log file, escaping square brackets so `rprint` doesn't misinterpret them.
-       - Create a backup copy of the `verification_program` and `code_file`, appending the current iteration number to the filename, e.g., "program_3.py" and "code_3.py" for the third iteration. Be sure to strip the extension before appending the iteration number.
-       - Read the contents of the `verification_program` and `code_file`.
-       - Call `fix_code_module_errors` (which will output using the Rich console print) while temporarily replacing the Rich console in fix_code_module_errors to capture the standard out with the following arguments:
-         * `program`: The contents of the `verification_program`.
-         * `prompt`: The prompt that generated the code.
-         * `code`: The contents of the `code_file`.
-         * `errors`: The errors extracted from the error log file.
-         * `error_log_file`: The path to the error log file.
-         * `strength` and `temperature`: The provided values.
-         * `verbose`: The provided verbose flag.
-       - rprint the standard output from the `fix_code_module_errors` function and also append it to the error log file.
-       - Add the returned `total_cost` to the total cost accumulator.
-       - If the total cost exceeds the `budget`, break the loop.
-       - If `verification_program` and `update_code` are `False`, break the loop as no changes were needed.
-       - If `update_code` is `True`:
-         * Write the `fixed_code` back to the `code_file`.
-       - If `verification_program` is `True`:
-         * Write the `fixed_program` back to the `verification_program`.
+       - Create a structured history log with specific XML tags:
+         * Use <attempt number="X"> to start each attempt record
+         * Within each attempt, include these sections:
+           <verification>
+             Status: Success/failure status with return code
+             Output: [Standard output text]
+             Error: [Error message text]
+           </verification>
+           
+           <current_error>
+             [Current error message to be fixed]
+           </current_error>
+           
+           <fixing>
+             <llm_analysis>
+               [Analysis from the LLM in human-readable format]
+             </llm_analysis>
+             <decision>
+               update_program: true/false
+               update_code: true/false
+             </decision>
+           </fixing>
+         * Use human-readable formatting within XML tags
+         * Save this structured log incrementally to the error log file
+         * Pass the complete history log to `fix_code_module_errors` using the `errors` parameter for context on previous attempts
+       - Create backup copies of the verification program and code file
+       - Read the contents of both files
+       - Call `fix_code_module_errors` with the enriched history
+       - Update files based on the fix results
+       - Track total cost and check against budget
     e. Increment the attempt counter.
   Step 4. If the last run didn't work, copy back the `verification_program` and `code_file` from the original.
   Step 5. Return the success status, final verification program, final code contents, total number of attempts, total cost, and model name.

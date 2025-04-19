@@ -8,20 +8,28 @@
 
 % Here are the error log(s) from the program run and potentially from prior program run fixes: <errors>{errors}</errors>
 
-% NOTE: The errors field may contain an XML-structured history of previous fixing attempts. If present, it will be formatted as follows:
-    <attempt number="..."> - Contains information about a specific fixing attempt
-    <verification> - Results from running and testing the code
-        <status> - Success/failure status with return code </status>
-        <output> - Standard output from the verification run </output>
-        <error> - Error messages from the verification run </error>
-    </verification>
-    <fixing> - Details of the attempt to fix the error
-        <llm_analysis> - Analysis and reasoning from previous fixing attempts </llm_analysis>   
-        <decision> - Which files were updated in the previous attempt </decision>
-    </fixing>
+% NOTE: The errors field contains a structured history of previous fixing attempts with XML tags and human-readable content:
+    <attempt number="X"> - Start of each attempt record
+      <verification>
+        Status: Success/failure status with return code
+        Output: [Standard output text]
+        Error: [Error message text]
+      </verification>
+      
+      <current_error>
+        [Current error message to be fixed]
+      </current_error>
+      
+      <fixing>
+        <llm_analysis>
+          [Analysis from previous attempts in human-readable format]
+        </llm_analysis>
+        <decision>
+          update_program: true/false
+          update_code: true/false
+        </decision>
+      </fixing>
     </attempt>
-    
-    <current_error> - Contains the most recent error that needs to be fixed now </current_error>
  
 % When analyzing errors, you should:
   1. Review the history of previous attempts to understand what has been tried

@@ -90,7 +90,7 @@ def fix_verification_main(
     output_results: Optional[str],
     output_code: Optional[str],
     loop: bool,
-    verification_program: Optional[str], # Only used if loop=True
+    verification_program: Optional[str],  # Only used if loop=True
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     budget: float = DEFAULT_BUDGET,
 ) -> Tuple[bool, str, str, int, float, str]:
@@ -146,7 +146,7 @@ def fix_verification_main(
             rich_print(f"  Mode: [yellow]Single Pass[/yellow]")
         rich_print(f"  Strength: {strength}, Temperature: {temperature}")
 
-    # --- File Path Handling ---
+    # ------------------- File-path handling -------------------
     input_file_paths: Dict[str, str] = {
         "prompt_file": prompt_file,
         "code_file": code_file,
@@ -164,30 +164,70 @@ def fix_verification_main(
         "output_code": output_code,
     }
 
+    # Initial default values (in case we need the manual fallback)
+    input_strings: Dict[str, str] = {}
+    output_code_path: Optional[str] = output_code
+    output_results_path: Optional[str] = output_results
+    language: str = ""
+
     try:
+        # First try the official helper.
         input_strings, output_file_paths, language = construct_paths(
             input_file_paths=input_file_paths,
             force=force,
             quiet=quiet,
-            command="verify", # Use 'verify' command type
-            command_options=command_options
+            command="verify",
+            command_options=command_options,
         )
-        # Extract resolved output paths
         output_code_path = output_file_paths.get("output_code")
         output_results_path = output_file_paths.get("output_results")
 
         if verbose:
-            rich_print("[dim]Resolved Output Paths:[/dim]")
-            rich_print(f"  Code: {output_code_path}")
-            rich_print(f"  Results: {output_results_path}")
-            rich_print(f"  Detected Language: {language}")
+            rich_print("[dim]Resolved output paths via construct_paths.[/dim]")
 
-    except FileNotFoundError as e:
-        rich_print(f"[bold red]Error:[/bold red] Input file not found: {e}")
-        sys.exit(1)
     except Exception as e:
-        rich_print(f"[bold red]Error:[/bold red] Failed during path construction: {e}")
-        sys.exit(1)
+        # If the helper does not understand the "verify" command fall back.
+        if "invalid command" in str(e).lower():
+            if verbose:
+                rich_print(
+                    "[yellow]construct_paths does not recognise "
+                    "'verify'. Falling back to manual path handling.[/yellow]"
+                )
+            try:
+                # Manually read the three mandatory files
+                with open(prompt_file, "r") as f:
+                    input_strings["prompt_file"] = f.read()
+                with open(code_file, "r") as f:
+                    input_strings["code_file"] = f.read()
+                with open(program_file, "r") as f:
+                    input_strings["program_file"] = f.read()
+            except FileNotFoundError as fe:
+                rich_print(f"[bold red]Error:[/bold red] {fe}")
+                sys.exit(1)
+
+            # Pick or build output paths
+            if output_code_path is None:
+                base, ext = os.path.splitext(code_file)
+                output_code_path = f"{base}_verified{ext}"
+            if output_results_path is None:
+                base, _ = os.path.splitext(program_file)
+                output_results_path = f"{base}_verify_results.log"
+
+            # Best‑effort language guess
+            if program_file.endswith(".py"):
+                language = "python"
+            elif program_file.endswith(".js"):
+                language = "javascript"
+            elif program_file.endswith(".sh"):
+                language = "bash"
+
+        else:
+            # Some other error – re‑raise / abort
+            rich_print(f"[bold red]Error:[/bold red] Failed during path construction: {e}")
+            if verbose:
+                import traceback
+                rich_print(Panel(traceback.format_exc(), title="Traceback", border_style="red"))
+            sys.exit(1)
 
     # --- Core Logic ---
     success: bool = False
@@ -348,7 +388,6 @@ def fix_verification_main(
         saved_results_path = output_results_path
         if not quiet:
             rich_print(f"Verification results log (from loop) should be at: [green]{output_results_path}[/green]")
-
 
     # --- Final User Feedback ---
     if not quiet:
