@@ -3,6 +3,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 import sys
 from z3 import *
+from pdd import EXTRACTION_STRENGTH
 
 # Ensure the pdd module can be imported
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -55,7 +56,7 @@ class TestIncreaseTests:
         mock_load_prompt.assert_called_once_with("increase_tests_LLM")
         mock_llm_invoke.assert_called_once()
         mock_postprocess.assert_called_once_with(
-            'Test LLM response', 'python', 0.97, 0.0, False
+            'Test LLM response', 'python', EXTRACTION_STRENGTH, 0.0, False
         )
 
     @patch('pdd.increase_tests.load_prompt_template')

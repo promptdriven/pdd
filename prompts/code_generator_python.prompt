@@ -50,5 +50,5 @@
 
     Step 3. Detect if the generation is incomplete using the unfinished_prompt function (strength .5) by passing in the last 600 characters of the output of Step 3.
         - a. If incomplete, call the continue_generation function to complete the generation.
-        - b. Else, if complete, postprocess the model output result using the postprocess function from the postprocess module with a strength of .97. Be sure to pass in all parameters like verbose to postprocess.
+        - b. Else, if complete, postprocess the model output result using the postprocess function from the postprocess module with the EXTRACTION_STRENGTH constant. Be sure to pass in all parameters like verbose to postprocess.
     Step 4. Return the runnable_code, total_cost and model_name.

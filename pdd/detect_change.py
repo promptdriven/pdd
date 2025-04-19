@@ -3,6 +3,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.markdown import Markdown
 from pydantic import BaseModel, Field
+from . import EXTRACTION_STRENGTH
 
 from .preprocess import preprocess
 from .load_prompt_template import load_prompt_template
@@ -101,7 +102,7 @@ def detect_change(
         extract_response = llm_invoke(
             prompt=extract_prompt,
             input_json={"llm_output": detect_response['result']},
-            strength=0.97,
+            strength=EXTRACTION_STRENGTH,
             temperature=0.0,
             verbose=verbose,
             output_pydantic=ChangesList

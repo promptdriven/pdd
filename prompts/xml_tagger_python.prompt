@@ -34,7 +34,7 @@
         2b. If verbose is True, pretty print a message letting the user know it is running and how many tokens are in the prompt and the cost.
         2c. The string output will be 'xml_generated_analysis' that contains the tagged prompt.
         2d. If verbose is True, print the 'xml_generated_analysis' to provide visibility into the intermediate result.
-    Step 3. Run a second llm_invoke with strength .97 and the provided temperature to extract the XML.
+    Step 3. Run a second llm_invoke with the EXTRACTION_STRENGTH constant and the provided temperature to extract the XML.
         3a. Pass the following string parameters to the prompt during invoke:
             - 'xml_generated_analysis'
         3b. If verbose is True, pretty print a message letting the user know it is running and how many tokens are in the prompt and the cost.

@@ -1,6 +1,7 @@
 import os
 import click
 from rich import print as rprint
+from pdd import DEFAULT_STRENGTH
 from pdd.bug_main import bug_main
 
 def main() -> None:
@@ -12,7 +13,7 @@ def main() -> None:
     ctx_obj = {
         'force': True,  # Overwrite existing files
         'quiet': False,  # Show all output
-        'strength': 0.97,  # Model strength (0-1)
+        'strength': DEFAULT_STRENGTH,  # Model strength (0-1)
         'temperature': 0  # Model randomness (0-1)
     }
     ctx = click.Context(click.Command('bug'), obj=ctx_obj)

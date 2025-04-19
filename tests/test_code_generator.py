@@ -1,5 +1,6 @@
 import pytest
 from unittest.mock import patch, MagicMock
+from pdd import EXTRACTION_STRENGTH
 from pdd.code_generator import code_generator
 
 # Define constants for mock returns
@@ -83,7 +84,7 @@ def test_code_generator_valid_input_complete(
     mock_postprocess.assert_called_once_with(
         llm_output=MOCK_INITIAL_RESPONSE['result'],
         language="python",
-        strength=.97,
+        strength=EXTRACTION_STRENGTH,
         temperature=0.0,
         verbose=True
     )
@@ -137,7 +138,7 @@ def test_code_generator_valid_input_incomplete(
     mock_postprocess.assert_called_once_with(
         llm_output=MOCK_FINAL_OUTPUT,
         language="python",
-        strength=.97,
+        strength=EXTRACTION_STRENGTH,
         temperature=0.0,
         verbose=False
     )
@@ -289,7 +290,7 @@ def test_code_generator_edge_case_exact_600_chars(
     mock_postprocess.assert_called_once_with(
         llm_output='a' * 600,
         language="python",
-        strength=.97,
+        strength=EXTRACTION_STRENGTH,
         temperature=0.0,
         verbose=False
     )

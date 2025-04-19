@@ -43,7 +43,7 @@
     Step 3. Pretty print the markdown formatting that is present in the result via the rich Markdown function.
     Step 4. Detect if the generation is incomplete using the unfinished_prompt function (strength .89) by passing in the last 600 characters of the output of Step 2.
         - a. If incomplete, call the continue_generation function to complete the generation.
-        - b. Else, if complete, postprocess the model output result using the postprocess function from the postprocess module with a strength of 0.97.    
+        - b. Else, if complete, postprocess the model output result using the postprocess function from the postprocess module with the EXTRACTION_STRENGTH constant.    
     Step 5. Print out the total_cost including all the costs.
 
 % Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses.

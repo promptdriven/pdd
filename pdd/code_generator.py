@@ -1,5 +1,6 @@
 from typing import Tuple
 from rich.console import Console
+from . import EXTRACTION_STRENGTH
 from .preprocess import preprocess
 from .llm_invoke import llm_invoke
 from .unfinished_prompt import unfinished_prompt
@@ -104,7 +105,7 @@ def code_generator(
         runnable_code, postprocess_cost, model_name_post = postprocess(
             llm_output=final_output,
             language=language,
-            strength=0.97,
+            strength=EXTRACTION_STRENGTH,
             temperature=0.0,
             verbose=verbose
         )

@@ -5,6 +5,7 @@ from .llm_invoke import llm_invoke
 from .unfinished_prompt import unfinished_prompt
 from .continue_generation import continue_generation
 from .postprocess import postprocess
+from . import EXTRACTION_STRENGTH
 
 def context_generator(code_module: str, prompt: str, language: str = "python", strength: float = 0.5, temperature: float = 0, verbose: bool = False) -> tuple:
     """
@@ -115,7 +116,7 @@ def context_generator(code_module: str, prompt: str, language: str = "python", s
         example_code, postprocess_cost, postprocess_model = postprocess(
             llm_output=final_llm_output,
             language=language,
-            strength=0.97,
+            strength=EXTRACTION_STRENGTH,
             temperature=temperature,
             verbose=verbose
         )

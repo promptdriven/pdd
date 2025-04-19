@@ -4,6 +4,7 @@ from rich import print as rprint
 from rich.markdown import Markdown
 from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
+from . import EXTRACTION_STRENGTH
 
 class ConflictChange(BaseModel):
     prompt_name: str = Field(description="Name of the prompt that needs to be changed")
@@ -85,7 +86,7 @@ def conflicts_in_prompts(
         extract_response = llm_invoke(
             prompt=extract_prompt,
             input_json=extract_input,
-            strength=0.97,  # As specified
+            strength=EXTRACTION_STRENGTH,
             temperature=temperature,
             output_pydantic=ConflictResponse,
             verbose=verbose
