@@ -1,11 +1,31 @@
 import os
-import subprocess
 import shutil
-import xml.sax.saxutils as xmlutils
+import subprocess
+import sys
+import io
+import contextlib
+from pathlib import Path
+from typing import Dict, Any, Tuple
+
+# Use Rich for pretty printing to the console
 from rich.console import Console
-from rich import print as rprint
-from pdd.fix_code_module_errors import fix_code_module_errors
-from rich.markdown import Markdown
+# Initialize Rich Console
+console = Console(record=True)
+rprint = console.print
+
+# Use relative import for internal modules
+try:
+    # Attempt relative import for package context
+    from .fix_code_module_errors import fix_code_module_errors
+except ImportError:
+    # Fallback for script execution context (e.g., testing)
+    # This assumes fix_code_module_errors.py is in the same directory or Python path
+    # You might need to adjust this based on your project structure during testing
+    print("Warning: Relative import failed. Attempting direct import for fix_code_module_errors.", file=sys.stderr)
+    # Add parent directory to sys.path if necessary for testing outside a package
+    # import sys
+    # sys.path.append(str(Path(__file__).parent.parent)) # Adjust based on structure
+    from fix_code_module_errors import fix_code_module_errors
 
 def fix_code_loop(
     code_file: str,
@@ -17,259 +37,412 @@ def fix_code_loop(
     budget: float,
     error_log_file: str = "error_code.log",
     verbose: bool = False,
-) -> tuple[bool, str, str, int, float, str]:
+) -> Tuple[bool, str, str, int, float, str | None]:
     """
     Attempts to fix errors in a code module through multiple iterations.
 
     Args:
         code_file: Path to the code file being tested.
-        prompt: Prompt that generated the code under test.
-        verification_program: Path to a Python program that verifies if the code runs correctly.
-        strength: Strength of the LLM model to use.
-        temperature: Temperature parameter for the LLM model.
-        max_attempts: Maximum number of fix attempts before giving up.
+        prompt: The prompt that generated the code under test.
+        verification_program: Path to the Python program that verifies the code.
+        strength: LLM model strength (0.0 to 1.0).
+        temperature: LLM temperature (0.0 to 1.0).
+        max_attempts: Maximum number of fix attempts.
         budget: Maximum cost allowed for the fixing process.
         error_log_file: Path to the error log file (default: "error_code.log").
-        verbose: Enable detailed logging of the fixing process (default: False).
+        verbose: Enable detailed logging (default: False).
 
     Returns:
-        success: Whether the errors were successfully fixed.
-        final_program: Contents of the final verification program file.
-        final_code: Contents of the final code file.
-        total_attempts: Number of fix attempts made.
-        total_cost: Total cost of all fix attempts.
-        model_name: Name of the LLM model used.
+        Tuple containing the following in order:
+        - success (bool): Whether the errors were successfully fixed.
+        - final_program (str): Contents of the final verification program file.
+        - final_code (str): Contents of the final code file.
+        - total_attempts (int): Number of fix attempts made.
+        - total_cost (float): Total cost of all fix attempts.
+        - model_name (str | None): Name of the LLM model used (or None if no LLM calls were made).
     """
-
-    console = Console()
+    if not Path(code_file).is_file():
+        raise FileNotFoundError(f"Code file not found: {code_file}")
+    if not Path(verification_program).is_file():
+        raise FileNotFoundError(f"Verification program not found: {verification_program}")
 
     # Step 1: Remove existing error log file
-    if os.path.exists(error_log_file):
+    try:
         os.remove(error_log_file)
+        if verbose:
+            rprint(f"Removed existing error log file: {error_log_file}")
+    except FileNotFoundError:
+        if verbose:
+            rprint(f"Error log file not found, no need to remove: {error_log_file}")
+    except OSError as e:
+        rprint(f"[bold red]Error removing log file {error_log_file}: {e}[/bold red]")
+        # Decide if this is fatal or not; for now, we continue
 
     # Step 2: Initialize variables
-    total_attempts = 0
+    attempts = 0
     total_cost = 0.0
-    model_name = ""
-    # Initialize history log for tracking attempts with XML structure
-    history_log = ""
-
-    # Check if verification program exists
-    if not os.path.exists(verification_program):
-        error_message = f"Error: Verification program not found at {verification_program}"
-        rprint(f"[bold red]{error_message}[/bold red]")
-        with open(error_log_file, "a") as f:
-            f.write(error_message + "\n")
-        return False, "", "", total_attempts, total_cost, model_name
-
-    # Create backup copies of the original files
-    original_verification_program = verification_program + ".original"
-    original_code_file = code_file + ".original"
-    shutil.copy(verification_program, original_verification_program)
-    shutil.copy(code_file, original_code_file)
-
-    # Step 3: Main loop
     success = False
-    while total_attempts < max_attempts:
-        rprint(f"\n[bold blue]Attempt: {total_attempts + 1}[/bold blue]")
-        with open(error_log_file, "a") as f:
-            f.write(f"\nAttempt: {total_attempts + 1}\n")
+    model_name = None
+    history_log = "<history>\n" # Initialize history log XML root
 
-        # Run the verification program
+    # Create initial backups before any modifications
+    code_file_path = Path(code_file)
+    verification_program_path = Path(verification_program)
+    original_code_backup = f"{code_file_path.stem}_original_backup{code_file_path.suffix}"
+    original_program_backup = f"{verification_program_path.stem}_original_backup{verification_program_path.suffix}"
+
+    try:
+        shutil.copy2(code_file, original_code_backup)
+        shutil.copy2(verification_program, original_program_backup)
+        if verbose:
+            rprint(f"Created initial backups: {original_code_backup}, {original_program_backup}")
+    except Exception as e:
+        rprint(f"[bold red]Error creating initial backups: {e}[/bold red]")
+        # Depending on severity, might want to return early here
+        return (
+            False,                                # success
+            Path(verification_program).read_text(encoding='utf-8'),  # final_program
+            Path(code_file).read_text(encoding='utf-8'),             # final_code
+            0,                                    # total_attempts
+            0.0,                                  # total_cost
+            None                                  # model_name
+        )
+
+
+    # Step 3: Enter the fixing loop
+    while attempts < max_attempts and total_cost <= budget:
+        current_attempt = attempts + 1
+        rprint(f"\n[bold cyan]Attempt {current_attempt}/{max_attempts}...[/bold cyan]")
+        attempt_log_entry = f'  <attempt number="{current_attempt}">\n' # Start XML for this attempt
+
+        # b. Run the verification program
+        if verbose:
+            rprint(f"Running verification: {sys.executable} {verification_program}")
+
+        process = subprocess.run(
+            [sys.executable, verification_program],
+            capture_output=True,
+            text=True,
+            encoding='utf-8', # Ensure consistent encoding
+        )
+
+        verification_status = f"Success (Return Code: {process.returncode})" if process.returncode == 0 else f"Failure (Return Code: {process.returncode})"
+        verification_output = process.stdout or "[No standard output]"
+        verification_error = process.stderr or "[No standard error]"
+
+        # Add verification results to the attempt log entry
+        attempt_log_entry += f"""\
+    <verification>
+      Status: {verification_status}
+      Output: <![CDATA[
+{verification_output}
+]]>
+      Error: <![CDATA[
+{verification_error}
+]]>
+    </verification>
+"""
+
+        # c. If the program runs without errors, break the loop
+        if process.returncode == 0:
+            rprint("[bold green]Verification successful![/bold green]")
+            success = True
+            history_log += attempt_log_entry + "  </attempt>\n" # Close the final successful attempt
+            break
+
+        # d. If the program fails
+        rprint(f"[bold red]Verification failed with return code {process.returncode}.[/bold red]")
+        current_error_message = verification_error # Use stderr as the primary error source
+
+        # Add current error to the attempt log entry
+        attempt_log_entry += f"""\
+    <current_error><![CDATA[
+{current_error_message}
+]]></current_error>
+"""
+
+        # Create backup copies for this iteration
+        code_base, code_ext = os.path.splitext(code_file)
+        program_base, program_ext = os.path.splitext(verification_program)
+        code_backup_path = f"{code_base}_{current_attempt}{code_ext}"
+        program_backup_path = f"{program_base}_{current_attempt}{program_ext}"
+
         try:
-            result = subprocess.run(
-                ["python", verification_program],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            with open(error_log_file, "a") as f:
-                f.write(result.stdout)
-                f.write(result.stderr)
-
-            # Record verification results in structured XML format
-            stdout_escaped = xmlutils.escape(result.stdout) if result.stdout else "None"
-            stderr_escaped = xmlutils.escape(result.stderr) if result.stderr else "None"
-            status = "Success" if result.returncode == 0 else f"Failed (Return Code: {result.returncode})"
-            
-            # Add verification information to history log
-            history_log += f'''
-<attempt number="{total_attempts + 1}">
-  <verification>
-    <status>{status}</status>
-    <output>
-{stdout_escaped}
-    </output>
-    <error>
-{stderr_escaped}
-    </error>
-  </verification>
-'''
-            # Check for successful execution
-            if result.returncode == 0:
-                rprint("[bold green]Code ran successfully![/bold green]")
-                # Close the final attempt tag
-                history_log += '''
-  <fixing>
-    <llm_analysis>
-No fixing required - execution succeeded.
-    </llm_analysis>
-    <decision>
-      update_program: false
-      update_code: false
-    </decision>
-  </fixing>
-</attempt>
-'''
-                success = True
-                break
-
-        except FileNotFoundError:
-            error_message = f"Error: Verification program not found at {verification_program}"
-            rprint(f"[bold red]{error_message}[/bold red]")
-            with open(error_log_file, "a") as f:
-                f.write(error_message + "\n")
-            return False, "", "", total_attempts, total_cost, model_name
-
-        # If we get here, code failed
-        rprint("[bold red]Code execution failed.[/bold red]")
-        with open(error_log_file, "r") as f:
-            error_message = f.read()
-
-        # Escape square brackets for Rich printing
-        escaped_error_message = error_message.replace("[", "\\[").replace("]", "\\]")
-        rprint(f"[bold red]Errors found:\n[/bold red]{escaped_error_message}")
-
-        # Create iteration backups
-        verification_program_backup = (verification_program.rsplit(".", 1)[0]
-                                       + f"_{total_attempts + 1}."
-                                       + verification_program.rsplit(".", 1)[1])
-        code_file_backup = (code_file.rsplit(".", 1)[0]
-                            + f"_{total_attempts + 1}."
-                            + code_file.rsplit(".", 1)[1])
-        shutil.copy(verification_program, verification_program_backup)
-        shutil.copy(code_file, code_file_backup)
+            shutil.copy2(code_file, code_backup_path)
+            shutil.copy2(verification_program, program_backup_path)
+            if verbose:
+                rprint(f"Created backups: {code_backup_path}, {program_backup_path}")
+        except Exception as e:
+            rprint(f"[bold red]Error creating backups for attempt {current_attempt}: {e}[/bold red]")
+            # Continue, but log the error
 
         # Read current file contents
         try:
-            with open(verification_program, "r") as f:
-                program_content = f.read()
-            with open(code_file, "r") as f:
-                code_content = f.read()
-        except FileNotFoundError as e:
-            rprint(f"[bold red]Error reading files: {e}[/bold red]")
-            with open(error_log_file, "a") as f:
-                f.write(f"Error reading files: {e}\n")
-            return False, "", "", total_attempts, total_cost, model_name
+            current_code = Path(code_file).read_text(encoding='utf-8')
+            current_program = Path(verification_program).read_text(encoding='utf-8')
+        except Exception as e:
+            rprint(f"[bold red]Error reading source files: {e}[/bold red]")
+            history_log += attempt_log_entry + "    <error>Failed to read source files</error>\n  </attempt>\n"
+            break # Cannot proceed without file contents
 
-        # Check budget before calling fix_code_module_errors
-        if total_cost >= budget:
-            rprint(f"[bold red]Budget exceeded. Stopping.[/bold red]")
-            success = False
-            break
+        # Prepare the full history context for the LLM
+        # Temporarily close the XML structure for the LLM call
+        error_context_for_llm = history_log + attempt_log_entry + "  </attempt>\n</history>\n"
 
-        # Create the combined error message with history and current error
-        errors_input_for_llm = history_log + f'''
-<current_error>
-{error_message}
-</current_error>
-'''
+        # Call fix_code_module_errors
+        rprint("Attempting to fix errors using LLM...")
+        update_program, update_code, fixed_program, fixed_code = False, False, "", ""
+        program_code_fix, cost, model_name_iter = "", 0.0, None
 
-        # Call fix_code_module_errors with the history-enriched error log
-        update_program, update_code, fixed_program, fixed_code, program_code_fix, cost, model_name = fix_code_module_errors(
-            program=program_content,
-            prompt=prompt,
-            code=code_content,
-            errors=errors_input_for_llm,  # Pass the enriched error input
-            strength=strength,
-            temperature=temperature,
-            verbose=verbose,
-        )
-        
-        # Display the LLM analysis
-        rprint(Markdown(program_code_fix))
-        with open(error_log_file, "a") as f:
-            f.write(f"LLM Analysis:\n{program_code_fix}\n")
+        # Capture Rich output from the internal function if needed, though it prints directly
+        # Using a temporary console or redirect might be complex if it uses the global console
+        # For simplicity, we assume fix_code_module_errors prints directly using `rprint`
 
-        # Add the cost of this fix attempt
-        total_cost += cost
-
-        # Record fixing results in XML format
-        program_code_fix_escaped = xmlutils.escape(program_code_fix)
-        history_log += f'''
-  <fixing>
-    <llm_analysis>
-{program_code_fix_escaped}
-    </llm_analysis>
-    <decision>
-      update_program: {update_program}
-      update_code: {update_code}
-    </decision>
-  </fixing>
-</attempt>
-'''
-
-        # Now increment attempts right after we've incurred cost
-        total_attempts += 1
-
-        # Check budget after fix
-        if total_cost > budget:
-            rprint("[bold red]Budget exceeded after fix attempt. Stopping.[/bold red]")
-            success = False
-            break
-
-        # If no changes to either file, nothing more to do
-        if not update_program and not update_code:
-            rprint("[bold yellow]No changes needed. Stopping.[/bold yellow]")
-            success = False
-            break
-
-        # Overwrite code file if updated
-        if update_code:
-            try:
-                with open(code_file, "w") as f:
-                    f.write(fixed_code)
-            except FileNotFoundError as e:
-                rprint(f"[bold red]Error writing to code file: {e}[/bold red]")
-                with open(error_log_file, "a") as f:
-                    f.write(f"Error writing to code file: {e}\n")
-                return False, "", "", total_attempts, total_cost, model_name
-
-        # Overwrite verification program if updated
-        if update_program:
-            try:
-                with open(verification_program, "w") as f:
-                    f.write(fixed_program)
-            except FileNotFoundError as e:
-                rprint(f"[bold red]Error writing to verification program: {e}[/bold red]")
-                with open(error_log_file, "a") as f:
-                    f.write(f"Error writing to verification program: {e}\n")
-                return False, "", "", total_attempts, total_cost, model_name
-
-    # Step 4: If not successful, restore the original files
-    if not success:
-        rprint("[bold yellow]Restoring original files.[/bold yellow]")
-        shutil.copy(original_verification_program, verification_program)
-        shutil.copy(original_code_file, code_file)
-        final_program = ""
-        final_code = ""
-    else:
         try:
-            with open(verification_program, "r") as f:
-                final_program = f.read()
-            with open(code_file, "r") as f:
-                final_code = f.read()
-        except FileNotFoundError as e:
-            rprint(f"[bold red]Error reading final files: {e}[/bold red]")
-            with open(error_log_file, "a") as f:
-                f.write(f"Error reading final files: {e}\n")
-            return False, "", "", total_attempts, total_cost, model_name
+            # Note: The example signature for fix_code_module_errors returns 7 values
+            (update_program, update_code, fixed_program, fixed_code,
+             program_code_fix, cost, model_name_iter) = fix_code_module_errors(
+                program=current_program,
+                prompt=prompt,
+                code=current_code,
+                errors=error_context_for_llm, # Pass the structured history
+                strength=strength,
+                temperature=temperature,
+                verbose=verbose,
+            )
+            if model_name_iter:
+                 model_name = model_name_iter # Update model name if returned
 
-    # Write the final history log to a separate file for debugging
+        except Exception as e:
+            rprint(f"[bold red]Error calling fix_code_module_errors: {e}[/bold red]")
+            cost = 0.0 # Assume no cost if the call failed
+            # Add error to the attempt log entry
+            attempt_log_entry += f"""\
+    <fixing>
+      <error>LLM call failed: {e}</error>
+    </fixing>
+"""
+            # Continue to the next attempt or break if limits reached
+
+        # Add fixing results to the attempt log entry
+        attempt_log_entry += f"""\
+    <fixing>
+      <llm_analysis><![CDATA[
+{program_code_fix or "[No analysis provided]"}
+]]></llm_analysis>
+      <decision>
+        update_program: {str(update_program).lower()}
+        update_code: {str(update_code).lower()}
+      </decision>
+    </fixing>
+"""
+        # Close the XML tag for this attempt
+        attempt_log_entry += "  </attempt>\n"
+        # Append this attempt's full log to the main history
+        history_log += attempt_log_entry
+
+        # Write the cumulative history log to the file
+        try:
+            with open(error_log_file, "w", encoding="utf-8") as f:
+                f.write(history_log + "</history>\n") # Write complete history including root close tag
+        except IOError as e:
+            rprint(f"[bold red]Error writing to log file {error_log_file}: {e}[/bold red]")
+
+
+        # Add cost and check budget
+        total_cost += cost
+        rprint(f"Attempt Cost: ${cost:.4f}, Total Cost: ${total_cost:.4f}, Budget: ${budget:.4f}")
+        if total_cost > budget:
+            rprint(f"[bold yellow]Budget exceeded (${total_cost:.4f} > ${budget:.4f}). Stopping.[/bold yellow]")
+            break
+
+        # If LLM suggested no changes but verification failed, stop to prevent loops
+        if not update_program and not update_code and process.returncode != 0:
+             rprint("[bold yellow]LLM indicated no changes needed, but verification still fails. Stopping.[/bold yellow]")
+             success = False # Ensure success is False
+             break
+
+        # Apply fixes if suggested
+        try:
+            if update_code:
+                Path(code_file).write_text(fixed_code, encoding='utf-8')
+                rprint(f"[green]Updated code file: {code_file}[/green]")
+            if update_program:
+                Path(verification_program).write_text(fixed_program, encoding='utf-8')
+                rprint(f"[green]Updated verification program: {verification_program}[/green]")
+        except IOError as e:
+            rprint(f"[bold red]Error writing updated files: {e}[/bold red]")
+            success = False # Mark as failed if we can't write updates
+            break # Stop if we cannot apply fixes
+
+        # e. Increment attempt counter
+        attempts += 1
+
+        # Check if max attempts reached after incrementing
+        if attempts >= max_attempts and not success:
+             rprint(f"[bold red]Maximum attempts ({max_attempts}) reached without success.[/bold red]")
+
+
+    # Step 4: Restore original files if the process failed
+    if not success:
+        rprint("[bold yellow]Attempting to restore original files as the process did not succeed.[/bold yellow]")
+        try:
+            shutil.copy2(original_code_backup, code_file)
+            shutil.copy2(original_program_backup, verification_program)
+            rprint(f"Restored {code_file} and {verification_program} from initial backups.")
+        except Exception as e:
+            rprint(f"[bold red]Error restoring original files: {e}. Final files might be in a failed state.[/bold red]")
+
+    # Clean up initial backup files
     try:
-        with open(error_log_file + ".history.xml", "w") as f:
-            f.write(history_log)
-    except Exception as e:
-        rprint(f"[bold red]Error writing history log: {e}[/bold red]")
+        os.remove(original_code_backup)
+        os.remove(original_program_backup)
+        if verbose:
+            rprint(f"Removed initial backup files: {original_code_backup}, {original_program_backup}")
+    except OSError as e:
+        rprint(f"[bold yellow]Warning: Could not remove initial backup files: {e}[/bold yellow]")
 
-    return success, final_program, final_code, total_attempts, total_cost, model_name
+
+    # Step 5: Read final file contents and return results
+    final_code_content = ""
+    final_program_content = ""
+    try:
+        final_code_content = Path(code_file).read_text(encoding='utf-8')
+        final_program_content = Path(verification_program).read_text(encoding='utf-8')
+    except Exception as e:
+        rprint(f"[bold red]Error reading final file contents: {e}[/bold red]")
+        success = False # Mark as failure if we can't even read the final files
+
+    # Ensure the history log file is complete
+    try:
+        with open(error_log_file, "w", encoding="utf-8") as f:
+             f.write(history_log + "</history>\n")
+    except IOError as e:
+        rprint(f"[bold red]Final write to log file {error_log_file} failed: {e}[/bold red]")
+
+
+    return (
+        success,
+        final_program_content,
+        final_code_content,
+        attempts if success else (attempts + 1 if attempts < max_attempts else max_attempts),
+        total_cost,
+        model_name,
+    )
+
+# Example usage (requires a dummy fix_code_module_errors and verification script)
+if __name__ == "__main__":
+    # Create dummy files for demonstration
+    DUMMY_CODE_FILE = "dummy_code.py"
+    DUMMY_VERIFICATION_FILE = "dummy_verify.py"
+    DUMMY_ERROR_LOG = "dummy_error.log"
+
+    # Dummy code with an error
+    Path(DUMMY_CODE_FILE).write_text(
+        "def my_func(a, b):\n    return a + b # Potential type error if strings used\n",
+        encoding='utf-8'
+    )
+
+    # Dummy verification script that will fail initially
+    Path(DUMMY_VERIFICATION_FILE).write_text(
+        f"""
+import sys
+# Import the function from the code file
+try:
+    # Assume dummy_code.py is in the same directory
+    from dummy_code import my_func
+except ImportError as e:
+    print(f"Import Error: {e}", file=sys.stderr)
+    sys.exit(1)
+
+# This will cause a TypeError initially
+try:
+    result = my_func(5, "a") # Intentionally cause error
+    print(f"Result: {{result}}")
+    # Check if result is as expected (it won't be initially)
+    # Add more checks if needed
+    # if result != expected_value:
+    #    print(f"Assertion failed: Result {{result}} != expected_value", file=sys.stderr)
+    #    sys.exit(1)
+except Exception as e:
+    print(f"Runtime Error: {{e}}", file=sys.stderr)
+    sys.exit(1) # Exit with non-zero code on error
+
+# If we reach here, it means no exceptions occurred
+print("Verification passed.")
+sys.exit(0) # Exit with zero code for success
+""",
+        encoding='utf-8'
+    )
+
+    # Dummy fix_code_module_errors function (replace with actual import)
+    # This dummy version simulates fixing the code on the second attempt
+    _fix_attempt_counter = 0
+    def dummy_fix_code_module_errors(program, prompt, code, errors, strength, temperature, verbose):
+        global _fix_attempt_counter
+        _fix_attempt_counter += 1
+        cost = 0.05 # Simulate API cost
+        model = "dummy-fixer-model-v1"
+        analysis = f"Analysis based on errors (attempt {_fix_attempt_counter}):\n{errors[-200:]}" # Show recent history
+
+        if _fix_attempt_counter >= 2:
+             # Simulate fixing the code file on the second try
+             fixed_code = "def my_func(a, b):\n    # Fixed: Ensure inputs are numbers or handle types\n    try:\n        return float(a) + float(b)\n    except (ValueError, TypeError):\n        return 'Error: Invalid input types'\n"
+             # Simulate fixing the verification program to use valid inputs
+             fixed_program = program.replace('my_func(5, "a")', 'my_func(5, 10)') # Fix the call
+             return True, True, fixed_program, fixed_code, analysis, cost, model # update_program, update_code
+        else:
+             # Simulate no changes needed on the first try
+             return False, False, program, code, analysis, cost, model
+
+    # Replace the actual import with the dummy for this example run
+    original_fix_func = fix_code_module_errors
+    fix_code_module_errors = dummy_fix_code_module_errors
+
+    rprint("[bold yellow]Running example fix_code_loop...[/bold yellow]")
+
+    results = fix_code_loop(
+        code_file=DUMMY_CODE_FILE,
+        prompt="Create a function that adds two numbers.",
+        verification_program=DUMMY_VERIFICATION_FILE,
+        strength=0.5,
+        temperature=0.1,
+        max_attempts=3,
+        budget=1.0,
+        error_log_file=DUMMY_ERROR_LOG,
+        verbose=True,
+    )
+
+    rprint("\n[bold blue]----- Fix Loop Results -----[/bold blue]")
+    rprint(f"Success: {results[0]}")
+    rprint(f"Total Attempts: {results[3]}")
+    rprint(f"Total Cost: ${results[4]:.4f}")
+    rprint(f"Model Name: {results[5]}")
+    rprint("\nFinal Code:")
+    rprint(f"[code]{results[2]}[/code]")
+    rprint("\nFinal Verification Program:")
+    rprint(f"[code]{results[1]}[/code]")
+
+    rprint(f"\nCheck the error log file: {DUMMY_ERROR_LOG}")
+    if Path(DUMMY_ERROR_LOG).exists():
+        rprint("\n[bold blue]----- Error Log Content ----- [/bold blue]")
+        log_content = Path(DUMMY_ERROR_LOG).read_text(encoding='utf-8')
+        # Use Rich Panel or just print for log content display
+        from rich.panel import Panel
+        rprint(Panel(log_content, title=DUMMY_ERROR_LOG, border_style="dim blue"))
+
+
+    # Restore original function if needed elsewhere
+    fix_code_module_errors = original_fix_func
+
+    # Clean up dummy files
+    # try:
+    #     os.remove(DUMMY_CODE_FILE)
+    #     os.remove(DUMMY_VERIFICATION_FILE)
+    #     # Keep the log file for inspection
+    #     # os.remove(DUMMY_ERROR_LOG)
+    #     # Remove backups if they exist
+    #     for f in Path(".").glob("dummy_*_backup.py"): os.remove(f)
+    #     for f in Path(".").glob("dummy_*_?.py"): os.remove(f) # Remove attempt backups like dummy_code_1.py
+    # except OSError as e:
+    #     print(f"Error cleaning up dummy files: {e}")
