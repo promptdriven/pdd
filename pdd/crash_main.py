@@ -77,7 +77,7 @@ def crash_main(
 
         if loop:
             # Use iterative fixing process
-            success, final_code, final_program, attempts, cost, model = fix_code_loop(
+            success, final_program, final_code, attempts, cost, model = fix_code_loop(
                 code_file, prompt_content, program_file, strength, temperature, max_attempts or 3, budget or 5.0, error_file, verbose
             )
         else:
@@ -90,11 +90,11 @@ def crash_main(
             attempts = 1
 
         # Ensure we have content to write, falling back to original content if needed
-        if final_code == "":
-            final_code = code_content
-        
         if final_program == "":
             final_program = program_content
+
+        if final_code == "":
+            final_code = code_content
 
         # Determine whether to write the files based on whether paths are provided
         should_write_code = output_file_paths.get("output") is not None
