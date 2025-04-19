@@ -1,5 +1,6 @@
 import pytest
 from rich.console import Console
+from pdd import DEFAULT_STRENGTH
 from pdd.generate_test import generate_test, _validate_inputs
 
 # Test fixtures
@@ -39,12 +40,12 @@ def test_generate_test_verbose(valid_inputs):
 # Test input validation
 def test_validate_inputs_empty_prompt():
     with pytest.raises(ValueError, match="Prompt must be a non-empty string"):
-        _validate_inputs("", "code", 0.97, 0.5, "python")
+        _validate_inputs("", "code", DEFAULT_STRENGTH, 0.5, "python")
 
 
 def test_validate_inputs_none_code():
     with pytest.raises(ValueError, match="Code must be a non-empty string"):
-        _validate_inputs("prompt", None, 0.97, 0.5, "python")
+        _validate_inputs("prompt", None, DEFAULT_STRENGTH, 0.5, "python")
 
 
 def test_validate_inputs_invalid_strength():
@@ -54,12 +55,12 @@ def test_validate_inputs_invalid_strength():
 
 def test_validate_inputs_invalid_temperature():
     with pytest.raises(ValueError, match="Temperature must be a float"):
-        _validate_inputs("prompt", "code", 0.97, "invalid", "python")
+        _validate_inputs("prompt", "code", DEFAULT_STRENGTH, "invalid", "python")
 
 
 def test_validate_inputs_empty_language():
     with pytest.raises(ValueError, match="Language must be a non-empty string"):
-        _validate_inputs("prompt", "code", 0.97, 0.5, "")
+        _validate_inputs("prompt", "code", DEFAULT_STRENGTH, 0.5, "")
 
 # Test error handling
 def test_generate_test_invalid_template(valid_inputs, monkeypatch):

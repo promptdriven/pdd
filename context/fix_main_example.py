@@ -1,5 +1,6 @@
 import click
 from rich import print as rprint
+from pdd import DEFAULT_STRENGTH
 from pdd.fix_main import fix_main
 import sys
 # Example usage within a Click command
@@ -46,7 +47,7 @@ def fix_command(ctx, **kwargs):
 if __name__ == '__main__':
     # Set up Click context with default values
     ctx_obj = {
-        'strength': 0.97,
+        'strength': DEFAULT_STRENGTH,
         'temperature': 0,
         'force': True,
         'quiet': False

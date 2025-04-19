@@ -43,7 +43,7 @@
             - 'errors'
         2b. If verbose is True, pretty print a message letting the user know it is running and how many tokens are in the prompt and the cost.
     Step 3. If verbose is True, pretty print the markdown formatting that is present in the result via the rich Markdown function. Also pretty print the number of tokens in the result and the cost.
-    Step 4. Run a second llm_invoke with strength .97 and the provided temperature to extract the fixes. 
+    Step 4. Run a second llm_invoke with the EXTRACTION_STRENGTH constant and the provided temperature to extract the fixes. 
         4a. Pass the following string parameters to the prompt during invoke:
             - 'program_code_fix': This is the result of the first llm_invoke
             - 'program'

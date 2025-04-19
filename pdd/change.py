@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from .preprocess import preprocess
 from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
+from . import EXTRACTION_STRENGTH
 
 console = Console()
 
@@ -86,7 +87,7 @@ def change(
         extract_response = llm_invoke(
             prompt=extract_prompt,
             input_json={"llm_output": change_response["result"]},
-            strength=0.97,  # Fixed strength as specified
+            strength=EXTRACTION_STRENGTH,  # Fixed strength for extraction
             temperature=temperature,
             verbose=verbose,
             output_pydantic=ExtractedPrompt

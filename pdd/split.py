@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
 from .llm_invoke import llm_invoke
+from . import EXTRACTION_STRENGTH
 
 class PromptSplit(BaseModel):
     extracted_functionality: str = Field(description="The extracted functionality as a sub-module prompt")
@@ -91,7 +92,7 @@ def split(
         extract_response = llm_invoke(
             prompt=processed_extract_prompt,
             input_json={"llm_output": split_response["result"]},
-            strength=0.97,  # Fixed strength for extraction
+            strength=EXTRACTION_STRENGTH,  # Fixed strength for extraction
             temperature=temperature,
             output_pydantic=PromptSplit,
             verbose=verbose

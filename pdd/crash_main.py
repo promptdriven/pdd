@@ -2,6 +2,7 @@ import sys
 from typing import Tuple, Optional
 import click
 from rich import print as rprint
+from . import DEFAULT_STRENGTH
 
 from .construct_paths import construct_paths
 from .fix_code_loop import fix_code_loop
@@ -70,7 +71,7 @@ def crash_main(
         error_content = input_strings["error_file"]
 
         # Get model parameters from context
-        strength = ctx.obj.get("strength", 0.97)
+        strength = ctx.obj.get("strength", DEFAULT_STRENGTH)
         temperature = ctx.obj.get("temperature", 0)
 
         verbose = ctx.params.get("verbose", ctx.obj.get("verbose", False))

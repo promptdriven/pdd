@@ -4,6 +4,7 @@ from rich.markdown import Markdown
 from pydantic import BaseModel, Field
 from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
+from . import EXTRACTION_STRENGTH
 
 class XMLOutput(BaseModel):
     xml_tagged: str = Field(description="The XML-tagged version of the prompt")
@@ -72,7 +73,7 @@ def xml_tagger(
         extraction_response = llm_invoke(
             prompt=extract_xml_prompt,
             input_json={"xml_generated_analysis": xml_generated_analysis},
-            strength=0.97,  # Fixed strength as specified
+            strength=EXTRACTION_STRENGTH,  # Fixed strength for extraction
             temperature=temperature,
             verbose=verbose,
             output_pydantic=XMLOutput

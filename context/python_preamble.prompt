@@ -1,1 +1,2 @@
 % The function should be part of a Python package, using relative imports (single dot) for internal modules (e.g. 'from .module_name import module_name'). All output to the console will be pretty printed using the Python Rich library. Ensure the function handles edge cases, such as missing inputs or model errors, and provide clear error messages.
+% The ./pdd/__init__.py file will have the EXTRACTION_STRENGTH and DEFAULT_STRENGTH constants.

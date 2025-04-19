@@ -44,7 +44,7 @@
         - b. If verbose is True, pretty print the output of 3a, including the token count and estimated cost.
         - c.  Capture the 'model_name' from the result of this llm_invoke call.
     4. Run the output from Step 3 through llm_invoke with the preprocessed extract_prompt_split_LLM prompt:
-        - a. Use a separate llm_invoke call with a fixed strength of .97 for the JSON extraction step.
+        - a. Use a separate llm_invoke call with the EXTRACTION_STRENGTH constant for the JSON extraction step.
         - b. Pass the following string parameters to the prompt during invocation: 'llm_output' (this string is from Step 3).
         - c. If verbose is True, pretty print the running message with the token count and cost.
         - d. Extract 'sub_prompt' and 'modified_prompt' key values from the Pydantic output.

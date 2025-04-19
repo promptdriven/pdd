@@ -1,5 +1,7 @@
 import os
+from pdd import DEFAULT_STRENGTH
 from pdd.git_update import git_update
+
 
 def main() -> None:
     """
@@ -12,7 +14,7 @@ def main() -> None:
     with open(f"prompts/{name}_python.prompt", "r") as file:
         input_prompt = file.read()
     modified_code_file: str = f"pdd/{name}.py"
-    strength: float = .97  # Strength parameter for the LLM (0.0 to 1.0)
+    strength: float = DEFAULT_STRENGTH  # Strength parameter for the LLM (0.0 to 1.0)
     temperature: float = 0  # Temperature parameter for the LLM
 
     try:

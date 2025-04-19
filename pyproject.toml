@@ -45,7 +45,7 @@ dependencies = [
     "langchain_core==0.3.51",
     "langchain_fireworks==0.2.9",
     "langchain_google_genai==2.1.2",
-    "langchain_google_vertexai==2.0.19",
+    "langchain_google_vertexai>=2.0.20",
     "langchain_groq==0.3.2",
     "langchain_mcp_adapters==0.0.7",
     "langchain_ollama==0.3.0",

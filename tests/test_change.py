@@ -1,6 +1,7 @@
 import pytest
 from rich.console import Console
 from rich.markdown import Markdown
+from pdd import EXTRACTION_STRENGTH
 from pdd.change import change, ExtractedPrompt
 from unittest.mock import patch, MagicMock
 
@@ -99,7 +100,7 @@ def test_change_llm_invoke_called_correctly(valid_inputs, mock_llm_response, moc
                 # Verify second call (extract prompt)
                 second_call_kwargs = mock_llm_invoke.call_args_list[1][1]
                 assert 'llm_output' in second_call_kwargs['input_json']
-                assert second_call_kwargs['strength'] == .97  # Fixed strength for extract
+                assert second_call_kwargs['strength'] == EXTRACTION_STRENGTH  # Fixed strength for extraction
 
 # Test verbose output
 def test_change_verbose_output(valid_inputs, mock_llm_response, mock_extract_response):

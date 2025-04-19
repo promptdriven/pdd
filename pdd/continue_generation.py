@@ -6,6 +6,7 @@ from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
 from .llm_invoke import llm_invoke
 from .unfinished_prompt import unfinished_prompt
+from . import EXTRACTION_STRENGTH
 
 console = Console()
 
@@ -119,7 +120,7 @@ def continue_generation(
                         "CONTINUED_GENERATION": continue_result,
                         "GENERATED_RESULTS": code_block[-200:]
                     },
-                    strength=0.8,
+                    strength=EXTRACTION_STRENGTH,
                     temperature=0,
                     output_pydantic=TrimResultsOutput,
                     verbose=verbose
