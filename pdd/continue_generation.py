@@ -69,7 +69,7 @@ def continue_generation(
         trim_start_response = llm_invoke(
             prompt=processed_prompts['trim_start'],
             input_json={"LLM_OUTPUT": llm_output},
-            strength=0.9,
+            strength=0.8,
             temperature=0,
             output_pydantic=TrimResultsStartOutput,
             verbose=verbose
@@ -119,7 +119,7 @@ def continue_generation(
                         "CONTINUED_GENERATION": continue_result,
                         "GENERATED_RESULTS": code_block[-200:]
                     },
-                    strength=0.9,
+                    strength=0.8,
                     temperature=0,
                     output_pydantic=TrimResultsOutput,
                     verbose=verbose
