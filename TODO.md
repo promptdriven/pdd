@@ -2,11 +2,10 @@
 - [ ] Python 3.13 support
 
 ## On Deck
-
+- [ ] during fix rather than just have the fix loop check to see if the example crashed, have it use a llm to check if the results are largely correct still
 
 ## Features
 - [ ] Have test and example use the cloud option for giving better context
-- [ ] during fix rather than just have the fix loop check to see if the example crashed, have it use a llm to check if the results are largely correct still
 - [ ] warming option for temperature increase
 - [ ] strength option for strength increase
 - [ ] use context caching during fixing errors

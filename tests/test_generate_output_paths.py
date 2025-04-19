@@ -1,264 +1,377 @@
-import pytest
 import os
+import sys
+import pytest
 from pathlib import Path
-from unittest.mock import patch, call
-from pdd.generate_output_paths import generate_output_paths
 
+# Assume the code under test is in pdd/generate_output_paths.py
+# Adjust the import path if necessary based on your project structure
+try:
+    from pdd.generate_output_paths import generate_output_paths, COMMAND_OUTPUT_KEYS, DEFAULT_FILENAMES, ENV_VAR_MAP
+except ImportError:
+    # If running directly from the tests directory, adjust sys.path
+    # This assumes your tests are in a 'tests' directory and 'pdd' is a sibling
+    pdd_module_path = Path(__file__).parent.parent / 'pdd'
+    sys.path.insert(0, str(pdd_module_path.parent))
+    from pdd.generate_output_paths import generate_output_paths, COMMAND_OUTPUT_KEYS, DEFAULT_FILENAMES, ENV_VAR_MAP
+
+
+# --- Test Constants ---
+TEST_BASENAME = "my_component"
+TEST_LANG = "python"
+TEST_EXT_WITH_DOT = ".py"
+TEST_EXT_WITHOUT_DOT = "py"
+TEST_EXT_EMPTY = ""
+
+# Helper to get expected default filename (without path)
+def get_expected_default_name(command, key, basename, lang, ext):
+    pattern = DEFAULT_FILENAMES[command][key]
+    effective_ext = ext if ext.startswith('.') or not ext else '.' + ext
+    if '{ext}' in pattern:
+        return pattern.format(basename=basename, language=lang, ext=effective_ext)
+    else:
+        return pattern.format(basename=basename, language=lang) # ext might not be needed
+
+# Helper to create absolute path in current dir for expectation
+def abs_path_cwd(filename):
+    return os.path.abspath(filename)
+
+# --- Fixture for temporary directory ---
 @pytest.fixture
-def setup_environment():
-    # Set up environment variables for testing
-    os.environ['PDD_GENERATE_OUTPUT_PATH'] = '/env/path/generate'
-    os.environ['PDD_FIX_TEST_OUTPUT_PATH'] = '/env/path/fix_test'
-    os.environ['PDD_FIX_CODE_OUTPUT_PATH'] = '/env/path/fix_code'
-    yield
-    # Clean up environment variables after testing
-    del os.environ['PDD_GENERATE_OUTPUT_PATH']
-    del os.environ['PDD_FIX_TEST_OUTPUT_PATH']
-    del os.environ['PDD_FIX_CODE_OUTPUT_PATH']
+def temp_output_dir(tmp_path):
+    """Creates a temporary directory for output testing."""
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    return output_dir
 
-@patch('pathlib.Path.mkdir')
-def test_generate_command_default(mock_mkdir):
-    result = generate_output_paths('generate', {}, 'myfile', 'python', '.py')
-    assert result == {'output': 'myfile.py'}
-    mock_mkdir.assert_not_called()
+# --- Test Cases ---
 
-@patch('pathlib.Path.mkdir')
-def test_generate_command_with_output_location(mock_mkdir):
-    result = generate_output_paths('generate', {'output': '/custom/path/output.py'}, 'myfile', 'python', '.py')
-    assert result == {'output': '/custom/path/output.py'}
-    mock_mkdir.assert_called_once_with(parents=True, exist_ok=True)
+def test_unknown_command():
+    """Test that an unknown command returns an empty dictionary."""
+    result = generate_output_paths(
+        command="invalid_command",
+        output_locations={},
+        basename=TEST_BASENAME,
+        language=TEST_LANG,
+        file_extension=TEST_EXT_WITH_DOT
+    )
+    assert result == {}
 
-@patch('pathlib.Path.mkdir')
-def test_generate_command_with_output_directory(mock_mkdir):
-    result = generate_output_paths('generate', {'output': '/custom/directory'}, 'myfile', 'python', '.py')
-    assert result == {'output': '/custom/directory/myfile.py'}
-    mock_mkdir.assert_called_once_with(parents=True, exist_ok=True)
+def test_missing_basename():
+    """Test that a missing basename returns an empty dictionary."""
+    result = generate_output_paths(
+        command="generate",
+        output_locations={},
+        basename="", # Empty basename
+        language=TEST_LANG,
+        file_extension=TEST_EXT_WITH_DOT
+    )
+    assert result == {}
 
-@patch('pathlib.Path.mkdir')
-def test_example_command(mock_mkdir):
-    result = generate_output_paths('example', {}, 'myfile', 'python', '.py')
-    assert result == {'output': 'myfile_example.py'}
-    mock_mkdir.assert_not_called()
+# --- Default Path Tests ---
+@pytest.mark.parametrize("command", COMMAND_OUTPUT_KEYS.keys())
+def test_defaults_for_all_commands(command):
+    """Test default path generation for all known commands."""
+    expected_keys = COMMAND_OUTPUT_KEYS[command]
+    result = generate_output_paths(
+        command=command,
+        output_locations={},
+        basename=TEST_BASENAME,
+        language=TEST_LANG,
+        file_extension=TEST_EXT_WITH_DOT
+    )
 
-@patch('pathlib.Path.mkdir')
-def test_test_command(mock_mkdir):
-    result = generate_output_paths('test', {}, 'myfile', 'python', '.py')
-    assert result == {'output': 'test_myfile.py'}
-    mock_mkdir.assert_not_called()
+    assert list(result.keys()).sort() == list(expected_keys).sort()
+    for key in expected_keys:
+        expected_filename = get_expected_default_name(command, key, TEST_BASENAME, TEST_LANG, TEST_EXT_WITH_DOT)
+        expected_path = abs_path_cwd(expected_filename)
+        assert key in result
+        assert result[key] == expected_path
+        assert os.path.isabs(result[key])
 
-@patch('pathlib.Path.mkdir')
-def test_preprocess_command(mock_mkdir):
-    result = generate_output_paths('preprocess', {}, 'myfile', 'python', '.py')
-    assert result == {'output': 'myfile_python_preprocessed.prompt'}
-    mock_mkdir.assert_not_called()
+# --- User Input Tests ---
+def test_user_input_specific_file():
+    """Test user providing a specific filename."""
+    user_file = "specific_output.py"
+    result = generate_output_paths(
+        command="generate",
+        output_locations={'output': user_file},
+        basename=TEST_BASENAME,
+        language=TEST_LANG,
+        file_extension=TEST_EXT_WITH_DOT
+    )
+    assert result == {'output': abs_path_cwd(user_file)}
 
-@patch('pathlib.Path.mkdir')
-def test_fix_command(mock_mkdir):
-    result = generate_output_paths('fix', {}, 'myfile', 'python', '.py')
-    assert result == {
-        'output_test': 'test_myfile_fixed.py',
-        'output_code': 'myfile_fixed.py',
-        'output_results': 'myfile_fix_results.log'
-    }
-    mock_mkdir.assert_not_called()
+def test_user_input_specific_file_absolute(temp_output_dir):
+    """Test user providing an absolute filename."""
+    user_file = temp_output_dir / "specific_output_abs.py"
+    result = generate_output_paths(
+        command="generate",
+        output_locations={'output': str(user_file)},
+        basename=TEST_BASENAME,
+        language=TEST_LANG,
+        file_extension=TEST_EXT_WITH_DOT
+    )
+    assert result == {'output': str(user_file)} # Already absolute
 
-@patch('pathlib.Path.mkdir')
-def test_split_command(mock_mkdir):
-    result = generate_output_paths('split', {}, 'myfile', 'python', '.py')
-    assert result == {
-        'output_sub': 'sub_myfile.prompt',
-        'output_modified': 'modified_myfile.prompt'
-    }
-    mock_mkdir.assert_not_called()
-
-@patch('pathlib.Path.mkdir')
-def test_change_command(mock_mkdir):
-    result = generate_output_paths('change', {}, 'myfile', 'python', '.py')
-    assert result == {'output': 'modified_myfile.prompt'}
-    mock_mkdir.assert_not_called()
-
-@patch('pathlib.Path.mkdir')
-def test_update_command(mock_mkdir):
-    result = generate_output_paths('update', {}, 'myfile', 'python', '.py')
-    assert result == {'output': 'modified_myfile.prompt'}
-    mock_mkdir.assert_not_called()
-
-@patch('pathlib.Path.mkdir')
-def test_detect_command(mock_mkdir):
-    result = generate_output_paths('detect', {}, 'myfile', 'python', '.py')
-    assert result == {'output': 'myfile_detect.csv'}
-    mock_mkdir.assert_not_called()
-
-@patch('pathlib.Path.mkdir')
-def test_conflicts_command(mock_mkdir):
-    result = generate_output_paths('conflicts', {}, 'myfile', 'python', '.py')
-    assert result == {'output': 'myfile_conflict.csv'}
-    mock_mkdir.assert_not_called()
-
-@patch('pathlib.Path.mkdir')
-def test_crash_command(mock_mkdir):
-    result = generate_output_paths('crash', {}, 'myfile', 'python', '.py')
-    assert result == {
-        'output': 'myfile_fixed.py',
-        'output_program': 'myfile_fixed.py'
-    }
-    mock_mkdir.assert_not_called()
-
-@patch('pathlib.Path.mkdir')
-def test_fix_command_with_custom_output(mock_mkdir):
-    result = generate_output_paths('fix', {'output_test': '/custom/test.py', 'output_code': '/custom/code.py'}, 'myfile', 'python', '.py')
-    assert result == {
-        'output_test': '/custom/test.py',
-        'output_code': '/custom/code.py',
-        'output_results': 'myfile_fix_results.log'
-    }
-    expected_calls = [
-        call(parents=True, exist_ok=True),
-        call(parents=True, exist_ok=True)
-    ]
-    mock_mkdir.assert_has_calls(expected_calls, any_order=True)
-
-@patch('pathlib.Path.mkdir')
-def test_generate_command_with_environment_variable(mock_mkdir, setup_environment):
-    result = generate_output_paths('generate', {}, 'myfile', 'python', '.py')
-    assert result == {'output': '/env/path/generate/myfile.py'}
-    mock_mkdir.assert_called_once_with(parents=True, exist_ok=True)
-
-@patch('pathlib.Path.mkdir')
-def test_fix_command_with_environment_variables(mock_mkdir, setup_environment):
-    result = generate_output_paths('fix', {}, 'myfile', 'python', '.py')
-    assert result == {
-        'output_test': '/env/path/fix_test/test_myfile_fixed.py',
-        'output_code': '/env/path/fix_code/myfile_fixed.py',
-        'output_results': 'myfile_fix_results.log'
-    }
-    expected_calls = [
-        call(parents=True, exist_ok=True),
-        call(parents=True, exist_ok=True)
-    ]
-    mock_mkdir.assert_has_calls(expected_calls, any_order=True)
-
-def test_invalid_command():
-    with pytest.raises(ValueError):
-        generate_output_paths('invalid_command', {}, 'myfile', 'python', '.py')
-
-@patch('pathlib.Path.mkdir')
-def test_missing_file_extension(mock_mkdir):
-    result = generate_output_paths('generate', {}, 'myfile', 'python', '')
-    assert result == {'output': 'myfile'}
-    mock_mkdir.assert_not_called()
-
-@patch('pathlib.Path.mkdir')
-def test_missing_language(mock_mkdir):
-    result = generate_output_paths('preprocess', {}, 'myfile', '', '.py')
-    assert result == {'output': 'myfile__preprocessed.prompt'}
-    mock_mkdir.assert_not_called()
-
-
-def test_generate_output_paths():
-    """
-    Unit tests for the generate_output_paths function.
-    Covers various scenarios and edge cases to ensure correctness.
-    """
-    # Test case 1: 'generate' command with a directory in output_locations
-    command = 'generate'
-    output_locations = {'output': 'output_dir/'}
-    basename = 'example'
-    language = 'python'
-    file_extension = '.py'
-
-    expected_output = {'output': os.path.join('output_dir', 'example.py')}
-    assert generate_output_paths(command, output_locations, basename, language, file_extension) == expected_output
-
-    # Test case 2: 'example' command with environment variable override
-    command = 'example'
-    output_locations = {'output': None}
-    basename = 'example'
-    language = 'python'
-    file_extension = '.py'
-
-    with patch.dict(os.environ, {'PDD_EXAMPLE_OUTPUT_PATH': 'env_output_dir'}):
-        expected_output = {'output': os.path.join('env_output_dir', 'example_example.py')}
-        assert generate_output_paths(command, output_locations, basename, language, file_extension) == expected_output
-
-    # Test case 3: 'test' command with default naming convention
+def test_user_input_directory_trailing_slash(temp_output_dir):
+    """Test user providing a directory path ending with a slash."""
     command = 'test'
-    output_locations = {'output': None}
-    basename = 'example'
-    language = 'python'
-    file_extension = '.py'
+    key = 'output'
+    default_name = get_expected_default_name(command, key, TEST_BASENAME, TEST_LANG, TEST_EXT_WITH_DOT)
+    expected_path = os.path.join(str(temp_output_dir), default_name)
 
-    expected_output = {'output': 'test_example.py'}
-    assert generate_output_paths(command, output_locations, basename, language, file_extension) == expected_output
+    result = generate_output_paths(
+        command=command,
+        output_locations={key: str(temp_output_dir) + os.sep},
+        basename=TEST_BASENAME,
+        language=TEST_LANG,
+        file_extension=TEST_EXT_WITH_DOT
+    )
+    assert result == {key: expected_path}
+    assert os.path.isabs(result[key])
 
-    # Test case 4: 'fix' command with multiple outputs
+def test_user_input_directory_existing(temp_output_dir):
+    """Test user providing an existing directory path."""
+    command = 'example'
+    key = 'output'
+    default_name = get_expected_default_name(command, key, TEST_BASENAME, TEST_LANG, TEST_EXT_WITH_DOT)
+    expected_path = os.path.join(str(temp_output_dir), default_name)
+
+    result = generate_output_paths(
+        command=command,
+        output_locations={key: str(temp_output_dir)}, # No trailing slash, but exists
+        basename=TEST_BASENAME,
+        language=TEST_LANG,
+        file_extension=TEST_EXT_WITH_DOT
+    )
+    assert result == {key: expected_path}
+    assert os.path.isabs(result[key])
+
+def test_user_input_directory_non_existing(temp_output_dir):
+    """Test user providing a non-existing path without trailing slash (treated as file)."""
+    user_path = temp_output_dir / "non_existing_dir_as_file" # Does not exist
+    command = 'generate'
+    key = 'output'
+
+    result = generate_output_paths(
+        command=command,
+        output_locations={key: str(user_path)},
+        basename=TEST_BASENAME,
+        language=TEST_LANG,
+        file_extension=TEST_EXT_WITH_DOT
+    )
+    # Should treat it as a specific file path, not append default name
+    assert result == {key: str(user_path)}
+    assert os.path.isabs(result[key])
+
+
+# --- Environment Variable Tests ---
+def test_env_var_specific_file(monkeypatch):
+    """Test environment variable providing a specific filename."""
+    env_var = ENV_VAR_MAP['generate']['output']
+    env_file = "env_generated.py"
+    monkeypatch.setenv(env_var, env_file)
+
+    result = generate_output_paths(
+        command="generate",
+        output_locations={}, # No user input
+        basename=TEST_BASENAME,
+        language=TEST_LANG,
+        file_extension=TEST_EXT_WITH_DOT
+    )
+    assert result == {'output': abs_path_cwd(env_file)}
+    monkeypatch.delenv(env_var) # Clean up
+
+def test_env_var_directory_trailing_slash(monkeypatch, temp_output_dir):
+    """Test environment variable providing a directory path with trailing slash."""
     command = 'fix'
-    output_locations = {'output_test': 'fix_output_dir/', 'output_code': None, 'output_results': None}
-    basename = 'example'
-    language = 'python'
-    file_extension = '.py'
+    key = 'output_code'
+    env_var = ENV_VAR_MAP[command][key]
+    default_name = get_expected_default_name(command, key, TEST_BASENAME, TEST_LANG, TEST_EXT_WITH_DOT)
+    expected_path = os.path.join(str(temp_output_dir), default_name)
 
-    expected_output = {
-        'output_test': os.path.join('fix_output_dir', 'test_example_fixed.py'),
-        'output_code': 'example_fixed.py',
-        'output_results': 'example_fix_results.log'
+    monkeypatch.setenv(env_var, str(temp_output_dir) + os.sep)
+
+    result = generate_output_paths(
+        command=command,
+        output_locations={}, # No user input
+        basename=TEST_BASENAME,
+        language=TEST_LANG,
+        file_extension=TEST_EXT_WITH_DOT
+    )
+    # Check only the key affected by env var, others should be default
+    assert key in result
+    assert result[key] == expected_path
+    assert os.path.isabs(result[key])
+    # Verify other keys have default paths
+    for other_key in COMMAND_OUTPUT_KEYS[command]:
+        if other_key != key:
+            other_default_name = get_expected_default_name(command, other_key, TEST_BASENAME, TEST_LANG, TEST_EXT_WITH_DOT)
+            assert result[other_key] == abs_path_cwd(other_default_name)
+
+    monkeypatch.delenv(env_var) # Clean up
+
+def test_env_var_directory_existing(monkeypatch, temp_output_dir):
+    """Test environment variable providing an existing directory path."""
+    command = 'preprocess'
+    key = 'output'
+    env_var = ENV_VAR_MAP[command][key]
+    default_name = get_expected_default_name(command, key, TEST_BASENAME, TEST_LANG, TEST_EXT_WITH_DOT)
+    expected_path = os.path.join(str(temp_output_dir), default_name)
+
+    monkeypatch.setenv(env_var, str(temp_output_dir)) # No trailing slash
+
+    result = generate_output_paths(
+        command=command,
+        output_locations={}, # No user input
+        basename=TEST_BASENAME,
+        language=TEST_LANG,
+        file_extension=TEST_EXT_WITH_DOT
+    )
+    assert result == {key: expected_path}
+    assert os.path.isabs(result[key])
+
+    monkeypatch.delenv(env_var) # Clean up
+
+# --- Prioritization Tests ---
+def test_prioritization_user_over_env(monkeypatch):
+    """Test that user input overrides environment variables."""
+    command = 'generate'
+    key = 'output'
+    env_var = ENV_VAR_MAP[command][key]
+    env_file = "env_gen.py"
+    user_file = "user_gen.py"
+
+    monkeypatch.setenv(env_var, env_file)
+
+    result = generate_output_paths(
+        command=command,
+        output_locations={key: user_file}, # User input provided
+        basename=TEST_BASENAME,
+        language=TEST_LANG,
+        file_extension=TEST_EXT_WITH_DOT
+    )
+    assert result == {key: abs_path_cwd(user_file)} # User path wins
+
+    monkeypatch.delenv(env_var) # Clean up
+
+def test_prioritization_env_over_default(monkeypatch):
+    """Test that environment variable overrides default path."""
+    command = 'example'
+    key = 'output'
+    env_var = ENV_VAR_MAP[command][key]
+    env_file = "env_example.py"
+
+    monkeypatch.setenv(env_var, env_file)
+
+    result = generate_output_paths(
+        command=command,
+        output_locations={}, # No user input
+        basename=TEST_BASENAME,
+        language=TEST_LANG,
+        file_extension=TEST_EXT_WITH_DOT
+    )
+    assert result == {key: abs_path_cwd(env_file)} # Env path wins over default
+
+    monkeypatch.delenv(env_var) # Clean up
+
+# --- Multi-Output Command Tests ---
+def test_fix_command_mixed_inputs(monkeypatch, temp_output_dir):
+    """Test 'fix' command with a mix of user, env, and default inputs."""
+    command = 'fix'
+    user_test_file = "my_fixed_test.py"
+    env_code_dir = temp_output_dir / "fixed_code"
+    env_code_dir.mkdir()
+    env_var_code = ENV_VAR_MAP[command]['output_code']
+
+    monkeypatch.setenv(env_var_code, str(env_code_dir)) # Env var points to a directory
+
+    result = generate_output_paths(
+        command=command,
+        output_locations={'output_test': user_test_file}, # User specifies test file
+        basename=TEST_BASENAME,
+        language=TEST_LANG,
+        file_extension=TEST_EXT_WITH_DOT
+    )
+
+    # Expected paths
+    expected_test_path = abs_path_cwd(user_test_file)
+    expected_code_default_name = get_expected_default_name(command, 'output_code', TEST_BASENAME, TEST_LANG, TEST_EXT_WITH_DOT)
+    expected_code_path = os.path.join(str(env_code_dir), expected_code_default_name)
+    expected_results_default_name = get_expected_default_name(command, 'output_results', TEST_BASENAME, TEST_LANG, TEST_EXT_WITH_DOT)
+    expected_results_path = abs_path_cwd(expected_results_default_name)
+
+    assert result == {
+        'output_test': expected_test_path,
+        'output_code': expected_code_path,
+        'output_results': expected_results_path
     }
-    assert generate_output_paths(command, output_locations, basename, language, file_extension) == expected_output
+    assert os.path.isabs(result['output_test'])
+    assert os.path.isabs(result['output_code'])
+    assert os.path.isabs(result['output_results'])
 
-    # Test case 5: 'split' command with missing keys in output_locations
-    command = 'split'
-    output_locations = {}
-    basename = 'example'
-    language = 'python'
-    file_extension = '.py'
+    monkeypatch.delenv(env_var_code) # Clean up
 
-    expected_output = {
-        'output_sub': 'sub_example.prompt',
-        'output_modified': 'modified_example.prompt'
-    }
-    assert generate_output_paths(command, output_locations, basename, language, file_extension) == expected_output
+# --- Edge Case Tests ---
+def test_file_extension_variants():
+    """Test handling of file extensions with/without dot and empty."""
+    command = 'generate'
+    key = 'output'
 
-    # Test case 6: 'crash' command with environment variable override
-    command = 'crash'
-    output_locations = {'output': None, 'output_program': None}
-    basename = 'example'
-    language = 'python'
-    file_extension = '.py'
+    # With dot
+    result_dot = generate_output_paths(command, {}, TEST_BASENAME, TEST_LANG, TEST_EXT_WITH_DOT)
+    expected_dot = abs_path_cwd(f"{TEST_BASENAME}{TEST_EXT_WITH_DOT}")
+    assert result_dot == {key: expected_dot}
 
-    with patch.dict(os.environ, {'PDD_CRASH_OUTPUT_PATH': 'crash_output_dir'}):
-        expected_output = {
-            'output': os.path.join('crash_output_dir', 'example_fixed.py'),
-            'output_program': 'example_fixed.py'
-        }
-        assert generate_output_paths(command, output_locations, basename, language, file_extension) == expected_output
+    # Without dot
+    result_no_dot = generate_output_paths(command, {}, TEST_BASENAME, TEST_LANG, TEST_EXT_WITHOUT_DOT)
+    expected_no_dot = abs_path_cwd(f"{TEST_BASENAME}{TEST_EXT_WITH_DOT}") # Should add dot
+    assert result_no_dot == {key: expected_no_dot}
 
-    # Test case 7: 'bug' command with default naming convention
-    command = 'bug'
-    output_locations = {'output': None}
-    basename = 'example'
-    language = 'python'
-    file_extension = '.py'
+    # Empty extension
+    result_empty = generate_output_paths(command, {}, TEST_BASENAME, TEST_LANG, TEST_EXT_EMPTY)
+    expected_empty = abs_path_cwd(f"{TEST_BASENAME}") # No extension
+    assert result_empty == {key: expected_empty}
 
-    expected_output = {'output': 'test_example_bug.py'}
-    assert generate_output_paths(command, output_locations, basename, language, file_extension) == expected_output
+def test_fixed_extension_ignores_input_ext():
+    """Test that commands with fixed extensions ignore the input file_extension."""
+    command = 'preprocess' # Uses .prompt
+    key = 'output'
+    result = generate_output_paths(
+        command=command,
+        output_locations={},
+        basename=TEST_BASENAME,
+        language=TEST_LANG,
+        file_extension=".different_ext" # Should be ignored
+    )
+    expected_name = get_expected_default_name(command, key, TEST_BASENAME, TEST_LANG, ".different_ext") # Pass ext for helper consistency
+    expected_path = abs_path_cwd(expected_name)
+    assert result == {key: expected_path}
+    assert result[key].endswith("_preprocessed.prompt") # Verify fixed extension
 
-    # Test case 8: 'auto-deps' command with environment variable override
-    command = 'auto-deps'
-    output_locations = {'output': None}
-    basename = 'example'
-    language = 'python'
-    file_extension = '.py'
+def test_output_locations_hyphen_key():
+    """Test that hyphenated keys in output_locations are handled."""
+    command = 'fix'
+    key_hyphen = 'output-test'
+    key_underscore = 'output_test'
+    user_file = "hyphen_test.py"
 
-    with patch.dict(os.environ, {'PDD_AUTO_DEPS_OUTPUT_PATH': 'auto_deps_output_dir'}):
-        expected_output = {'output': os.path.join('auto_deps_output_dir', 'example_with_deps.prompt')}
-        assert generate_output_paths(command, output_locations, basename, language, file_extension) == expected_output
+    result = generate_output_paths(
+        command=command,
+        output_locations={key_hyphen: user_file}, # Input uses hyphen
+        basename=TEST_BASENAME,
+        language=TEST_LANG,
+        file_extension=TEST_EXT_WITH_DOT
+    )
 
-    # Test case 9: Invalid command should raise ValueError
-    command = 'invalid_command'
-    output_locations = {'output': None}
-    basename = 'example'
-    language = 'python'
-    file_extension = '.py'
+    # Result dictionary should use the underscore key
+    assert key_underscore in result
+    assert key_hyphen not in result # Ensure hyphen key is not present
+    assert result[key_underscore] == abs_path_cwd(user_file)
 
-    with pytest.raises(ValueError):
-        generate_output_paths(command, output_locations, basename, language, file_extension)
+    # Check other keys are default
+    expected_code_default_name = get_expected_default_name(command, 'output_code', TEST_BASENAME, TEST_LANG, TEST_EXT_WITH_DOT)
+    expected_results_default_name = get_expected_default_name(command, 'output_results', TEST_BASENAME, TEST_LANG, TEST_EXT_WITH_DOT)
+    assert result['output_code'] == abs_path_cwd(expected_code_default_name)
+    assert result['output_results'] == abs_path_cwd(expected_results_default_name)
+
