@@ -117,6 +117,9 @@ def test_construct_paths_missing_input_file(tmpdir):
             )
 
     # Check if the path string is in the standard FileNotFoundError message
+    # Note: The error message from resolve(strict=True) might just contain the path
+    # or a more specific message depending on the OS/Python version.
+    # Checking for the path string itself is generally reliable.
     assert code_file_str in str(excinfo.value)
 
 
@@ -177,27 +180,27 @@ def test_construct_paths_basename_extraction(tmpdir):
     tmp_path = Path(str(tmpdir))
 
     test_cases = [
-        # command, input_dict_key, input_filename(s), expected_basename
-        ('generate', 'prompt_file', 'my_project_python.prompt', 'my_project'),
-        ('generate', 'prompt_file', 'my_project.prompt', 'my_project'),
-        ('test', 'prompt_file', 'my_module_python.prompt', 'my_module'),
-        ('split', 'input_prompt', 'large_project.prompt', 'large_project'),
+        # command, input_dict_key, input_filename(s), expected_basename, expect_error
+        ('generate', 'prompt_file', 'my_project_python.prompt', 'my_project', False),
+        ('generate', 'prompt_file', 'my_project.prompt', 'my_project', True), # Expect error: No lang suffix
+        ('test', 'prompt_file', 'my_module_python.prompt', 'my_module', False),
+        ('split', 'input_prompt', 'large_project.prompt', 'large_project', True), # Expect error: No lang suffix
         # Change command basename depends on change_prompt_file if present
-        ('change', 'change_prompt_file', 'how_to_change_original.prompt', 'how_to_change_original'),
+        ('change', 'change_prompt_file', 'how_to_change_original.prompt', 'how_to_change_original', True), # Expect error: No lang suffix/code file
         # Change command fallback if change_prompt_file absent (uses input_prompt_file)
-        ('change', 'input_prompt_file', 'original_prompt_java.prompt', 'original_prompt'),
-        ('detect', 'change_file', 'update_description.prompt', 'update_description'),
+        ('change', 'input_prompt_file', 'original_prompt_java.prompt', 'original_prompt', False),
+        ('detect', 'change_file', 'update_description.prompt', 'update_description', True), # Expect error: No lang suffix/code file
         # Conflicts uses sorted combination
-        ('conflicts', ('prompt1', 'prompt2'), ('module2_python.prompt', 'module1_python.prompt'), 'module1_module2'),
-        ('trace', 'prompt_file', 'trace_this_python.prompt', 'trace_this'),
+        ('conflicts', ('prompt1', 'prompt2'), ('module2_python.prompt', 'module1_python.prompt'), 'module1_module2', False),
+        ('trace', 'prompt_file', 'trace_this_python.prompt', 'trace_this', False),
         # Case with no language suffix
-        ('generate', 'prompt_file', 'no_lang.prompt', 'no_lang'),
+        ('generate', 'prompt_file', 'no_lang.prompt', 'no_lang', True), # Expect error: No lang suffix
         # Case where prompt is not .prompt extension (should still work if key matches)
-        ('generate', 'prompt_file', 'my_config_python.cfg', 'my_config'),
+        ('generate', 'prompt_file', 'my_config_python.cfg', 'my_config', False),
     ]
 
     for case in test_cases:
-        command, input_key, file_info, expected_basename = case
+        command, input_key, file_info, expected_basename, expect_error = case
         force = True
         quiet = True
         command_options = {}
@@ -219,12 +222,19 @@ def test_construct_paths_basename_extraction(tmpdir):
             file_path.write_text('Content')
             input_file_paths = {input_key: str(file_path)}
             # Add dummy code file if needed for language detection fallback (though mocked here)
-            if 'code_file' not in input_file_paths and command not in ['split', 'detect', 'conflicts']:
+            # Only add if not expecting an error and if needed
+            if not expect_error and 'code_file' not in input_file_paths and command not in ['split', 'detect', 'conflicts', 'change']:
                  # Use expected_basename which should be correct after _strip_language_suffix fix
                  base_for_dummy = expected_basename
                  # Handle conflicts case where expected_basename is combined
                  if command == 'conflicts': base_for_dummy = 'dummy' # Avoid module1_module2.py
-                 dummy_code = tmp_path / f"{base_for_dummy}.py"
+                 # Determine dummy extension based on expected language
+                 dummy_ext = '.py' # Default
+                 if '_java' in filename: dummy_ext = '.java'
+                 elif '_python' in filename: dummy_ext = '.py'
+                 elif '.cfg' in filename and '_python' in filename: dummy_ext = '.py' # Special case
+
+                 dummy_code = tmp_path / f"{base_for_dummy}{dummy_ext}"
                  dummy_code.touch()
                  input_file_paths['code_file'] = str(dummy_code)
 
@@ -233,65 +243,77 @@ def test_construct_paths_basename_extraction(tmpdir):
         mock_output_path = tmp_path / f'{expected_basename}_output.out'
         mock_output_paths_dict_str = {'output': str(mock_output_path)}
 
-        # Use specific mocks if needed, otherwise generic ones
-        mock_lang = 'python'
-        mock_ext = '.py'
         # Determine expected language based on filename/command for mocking get_language
-        determined_lang = mock_lang # Default
-        if isinstance(file_info, str):
-            if '_python' in file_info: determined_lang = 'python'
-            elif '_java' in file_info: determined_lang = 'java'
-            elif '.cfg' in file_info: determined_lang = 'python' # From _python suffix
-            elif command == 'detect': determined_lang = 'prompt' # Default for .prompt
-            elif command == 'split': determined_lang = 'prompt' # Default for .prompt
-            elif command == 'change' and 'java' in file_info: determined_lang = 'java'
-            elif command == 'change' and 'original' in file_info: determined_lang = 'prompt' # Default for .prompt
-            elif command == 'trace': determined_lang = 'python'
-            elif command == 'test': determined_lang = 'python'
-            elif command == 'generate' and '.prompt' in file_info and '_' not in Path(file_info).stem: determined_lang = 'prompt' # e.g. no_lang.prompt
-            elif command == 'generate' and '.prompt' in file_info: determined_lang = 'python' # Default mock
-        elif isinstance(file_info, tuple): # conflicts
-             determined_lang = 'python' # Based on filenames
+        # This is tricky because the test mocks get_language, but the internal logic might not call it as expected.
+        # We set mocks based on what *should* happen if the language *could* be determined.
+        determined_lang = 'python' # Default
+        mock_ext = '.py'
+        if not expect_error: # Only determine language if not expecting error
+            if isinstance(file_info, str):
+                if '_python' in file_info: determined_lang = 'python'; mock_ext = '.py'
+                elif '_java' in file_info: determined_lang = 'java'; mock_ext = '.java'
+                elif '.cfg' in file_info and '_python' in file_info: determined_lang = 'python'; mock_ext = '.py' # From suffix
+                elif command == 'change' and 'java' in file_info: determined_lang = 'java'; mock_ext = '.java'
+                elif command == 'trace': determined_lang = 'python'; mock_ext = '.py'
+                elif command == 'test': determined_lang = 'python'; mock_ext = '.py'
+                # Other cases might rely on code_file if added
+                elif 'code_file' in input_file_paths:
+                    code_ext = Path(input_file_paths['code_file']).suffix
+                    if code_ext == '.py': determined_lang = 'python'; mock_ext = '.py'
+                    elif code_ext == '.java': determined_lang = 'java'; mock_ext = '.java'
+                    # Add more if needed
+            elif isinstance(file_info, tuple): # conflicts
+                 # Assume python based on filenames in test case
+                 determined_lang = 'python'; mock_ext = '.py'
+        else:
+            # If expecting error, mocks might not matter as much, but set defaults
+            determined_lang = None
+            mock_ext = ''
 
-        # Determine expected extension based on determined language
-        if determined_lang == 'python': mock_ext = '.py'
-        elif determined_lang == 'java': mock_ext = '.java'
-        elif determined_lang == 'prompt': mock_ext = '.prompt'
-        else: mock_ext = ''
+
+        # Dynamic get_extension mock for _strip_language_suffix
+        def dynamic_get_extension(lang_candidate):
+            if lang_candidate == 'python': return '.py'
+            if lang_candidate == 'java': return '.java'
+            # Add other known languages if needed by test cases
+            return '' # Default for unknown
+
+        if expect_error:
+            # Expect ValueError("Could not determine language...")
+            with pytest.raises(ValueError) as excinfo:
+                 with patch('pdd.construct_paths.get_extension', side_effect=dynamic_get_extension), \
+                      patch('pdd.construct_paths.get_language', return_value=None), \
+                      patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
+                      construct_paths(
+                          input_file_paths, force, quiet, command, command_options
+                      )
+            assert "Could not determine language" in str(excinfo.value), f"Case {case} failed"
+        else:
+            # Expect success
+            with patch('pdd.construct_paths.get_extension', side_effect=dynamic_get_extension) as mock_get_ext, \
+                 patch('pdd.construct_paths.get_language', return_value=determined_lang), \
+                 patch('pdd.construct_paths.generate_output_paths') as mock_generate_output_paths:
+
+                mock_generate_output_paths.return_value = mock_output_paths_dict_str
+                try:
+                    input_strings, output_file_paths, language = construct_paths(
+                        input_file_paths, force, quiet, command, command_options
+                    )
+                except ValueError as e:
+                    pytest.fail(f"construct_paths raised unexpected ValueError for case {case}: {e}")
+                except FileNotFoundError as e:
+                     pytest.fail(f"construct_paths raised unexpected FileNotFoundError for case {case}: {e}")
 
 
-        with patch('pdd.construct_paths.get_extension', return_value=mock_ext) as mock_get_ext, \
-             patch('pdd.construct_paths.get_language', return_value=determined_lang), \
-             patch('pdd.construct_paths.generate_output_paths') as mock_generate_output_paths:
-
-            # Make get_extension dynamic for _strip_language_suffix internal calls
-            def dynamic_get_extension(lang_candidate):
-                if lang_candidate == 'python': return '.py'
-                if lang_candidate == 'java': return '.java'
-                # Add other known languages if needed by test cases
-                return '' # Default for unknown
-            mock_get_ext.side_effect = dynamic_get_extension
-
-            mock_generate_output_paths.return_value = mock_output_paths_dict_str
-            try:
-                input_strings, output_file_paths, language = construct_paths(
-                    input_file_paths, force, quiet, command, command_options
+                # Check that generate_output_paths was called with the expected basename using keyword args
+                # The language/extension passed should match the determined ones
+                mock_generate_output_paths.assert_called_once_with(
+                    command=command,
+                    output_locations={}, # Filtered options
+                    basename=expected_basename,
+                    language=determined_lang, # Use the language determined for mocking
+                    file_extension=mock_ext # Use the extension determined for mocking
                 )
-            except ValueError as e:
-                pytest.fail(f"construct_paths raised unexpected ValueError for case {case}: {e}")
-            except FileNotFoundError as e:
-                 pytest.fail(f"construct_paths raised unexpected FileNotFoundError for case {case}: {e}")
-
-
-            # Check that generate_output_paths was called with the expected basename using keyword args
-            # The language/extension passed should match the determined ones
-            mock_generate_output_paths.assert_called_once_with(
-                command=command,
-                output_locations={}, # Filtered options
-                basename=expected_basename,
-                language=determined_lang, # Use the language determined for mocking
-                file_extension=mock_ext # Use the extension determined for mocking
-            )
         # Clean up dummy code file
         if dummy_code and dummy_code.exists():
             dummy_code.unlink()
@@ -320,7 +342,7 @@ def test_construct_paths_language_extraction(tmpdir):
         assert language1 == 'python'
 
     # Case 2: Language in command_options (overrides filename if different)
-    prompt_file_generic = tmp_path / 'my_project.prompt'
+    prompt_file_generic = tmp_path / 'my_project.prompt' # No suffix
     prompt_file_generic.write_text('Prompt content')
     input_file_paths_2 = {'prompt_file': str(prompt_file_generic)}
     command_options_2 = {'language': 'javascript'} # Explicit language
@@ -378,8 +400,9 @@ def test_construct_paths_language_extraction(tmpdir):
     with patch('pdd.construct_paths.get_extension', side_effect=mock_get_extension_func_case5), \
          patch('pdd.construct_paths.get_language', side_effect=mock_get_language_func_case5), \
          patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
-         # Need a basename source
-         input_file_paths_5['prompt_file'] = str(prompt_file_generic) # Add generic prompt for basename
+         # Need a basename source - add generic prompt
+         input_file_paths_5['prompt_file'] = str(prompt_file_generic)
+         # Need language source for generate_output_paths call - rely on Makefile
          _, _, language5 = construct_paths(input_file_paths_5, True, True, 'generate', command_options_5)
          assert language5 == 'makefile'
 
@@ -430,6 +453,8 @@ def test_construct_paths_output_file_exists(tmpdir):
 
         assert excinfo.value.code == 1
         mock_confirm.assert_called_once()
+        # Check confirmation message style (optional, can be brittle)
+        # assert mock_confirm.call_args[0][0].startswith(click.style("Overwrite existing files?", fg="yellow"))
         mock_secho.assert_called_with("Operation cancelled.", fg="red", err=True)
         # Check that the warning about existing files was printed (less brittle, no tags)
         overwrite_core_message = "Warning: The following output files already exist and may be overwritten:"
@@ -512,7 +537,7 @@ def test_construct_paths_quiet_flag(tmpdir, capsys):
         captured = capsys.readouterr()
         # Check for specific markers in the output
         assert "Input files:" in captured.out
-        # Check for filename instead of full resolved path
+        # Check for filename instead of resolved path to avoid line wrapping issues
         assert prompt_file.name in captured.out
         assert "Output files:" in captured.out
         assert mock_output_path.name in captured.out
@@ -815,8 +840,9 @@ def test_construct_paths_nonexistent_directory_input(tmpdir):
         construct_paths(
             input_file_paths, force, quiet, command, command_options
         )
-    # Check if the path string is in the standard FileNotFoundError message
-    assert prompt_file_str in str(excinfo.value)
+    # Check if the *missing directory* path string is in the FileNotFoundError message
+    # because resolve(strict=True) fails on the first missing component.
+    assert str(nonexistent_dir) in str(excinfo.value)
 
 
 def test_construct_paths_relative_paths(tmpdir):
@@ -841,6 +867,7 @@ def test_construct_paths_relative_paths(tmpdir):
         command_options = {}
 
         # Mock generate_output_paths to return resolved Path objects as STRINGS
+        # Output path should also be resolved relative to the new CWD (tmp_path)
         mock_output_path = tmp_path / 'output.py'
         mock_output_paths_dict_str = {'output': str(mock_output_path)}
 
@@ -853,8 +880,8 @@ def test_construct_paths_relative_paths(tmpdir):
             # Check that files are correctly found and read
             assert input_strings['prompt_file'] == 'Prompt content'
             assert language == 'python'
-            # Check output path is resolved correctly
-            assert output_file_paths['output'] == str(mock_output_path)
+            # Check output path is resolved correctly (should be absolute string)
+            assert output_file_paths['output'] == str(mock_output_path.resolve())
 
     finally:
         # Change back to the original directory
@@ -876,7 +903,10 @@ def test_construct_paths_symbolic_links(tmpdir):
     symlink_prompt_file = tmp_path / 'link_to_project.prompt' # Different name for link
     # Ensure the target exists before creating the link
     assert real_prompt_file.exists()
-    symlink_prompt_file.symlink_to(real_prompt_file)
+    try:
+        symlink_prompt_file.symlink_to(real_prompt_file)
+    except OSError:
+        pytest.skip("Symbolic link creation failed (permissions or OS support?)") # Skip if symlink fails
     assert symlink_prompt_file.is_symlink()
 
     input_file_paths = {'prompt_file': str(symlink_prompt_file)}
@@ -965,7 +995,7 @@ def test_construct_paths_example_command(setup_test_files):
 def test_construct_paths_generate_command(setup_test_files):
     """Test the 'generate' command with output dir, expecting absolute path."""
     input_file_paths = {
-        "prompt_file": str(setup_test_files / "main_gen_prompt.prompt")
+        "prompt_file": str(setup_test_files / "main_gen_prompt.prompt") # No language suffix
     }
     # Specify output directory relative to test files dir
     output_dir_rel = "gen_output"
@@ -974,44 +1004,29 @@ def test_construct_paths_generate_command(setup_test_files):
     command_options = {"output": str(output_dir_abs)} # Pass absolute path
 
     # Mock generate_output_paths to return the expected absolute path string inside the dir
-    expected_output_filename = "main_gen.prompt" # Language is 'prompt' here
+    # The actual filename doesn't matter much here as we expect an error before generation
+    expected_output_filename = "main_gen.prompt"
     expected_output_path = output_dir_abs / expected_output_filename
     mock_output_paths_dict_str = {'output': str(expected_output_path)}
 
-    # Mock language detection for .prompt file without suffix
-    # Mock get_language to return 'prompt' for '.prompt' extension
-    def mock_get_language_func_gen(ext_or_name):
-        # This mock needs to handle the actual path name/suffix passed
-        if isinstance(ext_or_name, str):
-            if ext_or_name == '.prompt': return 'prompt'
-            if ext_or_name == 'main_gen_prompt': return None # Stem
-        return None
-    # Mock get_extension to return '.prompt' for 'prompt' language
+    # Mock language detection helpers - expect language determination to fail
+    # Mock get_extension to return '' for unknown languages
     def mock_get_extension_func_gen(lang):
-        if lang == 'prompt': return '.prompt'
         return ''
-    with patch('pdd.construct_paths.get_extension', side_effect=mock_get_extension_func_gen), \
-         patch('pdd.construct_paths.get_language', side_effect=mock_get_language_func_gen), \
-         patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
+    # Mock get_language to return None (simulating failure to find lang)
+    def mock_get_language_func_gen(ext_or_name):
+        return None
 
-        input_strings, output_file_paths, language = construct_paths(
-            input_file_paths=input_file_paths,
-            force=True, quiet=True, command="generate", command_options=command_options
-        )
-
-        # Language derived from .prompt file (no suffix) -> should raise ValueError now
-        # Let's adjust the test - if no suffix, it should raise error
-        # assert language == "prompt" # This is wrong based on new logic
-        # Re-run with mocks that lead to ValueError
-        with pytest.raises(ValueError) as excinfo:
-             with patch('pdd.construct_paths.get_extension', side_effect=mock_get_extension_func_gen), \
-                  patch('pdd.construct_paths.get_language', return_value=None), \
-                  patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
-                  construct_paths(
-                      input_file_paths=input_file_paths,
-                      force=True, quiet=True, command="generate", command_options=command_options
-                  )
-        assert "Could not determine language" in str(excinfo.value)
+    # Expect ValueError because language cannot be determined from 'main_gen_prompt.prompt'
+    with pytest.raises(ValueError) as excinfo:
+         with patch('pdd.construct_paths.get_extension', side_effect=mock_get_extension_func_gen), \
+              patch('pdd.construct_paths.get_language', side_effect=mock_get_language_func_gen), \
+              patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
+              construct_paths(
+                  input_file_paths=input_file_paths,
+                  force=True, quiet=True, command="generate", command_options=command_options
+              )
+    assert "Could not determine language" in str(excinfo.value)
 
 
 def test_construct_paths_bash_example(setup_test_files):
@@ -1037,17 +1052,19 @@ def test_construct_paths_bash_example(setup_test_files):
     mock_output_paths_dict_str = {'output': str(expected_output_file)}
 
     # Mock language detection for _bash.prompt
-    # Mock get_language to return 'bash' based on suffix logic
+    # Mock get_language to return 'bash' based on suffix logic (simulated)
     def mock_get_language_func_bash(ext_or_name):
-        # Simplified for test - real logic is in _determine_language
-        # It will check get_extension('bash') != ""
-        return 'bash' # Assume suffix logic works
-    # Mock get_extension to return '.sh' for 'bash' language
-    def mock_get_extension_func_bash(lang):
-        if lang == 'bash': return '.sh'
+        # This mock simulates the outcome of _determine_language step 3
+        # It won't be called directly by step 3, but we mock the final result
+        return 'bash'
+    # Mock get_extension to return '.sh' for 'bash' language AND recognize 'bash' suffix
+    def mock_get_extension_func_bash(lang_or_suffix):
+        if lang_or_suffix == 'bash': return '.sh' # Used by generate_output_paths AND _determine_language suffix check
         return '' # Needed for suffix check in _determine_language
+
+    # Patch get_extension with side effect, patch get_language with fixed return
     with patch('pdd.construct_paths.get_extension', side_effect=mock_get_extension_func_bash), \
-         patch('pdd.construct_paths.get_language', side_effect=mock_get_language_func_bash), \
+         patch('pdd.construct_paths.get_language', return_value='bash'), \
          patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
 
         # Call the construct_paths function
