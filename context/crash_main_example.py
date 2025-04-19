@@ -76,7 +76,7 @@ RecursionError: maximum recursion depth exceeded
         output="output/fixed_factorial.py",
         output_program="output/fixed_main.py",
         loop=True,
-        max_attempts=2,  # Maximum number of fix attempts
+        max_attempts=5,  # Maximum number of fix attempts
         budget=5.0       # Maximum cost in USD
     )
 
