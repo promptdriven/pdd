@@ -15,6 +15,9 @@ from .fix_error_loop import fix_error_loop
 from .get_jwt_token import get_jwt_token
 from .get_language import get_language
 
+# Import DEFAULT_STRENGTH from the package
+from . import DEFAULT_STRENGTH
+
 def fix_main(
     ctx: click.Context,
     prompt_file: str,
@@ -89,7 +92,7 @@ def fix_main(
         )
 
         # Get parameters from context
-        strength = ctx.obj.get('strength', 0.9)
+        strength = ctx.obj.get('strength', DEFAULT_STRENGTH)
         temperature = ctx.obj.get('temperature', 0)
         verbose = ctx.obj.get('verbose', False)
         if loop:

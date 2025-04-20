@@ -4,6 +4,9 @@ import sys
 import os
 from unittest.mock import patch, MagicMock, mock_open, ANY
 
+# Import DEFAULT_STRENGTH
+from pdd import DEFAULT_STRENGTH
+
 # Assuming the structure is tests/test_fix_verification_main.py
 # and the code is pdd/fix_verification_main.py
 from pdd.fix_verification_main import fix_verification_main
@@ -16,7 +19,7 @@ def mock_context(tmp_path):
     ctx = MagicMock(spec=click.Context)
     # Default params, can be overridden in tests
     ctx.params = {
-        'strength': 0.9,
+        'strength': DEFAULT_STRENGTH,
         'temperature': 0.0,
         'force': False,
         'quiet': False,
@@ -107,7 +110,7 @@ def test_single_pass_success_no_issues(
         prompt='Original prompt content',
         code='Original code content',
         output='Program ran ok',
-        strength=0.9,
+        strength=DEFAULT_STRENGTH,
         temperature=0.0,
         verbose=False
     )
@@ -251,7 +254,7 @@ def test_single_pass_program_run_fails(
         prompt='Original prompt content',
         code='Original code content',
         output='Partial output\n--- STDERR ---\nTraceback error', # Check combined output
-        strength=0.9,
+        strength=DEFAULT_STRENGTH,
         temperature=0.0,
         verbose=False
     )
@@ -303,7 +306,7 @@ def test_loop_mode_success(
         code_file=setup_files["code"],
         prompt='Original prompt content', # Pass content
         verification_program=setup_files["verifier"], # Pass path
-        strength=0.9,
+        strength=DEFAULT_STRENGTH,
         temperature=0.0,
         max_attempts=3, # Default
         budget=5.0,     # Default

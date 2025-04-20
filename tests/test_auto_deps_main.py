@@ -3,6 +3,8 @@ from unittest.mock import patch, MagicMock, mock_open
 import sys
 import click
 
+# Import DEFAULT_STRENGTH
+from pdd import DEFAULT_STRENGTH
 from pdd.auto_deps_main import auto_deps_main
 
 @pytest.fixture
@@ -17,7 +19,7 @@ def mock_ctx():
         'force': False
     }
     ctx.obj = {
-        'strength': 0.9,
+        'strength': DEFAULT_STRENGTH,
         'temperature': 0
     }
     return ctx
