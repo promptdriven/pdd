@@ -5,6 +5,9 @@ import click
 from click import Context, UsageError
 from rich.console import Console
 
+# Import DEFAULT_STRENGTH
+from pdd import DEFAULT_STRENGTH
+
 # Since the code under test is in pdd/fix_main.py, we import the fix_main function here:
 from pdd.fix_main import fix_main
 
@@ -25,7 +28,7 @@ def mock_ctx():
     ctx.obj = {
         'force': False,
         'quiet': False,
-        'strength': 0.9,
+        'strength': DEFAULT_STRENGTH,
         'temperature': 0.0
     }
     return ctx

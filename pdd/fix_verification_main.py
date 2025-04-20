@@ -13,13 +13,12 @@ from rich.syntax import Syntax
 from .construct_paths import construct_paths
 from .fix_verification_errors import fix_verification_errors
 from .fix_verification_errors_loop import fix_verification_errors_loop
-# Assuming get_language might be needed to determine how to run the program_file
-# from .get_language import get_language # Not strictly required by prompt, but likely needed for robust program execution
+# Import DEFAULT_STRENGTH from the main package
+from . import DEFAULT_STRENGTH
 
 # Default values from the README
 DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_BUDGET = 5.0
-DEFAULT_STRENGTH = 0.9 # Higher default for verification/fixing tasks
 DEFAULT_TEMPERATURE = 0.0
 
 def run_program(program_path: str, args: List[str] = []) -> Tuple[bool, str, str]:
