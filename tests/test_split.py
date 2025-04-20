@@ -45,7 +45,7 @@ def mock_dependencies():
 
 def test_successful_split(mock_dependencies):
     """Test successful execution with valid inputs"""
-    extracted_functionality, remaining_prompt, model_name, total_cost = split(
+    result_tuple, total_cost, model_name = split(
         VALID_INPUT_PROMPT,
         VALID_INPUT_CODE,
         VALID_EXAMPLE_CODE,
@@ -53,10 +53,10 @@ def test_successful_split(mock_dependencies):
         VALID_TEMPERATURE
     )
     
+    extracted_functionality, remaining_prompt = result_tuple
     assert extracted_functionality == "Write a helper function"
     assert remaining_prompt == "Use the helper function"
     assert model_name == "test-model"
-
     assert total_cost == 0.003  # Sum of both invoke costs
 
 def test_missing_input_parameters():

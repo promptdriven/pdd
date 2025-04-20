@@ -18,7 +18,7 @@ def split(
     strength: float,
     temperature: float,
     verbose: bool = False
-) -> Tuple[str, str, str, float]:
+) -> Tuple[str, str, float, str]:
     """
     Split a prompt into extracted functionality and remaining prompt.
 
@@ -31,7 +31,7 @@ def split(
         verbose (bool): Whether to print detailed information.
 
     Returns:
-        Tuple[str, str, str, float]: (extracted_functionality, remaining_prompt, model_name, total_cost)
+        Tuple[str, str, float, str]: (extracted_functionality, remaining_prompt, model_name, total_cost)
             where model_name is the name of the model used (returned as the second to last tuple element)
             and total_cost is the aggregated cost from all LLM invocations.
     """
@@ -112,8 +112,8 @@ def split(
             rprint(f"[bold cyan]Total Cost: ${total_cost:.6f}[/bold cyan]")
             rprint(f"[bold cyan]Model used: {model_name}[/bold cyan]")
 
-        # 6. Return results (model_name is the 2nd to last element)
-        return extracted_functionality, remaining_prompt, model_name, total_cost
+        # 6. Return results with standardized order: (result_data, cost, model_name)
+        return (extracted_functionality, remaining_prompt), total_cost, model_name
 
     except Exception as e:
         # Print an error message, then raise an exception that includes
