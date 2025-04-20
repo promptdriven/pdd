@@ -6,7 +6,7 @@
     Inputs:
         - `ctx` (`click.Context`): The Click context object containing CLI options and parameters.
             Context parameters used:
-            - strength (float): Model strength parameter, defaults to 0.9
+            - strength (float): Model strength parameter, defaults to the global DEFAULT_STRENGTH
             - temperature (float): Model temperature parameter, defaults to 0
             - force (bool): Whether to force overwrite existing files
             - quiet (bool): Whether to suppress output messages
