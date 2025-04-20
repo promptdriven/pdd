@@ -6,6 +6,7 @@ from unittest.mock import patch, ANY, MagicMock
 
 import pytest
 from click.testing import CliRunner
+import click # Import click for UsageError
 
 # Assuming 'pdd' package is installed or in PYTHONPATH
 # Adjust import if necessary based on project structure
@@ -55,9 +56,10 @@ def test_cli_command_help(runner):
 
 # --- Global Options Tests ---
 
+@patch('pdd.cli.auto_update') # Patch auto_update here as well
 @patch('pdd.cli.code_generator_main')
 @patch('pdd.cli.construct_paths')
-def test_cli_global_options_defaults(mock_construct, mock_main, runner, create_dummy_files):
+def test_cli_global_options_defaults(mock_construct, mock_main, mock_auto_update, runner, create_dummy_files):
     """Test default global options are passed in context."""
     files = create_dummy_files("test.prompt")
     mock_construct.return_value = ({}, {'output': 'out.py'}, 'python')
@@ -65,7 +67,7 @@ def test_cli_global_options_defaults(mock_construct, mock_main, runner, create_d
 
     result = runner.invoke(cli.cli, ["generate", str(files["test.prompt"])])
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0 # Should be 0 now after fixes
     mock_main.assert_called_once()
     ctx = mock_main.call_args.kwargs.get('ctx')
     assert ctx is not None
@@ -76,10 +78,12 @@ def test_cli_global_options_defaults(mock_construct, mock_main, runner, create_d
     assert ctx.obj['quiet'] is False
     assert ctx.obj['output_cost'] is None
     assert ctx.obj['local'] is False
+    mock_auto_update.assert_called_once() # Check auto_update was called
 
+@patch('pdd.cli.auto_update') # Patch auto_update here as well
 @patch('pdd.cli.code_generator_main')
 @patch('pdd.cli.construct_paths')
-def test_cli_global_options_explicit(mock_construct, mock_main, runner, create_dummy_files):
+def test_cli_global_options_explicit(mock_construct, mock_main, mock_auto_update, runner, create_dummy_files):
     """Test explicit global options override defaults."""
     files = create_dummy_files("test.prompt")
     mock_construct.return_value = ({}, {'output': 'out.py'}, 'python')
@@ -95,7 +99,7 @@ def test_cli_global_options_explicit(mock_construct, mock_main, runner, create_d
         "generate", str(files["test.prompt"])
     ])
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0 # Should be 0 now after fixes
     mock_main.assert_called_once()
     ctx = mock_main.call_args.kwargs.get('ctx')
     assert ctx is not None
@@ -106,10 +110,12 @@ def test_cli_global_options_explicit(mock_construct, mock_main, runner, create_d
     assert ctx.obj['quiet'] is False
     assert ctx.obj['output_cost'] == "costs.csv"
     assert ctx.obj['local'] is True
+    mock_auto_update.assert_called_once() # Check auto_update was called
 
+@patch('pdd.cli.auto_update') # Patch auto_update here as well
 @patch('pdd.cli.code_generator_main')
 @patch('pdd.cli.construct_paths')
-def test_cli_global_options_quiet_overrides_verbose(mock_construct, mock_main, runner, create_dummy_files):
+def test_cli_global_options_quiet_overrides_verbose(mock_construct, mock_main, mock_auto_update, runner, create_dummy_files):
     """Test --quiet overrides --verbose."""
     files = create_dummy_files("test.prompt")
     mock_construct.return_value = ({}, {'output': 'out.py'}, 'python')
@@ -127,6 +133,7 @@ def test_cli_global_options_quiet_overrides_verbose(mock_construct, mock_main, r
     assert ctx is not None
     assert ctx.obj['verbose'] is False # Should be forced to False
     assert ctx.obj['quiet'] is True
+    mock_auto_update.assert_called_once() # Check auto_update was called
 
 # --- Auto Update Tests ---
 
@@ -140,7 +147,8 @@ def test_cli_auto_update_called_by_default(mock_construct, mock_main, mock_auto_
     mock_main.return_value = ('code', 0.0, 'model')
 
     runner.invoke(cli.cli, ["generate", str(files["test.prompt"])])
-    mock_auto_update.assert_called_once_with(quiet=False)
+    # Check it's called without the 'quiet' argument now
+    mock_auto_update.assert_called_once_with()
 
 @patch.dict(os.environ, {"PDD_AUTO_UPDATE": "false"}, clear=True)
 @patch('pdd.cli.auto_update')
@@ -166,28 +174,31 @@ def test_cli_auto_update_handles_exception(mock_construct, mock_main, mock_auto_
 
     result = runner.invoke(cli.cli, ["generate", str(files["test.prompt"])])
     # Should still proceed and exit cleanly from the command itself
-    assert result.exit_code == 0
+    assert result.exit_code == 0 # Should be 0 now after fixes
     assert "Auto-update check failed" in result.output
     assert "Network error" in result.output
     mock_main.assert_called_once() # Ensure command still ran
 
 # --- Error Handling Tests ---
 
+@patch('pdd.cli.auto_update') # Patch auto_update
 @patch('pdd.cli.construct_paths', side_effect=FileNotFoundError("Input file missing"))
 @patch('pdd.cli.code_generator_main') # Mock main to prevent it running
-def test_cli_handle_error_filenotfound(mock_main, mock_construct, runner):
+def test_cli_handle_error_filenotfound(mock_main, mock_construct, mock_auto_update, runner):
     """Test handle_error for FileNotFoundError."""
     # No need to create file as construct_paths will raise error
     result = runner.invoke(cli.cli, ["generate", "nonexistent.prompt"])
-    assert result.exit_code == 1
+    assert result.exit_code == 1 # Should be 1 now after removing raise
     assert "Error during 'generate' command" in result.output
     assert "File not found" in result.output
     assert "Input file missing" in result.output
     mock_main.assert_not_called()
+    mock_auto_update.assert_called_once() # Auto update runs before command error
 
+@patch('pdd.cli.auto_update') # Patch auto_update
 @patch('pdd.cli.construct_paths')
 @patch('pdd.cli.code_generator_main', side_effect=ValueError("Invalid prompt content"))
-def test_cli_handle_error_valueerror(mock_main, mock_construct, runner, create_dummy_files):
+def test_cli_handle_error_valueerror(mock_main, mock_construct, mock_auto_update, runner, create_dummy_files):
     """Test handle_error for ValueError."""
     files = create_dummy_files("test.prompt")
     mock_construct.return_value = ({}, {'output': 'out.py'}, 'python')
@@ -197,10 +208,12 @@ def test_cli_handle_error_valueerror(mock_main, mock_construct, runner, create_d
     assert "Error during 'generate' command" in result.output
     assert "Input/Output Error" in result.output # ValueError maps to this
     assert "Invalid prompt content" in result.output
+    mock_auto_update.assert_called_once()
 
+@patch('pdd.cli.auto_update') # Patch auto_update
 @patch('pdd.cli.construct_paths')
 @patch('pdd.cli.code_generator_main', side_effect=Exception("Unexpected LLM issue"))
-def test_cli_handle_error_generic(mock_main, mock_construct, runner, create_dummy_files):
+def test_cli_handle_error_generic(mock_main, mock_construct, mock_auto_update, runner, create_dummy_files):
     """Test handle_error for generic Exception."""
     files = create_dummy_files("test.prompt")
     mock_construct.return_value = ({}, {'output': 'out.py'}, 'python')
@@ -210,23 +223,28 @@ def test_cli_handle_error_generic(mock_main, mock_construct, runner, create_dumm
     assert "Error during 'generate' command" in result.output
     assert "An unexpected error occurred" in result.output
     assert "Unexpected LLM issue" in result.output
+    mock_auto_update.assert_called_once()
 
+@patch('pdd.cli.auto_update') # Patch auto_update
 @patch('pdd.cli.construct_paths', side_effect=FileNotFoundError("Input file missing"))
 @patch('pdd.cli.code_generator_main')
-def test_cli_handle_error_quiet(mock_main, mock_construct, runner):
+def test_cli_handle_error_quiet(mock_main, mock_construct, mock_auto_update, runner):
     """Test handle_error respects --quiet."""
     result = runner.invoke(cli.cli, ["--quiet", "generate", "nonexistent.prompt"])
-    assert result.exit_code == 1
+    assert result.exit_code == 1 # Should be 1 now after removing raise
     # Error messages should be suppressed
     assert "Error during 'generate' command" not in result.output
     assert "File not found" not in result.output
     mock_main.assert_not_called()
+    # Auto update still runs but prints nothing when quiet
+    mock_auto_update.assert_called_once()
 
 # --- construct_paths Integration Tests ---
 
+@patch('pdd.cli.auto_update') # Patch auto_update
 @patch('pdd.cli.construct_paths')
 @patch('pdd.cli.code_generator_main')
-def test_cli_construct_paths_called_correctly(mock_main, mock_construct, runner, create_dummy_files):
+def test_cli_construct_paths_called_correctly(mock_main, mock_construct, mock_auto_update, runner, create_dummy_files):
     """Test construct_paths is called with correct arguments."""
     files = create_dummy_files("my_prompt.prompt")
     prompt_path_str = str(files["my_prompt.prompt"])
@@ -234,7 +252,8 @@ def test_cli_construct_paths_called_correctly(mock_main, mock_construct, runner,
     mock_construct.return_value = ({'prompt_file': 'content'}, {'output': 'output/dir/my_prompt.py'}, 'python')
     mock_main.return_value = ('code', 0.0, 'model')
 
-    runner.invoke(cli.cli, ["--force", "generate", prompt_path_str, "--output", output_path])
+    result = runner.invoke(cli.cli, ["--force", "generate", prompt_path_str, "--output", output_path])
+    assert result.exit_code == 0 # Should pass now
 
     mock_construct.assert_called_once_with(
         input_file_paths={"prompt_file": prompt_path_str},
@@ -248,12 +267,14 @@ def test_cli_construct_paths_called_correctly(mock_main, mock_construct, runner,
         prompt_file=prompt_path_str, # Check if main needs original or resolved path
         output='output/dir/my_prompt.py' # Check main gets resolved path
     )
+    mock_auto_update.assert_called_once()
 
 # --- Individual Command Tests (Example: generate, fix, change) ---
 
+@patch('pdd.cli.auto_update') # Patch auto_update
 @patch('pdd.cli.construct_paths')
 @patch('pdd.cli.code_generator_main')
-def test_cli_generate_command(mock_main, mock_construct, runner, create_dummy_files):
+def test_cli_generate_command(mock_main, mock_construct, mock_auto_update, runner, create_dummy_files):
     """Test the 'generate' command flow."""
     files = create_dummy_files("gen.prompt")
     prompt_path = str(files["gen.prompt"])
@@ -263,17 +284,19 @@ def test_cli_generate_command(mock_main, mock_construct, runner, create_dummy_fi
 
     result = runner.invoke(cli.cli, ["generate", prompt_path, "--output", "output/"])
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0 # Should pass now
     mock_construct.assert_called_once_with(
         input_file_paths={'prompt_file': prompt_path},
         force=False, quiet=False, command='generate', command_options={'output': 'output/'}
     )
     mock_main.assert_called_once_with(ctx=ANY, prompt_file=prompt_path, output=resolved_output)
+    mock_auto_update.assert_called_once()
     # Check result callback data (implicitly tested via chaining test)
 
+@patch('pdd.cli.auto_update') # Patch auto_update
 @patch('pdd.cli.construct_paths')
 @patch('pdd.cli.fix_main')
-def test_cli_fix_command(mock_main, mock_construct, runner, create_dummy_files):
+def test_cli_fix_command(mock_main, mock_construct, mock_auto_update, runner, create_dummy_files):
     """Test the 'fix' command flow."""
     files = create_dummy_files("p.prompt", "c.py", "t.py", "e.log")
     prompt_p, code_p, test_p, error_p = [str(files[f]) for f in ["p.prompt", "c.py", "t.py", "e.log"]]
@@ -298,7 +321,7 @@ def test_cli_fix_command(mock_main, mock_construct, runner, create_dummy_files):
         "--max-attempts", "5"
     ])
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0 # Should pass now
     mock_construct.assert_called_once_with(
         input_file_paths={'prompt_file': prompt_p, 'code_file': code_p, 'unit_test_file': test_p, 'error_file': error_p},
         force=False, quiet=False, command='fix',
@@ -309,10 +332,12 @@ def test_cli_fix_command(mock_main, mock_construct, runner, create_dummy_files):
         output_test=resolved_out_test, output_code=resolved_out_code, output_results=resolved_out_results,
         loop=True, verification_program=None, max_attempts=5, budget=5.0, auto_submit=False
     )
+    mock_auto_update.assert_called_once()
 
+@patch('pdd.cli.auto_update') # Patch auto_update
 @patch('pdd.cli.construct_paths')
 @patch('pdd.cli.change_main')
-def test_cli_change_command_csv_validation(mock_main, mock_construct, runner, create_dummy_files, tmp_path):
+def test_cli_change_command_csv_validation(mock_main, mock_construct, mock_auto_update, runner, create_dummy_files, tmp_path):
     """Test 'change' command validation for --csv."""
     files = create_dummy_files("changes.csv", "p.prompt")
     code_dir = tmp_path / "code_dir"
@@ -321,63 +346,78 @@ def test_cli_change_command_csv_validation(mock_main, mock_construct, runner, cr
 
     # Error: --csv requires directory for input_code
     result = runner.invoke(cli.cli, ["change", "--csv", str(files["changes.csv"]), str(files["p.prompt"])]) # p.prompt is a file
-    assert result.exit_code != 0
+    assert result.exit_code == 2 # click.UsageError is exit code 2
     assert "INPUT_CODE must be a directory when using --csv" in result.output
+    mock_auto_update.assert_called_once() # Auto update runs even if command fails validation
 
     # Error: Cannot use --csv and input_prompt_file
+    mock_auto_update.reset_mock()
     result = runner.invoke(cli.cli, ["change", "--csv", str(files["changes.csv"]), str(code_dir), str(files["p.prompt"])])
-    assert result.exit_code != 0
-    assert "Cannot use --csv and specify an INPUT_PROMPT_FILE" in result.output
+    assert result.exit_code == 2
+    # Check only for the specific error message substring
+    assert "Cannot use --csv and specify an INPUT_PROMPT_FILE simultaneously." in result.output
+    mock_auto_update.assert_called_once()
 
     # Error: Not using --csv requires input_prompt_file
+    mock_auto_update.reset_mock()
     result = runner.invoke(cli.cli, ["change", str(files["changes.csv"]), str(code_dir / "some_code.py")]) # Missing input_prompt_file
-    assert result.exit_code != 0
+    assert result.exit_code == 2
     assert "INPUT_PROMPT_FILE is required when not using --csv" in result.output
+    mock_auto_update.assert_called_once()
 
     # Error: Not using --csv requires file for input_code
+    mock_auto_update.reset_mock()
     result = runner.invoke(cli.cli, ["change", str(files["changes.csv"]), str(code_dir), str(files["p.prompt"])]) # code_dir is a dir
-    assert result.exit_code != 0
+    assert result.exit_code == 2
     assert "INPUT_CODE must be a file when not using --csv" in result.output
+    mock_auto_update.assert_called_once()
 
     # Valid CSV call
+    mock_auto_update.reset_mock()
     mock_main.return_value = ({'msg': 'Processed 1 file'}, 0.3, 'model-change')
     result = runner.invoke(cli.cli, ["change", "--csv", str(files["changes.csv"]), str(code_dir)])
-    assert result.exit_code == 0
+    assert result.exit_code == 0 # Should pass now
     mock_main.assert_called_once_with(
         ctx=ANY, change_prompt_file=str(files["changes.csv"]), input_code=str(code_dir),
         input_prompt_file=None, output=None, use_csv=True
     )
     # construct_paths should NOT have been called in CSV mode
     mock_construct.assert_not_called()
+    mock_auto_update.assert_called_once()
 
 
+@patch('pdd.cli.auto_update') # Patch auto_update
 @patch('pdd.cli.construct_paths')
 @patch('pdd.cli.auto_deps_main')
-def test_cli_auto_deps_strips_quotes(mock_main, mock_construct, runner, create_dummy_files, tmp_path):
+def test_cli_auto_deps_strips_quotes(mock_main, mock_construct, mock_auto_update, runner, create_dummy_files, tmp_path):
     """Test that auto-deps strips quotes from directory_path."""
     files = create_dummy_files("dep.prompt")
     dep_dir_path = tmp_path / "deps"
     dep_dir_path.mkdir()
     quoted_path = f'"{dep_dir_path}/*"' # Path with quotes
 
-    mock_construct.return_value = ({}, {'output': 'out.prompt'}, 'python')
+    # construct_paths is NOT called by auto_deps, so no need to mock its return value here
+    # mock_construct.return_value = ({}, {'output': 'out.prompt'}, 'python')
     mock_main.return_value = ('modified prompt', 0.1, 'model-deps')
 
     result = runner.invoke(cli.cli, ["auto-deps", str(files["dep.prompt"]), quoted_path])
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0 # Should pass now
     mock_main.assert_called_once()
     # Check that the path passed to auto_deps_main has quotes stripped
     call_args = mock_main.call_args.kwargs
     assert call_args['directory_path'] == f'{dep_dir_path}/*' # No quotes
+    mock_construct.assert_not_called() # auto_deps does not call construct_paths
+    mock_auto_update.assert_called_once()
 
 
 # --- Command Chaining Tests ---
 
+@patch('pdd.cli.auto_update') # Patch auto_update
 @patch('pdd.cli.construct_paths')
 @patch('pdd.cli.code_generator_main')
 @patch('pdd.cli.context_generator_main')
-def test_cli_chaining_cost_aggregation(mock_example_main, mock_gen_main, mock_construct, runner, create_dummy_files):
+def test_cli_chaining_cost_aggregation(mock_example_main, mock_gen_main, mock_construct, mock_auto_update, runner, create_dummy_files):
     """Test cost aggregation for chained commands."""
     files = create_dummy_files("chain.prompt", "chain_code.py")
     prompt_p = str(files["chain.prompt"])
@@ -395,16 +435,18 @@ def test_cli_chaining_cost_aggregation(mock_example_main, mock_gen_main, mock_co
 
     result = runner.invoke(cli.cli, ["generate", prompt_p, "example", prompt_p, code_p])
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0 # Should pass now
     assert "Command Chain Execution Summary" in result.output
     assert "Step 1 (generate): Cost: $0.123000, Model: model-A" in result.output
     assert "Step 2 (example): Cost: $0.045000, Model: model-B" in result.output
     assert "Total Estimated Cost for Chain: $0.168000" in result.output # 0.123 + 0.045
+    mock_auto_update.assert_called_once()
 
+@patch('pdd.cli.auto_update') # Patch auto_update
 @patch('pdd.cli.construct_paths')
 @patch('pdd.cli.code_generator_main')
-@patch('pdd.cli.preprocess_main') # Preprocess doesn't have @track_cost
-def test_cli_chaining_with_no_cost_command(mock_preprocess_main, mock_gen_main, mock_construct, runner, create_dummy_files):
+@patch('pdd.cli.preprocess_main') # Mock the underlying main function
+def test_cli_chaining_with_no_cost_command(mock_preprocess_main, mock_gen_main, mock_construct, mock_auto_update, runner, create_dummy_files):
     """Test chaining with a command that doesn't return cost info."""
     files = create_dummy_files("chain2.prompt")
     prompt_p = str(files["chain2.prompt"])
@@ -413,37 +455,38 @@ def test_cli_chaining_with_no_cost_command(mock_preprocess_main, mock_gen_main, 
         ({'prompt_file': 'p'}, {'output': 'chain2_prep.prompt'}, 'python'), # For preprocess
         ({'prompt_file': 'p'}, {'output': 'chain2_code.py'}, 'python') # For generate
     ]
-    # preprocess returns dummy values now
-    mock_preprocess_main.return_value = None # Simulate original behavior before dummy return
+    # preprocess_main itself doesn't return anything useful for cost tracking
+    mock_preprocess_main.return_value = None
     mock_gen_main.return_value = ('generated code', 0.111, 'model-C')
 
-    # Need to patch the preprocess command function itself to return the dummy tuple
-    # OR adjust the result callback to handle None/non-tuple results
-    # Let's patch the command function for simplicity here
-    with patch('pdd.cli.preprocess', return_value=("Preprocessing complete.", 0.0, "local")) as mock_preprocess_cmd:
-        result = runner.invoke(cli.cli, ["preprocess", prompt_p, "generate", prompt_p])
+    # The preprocess *command* function now returns a dummy tuple
+    result = runner.invoke(cli.cli, ["preprocess", prompt_p, "generate", prompt_p])
 
-        assert result.exit_code == 0
-        assert "Command Chain Execution Summary" in result.output
-        # Check how the callback handles the dummy return from preprocess
-        assert "Step 1 (preprocess): Cost: $0.000000, Model: local" in result.output
-        assert "Step 2 (generate): Cost: $0.111000, Model: model-C" in result.output
-        assert "Total Estimated Cost for Chain: $0.111000" in result.output
+    assert result.exit_code == 0 # Should pass now
+    assert "Command Chain Execution Summary" in result.output
+    # Check how the callback handles the dummy return from preprocess command
+    assert "Step 1 (preprocess): Cost: $0.000000, Model: local" in result.output
+    assert "Step 2 (generate): Cost: $0.111000, Model: model-C" in result.output
+    assert "Total Estimated Cost for Chain: $0.111000" in result.output
+    mock_auto_update.assert_called_once()
 
 
 # --- install_completion Command Test ---
 
+@patch('pdd.cli.auto_update') # Patch auto_update
 @patch('pdd.cli.install_completion')
-def test_cli_install_completion_cmd(mock_install_func, runner):
+def test_cli_install_completion_cmd(mock_install_func, mock_auto_update, runner):
     """Test the install_completion command."""
     result = runner.invoke(cli.cli, ["install_completion"])
-    assert result.exit_code == 0
+    assert result.exit_code == 0 # Should pass now
     mock_install_func.assert_called_once_with(quiet=False)
+    mock_auto_update.assert_called_once()
 
+@patch('pdd.cli.auto_update') # Patch auto_update
 @patch('pdd.cli.install_completion')
-def test_cli_install_completion_cmd_quiet(mock_install_func, runner):
+def test_cli_install_completion_cmd_quiet(mock_install_func, mock_auto_update, runner):
     """Test the install_completion command with --quiet."""
     result = runner.invoke(cli.cli, ["--quiet", "install_completion"])
     assert result.exit_code == 0
     mock_install_func.assert_called_once_with(quiet=True)
-
+    mock_auto_update.assert_called_once()
