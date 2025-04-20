@@ -142,10 +142,12 @@ def _extract_basename(
 def _determine_language(
     command_options: Dict[str, Any], # Keep original type hint
     input_file_paths: Dict[str, Path],
+    command: str = "",  # New parameter for the command name
 ) -> str:
     """
     Apply the language discovery strategy.
     Priority: Explicit option > Code/Test file extension > Prompt filename suffix.
+    For 'detect' command, default to 'prompt' as it typically doesn't need a language.
     """
     # Diagnostic check for None (should be handled by caller, but for safety)
     command_options = command_options or {}
@@ -185,7 +187,11 @@ def _determine_language(
                 if get_extension(token) != "":
                     return token.lower()
 
-    # 4 - If no language determined, raise error
+    # 4 - Special handling for detect command - default to prompt for LLM prompts
+    if command == "detect" and "change_file" in input_file_paths:
+        return "prompt"  # Default to prompt for detect command
+
+    # 5 - If no language determined, raise error
     raise ValueError("Could not determine language from input files or options.")
 
 
@@ -285,7 +291,7 @@ def construct_paths(
     # ------------- Step 3: language & extension --------------
     try:
         # Pass the potentially updated command_options
-        language = _determine_language(command_options, input_paths)
+        language = _determine_language(command_options, input_paths, command)
     except ValueError as e:
         console.print(f"[error]{e}", style="error")
         raise # Re-raise the ValueError from _determine_language

@@ -189,7 +189,8 @@ def test_construct_paths_basename_extraction(tmpdir):
         ('change', 'change_prompt_file', 'how_to_change_original.prompt', 'how_to_change_original', True), # Expect error: No lang suffix/code file
         # Change command fallback if change_prompt_file absent (uses input_prompt_file)
         ('change', 'input_prompt_file', 'original_prompt_java.prompt', 'original_prompt', False),
-        ('detect', 'change_file', 'update_description.prompt', 'update_description', True), # Expect error: No lang suffix/code file
+        # Detect command now has special handling and defaults to 'prompt' language
+        ('detect', 'change_file', 'update_description.prompt', 'update_description', False), # No longer expect error with special handling
         # Conflicts uses sorted combination
         ('conflicts', ('prompt1', 'prompt2'), ('module2_python.prompt', 'module1_python.prompt'), 'module1_module2', False),
         ('trace', 'prompt_file', 'trace_this_python.prompt', 'trace_this', False),
@@ -250,7 +251,11 @@ def test_construct_paths_basename_extraction(tmpdir):
         mock_ext = '.py'
         if not expect_error: # Only determine language if not expecting error
             if isinstance(file_info, str):
-                if '_python' in file_info: determined_lang = 'python'; mock_ext = '.py'
+                if command == 'detect' and input_key == 'change_file':
+                    # Special case for detect command
+                    determined_lang = 'prompt'
+                    mock_ext = ''
+                elif '_python' in file_info: determined_lang = 'python'; mock_ext = '.py'
                 elif '_java' in file_info: determined_lang = 'java'; mock_ext = '.java'
                 elif '.cfg' in file_info and '_python' in file_info: determined_lang = 'python'; mock_ext = '.py' # From suffix
                 elif command == 'change' and 'java' in file_info: determined_lang = 'java'; mock_ext = '.java'
@@ -1087,3 +1092,141 @@ def test_construct_paths_bash_example(setup_test_files):
         # Use the expected path for cleanup
         if expected_output_file.exists():
             os.remove(expected_output_file)
+
+def test_construct_paths_change_command_language_detection(tmpdir):
+    """
+    Test that construct_paths correctly handles language detection for the change command
+    when the prompt file doesn't include a language suffix.
+    
+    The change command should default to assuming the prompt is an LLM prompt
+    even when the file doesn't have a language suffix in its name.
+    """
+    tmp_path = Path(str(tmpdir))
+    
+    # Create a test change prompt file without language suffix
+    change_prompt_file = tmp_path / 'change.prompt'
+    change_prompt_file.write_text('Change this prompt to include error handling')
+    
+    # Create a test input code file for the change command
+    code_file = tmp_path / 'input_code.py'
+    code_file.write_text('def example(): print("Hello")')
+    
+    # Create a test input prompt file
+    input_prompt_file = tmp_path / 'input_prompt.prompt'
+    input_prompt_file.write_text('Write a function that prints Hello')
+    
+    input_file_paths = {
+        'change_prompt_file': str(change_prompt_file),
+        'input_code': str(code_file),
+        'input_prompt_file': str(input_prompt_file),
+    }
+    
+    force = True
+    quiet = True
+    command = 'change'
+    command_options = {}
+    
+    # Mock functions to isolate the test
+    mock_output_path = tmp_path / 'modified_input_prompt.prompt'
+    mock_output_paths_dict_str = {'output': str(mock_output_path)}
+    
+    # After implementing the fix, language detection for the 'change' command
+    # should now default to 'python' and not raise a ValueError
+    with patch('pdd.construct_paths.get_extension', side_effect=lambda lang: '.py' if lang == 'python' else ''), \
+         patch('pdd.construct_paths.get_language', side_effect=lambda ext: 'python' if ext == '.py' else ''), \
+         patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
+        
+        # This should now succeed with the default language being 'python'
+        input_strings, output_file_paths, language = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+        
+        # The language should be properly set to python
+        assert language == 'python'
+        assert isinstance(output_file_paths['output'], str)
+        assert output_file_paths['output'] == str(mock_output_path)
+    
+    # Also create a test case for a different command with no language indicators
+    no_lang_prompt_file = tmp_path / 'generic.prompt'
+    no_lang_prompt_file.write_text('Generic prompt with no language suffix')
+    
+    input_file_paths_no_lang = {
+        'prompt_file': str(no_lang_prompt_file),
+    }
+    
+    # Test with a different command without language indicators
+    with patch('pdd.construct_paths.get_extension', side_effect=lambda lang: '.py' if lang == 'python' else ''), \
+         patch('pdd.construct_paths.get_language', side_effect=lambda ext: 'python' if ext == '.py' else ''), \
+         patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
+        
+        # The "generate" command should raise ValueError with no language indicators
+        with pytest.raises(ValueError) as excinfo:
+            input_strings, output_file_paths, language = construct_paths(
+                input_file_paths_no_lang, force, quiet, "generate", command_options
+            )
+        
+        # The error should be about not being able to determine language
+        assert "Could not determine language" in str(excinfo.value)
+
+def test_construct_paths_detect_command_language_detection(tmpdir):
+    """
+    Test that construct_paths correctly handles language detection for the detect command
+    when the change_file doesn't include a language suffix.
+    
+    The detect command should default to assuming the language is 'prompt'
+    even when the file doesn't have a language suffix in its name.
+    """
+    tmp_path = Path(str(tmpdir))
+    
+    # Create a test change file without language suffix
+    change_file = tmp_path / 'update_description.prompt'
+    change_file.write_text('Change description with no language suffix')
+    
+    # Create just one prompt file to keep the test simple
+    prompt_file = tmp_path / 'prompt1.prompt'
+    prompt_file.write_text('Some generic prompt content')
+    
+    # Input file paths for the detect command - we just need change_file for the test
+    input_file_paths = {
+        'change_file': str(change_file),
+        'prompt_file': str(prompt_file)  # Use a simple key-value pair
+    }
+    
+    force = True
+    quiet = True
+    command = 'detect'
+    command_options = {}
+    
+    # Mock functions to isolate the test
+    mock_output_path = tmp_path / 'detect_output.csv'
+    mock_output_paths_dict_str = {'output': str(mock_output_path)}
+    
+    # Test the special handling for detect command with change_file
+    with patch('pdd.construct_paths.get_extension', side_effect=lambda lang: '.prompt' if lang == 'prompt' else '.py' if lang == 'python' else ''), \
+         patch('pdd.construct_paths.get_language', side_effect=lambda ext: 'python' if ext == '.py' else ''), \
+         patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
+        
+        # This should succeed with the default language being 'prompt'
+        input_strings, output_file_paths, language = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+        
+        # The language should be properly set to prompt
+        assert language == 'prompt'
+        assert isinstance(output_file_paths['output'], str)
+        assert output_file_paths['output'] == str(mock_output_path)
+    
+    # Now test what happens if we use a different command
+    # The 'detect' special case should not be triggered for other commands
+    with patch('pdd.construct_paths.get_extension', side_effect=lambda lang: '.prompt' if lang == 'prompt' else '.py' if lang == 'python' else ''), \
+         patch('pdd.construct_paths.get_language', side_effect=lambda ext: 'python' if ext == '.py' else ''), \
+         patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
+        
+        # Using a different command should result in ValueError
+        with pytest.raises(ValueError) as excinfo:
+            input_strings, output_file_paths, language = construct_paths(
+                input_file_paths, force, quiet, "generate", command_options  # Use different command
+            )
+        
+        # The error would be about not being able to determine language
+        assert "Could not determine language" in str(excinfo.value)
