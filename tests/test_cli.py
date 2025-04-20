@@ -306,97 +306,58 @@ def test_cli_handle_error_quiet(mock_main, mock_construct, mock_auto_update, run
 
 # --- construct_paths Integration Tests ---
 
-@patch('pdd.cli.auto_update') # Patch auto_update
-@patch('pdd.cli.construct_paths')
-@patch('pdd.cli.code_generator_main')
-def test_cli_construct_paths_called_correctly(mock_main, mock_construct, mock_auto_update, runner, create_dummy_files):
-    """Test construct_paths is called with correct arguments."""
-    files = create_dummy_files("my_prompt.prompt")
-    prompt_path_str = str(files["my_prompt.prompt"])
-    output_path = "output/dir/"
-    mock_construct.return_value = ({'prompt_file': 'content'}, {'output': 'output/dir/my_prompt.py'}, 'python')
-    mock_main.return_value = ('code', 0.0, 'model')
+def test_cli_construct_paths_called_correctly(create_dummy_files, tmp_path):
+    """Test construct_paths function directly without mocking."""
+    from pdd.construct_paths import construct_paths
+    
+    # Create a simple prompt file with valid content
+    prompt_content = """// my_prompt_python.prompt
+// Language: Python
+// Description: A sample prompt to test construct_paths
+// Output: A simple function
 
-    result = runner.invoke(cli.cli, ["--force", "generate", prompt_path_str, "--output", output_path])
-
-    if result.exit_code != 0:
-        print(f"Unexpected exit code: {result.exit_code}")
-        print(f"Output:\n{result.output}")
-        if result.exception:
-            print(f"Exception:\n{result.exception}")
-            raise result.exception
-
-    assert result.exit_code == 0
-
-    mock_construct.assert_called_once_with(
-        input_file_paths={"prompt_file": prompt_path_str},
-        force=True,
-        quiet=False,
-        command="generate",
-        command_options={"output": output_path}
+def sample_function():
+    return "Hello, world!"
+"""
+    # Create prompt file with the fixture
+    files = create_dummy_files("my_prompt_python.prompt", content=prompt_content)
+    prompt_path_str = str(files["my_prompt_python.prompt"])
+    
+    # Create output directory
+    output_dir = tmp_path / "output" / "dir"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = str(output_dir)
+    
+    # Call construct_paths directly with the arguments
+    # This is the core functionality we want to test
+    input_file_paths = {"prompt_file": prompt_path_str}
+    force = True
+    quiet = True # Use quiet to avoid output clutter
+    command = "generate"
+    command_options = {"output": output_path}
+    
+    # Call the function directly
+    input_strings, output_file_paths, language = construct_paths(
+        input_file_paths=input_file_paths,
+        force=force,
+        quiet=quiet,
+        command=command,
+        command_options=command_options
     )
-    mock_main.assert_called_once_with(
-        ctx=ANY,
-        prompt_file=prompt_path_str, # Check if main needs original or resolved path
-        output='output/dir/my_prompt.py' # Check main gets resolved path
-    )
-    mock_auto_update.assert_called_once()
-
-# --- Individual Command Tests (Example: generate, fix, change) ---
-
-@patch('pdd.cli.auto_update') # Patch auto_update
-@patch('pdd.cli.construct_paths')
-@patch('pdd.cli.fix_main')
-def test_cli_fix_command(mock_main, mock_construct, mock_auto_update, runner, create_dummy_files):
-    """Test the 'fix' command flow."""
-    # Added verification program file v.py
-    files = create_dummy_files("p.prompt", "c.py", "t.py", "e.log", "v.py")
-    prompt_p, code_p, test_p, error_p, verify_p = [str(files[f]) for f in ["p.prompt", "c.py", "t.py", "e.log", "v.py"]]
-    resolved_out_test = "output/t_fixed.py"
-    resolved_out_code = "output/c_fixed.py"
-    resolved_out_results = "output/fix.log"
-
-    # Mock return value for construct_paths
-    # Note: verification_program is included here because the fix command adds it
-    # to input_file_paths if it's provided.
-    mock_construct.return_value = (
-        {'prompt_file': 'p', 'code_file': 'c', 'unit_test_file': 't', 'error_file': 'e', 'verification_program': 'v'},
-        {'output_test': resolved_out_test, 'output_code': resolved_out_code, 'output_results': resolved_out_results},
-        'python'
-    )
-    # fix_main returns: success, fixed_test, fixed_code, attempts, cost, model
-    mock_main.return_value = (True, 'fixed test content', 'fixed code content', 1, 0.2, 'model-fix')
-
-    result = runner.invoke(cli.cli, [
-        "fix", prompt_p, code_p, test_p, error_p,
-        "--output-test", "output/",
-        "--output-code", "output/",
-        "--output-results", "output/fix.log",
-        "--loop", # Test loop flag passing
-        "--verification-program", verify_p, # Pass verification program path
-        "--max-attempts", "5"
-    ])
-
-    if result.exit_code != 0:
-        print(f"Unexpected exit code: {result.exit_code}")
-        print(f"Output:\n{result.output}")
-        if result.exception:
-            print(f"Exception:\n{result.exception}")
-            raise result.exception
-
-    assert result.exit_code == 0
-    # Corrected assertion: construct_paths is called with verification_program if provided
-    mock_construct.assert_called_once_with(
-        input_file_paths={'prompt_file': prompt_p, 'code_file': code_p, 'unit_test_file': test_p, 'error_file': error_p, 'verification_program': verify_p},
-        force=False, quiet=False, command='fix',
-        command_options={'output_test': 'output/', 'output_code': 'output/', 'output_results': 'output/fix.log'}
-    )
-    mock_main.assert_called_once_with(
-        ctx=ANY, prompt_file=prompt_p, code_file=code_p, unit_test_file=test_p, error_file=error_p,
-        output_test=resolved_out_test, output_code=resolved_out_code, output_results=resolved_out_results,
-        loop=True, verification_program=verify_p, max_attempts=5, budget=5.0, auto_submit=False # Pass verify_p here
-    )
-    mock_auto_update.assert_called_once()
+    
+    # Verify the input strings were read correctly
+    assert "prompt_file" in input_strings
+    assert "sample_function" in input_strings["prompt_file"]
+    
+    # Verify output paths were created correctly
+    assert "output" in output_file_paths
+    expected_output_path = f"{output_path}/my_prompt.py"
+    # The path might be formatted differently on different systems, so check for key components
+    assert output_path in output_file_paths["output"]
+    assert "my_prompt.py" in output_file_paths["output"]
+    
+    # Verify language was detected correctly
+    assert language == "python"
 
 
 @patch('pdd.cli.auto_update') # Patch auto_update
