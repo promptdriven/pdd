@@ -29,6 +29,11 @@ SPLIT_PROMPT="initial_construct_paths_python.prompt"
 SPLIT_SCRIPT="construct_paths.py"
 SPLIT_EXAMPLE_SCRIPT="split_construct_paths_generate_output_filename.py"
 
+# New filenames for verify workflow
+VERIFY_RESULTS_LOG="verify_results.log"
+VERIFY_CODE_OUTPUT="verified_$EXTENSION_SCRIPT"
+VERIFY_EXAMPLE_OUTPUT="verified_$EXTENSION_VERIFICATION_PROGRAM"
+
 # Enable verbose output (1 for true, 0 for false)
 VERBOSE=1
 
@@ -75,6 +80,27 @@ run_pdd_command() {
     # Removed separator from the end as it's now at the start
 }
 
+# Helper to run PDD command but NOT exit on failure (used for verify)
+run_pdd_command_noexit() {
+    local command=$1
+    shift
+    local args="$@"
+    local full_command="$PDD_SCRIPT --force --strength $STRENGTH --temperature $TEMPERATURE --output-cost $STAGING_PATH/regression/$COST_FILE $command $args"
+    log_timestamped "----------------------------------------"
+    log_timestamped "Starting command (non-fatal): $full_command"
+    log "Running (non-fatal): $full_command"
+    $full_command >> "$LOG_FILE" 2>&1
+    local status=$?
+    if [ $status -eq 0 ]; then
+        log "Command completed successfully."
+        log_timestamped "Command: $full_command - Completed successfully."
+    else
+        log "Command failed, continuing."
+        log_timestamped "Command: $full_command - Failed (continuing)."
+    fi
+    return $status
+}
+
 # Create regression test directory
 log "Creating regression test directory"
 mkdir -p "$STAGING_PATH/regression"
@@ -92,20 +118,15 @@ cp "$STAGING_PATH/regression/$EXTENSION_SCRIPT" "$STAGING_PATH/regression/origin
 
 # Modify the extension script slightly to trigger an update (adding a print statement)
 if [[ $(uname) == "Darwin" ]]; then
-  # macOS - BSD sed requires backslash after 'i' and newline before the text
-  # Need to add the print and a blank line to ensure proper spacing
-  sed -i '' '1i\
-print("Hello World")\
-
+  sed -i '' '1i\\
+print("Hello World")\\
 ' "$STAGING_PATH/regression/$EXTENSION_SCRIPT"
 else
-  # Linux/Others - GNU sed
   sed -i '1i print("Hello World")\n' "$STAGING_PATH/regression/$EXTENSION_SCRIPT"
 fi
 
 # Continue with the rest of the regression test commands
 run_pdd_command example --output  "$STAGING_PATH/regression/$EXTENSION_VERIFICATION_PROGRAM"  "$PROMPTS_PATH/$EXTENSION_PROMPT" "$STAGING_PATH/regression/$EXTENSION_SCRIPT"
-run_pdd_command test --output "$STAGING_PATH/regression/$EXTENSION_TEST" "$PROMPTS_PATH/$EXTENSION_PROMPT" "$STAGING_PATH/regression/$EXTENSION_SCRIPT"
 
 # Create a wrapper module that imports from the local file
 cat > "$STAGING_PATH/regression/pdd_wrapper.py" << 'EOF'
@@ -157,6 +178,34 @@ fi
 
 if [ -f "$STAGING_PATH/regression/fixed_crash_$EXTENSION_VERIFICATION_PROGRAM" ]; then
     cp "$STAGING_PATH/regression/fixed_crash_$EXTENSION_VERIFICATION_PROGRAM" "$STAGING_PATH/regression/$EXTENSION_VERIFICATION_PROGRAM"
+fi
+
+# ---------------- Verify command ----------------
+log "Running verify command"
+run_pdd_command_noexit verify \
+    --output-results "$STAGING_PATH/regression/$VERIFY_RESULTS_LOG" \
+    --output-code    "$STAGING_PATH/regression/$VERIFY_CODE_OUTPUT" \
+    --max-attempts 3 --budget 5.0 \
+    "$PROMPTS_PATH/$EXTENSION_PROMPT" \
+    "$STAGING_PATH/regression/$EXTENSION_SCRIPT" \
+    "$STAGING_PATH/regression/$EXTENSION_VERIFICATION_PROGRAM"
+
+# If verify produced a new code file, adopt it and regenerate example
+if [ -f "$STAGING_PATH/regression/$VERIFY_CODE_OUTPUT" ]; then
+    cp "$STAGING_PATH/regression/$VERIFY_CODE_OUTPUT" "$STAGING_PATH/regression/$EXTENSION_SCRIPT"
+    run_pdd_command example --output "$STAGING_PATH/regression/$VERIFY_EXAMPLE_OUTPUT" \
+        "$PROMPTS_PATH/$EXTENSION_PROMPT" "$STAGING_PATH/regression/$EXTENSION_SCRIPT"
+    cp "$STAGING_PATH/regression/$VERIFY_EXAMPLE_OUTPUT" "$STAGING_PATH/regression/$EXTENSION_VERIFICATION_PROGRAM"
+fi
+
+# Regenerate unit tests after verification to ensure they align with verified code
+run_pdd_command test --output "$STAGING_PATH/regression/$EXTENSION_TEST" "$PROMPTS_PATH/$EXTENSION_PROMPT" "$STAGING_PATH/regression/$EXTENSION_SCRIPT"
+
+# Update regenerated test to use local wrapper instead of pdd package
+if [[ $(uname) == "Darwin" ]]; then
+  sed -i '' 's/from pdd.get_extension import get_extension/from pdd_wrapper import get_extension/' "$STAGING_PATH/regression/$EXTENSION_TEST"
+else
+  sed -i 's/from pdd.get_extension import get_extension/from pdd_wrapper import get_extension/' "$STAGING_PATH/regression/$EXTENSION_TEST"
 fi
 
 # Run fix commands
