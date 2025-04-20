@@ -31,8 +31,9 @@ print(f"Factorial of 5 is: {result}")
         strength: float = 0.5  # Float value between 0 and 1
         temperature: float = 0.0  # Float value between 0 and 1
 
-        # Call the split function and unpack the new 4-tuple
-        sub_prompt, modified_prompt, model_name, total_cost = split(
+        # Call the split function with the new standardized return order
+        # Returns (result_tuple, total_cost, model_name)
+        result_tuple, total_cost, model_name = split(
             input_prompt=input_prompt,
             input_code=input_code,
             example_code=example_code,
@@ -40,6 +41,9 @@ print(f"Factorial of 5 is: {result}")
             temperature=temperature,
             verbose=True
         )
+        
+        # Unpack the result tuple
+        sub_prompt, modified_prompt = result_tuple
 
         # Print the results
         console.print(f"[bold]Sub Prompt:[/bold]\n{sub_prompt}")

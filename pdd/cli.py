@@ -629,8 +629,8 @@ def split(
         resolved_output_sub = output_file_paths.get("output_sub")
         resolved_output_modified = output_file_paths.get("output_modified")
 
-        # split_main returns: sub_prompt_content, modified_prompt_content, model_name, total_cost
-        sub_prompt, modified_prompt, model_name, total_cost = split_main(
+        # split_main now returns values in standardized order (result_data, cost, model_name)
+        result_data, total_cost, model_name = split_main(
             ctx=ctx,
             input_prompt_file=input_prompt,
             input_code_file=input_code,
@@ -638,16 +638,10 @@ def split(
             output_sub=resolved_output_sub,
             output_modified=resolved_output_modified,
         )
-        result_data = {
-            "sub_prompt_path": resolved_output_sub,
-            "modified_prompt_path": resolved_output_modified,
-            # "sub_prompt_content": sub_prompt, # Optional
-            # "modified_prompt_content": modified_prompt, # Optional
-        }
+        # The result_data is already properly formatted by split_main
         return result_data, total_cost, model_name
     except Exception as e:
         handle_error(e, command_name, quiet)
-        # Removed raise statement
 
 
 @cli.command("change")

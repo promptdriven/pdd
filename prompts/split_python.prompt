@@ -10,11 +10,12 @@
         - 'strength': A float value representing the strength parameter for the LLM model, used to influence the model's behavior. Range is between 0 and 1.
         - 'temperature': A float value representing the temperature parameter for the LLM model, used to control the randomness of the model's output. Range is between 0 and 1.
         - 'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
-    Outputs as a tuple:
-        - 'sub_prompt': A string containing the sub_prompt that was split from the input_prompt.
-        - 'modified_prompt': A string containing the modified prompt from input_prompt split from the sub_prompt.
-        - 'model_name': A string containing the name of the model used in the first llm_invoke call.
+    Outputs as a tuple matching the standardized order (result_data, cost, model_name):
+        - 'result_tuple': A tuple containing two strings:
+            - 'extracted_functionality': A string containing the sub_prompt that was split from the input_prompt.
+            - 'remaining_prompt': A string containing the modified prompt from input_prompt split from the sub_prompt.
         - 'total_cost': A float value representing the total cost of running the function.
+        - 'model_name': A string containing the name of the model used in the first llm_invoke call.
 
 % Here is how to use the internal modules:
     <internal_modules>
@@ -47,8 +48,9 @@
         - a. Use a separate llm_invoke call with the EXTRACTION_STRENGTH constant for the JSON extraction step.
         - b. Pass the following string parameters to the prompt during invocation: 'llm_output' (this string is from Step 3).
         - c. If verbose is True, pretty print the running message with the token count and cost.
-        - d. Extract 'sub_prompt' and 'modified_prompt' key values from the Pydantic output.
+        - d. Extract 'extracted_functionality' and 'remaining_prompt' key values from the Pydantic output.
     5. If verbose is True, pretty print the extracted sub_prompt and modified_prompt using Rich Markdown function. Include token counts, costs, and the model_name.
-    6. Return the 'sub_prompt', 'modified_prompt', 'model_name', and the total_cost of both invokes as a tuple.  The 'model_name' should be the second to last element in the tuple.
+    6. Return the results in the standardized order:
+        - Return a tuple containing ((extracted_functionality, remaining_prompt), total_cost, model_name)
 
 % Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses.
