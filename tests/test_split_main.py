@@ -56,10 +56,11 @@ def test_split_main_success(mock_ctx, quiet_mode, capsys):
 
         # Set up our patched functions
         mock_construct_paths.return_value = (mock_input_strings, mock_output_paths, mock_language)
-        mock_split.return_value = (extracted_functionality_result, remaining_prompt_result, mock_model_name, total_cost_result) # Corrected mock return
+        # Use standardized return order (result_data, cost, model_name)
+        mock_split.return_value = ((extracted_functionality_result, remaining_prompt_result), total_cost_result, mock_model_name)
 
         # Act
-        extracted_functionality, remaining_prompt, total_cost, model_name = split_main( # Corrected unpacking
+        result_data, total_cost, model_name = split_main(
             mock_ctx,
             "input_prompt_file.prompt",
             "input_code_file.py",
@@ -68,11 +69,15 @@ def test_split_main_success(mock_ctx, quiet_mode, capsys):
             None
         )
 
-        # Assert
-        assert extracted_functionality == extracted_functionality_result
-        assert remaining_prompt == remaining_prompt_result
+        # Assert that we get the expected dictionary with file paths and content
+        assert "sub_prompt_content" in result_data
+        assert "modified_prompt_content" in result_data
+        assert "output_sub" in result_data
+        assert "output_modified" in result_data
+        assert result_data["sub_prompt_content"] == extracted_functionality_result
+        assert result_data["modified_prompt_content"] == remaining_prompt_result
         assert total_cost == total_cost_result
-        assert model_name == mock_model_name # Added model name assertion
+        assert model_name == mock_model_name
 
 
         # Check that construct_paths was called with correct arguments
@@ -152,7 +157,8 @@ def test_split_main_io_error_during_write(mock_ctx, capsys):
          pytest.raises(SystemExit) as exc_info:
 
         mock_construct_paths.return_value = (mock_input_strings, mock_output_paths, mock_language)
-        mock_split.return_value = ("extracted functionality", "remaining prompt", mock_model_name, 0.5)
+        # Use standardized return order (result_data, cost, model_name)
+        mock_split.return_value = (("extracted functionality", "remaining prompt"), 0.5, mock_model_name)
 
         split_main(
             mock_ctx,
@@ -227,7 +233,8 @@ def test_split_main_quiet_mode(mock_ctx, capsys):
          patch("pdd.split_main.split") as mock_split, \
          patch("builtins.open", mock_open()):
         mock_construct_paths.return_value = (mock_input_strings, mock_output_paths, None)
-        mock_split.return_value = ("extracted functionality", "remaining prompt", mock_model_name, 1.234) # Corrected Mock
+        # Use standardized return order (result_data, cost, model_name)
+        mock_split.return_value = (("extracted functionality", "remaining prompt"), 1.234, mock_model_name)
 
         # Call function
         split_main(

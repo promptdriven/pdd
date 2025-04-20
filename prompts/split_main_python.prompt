@@ -10,12 +10,15 @@
         - 'example_code_file' (`str`): Path to the example code file showing usage.
         - 'output_sub' (`Optional[str]`): Path where to save the sub-prompt. If None, uses default naming convention.
         - 'output_modified' (`Optional[str]`): Path where to save the modified prompt. If None, uses default naming convention.
-    Outputs:
-        - Returns a tuple containing (`str`, `str`, `str`, `float`):
-            - `str`: The sub-prompt content
-            - `str`: The modified prompt content
-            - `str`: The model name used (second to last element)
+    Outputs following the standardized return order (result_data, cost, model_name):
+        - Returns a tuple containing:
+            - `Dict[str, str]`: A dictionary containing:
+                - 'sub_prompt_content': The extracted functionality content
+                - 'modified_prompt_content': The modified prompt content
+                - 'output_sub': Path where the sub-prompt was saved
+                - 'output_modified': Path where the modified prompt was saved
             - `float`: The total cost of the operation
+            - `str`: The model name used
 
 % Example for using the Python Click library:
         <click_example>
