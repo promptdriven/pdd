@@ -46,7 +46,7 @@ console = Console(theme=custom_theme)
 
 # --- Helper Function for Error Handling ---
 def handle_error(e: Exception, command_name: str, quiet: bool):
-    """Prints error messages using Rich console."""
+    """Prints error messages using Rich console and re-raises the exception."""
     if not quiet:
         console.print(f"[error]Error during '{command_name}' command:[/error]", style="error")
         if isinstance(e, FileNotFoundError):
@@ -55,10 +55,11 @@ def handle_error(e: Exception, command_name: str, quiet: bool):
             console.print(f"  [error]Input/Output Error:[/error] {e}", style="error")
         elif isinstance(e, click.UsageError): # Handle Click usage errors explicitly if needed
              console.print(f"  [error]Usage Error:[/error] {e}", style="error")
-             sys.exit(2) # Usage errors typically exit with 2
+             # click.UsageError should typically exit with 2, but re-raising allows test runner to handle it.
         else:
             console.print(f"  [error]An unexpected error occurred:[/error] {e}", style="error")
-    sys.exit(1) # Default exit code for other errors
+    # Re-raise the exception to allow higher-level handlers (like pytest) to see it.
+    raise e
 
 # --- Main CLI Group ---
 @click.group(chain=True, help="PDD (Prompt-Driven Development) Command Line Interface.")
@@ -165,14 +166,15 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
     or None from each command function.
     """
     total_chain_cost = 0.0
-    parent_ctx = ctx.parent # Get the parent context for invoked_subcommands
-    invoked_subcommands = parent_ctx.invoked_subcommands if parent_ctx else []
+    # Get invoked subcommands directly from the group context if available (safer for testing)
+    invoked_subcommands = getattr(ctx, 'invoked_subcommands', [])
 
     if not ctx.obj.get("quiet"):
         console.print("\n[info]--- Command Chain Execution Summary ---[/info]")
 
     for i, result_tuple in enumerate(results):
-        command_name = invoked_subcommands[i] if i < len(invoked_subcommands) else f"Command {i+1}"
+        # Use the retrieved subcommand name
+        command_name = invoked_subcommands[i] if i < len(invoked_subcommands) else f"Unknown Command {i+1}"
         # Check if the result is the expected tuple structure from @track_cost
         if isinstance(result_tuple, tuple) and len(result_tuple) == 3:
             _result_data, cost, model_name = result_tuple
@@ -186,7 +188,8 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
         else:
             # Handle unexpected return types if necessary
             if not ctx.obj.get("quiet"):
-                 console.print(f"  [warning]Step {i+1} ({command_name}):[/warning] Unexpected result format: {type(result_tuple)}")
+                 # Provide more detail on the unexpected type
+                 console.print(f"  [warning]Step {i+1} ({command_name}):[/warning] Unexpected result format: {type(result_tuple).__name__} - {str(result_tuple)[:50]}...")
 
 
     if not ctx.obj.get("quiet"):
