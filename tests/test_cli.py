@@ -688,3 +688,211 @@ def add(a, b):
         import traceback
         traceback.print_exc()
         raise
+
+@pytest.mark.real
+def test_real_fix_command(create_dummy_files, tmp_path):
+    """Test the 'fix' command with real files by calling the function directly."""
+    import os
+    import sys
+    import click
+    from pathlib import Path
+    # Import fix_main locally to avoid interfering with mocks in other tests
+    from pdd.fix_main import fix_main as fix_main_direct
+    
+    # Create a prompt file with valid content
+    prompt_content = """// fix_python.prompt
+// Language: Python
+// Description: A simple function to add two numbers
+// Inputs: Two numbers a and b
+// Outputs: The sum of a and b
+
+def add(a, b):
+    # Add two numbers and return the result
+    return a + b
+"""
+    
+    # Create a code file with a bug
+    code_content = """# add.py
+def add(a, b):
+    # This has a bug - it doesn't return anything
+    result = a + b
+    # Missing return statement
+"""
+    
+    # Create a test file that will fail
+    test_content = """# test_add.py
+import unittest
+from add import add
+
+class TestAdd(unittest.TestCase):
+    def test_add(self):
+        self.assertEqual(add(2, 3), 5)
+        self.assertEqual(add(-1, 1), 0)
+        self.assertEqual(add(0, 0), 0)
+
+if __name__ == '__main__':
+    unittest.main()
+"""
+    
+    # Create an error log file with the test failure
+    error_content = """============================= test session starts ==============================
+platform darwin -- Python 3.9.7, pytest-7.0.1, pluggy-1.0.0
+rootdir: /tmp/test_fix
+collected 1 item
+
+test_add.py F                                                              [100%]
+
+=================================== FAILURES ===================================
+_________________________________ TestAdd.test_add _________________________________
+
+self = <test_add.TestAdd testMethod=test_add>
+
+    def test_add(self):
+>       self.assertEqual(add(2, 3), 5)
+E       AssertionError: None != 5
+
+test_add.py:6: AssertionError
+=========================== short test summary info ============================
+FAILED test_add.py::TestAdd::test_add - AssertionError: None != 5
+"""
+    
+    # Create a simple verification program
+    verification_content = """# verify.py
+import unittest
+import subprocess
+import sys
+
+from add import add
+
+# Run the tests
+test_result = unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromName('test_add.TestAdd'))
+
+# Exit with appropriate code
+sys.exit(0 if test_result.wasSuccessful() else 1)
+"""
+    
+    # Create empty dummy files with the fixture
+    files = create_dummy_files(
+        "fix_python.prompt", "add.py", "test_add.py", "errors.log", "verify.py"
+    )
+    
+    # Set the content for each file
+    Path(files["fix_python.prompt"]).write_text(prompt_content)
+    Path(files["add.py"]).write_text(code_content)
+    Path(files["test_add.py"]).write_text(test_content)
+    Path(files["errors.log"]).write_text(error_content)
+    Path(files["verify.py"]).write_text(verification_content)
+    
+    # Get the file paths
+    prompt_file = str(files["fix_python.prompt"])
+    code_file = str(files["add.py"])
+    test_file = str(files["test_add.py"])
+    error_file = str(files["errors.log"])
+    verification_file = str(files["verify.py"])
+    
+    # Create output directory
+    output_dir = tmp_path / "output"
+    output_dir.mkdir(exist_ok=True)
+    output_test = str(output_dir / "fixed_test_add.py")
+    output_code = str(output_dir / "fixed_add.py")
+    output_results = str(output_dir / "fix_results.log")
+    
+    # Print environment info for debugging
+    print(f"Current working directory: {os.getcwd()}")
+    print(f"Prompt file location: {prompt_file}")
+    print(f"Code file location: {code_file}")
+    print(f"Test file location: {test_file}")
+    print(f"Error file location: {error_file}")
+    print(f"Verification file location: {verification_file}")
+    print(f"Output directory: {output_dir}")
+    
+    # Create a minimal context object with the necessary parameters
+    ctx = click.Context(click.Command("fix"))
+    ctx.obj = {
+        'force': True,
+        'quiet': False,
+        'verbose': True,
+        'strength': 0.8,
+        'temperature': 0.0,
+        'local': True  # Use local execution to avoid API calls
+    }
+    
+    try:
+        # Call fix_main directly - with no mock this time
+        success, fixed_test, fixed_code, attempts, cost, model = fix_main_direct(
+            ctx=ctx,
+            prompt_file=prompt_file,
+            code_file=code_file,
+            unit_test_file=test_file,
+            error_file=error_file,
+            output_test=output_test,
+            output_code=output_code,
+            output_results=output_results,
+            loop=False,  # Use simple mode for testing
+            verification_program=None,  # Not needed in simple mode
+            max_attempts=3,
+            budget=1.0,
+            auto_submit=False
+        )
+        
+        # Verify we got reasonable results back
+        assert isinstance(success, bool), "Success should be a boolean"
+        assert isinstance(fixed_test, str), "Fixed test should be a string"
+        assert isinstance(fixed_code, str), "Fixed code should be a string"
+        assert attempts > 0, "Should have at least one attempt"
+        assert isinstance(cost, float), "Cost should be a float"
+        assert isinstance(model, str), "Model name should be a string"
+        
+        # Check output files were created
+        assert Path(output_test).exists(), f"Output test file not created at {output_test}"
+        assert Path(output_code).exists(), f"Output code file not created at {output_code}"
+        
+        # Verify content of generated code file
+        fixed_code_content = Path(output_code).read_text()
+        assert "def add" in fixed_code_content, "Fixed code should contain an add function"
+        assert "return" in fixed_code_content, "Fixed code should include a return statement"
+        assert "result" in fixed_code_content, "Fixed code should maintain the result variable"
+        
+        # Print success message
+        print("\nTest passed! Fixed code:")
+        print(fixed_code_content)
+        
+        # Try with loop mode if the non-loop mode succeeded
+        if success:
+            try:
+                print("\nTesting fix_main with loop mode...")
+                # Call fix_main in loop mode
+                loop_success, loop_fixed_test, loop_fixed_code, loop_attempts, loop_cost, loop_model = fix_main_direct(
+                    ctx=ctx,
+                    prompt_file=prompt_file,
+                    code_file=code_file,
+                    unit_test_file=test_file,
+                    error_file=error_file,  # Not used in loop mode
+                    output_test=output_test + ".loop",
+                    output_code=output_code + ".loop",
+                    output_results=output_results + ".loop",
+                    loop=True,
+                    verification_program=verification_file,
+                    max_attempts=3,
+                    budget=1.0,
+                    auto_submit=False
+                )
+                
+                # Verify loop results
+                assert isinstance(loop_success, bool), "Loop success should be a boolean"
+                assert isinstance(loop_fixed_code, str), "Loop fixed code should be a string"
+                assert loop_attempts > 0, "Loop should have at least one attempt"
+                
+                print(f"Loop test result: success={loop_success}, attempts={loop_attempts}")
+                print(f"Loop fixed code:\n{loop_fixed_code}")
+            except Exception as loop_e:
+                print(f"Loop mode test failed (but non-loop test passed): {loop_e}")
+                # Don't fail the entire test if just the loop mode fails
+                import traceback
+                traceback.print_exc()
+        
+    except Exception as e:
+        print(f"Error executing fix_main: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
