@@ -53,9 +53,12 @@ def handle_error(e: Exception, command_name: str, quiet: bool):
             console.print(f"  [error]File not found:[/error] {e}", style="error")
         elif isinstance(e, (ValueError, IOError)):
             console.print(f"  [error]Input/Output Error:[/error] {e}", style="error")
+        elif isinstance(e, click.UsageError): # Handle Click usage errors explicitly if needed
+             console.print(f"  [error]Usage Error:[/error] {e}", style="error")
+             sys.exit(2) # Usage errors typically exit with 2
         else:
             console.print(f"  [error]An unexpected error occurred:[/error] {e}", style="error")
-    sys.exit(1)
+    sys.exit(1) # Default exit code for other errors
 
 # --- Main CLI Group ---
 @click.group(chain=True, help="PDD (Prompt-Driven Development) Command Line Interface.")
@@ -145,7 +148,8 @@ def cli(
         try:
             if not quiet:
                 console.print("[info]Checking for updates...[/info]")
-            auto_update(quiet=quiet) # Pass quiet flag to auto_update
+            # Removed quiet=quiet argument as it caused TypeError
+            auto_update()
         except Exception as e:
             if not quiet:
                 console.print(f"[warning]Auto-update check failed:[/warning] {e}", style="warning")
@@ -153,34 +157,36 @@ def cli(
 # --- Result Callback for Chained Commands ---
 @cli.result_callback()
 @click.pass_context
-def process_commands(ctx: click.Context, results: List[Tuple[Any, float, str]], **kwargs):
+def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float, str]]], **kwargs):
     """
     Processes the results from chained commands.
 
     Receives a list of tuples, typically (result, cost, model_name),
-    from each command function decorated with @track_cost.
+    or None from each command function.
     """
     total_chain_cost = 0.0
+    parent_ctx = ctx.parent # Get the parent context for invoked_subcommands
+    invoked_subcommands = parent_ctx.invoked_subcommands if parent_ctx else []
+
     if not ctx.obj.get("quiet"):
         console.print("\n[info]--- Command Chain Execution Summary ---[/info]")
 
     for i, result_tuple in enumerate(results):
+        command_name = invoked_subcommands[i] if i < len(invoked_subcommands) else f"Command {i+1}"
         # Check if the result is the expected tuple structure from @track_cost
         if isinstance(result_tuple, tuple) and len(result_tuple) == 3:
             _result_data, cost, model_name = result_tuple
             total_chain_cost += cost
             if not ctx.obj.get("quiet"):
-                 # Identify the command based on the order in the chain if possible
-                 # This requires inspecting ctx.invoked_subcommands or similar,
-                 # which might be complex. For now, just number them.
-                 command_name = ctx.invoked_subcommands[i] if i < len(ctx.invoked_subcommands) else f"Command {i+1}"
                  console.print(f"  [info]Step {i+1} ({command_name}):[/info] Cost: ${cost:.6f}, Model: {model_name}")
+        elif result_tuple is None:
+             # Handle commands that return None (like install_completion)
+             if not ctx.obj.get("quiet"):
+                 console.print(f"  [info]Step {i+1} ({command_name}):[/info] Command completed (no cost info).")
         else:
-            # Handle cases where a command might not return the standard tuple
-            # (e.g., install_completion returns None)
+            # Handle unexpected return types if necessary
             if not ctx.obj.get("quiet"):
-                 command_name = ctx.invoked_subcommands[i] if i < len(ctx.invoked_subcommands) else f"Command {i+1}"
-                 console.print(f"  [info]Step {i+1} ({command_name}):[/info] No cost information returned.")
+                 console.print(f"  [warning]Step {i+1} ({command_name}):[/warning] Unexpected result format: {type(result_tuple)}")
 
 
     if not ctx.obj.get("quiet"):
@@ -228,8 +234,7 @@ def generate(ctx: click.Context, prompt_file: str, output: Optional[str]) -> Tup
         return generated_code, total_cost, model_name
     except Exception as e:
         handle_error(e, command_name, quiet)
-        # Should not be reached due to sys.exit in handle_error, but satisfy type checker
-        raise
+        # Removed raise statement
 
 
 @cli.command("example")
@@ -269,7 +274,7 @@ def example(ctx: click.Context, prompt_file: str, code_file: str, output: Option
         return example_code, total_cost, model_name
     except Exception as e:
         handle_error(e, command_name, quiet)
-        raise
+        # Removed raise statement
 
 
 @cli.command("test")
@@ -360,7 +365,7 @@ def test(
         return generated_test_code, total_cost, model_name
     except Exception as e:
         handle_error(e, command_name, quiet)
-        raise
+        # Removed raise statement
 
 
 @cli.command("preprocess")
@@ -396,7 +401,7 @@ def test(
     help="List of keys to exclude from curly bracket doubling.",
 )
 @click.pass_context
-# No @track_cost as preprocessing is local
+# No @track_cost as preprocessing is local, but return dummy tuple for callback
 def preprocess(
     ctx: click.Context,
     prompt_file: str,
@@ -405,7 +410,7 @@ def preprocess(
     recursive: bool,
     double: bool,
     exclude: Optional[Tuple[str, ...]],
-) -> None: # Returns None as it writes a file
+) -> Tuple[str, float, str]: # Returns dummy tuple
     """Preprocess prompt files and save the results."""
     quiet = ctx.obj.get("quiet", False)
     command_name = "preprocess"
@@ -433,18 +438,12 @@ def preprocess(
             exclude=list(exclude) if exclude else [], # Convert tuple to list
             # Pass input_strings if needed
         )
-        # Since preprocess_main writes the file, we don't return content here.
-        # For chaining, maybe return the path? Or None? Let's return None.
-        # The result callback needs to handle None gracefully.
-        # Let's adjust track_cost/callback later if needed, or have preprocess_main return dummy cost/model.
-        # For now, return None, assuming callback handles it.
-        # return None
-        # --- Adjustment: To fit the result_callback structure, return dummy values ---
+        # Return dummy values to fit the result_callback structure
         return "Preprocessing complete.", 0.0, "local"
 
     except Exception as e:
         handle_error(e, command_name, quiet)
-        raise
+        # Removed raise statement
 
 
 @cli.command("fix")
@@ -574,7 +573,7 @@ def fix(
         return result_data, cost, model
     except Exception as e:
         handle_error(e, command_name, quiet)
-        raise
+        # Removed raise statement
 
 
 @cli.command("split")
@@ -645,7 +644,7 @@ def split(
         return result_data, total_cost, model_name
     except Exception as e:
         handle_error(e, command_name, quiet)
-        raise
+        # Removed raise statement
 
 
 @cli.command("change")
@@ -724,9 +723,11 @@ def change(
         )
         # result_data is string (single) or dict/message (csv)
         return result_data, total_cost, model_name
+    except click.UsageError as e: # Catch UsageError specifically
+        handle_error(e, command_name, quiet)
     except Exception as e:
         handle_error(e, command_name, quiet)
-        raise
+        # Removed raise statement
 
 
 @cli.command("update")
@@ -793,9 +794,11 @@ def update(
             git=git,
         )
         return updated_prompt, total_cost, model_name
+    except click.UsageError as e: # Catch UsageError specifically
+        handle_error(e, command_name, quiet)
     except Exception as e:
         handle_error(e, command_name, quiet)
-        raise
+        # Removed raise statement
 
 
 @cli.command("detect")
@@ -830,9 +833,11 @@ def detect(
             output=output, # Pass user-provided or default path
         )
         return changes_list, total_cost, model_name
+    except click.UsageError as e: # Catch UsageError specifically
+        handle_error(e, command_name, quiet)
     except Exception as e:
         handle_error(e, command_name, quiet)
-        raise
+        # Removed raise statement
 
 
 @cli.command("conflicts")
@@ -866,7 +871,7 @@ def conflicts(
         return conflicts_list, total_cost, model_name
     except Exception as e:
         handle_error(e, command_name, quiet)
-        raise
+        # Removed raise statement
 
 
 @cli.command("crash")
@@ -964,7 +969,7 @@ def crash(
         return result_data, cost, model
     except Exception as e:
         handle_error(e, command_name, quiet)
-        raise
+        # Removed raise statement
 
 
 @cli.command("trace")
@@ -1002,7 +1007,7 @@ def trace(
         return prompt_line_result, total_cost, model_name
     except Exception as e:
         handle_error(e, command_name, quiet)
-        raise
+        # Removed raise statement
 
 
 @cli.command("bug")
@@ -1048,7 +1053,7 @@ def bug(
         return unit_test_content, total_cost, model_name
     except Exception as e:
         handle_error(e, command_name, quiet)
-        raise
+        # Removed raise statement
 
 
 @cli.command("auto-deps")
@@ -1102,7 +1107,7 @@ def auto_deps(
         return modified_prompt, total_cost, model_name
     except Exception as e:
         handle_error(e, command_name, quiet)
-        raise
+        # Removed raise statement
 
 
 @cli.command("verify")
@@ -1177,7 +1182,7 @@ def verify(
         return result_data, cost, model
     except Exception as e:
         handle_error(e, command_name, quiet)
-        raise
+        # Removed raise statement
 
 
 @cli.command("install_completion")
@@ -1190,11 +1195,11 @@ def install_completion_cmd(ctx: click.Context) -> None: # Returns None
     try:
         # install_completion function handles everything internally, including printing
         install_completion(quiet=quiet) # Pass quiet flag
-        # Return dummy values to fit the callback structure
-        return "Completion installation attempted.", 0.0, "local"
+        # Return None, callback handles it
+        return None
     except Exception as e:
         handle_error(e, command_name, quiet)
-        raise
+        # Removed raise statement
 
 
 # --- Entry Point ---
