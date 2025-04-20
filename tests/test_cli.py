@@ -346,35 +346,6 @@ def test_cli_construct_paths_called_correctly(mock_main, mock_construct, mock_au
 
 @patch('pdd.cli.auto_update') # Patch auto_update
 @patch('pdd.cli.construct_paths')
-@patch('pdd.cli.code_generator_main')
-def test_cli_generate_command(mock_main, mock_construct, mock_auto_update, runner, create_dummy_files):
-    """Test the 'generate' command flow."""
-    files = create_dummy_files("gen.prompt")
-    prompt_path = str(files["gen.prompt"])
-    resolved_output = "output/gen_impl.py"
-    mock_construct.return_value = ({'prompt_file': 'prompt data'}, {'output': resolved_output}, 'python')
-    mock_main.return_value = ('generated code', 0.1, 'model-gen')
-
-    result = runner.invoke(cli.cli, ["generate", prompt_path, "--output", "output/"])
-
-    if result.exit_code != 0:
-        print(f"Unexpected exit code: {result.exit_code}")
-        print(f"Output:\n{result.output}")
-        if result.exception:
-            print(f"Exception:\n{result.exception}")
-            raise result.exception
-
-    assert result.exit_code == 0
-    mock_construct.assert_called_once_with(
-        input_file_paths={'prompt_file': prompt_path},
-        force=False, quiet=False, command='generate', command_options={'output': 'output/'}
-    )
-    mock_main.assert_called_once_with(ctx=ANY, prompt_file=prompt_path, output=resolved_output)
-    mock_auto_update.assert_called_once()
-    # Check result callback data (implicitly tested via chaining test)
-
-@patch('pdd.cli.auto_update') # Patch auto_update
-@patch('pdd.cli.construct_paths')
 @patch('pdd.cli.fix_main')
 def test_cli_fix_command(mock_main, mock_construct, mock_auto_update, runner, create_dummy_files):
     """Test the 'fix' command flow."""
@@ -636,3 +607,84 @@ def test_cli_install_completion_cmd_quiet(mock_install_func, mock_auto_update, r
     assert result.exit_code == 0
     mock_install_func.assert_called_once_with(quiet=True)
     mock_auto_update.assert_called_once()
+
+# --- Real Command Tests (No Mocking) ---
+
+def test_real_generate_command(create_dummy_files, tmp_path):
+    """Test the 'generate' command with real files by calling the function directly."""
+    import os
+    import sys
+    import click
+    from pathlib import Path
+    from pdd.code_generator_main import code_generator_main
+    
+    # Create a simple prompt file with valid content - use a name with language suffix
+    prompt_content = """// gen_python.prompt
+// Language: Python
+// Description: A simple function to add two numbers
+// Inputs: Two numbers a and b
+// Outputs: The sum of a and b
+
+def add(a, b):
+    # Add two numbers and return the result
+    pass
+"""
+    # Create prompt file with the fixture - use proper naming convention with language
+    files = create_dummy_files("gen_python.prompt", content=prompt_content)
+    prompt_file = str(files["gen_python.prompt"])
+    
+    # Create output directory
+    output_dir = tmp_path / "output"
+    output_dir.mkdir(exist_ok=True)
+    output_file = str(output_dir / "gen.py")
+    
+    # Print environment info for debugging
+    print(f"Current working directory: {os.getcwd()}")
+    print(f"Prompt file location: {prompt_file}")
+    print(f"Output directory: {output_dir}")
+    
+    # Create a minimal context object with the necessary parameters
+    ctx = click.Context(click.Command("generate"))
+    ctx.obj = {
+        'force': False,
+        'quiet': False,
+        'verbose': True,
+        'strength': 0.8,
+        'temperature': 0.0,
+        'local': True  # Use local execution to avoid API calls
+    }
+    
+    try:
+        # Call code_generator_main directly - with no mock this time
+        # Let it use the real LLM implementation
+        code, cost, model = code_generator_main(
+            ctx=ctx,
+            prompt_file=prompt_file,
+            output=output_file
+        )
+        
+        # Verify we got reasonable results back
+        assert isinstance(code, str), "Generated code should be a string"
+        assert len(code) > 0, "Generated code should not be empty"
+        assert isinstance(cost, float), "Cost should be a float"
+        assert isinstance(model, str), "Model name should be a string"
+        
+        # Check output file was created
+        output_path = Path(output_file)
+        assert output_path.exists(), f"Output file not created at {output_path}"
+        
+        # Verify content of generated file - checking for function with any signature
+        generated_code = output_path.read_text()
+        assert "def add" in generated_code, "Generated code should contain an add function"
+        assert "return" in generated_code, "Generated code should include a return statement"
+        assert "pass" not in generated_code, "Generated code should replace the 'pass' placeholder"
+        
+        # Print success message
+        print("\nTest passed! Generated code:")
+        print(generated_code)
+    
+    except Exception as e:
+        print(f"Error executing code_generator_main: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
