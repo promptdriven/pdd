@@ -292,9 +292,35 @@ def construct_paths(
     try:
         # Pass the potentially updated command_options
         language = _determine_language(command_options, input_paths, command)
+        
+        # Add validation to ensure language is never None
+        if language is None:
+            # Set a default language based on command, defaulting to 'python' for most commands
+            if command == 'bug':
+                # The bug command typically defaults to python in bug_main.py
+                language = 'python'
+            else:
+                # General fallback for other commands
+                language = 'python'
+            
+            # Log the issue for debugging
+            if not quiet:
+                console.print(
+                    f"[warning]Warning: Could not determine language for '{command}' command. Using default: {language}[/warning]",
+                    style="warning"
+                )
     except ValueError as e:
         console.print(f"[error]{e}", style="error")
         raise # Re-raise the ValueError from _determine_language
+
+    # Final safety check before calling get_extension
+    if not language or not isinstance(language, str):
+        language = 'python'  # Absolute fallback
+        if not quiet:
+            console.print(
+                f"[warning]Warning: Invalid language value. Using default: {language}[/warning]",
+                style="warning"
+            )
 
     file_extension = get_extension(language) # Pass determined language
 
