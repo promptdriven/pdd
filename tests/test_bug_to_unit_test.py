@@ -131,3 +131,51 @@ def test_error_handling_for_invalid_template():
         assert unit_test == ""
         assert cost == 0.0
         assert model == ""
+        
+def test_handle_none_language_parameter():
+    """Test that bug_to_unit_test properly handles None language parameter."""
+    from unittest.mock import patch, MagicMock
+    
+    # Create a mock response
+    llm_response = {
+        'result': "```python\ndef test_function():\n    pass\n```",
+        'cost': 0.01,
+        'model_name': 'test_model'
+    }
+    
+    # Mock unfinished_prompt to return that the generation is finished
+    unfinished_mock = (None, True, 0.0, 'test_model')
+    
+    # Mock all the external calls
+    with patch('pdd.bug_to_unit_test.load_prompt_template', return_value="Template content"), \
+         patch('pdd.bug_to_unit_test.preprocess', return_value="Processed prompt"), \
+         patch('pdd.bug_to_unit_test.llm_invoke', return_value=llm_response), \
+         patch('pdd.bug_to_unit_test.unfinished_prompt', return_value=unfinished_mock), \
+         patch('pdd.bug_to_unit_test.postprocess') as mock_postprocess:
+        
+        # Set up postprocess to return a valid result
+        mock_postprocess.return_value = ("def test_function():\n    pass", 0.005, "test_model")
+        
+        # Call with None language parameter - this should reproduce the bug
+        unit_test, cost, model = bug_to_unit_test(
+            current_output="3",
+            desired_output="5",
+            prompt_used_to_generate_the_code="test prompt",
+            code_under_test="def test(): pass",
+            program_used_to_run_code_under_test="python",
+            language=None  # Explicitly set to None to reproduce the bug
+        )
+        
+        # Postprocess should have been called with 'python' (default) not None
+        args, kwargs = mock_postprocess.call_args
+        assert args[1] is not None, "Language parameter should not be None"
+        assert isinstance(args[1], str), "Language parameter should be a string"
+        assert args[1].lower() == "python", f"Language should default to 'python', got '{args[1]}'"
+        
+        # Function should return valid results
+        assert isinstance(unit_test, str)
+        assert len(unit_test) > 0
+        assert isinstance(cost, float)
+        assert cost > 0
+        assert isinstance(model, str)
+        assert len(model) > 0

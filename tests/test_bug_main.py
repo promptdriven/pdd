@@ -200,3 +200,43 @@ def test_bug_main_different_language(mock_ctx, mock_input_files):
         
         # Assertions
         assert result == ("Generated unit test", 0.001, "gpt-4")
+
+def test_bug_main_language_from_construct_paths(mock_ctx, mock_input_files):
+    """Test case for bug_main using the language detected by construct_paths when language is None."""
+    with patch('pdd.bug_main.construct_paths') as mock_construct_paths, \
+         patch('pdd.bug_main.bug_to_unit_test') as mock_bug_to_unit_test:
+        
+        # Mock construct_paths to return "python" as detected language
+        mock_construct_paths.return_value = (
+            {
+                "prompt_file": "Prompt content",
+                "code_file": "Code content",
+                "program_file": "Program content",
+                "current_output": "Current output content",
+                "desired_output": "Desired output content"
+            },
+            {"output": None},
+            "python"  # Detected language
+        )
+        
+        # Mock bug_to_unit_test
+        mock_bug_to_unit_test.return_value = ("Generated unit test", 0.001, "gpt-4")
+        
+        # Call the function with language=None
+        result = bug_main(
+            mock_ctx,
+            mock_input_files["prompt_file"],
+            mock_input_files["code_file"],
+            mock_input_files["program_file"],
+            mock_input_files["current_output"],
+            mock_input_files["desired_output"],
+            language=None  # Explicitly passing None to test our fix
+        )
+        
+        # Verify bug_to_unit_test was called with the language from construct_paths
+        mock_bug_to_unit_test.assert_called_once()
+        args, kwargs = mock_bug_to_unit_test.call_args
+        assert args[7] == "python", "The language parameter should be 'python' from construct_paths, not None"
+        
+        # Assertions on the result
+        assert result == ("Generated unit test", 0.001, "gpt-4")

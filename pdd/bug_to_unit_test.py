@@ -44,6 +44,11 @@ def bug_to_unit_test(
     # Validate strength parameter
     if not 0 <= strength <= 1:
         raise ValueError("Strength parameter must be between 0 and 1")
+        
+    # Ensure language parameter is not None or empty
+    if not language or not isinstance(language, str):
+        language = "python"  # Default fallback
+        console.print("[yellow]Warning: Invalid language parameter, defaulting to 'python'[/yellow]")
 
     total_cost = 0.0
     final_model_name = ""
@@ -63,7 +68,7 @@ def bug_to_unit_test(
             "desired_output": desired_output,
             "code_under_test": code_under_test,
             "program_used_to_run_code_under_test": program_used_to_run_code_under_test,
-            "language": language
+            "language": language if language and isinstance(language, str) else "python"
         }
 
         console.print("[bold blue]Generating unit test...[/bold blue]")
@@ -109,6 +114,11 @@ def bug_to_unit_test(
             result = response['result']
 
         # Post-process the result
+        # Double-check language is valid before passing to postprocess
+        if not language or not isinstance(language, str):
+            language = "python"  # Ensure language is valid
+            console.print("[yellow]Warning: Language value became invalid during processing, defaulting to 'python'[/yellow]")
+            
         final_code, postprocess_cost, postprocess_model = postprocess(
             result,
             language,
