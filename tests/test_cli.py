@@ -12,6 +12,9 @@ import click # Import click for UsageError
 # Adjust import if necessary based on project structure
 from pdd import cli, __version__, DEFAULT_STRENGTH
 
+# Import fix_verification_main to mock
+from pdd.fix_verification_main import fix_verification_main
+
 # Helper to create dummy files
 @pytest.fixture
 def create_dummy_files(tmp_path):
@@ -857,3 +860,105 @@ sys.exit(0 if test_result.wasSuccessful() else 1)
         import traceback
         traceback.print_exc()
         raise
+
+@patch('pdd.cli.auto_update') # Patch auto_update
+# Mock construct_paths where it is called: inside fix_verification_main
+@patch('pdd.fix_verification_main.construct_paths')
+def test_cli_verify_command_calls_into_fix_verification_main(mock_construct_in_main, mock_auto_update, runner, create_dummy_files, tmp_path):
+    """Test that `pdd verify` calls into fix_verification_main by checking if construct_paths inside it is called."""
+    # Setup dummy files
+    prompt_file = tmp_path / "test.prompt"
+    prompt_file.write_text("prompt content")
+    code_file = tmp_path / "test.py"
+    code_file.write_text("code content")
+    program_file = tmp_path / "test_program.py"
+    program_file.write_text("program content")
+
+    # Mock construct_paths called inside fix_verification_main
+    mock_construct_in_main.return_value = ({
+        "prompt_file": "prompt content",
+        "code_file": "code content",
+        "program_file": "program content",
+        "verification_program": "program content"
+    }, {
+        "output_results": "results.log",
+        "output_code": "verified.py"
+    }, "python")
+
+    # Invoke the verify command with MINIMAL arguments
+    result = runner.invoke(cli.cli, [
+        "verify",
+        str(prompt_file),
+        str(code_file),
+        str(program_file)
+        # Remove options like --max-attempts, --budget for simplicity
+    ])
+
+    # Assert construct_paths (mocked inside fix_verification_main) was called
+    try:
+        mock_construct_in_main.assert_called_once()
+    except AssertionError as e:
+        print(f"Assertion Failed: {e}")
+        print(f"CLI Error Output (if any):\n{result.output}")
+        if result.exception:
+            print(f"CLI Exception: {result.exception}")
+            import traceback
+            traceback.print_exception(result.exception)
+        raise e
+
+@patch('pdd.cli.auto_update') # Patch auto_update
+# Mock the target function where it's imported in cli.py
+@patch('pdd.cli.fix_verification_main')
+# We also need to mock construct_paths because fix_verification_main calls it
+# and it expects real files if not mocked. Mock it where it's called inside fix_verification_main
+@patch('pdd.fix_verification_main.construct_paths')
+def test_cli_verify_force_flag_propagation(mock_construct_in_main, mock_fix_verification_main, mock_auto_update, runner, create_dummy_files, tmp_path):
+    """
+    Test that the global --force flag is correctly propagated to the context
+    object passed to fix_verification_main when invoking the verify command.
+    """
+    files = create_dummy_files(
+        "verify_prompt.prompt",
+        "verify_code.py",
+        "verify_program.py"
+    )
+
+    # Mock construct_paths return value (needed by fix_verification_main)
+    mock_construct_in_main.return_value = (
+        {'prompt_file': 'p', 'code_file': 'c', 'program_file': 'prog'}, # dummy input_strings
+        {'output_results': 'results.log', 'output_code': 'code_verified.py'}, # dummy output_paths
+        'python' # dummy language
+    )
+
+    # Mock fix_verification_main return value (needs correct tuple format)
+    # (success_status, final_program, final_code, attempts, total_cost, model_name)
+    mock_fix_verification_main.return_value = (True, 'prog', 'code_verified.py', 1, 0.01, 'mock_model')
+
+    result = runner.invoke(cli.cli, [
+        "--force", # Use the global force flag
+        "verify",
+        str(files["verify_prompt.prompt"]),
+        str(files["verify_code.py"]),
+        str(files["verify_program.py"]),
+    ])
+
+    # Check for CLI errors first
+    if result.exit_code != 0:
+        print(f"CLI invocation failed with exit code {result.exit_code}")
+        print(f"Output: {result.output}")
+        if result.exception:
+            print(f"Exception: {result.exception}")
+            pytest.fail(f"CLI invocation failed unexpectedly: {result.exception}")
+
+    # Assert that fix_verification_main was called
+    mock_fix_verification_main.assert_called_once()
+
+    # Get the arguments passed to fix_verification_main
+    call_args, call_kwargs = mock_fix_verification_main.call_args
+
+    # The context object (ctx) is passed as a keyword argument
+    ctx_passed = call_kwargs.get('ctx')
+    assert ctx_passed is not None, "Context object was not passed as a keyword argument to fix_verification_main"
+
+    # Assert that the 'force' flag in the context object is True
+    assert ctx_passed.obj.get('force') is True, "The --force flag was not correctly set in ctx.obj"
