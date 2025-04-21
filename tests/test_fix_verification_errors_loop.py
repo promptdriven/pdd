@@ -612,3 +612,171 @@ def test_program_args_passed(setup_test_environment):
     env["mock_runner"].assert_called_once_with(env["program_file"], args=custom_args)
     # Also check fixer was called once (for initial assessment)
     env["mock_fixer"].assert_called_once()
+
+
+# --- Test Cases for Bug Detection ---
+
+@pytest.mark.parametrize(
+    "missing_arg",
+    ["program_file", "code_file", "prompt", "verification_program"]
+)
+def test_loop_handles_missing_input_error(setup_test_environment, capsys, missing_arg):
+    """
+    Test that the loop correctly handles the 'Missing inputs' error from fix_verification_errors
+    and does NOT report success.
+    (Covers the 'Contradictory Logging' bug)
+    """
+    env = setup_test_environment
+    env["default_args"]["max_attempts"] = 1 # Only need one attempt
+
+    # Simulate initial run failure (to enter the loop)
+    env["mock_runner"].return_value = (0, "Running with test_arg\nVERIFICATION_FAILURE: Got INITIAL_BUG")
+
+    # Simulate fix_verification_errors returning the specific 'missing input' dict
+    missing_input_return = {
+        "explanation": None,
+        "fixed_program": env["program_content"], # Content doesn't matter here
+        "fixed_code": env["code_content_initial"],
+        "total_cost": 0.0,
+        "model_name": None,
+        "verification_issues_count": 0, # Crucially, count is 0
+    }
+    # Configure the mock to return the missing input dict ONLY IF called
+    # We simulate the condition by setting one of the args passed to the loop to None/empty
+    if missing_arg in ["program_file", "code_file", "verification_program"]:
+        env["default_args"][missing_arg] = "" # Empty path simulates missing file content later
+    elif missing_arg == "prompt":
+        env["default_args"][missing_arg] = "" # Empty prompt
+
+    # Configure the mock fixer to return the error dict when called
+    env["mock_fixer"].side_effect = [
+         { # Initial assessment (failed)
+            'explanation': ["Initial bug found"], 'fixed_program': env["program_content"],
+            'fixed_code': env["code_content_initial"], 'total_cost': 0.001,
+            'model_name': 'model-init', 'verification_issues_count': 1,
+        },
+        missing_input_return # Attempt 1 -> triggers missing input internally
+    ]
+
+    # This test assumes the *inner* function `fix_verification_errors` would raise the error
+    # due to missing content, not necessarily the loop function due to missing path args.
+    # We need to refine the mock setup slightly. Let's mock the check within fix_verification_errors.
+    # A simpler way for the test: Assume the first call to fix_verification_errors inside the loop
+    # fails due to missing input (simulated by its return value).
+
+    env["mock_fixer"].reset_mock() # Reset side effect
+    env["mock_fixer"].side_effect = [
+         { # Initial assessment (failed)
+            'explanation': ["Initial bug found"], 'fixed_program': env["program_content"],
+            'fixed_code': env["code_content_initial"], 'total_cost': 0.001,
+            'model_name': 'model-init', 'verification_issues_count': 1,
+        },
+        missing_input_return # First *loop* attempt call to fixer
+    ]
+    # To ensure the loop logic processes this return correctly, we don't need to modify loop args here.
+
+    result = fix_verification_errors_loop(**env["default_args"])
+
+    captured = capsys.readouterr()
+
+    # Assertions for the Contradictory Logging bug:
+    # We expect the inner function's error message to be printed (though we don't mock the print *within* the mocked function)
+    # We assert that the *loop* does NOT print the success message.
+    # assert "Error: Missing one or more required inputs" in captured.err # Mock doesn't print this
+    assert "[bold green]Success! 0 verification issues found" not in captured.out
+
+    # Assertions for the loop's overall status:
+    assert result["success"] is False
+    assert result["total_attempts"] == 1 # Should stop after 1 attempt
+    assert result["total_cost"] > 0 # Should include initial assessment cost
+    assert result["statistics"]["initial_issues"] == 1
+    assert result["statistics"]["final_issues"] == 1 # Remains unchanged
+    assert "Missing input" in result["statistics"]["status_message"] or \
+           "Error during verification" in result["statistics"]["status_message"] # Check for failure message
+
+    # Check log file
+    log_root = read_log_xml(env["log_file"])
+    iter1 = log_root.find("Iteration[@attempt='1']")
+    assert iter1 is not None
+    # Check for a status indicating the error
+    assert "Error" in iter1.find("Status").text or "Missing Input" in iter1.find("Status").text
+    assert log_root.find("FinalActions/Action").text == "Process finished with errors."
+
+
+def test_loop_handles_false_llm_success(setup_test_environment, capsys):
+    """
+    Test that the loop handles the case where the LLM fixer incorrectly reports 0 issues,
+    but the secondary verification step (`_run_program`) fails. The loop should not report success.
+    (Covers the 'False Success Report' bug)
+    """
+    env = setup_test_environment
+    env["default_args"]["max_attempts"] = 1
+
+    # Initial run: Failure (to enter the loop)
+    # Loop attempt 1 run: Still Failure (before fix applied)
+    # Secondary verification run: Failure (this is the key mock)
+    env["mock_runner"].side_effect = [
+        (0, "Running with test_arg\nVERIFICATION_FAILURE: Got INITIAL_BUG"), # Initial run
+        (0, "Running with test_arg\nVERIFICATION_FAILURE: Got INITIAL_BUG"), # Loop attempt 1 run
+        (1, "Simulated Verification Error Output"), # Secondary verification run fails
+    ]
+
+    # Fixer calls:
+    # 1. Initial assessment (>0 issues)
+    # 2. First attempt fixer call: Returns 0 issues, but suggests a change
+    env["mock_fixer"].side_effect = [
+        { # Initial assessment
+            'explanation': ["Initial bug found"], 'fixed_program': env["program_content"],
+            'fixed_code': env["code_content_initial"], 'total_cost': 0.001,
+            'model_name': 'model-init', 'verification_issues_count': 1,
+        },
+        { # First attempt fix - LLM *incorrectly* reports 0 issues but provides a (bad) fix
+            'explanation': ["Claimed fix, 0 issues"],
+            'fixed_program': env["program_content"],
+            'fixed_code': env["code_content_fixed"], # Provides a change
+            'total_cost': 0.002,
+            'model_name': 'model-fixer',
+            'verification_issues_count': 0, # <<< False success from LLM
+        }
+    ]
+
+    result = fix_verification_errors_loop(**env["default_args"])
+    captured = capsys.readouterr()
+
+    # Assertions for the False Success Report bug:
+    # The loop's main success message should NOT be printed because secondary verification failed
+    assert "[bold green]Success! 0 verification issues found" not in captured.out
+    assert "Secondary verification failed" in captured.out # Check for failure message
+
+    # Assertions for the loop's overall status:
+    assert result["success"] is False
+    assert result["total_attempts"] == 1 # Should stop after 1 attempt due to failed verification
+    assert result["total_cost"] == 0.001 + 0.002
+    assert result["model_name"] == 'model-fixer'
+    assert result["final_code"] == env["code_content_initial"] # Code should be reverted
+    assert result["statistics"]["initial_issues"] == 1
+    assert result["statistics"]["final_issues"] == 1 # Remains unchanged
+    assert "Secondary Verification Failed" in result["statistics"]["status_message"] or \
+           "Changes Discarded" in result["statistics"]["status_message"]
+
+    # Check mocks
+    assert env["mock_runner"].call_count == 3 # Initial, Attempt 1, Secondary Verification
+    env["mock_runner"].assert_has_calls([
+        call(env["program_file"], args=["test_arg"]),
+        call(env["program_file"], args=["test_arg"]),
+        call(env["verification_file"]), # Secondary verification call
+    ])
+    assert env["mock_fixer"].call_count == 2
+
+    # Check log file
+    log_root = read_log_xml(env["log_file"])
+    iter1 = log_root.find("Iteration[@attempt='1']")
+    assert iter1 is not None
+    assert iter1.find("Status").text == "Changes Discarded"
+    sec_ver = iter1.find("SecondaryVerification")
+    assert sec_ver is not None
+    assert sec_ver.get("passed") == "false"
+    assert log_root.find("FinalActions/Action").text == "Process finished with errors."
+
+
+# --- End Bug Detection Test Cases ---

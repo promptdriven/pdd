@@ -513,3 +513,63 @@ def test_verbose_flag_propagation(
         verification_log_file=ANY, verbose=True, program_args=ANY # Check verbose=True
     )
 
+
+@patch('pdd.fix_verification_main.fix_verification_errors_loop')
+@patch('pdd.fix_verification_main.fix_verification_errors')
+@patch('pdd.fix_verification_main.run_program')
+@patch('pdd.fix_verification_main.construct_paths')
+def test_force_flag_retrieved_from_ctx_obj(
+    mock_construct, mock_run_prog, mock_fix_errors, mock_fix_loop,
+    mock_context, setup_files, mock_construct_paths_response, tmp_path
+):
+    """
+    Test that fix_verification_main retrieves the 'force' flag from ctx.obj,
+    not ctx.params.
+    """
+    # Modify the mock context to simulate --force being passed globally
+    # Set force=True in obj (correct place)
+    mock_context.obj = {'force': True}
+    # Ensure force is NOT in params (or is False) to test correct retrieval
+    mock_context.params = {
+        'strength': DEFAULT_STRENGTH,
+        'temperature': 0.0,
+        'force': False, # Explicitly set False in params to ensure obj is used
+        'quiet': False,
+        'verbose': False,
+    }
+
+    # Prepare mocks as in a standard successful run (using loop mode for simplicity)
+    mock_construct.return_value = mock_construct_paths_response
+    mock_fix_loop.return_value = {
+        'success': True,
+        'final_program': 'Fixed program',
+        'final_code': 'Fixed code',
+        'total_attempts': 1,
+        'total_cost': 0.3,
+        'model_name': 'model-loop'
+    }
+
+    # Call the function in loop mode (as it's the default for verify)
+    fix_verification_main(
+        ctx=mock_context,
+        prompt_file=setup_files["prompt"],
+        code_file=setup_files["code"],
+        program_file=setup_files["program"],
+        output_results=None,
+        output_code=None,
+        loop=True,
+        verification_program=setup_files["verifier"] # Required for loop mode
+    )
+
+    # --- THE CRUCIAL ASSERTION ---
+    # Check that construct_paths was called with force=True, which means
+    # the value must have been read from ctx.obj, not ctx.params.
+    mock_construct.assert_called_once()
+    call_args, call_kwargs = mock_construct.call_args
+    assert call_kwargs.get('force') is True, "construct_paths should have been called with force=True"
+
+    # Other mocks should not be called in loop mode
+    mock_run_prog.assert_not_called()
+    mock_fix_errors.assert_not_called()
+    mock_fix_loop.assert_called_once() # Ensure loop function was called
+
