@@ -1230,3 +1230,71 @@ def test_construct_paths_detect_command_language_detection(tmpdir):
         
         # The error would be about not being able to determine language
         assert "Could not determine language" in str(excinfo.value)
+
+def test_construct_paths_bug_command_language_detection(tmpdir):
+    """
+    Test that construct_paths correctly handles None language values for the bug command.
+    This specifically tests the fix for the scenario where language was set to None.
+    """
+    tmp_path = Path(str(tmpdir))
+
+    # Create the input files exactly matching the failing command
+    prompt_file = tmp_path / 'get_extension_python.prompt'
+    prompt_file.write_text('Prompt content for bug test')
+
+    code_file = tmp_path / 'get_extension.py'
+    code_file.write_text('def get_extension(): pass')
+
+    program_file = tmp_path / 'get_extension_example.py'
+    program_file.write_text('import get_extension')
+
+    current_output = tmp_path / 'current_output.txt'
+    current_output.write_text('Current output')
+
+    desired_output = tmp_path / 'desired_output.txt'
+    desired_output.write_text('Desired output')
+
+    input_file_paths = {
+        'prompt_file': str(prompt_file),
+        'code_file': str(code_file),
+        'program_file': str(program_file),
+        'current_output': str(current_output),
+        'desired_output': str(desired_output)
+    }
+
+    force = True
+    quiet = True
+    command = 'bug'
+    command_options = {
+        'output': str(tmp_path / 'bug_test_get_extension.py'),
+        'language': None  # Explicitly set to None to mimic the bug
+    }
+
+    # Mock generate_output_paths to return a dictionary of output paths
+    output_test_path = tmp_path / 'bug_test_get_extension.py'
+    mock_output_paths = {'output': str(output_test_path)}
+
+    # Test Part 1: Mock _determine_language to return None - the fix should handle this gracefully
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths), \
+         patch('pdd.construct_paths._determine_language', return_value=None):  # Simulate the bug where language is None
+
+        # Now that the fix is in place, this should run without error
+        input_strings, output_file_paths, language = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+
+        # Verify the fallback language was set correctly for 'bug' command
+        assert language is not None, "Language should not be None"
+        assert language.lower() == 'python', f"Language should default to 'python', got '{language}'"
+        assert isinstance(language, str), "Language should be a string"
+
+    # Test Part 2: Without mocking _determine_language, ensure standard behavior
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths):
+        input_strings, output_file_paths, language = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+
+        # Verify correct behavior with regular language detection
+        assert language is not None, "Language should not be None"
+        assert language.lower() == 'python', f"Language should be 'python', got '{language}'"
+        assert isinstance(language, str), "Language should be a string"
