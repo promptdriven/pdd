@@ -8,9 +8,9 @@
     Output: 
         'modified_prompt' - A string that contains the updated prompt that will generate the modified code.
 
-% Here is the input_prompt to change: ```{input_prompt}```
-% Here is the input_code: ```{input_code}```
-% Here is the modified_code: ```{modified_code}```
+% Here is the input_prompt to change: <input_prompt>{input_prompt}</input_prompt>
+% Here is the input_code: <input_code>{input_code}</input_code>
+% Here is the modified_code: <modified_code>{modified_code}</modified_code>
 
 % To generate the modified prompt, perform the following sequence of steps:
     1. Using the provided input_code and input_prompt, identify what the code does and how it was generated.
