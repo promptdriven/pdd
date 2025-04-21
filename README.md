@@ -211,6 +211,8 @@ Each workflow in PDD addresses a fundamental development need:
    
    This workflow addresses the complexity of managing multiple interdependent prompts.
 
+6. **Enhancement Phase**: Use Feature Enhancement when adding capabilities to existing modules.
+
 ### Workflow Selection Principles
 
 The choice of workflow should be guided by your current development phase:
@@ -255,6 +257,26 @@ Effective PDD employs these recurring patterns:
 ```
 pdd [GLOBAL OPTIONS] COMMAND [OPTIONS] [ARGS]...
 ```
+
+## Command Overview
+
+Here is a brief overview of the main commands provided by PDD. Click the command name to jump to its detailed section:
+
+- **[`generate`](#1-generate)**: Creates runnable code from a prompt file.
+- **[`example`](#2-example)**: Generates a compact example showing how to use functionality defined in a prompt.
+- **[`test`](#3-test)**: Generates or enhances unit tests for a code file and its prompt.
+- **[`preprocess`](#4-preprocess)**: Preprocesses prompt files, handling includes, comments, and other directives.
+- **[`fix`](#5-fix)**: Fixes errors in code and unit tests based on error messages and the original prompt.
+- **[`split`](#6-split)**: Splits large prompt files into smaller, more manageable ones.
+- **[`change`](#7-change)**: Modifies a prompt file based on instructions in a change prompt.
+- **[`update`](#8-update)**: Updates the original prompt file based on modified code.
+- **[`detect`](#9-detect)**: Analyzes prompts to determine which ones need changes based on a description.
+- **[`conflicts`](#10-conflicts)**: Finds and suggests resolutions for conflicts between two prompt files.
+- **[`crash`](#11-crash)**: Fixes errors in a code module and its calling program that caused a crash.
+- **[`trace`](#12-trace)**: Finds the corresponding line number in a prompt file for a given code line.
+- **[`bug`](#13-bug)**: Generates a unit test based on observed vs. desired program outputs.
+- **[`auto-deps`](#14-auto-deps)**: Analyzes and inserts needed dependencies into a prompt file.
+- **[`verify`](#15-verify)**: Verifies functional correctness by running a program and judging its output against the prompt's intent using an LLM.
 
 ## Global Options
 
