@@ -1298,3 +1298,61 @@ def test_construct_paths_bug_command_language_detection(tmpdir):
         assert language is not None, "Language should not be None"
         assert language.lower() == 'python', f"Language should be 'python', got '{language}'"
         assert isinstance(language, str), "Language should be a string"
+
+def test_construct_paths_force_overwrite(tmpdir):
+    """
+    Test that construct_paths does NOT prompt for overwrite when force=True,
+    even if output files exist.
+    """
+    tmp_path = Path(str(tmpdir))
+
+    # Create dummy input file
+    prompt_file = tmp_path / 'project_python.prompt'
+    prompt_file.write_text('prompt')
+
+    # Create dummy EXISTING output file
+    output_file = tmp_path / 'project_verified.py'
+    output_file.write_text('existing code')
+
+    input_file_paths = {'prompt_file': str(prompt_file)}
+    # Simulate options for a command like 'verify' that uses 'output_code'
+    command_options = {'output_code': str(output_file)}
+    command = 'verify' # Use a command that generates output_code
+    force = True
+    quiet = False # Set quiet to False to ensure prompt would normally appear
+
+    # Mock generate_output_paths to return the existing output path
+    mock_output_paths_dict = {'output_code': str(output_file)}
+
+    # Mock click.confirm to ensure it's NOT called
+    with patch('pdd.construct_paths.click.confirm', side_effect=Exception("Should not be called")) as mock_confirm, \
+         patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict), \
+         patch('pdd.construct_paths.get_language', return_value='python'), \
+         patch('pdd.construct_paths.get_extension', return_value='.py'): # Add mock for get_extension
+
+        try:
+            # Call the function with force=True
+            input_strings, output_file_paths, language = construct_paths(
+                input_file_paths=input_file_paths,
+                force=force,
+                quiet=quiet,
+                command=command,
+                command_options=command_options
+            )
+            # Assertions after the call (optional, main check is no exception/call to confirm)
+            assert 'prompt_file' in input_strings
+            assert output_file_paths['output_code'] == str(output_file)
+            assert language == 'python'
+
+        except SystemExit:
+            pytest.fail("construct_paths exited unexpectedly, likely due to unmocked confirmation prompt.")
+        except Exception as e:
+             # Let other unexpected exceptions fail the test naturally
+             # but specifically check if it was the mocked confirm exception
+             if "Should not be called" in str(e):
+                  pytest.fail("click.confirm was called unexpectedly despite force=True")
+             else:
+                  raise # Re-raise other exceptions
+
+    # Primary assertion: click.confirm should NOT have been called
+    mock_confirm.assert_not_called()

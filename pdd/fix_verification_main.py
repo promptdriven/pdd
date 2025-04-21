@@ -120,12 +120,12 @@ def fix_verification_main(
             - model_name (str): Name of the LLM used.
     """
     # Extract global options from context
-    params = ctx.params
-    strength: float = params.get('strength', DEFAULT_STRENGTH)
-    temperature: float = params.get('temperature', DEFAULT_TEMPERATURE)
-    force: bool = params.get('force', False)
-    quiet: bool = params.get('quiet', False)
-    verbose: bool = params.get('verbose', False)
+    # params = ctx.params # We need obj for global flags
+    strength: float = ctx.obj.get('strength', DEFAULT_STRENGTH) # Get globals from obj
+    temperature: float = ctx.obj.get('temperature', DEFAULT_TEMPERATURE)
+    force: bool = ctx.obj.get('force', False) # <<< FIX: Get force from ctx.obj
+    quiet: bool = ctx.obj.get('quiet', False)
+    verbose: bool = ctx.obj.get('verbose', False)
 
     # --- Input Validation ---
     if loop and not verification_program:
