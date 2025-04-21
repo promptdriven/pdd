@@ -44,13 +44,17 @@ def bug_main(
             "output": output,
             "language": language
         }
-        input_strings, output_file_paths, _ = construct_paths(
+        input_strings, output_file_paths, detected_language = construct_paths(
             input_file_paths=input_file_paths,
             force=ctx.obj.get('force', False),
             quiet=ctx.obj.get('quiet', False),
             command="bug",
             command_options=command_options
         )
+        
+        # Use the language detected by construct_paths if none was explicitly provided
+        if language is None:
+            language = detected_language
 
         # Load input files
         prompt_content = input_strings["prompt_file"]
