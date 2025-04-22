@@ -45,12 +45,14 @@ def fix_verification_errors(
     fixed_code = code
     final_explanation = None
 
-    if not all([program, prompt, code, output]):
-        rprint("[bold red]Error:[/bold red] Missing one or more required inputs (program, prompt, code, output).")
+    # Check only essential inputs, allow empty output
+    if not all([program, prompt, code]):
+        # Keep the error print for program, prompt, code missing
+        rprint("[bold red]Error:[/bold red] Missing one or more required inputs (program, prompt, code).")
         return {
             "explanation": None,
-            "fixed_program": program,
-            "fixed_code": code,
+            "fixed_program": program, # Return original if possible
+            "fixed_code": code,       # Return original if possible
             "total_cost": 0.0,
             "model_name": None,
             "verification_issues_count": 0,
