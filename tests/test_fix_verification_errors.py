@@ -133,9 +133,9 @@ def test_happy_path_issues_fixed(mock_rprint):
 
 
 @patch('pdd.fix_verification_errors.rprint')
-@pytest.mark.parametrize("missing_arg", ["program", "prompt", "code", "output"])
+@pytest.mark.parametrize("missing_arg", ["program", "prompt", "code"])
 def test_input_missing(mock_rprint, missing_arg):
-    """Tests missing required string inputs."""
+    """Tests missing required string inputs (program, prompt, code)."""
     inputs = {
         "program": STD_PROGRAM,
         "prompt": STD_PROMPT,
@@ -144,7 +144,7 @@ def test_input_missing(mock_rprint, missing_arg):
         "strength": STD_STRENGTH,
         "temperature": STD_TEMP,
     }
-    inputs[missing_arg] = "" # Test with empty string
+    inputs[missing_arg] = "" # Test with empty string for program, prompt, or code
 
     result = fix_verification_errors(**inputs)
     # Adjust expected return to match the specific input used
@@ -154,12 +154,12 @@ def test_input_missing(mock_rprint, missing_arg):
         expected_return['fixed_program'] = ""
     elif missing_arg == "code":
         expected_return['fixed_code'] = ""
-    # If prompt or output is missing, fixed_program/fixed_code remain STD_PROGRAM/STD_CODE
+    # If prompt is missing, fixed_program/fixed_code remain STD_PROGRAM/STD_CODE
 
     assert result == expected_return
-    # Check that rprint was called once with the correct message
+    # Check that rprint was called once with the updated message
     mock_rprint.assert_called_once_with(
-        "[bold red]Error:[/bold red] Missing one or more required inputs (program, prompt, code, output)."
+        "[bold red]Error:[/bold red] Missing one or more required inputs (program, prompt, code)."
     )
 
 
@@ -180,6 +180,44 @@ def test_input_invalid_strength(mock_rprint, invalid_strength):
     mock_rprint.assert_called_once_with(
         f"[bold red]Error:[/bold red] Strength must be between 0.0 and 1.0, got {invalid_strength}."
     )
+
+
+@patch('pdd.fix_verification_errors.rprint')
+@patch('pdd.fix_verification_errors.llm_invoke')
+@patch('pdd.fix_verification_errors.load_prompt_template')
+def test_empty_output_proceeds_normally(mock_load_template, mock_llm_invoke, mock_rprint):
+    """Tests that an empty output string does not cause an error and proceeds to LLM call."""
+    # Mock dependencies to simulate successful execution after input validation
+    mock_load_template.side_effect = ["find_template_content", "fix_template_content"]
+    mock_llm_invoke.return_value = {
+        'result': '<issues_count>0</issues_count><details>No issues found with empty output.</details>',
+        'cost': 0.01,
+        'model_name': 'model-empty-output'
+    }
+
+    result = fix_verification_errors(
+        program=STD_PROGRAM,
+        prompt=STD_PROMPT,
+        code=STD_CODE,
+        output="",  # Key: Provide empty output
+        strength=STD_STRENGTH,
+        temperature=STD_TEMP,
+        verbose=False
+    )
+
+    # Assert that the function did not return the input error state
+    assert result["explanation"] is not None or result["verification_issues_count"] is not None # Check it's not the specific error dict structure
+    assert result["model_name"] == 'model-empty-output' # Check model name from mocked LLM call
+    assert result["verification_issues_count"] == 0 # Check issues count from mocked LLM call
+
+    # Assert that the initial validation error was NOT printed
+    for call_args in mock_rprint.call_args_list:
+        assert "Missing one or more required inputs" not in call_args[0][0]
+
+    # Assert that the LLM invocation was attempted
+    mock_load_template.assert_called()
+    mock_llm_invoke.assert_called_once()
+    assert mock_llm_invoke.call_args[1]['input_json']['output'] == "" # Verify empty output was passed to LLM
 
 
 @patch('pdd.fix_verification_errors.rprint')
