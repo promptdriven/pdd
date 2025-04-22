@@ -544,7 +544,7 @@ When using the `--double` option:
 - Special handling is applied for code blocks (JSON, JavaScript, TypeScript, Python)
 - Multiline variables with curly brackets receive special handling
 
-Use the `--exclude` option to specify keys that should be excluded from curly bracket doubling.
+Use the `--exclude` option to specify keys that should be excluded from curly bracket doubling. This means that if a key listed in `--exclude` appears exactly within single curly braces (e.g., `{key}`), those braces will not be doubled. Braces containing other content, even if related to the key (e.g., `var={key}_value`), will still be doubled.
 
 Example:
 ```
@@ -630,7 +630,7 @@ Arguments:
 
 Options:
 - `--output LOCATION`: Specify where to save the modified prompt file. The default file name is `modified_<basename>.prompt`. If an environment variable `PDD_CHANGE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
-- `--csv`: Use a CSV file for the change prompts instead of a single change prompt file. The CSV file should have columns: `prompt_name` and `change_instructions`. When this option is used, `INPUT_PROMPT_FILE` is not needed, and `INPUT_CODE` should be the directory where the code files are located.
+- `--csv`: Use a CSV file for the change prompts instead of a single change prompt file. The CSV file should have columns: `prompt_name` and `change_instructions`. When this option is used, `INPUT_PROMPT_FILE` is not needed, and `INPUT_CODE` should be the directory where the code files are located. The command expects prompt names in the CSV to follow the `<basename>_<language>.prompt` convention. For each `prompt_name` in the CSV, it will look for the corresponding code file (e.g., `<basename>.<language_extension>`) within the specified `INPUT_CODE` directory.
 
 Example (single prompt change):
 ```
