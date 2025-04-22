@@ -77,7 +77,7 @@ ifdef MODULE
 	@# Generate example file
 	@echo "Generating example for $(PY_FILE)"
 	@mkdir -p $(CONTEXT_DIR)
-	-@PYTHONPATH=$(PROD_DIR) pdd --strength .8 --verbose example --output $(EXAMPLE_FILE) $(PY_PROMPT) $(PY_FILE)
+	-@PYTHONPATH=$(PROD_DIR) pdd  --strength .95 --temperature 1  --verbose example --output $(EXAMPLE_FILE) $(PY_PROMPT) $(PY_FILE)
 
 	@# Generate test file
 	@echo "Generating test for $(PY_FILE)"
@@ -129,7 +129,7 @@ ifdef MODULE
 	prompt="$(PROMPTS_DIR)/$${name}_python.prompt"; \
 	echo "Fixing $$name"; \
 	if [ -f "$(CONTEXT_DIR)/$${name}_example.py" ]; then \
-		pdd --strength .8 --temperature 0 --verbose --force fix --loop --auto-submit  --output-test output/ --output-code output/ --verification-program $(CONTEXT_DIR)/$${name}_example.py $$prompt $(PDD_DIR)/$${name}.py $(TESTS_DIR)/test_$${name}.py $${name}.log; \
+		pdd --strength .8 --temperature 0 --verbose --force fix --loop --auto-submit --max-attempts 5 --output-test output/ --output-code output/ --verification-program $(CONTEXT_DIR)/$${name}_example.py $$prompt $(PDD_DIR)/$${name}.py $(TESTS_DIR)/test_$${name}.py $${name}.log; \
 	else \
 		echo "Warning: No verification program found for $$name"; \
 	fi;
@@ -139,7 +139,7 @@ else
 		name=$$(basename $$prompt _python.prompt); \
 		echo "Fixing $$name"; \
 		if [ -f "$(CONTEXT_DIR)/$${name}_example.py" ]; then \
-			pdd --strength .85 --temperature 1 --verbose --force fix --loop --auto-submit  --output-test output/ --output-code output/ --verification-program $(CONTEXT_DIR)/$${name}_example.py $$prompt $(PDD_DIR)/$${name}.py $(TESTS_DIR)/test_$${name}.py $${name}.log; \
+			pdd --strength .8 --temperature 0 --verbose --force fix --loop --auto-submit --max-attempts 5 --output-test output/ --output-code output/ --verification-program $(CONTEXT_DIR)/$${name}_example.py $$prompt $(PDD_DIR)/$${name}.py $(TESTS_DIR)/test_$${name}.py $${name}.log; \
 		else \
 			echo "Warning: No verification program found for $$name"; \
 		fi; \
