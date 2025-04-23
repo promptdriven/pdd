@@ -163,15 +163,38 @@ def change_main(
 
                         logger.debug("Finished saving individual files successfully")
                     else:
-                        # Save as CSV
-                        logger.debug(f"Attempting to save results to CSV: {repr(output_path)}")
-                        with open(output_path, 'w', newline='') as csvfile:
-                            fieldnames = ['file_name', 'modified_prompt']
-                            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                            writer.writeheader()
-                            for item in modified_prompts:
-                                writer.writerow(item)
-                        logger.debug("Results saved to CSV successfully")
+                        # Check if output_path is a directory
+                        if os.path.isdir(output_path):
+                            # Handle as a directory - save individual files inside it
+                            logger.debug(f"Output path is a directory: {repr(output_path)}")
+                            for i, item in enumerate(modified_prompts):
+                                try:
+                                    file_name = item['file_name']
+                                    modified_prompt = item['modified_prompt']
+                                    
+                                    # Extract just the basename from the file_name path
+                                    base_file_name = os.path.basename(file_name)
+                                    
+                                    individual_output_path = os.path.join(output_path, base_file_name)
+                                    logger.debug(f"Saving file to: {repr(individual_output_path)}")
+                                    with open(individual_output_path, 'w') as file:
+                                        file.write(modified_prompt)
+                                except KeyError as ke:
+                                    logger.error(f"Item {i}: Missing key in modified_prompts item: {ke}. Item data: {item}")
+                                except Exception as item_e:
+                                    logger.error(f"Item {i}: Error processing item: {item_e}. Item data: {item}")
+                                    raise
+                            logger.debug("Results saved as individual files in directory successfully")
+                        else:
+                            # Handle as a CSV file
+                            logger.debug(f"Attempting to save results to CSV: {repr(output_path)}")
+                            with open(output_path, 'w', newline='') as csvfile:
+                                fieldnames = ['file_name', 'modified_prompt']
+                                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                                writer.writeheader()
+                                for item in modified_prompts:
+                                    writer.writerow(item)
+                            logger.debug("Results saved to CSV successfully")
                 except Exception as e:
                     error_msg = f"Error writing output: {str(e)}"
                     logger.error(error_msg)
@@ -191,6 +214,13 @@ def change_main(
                         for item in modified_prompts:
                             file_name = item['file_name']
                             individual_output_path = os.path.join(output_dir, file_name)
+                            rprint(f"  - {individual_output_path}")
+                    elif os.path.isdir(output_path):
+                        rprint(f"[bold]Results saved as individual files in directory:[/bold] {output_path}")
+                        for item in modified_prompts:
+                            file_name = item['file_name']
+                            base_file_name = os.path.basename(file_name)
+                            individual_output_path = os.path.join(output_path, base_file_name)
                             rprint(f"  - {individual_output_path}")
                     else:
                         rprint(f"[bold]Results saved to CSV:[/bold] {output_path}")
