@@ -404,7 +404,10 @@ def test_change_main_csv_success(
         command="change",
         command_options={"output": output}
     )
-    mock_os_path_isdir.assert_called_once_with(input_code)
+    # We now call os.path.isdir multiple times - first to check input_code is a directory,
+    # then to check if output_path is a directory
+    assert mock_os_path_isdir.call_count >= 1
+    assert any(call[0][0] == input_code for call in mock_os_path_isdir.call_args_list)
     mock_csv_dictreader.assert_called_once()
     mock_process_csv_change.assert_called_once_with(
         csv_file=change_prompt_file,
@@ -418,7 +421,11 @@ def test_change_main_csv_success(
     mock_rprint.assert_any_call("[bold green]Batch change operation completed successfully.[/bold green]")
     mock_rprint.assert_any_call(f"[bold]Model used:[/bold] {model_name}")
     mock_rprint.assert_any_call(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
-    mock_rprint.assert_any_call(f"[bold]Results saved to CSV:[/bold] {output}")
+    
+    # Since we've updated our logic to check if output is a directory, 
+    # and our mock returns True for os.path.isdir,
+    # we should be saving as individual files in the directory now
+    mock_rprint.assert_any_call(f"[bold]Results saved as individual files in directory:[/bold] {output}")
 
 def test_change_main_csv_input_code_not_directory(
     mock_construct_paths,
