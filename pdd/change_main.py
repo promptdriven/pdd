@@ -4,6 +4,7 @@ from typing import Optional, Tuple, List, Dict
 import click
 from rich import print as rprint
 import logging
+import traceback
 
 from .construct_paths import construct_paths
 from .change import change as change_func
@@ -109,7 +110,7 @@ def change_main(
 
             # Perform batch changes using CSV
             try:
-                logger.debug("Calling process_csv_change")
+                logger.debug("BEFORE calling process_csv_change")
                 success, modified_prompts, total_cost, model_name = process_csv_change(
                     csv_file=change_prompt_file,
                     strength=strength,
@@ -120,6 +121,7 @@ def change_main(
                     budget=ctx.obj.get('budget', 10.0)
                 )
                 logger.debug(f"process_csv_change completed. Success: {success}")
+                logger.debug(f"AFTER calling process_csv_change. Success: {success}")
             except Exception as e:
                 error_msg = f"Error during CSV processing: {str(e)}"
                 logger.error(error_msg)
@@ -133,6 +135,7 @@ def change_main(
 
             # Save results
             if success:
+                logger.debug(f"Preparing to save results. Output path determined as: {repr(output_path)}")
                 try:
                     if output is None:
                         # Save individual files
@@ -163,10 +166,18 @@ def change_main(
 
                         logger.debug("Finished saving individual files successfully")
                     else:
-                        # Check if output_path is a directory
-                        if os.path.isdir(output_path):
+                        # Normalize path to handle potential trailing slashes consistently
+                        normalized_output_path = os.path.normpath(output_path)
+                        logger.debug(f"Normalized output path for isdir check: {repr(normalized_output_path)}")
+
+                        # Check if the NORMALIZED path is a directory
+                        isdir_result = os.path.isdir(normalized_output_path)
+                        logger.debug(f"os.path.isdir({repr(normalized_output_path)}) returned: {isdir_result}")
+                        if isdir_result:
                             # Handle as a directory - save individual files inside it
-                            logger.debug(f"Output path is a directory: {repr(output_path)}")
+                            logger.debug(f"Output path is a directory: {repr(output_path)}") # Log original path for user info
+                            # Ensure the directory exists
+                            os.makedirs(normalized_output_path, exist_ok=True)
                             for i, item in enumerate(modified_prompts):
                                 try:
                                     file_name = item['file_name']
@@ -175,7 +186,8 @@ def change_main(
                                     # Extract just the basename from the file_name path
                                     base_file_name = os.path.basename(file_name)
                                     
-                                    individual_output_path = os.path.join(output_path, base_file_name)
+                                    # Use normalized_output_path for joining
+                                    individual_output_path = os.path.join(normalized_output_path, base_file_name)
                                     logger.debug(f"Saving file to: {repr(individual_output_path)}")
                                     with open(individual_output_path, 'w') as file:
                                         file.write(modified_prompt)
@@ -183,12 +195,19 @@ def change_main(
                                     logger.error(f"Item {i}: Missing key in modified_prompts item: {ke}. Item data: {item}")
                                 except Exception as item_e:
                                     logger.error(f"Item {i}: Error processing item: {item_e}. Item data: {item}")
-                                    raise
+                                    raise # Reraise after logging
                             logger.debug("Results saved as individual files in directory successfully")
                         else:
                             # Handle as a CSV file
-                            logger.debug(f"Attempting to save results to CSV: {repr(output_path)}")
-                            with open(output_path, 'w', newline='') as csvfile:
+                            logger.debug(f"Output path is treated as a file: {repr(output_path)}")
+                            # Ensure parent directory exists before trying to write file
+                            parent_dir = os.path.dirname(normalized_output_path)
+                            if parent_dir: # Avoid trying to create '' if path has no directory part
+                                os.makedirs(parent_dir, exist_ok=True)
+
+                            logger.debug(f"Attempting to save results to CSV: {repr(output_path)}") # Log original path
+                            # Use normalized_output_path for writing the file
+                            with open(normalized_output_path, 'w', newline='') as csvfile:
                                 fieldnames = ['file_name', 'modified_prompt']
                                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                                 writer.writeheader()
@@ -197,7 +216,9 @@ def change_main(
                             logger.debug("Results saved to CSV successfully")
                 except Exception as e:
                     error_msg = f"Error writing output: {str(e)}"
-                    logger.error(error_msg)
+                    logger.error(f"Error during output saving: {str(e)}")
+                    logger.error(f"Exception type: {type(e)}")
+                    logger.error(f"Traceback: {traceback.format_exc()}")
                     if not ctx.obj.get('quiet', False):
                         rprint(f"[bold red]Error: {error_msg}[/bold red]")
                     return (error_msg, total_cost, model_name)

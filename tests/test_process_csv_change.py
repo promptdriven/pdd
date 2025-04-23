@@ -262,7 +262,7 @@ def test_nonexistent_prompt_file_in_row(mock_change, capsys):
     assert list_of_jsons == []
     assert total_cost == 0.0
     assert model_name == ""
-    expected_warning = f"[yellow]Warning:[/yellow] Prompt file 'valid_prompt_language.prompt' does not exist. Skipping row 1."
+    expected_warning = f"[yellow]Warning:[/yellow] Prompt file '{Path(code_directory) / 'valid_prompt_language.prompt'}' does not exist. Skipping row 1."
     mock_print.assert_any_call(expected_warning)
 
 def test_budget_exceeded(mock_change, capsys):
@@ -559,3 +559,54 @@ def test_relative_imports(mock_change, capsys, tmp_path):
     assert "Success: Yes" in captured.out
     assert "Total Cost: $1.000000" in captured.out
     assert "Model Used: model_v1" in captured.out
+
+# New test for path resolution
+def test_correct_prompt_path_resolution(mock_change, tmp_path, capsys):
+    """
+    Test that prompt_path is correctly resolved using code_directory.
+    """
+    # Arrange
+    code_dir = tmp_path / "code_files"
+    code_dir.mkdir()
+    
+    # Create dummy prompt and code files inside code_dir
+    prompt_filename = "my_prompt_python.prompt"
+    code_filename = "my_prompt.py"
+    prompt_file_path = code_dir / prompt_filename
+    code_file_path = code_dir / code_filename
+    
+    prompt_file_path.write_text("Original prompt content")
+    code_file_path.write_text("def my_func(): pass")
+    
+    # Create CSV file mentioning only the prompt filename
+    csv_filename = tmp_path / "changes.csv"
+    csv_content = f"prompt_name,change_instructions\n{prompt_filename},Do the change\n"
+    csv_filename.write_text(csv_content)
+    
+    # Mock the change function
+    mock_change.return_value = ("Modified prompt", 0.01, "test_model")
+    
+    # Act
+    success, list_of_jsons, total_cost, model_name = process_csv_change(
+        csv_file=str(csv_filename),
+        strength=0.5,
+        temperature=0.5,
+        code_directory=str(code_dir),
+        language="python",
+        extension=".py",
+        budget=1.0
+    )
+    
+    # Assert
+    assert success, "Processing should succeed when paths are resolved correctly."
+    assert len(list_of_jsons) == 1, "One row should have been processed."
+    assert list_of_jsons[0]["file_name"] == prompt_filename
+    assert list_of_jsons[0]["modified_prompt"] == "Modified prompt"
+    assert total_cost == 0.01
+    assert model_name == "test_model"
+    
+    # Check that no warnings about missing files were printed
+    captured = capsys.readouterr()
+    assert f"Prompt file \'{prompt_file_path}\' does not exist" not in captured.out
+    assert f"Input code file \'{code_file_path}\' does not exist" not in captured.out
+    assert "Row 1 processed successfully." in captured.out

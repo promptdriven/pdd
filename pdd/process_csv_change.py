@@ -93,9 +93,15 @@ def process_csv_change(
 
                 # Parse the prompt_name to get the input_code filename
                 try:
-                    prompt_path = Path(prompt_name)
-                    base_name = prompt_path.stem  # Removes suffix
-                    # Remove the '_<language>' part if present
+                    # Original logic using Path(prompt_name) might be wrong if prompt_name is relative
+                    # prompt_path_obj = Path(prompt_name)
+                    # Construct the full path to the prompt file using the code directory
+                    # Assuming prompt_name is the filename (potentially relative within code_dir)
+                    prompt_path = code_dir_path / prompt_name
+
+                    # Derive input code filename (assuming standard naming convention)
+                    base_name = prompt_path.stem  # Removes suffix like .prompt
+                    # Remove the _<language> part if present (e.g., _python)
                     if '_' in base_name:
                         base_name = base_name.rsplit('_', 1)[0]
                     input_code_name = f"{base_name}{extension}"
@@ -107,10 +113,11 @@ def process_csv_change(
                         any_failures = True
                         continue
 
-                    # Check if prompt file exists
+                    # Check if the constructed prompt file path exists
                     if not prompt_path.is_file():
-                        console.print(f"[yellow]Warning:[/yellow] Prompt file '{prompt_name}' does not exist. Skipping row {row_number}.")
-                        logger.warning(f"Prompt file '{prompt_name}' does not exist for row {row_number}")
+                        # Use the full constructed path in the warning message
+                        console.print(f"[yellow]Warning:[/yellow] Prompt file '{prompt_path}' does not exist. Skipping row {row_number}.")
+                        logger.warning(f"Prompt file '{prompt_path}' does not exist for row {row_number}")
                         any_failures = True
                         continue
 
