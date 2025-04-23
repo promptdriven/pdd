@@ -136,22 +136,42 @@ def change_main(
                 try:
                     if output is None:
                         # Save individual files
-                        for item in modified_prompts:
-                            file_name = item['file_name']
-                            modified_prompt = item['modified_prompt']
-                            individual_output_path = os.path.join(os.path.dirname(output_path), file_name)
-                            with open(individual_output_path, 'w') as file:
-                                file.write(modified_prompt)
-                        logger.debug("Results saved as individual files successfully")
+                        logger.debug("Attempting to save individual prompt files.")
+                        for i, item in enumerate(modified_prompts):
+                            logger.debug(f"--- Processing item {i} ---")
+                            try:
+                                file_name = item['file_name']
+                                modified_prompt = item['modified_prompt']
+                                logger.debug(f"Item {i}: file_name = {repr(file_name)}")
+                                logger.debug(f"Item {i}: output_path = {repr(output_path)}")
+
+                                dirname_output = os.path.dirname(output_path)
+                                logger.debug(f"Item {i}: os.path.dirname(output_path) = {repr(dirname_output)}")
+
+                                individual_output_path = os.path.join(dirname_output, file_name)
+                                logger.debug(f"Item {i}: Calculated individual_output_path = {repr(individual_output_path)}")
+
+                                logger.debug(f"Item {i}: Attempting to open: {repr(individual_output_path)}")
+                                with open(individual_output_path, 'w') as file:
+                                    file.write(modified_prompt)
+                                logger.debug(f"Item {i}: Successfully wrote to: {repr(individual_output_path)}")
+                            except KeyError as ke:
+                                logger.error(f"Item {i}: Missing key in modified_prompts item: {ke}. Item data: {item}")
+                            except Exception as item_e:
+                                logger.error(f"Item {i}: Error processing item: {item_e}. Item data: {item}")
+                                raise
+
+                        logger.debug("Finished saving individual files successfully")
                     else:
                         # Save as CSV
+                        logger.debug(f"Attempting to save results to CSV: {repr(output_path)}")
                         with open(output_path, 'w', newline='') as csvfile:
                             fieldnames = ['file_name', 'modified_prompt']
                             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                             writer.writeheader()
                             for item in modified_prompts:
                                 writer.writerow(item)
-                        logger.debug("Results saved successfully")
+                        logger.debug("Results saved to CSV successfully")
                 except Exception as e:
                     error_msg = f"Error writing output: {str(e)}"
                     logger.error(error_msg)
