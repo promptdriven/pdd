@@ -5,6 +5,21 @@ set -e
 # Treat unset variables as an error when substituting.
 set -u
 
+# Global settings
+VERBOSE=${VERBOSE:-1} # Default to 1 if not set
+STRENGTH=${STRENGTH:-0.85} # Default strength
+TEMPERATURE=${TEMPERATURE:-1.0} # Default temperature
+TEST_LOCAL=${TEST_LOCAL:-false} # Default to cloud execution
+CLEANUP_ON_EXIT=false # Set to false to keep files for debugging
+
+# --- Helper Functions ---
+
+log() {
+    if [ "$VERBOSE" -eq 1 ]; then
+        echo "[INFO] $1"
+    fi
+}
+
 # --- Test Selection ---
 # Accept a single argument (test number) to run only that test. Default to "all".
 TARGET_TEST=${1:-"all"}
@@ -96,20 +111,7 @@ VERIFY_HARNESS_LOG="verify_harness.log"
 VERIFY_ISOLATED_DIR="isolated_verify"
 VERIFY_SCRIPT_PATH="$PDD_PATH/../tests/isolated_verify.py"
 
-# Global settings
-VERBOSE=${VERBOSE:-1} # Default to 1 if not set
-STRENGTH=${STRENGTH:-0.85} # Default strength
-TEMPERATURE=${TEMPERATURE:-1.0} # Default temperature
-TEST_LOCAL=${TEST_LOCAL:-false} # Default to cloud execution
-CLEANUP_ON_EXIT=false # Set to false to keep files for debugging
-
 # --- Helper Functions ---
-
-log() {
-    if [ "$VERBOSE" -eq 1 ]; then
-        echo "[INFO] $1"
-    fi
-}
 
 log_error() {
     echo "[ERROR] $1" >&2
