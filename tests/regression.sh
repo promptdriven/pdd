@@ -469,21 +469,26 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "6" ]; then
   if [ ! -s "$MATH_ERROR_LOG" ]; then
       log_error "Crash test error log is empty. Skipping 'crash' command."
   else
-      # Run crash (non-loop)
-      run_pdd_command crash --output "$CRASH_FIXED_SCRIPT" \
+      # Run crash (non-loop) - Increase strength here
+      run_pdd_command --strength 0.8 crash --output "$CRASH_FIXED_SCRIPT" \
                             --output-program "$CRASH_FIXED_PROGRAM" \
                             "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" \
                             "$MATH_VERIFICATION_PROGRAM" "$MATH_ERROR_LOG"
       check_exists "$CRASH_FIXED_SCRIPT" "'crash' fixed script output"
       check_exists "$CRASH_FIXED_PROGRAM" "'crash' fixed program output"
+
+      # Copy the fixed script over the original so the fixed program imports the fixed code
+      log "Copying fixed script $CRASH_FIXED_SCRIPT over $MATH_SCRIPT for validation"
+      cp "$CRASH_FIXED_SCRIPT" "$MATH_SCRIPT"
+
       # Verify the fix
-      log "Running the fixed program after 'crash' command"
+      log "Running the fixed program after 'crash' command (using copied fixed script)"
       python "$CRASH_FIXED_PROGRAM" >> "$LOG_FILE" 2>&1
       if [ $? -eq 0 ]; then
           log "Fixed program ran successfully after crash command."
           log_timestamped "Validation success: Fixed program ran successfully after crash command."
-          # Adopt fixed versions for subsequent tests
-          cp "$CRASH_FIXED_SCRIPT" "$MATH_SCRIPT"
+          # Adopt fixed versions for subsequent tests (already done by the cp above, but keep for clarity if needed later)
+          # cp "$CRASH_FIXED_SCRIPT" "$MATH_SCRIPT" # Now potentially redundant
           cp "$CRASH_FIXED_PROGRAM" "$MATH_VERIFICATION_PROGRAM"
       else
           log_error "Fixed program still failed after crash command."
@@ -506,8 +511,8 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "6" ]; then
   if [ ! -s "${MATH_ERROR_LOG}_loop" ]; then
       log_error "Crash loop test error log is empty. Skipping 'crash --loop' command."
   else
-      # Run crash --loop
-      run_pdd_command_noexit crash --loop --max-attempts 2 --budget 5.0 \
+      # Run crash --loop - Increase strength here too
+      run_pdd_command_noexit crash --strength 0.8 --loop --max-attempts 2 --budget 5.0 \
                             --output "${CRASH_FIXED_SCRIPT}_loop" \
                             --output-program "${CRASH_FIXED_PROGRAM}_loop" \
                             "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" \
@@ -517,11 +522,14 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "6" ]; then
           log "Crash --loop produced an output script."
           # Optionally try running the output program and log result
           if [ -f "${CRASH_FIXED_PROGRAM}_loop" ]; then
+               # Copy the loop-fixed script over the original for validation
+               log "Copying loop-fixed script ${CRASH_FIXED_SCRIPT}_loop over $MATH_SCRIPT for loop validation"
+               cp "${CRASH_FIXED_SCRIPT}_loop" "$MATH_SCRIPT"
                log "Running program fixed by crash --loop"
                python "${CRASH_FIXED_PROGRAM}_loop" >> "$LOG_FILE" 2>&1 || log "Program fixed by crash --loop failed to run (non-fatal)."
           fi
           # Adopt latest fixed versions if produced
-          cp "${CRASH_FIXED_SCRIPT}_loop" "$MATH_SCRIPT"
+          # cp "${CRASH_FIXED_SCRIPT}_loop" "$MATH_SCRIPT" # Already done by cp above
           if [ -f "${CRASH_FIXED_PROGRAM}_loop" ]; then
              cp "${CRASH_FIXED_PROGRAM}_loop" "$MATH_VERIFICATION_PROGRAM"
           fi
