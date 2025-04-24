@@ -7,8 +7,8 @@ set -u
 
 # Global settings
 VERBOSE=${VERBOSE:-1} # Default to 1 if not set
-STRENGTH=${STRENGTH:-0.85} # Default strength
-TEMPERATURE=${TEMPERATURE:-1.0} # Default temperature
+STRENGTH=${STRENGTH:-0.5} # Default strength
+TEMPERATURE=${TEMPERATURE:-0.0} # Default temperature
 TEST_LOCAL=${TEST_LOCAL:-false} # Default to cloud execution
 CLEANUP_ON_EXIT=false # Set to false to keep files for debugging
 
@@ -66,11 +66,11 @@ BUG_TEST_SCRIPT="bug_${MATH_TEST_SCRIPT}"
 AUTO_DEPS_PROMPT="auto_deps_${MATH_PROMPT}"
 
 # Complex preprocess test case files
-COMPLEX_PROMPT="complex_features.prompt"
-COMPLEX_PREPROCESSED="complex_features_preprocessed.prompt"
-COMPLEX_XML="complex_features_xml.prompt"
-COMPLEX_RECURSIVE="complex_features_recursive.prompt"
-COMPLEX_DOUBLE="complex_features_double.prompt"
+COMPLEX_PROMPT="complex_features_python.prompt"
+COMPLEX_PREPROCESSED="complex_features_python_preprocessed.prompt"
+COMPLEX_XML="complex_features_python_xml.prompt"
+COMPLEX_RECURSIVE="complex_features_python_recursive.prompt"
+COMPLEX_DOUBLE="complex_features_python_double.prompt"
 INCLUDE_FILE="include_me.txt"
 SHELL_OUTPUT_FILE="shell_output.txt"
 WEB_DUMMY_FILE="dummy_web.html"
@@ -322,8 +322,16 @@ EOF
 # Create file for detect test
 echo "Refactor the simple_math function to use a helper." > "$DETECT_CHANGE_FILE"
 
+# Make sure DETECT_CHANGE_FILE follows the naming convention
+mv "$DETECT_CHANGE_FILE" "change_description_python.prompt"
+DETECT_CHANGE_FILE="change_description_python.prompt"
+
 # Create files for split test
 echo "Extract the 'add' function into a separate sub-prompt." > "$SPLIT_PROMPT"
+
+# Make sure SPLIT_PROMPT follows the naming convention
+mv "$SPLIT_PROMPT" "split_instruction_python.prompt"
+SPLIT_PROMPT="split_instruction_python.prompt"
 
 # --- Regression Tests ---
 
@@ -351,7 +359,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "1" ]; then
   export PDD_GENERATE_OUTPUT_PATH="$ENV_OUT_DIR/" # Trailing slash indicates directory
   run_pdd_command generate "$PROMPTS_PATH/$MATH_PROMPT" # No --output
   # Default name is <basename>.<lang_ext> which should be simple_math.py
-  check_exists "$ENV_OUT_DIR/$MATH_PROMPT" "'generate' output via env var" # Note: Check file name based on prompt name
+  check_exists "$ENV_OUT_DIR/$MATH_SCRIPT" "'generate' output via env var" # Check for the Python file, not the prompt
   unset PDD_GENERATE_OUTPUT_PATH
 fi
 
