@@ -13,7 +13,7 @@
 
     Outputs:
     - Returns a tuple containing (`str`, `float`, `str`):
-      - `str`: The modified prompt, a message indicating multiple prompts were updated, or an error message.
+      - `str`: The modified prompt content (non-CSV mode), a message indicating multiple prompts were updated (CSV mode), or an error message.
       - `float`: The total cost of the operation (may be zero if not applicable or on error).
       - `str`: The name of the model used (may be empty on error).
 
@@ -55,37 +55,42 @@
    2. **Parse Arguments and Options**:
       - Check if the `use_csv` flag is set.
       - Validate mandatory arguments: `change_prompt_file` and `input_code` are always required.
-      - When `use_csv` is False, validate that `input_prompt_file` is provided.
-      - Provide informative messages if required arguments are missing.
+      - When `use_csv` is False, validate that `input_prompt_file` is provided. If `use_csv` is True, ensure `input_prompt_file` is *not* used and `input_code` refers to a valid directory.
+      - Provide informative messages if required arguments are missing or invalid based on the mode.
 
    3. **Construct File Paths**:
       - Use `construct_paths` to load input files and establish output file paths.
-      - When `use_csv` is True, `input_code` should be treated as a directory path and not included in the `input_file_paths` dictionary.
+      - When `use_csv` is True, `input_code` should be treated as a directory path and *not* loaded as a file content; it's used by `process_csv_change` to locate corresponding code files.
       - Respect `--force` and `--quiet` options from the CLI context.
 
    4. **Perform Prompt Modification**:
       - If `use_csv` is True:
-        - Verify that `input_code` is a directory.
-        - Validate the CSV file format to ensure it contains 'prompt_name' and 'change_instructions' columns.
-        - Call `process_csv_change` to handle batch changes specified in the change prompt file (which should be a CSV in this case).
-        - Ensure that `process_csv_change` returns a tuple with four elements: (success, modified_prompts, total_cost, model_name).
-        - Use the `change_prompt_file` directly as the CSV file path, not its content.
-      - Else:
-        - Load `input_code_content` and `input_prompt_content` from the `input_strings` dictionary.
-        - Call `change_func` to modify the input prompt based on the change prompt and code.
+        - Verify that `input_code` is a valid directory path.
+        - Use `change_prompt_file` as the path to the input CSV file. Validate that this CSV file contains the required columns: `prompt_name` and `change_instructions`.
+        - Call `process_csv_change` to handle batch changes. This function should:
+          - Iterate through the rows of the CSV.
+          - For each row, parse the `prompt_name` to determine the `<basename>` and `<language>`.
+          - Locate the corresponding input prompt file using the `prompt_name`.
+          - Locate the corresponding code file (`<basename>.<language_extension>`) within the `input_code` directory.
+          - Perform the change using the `change_instructions` for that row.
+        - Ensure that `process_csv_change` returns a tuple with four elements: (success, modified_prompts_list, total_cost, model_name), where `modified_prompts_list` is a list of dictionaries, each containing 'file_name' (original prompt path) and 'modified_prompt' (content).
+      - Else (non-CSV mode):
+        - Load `input_code_content` and `input_prompt_content` from the `input_strings` dictionary returned by `construct_paths`.
+        - Call `change_func` to modify the single `input_prompt_content` based on the `change_prompt_file` content and `input_code_content`.
 
    5. **Save Results**:
       - For CSV mode:
-        - If `output` is not specified, save individual files for each modified prompt.
-        - If `output` is specified, save results as a CSV file.
+        - Determine the output target based on the `output` argument.
+        - If `output` is not specified or is a directory path: Iterate through the `modified_prompts_list`. For each dictionary in the list, save the `modified_prompt` content as an individual file within the target directory (current working directory or the specified one), using the default naming convention derived from the `file_name` or overwriting if `--force` is used.
+        - If `output` specifies a CSV file path: Create a new CSV file at this path. Iterate through the `modified_prompts_list`. For each dictionary, write a row with the `file_name` mapped to the `prompt_name` column and the `modified_prompt` mapped to the `modified_prompt` column.
       - For non-CSV mode:
-        - Write the modified prompt to the output location.
-      - Use the `output_file_paths` dictionary to determine the output path when not explicitly provided.
+        - Write the single modified prompt string returned by `change_func` to the output location determined by `construct_paths` (respecting `--output` and defaults).
+      - Use the `output_file_paths` dictionary from `construct_paths` to determine the output path when not explicitly provided in non-CSV mode or when saving individual files in CSV mode with a directory output.
 
    6. **Provide User Feedback**:
       - Use `rprint` to display messages about the operation's success or failure.
       - Respect verbosity settings from the CLI context.
-      - In CSV mode, provide information about individual files saved or the CSV output file.
+      - In CSV mode, provide information about the number of prompts processed and where the results were saved (individual files in a directory or a single output CSV file).
 
    7. **Error Handling and Logging**:
       - Implement try-except blocks to catch exceptions at various stages.
@@ -94,9 +99,9 @@
 
 % Ensure adherence to the existing codebase's style, including type annotations, docstrings, and exception handling. Use logging extensively for debugging and tracing the execution flow. Handle all potential error scenarios and provide informative error messages.
 
-% Important: Make sure to handle the `input_code` parameter correctly in both CSV and non-CSV modes. In CSV mode, it should be a directory path, while in non-CSV mode, it should be a file path.
+% Important: Make sure to handle the `input_code` parameter correctly in both CSV and non-CSV modes. In CSV mode, it is a directory path used to find code files, not a file to be read directly. In non-CSV mode, it's the path to the relevant code file.
 
-% Note: In the CSV mode, ensure that the `process_csv_change` function is called with the correct parameters, including using the `change_prompt_file` as the CSV file path directly, not its content. Also, handle the returned tuple correctly, which should now include a success flag.
+% Note: In the CSV mode, the `process_csv_change` function is central. It needs to handle reading the input CSV (`change_prompt_file`), finding corresponding prompt and code files based on `prompt_name` and the `input_code` directory, applying changes, and collecting results. Handle the returned tuple (`success`, `modified_prompts_list`, `total_cost`, `model_name`) correctly.
 
 % Use `use_csv` instead of `csv` for the boolean flag to avoid conflicts with the imported csv module.
 
