@@ -568,6 +568,11 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "7" ]; then
       log_error "Verification program $MATH_VERIFICATION_PROGRAM not found. Skipping 'verify' test."
   else
       log "Running pdd verify"
+      
+      log "Introducing semantic error into $MATH_SCRIPT for verify test..."
+      # Change 'return a + b' to 'return a - b' to test if verify can fix semantic errors
+      sed -i.bak 's/return a + b/return a - b/' "$MATH_SCRIPT"
+
       # Directly call pdd verify instead of the python harness script
       run_pdd_command_noexit verify \
           --output-results "$VERIFY_RESULTS_LOG" \
@@ -580,9 +585,19 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "7" ]; then
 
       VERIFY_STATUS=$?
       if [ $VERIFY_STATUS -eq 0 ]; then
-          log "pdd verify completed successfully."
           log_timestamped "Validation success: pdd verify completed successfully."
           check_exists "$VERIFY_CODE_OUTPUT" "'verify' output code"
+
+          log "Checking if verify fixed the semantic error in $VERIFY_CODE_OUTPUT"
+          if grep -q "return a + b" "$VERIFY_CODE_OUTPUT"; then
+              log "Semantic error correctly fixed by verify."
+              log_timestamped "Validation success: Semantic error correctly fixed by verify."
+          else
+              log_error "Verify command succeeded but FAILED to fix the introduced semantic error in $VERIFY_CODE_OUTPUT."
+              log_timestamped "Validation failed: Verify did not fix semantic error."
+              exit 1 # Fail the test explicitly
+          fi
+
           # Adopt verified code
           cp "$VERIFY_CODE_OUTPUT" "$MATH_SCRIPT"
           # Regenerate example program based on verified code
