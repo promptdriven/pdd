@@ -446,8 +446,8 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "5" ]; then
   # 5a. Change with --csv
   log "5a. Testing 'change --csv'"
   run_pdd_command change --csv --output "$CHANGE_CSV_OUT_DIR/" "$CHANGE_CSV_FILE" "$CHANGE_CSV_CODE_DIR/" # Note trailing slash for output dir
-  check_exists "$CHANGE_CSV_OUT_DIR/modified_$DUMMY_PROMPT_A" "'change --csv' output A"
-  check_exists "$CHANGE_CSV_OUT_DIR/modified_$DUMMY_PROMPT_B" "'change --csv' output B"
+  check_exists "$CHANGE_CSV_OUT_DIR/$DUMMY_PROMPT_A" "'change --csv' output A"
+  check_exists "$CHANGE_CSV_OUT_DIR/$DUMMY_PROMPT_B" "'change --csv' output B"
 fi
 
 # 6. Crash
