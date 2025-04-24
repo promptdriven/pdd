@@ -39,7 +39,27 @@ PDD_SCRIPT="pdd" # Assumes pdd is in PATH or use "$PDD_PATH/cli.py" etc.
 PROMPTS_PATH="$PDD_BASE_DIR/prompts"
 CONTEXT_PATH="$PDD_BASE_DIR/context"
 CONTEXT_PATH_GLOB="$CONTEXT_PATH/*.py" # Escaping might be needed depending on shell interpretation
-REGRESSION_DIR="$STAGING_PATH/regression_$(date +%Y%m%d_%H%M%S)" # Unique dir per run
+
+# Determine REGRESSION_DIR
+if [ -n "${REGRESSION_TARGET_DIR:-}" ]; then
+    REGRESSION_DIR="$REGRESSION_TARGET_DIR"
+    log "Using specified regression directory: $REGRESSION_DIR"
+elif [ "$TARGET_TEST" = "all" ]; then
+    REGRESSION_DIR="$STAGING_PATH/regression_$(date +%Y%m%d_%H%M%S)"
+    log "Creating new regression directory for full run: $REGRESSION_DIR"
+else
+    # Find the latest existing regression directory for specific tests
+    LATEST_REGRESSION_DIR=$(ls -td -- "$STAGING_PATH"/regression_* 2>/dev/null | head -n 1)
+    if [ -d "$LATEST_REGRESSION_DIR" ]; then
+        REGRESSION_DIR="$LATEST_REGRESSION_DIR"
+        log "Reusing latest regression directory for specific test: $REGRESSION_DIR"
+    else
+        log "Warning: No existing regression directory found in $STAGING_PATH. Creating a new one."
+        REGRESSION_DIR="$STAGING_PATH/regression_$(date +%Y%m%d_%H%M%S)_specific_${TARGET_TEST}"
+        log "Creating new regression directory: $REGRESSION_DIR"
+    fi
+fi
+
 LOG_FILE="$REGRESSION_DIR/regression.log"
 COST_FILE="regression_cost.csv"
 
@@ -512,7 +532,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "6" ]; then
       log_error "Crash loop test error log is empty. Skipping 'crash --loop' command."
   else
       # Run crash --loop - Increase strength here too
-      run_pdd_command_noexit crash --strength 0.8 --loop --max-attempts 2 --budget 5.0 \
+      run_pdd_command_noexit --strength 0.8 crash --loop --max-attempts 2 --budget 5.0 \
                             --output "${CRASH_FIXED_SCRIPT}_loop" \
                             --output-program "${CRASH_FIXED_PROGRAM}_loop" \
                             "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" \
