@@ -21,39 +21,41 @@ def main() -> None:
     The example will:
     - Create sample input files.
     - Call 'change_main' in single-change mode.
-    - Call 'change_main' in CSV batch-change mode based on log example.
+    - Call 'change_main' in CSV batch-change mode.
     - Display the outputs.
     """
 
     # Set up the Click context with necessary parameters and options
     ctx = click.Context(click.Command("change"))
 
+    # Set up CLI options (as would be parsed from command-line arguments)
+    # ctx.obj["force"] = True  # Do not overwrite existing files
+    # ctx.obj["quiet"] = False  # Verbose output
+    # ctx.obj["verbose"] = True  # Non-verbose output
+
     # Set up global options accessible via 'ctx.obj'
-    # Adjusted strength and temperature based on log example
     ctx.obj = {
-        "force" : True,       # Overwrite existing files (or handle based on needs)
-        "quiet" : False,      # Verbose output
-        "verbose" : True,     # Detailed output
-        "strength": 0.85,     # LLM strength parameter (from log)
-        "temperature": 1.0,   # LLM temperature parameter (from log)
+        "force" : True,  # Do not overwrite existing files
+        "quiet" : False,  # Verbose output
+        "verbose" : True,  # Non-verbose output
+        "strength": .8,      # LLM strength parameter (0.0 to 1.0)
+        "temperature": 0,     # LLM temperature parameter (0.0 to 1.0)
         "language": "python", # Programming language for code files
         "extension": ".py",   # File extension for code files
-        "budget": 10.0,       # Maximum budget in dollars
+        "budget": 10.0,        # Maximum budget in dollars
     }
 
     # Create directories for the example
-    # os.makedirs("output/example_code_directory", exist_ok=True) # Original single mode dir
+    os.makedirs("output/example_code_directory", exist_ok=True)
     os.makedirs("output/example_output_directory", exist_ok=True)
-    os.makedirs("output/single_change_files", exist_ok=True) # Dir for single change example files
 
     # ------------- Single-Change Mode Example -------------
 
-    # Create sample input files for single-change mode in a specific directory
-    single_change_dir = Path("output/single_change_files")
-    change_prompt_file = single_change_dir / "change_prompt.prompt"
-    input_code_file = single_change_dir / "example_code.py"
-    input_prompt_file = single_change_dir / "input_prompt.prompt"
-    output_file = single_change_dir / "modified_prompt.prompt" # Output file for single change
+    # Create sample input files for single-change mode
+    change_prompt_file = "output/change_prompt.prompt"
+    input_code_file = "output/example_code.py"
+    input_prompt_file = "output/input_prompt.prompt"
+    output_file = "output/modified_prompt.prompt"
 
     with open(change_prompt_file, "w") as f:
         f.write("Modify the function to add error handling for division by zero.")
@@ -66,97 +68,82 @@ def divide(a, b):
 
     with open(input_prompt_file, "w") as f:
         f.write("Write a function to perform division of two numbers.")
+    # base = 'split'
+    # change_prompt_file = "context/change/22/change.prompt"
+    # input_code_file = f"pdd/{base}.py"
+    # input_prompt_file = f"prompts/{base}_python.prompt"
+    # output_file = f"/{base}_main_python.prompt"
 
     # Call change_main in single-change mode
     rprint("[bold underline]Single-Change Mode Example[/bold underline]")
-    try:
-        modified_prompt, total_cost, model_name = change_main(
-            ctx=ctx,
-            change_prompt_file=str(change_prompt_file),
-            input_code=str(input_code_file),
-            input_prompt_file=str(input_prompt_file),
-            output=str(output_file),
-            use_csv=False,  # CSV mode disabled
-        )
+    modified_prompt, total_cost, model_name = change_main(
+        ctx=ctx,
+        change_prompt_file=change_prompt_file,
+        input_code=input_code_file,
+        input_prompt_file=input_prompt_file,
+        output=output_file,
+        use_csv=False,  # CSV mode disabled
+    )
 
-        # Display the outputs
-        rprint(f"\n[bold]Modified Prompt Saved to:[/bold] {output_file}")
-        # Optionally read and print modified prompt content if needed
-        # with open(output_file, "r") as f:
-        #     rprint(f.read())
-        rprint(f"[bold]Total Cost:[/bold] ${total_cost:.6f}")
-        rprint(f"[bold]Model Used:[/bold] {model_name}")
-    except Exception as e:
-        rprint(f"[bold red]Error in single-change mode:[/bold red] {e}")
+    # Display the outputs
+    rprint(f"\n[bold]Modified Prompt:[/bold]\n{modified_prompt}")
+    rprint(f"[bold]Total Cost:[/bold] ${total_cost:.6f}")
+    rprint(f"[bold]Model Used:[/bold] {model_name}")
 
+#     # ------------- CSV Batch-Change Mode Example -------------
 
-    # ------------- CSV Batch-Change Mode Example (Based on Log) -------------
-
-    # Create sample code/prompt files in a directory similar to the log ('change_csv_code')
-    code_directory = Path("output/change_csv_code")
-    os.makedirs(code_directory, exist_ok=True)
-
-    prompt_file_1 = code_directory / "dummy_a_python.prompt"
-    prompt_file_2 = code_directory / "dummy_b_python.prompt"
+    # Create sample code files in a directory
+    code_directory = "output/example_code_directory"
+    prompt_file_1 = Path(code_directory) / "script1_python.prompt"
+    prompt_file_2 = Path(code_directory) / "script2_python.prompt"
 
     with open(prompt_file_1, "w") as f:
-        f.write("Write a Python function `func_a(a, b)` that takes two numbers as input and returns their sum.")
-
+        f.write("Create the function to add two numbers.")
+    
     with open(prompt_file_2, "w") as f:
-        f.write("Write a Python function `add(a, b)` that takes two numbers as input and returns their sum.")
+        f.write("Create the function to subtract two numbers.")
 
-    code_file_1 = code_directory / "dummy_a.py"
-    code_file_2 = code_directory / "dummy_b.py"
+    code_file_1 = Path(code_directory) / "script1.py"
+    code_file_2 = Path(code_directory) / "script2.py"
 
     with open(code_file_1, "w") as f:
         f.write("""
-def func_a(a, b):
-    # Original function A
+def add(a, b):
     return a + b
 """)
 
     with open(code_file_2, "w") as f:
         f.write("""
-def add(a, b):
-    # Original function B
-    return a + b
+def subtract(a, b):
+    return a - b
 """)
 
     # Create a CSV file specifying changes for batch processing
-    csv_change_prompt_file = Path("output/batch_changes.csv") # Keep CSV in output dir
+    csv_change_prompt_file = "output/batch_changes.csv"
     with open(csv_change_prompt_file, "w") as csvfile:
         csvfile.write("prompt_name,change_instructions\n")
-        # Use relative paths within the code_directory for prompt_name
-        csvfile.write(f"{prompt_file_1.name},Modify the function `func_a` to `func_a_modified`.\n")
-        csvfile.write(f"{prompt_file_2.name},Include a comment saying 'Modified B' at the beginning of the function.\n")
+        csvfile.write(f"{prompt_file_1},Modify the function to handle overflow errors.\n")
+        csvfile.write(f"{prompt_file_2},Optimize the function for large integers.\n")
 
-    # Define output for batch changes - None, indicating save to input dir (code_directory)
-    # Based on log: Output path was a directory, causing an error later.
-    # Setting output=None should make change_main save individual modified prompts
-    # in the input_code directory (code_directory here).
-    batch_output_file = "output/"
+    # Define output file for batch changes
+    batch_output_file = None#"batch_modified_prompts.csv"
 
     # Call change_main in CSV batch-change mode
-    rprint("\n[bold underline]CSV Batch-Change Mode Example (Based on Log)[/bold underline]")
-    try:
-        message, total_cost_csv, model_name_csv = change_main(
-            ctx=ctx,
-            change_prompt_file=str(csv_change_prompt_file), # Path to the CSV file
-            input_code=str(code_directory), # Directory containing code/prompts
-            input_prompt_file=None,  # Not used in CSV mode when paths are in CSV
-            output=batch_output_file, # None means save modified prompts individually
-            use_csv=True  # CSV mode enabled
-        )
+    rprint("\n[bold underline]CSV Batch-Change Mode Example[/bold underline]")
+    message, total_cost_csv, model_name_csv = change_main(
+        ctx=ctx,
+        change_prompt_file=csv_change_prompt_file,
+        input_code=code_directory,
+        input_prompt_file=None,  # Not used in CSV mode
+        output=batch_output_file,
+        use_csv=True  # CSV mode enabled
+    )
 
-        # Display the outputs
-        rprint(f"\n[bold]{message}[/bold]")
-        rprint(f"[bold]Total Cost:[/bold] ${total_cost_csv:.6f}")
-        rprint(f"[bold]Model Used:[/bold] {model_name_csv}")
-        # Print the directory where results are saved
-        rprint(f"[bold]Batch Results Saved to Directory:[/bold] {code_directory.resolve()}")
-    except Exception as e:
-        rprint(f"[bold red]Error in CSV batch-change mode:[/bold red] {e}")
-
+    # Display the outputs
+    rprint(f"\n[bold]{message}[/bold]")
+    rprint(f"[bold]Total Cost:[/bold] ${total_cost_csv:.6f}")
+    rprint(f"[bold]Model Used:[/bold] {model_name_csv}")
+    rprint(f"[bold]Batch Results Saved to:[/bold] {batch_output_file}")
 
 if __name__ == "__main__":
     main()
