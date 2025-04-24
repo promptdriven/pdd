@@ -126,7 +126,7 @@ def subtract(a, b):
         csvfile.write(f"{prompt_file_2},Optimize the function for large integers.\n")
 
     # Define output file for batch changes
-    batch_output_file = None#"batch_modified_prompts.csv"
+    batch_output_file = "output" #"output/batch_modified_prompts.csv"
 
     # Call change_main in CSV batch-change mode
     rprint("\n[bold underline]CSV Batch-Change Mode Example[/bold underline]")
