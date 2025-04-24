@@ -1,0 +1,618 @@
+“I want you to help me think about prompt-driven development. This is the idea of basically, instead of the code being the main artifact of the system, the prompt is. And so I want you to ask me questions about it so that we can eventually write a white paper about this. Why don't you go ahead and start asking me questions.”
+00:25
+ChatGPT said:
+Sure! That sounds interesting. To start, what's the main problem you're trying to solve with prompt-driven development?
+
+You said:
+“The main problem to solve is that with code being the main artifact instead of the prompt, the problem is that most of the time you have to modify a program. Something like 80-90% of the cost of development isn't the initial writing of the code, it's the maintenance of the code. And for most systems that are worth working on, there's a lot of modifications of the program that have to happen over its lifetime. And so it's kind of like when you build a house, you could build a house from scratch a lot cheaper per square foot than you can renovating it. And the cost of renovation per square foot is a lot higher because it's a lot of legacy. So for instance, sometimes it's a lot easier to just write a program from scratch than to modify the existing code because the existing code has been patched so many times. So the idea behind prompt-driven development is that the prompt is the main artifact rather than the code. So right now, like in Cursor, AI, or Cloud Code, you basically keep patching the code versus starting from a prompt that you modify and maintain. With Cursor, Cloud, or Windsurf, you're basically modifying the code instead of the prompt.”
+01:30
+
+ChatGPT said:
+Got it. So you're aiming to reduce the maintenance burden by shifting focus from code to the prompt as the primary artifact. How do you see prompts evolving over time compared to traditional code?
+
+You said:
+“I think what's going to happen is that the prompt is going to become the code. So when I first started doing chip design many years ago, the main artifact of the system was actually the netlist, basically the schematic of the system. But what people did was they started using what's called high-level description languages, things like Verilog or VHDL. And people would synthesize the netlist from the HDL, Verilog. And initially, when it first came on board, people thought the main artifact was still the netlist rather than the Verilog or VHDL. Because every time you would synthesize, the netlist would change. But today, if you look at chip design, pretty much everyone agrees the main artifact is the Verilog or VHDL. And so I think the same thing is going to happen with prompt-driven development.”
+01:01
+ChatGPT said:
+That makes sense! So, similar to how HDLs became the primary artifact in chip design, you're envisioning prompts becoming the main source of truth for software systems. How do you think this shift will affect the role of developers?
+
+You said:
+“I think developers are still going to be around, still going to exist. It's just that they're going to work at a much higher level, a much more abstract level, and that's got a lot more leverage. So it's kind of like the change from punch cards to assembly to C to things like Python, and now with prompts. So it's just a higher-level description language that allows developers to develop a lot quicker than they can today.”
+00:25
+ChatGPT said:
+Absolutely. By operating at a higher level of abstraction, developers can focus more on the overall logic and design, rather than the nitty-gritty details. How do you think this will impact collaboration among team members, like between developers and non-technical stakeholders?
+
+You said:
+“I think this can be a lot easier because there's going to be a common language that everyone shares. Right now, with traditional development, you have to only a few people know how to look at the code. Versus with prompts, basically anyone can. So I think it makes it easier for everyone to collaborate together because they are essentially using the same exact language together.”
+00:30
+ChatGPT said:
+That makes sense. So prompts could serve as a bridge, allowing non-technical stakeholders to contribute more directly. Do you foresee any challenges in transitioning to a prompt-driven approach?
+
+You said:
+“Thanks.”
+00:00
+ChatGPT said:
+Interesting point! What do you think would be the biggest hurdles for teams making this shift?
+
+You said:
+“Hi, can you continue the conversation?”
+00:02
+ChatGPT said:
+Sure! One hurdle might be the initial learning curve, especially for teams used to traditional coding. Do you think there would be specific training or tools needed to help with that transition?
+
+You said:
+“One tool I'm developing, actually I developed it for myself, is something called PDD, or Prompt Driven Development. And it's basically, it's also a MPC server. And I made it for myself, but I did open source so other people could use it. And it helps people do prompt driven development.”
+00:23
+ChatGPT said:
+That's great! Having an open-source tool like PDD could really help teams get started. Have you seen others adopting it, or are there any success stories from people who've tried it out so far?
+
+You said:
+“Well, I'm the biggest user of it. I used it in lots of different projects. And I think the reason why I like prompt-driven development is because, first of all, it's token efficient. As we know, elements can get very, very expensive. But because a lot of tools out there, like Cursor and Cloud Code, they're like token launchers, especially when they're in Gentic mode. And Gentic mode has its place. But sometimes there are flows that are more deterministic and are much more token efficient. Also, you have a lot more control with prompt-driven development, because everything is specified. And so it's more consistent. So if you want to regroup, you can do that.”
+00:48
+ChatGPT said:
+That makes a lot of sense. Having that
+
+You said:
+“program. It's a lot easier with problem-driven development versus an agentic flow, where you have to pay a lot of tokens and it's kind of random. You're never sure what you're going to quite get.”
+00:13
+ChatGPT said:
+Exactly, the consistency and control with prompt-driven development can save both time and resources. Plus, having a deterministic approach means fewer surprises. Do you think this approach will become more mainstream as LLMs continue to evolve?
+
+You said:
+“Yeah, I think that...”
+00:01
+ChatGPT said:
+It definitely seems like the efficiency and predictability of prompt-driven development could attract more teams. It'll be interesting to see how it evolves!
+
+You said:
+Transcript Unavailable
+00:00
+ChatGPT said:
+Absolutely! It's an exciting time for development practices. If you keep gathering feedback and success stories, it'll help push the movement forward.
+
+You said:
+“What other questions do you have about this that might help people understand why they should do problem-driven development?”
+00:06
+ChatGPT said:
+A good question might be about real-world examples. Can you share a specific project where PDD made a significant difference, and what the impact was?
+
+You said:
+“I recently used PDD to create what I call PDD-MCP. So MCP is a Module Context Protocol, or MCP, that came out from Anthropic. And I created a wrapper around the PDD-CLI, Command Line Interface, so that this could be hooked up to Cursor and other development tools, like Cloud Code, and Windsurf, and things like that. And I actually did it with prompt-driven development. So I started out with the architecture file. Actually, I started out with the BME of what it's supposed to do. Then I used PDD to create an architecture file. Which basically contained all of the files that would be in the system. And then I used it to create all the prompt files. And then used PDD to create all of the resulting Python files, and then the examples files for the Python files, and then all the tests. And that was all auto-generated. And so it was, and of course, if I ever need to make modifications, which I did, because I decided not just to add the tools, I decided to add prompts as well, and other features, it was a lot easier to continue to revise the MCP server. Versus the problem with just patching the code is that the code gets very, very messy. And it gets harder and harder to do bigger changes in the code. Versus with prompt-driven development, big changes are actually relatively easy. Because you always have the plants in the house. And because the house can be regenerated very quickly, you don't have to, you don't get this kind of complexity or rat's nest that develops as you keep patching the code to do different things.”
+02:18
+ChatGPT said:
+That's a fantastic example! It really highlights the flexibility and efficiency of PDD. It's impressive how it simplifies making large-scale changes. This could definitely appeal to developers dealing with complex, evolving projects.
+
+You said:
+“What other questions do you have for me that might help people understand why they should do problem-driven development?”
+00:05
+ChatGPT said:
+A useful question might be about comparing timelines. How much time did you save using PDD for a project compared to traditional coding methods?
+
+You said:
+“No transcription available”
+03:20
+ChatGPT said:
+That's a compelling comparison! It sounds like PDD's efficiency and cost savings really set it apart, especially for experienced users. Plus, the ability to start with lower-cost models and scale up is a great advantage. Thanks for sharing your experience!
+
+You said:
+“What other questions do you have that might be helpful to inform someone why they should do product-driven development?”
+00:05
+ChatGPT said:
+Another useful question might be about scalability. How does PDD handle larger, more complex systems compared to traditional coding approaches?
+
+You said:
+“I actually think that this is where PDD separates even more from using genetic tools like Curse or Cloud Code. Because with Curse and Cloud Code, you're making prompts, and you're talking to the chatbot, but it's not really directed. It's like a universal chatbot for the whole code base, versus with product-driven development, you're basically making these prompts that are going to the LLMs. But they're very attached to specific parts of the code base. So it's actually a lot more directed. So you have a lot more control. So it's almost like the difference between automatic versus manual, where manual, you actually have a lot more control over the speed and performance of the car. And so it's also similar to product-driven development, where you have more control over the operation and generation of the code than you do with things that are just more generic chatbots.”
+01:11
+ChatGPT said:
+That's a great analogy! The precision and control of PDD definitely sound like strong advantages, especially when dealing with large or complex codebases. It gives developers a more tailored approach, which can be crucial for scalability.
+
+You said:
+“What other questions might be useful?”
+00:01
+ChatGPT said:
+Another useful question could be about collaboration. How does PDD influence teamwork, especially between developers and non-technical team members?
+
+You said:
+“Uh, well, I think because all the development is happening through prompts that, you know, anyone could read, I think it's a lot easier to validate the business logic. You know, the problem with things like Cursor or Cloud Code is that most of the businesses aren't looking at Cursor or Cloud Code.”
+00:18
+ChatGPT said:
+That makes sense. So with PDD, having prompts as a central artifact makes it easier for everyone to stay on the same page and provide input. This could really streamline communication across teams.
+
+You said:
+“No transcription available”
+07:13
+ChatGPT said:
+Exactly, keeping prompts as the main artifact can bridge the gap between technical and business perspectives. It ensures everyone's aligned and makes the development process more transparent. Thanks for sharing all this!
+
+You said:
+“What other questions do you think might be useful?”
+00:02
+ChatGPT said:
+Another helpful question could be about adaptability. How easily can PDD handle changes in project requirements compared to traditional coding methods?
+
+You said:
+“I think this is where it's really strong because, you know, if you're going to do the, you know, the program's only going to be modified once or only going to be made once, you don't have to modify it, then it's not that big of a deal because basically then you can, you know, the original prompts are okay that you throw them away. But with, you know, most systems, you have to keep modifying the system, the program. I think in general, something like 90% of the cost of development is actually, you know, when you're updating the program. And so what happens is, is that.”
+00:47
+ChatGPT said:
+So with PDD, adapting to changes is easier
+
+You said:
+Transcript Unavailable
+00:00
+ChatGPT said:
+Right, since the prompts
+
+You said:
+“you have this kind of code that you have to you have to deal with.”
+00:05
+ChatGPT said:
+Exactly, keeping prompts updated is simpler than dealing with tangled code. This flexibility is a huge advantage in the long run!
+
+You said:
+“What other questions do you think might be useful?”
+00:02
+ChatGPT said:
+You might also ask about integration. How easily can PDD be integrated into existing workflows and tools?
+
+You said:
+“Well, you know, actually, I developed it and use it on a cursor of Cloud Code, so it works well with Cloud Code. And so a lot of these tools aren't, isn't, should I use this or that? It's much more additive. We should use this and that. By using them together, it's actually quite powerful. So I actually like to use PDD as part of a genetic tool. So I often use it as part of Cursor or Cloud Code to help me generate prompts, to help me run PDD. And, you know, so there are places where, you know, the PDD is not trying to be the end-all of everything. Instead, what it's doing is it's essentially, the other tools kind of help fill in the gaps. So, and also like they have great, you know, file editors and things like that. So it's actually quite useful. So I think the tools are quite complementary as well.”
+00:58
+ChatGPT said:
+That's a great approach! Using PDD alongside other tools can really maximize its strengths. It's awesome that it integrates so seamlessly into existing workflows.
+
+You said:
+“Can you summarize to me the advantages of PDD?”
+00:02
+ChatGPT said:
+Sure! PDD offers greater efficiency, control, and flexibility. It's more token-efficient, integrates well with existing tools, and makes collaboration easier by using prompts as the main artifact.
+
+You said:
+“I want you to continue the interview. So, interview me about problem-driven development and why people should use it. So, please continue the interview.”
+00:08
+ChatGPT said:
+Absolutely! Let's dive a bit deeper. How do you see PDD evolving in the future, and what improvements or features are you planning?
+
+You said:
+“So some of the features is basically, probably one of the biggest is the PDD Cloud. So what the cloud does is it stores examples. So one of the biggest ways to make AI better is actually to give the prompt or the LLM examples. We call it few-shot learning. In fact, you could take a less powerful model, and if you have a less powerful model and you give it better context or examples, it will outperform a much more expensive, larger model. So what PDD Cloud does is that it stores all these kind of few-shot examples. And then when people generate code, it will use these examples, references, and thus produce much higher quality results than if you were to just generate them without the examples. And so basically what this is is a marketplace for people to provide these few-shot examples. And this is kind of the thing that I think all the other tools are missing, is they don't provide the context to allow these LLMs to really do a good job. They're always kind of missing these few-shot examples. And so that's probably one of the biggest things coming out for PDD.”
+01:35
+ChatGPT said:
+That's exciting! Having a cloud-based marketplace for examples could really enhance the quality of generated code. It sounds like it could make a significant difference, especially for teams looking to get the most out of their models.
+
+You said:
+“Exactly.”
+00:00
+ChatGPT said:
+It's a brilliant idea. I'm sure it'll open up a lot of possibilities for developers. What's your timeline for rolling out PDD Cloud?
+
+You said:
+“Well, the other thing that I have is a VS Code plugin that will highlight the code according to the prompt format, so .prompt format. So I have this VS Code plugin to kind of make that easier.”
+00:15
+ChatGPT said:
+Nice! A VS Code plugin sounds like a great addition. It should make working with the .prompt format even smoother for developers using PDD.
+
+You said:
+“By the way, one thing I want to talk about also is the big motivation behind prompt-driven development. So with tools like Cursor or Cloud Code or Windsurf, the big issue is that they're interactive tools. So they're gentic, but they're also interactive tools. So you have to sit there and babysit it. So people do what's called Vibe Coding, which is they will essentially not look at the code and stuff like that. But you still, every few minutes or few seconds, you have to redirect the tool to do the right thing. So it's kind of an interactive thing. Versus with prompt-driven development, it's more batch. So instead of having to babysit it, you can launch it and let it go. And because you have actually more direct control over what goes on, you can let it run for an hour or two hours, three hours before having to come back. So that's actually one of the big advantages that the current gentic coding tools are much more like copilots in terms of you have to kind of redirect them every few seconds or minutes. Versus prompt-driven development, it's more of a batch mode. So you can let it run. And speaking about batch mode, a lot of these LLM providers actually have a batch mode, which is way cheaper, which is like 50% off the cost, versus interactive mode, where you need to get fast results back. So you can actually save money as well when you're generating, because you can use the batch mode. And you don't have to babysit the whole generation process.”
+02:04
+ChatGPT said:
+That's a huge advantage! Being able to run longer processes without constant intervention not only saves time but also cuts costs. It makes PDD even more appealing for teams looking to optimize their workflow.
+
+You said:
+“What other questions do you have that might be interesting to people?”
+00:05
+ChatGPT said:
+You could also explore the learning curve. How approachable is PDD for someone new to prompt-driven development?
+
+You said:
+“Well, people are already kind of doing this in terms of like in Cloud Code or Cursor, they are already prompting it. The only issue is that the prompts are kind of thrown away, like they're kind of scroll away and, you know, they're not version controlled. And the prompts are used to basically generate the code. Those are the prompts you want to keep. Now, there are some other prompts that are more what I call control prompts, and those, you know, are okay if they're thrown away. But people are already prompting, it's just whether they save the generation prompts or not.”
+00:43
+ChatGPT said:
+Got it, so it's more about capturing and organizing those valuable prompts. PDD's approach ensures they're preserved and version-controlled, which makes it easier for anyone to pick up and use.
+
+You said:
+“I love your scooter. It has, like, the cool shocks on it. How fast does it go?”
+00:04
+ChatGPT said:
+It sounds like a fun ride! Is it electric or gas-powered?
+
+You said:
+“Please continue to ask me questions that might help people understand why we want to do prompt-driven development.”
+00:08
+ChatGPT said:
+Sure! How does PDD impact onboarding for new team members, especially those unfamiliar with the project?
+
+You said:
+“Well, I think this is a big advantage, because rather than having to look at a big code base, which can be hard to understand, people are just reading... ... ...baller than the actual code. So they could, by reading just a fraction of the stuff, they can get an idea about what's going on. So it's actually a pretty big advantage for... ...versus, like, you know, traditional code-driven development, where there's a lot of... ...usually a lot of code that you have to read.”
+00:31
+ChatGPT said:
+Absolutely. Simplifying onboarding with more readable prompts makes it easier for new team members to get up to speed quickly. This could definitely boost productivity and collaboration from the start.
+
+You said:
+“What are some other good questions that might help people understand why we want to do PDD?”
+00:05
+ChatGPT said:
+Another good question could be about maintenance. How does PDD simplify ongoing maintenance tasks compared to traditional methods?
+
+You said:
+“I think this is where PDD shines. Most of the cost of code actually is maintenance. And when you start patching code and you start fixing things, a lot of times you're trying to do it in a way that minimizes the amount of changes to the code. And so usually it's kind of a suboptimal way. And as you do a lot of these patches, what happens is the code becomes bloated, hard to work with. And so it sometimes gets easier just to rewrite everything. And the neat thing about prompt-driven development is that because you can regenerate code fairly easily, you can just change your prompts at a high level and then just simply regenerate. And so refactoring code, having a clean code base that's easy to maintain is actually a lot easier with prompt-driven development.”
+00:55
+ChatGPT said:
+That's a compelling benefit. With PDD, maintaining a clean codebase becomes much more manageable, reducing technical debt over time. It really streamlines the whole development lifecycle.
+
+You said:
+“I think one of the big things about PDD is the fact that it's all scripted versus interactive, where you have to kind of sit there and babysit the process. And so I think that's something that really helps in terms of this kind of flow.”
+00:23
+ChatGPT said:
+Absolutely, the scripted approach definitely adds consistency and reduces the need for constant oversight. It's a big advantage for teams aiming for a more efficient, reliable workflow.
+
+You said:
+“What other questions do you have?”
+00:01
+ChatGPT said:
+You might also explore customization. How customizable is PDD for different types of projects or industries?
+
+You said:
+“Well, one thing we have is we have these ideas of you can include, like, preambles in your prompt. So these are essentially preferences that people can put in so that as we generate code or we create tasks, it creates it into the standard that the company is used to. So it's a little bit like Crystal Rules. So some of the other tools also have something like this. But I think this one at PDE also has and makes it easier to have things kind of conform to whatever standard that people happen to be using.”
+00:36
+ChatGPT said:
+That's a great feature! Customizable preambles can ensure that code and tests adhere to specific standards, making PDD versatile for various industries and projects.
+
+You said:
+“People might like to know.”
+00:01
+ChatGPT said:
+Another question could be about scalability. How well does PDD handle larger, more complex systems?
+
+You said:
+Transcript Unavailable
+00:02
+ChatGPT said:
+Prompt-driven development focuses on using prompts as the primary artifact instead of traditional code. It allows for more efficient, flexible, and controlled development by leveraging LLMs, simplifying maintenance, and enhancing collaboration.
+
+You said:
+“Can you ask me more questions about prompt-driven development?”
+00:03
+ChatGPT said:
+Sure! How do you envision PDD influencing the future of software engineering practices?
+
+You said:
+“I think this is actually going to replace the current code-driven development. One of the reasons why I think prompt-driven development, especially PDD, the utility CLI that I created, is important is because it just doesn't just generate code from prompts. It also finds similar examples. Right now, all of the prompts are what I call zero-shot prompts. What PDD does is it tries to find relevant examples so that it generates code that's more likely to do what the developer wants to do. I think as the LMs get more and more powerful, I think what's also really important is the context. Sometimes context matters more than a more powerful LLM, because if you have better context, then sometimes the LLM can actually do the job. The quality of the context is actually sometimes a bigger determinant in terms of the quality of code than the quality of the LLM.”
+01:19
+ChatGPT said:
+That's a powerful insight. Leveraging context through examples can definitely enhance code quality. It suggests that PDD could be a game-changer as LLMs evolve!
+
+You said:
+“What other questions might be interesting for people to know about?”
+00:03
+ChatGPT said:
+Another interesting question could be about accessibility. How does PDD make development more accessible for non-traditional developers or those without a coding background?
+
+You said:
+“Well, PDD does have a MCP server. So MCP is the Model Context Protocol. And so it could hook up to Cloud AI Desktop. It could hook up to Cloud Code. It could hook up to any chatbot that has a MCP connection. And so people can basically talk to it, and it will generate code. And unlike just using, let's say, Cloud Code or Cursor by itself, it's a lot more efficient. And also, you're able to have more stability in terms of generating the output and more scalability. Because rather than taking the same code and patching it, patching it, patching it, where it becomes very complex, you can always start from scratch and get the code. So I think it's actually a kind of blends an ease-of-use plus efficiency.”
+01:07
+ChatGPT said:
+That's fantastic! Combining ease of use with efficiency makes PDD a powerful tool for a wide range of users. It sounds like it really lowers the barrier to entry for coding.
+
+You said:
+“What other questions might be interesting for people to know about?”
+00:02
+ChatGPT said:
+A good question could be about real-world applications. Can you share a specific example where PDD has made a significant impact on a project?
+
+You said:
+“Well, one is the PDD-MCP server. So as I mentioned before, I used it doing it through the product-driven development way, and then also tried doing it using the iterative interactive cursor way. And so it just allows you to be a lot quicker, because you didn't have to. Maybe in terms of total LLM cut time, it's not that different. But in terms of human time, because with the cursor one, you've got to babysit it all the way. But with PDD, you don't have to do that.”
+00:38
+ChatGPT said:
+That's a great example! Saving human time is crucial, especially on complex projects. It really highlights the practical benefits of PDD in real-world applications.
+
+You said:
+“What other questions might be interesting for people?”
+00:03
+ChatGPT said:
+Another interesting question could be about collaboration. How does PDD facilitate teamwork among developers and other stakeholders?
+
+You said:
+“Well, because everyone's sharing prompts that are much more human-readable. You know, I think it allows people... Because right now the problem is when people read other people's code, it's kind of hard to understand. But with PDD, it allows onboarding a lot faster and communication a lot faster, because people are able to understand it in a more quick fashion, what's going on with other people's code.”
+00:27
+ChatGPT said:
+That makes total sense. By making the prompts clear and accessible, PDD helps everyone stay on the same page. This transparency can really improve collaboration and reduce misunderstandings.
+
+You said:
+“By the way, one of my guys, he's, we brought him to the desk already, but he still doesn't have his badge. He started on Monday. His name is Song Yu. Okay, thank you. Okay, thank you.”
+00:13
+ChatGPT said:
+No problem! Hopefully, he can get his badge sorted out soon. Anything else you'd like to discuss about PDD?
+
+You said:
+“Hi, I want you to ask me questions about why prompt-driven development, the proposed prompt-driven development methodology, so maybe some potential problems with it.”
+00:15
+ChatGPT said:
+Sure! What challenges do you foresee with adopting PDD across different development teams?
+
+You said:
+“I think one of the issues is that people sometimes, well not sometimes, but a lot of people aren't very good at writing prompts, people have been conditioned, where you're looking for search words, search words. So I think a lot of people are conditioned for that versus talking out with complete ideas. I think also more people are used to having dialogues versus maybe writing out a complete specification. So I think those are some of the things that make it tough doing prompt-driven development. One of the things that I suggest is that people use tools like Cursor or Cloud Code and have it help you write the prompt and edit the prompt so that you can kind of get the...”
+01:07
+ChatGPT said:
+That's a great approach. Using supportive tools to help refine prompts can definitely ease the transition. Are there any other strategies you think could help developers get more comfortable with PDD?
+
+You said:
+“against problem-driven development, and I'll try to address them.”
+00:05
+ChatGPT said:
+Sure! Some might argue that PDD could lead to inconsistencies if prompts aren't standardized. How would you address that?
+
+You said:
+“Let's see. Not standardized. Well, I mean, it's just basically written language, the way humans usually write it. I think that, you know, one principle about prompts is that you want to make sure that it's somewhat concise, because if you don't, then you could have actually written the code itself in that time. So I think it's important that we make sure that with the prompts, that we make sure that they talk out what is needed versus exactly how to do it. Maybe at a high level, because if you don't, then if you have to over-specify the prompt, then you almost might as well have written the code. But in general, you want to kind of do the minimum that's needed to get the code that you want.”
+01:06
+ChatGPT said:
+That's a solid point. Concise, clear prompts ensure efficiency and still leave room for the LLM to generate the best solution. Standardizing that approach could help maintain consistency.
+
+You said:
+Transcript Unavailable
+00:09
+ChatGPT said:
+Some might worry that PDD could limit creativity by relying heavily on LLMs. How would you respond to that concern?
+
+You said:
+“Well, no, I think this actually gives you more creativity, because instead of spending time on the details, you can spend time on the big picture.”
+00:07
+ChatGPT said:
+Absolutely! By handling the details, PDD frees up developers to focus on innovative ideas and higher-level concepts. It can actually boost creative problem-solving.
+
+You said:
+“I want you to think about this in a step-by-step fashion and tell me what are some of the flaws in the logic of using problem-driven development.”
+00:11
+ChatGPT said:
+Sure! One potential flaw could be over-reliance on LLMs, possibly missing nuanced requirements. Another is the learning curve for writing effective prompts. Also, integrating PDD into existing workflows might be challenging initially.
+
+You said:
+“How would you try to address each of those issues?”
+00:03
+ChatGPT said:
+For over-reliance, we can ensure thorough testing and human review. To address the learning curve, providing training and best practices can help. And for workflow integration, starting small and gradually scaling up can ease the transition.
+
+You said:
+“I think one issue that I was talking to another team about is there's a kind of a synchronization issue. So they would develop a PRD, and then the developers would go ahead and do the PRD, and there would be a lot of interaction between the product manager and the developers, and the PRD would get it out of date and become stale. So I think there's a persistent synchronization issue in our organization around synchronizing all the different docs or assets in the company. So I think one of the things that problem-driven development should help is basically having a consistent source of truth across all of the different assets in the company. So I guess I'd like to hear your analysis of that.”
+01:00
+ChatGPT said:
+You're right; synchronization issues can cause a lot of friction. PDD can help by using prompts as a living document, ensuring everyone's working from the same up-to-date source. It keeps communication and documentation aligned, reducing the risk of outdated information.
+
+You said:
+“I think with problem-driven development, you kind of want a constant synchronization between all the different assets at all times. Because I think what happens is, as you do the detailed implementation, you learn something. There's things you didn't know when you were doing the high-level specification. And that needs to be fed back into the high-level dock so that that learning is there for future implementation of different parts of the system.”
+00:36
+ChatGPT said:
+Exactly, that feedback loop is crucial. Continuously updating prompts with new insights ensures the entire team benefits from evolving knowledge. This way, the high-level documentation remains relevant and useful.
+
+You said:
+“What is the argument against problem-driven development?”
+00:04
+ChatGPT said:
+One argument might be that relying on prompts could limit the depth of customization possible compared to writing code directly. How would you address that?
+
+You said:
+“While you're generating the code, are you asking about in terms of not being able to specify a detailed enough spec in order to modify or to get the exact requirement that you need?”
+00:19
+ChatGPT said:
+Yes, exactly. Some might worry that prompts can't capture all the nuances. How would you ensure that detailed requirements are met using PDD?
+
+You said:
+“Well, you could also write a more detailed prompt. So I think that's that. And you also talk about what is the specific outcome that you're trying to get. So I don't think that's necessarily an issue.”
+00:12
+ChatGPT said:
+That's a great point. By refining the prompt and focusing on desired outcomes, you can achieve the necessary precision. PDD's flexibility allows for detailed customization when needed.
+
+You said:
+“What's the strongest argument against doing prompt-driven development?”
+00:04
+ChatGPT said:
+The strongest argument might be the learning curve for writing effective prompts. It requires a shift in mindset and skills, which could be challenging for some teams.
+
+You said:
+“What do you think are the strongest arguments for doing problem-driven development?”
+00:03
+ChatGPT said:
+The strongest arguments for PDD are its efficiency, flexibility, and the potential to streamline collaboration. It simplifies maintenance and makes development more accessible to a wider range of people.
+
+You said:
+“How would you, what could be a experiment that we could do that would basically allow us to measure the effectiveness of doing problem-driven development versus traditional code-driven development?”
+00:15
+ChatGPT said:
+A good experiment could be running parallel projects, one using PDD and the other traditional coding. You'd compare metrics like development time, number of bugs, and team satisfaction to measure effectiveness.
+
+You said:
+“What if there's only one person? How would you do it with just one person?”
+00:03
+ChatGPT said:
+For one person, you could have them complete two similar tasks, one with PDD and one traditionally. Then compare the time taken, quality of output, and the user's experience with each method.
+
+You said:
+“Has there been similar approaches done before?”
+00:02
+ChatGPT said:
+Yes, there have been studies comparing traditional development methods with newer approaches like pair programming or test-driven development. These can offer insights into designing your PDD experiment.
+
+You said:
+“What have those studies shown?”
+00:01
+ChatGPT said:
+Those studies often show benefits like improved code quality, collaboration, and efficiency. They also highlight challenges, like initial learning curves. The results can help set expectations for adopting PDD.
+
+You said:
+Transcript Unavailable
+00:00
+ChatGPT said:
+Absolutely. Seeing how other methodologies have been tested can give a roadmap for measuring PDD's impact. It helps anticipate both benefits and potential hurdles.
+
+You said:
+“What have studies shown in terms of the impact of the other development styles that you mentioned?”
+00:06
+ChatGPT said:
+Studies on pair programming and test-driven development show improved collaboration, higher code quality, and faster bug detection. They also note initial slowdowns during adoption but long-term productivity gains.
+
+You said:
+“How common are these other type of development styles?”
+00:04
+ChatGPT said:
+They're fairly common, especially in agile environments. Many teams use pair programming or test-driven development to improve collaboration and code quality. Adopting PDD could follow a similar path.
+
+You said:
+“One of the issues I experienced when doing prompt-driven development is that sometimes it's faster for me to just use cursor to fix the code versus fixing the prompt and then fixing the code. What's your response to that?”
+00:17
+ChatGPT said:
+That's a valid concern. Sometimes, direct code edits can be quicker. The key is finding the right balance—using PDD for broader changes and tools like Cursor for quick fixes. It's about leveraging each tool's strengths.
+
+You said:
+Transcript Unavailable
+00:00
+ChatGPT said:
+It's all about finding the most efficient approach for the task at hand.
+
+You said:
+“I think I actually think maybe because what we need to do is when there's a bug, rather than jumping to fix the bug directly, we need to generate the test first and then actually fix the code or fix the prompt.”
+00:23
+ChatGPT said:
+That's a solid approach! Writing a test first ensures you're addressing the bug thoroughly and helps keep the prompt accurate. It reinforces the value of PDD by keeping everything in sync.
+
+You said:
+Transcript Unavailable
+00:00
+ChatGPT said:
+Exactly! It helps ensure the fix is both correct and well-integrated. Plus, it maintains consistency across the project.
+
+You said:
+“I want to tell you about a kind of a pattern, a methodology. So what I do is I have the spec, the PRD. And then what I do is I break the work down into individual prompts for each code module. And then with each code module prompt, what I do then is I create the code module itself. And then what I do is I create an example of how to use that code module. And the reason why the example is important is because this allows other modules to use this. It's like a C header file, so it's a much smaller snippet, it's like the signature. So it's very token efficient. And as we know, if you fill the token window up of a model, it gets dumber, basically. And then I generate the test. And so those are the three kind of core things, which is the prompt, the test, and then the example. And I usually have the prompts in the prompts directory, the example in the context directory, and then the test in the test directory. And so an important thing here, an idea here is to keep everything synced up at all times. So I will try to make sure the example works with the prompt. And once I know that works, then I generate the test and make sure the test work with example and the prompt. And if there's ever time in order to get things working, let's say the function signature has to change, then what I'll do is I'll basically update the architecture or PRD or other files as necessary so that when I generate additional files in the future, it always has the latest state of the art in terms of where things are at, how things are working. So this is the idea is that the whole system at a time is always kind of synced up from top to end, from the things that generated the code to the code itself. So I'm almost automatically updating the prompts based on what the results are of the generations of the code. So can you help me kind of analyze this thought process and what the pros and cons are?”
+03:08
+ChatGPT said:
+Sure! Your approach ensures constant synchronization, which is a major pro. It keeps everything up-to-date and minimizes errors. A potential con might be the overhead of frequently updating multiple files, which could slow things down. Overall, it's a robust methodology!
+
+You said:
+“How do you think it could be better?”
+00:01
+ChatGPT said:
+One improvement could be automating some updates, like having scripts handle routine changes. That way, you maintain synchronization without too much manual effort. It could streamline your process even more.
+
+You said:
+“Right now, kind of the flow of prompt-driven development is I will generate, then I'll create the example, then I'll verify the example, then I'll generate the test, and then I'll verify the test, get everything working with the test. And then I will update the prompt, because sometimes there are things that I learn by implementing the code that needs to make its way back up to the prompt to make it more accurate. And then I'll back propagate all the way back up to the architectural spec files.”
+00:40
+ChatGPT said:
+That's a thorough process! It ensures continuous improvement and accuracy. Automating some steps, like generating tests or syncing prompts, could save time while maintaining this valuable feedback loop.
+
+You said:
+“How do you think the process could be better?”
+00:01
+ChatGPT said:
+Streamlining the verification steps might help. For example, using automated testing tools or scripts to validate examples and tests could speed things up and reduce manual work.
+
+You said:
+“Can you give me an overall summary of the prompt-driven development process?”
+00:07
+ChatGPT said:
+Certainly! The PDD process starts with a PRD, breaking it down into prompts for each module. You generate the code, create examples, and verify them. Then you generate and verify tests, updating prompts and architectural files as needed to keep everything in sync.
+
+You said:
+“Can you compare this methodology to other methodologies out there?”
+00:03
+ChatGPT said:
+Sure! Compared to traditional coding, PDD emphasizes modularity and continuous synchronization. Like test-driven development, it focuses on examples and tests, but PDD uses LLMs to generate code, offering a unique blend of automation and human oversight.
+
+You said:
+“Can you compare and contrast the different coding methodologies?”
+00:03
+ChatGPT said:
+Sure! Traditional coding offers maximum control and customization, but can be time-consuming. Test-driven development emphasizes testing first, improving reliability but potentially slowing initial development. PDD blends automation with human input, leveraging LLMs for efficiency while ensuring continuous synchronization and modularity.
+
+You said:
+“Can you figure out the pros and cons of each methodology? Let's say PDD versus test-driven design versus pair programming versus all the other types of programming methodologies.”
+00:20
+ChatGPT said:
+Sure! PDD's pros are efficiency, modularity, and automation, but it has a learning curve. Test-driven development improves reliability and bug detection but can slow initial progress. Pair programming boosts collaboration and knowledge sharing but requires more developer time. Traditional coding offers control but can be slower. Each has its strengths and trade-offs.
+
+You said:
+“What do you think is the best methodology?”
+00:02
+ChatGPT said:
+The best methodology depends on the project and team needs. For high collaboration, pair programming shines. For reliability, test-driven development is great. PDD suits teams embracing automation and modularity. Often, a mix tailored to your context works best.
+
+You said:
+“So right now, there's kind of two trends. There's a trend of kind of iteratively patching the code. Another approach is this problem-driven development approach. What do you think the pros and cons are of each methodology?”
+00:14
+ChatGPT said:
+Iteratively patching code is fast for quick fixes and familiar to many developers. However, it can lead to technical debt and inconsistencies. PDD, on the other hand, promotes modularity, continuous synchronization, and efficiency, but requires a shift in mindset and skills. Balancing both might be ideal.
+
+You said:
+“I want to talk a little bit more about the fundamental unit for prompt-driven development. So for prompt-driven development, the fundamental unit is the prompt. And the prompt generates three components. The first component is essentially the actual code, the code that will execute whatever the prompt wanted. The second piece is the example. And the example basically is an example of how to use the code that's been generated. And then the third piece is the test. And the test verifies that the code is correct. So this is the fundamental unit, these four files. And they all come from the prompt. And one important piece is generally we want to make sure that this unit can work, hopefully, with a one-shot generation. So sometimes you're going to have to fix stuff with unit tests. But basically, if you can't get it fixed when you generate the code and the unit test, and it can't get it fully working, then it's important that you split the prompt into smaller prompts so that each generation, each prompt by itself can be successfully generated and then fixed with a unit test if necessary. And then in the future, when the prompt changes, the idea is that the unit tests live on. So you may generate more unit tests. But the idea is not to delete the old unit test so that the unit tests continue to move forward. But the idea is that in the system, all four of these files stay synced up together at all times. So after, let's say, you had to fix the example, you had to fix the unit test in the code to make the stuff work, you would go back and do an update to make sure that the prompt is synced up. And the prompt that generated this prompt also will get updated. So you want to also back propagate the changes to this prompt to the prompt that generated this prompt. So the basic idea is that at all times, all files are synced up in the system. So what do you think about this approach to prompt-driven development?”
+02:50
+ChatGPT said:
+Your approach ensures consistency and keeps everything in sync, which is crucial. The emphasis on unit tests and examples ensures thorough validation. One potential challenge could be managing the back-propagation, especially in larger projects. Automating parts of this process could make it even more efficient.
+
+You said:
+“Yeah, I think that the backpropagation is actually very important in automating it. You know, with systems that were traditionally done, the problem is that it's a lot of work to keep all the documents updated. But with LLMs, updating documents is actually relatively easy now. So it's easy to backpropagate the test to basically keep the system fully in sync.”
+00:35
+ChatGPT said:
+Absolutely. Leveraging LLMs to automate documentation updates can significantly reduce manual workload. It ensures all components remain synchronized, making the whole PDD process smoother and more efficient.
+
+You said:
+“What recommendations do you have in terms of trying to make the PDD workflow better?”
+00:04
+ChatGPT said:
+Focusing on automation and tool integration would be key. Streamlining back-propagation, using scripts to handle routine tasks, and ensuring seamless integration with existing tools can enhance the PDD workflow.
+
+You said:
+“What other issues do you see with the product-driven development flow?”
+00:03
+ChatGPT said:
+One potential issue could be managing dependencies between prompts. Ensuring that changes in one module don't negatively impact others might require careful coordination and robust testing.
+
+You said:
+“How do you think we can handle that?”
+00:01
+ChatGPT said:
+Handling that could involve a combination of comprehensive testing and modular design. Automated tests can catch issues early, while keeping prompts focused and independent reduces the risk of conflicts.
+
+You said:
+“But how does that address the issue you just brought up?”
+00:02
+ChatGPT said:
+Comprehensive testing ensures that changes in one module don't break others. Modular design limits dependencies, making it easier to isolate and manage changes.
+
+You said:
+“Explain to me again the problem that you highlighted.”
+00:03
+ChatGPT said:
+Sure! The issue is that changes in one prompt might affect others due to dependencies. Without careful coordination, this could lead to inconsistencies or bugs across modules.
+
+You said:
+“And so, tell me how your proposal fixes this problem.”
+00:04
+ChatGPT said:
+By using comprehensive testing and modular design, you can isolate changes and ensure they don't impact other modules. This reduces the risk of inconsistencies and keeps the system stable.
+
+You said:
+“Can you give me an example?”
+00:01
+ChatGPT said:
+Sure! Imagine a module for user authentication. If you change its prompt, comprehensive tests would ensure other modules, like user profile, remain unaffected. This keeps everything running smoothly.
+
+You said:
+“Can you give me more details so I understand better?”
+00:02
+ChatGPT said:
+Sure! If the authentication module's prompt changes, like adding a new security check, comprehensive tests would verify that other related modules, such as user profile updates, still work correctly. This ensures changes don't cause unexpected issues elsewhere.
+
+You said:
+“Hmm, okay, I think I don't fully understand how that prevents the issue.”
+00:04
+
+ChatGPT said:
+No worries! By running comprehensive tests after each change, you'd catch any issues early. If the new security check in the authentication module breaks something in the user profile, the tests would fail, alerting you to the problem before it affects production.
+
+
+
+
+
+
+You said:
+“Oh, I see. I think I... I'm starting to understand what you mean.”
+00:02
+
+ChatGPT said:
+Great! The goal is to catch issues early and keep everything stable. Comprehensive testing acts as a safety net.
