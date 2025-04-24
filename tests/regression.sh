@@ -559,35 +559,29 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "6" ]; then
   fi
 fi
 
-# 7. Verify (using isolated harness)
+# 7. Verify (using built-in pdd verify)
 if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "7" ]; then
   log "7. Testing 'verify' command"
-  if [ ! -f "$VERIFY_SCRIPT_PATH" ]; then
-      log_error "Verification harness script not found at $VERIFY_SCRIPT_PATH. Skipping 'verify' test."
+  if [ ! -f "$MATH_SCRIPT" ]; then
+      log_error "Code file $MATH_SCRIPT not found. Skipping 'verify' test."
+  elif [ ! -f "$MATH_VERIFICATION_PROGRAM" ]; then
+      log_error "Verification program $MATH_VERIFICATION_PROGRAM not found. Skipping 'verify' test."
   else
-      mkdir -p "$VERIFY_ISOLATED_DIR"
-      log "Running isolated verification harness"
-      python "$VERIFY_SCRIPT_PATH" \
-          --prompt-file "$PROMPTS_PATH/$MATH_PROMPT" \
-          --code-file "$MATH_SCRIPT" \
-          --program-file "$MATH_VERIFICATION_PROGRAM" \
+      log "Running pdd verify"
+      # Directly call pdd verify instead of the python harness script
+      run_pdd_command_noexit verify \
           --output-results "$VERIFY_RESULTS_LOG" \
           --output-code "$VERIFY_CODE_OUTPUT" \
-          --output-dir "$VERIFY_ISOLATED_DIR" \
           --max-attempts 3 \
           --budget 5.0 \
-          --strength $STRENGTH \
-          --temperature $TEMPERATURE \
-          --force \
-          --verbose \
-          ${TEST_LOCAL:+--local} \
-          > "$VERIFY_HARNESS_LOG" 2>&1
+          "$PROMPTS_PATH/$MATH_PROMPT" \
+          "$MATH_SCRIPT" \
+          "$MATH_VERIFICATION_PROGRAM"
 
-      cat "$VERIFY_HARNESS_LOG" >> "$LOG_FILE"
       VERIFY_STATUS=$?
       if [ $VERIFY_STATUS -eq 0 ]; then
-          log "Verification harness completed successfully."
-          log_timestamped "Validation success: Verification harness completed successfully."
+          log "pdd verify completed successfully."
+          log_timestamped "Validation success: pdd verify completed successfully."
           check_exists "$VERIFY_CODE_OUTPUT" "'verify' output code"
           # Adopt verified code
           cp "$VERIFY_CODE_OUTPUT" "$MATH_SCRIPT"
@@ -607,9 +601,9 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "7" ]; then
               log_timestamped "Validation success: Verified code example program ran successfully."
           fi
       else
-          log_error "Verification harness failed with exit code $VERIFY_STATUS."
-          log_timestamped "Validation failed: Verification harness failed with exit code $VERIFY_STATUS."
-          # Decide if this is fatal
+          log_error "pdd verify failed with exit code $VERIFY_STATUS."
+          log_timestamped "Validation failed: pdd verify failed with exit code $VERIFY_STATUS."
+          # Decide if this is fatal, but script will likely exit due to set -e anyway if VERIFY_STATUS != 0
       fi
   fi
 fi
