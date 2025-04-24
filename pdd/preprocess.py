@@ -133,9 +133,9 @@ def process_web_tags(text: str) -> str:
                 console.print("[bold yellow]Warning:[/bold yellow] FIRECRAWL_API_KEY not found in environment")
                 return f"[Error: FIRECRAWL_API_KEY not set. Cannot scrape {url}]"
             app = FirecrawlApp(api_key=api_key)
-            response = app.scrape_url(url=url, params={'formats': ['markdown']})
-            if 'markdown' in response:
-                return response['markdown']
+            response = app.scrape_url(url, formats=['markdown'])
+            if hasattr(response, 'markdown'):
+                return response.markdown
             else:
                 console.print(f"[bold yellow]Warning:[/bold yellow] No markdown content returned for {url}")
                 return f"[No content available for {url}]"
