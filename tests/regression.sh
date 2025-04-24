@@ -30,15 +30,14 @@ log "Running tests: $TARGET_TEST"
 export PDD_AUTO_UPDATE=false
 
 # Define base variables
-# Assuming PDD_PATH is set externally, pointing to the pdd source directory
-if [ -z "${PDD_PATH:-}" ]; then
-  echo "Error: PDD_PATH environment variable is not set."
-  exit 1
-fi
-STAGING_PATH="$PDD_PATH/../staging"
-PDD_SCRIPT="pdd" # Assumes pdd is in PATH or use "$PDD_PATH/pdd/cli.py" etc.
-PROMPTS_PATH="$PDD_PATH/../prompts"
-CONTEXT_PATH="$PDD_PATH/../context"
+# Set PDD base directory as the script's location (two directories up from this script)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PDD_BASE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+PDD_PATH="$PDD_BASE_DIR/pdd"
+STAGING_PATH="$PDD_BASE_DIR/staging"
+PDD_SCRIPT="pdd" # Assumes pdd is in PATH or use "$PDD_PATH/cli.py" etc.
+PROMPTS_PATH="$PDD_BASE_DIR/prompts"
+CONTEXT_PATH="$PDD_BASE_DIR/context"
 CONTEXT_PATH_GLOB="$CONTEXT_PATH/*.py" # Escaping might be needed depending on shell interpretation
 REGRESSION_DIR="$STAGING_PATH/regression_$(date +%Y%m%d_%H%M%S)" # Unique dir per run
 LOG_FILE="$REGRESSION_DIR/regression.log"
@@ -46,7 +45,7 @@ COST_FILE="regression_cost.csv"
 
 # simple_math test case files
 MATH_BASENAME="simple_math"
-MATH_PROMPT="${MATH_BASENAME}.prompt"
+MATH_PROMPT="${MATH_BASENAME}_python.prompt"
 MATH_SCRIPT="${MATH_BASENAME}.py"
 MATH_TEST_SCRIPT="test_${MATH_BASENAME}.py"
 MATH_VERIFICATION_PROGRAM="${MATH_BASENAME}_example.py"
@@ -109,7 +108,7 @@ VERIFY_CODE_OUTPUT="verified_${MATH_SCRIPT}"
 VERIFY_EXAMPLE_OUTPUT="verified_${MATH_VERIFICATION_PROGRAM}" # Example derived from verified code
 VERIFY_HARNESS_LOG="verify_harness.log"
 VERIFY_ISOLATED_DIR="isolated_verify"
-VERIFY_SCRIPT_PATH="$PDD_PATH/../tests/isolated_verify.py"
+VERIFY_SCRIPT_PATH="$PDD_BASE_DIR/tests/isolated_verify.py"
 
 # --- Helper Functions ---
 
