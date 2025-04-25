@@ -250,11 +250,6 @@ run_pdd_expect_fail() {
 # --- Cleanup Function ---
 cleanup() {
     log "Running cleanup..."
-    # Kill web server if running
-    if [ -n "${HTTP_SERVER_PID:-}" ]; then
-        log "Stopping background HTTP server (PID: $HTTP_SERVER_PID)..."
-        kill "$HTTP_SERVER_PID" || log "HTTP server already stopped."
-    fi
     if [ "$CLEANUP_ON_EXIT" = "true" ]; then
       log "Removing regression directory: $REGRESSION_DIR"
       rm -rf "$REGRESSION_DIR"
@@ -284,6 +279,32 @@ log "Strength: $STRENGTH"
 log "Temperature: $TEMPERATURE"
 log "Local Execution: $TEST_LOCAL"
 log "----------------------------------------"
+
+# Create context files needed by multiple tests
+log "Creating common context files (example.prompt, test.prompt)"
+mkdir -p context # Ensure context subdirectory exists
+if [ $? -ne 0 ]; then
+    log_error "Failed to create context directory. Exiting."
+    exit 1
+fi
+# Context for 'example' command
+cat << \EOF > "context/example.prompt"
+For the function 'add' defined based on 'simple_math_python.prompt', the implementation is in 'simple_math.py'.
+Therefore, the example should include the line: 'from simple_math import add'
+EOF
+if [ $? -ne 0 ]; then
+    log_error "Failed to write context/example.prompt file. Exiting."
+    exit 1
+fi
+# Context for 'test' command
+cat << EOF > "context/test.prompt"
+For the function 'add' defined based on 'simple_math_python.prompt', the implementation is in 'simple_math.py'.
+Therefore, the test file should include the line: 'from simple_math import add'
+EOF
+if [ $? -ne 0 ]; then
+    log_error "Failed to write context/test.prompt file. Exiting."
+    exit 1
+fi
 
 
 # --- Test Preparations ---
@@ -382,11 +403,21 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "2" ]; then
   log "2. Testing 'example' command"
 
   # Create a context example prompt to guide the import generation
-  log "Creating context/example.prompt for example generation"
-  cat << EOF > "example.prompt"
-For the function 'add' defined based on 'simple_math_python.prompt', the implementation is in 'simple_math.py'.
-Therefore, the example should include the line: 'from simple_math import add'
-EOF
+  # MOVED TO SETUP SECTION
+  # log "Creating context/example.prompt for example generation"
+  # mkdir -p context # Ensure context subdirectory exists
+  # if [ $? -ne 0 ]; then
+  #     log_error "Failed to create context directory. Exiting."
+  #     exit 1
+  # fi
+  # cat << \EOF > "context/example.prompt"
+  # For the function 'add' defined based on 'simple_math_python.prompt', the implementation is in 'simple_math.py'.
+  # Therefore, the example should include the line: 'from simple_math import add'
+  # EOF
+  # if [ $? -ne 0 ]; then
+  #     log_error "Failed to write context/example.prompt file. Exiting."
+  #     exit 1
+  # fi
 
   run_pdd_command example --output "$MATH_VERIFICATION_PROGRAM" "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
   check_exists "$MATH_VERIFICATION_PROGRAM" "'example' output"
@@ -648,50 +679,32 @@ fi
 # 8. Test
 if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "8" ]; then
   log "8. Testing 'test' command (initial generation)"
+
+  # Create a context test prompt to guide test generation
+  # MOVED TO SETUP SECTION
+  # log "Creating context/test.prompt for test generation"
+  # mkdir -p context # Ensure context subdirectory exists (might be redundant if Test 2 ran)
+  # cat << EOF > "context/test.prompt"
+  # For the function 'add' defined based on 'simple_math_python.prompt', the implementation is in 'simple_math.py'.
+  # Therefore, the test file should include the line: 'from simple_math import add'
+  # EOF
+
   run_pdd_command test --output "$MATH_TEST_SCRIPT" --language Python "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
   check_exists "$MATH_TEST_SCRIPT" "'test' initial output"
 
   # 8a. Test with coverage improvement
   log "8a. Testing 'test' with coverage improvement"
   # Fix the module import issue in the test script
-  log "Fixing module import in test script..."
-  sed -i.bak 's/from add import add/from simple_math import add/' "$MATH_TEST_SCRIPT"
+  # log "Fixing module import in test script..." # Should be unnecessary with context/test.prompt
+  # sed -i.bak 's/from add import add/from simple_math import add/' "$MATH_TEST_SCRIPT"
   
   # Remove the Z3 dependency that's causing issues
-  log "Removing Z3 dependency from test script..."
-  sed -i.bak2 's/from z3 import Int, Solver, sat/# Z3 import removed for regression tests/' "$MATH_TEST_SCRIPT"
-  # Replace the entire test file with a simple working version
-  log "Creating simplified test file without Z3 dependencies..."
-  cat > "$MATH_TEST_SCRIPT" << 'EOF'
-import pytest
-from simple_math import add
-
-def test_add_correctness_for_all_integers():
-    # Z3 formal verification disabled for regression tests
-    pass
-
-# --- Unit Tests ---
-
-def test_add_positive_numbers():
-    assert add(1, 2) == 3
-
-def test_add_negative_numbers():
-    assert add(-1, -2) == -3
-
-def test_add_zero():
-    assert add(0, 0) == 0
-    assert add(0, 5) == 5
-    assert add(-5, 0) == -5
-
-def test_add_large_numbers():
-    large_num1 = 10**6
-    large_num2 = 10**6
-    assert add(large_num1, large_num2) == 2 * 10**6
-
-def test_add_mixed_signs():
-    assert add(10, -5) == 5
-    assert add(-10, 5) == -5
-EOF
+  # log "Removing Z3 dependency from test script..." # Should be unnecessary with context/test.prompt
+  # sed -i.bak2 's/from z3 import Int, Solver, sat/# Z3 import removed for regression tests/' "$MATH_TEST_SCRIPT"
+  # log "Creating simplified test file without Z3 dependencies..." # Should be unnecessary with context/test.prompt
+  # cat > "$MATH_TEST_SCRIPT" << 'EOF'
+  # ... (simplified test content removed) ...
+  # EOF
   
   # Run initial tests with coverage
   log "Running pytest with coverage..."
@@ -763,7 +776,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "9" ]; then
                           "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "$MATH_TEST_SCRIPT" "$PYTEST_LOG"
 
       # Adopt fixed versions if they were created
-      local adopted_fix=false
+      adopted_fix=false
       if [ -f "$FIXED_MATH_SCRIPT" ]; then
           cp "$FIXED_MATH_SCRIPT" "$MATH_SCRIPT"
           log "Adopted fixed script from 'fix' command."
