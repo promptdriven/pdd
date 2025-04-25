@@ -179,6 +179,45 @@ PDD continues to evolve, with initiatives like:
 *   **PDD Cloud**: A platform to store and share few-shot examples, providing crucial context to LLMs during generation, enabling higher quality results even with less powerful models. This acts as a marketplace for valuable context.
 *   **VS Code Extension**: Provides syntax highlighting and tooling support for `.prompt` files within the popular editor.
 
+## Visual: Collaboration Model Comparison
+
+The following diagram illustrates how PDD transforms collaboration between different stakeholders by making prompts (rather than code) the central shared artifact:
+
+```mermaid
+flowchart LR
+    subgraph Traditional ["Traditional Code-Centric Development"]
+        direction TB
+        TC[Code] --> TD[Developers]
+        TS[Specifications/PRDs] --> TPM[Product Managers]
+        TS --> TB[Business Stakeholders]
+        TS -.-> TC
+        TPM -.-> TS
+        TB -.-> TS
+        TD --> TC
+        
+        classDef artifact fill:#f9f,stroke:#333,stroke-width:2px
+        classDef stakeholder fill:#bbf,stroke:#333,stroke-width:2px
+        class TC,TS artifact
+        class TD,TPM,TB stakeholder
+    end
+    
+    subgraph PDD ["Prompt-Driven Development"]
+        direction TB
+        PP[Prompts] --> PD[Developers]
+        PP --> PPM[Product Managers]
+        PP --> PB[Business Stakeholders]
+        PC[Generated Code] --> PP
+        PP --> PC
+        
+        class PP,PC artifact
+        class PD,PPM,PB stakeholder
+    end
+    
+    Traditional ~~~ PDD
+```
+
+In traditional development, developers primarily interact with the code, while other stakeholders work through specifications that often become disconnected from the actual implementation. PDD transforms this by making prompts the central, common artifact that all stakeholders can understand and contribute to, while maintaining synchronization with the generated code.
+
 ## Conclusion
 
 Prompt-Driven Development offers a compelling alternative to traditional coding paradigms and purely interactive AI patching approaches, directly addressing the high cost and complexity of software maintenance. By establishing prompts as the primary artifact, emphasizing regeneration over patching, and leveraging LLMs within a structured, batch-oriented workflow for code generation and synchronization, PDD promotes long-term efficiency, consistency, better collaboration, and adaptability. While requiring a shift in mindset and skills, and acknowledging that interactive tools have their place for specific tasks, the potential benefits of PDD – particularly for complex, evolving systems – position it as a significant evolution in software engineering practices, enabling developers to work faster, more strategically, and at a higher level of abstraction. 
