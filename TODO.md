@@ -29,7 +29,6 @@
 - [ ] autogenerate the model.csv file and print out the strength of each model
 - [ ] agentic prompt to code
 - [ ] agentic additional context inclusion via context 7 MCP
-- [ ] add to whitepaper the idea that code generation is getting better and better and longer output make prompt driven better than interactive patching when LLMs were very limited and could only do small generations reliably
 
 ## Bugs
 
