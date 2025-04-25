@@ -60,7 +60,7 @@ set_llm_cache(SQLiteCache(database_path=".langchain.db"))
 # Create the LCEL template. Make note of the variable {topic} which will be filled in later.
 prompt_template = PromptTemplate.from_template("Tell me a joke about {topic}")
 
-llm = ChatGoogleGenerativeAI(model="gemini-2.0-pro-exp-02-05", temperature=0, callbacks=[handler])
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-pro-exp-03-25", temperature=0, callbacks=[handler])
 # Combine with a model and parser to output a string
 chain = prompt_template |llm| StrOutputParser()
 
@@ -69,7 +69,7 @@ result = chain.invoke({"topic": "cats"})
 print("********Google:", result)
 
 
-llm = ChatVertexAI(model="gemini-2.0-pro-exp-02-05", temperature=0, callbacks=[handler])
+llm = ChatVertexAI(model="gemini-2.5-pro-exp-03-25", temperature=0, callbacks=[handler])
 # Combine with a model and parser to output a string
 chain = prompt_template |llm| StrOutputParser()
 
@@ -152,7 +152,7 @@ print("deepseek pydantic",result)
 
 # Set up the Azure ChatOpenAI LLM instance
 llm_no_struct = AzureChatOpenAI(
-    model="o1-mini-2024-09-12",
+    model="gpt-4o",
     temperature=0,
     callbacks=[handler]
 )
