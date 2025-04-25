@@ -207,6 +207,7 @@ def construct_paths(
     quiet: bool,
     command: str,
     command_options: Optional[Dict[str, Any]], # Allow None
+    create_error_file: bool = True,  # Added parameter to control error file creation
 ) -> Tuple[Dict[str, str], Dict[str, str], str]:
     """
     High‑level orchestrator that loads inputs, determines basename/language,
@@ -246,12 +247,17 @@ def construct_paths(
     input_strings: Dict[str, str] = {}
     for key, path in input_paths.items():
         if key == "error_file":
-            _ensure_error_file(path, quiet) # Pass quiet flag
-            # Ensure path exists before trying to read
-            if not path.exists():
-                 # _ensure_error_file should have created it, but check again
-                 # If it still doesn't exist, something went wrong
-                 raise FileNotFoundError(f"Error file '{path}' could not be created or found.")
+            if create_error_file:
+                _ensure_error_file(path, quiet) # Pass quiet flag
+                # Ensure path exists before trying to read
+                if not path.exists():
+                     # _ensure_error_file should have created it, but check again
+                     # If it still doesn't exist, something went wrong
+                     raise FileNotFoundError(f"Error file '{path}' could not be created or found.")
+            else:
+                # When create_error_file is False, error out if the file doesn't exist
+                if not path.exists():
+                    raise FileNotFoundError(f"Error file '{path}' does not exist.")
 
         # Check existence again, especially for error_file which might have been created
         if not path.exists():

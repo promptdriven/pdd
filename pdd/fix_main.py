@@ -6,6 +6,7 @@ from rich import print as rprint
 import requests
 import asyncio
 import os
+from pathlib import Path
 
 from .preprocess import preprocess
 
@@ -68,6 +69,12 @@ def fix_main(
     analysis_results = None
 
     try:
+        # Verify error file exists if not in loop mode
+        if not loop:
+            error_path = Path(error_file)
+            if not error_path.exists():
+                raise FileNotFoundError(f"Error file '{error_file}' does not exist.")
+                
         # Construct file paths
         input_file_paths = {
             "prompt_file": prompt_file,
@@ -88,7 +95,8 @@ def fix_main(
             force=ctx.obj.get('force', False),
             quiet=ctx.obj.get('quiet', False),
             command="fix",
-            command_options=command_options
+            command_options=command_options,
+            create_error_file=loop  # Only create error file if in loop mode
         )
 
         # Get parameters from context
