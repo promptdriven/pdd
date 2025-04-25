@@ -73,6 +73,33 @@ Adopting a PDD approach offers numerous advantages, particularly when contrasted
 *   **Cost Savings (LLM Usage)**:
     *   **Token Efficiency**: PDD workflows, being more structured and modular (using examples as interfaces), can be more deterministic and token-efficient compared to the potentially verbose interactions of purely agentic/chat-based coding assistants.
     *   **Batch Processing API Discounts**: PDD is inherently suited to batch-mode generation. Developers can define prompts, launch the generation process, and return later. LLM providers often offer significant discounts (e.g., 50% off) for batch processing APIs compared to the more expensive interactive APIs required by constantly supervised tools.
+
+### Batch vs. Interactive Workflow Timelines
+
+```mermaid
+gantt
+    title Developer Time Utilization: Interactive vs. Batch Approaches
+    dateFormat  HH:mm
+    axisFormat %H:%M
+    section Interactive/Patching
+    Define initial prompt      :a1, 00:00, 5m
+    Review & direct AI         :a2, after a1, 5m
+    Review & redirect AI       :a3, after a2, 5m
+    Review & fix output        :a4, after a3, 5m
+    Review & redirect AI       :a5, after a4, 5m
+    Review & fix output        :a6, after a5, 5m
+    Review & redirect AI       :a7, after a6, 5m
+    Final review & integration :a8, after a7, 10m
+    section PDD (Batch)
+    Define/refine prompt       :b1, 00:00, 15m
+    Launch generation          :milestone, after b1, 0m
+    AI batch processing        :b2, after b1, 30m
+    Developer works on other tasks :b3, after b1, 30m
+    Review results & integrate :b4, after b2, 10m
+```
+
+*Figure 1: Comparison of developer time utilization in interactive vs. batch (PDD) workflows. While both approaches might use similar total LLM processing time, the PDD approach frees the developer from constant supervision, allowing them to work on other tasks while batch processing occurs.*
+
 *   **Enhanced Control & Consistency**: PDD provides more direct control over the generation process. Prompts are attached to specific code modules, making the generation highly directed and reproducible, unlike less predictable, "universal chatbot" style interactions.
 *   **Improved Collaboration & Accessibility**: Prompts, being in natural language, serve as a common language accessible to both technical and non-technical stakeholders. This facilitates validation of business logic and keeps everyone aligned, unlike code-centric patching workflows.
 *   **Easier Onboarding**: New team members can understand the system's purpose and structure by reading the prompts, which are typically much shorter and clearer than the full codebase resulting from numerous patches.
@@ -80,7 +107,7 @@ Adopting a PDD approach offers numerous advantages, particularly when contrasted
 *   **Enhanced Code Quality (via Explicit Context)**: PDD emphasizes systematically finding and providing relevant context (like few-shot examples, potentially sourced from a shared cloud) to the LLM during generation. Good context can allow even less powerful models to outperform stronger models that lack context, leading to higher-quality, more accurate code compared to zero-shot or implicit context approaches.
 *   **Adaptability**: PDD excels in scenarios requiring frequent changes or evolution. Modifying high-level prompts is often simpler and safer than performing deep surgery on patched code.
 *   **Systematic Prompt Management**: PDD treats generation prompts as critical, version-controlled artifacts, unlike interactive approaches where valuable generation logic may be lost in chat history.
-*   **Integration**: PDD tools are designed to be complementary to existing development environments (like VS Code) and agentic tools (like Cursor or Claude Code), often integrating via protocols like MCP (Model Context Protocol). They can be used *together*.
+*   **Integration**: PDD tools are designed to be complementary to existing development environments (like VS Code) and agentic tools (like Cursor or Cloud Code), often integrating via protocols like MCP (Model Context Protocol). They can be used *together*.
 
 ## Addressing Potential Concerns
 
@@ -155,31 +182,3 @@ PDD continues to evolve, with initiatives like:
 ## Conclusion
 
 Prompt-Driven Development offers a compelling alternative to traditional coding paradigms and purely interactive AI patching approaches, directly addressing the high cost and complexity of software maintenance. By establishing prompts as the primary artifact, emphasizing regeneration over patching, and leveraging LLMs within a structured, batch-oriented workflow for code generation and synchronization, PDD promotes long-term efficiency, consistency, better collaboration, and adaptability. While requiring a shift in mindset and skills, and acknowledging that interactive tools have their place for specific tasks, the potential benefits of PDD – particularly for complex, evolving systems – position it as a significant evolution in software engineering practices, enabling developers to work faster, more strategically, and at a higher level of abstraction. 
-
-## Diagrams
-
-### Batch vs. Interactive Workflow Timelines
-
-```mermaid
-gantt
-    title Developer Time Utilization: Interactive vs. Batch Approaches
-    dateFormat  HH:mm
-    axisFormat %H:%M
-    section Interactive/Patching
-    Define initial prompt      :a1, 00:00, 5m
-    Review & direct AI         :a2, after a1, 5m
-    Review & redirect AI       :a3, after a2, 5m
-    Review & fix output        :a4, after a3, 5m
-    Review & redirect AI       :a5, after a4, 5m
-    Review & fix output        :a6, after a5, 5m
-    Review & redirect AI       :a7, after a6, 5m
-    Final review & integration :a8, after a7, 10m
-    section PDD (Batch)
-    Define/refine prompt       :b1, 00:00, 15m
-    Launch generation          :milestone, after b1, 0m
-    AI batch processing        :b2, after b1, 30m
-    Developer works on other tasks :b3, after b1, 30m
-    Review results & integrate :b4, after b2, 10m
-```
-
-*Figure 1: Comparison of developer time utilization in interactive vs. batch (PDD) workflows. While both approaches might use similar total LLM processing time, the PDD approach frees the developer from constant supervision, allowing them to work on other tasks while batch processing occurs.* 
