@@ -98,22 +98,25 @@ While PDD offers significant advantages, potential challenges exist:
 flowchart TD
     subgraph Initialization
         A[Requirements/PRD] -->|Break down| B[Define Prompt]
-        B -->|Include Context| C["auto-deps\n(Find Relevant Examples)"]
+        B -->|Find Context| C["auto-deps\n(Relevant Examples)"]
     end
     
     subgraph Generation
         C --> D["generate\n(Create Code Module)"]
-        D --> E["example\n(Create Usage Example)"]
+        B --> E["example\n(Create Usage Example)"]
+        D -.->|Reference| E
     end
     
     subgraph Verification
-        E --> F["verify/crash\n(Test Example)"]
-        F -->|Issues| G["Fix Basic Issues"]
-        G --> E
+        E --> F["fix\n(Resolve Crashes)"]
+        F --> G["verify\n(Functional Correctness)"]
+        G -->|Issues| F
     end
     
     subgraph Testing
-        F -->|Passes| H["test\n(Generate Unit Tests)"]
+        G -->|Passes| H["test\n(Generate Unit Tests)"]
+        C -.->|Context| H
+        D -.->|Reference| H
         H --> I["fix\n(Resolve Bugs)"]
         I -->|Bugs Remain| I
     end
@@ -125,6 +128,7 @@ flowchart TD
     end
     
     style A fill:#f9f,stroke:#333
+    style B fill:#f96,stroke:#333
     style J fill:#bbf,stroke:#333
     style K fill:#bbf,stroke:#333
 ```
