@@ -862,8 +862,14 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "15" ]; then
 
   # 15a. Auto-Deps with --force-scan
   log "15a. Testing 'auto-deps --force-scan'"
-  # Modify timestamp of CSV to check if scan happens
-  touch -m -d "2 hours ago" "$AUTO_DEPS_CSV"
+  # Modify timestamp of CSV to check if scan happens (cross-platform solution)
+  if date --version 2>/dev/null | grep -q GNU; then
+    # GNU/Linux
+    touch -m -d "2 hours ago" "$AUTO_DEPS_CSV"
+  else
+    # BSD/macOS
+    touch -m -t "$(date -v-2H +%Y%m%d%H%M.%S)" "$AUTO_DEPS_CSV"
+  fi
   run_pdd_command auto-deps --force-scan --output "forced_scan_${AUTO_DEPS_PROMPT}" \
                              --csv "$AUTO_DEPS_CSV" \
                              "$PROMPTS_PATH/$MATH_PROMPT" "$CONTEXT_PATH_GLOB"
