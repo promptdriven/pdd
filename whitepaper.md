@@ -185,24 +185,27 @@ The following diagram illustrates how PDD transforms collaboration between diffe
 
 ```mermaid
 flowchart LR
-    subgraph Traditional ["Traditional Code-Centric Development"]
+    subgraph Traditional ["Interactive AI-Assisted Development"]
         direction TB
         TS[Specifications/PRDs] --> TD[Developers]
-        TD --> TC[Code]
-        TC --> TD
+        TD --> TI[Interactive Chat/\nSingle-use Prompts]
+        TI --> TD
+        TI --> TC[Generated Code]
+        TC --> TI
         TPM[Product Managers] --> TS
         
         classDef artifact fill:#f9f,stroke:#333,stroke-width:2px
         classDef stakeholder fill:#bbf,stroke:#333,stroke-width:2px
-        class TC,TS artifact
+        class TC,TS,TI artifact
         class TD,TPM stakeholder
     end
     
     subgraph PDD ["Prompt-Driven Development"]
         direction TB
-        PP[Prompts] <--> PD[Developers]
+        PP[Versioned Prompts] <--> PD[Developers]
         PP <--> PPM[Product Managers]
-        PP <--> PC[Generated Code]
+        PP --> PC[Generated Code]
+        PC -- "Technical Learnings" --> PP
         
         class PP,PC artifact
         class PD,PPM stakeholder
@@ -211,7 +214,7 @@ flowchart LR
     Traditional ~~~ PDD
 ```
 
-In traditional development, product managers create specifications that developers use to write code, but the artifacts often become disconnected over time. PDD transforms this by making prompts the central, common artifact that both developers and product managers actively contribute to and maintain, while ensuring continuous synchronization with the generated code.
+In traditional interactive AI-assisted development, developers create ephemeral prompts in chat interfaces to generate code, but these prompts are typically lost and not systematically preserved. PDD transforms this by making versioned prompts the central, persisted artifact that both developers and product managers actively contribute to and maintain. Crucially, technical learnings gained during implementation are back-propagated to keep prompts updated, ensuring continuous synchronization with the generated code.
 
 ## Conclusion
 
