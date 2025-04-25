@@ -109,6 +109,43 @@ gantt
 *   **Systematic Prompt Management**: PDD treats generation prompts as critical, version-controlled artifacts, unlike interactive approaches where valuable generation logic may be lost in chat history.
 *   **Integration**: PDD tools are designed to be complementary to existing development environments (like VS Code) and agentic tools (like Cursor or Cloud Code), often integrating via protocols like MCP (Model Context Protocol). They can be used *together*.
 
+## Visual: Collaboration Model Comparison
+
+The following diagram illustrates how PDD transforms collaboration between different stakeholders by making prompts (rather than code) the central shared artifact:
+
+```mermaid
+flowchart LR
+    subgraph Traditional ["Interactive AI-Assisted Development"]
+        direction TB
+        TS[Specifications/PRDs] --> TD[Developers]
+        TD --> TI[Interactive Chat/\nSingle-use Prompts]
+        TI --> TD
+        TI --> TC[Generated Code]
+        TC --> TI
+        TPM[Product Managers] --> TS
+        
+        classDef artifact fill:#f9f,stroke:#333,stroke-width:2px
+        classDef stakeholder fill:#bbf,stroke:#333,stroke-width:2px
+        class TC,TS,TI artifact
+        class TD,TPM stakeholder
+    end
+    
+    subgraph PDD ["Prompt-Driven Development"]
+        direction TB
+        PP[Versioned Prompts] <--> PD[Developers]
+        PP <--> PPM[Product Managers]
+        PP --> PC[Generated Code]
+        PC -- "Technical Learnings" --> PP
+        
+        class PP,PC artifact
+        class PD,PPM stakeholder
+    end
+    
+    Traditional ~~~ PDD
+```
+
+In traditional interactive AI-assisted development, developers create ephemeral prompts in chat interfaces to generate code, but these prompts are typically lost and not systematically preserved. PDD transforms this by making versioned prompts the central, persisted artifact that both developers and product managers actively contribute to and maintain. Crucially, technical learnings gained during implementation are back-propagated to keep prompts updated, ensuring continuous synchronization with the generated code.
+
 ## Addressing Potential Concerns
 
 While PDD offers significant advantages, potential challenges exist:
@@ -178,43 +215,6 @@ PDD continues to evolve, with initiatives like:
 
 *   **PDD Cloud**: A platform to store and share few-shot examples, providing crucial context to LLMs during generation, enabling higher quality results even with less powerful models. This acts as a marketplace for valuable context.
 *   **VS Code Extension**: Provides syntax highlighting and tooling support for `.prompt` files within the popular editor.
-
-## Visual: Collaboration Model Comparison
-
-The following diagram illustrates how PDD transforms collaboration between different stakeholders by making prompts (rather than code) the central shared artifact:
-
-```mermaid
-flowchart LR
-    subgraph Traditional ["Interactive AI-Assisted Development"]
-        direction TB
-        TS[Specifications/PRDs] --> TD[Developers]
-        TD --> TI[Interactive Chat/\nSingle-use Prompts]
-        TI --> TD
-        TI --> TC[Generated Code]
-        TC --> TI
-        TPM[Product Managers] --> TS
-        
-        classDef artifact fill:#f9f,stroke:#333,stroke-width:2px
-        classDef stakeholder fill:#bbf,stroke:#333,stroke-width:2px
-        class TC,TS,TI artifact
-        class TD,TPM stakeholder
-    end
-    
-    subgraph PDD ["Prompt-Driven Development"]
-        direction TB
-        PP[Versioned Prompts] <--> PD[Developers]
-        PP <--> PPM[Product Managers]
-        PP --> PC[Generated Code]
-        PC -- "Technical Learnings" --> PP
-        
-        class PP,PC artifact
-        class PD,PPM stakeholder
-    end
-    
-    Traditional ~~~ PDD
-```
-
-In traditional interactive AI-assisted development, developers create ephemeral prompts in chat interfaces to generate code, but these prompts are typically lost and not systematically preserved. PDD transforms this by making versioned prompts the central, persisted artifact that both developers and product managers actively contribute to and maintain. Crucially, technical learnings gained during implementation are back-propagated to keep prompts updated, ensuring continuous synchronization with the generated code.
 
 ## Conclusion
 
