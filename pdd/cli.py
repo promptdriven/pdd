@@ -453,7 +453,7 @@ def preprocess(
 @click.argument("prompt_file", type=click.Path(exists=True, dir_okay=False))
 @click.argument("code_file", type=click.Path(exists=True, dir_okay=False))
 @click.argument("unit_test_file", type=click.Path(exists=True, dir_okay=False))
-@click.argument("error_file", type=click.Path(dir_okay=False)) # Allow non-existent for loop mode
+@click.argument("error_file", type=click.Path(exists=True, dir_okay=False)) # Changed to require error file to exist
 @click.option(
     "--output-test",
     type=click.Path(writable=True),

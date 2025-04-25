@@ -56,6 +56,13 @@ def trace_main(ctx: click.Context, prompt_file: str, code_file: str, code_line: 
                 code_content, code_line, prompt_content, strength, temperature
             )
             logger.debug(f"Trace analysis completed: prompt_line={prompt_line}, total_cost={total_cost}, model_name={model_name}")
+            
+            # Exit with error if trace returned None (indicating an error occurred)
+            if prompt_line is None:
+                if not quiet:
+                    rprint(f"[bold red]Trace analysis failed[/bold red]")
+                logger.error("Trace analysis failed (prompt_line is None)")
+                ctx.exit(1)
         except ValueError as e:
             if not quiet:
                 rprint(f"[bold red]Invalid input: {e}[/bold red]")
