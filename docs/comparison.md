@@ -1,0 +1,10 @@
+| Feature | whitepaper.md (Attached File) | Inline Whitepaper |
+| :------------------ | :--------------------------------------------------------------- | :------------------------------------------------------------------- |
+| Primary Focus | Maintenance Burden: Heavily emphasizes solving the 80-90% maintenance cost problem via regeneration vs. patching. | Overall Paradigm Shift: Frames PDD as the next evolution addressing broad limitations of code-centricity, business alignment, and scalability. |
+| Tone & Style | Technical, comparative, pragmatic. Uses Mermaid diagrams. | Formal, assertive ("irrefutable case"), structured like a classic whitepaper (Abstract, ToC, Appendix). |
+| Comparison | Directly compares PDD to Interactive AI Patching (Cursor, Aider) and TDD. | Compares PDD to "Traditional Coding" and generic "AI-Assisted Coding" using a table. Less direct critique of specific interactive tools. |
+| Emphasis on Commands | Mentions commands within the workflow diagram and discussion. | Heavily emphasizes specific PDD commands as direct mitigations for each listed challenge. Includes a dedicated appendix of commands. |
+| Key Concepts | Explicitly defines "Regenerative Development," "Intent Preservation," "Synchronization" (back-propagation), "Batch Workflow," "Test Accumulation." Mentions PDD Cloud/VS Code extension. | Focuses on prompt crafting, AI interpretation, generation, review, integration. Less emphasis on specific named PDD principles like regeneration or batch processing. |
+| Problem Framing | Views complex, patched "legacy code" as the main problem. | Views code-centric focus, communication gaps, technical debt, and human error as key limitations. |
+| Mitigation Strategy | Discusses conceptual mitigations (e.g., LLMs automating synchronization). | Directly maps specific PDD commands (trace, update, split) to specific problems (debugging, small changes, detail omission). |
+| Structure | More narrative flow with integrated diagrams. | Strict, formal sections typical of whitepapers. |
