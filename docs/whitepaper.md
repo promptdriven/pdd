@@ -57,7 +57,7 @@ This transition elevates the developer's role, moving them to a higher level of 
 
 PDD is built on several fundamental concepts, detailed in the PDD methodology:
 
-1.  **Prompts as the Source of Truth**: The prompts, written primarily in natural language, authoritatively define the system's intended behavior. Code becomes a generated artifact derived from these prompts. Importantly, prompts unify information that is often scattered across source code, comments, README files, Confluence, Jira, and other documentation sources—putting all relevant context in one place that the model can enforce.
+1.  **Prompts as the Source of Truth**: The prompts, written primarily in natural language, authoritatively define the system's intended behavior. Code becomes a generated artifact derived from these prompts.
 2.  **Regenerative Development**: Changes are implemented by modifying the relevant prompt(s) and regenerating the affected code. This avoids the accumulation of patches and maintains conceptual integrity.
 3.  **Intent Preservation**: Prompts capture the "why" behind the code, preserving design rationale more effectively than code comments alone.
 4.  **Modularity**: Similar to code, prompts are designed as modular units, often linked via minimal "example" files that act as interfaces, promoting reusability and token efficiency.
@@ -68,9 +68,7 @@ PDD is built on several fundamental concepts, detailed in the PDD methodology:
 
 Adopting a PDD approach offers numerous advantages, particularly when contrasted with direct code patching using interactive AI assistants:
 
-> **From a single prompt, the system can emit:** working code, OpenAPI spec, client SDKs, integration tests, Terraform route, plus a Storybook page if it's front-end. Hand-written code only gives you one of those; humans still have to wire up the rest.
-
-*   **Reduced Maintenance Cost & Effort**: By regenerating code from updated prompts, PDD avoids the "rat's nest" complexity that arises from repeated patching. Refactoring and implementing large changes become significantly easier and cleaner. For example, because the prompt knows the full intent, you can change "JWT" to "session cookie" once and re-generate the whole slice—tests and docs included. With code-as-source you chase that change across a dozen files and invariably miss one.
+*   **Reduced Maintenance Cost & Effort**: By regenerating code from updated prompts, PDD avoids the "rat's nest" complexity that arises from repeated patching. Refactoring and implementing large changes become significantly easier and cleaner.
 *   **Increased Efficiency & Speed (Developer Focus & Throughput)**: Developers operate at a higher abstraction level. While a single patch might seem faster interactively, PDD's batch nature frees up developer time by eliminating the need to constantly "babysit" the AI, leading to greater overall throughput, especially on larger tasks.
 *   **Cost Savings (LLM Usage)**:
     *   **Token Efficiency**: PDD workflows, being more structured and modular (using examples as interfaces), can be more deterministic and token-efficient compared to the potentially verbose interactions of purely agentic/chat-based coding assistants.
@@ -103,7 +101,7 @@ gantt
 *Figure 1: Comparison of developer time utilization in interactive vs. batch (PDD) workflows. While both approaches might use similar total LLM processing time, the PDD approach frees the developer from constant supervision, allowing them to work on other tasks while batch processing occurs.*
 
 *   **Enhanced Control & Consistency**: PDD provides more direct control over the generation process. Prompts are attached to specific code modules, making the generation highly directed and reproducible, unlike less predictable, "universal chatbot" style interactions.
-*   **Improved Collaboration & Accessibility**: Prompts, being in natural language, serve as a common language accessible to both technical and non-technical stakeholders. This facilitates validation of business logic and keeps everyone aligned, unlike code-centric patching workflows. For example, a compliance officer or PM can grep a prompt for "GDPR delete-within-30-days" and see exactly where the contract lives—without reading Python decorators.
+*   **Improved Collaboration & Accessibility**: Prompts, being in natural language, serve as a common language accessible to both technical and non-technical stakeholders. This facilitates validation of business logic and keeps everyone aligned, unlike code-centric patching workflows.
 *   **Easier Onboarding**: New team members can understand the system's purpose and structure by reading the prompts, which are typically much shorter and clearer than the full codebase resulting from numerous patches.
 *   **Better Scalability & Complexity Management**: For large, complex systems, PDD's directed, modular approach with regeneration offers more control and manageability than repeatedly patching a large, monolithic codebase via interactive chat.
 *   **Enhanced Code Quality (via Explicit Context)**: PDD emphasizes systematically finding and providing relevant context (like few-shot examples, potentially sourced from a shared cloud) to the LLM during generation. Good context can allow even less powerful models to outperform stronger models that lack context, leading to higher-quality, more accurate code compared to zero-shot or implicit context approaches.
@@ -191,7 +189,7 @@ flowchart TD
     end
     
     subgraph Verification
-        E --> F["crash\n(Resolve Runtime Errors)"]
+        E --> F["fix\n(Resolve Crashes)"]
         F --> G["verify\n(Functional Correctness)"]
         G -->|Issues| F
     end
@@ -224,11 +222,10 @@ A typical PDD workflow involves a **batch-oriented, synchronized cycle**, contra
 1.  **Define**: Start with a requirement (e.g., from a PRD) and break it down into a specific prompt for a code module. Use `auto-deps` to find and include necessary context.
 2.  **Generate**: Use `generate` to create the code module from the prompt.
 3.  **Example**: Use `example` to create a minimal usage example (the interface).
-4.  **Crash**: Use `crash` to fix any runtime errors that prevent the code/example from running.
-5.  **Verify**: After resolving crashes, use `verify` to ensure the example runs correctly and aligns with the prompt's intent.
-6.  **Test**: Use `test` to generate unit tests for the code module.
-7.  **Fix**: Use `fix` along with the generated tests to identify and correct bugs in the generated code, iterating until tests pass.
-8.  **Update & Back-propagate**: Use `update` to synchronize any necessary changes made during fixing back to the prompt. Crucially, propagate these learnings back up the chain to architectural specs or parent prompts to ensure consistency across the system.
+4.  **Verify (Initial)**: Use `verify` or `crash` to ensure the example/code runs and aligns with the prompt's intent, fixing basic issues iteratively.
+5.  **Test**: Use `test` to generate unit tests for the code module.
+6.  **Fix**: Use `fix` along with the generated tests to identify and correct bugs in the generated code, iterating until tests pass.
+7.  **Update & Back-propagate**: Use `update` to synchronize any necessary changes made during fixing back to the prompt. Crucially, propagate these learnings back up the chain to architectural specs or parent prompts to ensure consistency across the system.
 
 The fundamental unit is often considered the prompt and its generated code, example, and test file – all kept in sync. If a prompt is too complex to generate correctly in one shot (even with fixing), it should be split (`split`) into smaller, manageable units.
 
