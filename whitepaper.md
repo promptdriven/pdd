@@ -94,6 +94,41 @@ While PDD offers significant advantages, potential challenges exist:
 
 ## The PDD Workflow: A Synchronized Cycle
 
+```mermaid
+flowchart TD
+    subgraph Initialization
+        A[Requirements/PRD] -->|Break down| B[Define Prompt]
+        B -->|Include Context| C["auto-deps\n(Find Relevant Examples)"]
+    end
+    
+    subgraph Generation
+        C --> D["generate\n(Create Code Module)"]
+        D --> E["example\n(Create Usage Example)"]
+    end
+    
+    subgraph Verification
+        E --> F["verify/crash\n(Test Example)"]
+        F -->|Issues| G["Fix Basic Issues"]
+        G --> E
+    end
+    
+    subgraph Testing
+        F -->|Passes| H["test\n(Generate Unit Tests)"]
+        H --> I["fix\n(Resolve Bugs)"]
+        I -->|Bugs Remain| I
+    end
+    
+    subgraph Synchronization
+        I -->|Tests Pass| J["update\n(Sync Changes to Prompt)"]
+        J -->|Back-propagate| K["Update Architecture/Specs"]
+        K -.->|Future Changes| A
+    end
+    
+    style A fill:#f9f,stroke:#333
+    style J fill:#bbf,stroke:#333
+    style K fill:#bbf,stroke:#333
+```
+
 A typical PDD workflow involves a **batch-oriented, synchronized cycle**, contrasting with the constant supervision model of interactive patching:
 
 1.  **Define**: Start with a requirement (e.g., from a PRD) and break it down into a specific prompt for a code module. Use `auto-deps` to find and include necessary context.
