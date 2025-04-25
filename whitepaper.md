@@ -80,7 +80,7 @@ Adopting a PDD approach offers numerous advantages, particularly when contrasted
 *   **Enhanced Code Quality (via Explicit Context)**: PDD emphasizes systematically finding and providing relevant context (like few-shot examples, potentially sourced from a shared cloud) to the LLM during generation. Good context can allow even less powerful models to outperform stronger models that lack context, leading to higher-quality, more accurate code compared to zero-shot or implicit context approaches.
 *   **Adaptability**: PDD excels in scenarios requiring frequent changes or evolution. Modifying high-level prompts is often simpler and safer than performing deep surgery on patched code.
 *   **Systematic Prompt Management**: PDD treats generation prompts as critical, version-controlled artifacts, unlike interactive approaches where valuable generation logic may be lost in chat history.
-*   **Integration**: PDD tools are designed to be complementary to existing development environments (like VS Code) and agentic tools (like Cursor or Cloud Code), often integrating via protocols like MCP (Model Context Protocol). They can be used *together*.
+*   **Integration**: PDD tools are designed to be complementary to existing development environments (like VS Code) and agentic tools (like Cursor or Claude Code), often integrating via protocols like MCP (Model Context Protocol). They can be used *together*.
 
 ## Addressing Potential Concerns
 
@@ -88,7 +88,7 @@ While PDD offers significant advantages, potential challenges exist:
 
 *   **Learning Curve**: Developers need to shift their mindset and develop skills in writing effective, concise prompts that specify *what* is needed, not necessarily *how* to implement it. Using agentic tools to help draft and refine prompts can ease this transition.
 *   **Prompt Quality & Consistency**: Poorly written or non-standardized prompts could lead to inconsistent results. Emphasizing clarity, conciseness, and potentially team standards or preambles (similar to style guides) helps mitigate this.
-*   **Synchronization Overhead**: Manually keeping prompts, code, examples, and tests synchronized requires discipline. Automation, facilitated by LLMs' ability to easily update documentation/prompts based on code changes, is key to making the crucial back-propagation step manageable.
+*   **Synchronization Overhead**: Manually keeping prompts, code, examples, and tests synchronized requires discipline. Automation (often with Makefiles), facilitated by LLMs' ability to easily update documentation/prompts based on code changes, is key to making the crucial back-propagation step manageable.
 *   **Depth of Customization**: Concerns may arise that prompts can't capture every nuance required. PDD addresses this by allowing for detailed prompts when necessary and focusing on specifying the desired outcome clearly. The `test` and `fix` cycles further ensure requirements are met. For very small, localized fixes, direct patching might *feel* faster in the moment, but PDD prioritizes long-term maintainability by keeping the prompt as the source of truth. A balanced approach, perhaps using tests to guide prompt fixes even for small bugs, is often optimal.
 *   **Dependency Management**: Changes in one prompt/module could affect others. This is managed through modular design, clear interfaces (examples), and comprehensive testing to catch integration issues early. PDD's structure helps manage this more systematically than ad-hoc patching.
 
