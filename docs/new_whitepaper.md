@@ -165,19 +165,19 @@ Parent Prompts"]
 
 *Figure 2: The PDD Synchronized Workflow Cycle. Note the explicit use of PDD commands and the crucial feedback loop (`pdd update`) syncing implementation learnings back to the prompt.*
 
-**Key Steps & Associated Commands:**
+**Key Steps in the PDD Cycle:**
 
-1.  **Define**: Start with requirements (e.g., from a PRD) and break them down into a specific, modular prompt (`.prompt` file) for a code component. Use `pdd auto-deps` (or manual selection) to find relevant few-shot examples or context.
-2.  **Generate**: Use `pdd generate` to create the primary code module from the prompt and context.
-3.  **Example**: Use `pdd example` to generate a minimal usage example, defining the module's interface.
-4.  **Verify/Fix (Initial)**: Use `pdd verify` or `pdd fix` (potentially with basic runtime checks) to ensure the generated code runs without crashing and handles basic cases described in the prompt. Iterate fixes if necessary. Manually review against the prompt's intent.
-5.  **Test**: Use `pdd test` to generate unit tests for the code module, leveraging the prompt and code for context.
-6.  **Fix (Testing)**: Use `pdd fix`, providing the generated tests and any error output, to identify and correct bugs in the generated code. Iterate until tests pass.
-7.  **Update & Back-propagate**: This is critical. Use `pdd update` to analyze the differences between the originally generated code and the final, fixed code, automatically suggesting modifications to the original prompt to reflect the necessary changes and learnings. Propagate these insights back up the chain to architectural documents or parent prompts to maintain overall system consistency.
+1.  **Define**: The process begins by translating requirements (e.g., from a PRD) into a specific, modular prompt (`.prompt` file) for a target code component. To provide necessary context, relevant few-shot examples can be found manually or automatically using tools like `pdd auto-deps`.
+2.  **Generate**: Next, invoke `pdd generate` to create the primary code module based on the prompt and the gathered context.
+3.  **Example**: To define the module's public interface and demonstrate its usage, run `pdd example` to produce a minimal example file.
+4.  **Verify/Fix (Initial)**: Ensure the generated code is fundamentally functional – that it runs without crashing and handles basic cases outlined in the prompt. This initial check often involves iterative fixing, potentially aided by `pdd verify` or `pdd fix` commands along with simple runtime tests. Manual review against the prompt's stated intent is also vital here.
+5.  **Test**: Enhance verification by automatically generating unit tests for the code module; this is done by running `pdd test`, which uses both the prompt and the generated code for comprehensive context.
+6.  **Fix (Testing)**: With tests available, rigorously identify and correct bugs by executing `pdd fix`, supplying the tests and any resulting error output. This step is iterated until the generated code passes all generated tests.
+7.  **Update & Back-propagate**: This critical synchronization step ensures the prompt remains the source of truth. Run `pdd update` to analyze the delta between the originally generated code and the final, fixed version. The command then suggests modifications to the source prompt to incorporate the necessary changes and learnings from the fixing process. Finally, propagate these insights back to higher-level architectural documents or parent prompts to maintain consistency across the entire system.
 
 **Test Accumulation:** A crucial aspect is the longevity of tests. When prompts are updated and code is regenerated, existing unit tests should ideally be preserved and run alongside any newly generated ones. The goal is not to discard old tests but to accumulate a robust suite acting as a regression safety net, ensuring previous functionality remains intact as the system evolves.
 
-The fundamental unit in PDD is often considered the prompt and its associated, synchronized code, example, and test files. If a prompt proves too complex for reliable generation and fixing, it should be refactored (`pdd split` can assist) into smaller, more manageable units.
+The fundamental unit in PDD is often considered the prompt and its associated, synchronized code, example, and test files. If a prompt proves too complex for reliable generation and fixing, it should be refactored into smaller, more manageable units; the `pdd split` command can assist with this process.
 
 ---
 
@@ -208,10 +208,10 @@ PDD offers a unique approach compared to existing methodologies:
 
 *   **PDD vs. Interactive AI-Assisted Patching (e.g., Cursor, Aider):** This is a crucial distinction. While both use LLMs, their philosophies differ:
     *   *Primary Artifact:* PDD elevates the **Prompt** as the persistent source of truth. Interactive tools treat **Code** as primary, using ephemeral chat instructions for direct patching, often losing the generation rationale.
-    *   *Workflow:* PDD is primarily **batch-oriented** and **regenerative**. This fundamentally changes developer interaction: developers define prompts, initiate generation, and are then *free to perform other tasks* while the AI processes in the background. Interactive tools are inherently **interactive**, requiring constant step-by-step supervision, consuming significant developer focus time for guidance, review, and correction cycles, akin to micro-management.
+    *   *Workflow & Developer Focus:* PDD is primarily **batch-oriented** and **regenerative**. Developers define prompts, initiate generation, and are then *free to perform other tasks* while the AI processes. This contrasts sharply with interactive tools, which require constant step-by-step supervision, consuming significant developer focus time in guidance, review, and correction cycles.
     *   *Maintenance:* PDD favors **regeneration** from updated prompts to prevent complexity creep and maintain conceptual integrity. Interactive patching risks accumulating technical debt if the underlying intent (the "lost prompt") isn't captured or updated.
     *   *Synchronization:* PDD includes specific mechanisms (`pdd update`) to systematically keep prompts aligned with implementation learnings. Interactive tools typically lack this automated feedback loop.
-    *   *Developer Time & Cost Efficiency:* The batch nature of PDD often leads to greater overall developer throughput compared to the constant attention required by interactive tools. While total *AI processing time* might be similar, PDD liberates *developer time*. Furthermore, PDD workflows are well-suited for potentially cheaper batch processing APIs offered by LLM providers (often heavily discounted compared to interactive APIs), leading to direct cost savings on generation.
+    *   *Efficiency (Developer Throughput & LLM Cost):* The batch nature of PDD directly translates to **greater overall developer throughput**, as developers are liberated from constant AI supervision. While total AI processing time might be similar, PDD optimizes *developer* time. Furthermore, PDD workflows are well-suited for potentially **cheaper batch processing APIs** offered by LLM providers (often heavily discounted compared to interactive APIs), leading to **direct cost savings** on generation, especially at scale.
     *   *Leveraging LLMs:* As LLMs improve at generating larger, correct code blocks, PDD's regenerative model is well-positioned to utilize these capabilities for substantial tasks, potentially more effectively than tools focused solely on incremental patching.
 
 *   **PDD vs. Test-Driven Development (TDD):** PDD shares TDD's strong emphasis on testing. However, TDD writes tests *before* manually writing minimal code. PDD uses prompts to generate the code, examples, *and* initial tests (`pdd generate`, `pdd example`, `pdd test`). Tests then guide the refinement process (`pdd fix`), but the prompt remains the ultimate source of functional intent, and the core generation is LLM-driven. The accumulated tests in PDD serve a similar regression-prevention role as in TDD.
@@ -225,8 +225,8 @@ In essence, PDD combines the automation of LLMs with a structured, prompt-centri
 Adopting PDD offers compelling benefits, particularly addressing the shortcomings of traditional and patching approaches:
 
 1.  **Drastically Reduced Maintenance Cost & Effort**: By regenerating code from updated prompts, PDD avoids the tangled complexity ("rat's nest") of repeatedly patched code. Refactoring and implementing significant changes become vastly simpler and less error-prone. This directly tackles the 80-90% maintenance cost problem.
-2.  **Increased Overall Efficiency & Throughput**: As highlighted in the comparison with interactive tools, developers operate at a higher abstraction level and the batch-oriented workflow frees them from constant AI supervision. This allows for parallel work and leads to greater overall throughput and faster delivery cycles, even if individual generation steps take time.
-3.  **Potential for Significant LLM Cost Savings**: By enabling the use of batch processing APIs, which are often significantly cheaper than interactive APIs, PDD can lead to direct reductions in LLM usage costs, especially at scale.
+2.  **Increased Developer Efficiency & Throughput**: Stemming directly from its batch-oriented, regenerative workflow (as detailed in the comparison section), PDD significantly enhances developer productivity. By freeing developers from the constant supervision required by interactive patching tools, it allows for parallel work and faster overall project velocity.
+3.  **Potential for Significant LLM Cost Savings**: The suitability of PDD for batch processing allows organizations to leverage potentially lower-cost batch APIs from LLM providers, leading to direct reductions in operational expenses compared to workflows reliant on more expensive interactive APIs.
 4.  **Improved Code Quality, Consistency & Context Use**:
     *   *Adherence to Best Practices*: AI models, guided by well-crafted prompts and potentially organizational standards embedded in tools, generate code adhering to best practices and security guidelines.
     *   *Uniform Codebase*: Regeneration promotes consistent coding styles and patterns across the codebase, enhancing readability and maintainability.
@@ -385,4 +385,4 @@ This section provides a summary of key PDD commands that facilitate the workflow
 *   **`pdd auto-deps`**: Analyzes a prompt and searches a codebase or designated library (like PDD Cloud) for relevant few-shot examples to include as context for `pdd generate` or `pdd test`. *Improves generation quality via automatic context finding.*
 *   **`pdd conflicts`**: Analyzes two potentially related prompts for logical conflicts or inconsistencies (experimental).
 
-These commands form a cohesive toolkit designed to make the Prompt-Driven Development lifecycle practical, efficient, and maintainable. 
+These commands form a cohesive toolkit designed to make the Prompt-Driven Development lifecycle practical, efficient, and maintainable.
