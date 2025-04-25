@@ -176,10 +176,8 @@ run_pdd_command_base() {
 
     local cmd_array=("$PDD_SCRIPT" "--force")
 
-    # Add cost tracking only if the file doesn't exist yet
-    if [ ! -f "$REGRESSION_DIR/$COST_FILE" ]; then
-      cmd_array+=("--output-cost" "$REGRESSION_DIR/$COST_FILE")
-    fi
+    # Always add cost tracking
+    cmd_array+=("--output-cost" "$REGRESSION_DIR/$COST_FILE")
 
     # Add strength and temp unless overridden
     local has_strength=false
@@ -275,10 +273,6 @@ log "Creating regression test directory: $REGRESSION_DIR"
 mkdir -p "$REGRESSION_DIR"
 cd "$REGRESSION_DIR" # Work inside the regression directory
 
-# Create cost file header if it doesn't exist
-if [ ! -f "$COST_FILE" ]; then
-    echo "timestamp,model,command,cost,input_files,output_files" > "$COST_FILE"
-fi
 
 log "Current directory: $(pwd)"
 log "PDD Script: $(command -v $PDD_SCRIPT || echo 'Not in PATH')"
@@ -386,6 +380,14 @@ fi
 # 2. Example
 if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "2" ]; then
   log "2. Testing 'example' command"
+
+  # Create a context example prompt to guide the import generation
+  log "Creating context/example.prompt for example generation"
+  cat << EOF > "example.prompt"
+For the function 'add' defined based on 'simple_math_python.prompt', the implementation is in 'simple_math.py'.
+Therefore, the example should include the line: 'from simple_math import add'
+EOF
+
   run_pdd_command example --output "$MATH_VERIFICATION_PROGRAM" "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
   check_exists "$MATH_VERIFICATION_PROGRAM" "'example' output"
 fi
@@ -468,6 +470,26 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "5" ]; then
   run_pdd_command change --csv --output "$CHANGE_CSV_OUT_DIR/" "$CHANGE_CSV_FILE" "$CHANGE_CSV_CODE_DIR/" # Note trailing slash for output dir
   check_exists "$CHANGE_CSV_OUT_DIR/$DUMMY_PROMPT_A" "'change --csv' output A"
   check_exists "$CHANGE_CSV_OUT_DIR/$DUMMY_PROMPT_B" "'change --csv' output B"
+
+  # Intermediate check for cost file population
+  log "Performing intermediate check on cost file: $COST_FILE"
+  if [ -f "$COST_FILE" ]; then
+      DATA_ROWS=$(awk 'NR > 1' "$COST_FILE" | wc -l | tr -d ' ')
+      if [ "$DATA_ROWS" -gt 0 ]; then
+          log "Cost file contains $DATA_ROWS data rows (intermediate check passed)."
+          log_timestamped "Validation success: Cost file contains data rows (intermediate check)."
+      else
+          log_error "Cost file only contains header or is empty after several commands."
+          log_timestamped "Validation failed: Cost file missing data rows (intermediate check)."
+          # Decide if this should be fatal; for now, just log error
+          # exit 1
+      fi
+  else
+      log_error "Cost file $COST_FILE not found for intermediate check."
+      log_timestamped "Validation failed: Cost file not found (intermediate check)."
+      # Decide if this should be fatal
+      # exit 1
+  fi
 fi
 
 # 6. Crash
@@ -930,15 +952,30 @@ log "All tests completed."
 log "Log file: $(pwd)/$LOG_FILE"
 log "Cost file: $(pwd)/$COST_FILE"
 
-# Display total cost
+# Display total cost and perform final validation
 if [ -f "$COST_FILE" ]; then
+    # Validate row count
+    MIN_EXPECTED_COST_ROWS=10
+    ACTUAL_DATA_ROWS=$(awk 'NR > 1 {count++} END {print count+0}' "$COST_FILE") # +0 ensures numeric output even if empty
+    log "Found $ACTUAL_DATA_ROWS data rows in cost file."
+    if [ "$ACTUAL_DATA_ROWS" -ge "$MIN_EXPECTED_COST_ROWS" ]; then
+        log "Cost file row count ($ACTUAL_DATA_ROWS) meets minimum expectation ($MIN_EXPECTED_COST_ROWS)."
+        log_timestamped "Validation success: Cost file row count sufficient."
+    else
+        log_error "Cost file row count ($ACTUAL_DATA_ROWS) is below minimum expectation ($MIN_EXPECTED_COST_ROWS)."
+        log_timestamped "Validation failed: Cost file row count insufficient."
+        # Decide if this should be fatal
+        # exit 1
+    fi
+
     # Robust awk command to handle potential missing cost values or headers
     total_cost=$(awk -F',' 'NR > 1 && NF >= 4 && $4 ~ /^[0-9]+(\.[0-9]+)?$/ { sum += $4 } END { printf "%.6f", sum }' "$COST_FILE")
     log "Total estimated cost of all operations: $total_cost USD"
     log_timestamped "Total estimated cost of all operations: $total_cost USD"
 else
-    log "Cost file not found or invalid. Unable to calculate total cost."
-    log_timestamped "Cost file not found or invalid. Unable to calculate total cost."
+    log_error "Cost file $COST_FILE not found at end of script. Cannot calculate total cost or validate rows."
+    log_timestamped "Validation failed: Cost file not found at end of script."
+    # exit 1 # Definitely fatal if cost tracking was expected
 fi
 
 cd .. # Go back to original directory if needed
