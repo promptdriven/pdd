@@ -64,6 +64,32 @@ PDD is built on several fundamental concepts, detailed in the PDD methodology:
 5.  **Synchronization**: A core tenet is maintaining synchronization between the prompt, the generated code, usage examples, and tests. Learning gained during implementation is fed back into the prompts, ensuring they remain accurate and up-to-date. This contrasts with patching approaches where documentation and original specifications often become stale.
 6.  **Batch-Oriented Workflow**: PDD is fundamentally designed as a batch process, allowing for scripted, reproducible generation, contrasting with the inherently interactive nature of many code-patching AI tools.
 
+### The Fundamental PDD Unit
+
+The diagram below illustrates the fundamental building block of Prompt-Driven Development - a synchronized unit consisting of a prompt and its derived artifacts:
+
+```mermaid
+graph TD
+    subgraph "Synchronized PDD Unit"
+    A[Prompt<br><i>prompts/module_py.prompt</i>] --> B[Generated Code<br><i>src/module.py</i>]
+    A --> C[Usage Example<br><i>context/module_example.py</i>]
+    A --> D[Unit Tests<br><i>tests/test_module.py</i>]
+    
+    B -.-> E[Implementation Learnings]
+    C -.-> E
+    D -.-> E
+    E -.-> A
+    end
+    
+    style A fill:#ffe6cc,stroke:#d79b00
+    style B fill:#d5e8d4,stroke:#82b366
+    style C fill:#dae8fc,stroke:#6c8ebf
+    style D fill:#e1d5e7,stroke:#9673a6
+    style E fill:#f8cecc,stroke:#b85450
+```
+
+This unit represents the core pattern of PDD workflow: prompts generate code, examples, and tests - all of which should remain synchronized. Importantly, as implementation proceeds, learnings from each artifact are fed back into the prompt to maintain accuracy and consistency across the system.
+
 ## Key Benefits of PDD
 
 Adopting a PDD approach offers numerous advantages, particularly when contrasted with direct code patching using interactive AI assistants:
