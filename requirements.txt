@@ -26,7 +26,7 @@ pytest==8.2.0
 rich==14.0.0
 semver==3.0.2
 utils==1.0.2
-z3==0.2.0
+z3-solver==4.14.1.0
 setuptools
 build
 python-Levenshtein
