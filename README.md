@@ -442,6 +442,24 @@ Options:
 - `--target-coverage FLOAT`: Desired code coverage percentage to achieve (default is 90.0).
 - `--merge`: When used with --existing-tests, merges new tests with existing test file instead of creating a separate file.
 
+#### Providing Command-Specific Context
+
+While prompts are the primary source of instructions, some PDD commands (like `test` and `example`) can be further guided by project-specific context files. These commands may automatically look for conventional files (e.g., `context/test.prompt`, `context/example.prompt`) in the current working directory during their internal prompt preprocessing phase.
+
+If found, the content of these context files is included (using the `<include>` mechanism described in the `preprocess` section) into the internal prompt used by the command. This allows you to provide specific instructions tailored to your project, such as:
+
+- Specifying required import statements.
+- Suggesting preferred testing frameworks or libraries.
+- Providing project-specific coding conventions or patterns.
+
+**Example:** Creating a file named `context/test.prompt` with the content:
+```
+Please ensure all tests use the 'unittest' framework and import the main module as 'from my_module import *'.
+```
+could influence the output of the `pdd test` command when run in the same directory.
+
+**Note:** This feature relies on the internal implementation of specific PDD commands incorporating the necessary `<include>` tags for these conventional context files. It is primarily used by `test` and `example` but may be adopted by other commands in the future. Check the specific command documentation or experiment to confirm if a command utilizes this pattern.
+
 #### Basic Examples:
 
 1. Generate initial unit tests:
@@ -504,6 +522,7 @@ PDD supports the following XML-like tags in prompt files:
    ```xml
    <include>./path/to/file.txt</include>
    ```
+   This mechanism is also used internally by some commands (like `test` and `example`) to automatically incorporate project-specific context files if they exist in conventional locations (e.g., `context/test.prompt`). See 'Providing Command-Specific Context' for details.
 
 2. **`pdd`**: Indicates a comment that will be removed from the preprocessed prompt, including the tags themselves.
    ```xml
@@ -529,7 +548,6 @@ PDD supports two ways of including external content:
    ```
    <./path/to/file.txt>
    ```
-   ````
    This will be recursively processed until there are no more angle brackets in triple backticks.
 
 2. **XML include tags**: As described above.
