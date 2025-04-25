@@ -64,32 +64,6 @@ PDD is built on several fundamental concepts, detailed in the PDD methodology:
 5.  **Synchronization**: A core tenet is maintaining synchronization between the prompt, the generated code, usage examples, and tests. Learning gained during implementation is fed back into the prompts, ensuring they remain accurate and up-to-date. This contrasts with patching approaches where documentation and original specifications often become stale.
 6.  **Batch-Oriented Workflow**: PDD is fundamentally designed as a batch process, allowing for scripted, reproducible generation, contrasting with the inherently interactive nature of many code-patching AI tools.
 
-### The Fundamental PDD Unit
-
-The diagram below illustrates the fundamental building block of Prompt-Driven Development - a synchronized unit consisting of a prompt and its derived artifacts:
-
-```mermaid
-graph TD
-    subgraph "Synchronized PDD Unit"
-    A[Prompt<br><i>prompts/module_py.prompt</i>] --> B[Generated Code<br><i>src/module.py</i>]
-    A --> C[Usage Example<br><i>context/module_example.py</i>]
-    A --> D[Unit Tests<br><i>tests/test_module.py</i>]
-    
-    B -.-> E[Implementation Learnings]
-    C -.-> E
-    D -.-> E
-    E -.-> A
-    end
-    
-    style A fill:#ffe6cc,stroke:#d79b00
-    style B fill:#d5e8d4,stroke:#82b366
-    style C fill:#dae8fc,stroke:#6c8ebf
-    style D fill:#e1d5e7,stroke:#9673a6
-    style E fill:#f8cecc,stroke:#b85450
-```
-
-This unit represents the core pattern of PDD workflow: prompts generate code, examples, and tests - all of which should remain synchronized. Importantly, as implementation proceeds, learnings from each artifact are fed back into the prompt to maintain accuracy and consistency across the system.
-
 ## Key Benefits of PDD
 
 Adopting a PDD approach offers numerous advantages, particularly when contrasted with direct code patching using interactive AI assistants:
@@ -181,3 +155,31 @@ PDD continues to evolve, with initiatives like:
 ## Conclusion
 
 Prompt-Driven Development offers a compelling alternative to traditional coding paradigms and purely interactive AI patching approaches, directly addressing the high cost and complexity of software maintenance. By establishing prompts as the primary artifact, emphasizing regeneration over patching, and leveraging LLMs within a structured, batch-oriented workflow for code generation and synchronization, PDD promotes long-term efficiency, consistency, better collaboration, and adaptability. While requiring a shift in mindset and skills, and acknowledging that interactive tools have their place for specific tasks, the potential benefits of PDD – particularly for complex, evolving systems – position it as a significant evolution in software engineering practices, enabling developers to work faster, more strategically, and at a higher level of abstraction. 
+
+## Diagrams
+
+### Batch vs. Interactive Workflow Timelines
+
+```mermaid
+gantt
+    title Developer Time Utilization: Interactive vs. Batch Approaches
+    dateFormat  HH:mm
+    axisFormat %H:%M
+    section Interactive/Patching
+    Define initial prompt      :a1, 00:00, 5m
+    Review & direct AI         :a2, after a1, 5m
+    Review & redirect AI       :a3, after a2, 5m
+    Review & fix output        :a4, after a3, 5m
+    Review & redirect AI       :a5, after a4, 5m
+    Review & fix output        :a6, after a5, 5m
+    Review & redirect AI       :a7, after a6, 5m
+    Final review & integration :a8, after a7, 10m
+    section PDD (Batch)
+    Define/refine prompt       :b1, 00:00, 15m
+    Launch generation          :milestone, after b1, 0m
+    AI batch processing        :b2, after b1, 30m
+    Developer works on other tasks :b3, after b1, 30m
+    Review results & integrate :b4, after b2, 10m
+```
+
+*Figure 1: Comparison of developer time utilization in interactive vs. batch (PDD) workflows. While both approaches might use similar total LLM processing time, the PDD approach frees the developer from constant supervision, allowing them to work on other tasks while batch processing occurs.* 
