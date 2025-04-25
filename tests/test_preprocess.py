@@ -229,19 +229,23 @@ def test_process_xml_web_tag() -> None:
     prompt = "This is a test <web>https://example.com</web>"
     expected_output = f"This is a test {mock_markdown_content}"
 
-    # Create a mock FirecrawlApp class
-    mock_firecrawl_app = MagicMock()
-    mock_instance = mock_firecrawl_app.return_value
-    mock_instance.scrape_url.return_value = {'markdown': mock_markdown_content}
+    # Since FirecrawlApp is imported inside the function, we need to patch the module
+    # Create a mock module with a FirecrawlApp class
+    mock_firecrawl = MagicMock()
+    mock_response = MagicMock()
+    mock_response.markdown = mock_markdown_content  # This is what's accessed in the code
     
-    # Patch the import
-    with patch.dict('sys.modules', {'firecrawl': MagicMock()}):
-        with patch('builtins.__import__', side_effect=lambda name, *args: 
-              MagicMock(FirecrawlApp=mock_firecrawl_app) if name == 'firecrawl' else importlib.__import__(name, *args)):
-            # Mock the environment variable for API key
-            with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'fake_api_key'}):
-                result = preprocess(prompt, recursive=False, double_curly_brackets=False)
-                assert result == expected_output
+    # Setup the mock FirecrawlApp class
+    mock_app = MagicMock()
+    mock_app.scrape_url.return_value = mock_response
+    mock_firecrawl.FirecrawlApp.return_value = mock_app
+    
+    # Patch the import at the module level
+    with patch.dict('sys.modules', {'firecrawl': mock_firecrawl}):
+        # Mock the environment variable for API key
+        with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'fake_api_key'}):
+            result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+            assert result == expected_output
 
 # Test for handling missing Firecrawl API key
 def test_process_xml_web_tag_missing_api_key() -> None:
