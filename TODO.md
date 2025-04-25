@@ -28,7 +28,7 @@
 - [ ] test out anthropic think tool
 - [ ] autogenerate the model.csv file and print out the strength of each model
 - [ ] agentic prompt to code
-- [ ] agentic additional context inclusion
+- [ ] agentic additional context inclusion via context 7 MCP
 
 ## Bugs
 
