@@ -214,24 +214,11 @@ def generate(ctx: click.Context, prompt_file: str, output: Optional[str]) -> Tup
     quiet = ctx.obj.get("quiet", False)
     command_name = "generate"
     try:
-        input_file_paths = {"prompt_file": prompt_file}
-        command_options = {"output": output}
-
-        input_strings, output_file_paths, language = construct_paths(
-            input_file_paths=input_file_paths,
-            force=ctx.obj.get("force", False),
-            quiet=quiet,
-            command=command_name,
-            command_options=command_options,
-        )
-
-        # Pass resolved output path from construct_paths
-        resolved_output = output_file_paths.get("output")
-
+        # Pass the original 'output' to code_generator_main
         generated_code, total_cost, model_name = code_generator_main(
             ctx=ctx,
-            prompt_file=prompt_file, # Pass original path for main logic if needed
-            output=resolved_output,  # Pass resolved path
+            prompt_file=prompt_file,
+            output=output, # Pass the original output argument
             # Pass input_strings if needed by main func, e.g., input_strings.get("prompt_file")
         )
         return generated_code, total_cost, model_name
@@ -256,23 +243,12 @@ def example(ctx: click.Context, prompt_file: str, code_file: str, output: Option
     quiet = ctx.obj.get("quiet", False)
     command_name = "example"
     try:
-        input_file_paths = {"prompt_file": prompt_file, "code_file": code_file}
-        command_options = {"output": output}
-
-        input_strings, output_file_paths, language = construct_paths(
-            input_file_paths=input_file_paths,
-            force=ctx.obj.get("force", False),
-            quiet=quiet,
-            command=command_name,
-            command_options=command_options,
-        )
-        resolved_output = output_file_paths.get("output")
-
+        # Pass the original 'output' to context_generator_main
         example_code, total_cost, model_name = context_generator_main(
             ctx=ctx,
             prompt_file=prompt_file,
             code_file=code_file,
-            output=resolved_output,
+            output=output, # Pass the original output argument
         )
         return example_code, total_cost, model_name
     except Exception as e:
@@ -331,35 +307,13 @@ def test(
     quiet = ctx.obj.get("quiet", False)
     command_name = "test"
     try:
-        input_file_paths = {"prompt_file": prompt_file, "code_file": code_file}
-        # Add existing_tests if provided, as construct_paths might need it (though unlikely)
-        if existing_tests:
-            input_file_paths["existing_tests"] = existing_tests
-
-        command_options = {
-            "output": output,
-            "language": language,
-            # Pass other options directly to cmd_test_main, not needed for construct_paths
-        }
-
-        # construct_paths determines language if not provided, and output path
-        _input_strings, output_file_paths, resolved_language = construct_paths(
-            input_file_paths=input_file_paths,
-            force=ctx.obj.get("force", False),
-            quiet=quiet,
-            command=command_name,
-            command_options=command_options,
-        )
-        resolved_output = output_file_paths.get("output")
-        # Use language from construct_paths if user didn't specify one
-        final_language = language if language is not None else resolved_language
-
+        # Pass original 'output' and 'language' to cmd_test_main
         generated_test_code, total_cost, model_name = cmd_test_main(
             ctx=ctx,
             prompt_file=prompt_file,
             code_file=code_file,
-            output=resolved_output,
-            language=final_language, # Pass the determined language
+            output=output, # Pass original output argument
+            language=language, # Pass original language argument (main will resolve default)
             coverage_report=coverage_report,
             existing_tests=existing_tests,
             target_coverage=target_coverage,
