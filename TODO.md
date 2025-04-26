@@ -42,6 +42,7 @@
 - [ ] have fix remember what was the closest code passing and start from that to hill climb
 - [ ] AWS Nova support
 - [ ] fix quiet vs. verbose ambiguity
+- [ ] have a link from includes to the files for the vscode prompt extension
 
 
 ## Documentation
