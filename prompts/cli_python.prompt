@@ -36,11 +36,6 @@
         <include>./context/track_cost_example.py</include>
         </track_cost_example>
 
-        - Here is how to use the `construct_paths` function to load the input files and create the output file paths:
-        <construct_paths_example>
-        <include>context/construct_paths_example.py</include>
-        </construct_paths_example>
-
         - `change` command: The core logic is implemented in the `change_main` function, defined in a separate module. Here's how to use `change_main`:
         <change_main_example>
         <include>context/change_main_example.py</include>
