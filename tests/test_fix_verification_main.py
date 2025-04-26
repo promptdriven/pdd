@@ -9,7 +9,7 @@ from pdd import DEFAULT_STRENGTH
 
 # Assuming the structure is tests/test_fix_verification_main.py
 # and the code is pdd/fix_verification_main.py
-from pdd.fix_verification_main import fix_verification_main
+from pdd.fix_verification_main import fix_verification_main, DEFAULT_TEMPERATURE # Import DEFAULT_TEMPERATURE if needed
 
 # --- Fixtures ---
 
@@ -17,14 +17,16 @@ from pdd.fix_verification_main import fix_verification_main
 def mock_context(tmp_path):
     """Creates a mock Click context object."""
     ctx = MagicMock(spec=click.Context)
-    # Default params, can be overridden in tests
-    ctx.params = {
+    # Initialize ctx.obj for global options
+    ctx.obj = {
         'strength': DEFAULT_STRENGTH,
-        'temperature': 0.0,
+        'temperature': DEFAULT_TEMPERATURE, # Use imported default
         'force': False,
         'quiet': False,
         'verbose': False,
     }
+    # params usually holds command-specific parameters, leave empty for this command
+    ctx.params = {}
     return ctx
 
 @pytest.fixture
@@ -104,6 +106,8 @@ def test_single_pass_success_no_issues(
     )
 
     mock_construct.assert_called_once()
+    # Check force was read from ctx.obj (default is False)
+    assert mock_construct.call_args[1]['force'] is False
     mock_run_prog.assert_called_once_with(setup_files["program"])
     mock_fix_errors.assert_called_once_with(
         program='Original program content',
@@ -111,8 +115,8 @@ def test_single_pass_success_no_issues(
         code='Original code content',
         output='Program ran ok',
         strength=DEFAULT_STRENGTH,
-        temperature=0.0,
-        verbose=False
+        temperature=DEFAULT_TEMPERATURE, # Check default temp
+        verbose=False # Check default verbose
     )
     mock_fix_loop.assert_not_called()
 
@@ -158,6 +162,8 @@ def test_single_pass_success_with_fixes(
         verification_program=None
     )
 
+    mock_construct.assert_called_once()
+    mock_run_prog.assert_called_once()
     mock_fix_errors.assert_called_once()
     mock_fix_loop.assert_not_called()
 
@@ -204,6 +210,8 @@ def test_single_pass_failure_no_fixes(
         verification_program=None
     )
 
+    mock_construct.assert_called_once()
+    mock_run_prog.assert_called_once()
     mock_fix_errors.assert_called_once()
     mock_fix_loop.assert_not_called()
 
@@ -248,6 +256,7 @@ def test_single_pass_program_run_fails(
         verification_program=None
     )
 
+    mock_construct.assert_called_once()
     mock_run_prog.assert_called_once_with(setup_files["program"])
     mock_fix_errors.assert_called_once_with(
         program='Original program content',
@@ -255,7 +264,7 @@ def test_single_pass_program_run_fails(
         code='Original code content',
         output='Partial output\n--- STDERR ---\nTraceback error', # Check combined output
         strength=DEFAULT_STRENGTH,
-        temperature=0.0,
+        temperature=DEFAULT_TEMPERATURE,
         verbose=False
     )
     mock_fix_loop.assert_not_called()
@@ -300,6 +309,8 @@ def test_loop_mode_success(
     mock_construct.assert_called_once()
     # Note: construct_paths input_file_paths should include verification_program
     assert "verification_program" in mock_construct.call_args[1]['input_file_paths']
+    # Check force was read from ctx.obj (default is False)
+    assert mock_construct.call_args[1]['force'] is False
 
     mock_fix_loop.assert_called_once_with(
         program_file=setup_files["program"],
@@ -307,11 +318,11 @@ def test_loop_mode_success(
         prompt='Original prompt content', # Pass content
         verification_program=setup_files["verifier"], # Pass path
         strength=DEFAULT_STRENGTH,
-        temperature=0.0,
+        temperature=DEFAULT_TEMPERATURE,
         max_attempts=3, # Default
         budget=5.0,     # Default
         verification_log_file=output_results_path,
-        verbose=False,
+        verbose=False, # Check default verbose
         program_args=[] # Default empty args
     )
     mock_fix_errors.assert_not_called()
@@ -357,6 +368,7 @@ def test_loop_mode_failure(
         max_attempts=5 # Override default for test clarity
     )
 
+    mock_construct.assert_called_once()
     mock_fix_loop.assert_called_once()
     assert mock_fix_loop.call_args[1]['max_attempts'] == 5 # Check override passed
     mock_fix_errors.assert_not_called()
@@ -384,7 +396,10 @@ def test_loop_mode_missing_verification_program(mock_context, setup_files):
 @patch('pdd.fix_verification_main.construct_paths')
 def test_construct_paths_file_not_found(mock_construct, mock_context, setup_files, capsys):
     """Verify SystemExit if construct_paths raises FileNotFoundError."""
-    mock_construct.side_effect = FileNotFoundError("mock_file.txt not found")
+    # Simulate construct_paths raising FileNotFoundError AFTER global options are read
+    def construct_side_effect(*args, **kwargs):
+        raise FileNotFoundError("mock_file.txt not found")
+    mock_construct.side_effect = construct_side_effect
 
     with pytest.raises(SystemExit) as e:
         fix_verification_main(
@@ -402,6 +417,8 @@ def test_construct_paths_file_not_found(mock_construct, mock_context, setup_file
     captured = capsys.readouterr()
     # Check for the actual error message prefix printed by the code
     assert "Failed during path construction" in captured.out
+    # Ensure global options were read before the error
+    assert 'force' in mock_construct.call_args[1]
 
 
 @patch('builtins.open', new_callable=mock_open)
@@ -482,7 +499,8 @@ def test_verbose_flag_propagation(
     mock_context, setup_files, mock_construct_paths_response
 ):
     """Verify verbose flag is passed down."""
-    mock_context.params['verbose'] = True
+    # Set verbose=True in ctx.obj
+    mock_context.obj['verbose'] = True
     mock_construct.return_value = mock_construct_paths_response
     mock_run_prog.return_value = (True, "Output", "")
     mock_fix_errors.return_value = { 'verification_issues_count': 0, 'fixed_program': 'p', 'fixed_code': 'c', 'total_cost': 0, 'model_name': 'm', 'explanation': [] }
@@ -502,6 +520,9 @@ def test_verbose_flag_propagation(
     # Reset mocks and test loop mode
     mock_fix_errors.reset_mock()
     mock_construct.reset_mock() # Reset construct_paths mock as well
+    # Reset verbose flag for loop test (or ensure it's still True if intended)
+    mock_context.obj['verbose'] = True # Ensure it's set for the loop call too
+
     fix_verification_main(
         ctx=mock_context, prompt_file=setup_files["prompt"], code_file=setup_files["code"],
         program_file=setup_files["program"], output_results=None, output_code=None,
@@ -528,15 +549,9 @@ def test_force_flag_retrieved_from_ctx_obj(
     """
     # Modify the mock context to simulate --force being passed globally
     # Set force=True in obj (correct place)
-    mock_context.obj = {'force': True}
+    mock_context.obj['force'] = True
     # Ensure force is NOT in params (or is False) to test correct retrieval
-    mock_context.params = {
-        'strength': DEFAULT_STRENGTH,
-        'temperature': 0.0,
-        'force': False, # Explicitly set False in params to ensure obj is used
-        'quiet': False,
-        'verbose': False,
-    }
+    # ctx.params is already empty in the updated fixture, so no change needed here.
 
     # Prepare mocks as in a standard successful run (using loop mode for simplicity)
     mock_construct.return_value = mock_construct_paths_response
@@ -572,4 +587,3 @@ def test_force_flag_retrieved_from_ctx_obj(
     mock_run_prog.assert_not_called()
     mock_fix_errors.assert_not_called()
     mock_fix_loop.assert_called_once() # Ensure loop function was called
-
