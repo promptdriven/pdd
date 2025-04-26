@@ -8,7 +8,7 @@
     - `change_prompt_file` (`str`): Path to the change prompt file.
     - `input_code` (`str`): Path to the input code file or directory (when used with the '--csv' option).
     - `input_prompt_file` (`Optional[str]`): Path to the input prompt file. Optional and not used when '--csv' is specified.
-    - `output` (`Optional[str]`): Path to save the modified prompt file. If not specified, this will be generated based on the input files.
+    - `output` (`Optional[str]`): Output path (file or directory). Specifies the destination for the modified prompt(s) or a CSV results file (in CSV mode). Defaults generated if not specified.
     - `use_csv` (`bool`): Flag indicating whether to use CSV mode for batch changes.
 
     Outputs:
