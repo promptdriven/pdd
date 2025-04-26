@@ -93,14 +93,12 @@ def process_csv_change(
 
                 # Parse the prompt_name to get the input_code filename
                 try:
-                    # Original logic using Path(prompt_name) might be wrong if prompt_name is relative
-                    # prompt_path_obj = Path(prompt_name)
-                    # Construct the full path to the prompt file using the code directory
-                    # Assuming prompt_name is the filename (potentially relative within code_dir)
-                    prompt_path = code_dir_path / prompt_name
+                    # Assuming prompt_name *might* be a full path, get just the filename
+                    prompt_filename = Path(prompt_name).name
+                    prompt_path = code_dir_path / prompt_filename # Construct path relative to code_dir
 
-                    # Derive input code filename (assuming standard naming convention)
-                    base_name = prompt_path.stem  # Removes suffix like .prompt
+                    # Derive input code filename from the *filename* part
+                    base_name = Path(prompt_filename).stem  # Removes suffix like .prompt
                     # Remove the _<language> part if present (e.g., _python)
                     if '_' in base_name:
                         base_name = base_name.rsplit('_', 1)[0]
