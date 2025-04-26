@@ -34,3 +34,4 @@ pytest-cov
 pytest-asyncio
 twine
 firecrawl-py
+pytest-mock
