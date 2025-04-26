@@ -372,23 +372,11 @@ def preprocess(
     quiet = ctx.obj.get("quiet", False)
     command_name = "preprocess"
     try:
-        input_file_paths = {"prompt_file": prompt_file}
-        command_options = {"output": output}
-
-        input_strings, output_file_paths, language = construct_paths(
-            input_file_paths=input_file_paths,
-            force=ctx.obj.get("force", False),
-            quiet=quiet,
-            command=command_name,
-            command_options=command_options,
-        )
-        resolved_output = output_file_paths.get("output")
-
-        # preprocess_main handles file writing internally
+        # Pass original 'output' to preprocess_main
         preprocess_main(
             ctx=ctx, # Pass context for quiet/force flags if needed by preprocess_main
             prompt_file=prompt_file,
-            output=resolved_output,
+            output=output, # Pass original output argument
             xml=xml,
             recursive=recursive,
             double=double,
@@ -563,34 +551,14 @@ def split(
     quiet = ctx.obj.get("quiet", False)
     command_name = "split"
     try:
-        input_file_paths = {
-            "input_prompt": input_prompt,
-            "input_code": input_code,
-            "example_code": example_code,
-        }
-        command_options = {
-            "output_sub": output_sub,
-            "output_modified": output_modified,
-        }
-
-        _input_strings, output_file_paths, _language = construct_paths(
-            input_file_paths=input_file_paths,
-            force=ctx.obj.get("force", False),
-            quiet=quiet,
-            command=command_name,
-            command_options=command_options,
-        )
-        resolved_output_sub = output_file_paths.get("output_sub")
-        resolved_output_modified = output_file_paths.get("output_modified")
-
-        # split_main now returns values in standardized order (result_data, cost, model_name)
+        # Pass original output paths to split_main
         result_data, total_cost, model_name = split_main(
             ctx=ctx,
             input_prompt_file=input_prompt,
             input_code_file=input_code,
             example_code_file=example_code,
-            output_sub=resolved_output_sub,
-            output_modified=resolved_output_modified,
+            output_sub=output_sub, # Pass original output_sub
+            output_modified=output_modified, # Pass original output_modified
         )
         # The result_data is already properly formatted by split_main
         return result_data, total_cost, model_name
@@ -716,32 +684,13 @@ def update(
         if not git and not input_code_file:
             raise click.UsageError("INPUT_CODE_FILE is required when not using --git.")
 
-        input_file_paths = {
-            "input_prompt_file": input_prompt_file,
-            "modified_code_file": modified_code_file,
-        }
-        if input_code_file:
-            input_file_paths["input_code_file"] = input_code_file
-
-        command_options = {"output": output}
-
-        # construct_paths resolves output path
-        _input_strings, output_file_paths, _language = construct_paths(
-            input_file_paths=input_file_paths,
-            force=ctx.obj.get("force", False),
-            quiet=quiet,
-            command=command_name,
-            command_options=command_options,
-        )
-        resolved_output = output_file_paths.get("output")
-
-        # update_main returns: updated_prompt_content, total_cost, model_name
+        # Pass original 'output' to update_main
         updated_prompt, total_cost, model_name = update_main(
             ctx=ctx,
             input_prompt_file=input_prompt_file,
             modified_code_file=modified_code_file,
             input_code_file=input_code_file, # Pass original path or None
-            output=resolved_output,
+            output=output, # Pass original output argument
             git=git,
         )
         return updated_prompt, total_cost, model_name
@@ -875,36 +824,15 @@ def crash(
     quiet = ctx.obj.get("quiet", False)
     command_name = "crash"
     try:
-        input_file_paths = {
-            "prompt_file": prompt_file,
-            "code_file": code_file,
-            "program_file": program_file,
-            "error_file": error_file,
-        }
-        command_options = {
-            "output": output, # For fixed code file
-            "output_program": output_program,
-        }
-
-        _input_strings, output_file_paths, _language = construct_paths(
-            input_file_paths=input_file_paths,
-            force=ctx.obj.get("force", False),
-            quiet=quiet,
-            command=command_name,
-            command_options=command_options,
-        )
-        resolved_output_code = output_file_paths.get("output")
-        resolved_output_program = output_file_paths.get("output_program")
-
-        # crash_main returns: success, fixed_code_content, fixed_program_content, attempts, cost, model
+        # Pass original output paths to crash_main
         success, fixed_code, fixed_program, attempts, cost, model = crash_main(
             ctx=ctx,
             prompt_file=prompt_file,
             code_file=code_file,
             program_file=program_file,
             error_file=error_file,
-            output=resolved_output_code, # Pass resolved path for code
-            output_program=resolved_output_program, # Pass resolved path for program
+            output=output, # Pass original output argument (for code)
+            output_program=output_program, # Pass original output_program argument
             loop=loop,
             max_attempts=max_attempts,
             budget=budget,
@@ -912,8 +840,8 @@ def crash(
         result_data = {
             "success": success,
             "attempts": attempts,
-            "fixed_code_path": resolved_output_code,
-            "fixed_program_path": resolved_output_program,
+            "fixed_code_path": output, # Use original path for reporting
+            "fixed_program_path": output_program, # Use original path for reporting
             # "fixed_code_content": fixed_code, # Optional
             # "fixed_program_content": fixed_program, # Optional
         }
