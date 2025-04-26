@@ -18,7 +18,7 @@ def create_dummy_context(params: Dict[str, Any]) -> click.Context:
     """Creates a dummy Click context object for testing purposes."""
     # A minimal context setup is needed. We mainly care about ctx.params.
     ctx = click.Context(click.Command('dummy'))
-    ctx.params = params
+    ctx.obj = params
     return ctx
 
 def run_fix_verification_example():
