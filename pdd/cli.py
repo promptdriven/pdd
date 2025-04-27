@@ -1,14 +1,13 @@
 # pdd/cli.py
 from __future__ import annotations
 
-import importlib.metadata
 import os
-import sys
 from typing import Any, Dict, List, Optional, Tuple
 
 import click
 from rich.console import Console
 from rich.theme import Theme
+from rich.markup import MarkupError, escape
 
 # --- Relative Imports for Internal Modules ---
 from . import DEFAULT_STRENGTH, __version__
@@ -55,6 +54,10 @@ def handle_error(e: Exception, command_name: str, quiet: bool):
         elif isinstance(e, click.UsageError): # Handle Click usage errors explicitly if needed
              console.print(f"  [error]Usage Error:[/error] {e}", style="error")
              # click.UsageError should typically exit with 2, but re-raising allows test runner to handle it.
+        elif isinstance(e, MarkupError):
+            console.print("  [error]Markup Error:[/error] Invalid Rich markup encountered.", style="error")
+            # Print the error message safely escaped
+            console.print(escape(str(e)))
         else:
             console.print(f"  [error]An unexpected error occurred:[/error] {e}", style="error")
     # Re-raise the exception to allow higher-level handlers (like pytest) to see it.
