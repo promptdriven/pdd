@@ -94,7 +94,6 @@ async def _fix_errors_from_unit_tests_async(
             os.makedirs(os.path.dirname(os.path.abspath(error_file)), exist_ok=True)
     except Exception as e:
         if verbose:
-            print("DEBUG: About to print error reading error file") # DEBUG
             console.print(f"[bold red]Error reading error file: {str(e)}[/bold red]")
         prior_fixes = f"Error reading prior fixes: {str(e)}"
     
@@ -168,13 +167,11 @@ async def _fix_errors_from_unit_tests_async(
                 console.print(f"[bold]Output tokens: {llm_response.get('output_tokens', 'unknown')}[/bold]")
                 console.print(f"[bold]Cost: ${llm_response['cost']:.6f}[/bold]")
             except Exception as e:
-                print("DEBUG: About to print error displaying LLM analysis output") # DEBUG
                 console.print(f"[bold red]Error displaying LLM analysis output: {e}[/bold red]")
     
     except Exception as e:
         error_msg = f"Error during LLM analysis: {str(e)}"
         if verbose:
-            print("DEBUG: About to print error during LLM analysis") # DEBUG
             console.print(f"[bold red]{error_msg}[/bold red]")
         
         # Log the error to the error file
@@ -186,7 +183,6 @@ async def _fix_errors_from_unit_tests_async(
                 f.write(error_log)
         except Exception as file_err:
             if verbose:
-                print("DEBUG: About to print error writing error log within LLM except") # DEBUG
                 console.print(f"[bold red]Failed to write to error file: {str(file_err)}[/bold red]")
         
         # Return default values
@@ -229,7 +225,6 @@ async def _fix_errors_from_unit_tests_async(
             console.print(f"[bold green]Analysis logged to {error_file}[/bold green]")
     except Exception as e:
         if verbose:
-            print("DEBUG: About to print error writing analysis log") # DEBUG
             console.print(f"[bold red]Failed to write to error file: {str(e)}[/bold red]")
     
     
@@ -275,7 +270,6 @@ async def _fix_errors_from_unit_tests_async(
                     console.print(f"[bold green]Unit test fixes applied successfully[/bold green]")
             else:
                 if verbose:
-                    print("DEBUG: About to print failure applying unit test fixes") # DEBUG
                     console.print(f"[bold red]Failed to apply unit test fixes: {test_error}[/bold red]")
             
             # Clean up
@@ -284,7 +278,6 @@ async def _fix_errors_from_unit_tests_async(
             
         except Exception as e:
             if verbose:
-                print("DEBUG: About to print exception applying unit test fixes") # DEBUG
                 console.print(f"[bold red]Error applying unit test fixes: {str(e)}[/bold red]")
     else:
         if verbose:
@@ -322,7 +315,6 @@ async def _fix_errors_from_unit_tests_async(
                     console.print(f"[bold green]Code fixes applied successfully[/bold green]")
             else:
                 if verbose:
-                    print("DEBUG: About to print failure applying code fixes") # DEBUG
                     console.print(f"[bold red]Failed to apply code fixes: {code_error}[/bold red]")
             
             # Clean up
@@ -331,7 +323,6 @@ async def _fix_errors_from_unit_tests_async(
             
         except Exception as e:
             if verbose:
-                print("DEBUG: About to print exception applying code fixes") # DEBUG
                 console.print(f"[bold red]Error applying code fixes: {str(e)}[/bold red]")
     else:
         if verbose:
