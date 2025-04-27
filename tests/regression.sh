@@ -344,8 +344,8 @@ EOF
 log "Creating files for change --csv test"
 mkdir -p "$CHANGE_CSV_CODE_DIR"
 mkdir -p "$CHANGE_CSV_OUT_DIR"
-echo "def func_a():\n  print('Hello A')" > "$CHANGE_CSV_CODE_DIR/$DUMMY_CODE_A"
-echo "def func_b():\n  print('Hello B')" > "$CHANGE_CSV_CODE_DIR/$DUMMY_CODE_B"
+printf "def func_a():\\n  print('Hello A')\\n" > "$CHANGE_CSV_CODE_DIR/$DUMMY_CODE_A"
+printf "def func_b():\\n  print('Hello B')\\n" > "$CHANGE_CSV_CODE_DIR/$DUMMY_CODE_B"
 cp "$PROMPTS_PATH/$MATH_PROMPT" "$DUMMY_PROMPT_A" # Use math prompt as base
 cp "$PROMPTS_PATH/$MATH_PROMPT" "$DUMMY_PROMPT_B" # Use math prompt as base
 cat << EOF > "$CHANGE_CSV_FILE"
