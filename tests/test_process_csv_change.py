@@ -427,9 +427,8 @@ def test_nonexistent_code_file_in_row(mock_change_fixture, capsys):
     # Check for the specific error message
     expected_error = f"[bold red]Error:[/bold red] Derived code file not found or is not a file: '{derived_code_path}' (row 1)"
     mock_print.assert_any_call(expected_error)
-    # Check summary output via capsys
-    captured = capsys.readouterr()
-    assert "Overall Success Status: False" in captured.out
+    # Check summary output via mock_print
+    mock_print.assert_any_call("[bold]Overall Success Status:[/bold] False")
 
 # --- Test Budget Handling ---
 
@@ -509,16 +508,15 @@ def test_budget_exceeded(mock_change_fixture, capsys):
     assert model_name == "model_v1" # From the first successful call
 
     # Check that the budget exceeded warning was printed for row 2
-    expected_budget_message = f"[bold yellow]Warning:[/bold yellow] Budget exceeded (£{budget:.2f}) after processing row 2. Change from this row NOT saved. Stopping."
+    expected_budget_message = f"[bold yellow]Warning:[/bold yellow] Budget exceeded (${budget:.2f}) after processing row 2. Change from this row NOT saved. Stopping."
     mock_print.assert_any_call(expected_budget_message)
 
     # Check that change was called only twice
     assert mock_change_fixture.call_count == 2
 
-    # Check summary output via capsys
-    captured = capsys.readouterr()
-    assert "Overall Success Status: False" in captured.out
-    assert "Successful Changes: 1" in captured.out
+    # Check summary output via mock_print
+    mock_print.assert_any_call("[bold]Overall Success Status:[/bold] False")
+    mock_print.assert_any_call("[bold]Successful Changes:[/bold] 1")
 
 # --- Test Successful Scenarios ---
 
@@ -716,7 +714,8 @@ def test_change_function_exception(mock_change_fixture, capsys):
          patch("os.path.isdir", mock_isdir), \
          patch("builtins.open", side_effect=open_effect), \
          patch("pdd.process_csv_change.resolve_prompt_path", mock_resolve), \
-         patch("pdd.process_csv_change.get_extension", return_value=".py"):
+         patch("pdd.process_csv_change.get_extension", return_value=".py"), \
+         patch("pdd.process_csv_change.console.print") as mock_print:
 
         success, list_of_jsons, total_cost, model_name = process_csv_change(
             csv_file, 0.5, 0.5, code_directory, "python", ".py", budget
@@ -726,11 +725,13 @@ def test_change_function_exception(mock_change_fixture, capsys):
     assert list_of_jsons == [{"file_name": prompt1_name, "modified_prompt": "modified prompt 1"}] # Only row 1 result
     assert total_cost == 1.0 # Only cost from row 1
     assert model_name == "model_v1" # From row 1
-    captured = capsys.readouterr()
+    
     # Check for the error message logged for row 2
-    assert f"Error: Failed during 'change' call for '{prompt2_name}' (row 2): {change_exception}" in captured.out
-    assert f"Successfully processed change for: {prompt1_name}" in captured.out
-    assert "Overall Success Status: False" in captured.out
+    error_msg = f"[bold red]Error:[/bold red] Failed during 'change' call for '{prompt2_name}' (row 2): {change_exception}"
+    mock_print.assert_any_call(error_msg)
+    mock_print.assert_any_call("[bold]Overall Success Status:[/bold] False")
+    
+    mock_print.assert_any_call(f"  [green]Successfully processed change for:[/green] {prompt1_name}")
 
 # --- Test Path Resolution Helper ---
 # Use tmp_path for more realistic file system interactions

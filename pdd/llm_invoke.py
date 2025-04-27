@@ -25,6 +25,7 @@ import json
 
 from pydantic import BaseModel, Field
 from rich import print as rprint
+from rich.errors import MarkupError
 
 # Langchain core and community imports
 from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
@@ -347,12 +348,22 @@ def llm_invoke(prompt, input_json, strength, temperature, verbose=False, output_
                 rprint(f"Strength used: {strength}")
                 rprint(f"Temperature used: {temperature}")
                 try:
-                    rprint(f"Input JSON: {str(input_json)}")  # Use str() instead of json.dumps()
+                    # Try printing with rich formatting first
+                    rprint(f"Input JSON: {str(input_json)}")
+                except MarkupError:
+                    # Fallback to standard print if rich markup fails
+                    print(f"Input JSON: {str(input_json)}")
                 except Exception:
-                    rprint(f"Input JSON: {input_json}")
+                    print(f"Input JSON: {input_json}")
                 if output_pydantic:
                     rprint(f"Output Pydantic format: {output_pydantic}")
-                rprint(f"Result: {result_output}")
+                try:
+                    # Try printing with rich formatting first
+                    rprint(f"Result: {result_output}")
+                except MarkupError as me:
+                    # Fallback to standard print if rich markup fails
+                    print(f"[bold yellow]Warning:[/bold yellow] Failed to render result with rich markup: {me}")
+                    print(f"Raw Result: {str(result_output)}") # Use standard print
 
             return {'result': result_output, 'cost': cost, 'model_name': model.model}
 
