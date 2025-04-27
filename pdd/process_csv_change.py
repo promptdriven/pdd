@@ -128,185 +128,197 @@ def process_csv_change(
     successful_changes = 0
 
     try:
+        header_valid = True
         with open(csv_file, mode='r', newline='', encoding='utf-8') as file:
-            # Handle potential empty file
-            first_char = file.read(1)
-            if not first_char:
+            header_valid = True # Flag to track header status
+            reader = None # Initialize reader to None
+
+            # Read the header line manually
+            header_line = file.readline()
+            if not header_line:
+                # Handle empty file
                 console.print("[yellow]Warning:[/yellow] CSV file is empty.")
-                # Return success=True as no processing failed, but no results
-                return True, [], 0.0, "N/A"
-            file.seek(0) # Reset file pointer
+                header_valid = False # Treat as invalid header for flow control
+                # No rows will be processed, overall_success remains True initially
+            else:
+                # Parse the header line
+                actual_fieldnames = [col.strip() for col in header_line.strip().split(',')]
 
-            reader = csv.DictReader(file)
+                # Check if required columns are present
+                required_cols = {'prompt_name', 'change_instructions'}
+                missing_cols = required_cols - set(actual_fieldnames)
+                if missing_cols:
+                    console.print(f"[bold red]Error:[/bold red] CSV file must contain 'prompt_name' and 'change_instructions' columns. Missing: {missing_cols}")
+                    overall_success = False # Mark overall failure
+                    header_valid = False # Mark header as invalid
+                else:
+                    # Header is valid and has required columns, initialize DictReader for remaining lines
+                    reader = csv.DictReader(file, fieldnames=actual_fieldnames)
 
-            # Check for required columns
-            if not reader.fieldnames or not all(col in reader.fieldnames for col in ['prompt_name', 'change_instructions']):
-                missing_cols = set(['prompt_name', 'change_instructions']) - set(reader.fieldnames or [])
-                console.print(f"[bold red]Error:[/bold red] CSV file must contain 'prompt_name' and 'change_instructions' columns. Missing: {missing_cols}")
-                return False, [], 0.0, None # Return None for model_name on early exit
+            # Only loop if the header was valid and reader was initialized
+            if header_valid and reader:
+                for i, row in enumerate(reader):
+                    row_num = i + 1
+                    processed_rows += 1
+                    console.print(f"\n[cyan]Processing row {row_num}...[/cyan]")
 
-            for i, row in enumerate(reader):
-                row_num = i + 1
-                processed_rows += 1
-                console.print(f"\n[cyan]Processing row {row_num}...[/cyan]")
+                    prompt_name_from_csv = row.get('prompt_name', '').strip()
+                    change_instructions = row.get('change_instructions', '').strip()
 
-                prompt_name_from_csv = row.get('prompt_name', '').strip()
-                change_instructions = row.get('change_instructions', '').strip()
+                    if not prompt_name_from_csv:
+                        console.print(f"[bold yellow]Warning:[/bold yellow] Missing 'prompt_name' in row {row_num}. Skipping.")
+                        overall_success = False # Mark as not fully successful if skips occur
+                        continue
+                    if not change_instructions:
+                         console.print(f"[bold yellow]Warning:[/bold yellow] Missing 'change_instructions' in row {row_num}. Skipping.")
+                         overall_success = False # Mark as not fully successful if skips occur
+                         continue
 
-                if not prompt_name_from_csv:
-                    console.print(f"[bold yellow]Warning:[/bold yellow] Missing 'prompt_name' in row {row_num}. Skipping.")
-                    overall_success = False # Mark as not fully successful if skips occur
-                    continue
-                if not change_instructions:
-                     console.print(f"[bold yellow]Warning:[/bold yellow] Missing 'change_instructions' in row {row_num}. Skipping.")
-                     overall_success = False # Mark as not fully successful if skips occur
-                     continue
+                    # Try to resolve the prompt file path
+                    resolved_prompt_path = resolve_prompt_path(prompt_name_from_csv, csv_file, code_directory)
+                    if not resolved_prompt_path:
+                        console.print(f"[bold red]Error:[/bold red] Prompt file for '{prompt_name_from_csv}' not found in any location (row {row_num}).")
+                        console.print(f"  [dim]Searched: as is, CWD, CSV dir, code dir (using basename and full name)[/dim]")
+                        overall_success = False
+                        continue
 
-                # Try to resolve the prompt file path
-                resolved_prompt_path = resolve_prompt_path(prompt_name_from_csv, csv_file, code_directory)
-                if not resolved_prompt_path:
-                    console.print(f"[bold red]Error:[/bold red] Prompt file for '{prompt_name_from_csv}' not found in any location (row {row_num}).")
-                    console.print(f"  [dim]Searched: as is, CWD, CSV dir, code dir (using basename and full name)[/dim]")
-                    overall_success = False
-                    continue
+                    console.print(f"  [dim]Prompt name from CSV:[/dim] {prompt_name_from_csv}")
+                    console.print(f"  [dim]Resolved prompt path:[/dim] {resolved_prompt_path}")
 
-                console.print(f"  [dim]Prompt name from CSV:[/dim] {prompt_name_from_csv}")
-                console.print(f"  [dim]Resolved prompt path:[/dim] {resolved_prompt_path}")
+                    # --- Step 2a: Initialize variables ---
+                    input_prompt: Optional[str] = None
+                    input_code: Optional[str] = None
+                    input_code_path: Optional[str] = None
 
-                # --- Step 2a: Initialize variables ---
-                input_prompt: Optional[str] = None
-                input_code: Optional[str] = None
-                input_code_path: Optional[str] = None
-
-                # Read the input prompt from the resolved path
-                try:
-                    with open(resolved_prompt_path, 'r', encoding='utf-8') as f:
-                        input_prompt = f.read()
-                except IOError as e:
-                    console.print(f"[bold red]Error:[/bold red] Could not read prompt file '{resolved_prompt_path}' (row {row_num}): {e}")
-                    overall_success = False
-                    continue # Skip to next row
-
-                # Parse prompt_name to determine input_code_name
-                try:
-                    # i. remove the path and suffix _language.prompt from the prompt_name
-                    prompt_filename = os.path.basename(resolved_prompt_path) # Use basename of resolved path
-                    base_name, ext = os.path.splitext(prompt_filename) # Removes .prompt (or other ext)
-
-                    # Ensure it actually ends with .prompt before stripping language
-                    if ext.lower() != '.prompt':
-                         console.print(f"[bold yellow]Warning:[/bold yellow] Prompt file '{prompt_filename}' does not end with '.prompt'. Attempting to parse language anyway (row {row_num}).")
-                         # Keep base_name as is, don't assume .prompt was the only extension part
-
-                    file_stem = base_name
-                    actual_language = language # Default language
-
-                    # Check for _language suffix
-                    if '_' in base_name:
-                        parts = base_name.rsplit('_', 1)
-                        # Check if the suffix looks like a language identifier (simple check: alpha only)
-                        if len(parts) == 2 and parts[1].isalpha():
-                            file_stem = parts[0]
-                            # Use capitalize for consistency, matching get_extension examples
-                            actual_language = parts[1].capitalize()
-                            console.print(f"    [dim]Inferred language from filename:[/dim] {actual_language}")
-                        else:
-                            console.print(f"    [dim]Suffix '_{parts[1]}' not recognized as language, using default:[/dim] {language}")
-                    else:
-                        console.print(f"    [dim]Using default language:[/dim] {language}")
-
-
-                    # ii. use get_extension to infer the extension
+                    # Read the input prompt from the resolved path
                     try:
-                        # Use the capitalized version for lookup
-                        code_extension = get_extension(actual_language.capitalize())
-                        console.print(f"    [dim]Inferred extension for {actual_language}:[/dim] '{code_extension}'")
-                    except ValueError: # Handle case where get_extension doesn't know the language
-                        console.print(f"[bold yellow]Warning:[/bold yellow] Could not determine extension for language '{actual_language}'. Using default extension '{extension}' (row {row_num}).")
-                        code_extension = extension # Fallback to the provided default extension parameter
-                        # Do not mark overall_success as False for this warning, it's a fallback mechanism
+                        with open(resolved_prompt_path, 'r', encoding='utf-8') as f:
+                            input_prompt = f.read()
+                    except IOError as e:
+                        console.print(f"[bold red]Error:[/bold red] Could not read prompt file '{resolved_prompt_path}' (row {row_num}): {e}")
+                        overall_success = False
+                        continue # Skip to next row
 
-                    # iii. add the suffix extension to the prompt_name (stem)
-                    input_code_filename = file_stem + code_extension
+                    # Parse prompt_name to determine input_code_name
+                    try:
+                        # i. remove the path and suffix _language.prompt from the prompt_name
+                        prompt_filename = os.path.basename(resolved_prompt_path) # Use basename of resolved path
+                        base_name, ext = os.path.splitext(prompt_filename) # Removes .prompt (or other ext)
 
-                    # iv. Construct code file path: place it directly in code_directory.
-                    input_code_path = os.path.join(code_directory, input_code_filename)
-                    console.print(f"  [dim]Derived target code path:[/dim] {input_code_path}")
+                        # Ensure it actually ends with .prompt before stripping language
+                        if ext.lower() != '.prompt':
+                             console.print(f"[bold yellow]Warning:[/bold yellow] Prompt file '{prompt_filename}' does not end with '.prompt'. Attempting to parse language anyway (row {row_num}).")
+                             # Keep base_name as is, don't assume .prompt was the only extension part
+
+                        file_stem = base_name
+                        actual_language = language # Default language
+
+                        # Check for _language suffix
+                        if '_' in base_name:
+                            parts = base_name.rsplit('_', 1)
+                            # Check if the suffix looks like a language identifier (simple check: alpha only)
+                            if len(parts) == 2 and parts[1].isalpha():
+                                file_stem = parts[0]
+                                # Use capitalize for consistency, matching get_extension examples
+                                actual_language = parts[1].capitalize()
+                                console.print(f"    [dim]Inferred language from filename:[/dim] {actual_language}")
+                            else:
+                                console.print(f"    [dim]Suffix '_{parts[1]}' not recognized as language, using default:[/dim] {language}")
+                        else:
+                            console.print(f"    [dim]Using default language:[/dim] {language}")
 
 
-                    # Read the input code from the input_code_path
-                    if not os.path.exists(input_code_path) or not os.path.isfile(input_code_path):
-                         console.print(f"[bold red]Error:[/bold red] Derived code file not found or is not a file: '{input_code_path}' (row {row_num})")
+                        # ii. use get_extension to infer the extension
+                        try:
+                            # Use the capitalized version for lookup
+                            code_extension = get_extension(actual_language.capitalize())
+                            console.print(f"    [dim]Inferred extension for {actual_language}:[/dim] '{code_extension}'")
+                        except ValueError: # Handle case where get_extension doesn't know the language
+                            console.print(f"[bold yellow]Warning:[/bold yellow] Could not determine extension for language '{actual_language}'. Using default extension '{extension}' (row {row_num}).")
+                            code_extension = extension # Fallback to the provided default extension parameter
+                            # Do not mark overall_success as False for this warning, it's a fallback mechanism
+
+                        # iii. add the suffix extension to the prompt_name (stem)
+                        input_code_filename = file_stem + code_extension
+
+                        # iv. Construct code file path: place it directly in code_directory.
+                        input_code_path = os.path.join(code_directory, input_code_filename)
+                        console.print(f"  [dim]Derived target code path:[/dim] {input_code_path}")
+
+
+                        # Read the input code from the input_code_path
+                        if not os.path.exists(input_code_path) or not os.path.isfile(input_code_path):
+                             console.print(f"[bold red]Error:[/bold red] Derived code file not found or is not a file: '{input_code_path}' (row {row_num})")
+                             overall_success = False
+                             continue # Skip to next row
+                        with open(input_code_path, 'r', encoding='utf-8') as f:
+                            input_code = f.read()
+
+                    except Exception as e:
+                        console.print(f"[bold red]Error:[/bold red] Failed to parse filenames or read code file for row {row_num}: {e}")
+                        overall_success = False
+                        continue # Skip to next row
+
+                    # Ensure we have all necessary components before calling change
+                    # (Should be guaranteed by checks above, but added defensively)
+                    if input_prompt is None or input_code is None or change_instructions is None:
+                         console.print(f"[bold red]Internal Error:[/bold red] Missing required data (prompt, code, or instructions) for row {row_num}. Skipping.")
                          overall_success = False
-                         continue # Skip to next row
-                    with open(input_code_path, 'r', encoding='utf-8') as f:
-                        input_code = f.read()
+                         continue
 
-                except Exception as e:
-                    console.print(f"[bold red]Error:[/bold red] Failed to parse filenames or read code file for row {row_num}: {e}")
-                    overall_success = False
-                    continue # Skip to next row
+                    # --- Step 2b: Call the change function ---
+                    try:
+                        # Check budget *before* making the potentially expensive call
+                        if total_cost >= budget:
+                             console.print(f"[bold yellow]Warning:[/bold yellow] Budget (${budget:.2f}) already met or exceeded before processing row {row_num}. Stopping.")
+                             overall_success = False # Mark as incomplete due to budget
+                             break # Exit the loop
 
-                # Ensure we have all necessary components before calling change
-                # (Should be guaranteed by checks above, but added defensively)
-                if input_prompt is None or input_code is None or change_instructions is None:
-                     console.print(f"[bold red]Internal Error:[/bold red] Missing required data (prompt, code, or instructions) for row {row_num}. Skipping.")
-                     overall_success = False
-                     continue
+                        console.print(f"  [dim]Calling LLM for change... (Budget remaining: ${budget - total_cost:.2f})[/dim]")
+                        modified_prompt, cost, current_model_name = change(
+                            input_prompt=input_prompt,
+                            input_code=input_code,
+                            change_prompt=change_instructions,
+                            strength=strength,
+                            temperature=temperature
+                        )
+                        console.print(f"    [dim]Change cost:[/dim] ${cost:.6f}")
+                        console.print(f"    [dim]Model used:[/dim] {current_model_name}")
 
-                # --- Step 2b: Call the change function ---
-                try:
-                    # Check budget *before* making the potentially expensive call
-                    if total_cost >= budget:
-                         console.print(f"[bold yellow]Warning:[/bold yellow] Budget (${budget:.2f}) already met or exceeded before processing row {row_num}. Stopping.")
-                         overall_success = False # Mark as incomplete due to budget
-                         break # Exit the loop
+                        # --- Step 2c: Add cost ---
+                        new_total_cost = total_cost + cost
 
-                    console.print(f"  [dim]Calling LLM for change... (Budget remaining: ${budget - total_cost:.2f})[/dim]")
-                    modified_prompt, cost, current_model_name = change(
-                        input_prompt=input_prompt,
-                        input_code=input_code,
-                        change_prompt=change_instructions,
-                        strength=strength,
-                        temperature=temperature
-                    )
-                    console.print(f"    [dim]Change cost:[/dim] ${cost:.6f}")
-                    console.print(f"    [dim]Model used:[/dim] {current_model_name}")
+                        # --- Step 2d: Check budget *after* call ---
+                        console.print(f"  [dim]Cumulative cost:[/dim] ${new_total_cost:.6f} / ${budget:.2f}")
+                        if new_total_cost > budget:
+                            console.print(f"[bold yellow]Warning:[/bold yellow] Budget exceeded (${budget:.2f}) after processing row {row_num}. Change from this row NOT saved. Stopping.")
+                            total_cost = new_total_cost # Record the cost even if result isn't saved
+                            overall_success = False # Mark as incomplete due to budget
+                            break # Exit the loop
+                        else:
+                             total_cost = new_total_cost # Update cost only if within budget
 
-                    # --- Step 2c: Add cost ---
-                    new_total_cost = total_cost + cost
+                        # --- Step 2e: Add successful result ---
+                        # Capture model name on first successful call within budget
+                        if model_name is None and current_model_name:
+                            model_name = current_model_name
+                        # Warn if model name changes on subsequent calls
+                        elif current_model_name and model_name != current_model_name:
+                             console.print(f"[bold yellow]Warning:[/bold yellow] Model name changed from '{model_name}' to '{current_model_name}' in row {row_num}.")
+                             # Keep the first model_name
 
-                    # --- Step 2d: Check budget *after* call ---
-                    console.print(f"  [dim]Cumulative cost:[/dim] ${new_total_cost:.6f} / ${budget:.2f}")
-                    if new_total_cost > budget:
-                        console.print(f"[bold yellow]Warning:[/bold yellow] Budget exceeded (${budget:.2f}) after processing row {row_num}. Change from this row NOT saved. Stopping.")
-                        total_cost = new_total_cost # Record the cost even if result isn't saved
-                        overall_success = False # Mark as incomplete due to budget
-                        break # Exit the loop
-                    else:
-                         total_cost = new_total_cost # Update cost only if within budget
-
-                    # --- Step 2e: Add successful result ---
-                    # Capture model name on first successful call within budget
-                    if model_name is None and current_model_name:
-                        model_name = current_model_name
-                    # Warn if model name changes on subsequent calls
-                    elif current_model_name and model_name != current_model_name:
-                         console.print(f"[bold yellow]Warning:[/bold yellow] Model name changed from '{model_name}' to '{current_model_name}' in row {row_num}.")
-                         # Keep the first model_name
-
-                    list_of_jsons.append({
-                        "file_name": prompt_name_from_csv, # Use original prompt name from CSV as key
-                        "modified_prompt": modified_prompt
-                    })
-                    successful_changes += 1
-                    console.print(f"  [green]Successfully processed change for:[/green] {prompt_name_from_csv}")
+                        list_of_jsons.append({
+                            "file_name": prompt_name_from_csv, # Use original prompt name from CSV as key
+                            "modified_prompt": modified_prompt
+                        })
+                        successful_changes += 1
+                        console.print(f"  [green]Successfully processed change for:[/green] {prompt_name_from_csv}")
 
 
-                except Exception as e:
-                    console.print(f"[bold red]Error:[/bold red] Failed during 'change' call for '{prompt_name_from_csv}' (row {row_num}): {e}")
-                    overall_success = False
-                    # Continue to the next row even if one fails
+                    except Exception as e:
+                        console.print(f"[bold red]Error:[/bold red] Failed during 'change' call for '{prompt_name_from_csv}' (row {row_num}): {e}")
+                        overall_success = False
+                        # Continue to the next row even if one fails
 
     except FileNotFoundError:
         # This case should be caught by the initial validation, but included for robustness
@@ -337,8 +349,14 @@ def process_csv_change(
     console.print(f"[bold]Overall Success Status:[/bold] {overall_success}")
 
 
-    # Return overall_success, results, cost, and model name ("N/A" if None)
-    return overall_success, list_of_jsons, total_cost, model_name if model_name else "N/A"
+    # --- Summary printing block should be right above here ---
+
+    final_model_name = model_name if model_name else "N/A"
+    # If overall_success is False AND header_valid is False, it means we failed on header validation.
+    if not overall_success and not header_valid:
+         final_model_name = None
+
+    return overall_success, list_of_jsons, total_cost, final_model_name
 
 # Example usage (assuming this file is part of a package structure)
 # Keep the example usage block as is for basic testing/demonstration

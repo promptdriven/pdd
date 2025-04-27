@@ -185,7 +185,9 @@ def test_missing_columns_in_csv(mock_change_fixture, capsys):
     captured = capsys.readouterr()
     # Check for the specific error message about missing columns
     assert "Error: CSV file must contain 'prompt_name' and 'change_instructions' columns." in captured.out
-    assert "Missing: {'prompt_name', 'change_instructions'}" in captured.out # Check detail
+    assert "Missing:" in captured.out
+    assert "'prompt_name'" in captured.out
+    assert "'change_instructions'" in captured.out
 
 def test_empty_csv_file(mock_change_fixture, capsys):
     """ Test processing an empty CSV file """
@@ -232,7 +234,7 @@ def test_csv_header_only(mock_change_fixture, capsys):
     assert total_cost == 0.0
     assert model_name == "N/A" # No successful changes
     captured = capsys.readouterr()
-    assert "CSV processing finished successfully." in captured.out # Check summary message
+    assert "CSV processing finished successfully (no data rows found)." in captured.out # Check summary message
     assert "Total Rows Processed: 0" in captured.out
     assert "Successful Changes: 0" in captured.out
     assert "Overall Success Status: True" in captured.out
@@ -331,9 +333,8 @@ def test_nonexistent_prompt_file_in_row(mock_change_fixture, capsys):
     # Check for the specific error message from the code
     expected_error = f"[bold red]Error:[/bold red] Prompt file for '{prompt_name_csv}' not found in any location (row 1)."
     mock_print.assert_any_call(expected_error)
-    # Check summary output via capsys
-    captured = capsys.readouterr()
-    assert "Overall Success Status: False" in captured.out
+    # Check summary output via mock_print
+    mock_print.assert_any_call("[bold]Overall Success Status:[/bold] False")
 
 def test_nonexistent_code_file_in_row(mock_change_fixture, capsys):
     """
@@ -370,8 +371,9 @@ def test_nonexistent_code_file_in_row(mock_change_fixture, capsys):
              success, list_of_jsons, total_cost, model_name = process_csv_change(
                  csv_file, 0.5, 0.5, code_directory, "python", ".py", 10.0
              )
-             # Check that the prompt file was opened
-             m_open.assert_called_with(resolved_prompt_path, 'r', encoding='utf-8')
+             # Check that the prompt file was opened among potentially other calls (like the CSV)
+             expected_prompt_open_call = call(resolved_prompt_path, 'r', encoding='utf-8')
+             assert expected_prompt_open_call in m_open.call_args_list
 
 
     assert not success # Failed because row couldn't be processed
