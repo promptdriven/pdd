@@ -19,7 +19,6 @@ from .change_main import change_main
 from .cmd_test_main import cmd_test_main
 from .code_generator_main import code_generator_main
 from .conflicts_main import conflicts_main
-from .construct_paths import construct_paths
 from .context_generator_main import context_generator_main
 from .crash_main import crash_main
 from .detect_change_main import detect_change_main
@@ -462,30 +461,6 @@ def fix(
     quiet = ctx.obj.get("quiet", False)
     command_name = "fix"
     try:
-        input_file_paths = {
-            "prompt_file": prompt_file,
-            "code_file": code_file,
-            "unit_test_file": unit_test_file,
-            "error_file": error_file,
-        }
-        command_options = {
-            "output_test": output_test,
-            "output_code": output_code,
-            "output_results": output_results,
-            # Pass loop-related options directly to fix_main
-        }
-
-        # construct_paths ensures error_file exists if needed, resolves paths
-        _input_strings, output_file_paths, _language = construct_paths(
-            input_file_paths=input_file_paths,
-            force=ctx.obj.get("force", False),
-            quiet=quiet,
-            command=command_name,
-            command_options=command_options,
-        )
-        resolved_output_test = output_file_paths.get("output_test")
-        resolved_output_code = output_file_paths.get("output_code")
-        resolved_output_results = output_file_paths.get("output_results")
 
         # fix_main returns: success, fixed_test_content, fixed_code_content, attempts, cost, model
         # We need to adapt this to the (result, cost, model) structure for the callback
@@ -495,9 +470,9 @@ def fix(
             code_file=code_file,
             unit_test_file=unit_test_file,
             error_file=error_file, # Pass original path, construct_paths ensured it's handled
-            output_test=resolved_output_test,
-            output_code=resolved_output_code,
-            output_results=resolved_output_results,
+            output_test=output_test,
+            output_code=output_code,
+            output_results=output_results,
             loop=loop,
             verification_program=verification_program,
             max_attempts=max_attempts,
@@ -508,9 +483,9 @@ def fix(
         result_data = {
             "success": success,
             "attempts": attempts,
-            "fixed_test_path": resolved_output_test,
-            "fixed_code_path": resolved_output_code,
-            "results_log_path": resolved_output_results,
+            "fixed_test_path": output_test,
+            "fixed_code_path": output_code,
+            "results_log_path": output_results,
             # Optionally include content if needed downstream, but paths are usually sufficient
             # "fixed_test_content": fixed_test,
             # "fixed_code_content": fixed_code,
@@ -597,38 +572,7 @@ def change(
     quiet = ctx.obj.get("quiet", False)
     command_name = "change"
     try:
-        # Validation specific to 'change' command
-        if use_csv and input_prompt_file:
-            raise click.UsageError("Cannot use --csv and specify an INPUT_PROMPT_FILE simultaneously.")
-        if not use_csv and not input_prompt_file:
-            raise click.UsageError("INPUT_PROMPT_FILE is required when not using --csv.")
-        if use_csv and not os.path.isdir(input_code):
-             raise click.UsageError("INPUT_CODE must be a directory when using --csv.")
-        if not use_csv and os.path.isdir(input_code):
-             raise click.UsageError("INPUT_CODE must be a file when not using --csv.")
 
-
-        input_file_paths = {"change_prompt_file": change_prompt_file}
-        # Only add input_code and input_prompt_file if not using CSV,
-        # as construct_paths expects files for these keys.
-        if not use_csv:
-            input_file_paths["input_code"] = input_code
-            if input_prompt_file: # Should always be true if not use_csv
-                 input_file_paths["input_prompt_file"] = input_prompt_file
-
-        command_options = {"output": output}
-
-        # Only call construct_paths if not using CSV, as CSV mode handles paths differently
-        resolved_output = output # Default if CSV or construct_paths fails
-        if not use_csv:
-            _input_strings, output_file_paths, _language = construct_paths(
-                input_file_paths=input_file_paths,
-                force=ctx.obj.get("force", False),
-                quiet=quiet,
-                command=command_name,
-                command_options=command_options,
-            )
-            resolved_output = output_file_paths.get("output")
 
         # change_main handles both single and CSV modes
         # It returns: modified_prompt_content (single) or message (csv), total_cost, model_name
@@ -637,7 +581,7 @@ def change(
             change_prompt_file=change_prompt_file,
             input_code=input_code, # Pass original path/dir
             input_prompt_file=input_prompt_file, # Pass original path or None
-            output=resolved_output, # Pass resolved path (single) or original (csv)
+            output=output, # Pass resolved path (single) or original (csv)
             use_csv=use_csv,
         )
         # result_data is string (single) or dict/message (csv)

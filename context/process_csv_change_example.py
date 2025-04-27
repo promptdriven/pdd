@@ -24,7 +24,8 @@ code_dir.mkdir(parents=True, exist_ok=True)
 )
 
 # ----  b)  Prompt file (must follow *_<language>.prompt naming) ----
-(code_dir / "factorial_python.prompt").write_text(
+prompt_path = code_dir / "factorial_python.prompt"
+prompt_path.write_text(
     "Write a test for the factorial function.",
     encoding="utf-8"
 )
@@ -33,7 +34,7 @@ code_dir.mkdir(parents=True, exist_ok=True)
 csv_path = workspace / "tasks.csv"
 csv_path.write_text(
     "prompt_name,change_instructions\n"
-    "factorial_python.prompt,Add an example section to the prompt.\n",
+    f"{prompt_path},Add an example section to the prompt.\n",
     encoding="utf-8"
 )
 
