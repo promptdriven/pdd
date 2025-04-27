@@ -5,18 +5,17 @@ import asyncio
 import tempfile
 from datetime import datetime
 from typing import Dict, Tuple, Any, Optional, List, Union
-import psutil  # Add psutil import for process management
 
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
+from rich.markup import MarkupError
 
 from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
 from .preprocess import preprocess
-from .edit_file import edit_file, run_edit_in_subprocess
-from langchain_mcp_adapters.client import MultiServerMCPClient
+from edit_file_tool import edit_file as edit_file_tool_edit
 
 console = Console()
 
@@ -95,6 +94,7 @@ async def _fix_errors_from_unit_tests_async(
             os.makedirs(os.path.dirname(os.path.abspath(error_file)), exist_ok=True)
     except Exception as e:
         if verbose:
+            print("DEBUG: About to print error reading error file") # DEBUG
             console.print(f"[bold red]Error reading error file: {str(e)}[/bold red]")
         prior_fixes = f"Error reading prior fixes: {str(e)}"
     
@@ -156,13 +156,25 @@ async def _fix_errors_from_unit_tests_async(
         # Display response if verbose
         if verbose:
             console.print("\n[bold green]LLM Analysis Complete[/bold green]")
-            console.print(Markdown(analysis_results))
-            console.print(f"[bold]Output tokens: {llm_response.get('output_tokens', 'unknown')}[/bold]")
-            console.print(f"[bold]Cost: ${llm_response['cost']:.6f}[/bold]")
+            try:
+                console.print(Markdown(analysis_results))
+                console.print(f"[bold]Output tokens: {llm_response.get('output_tokens', 'unknown')}[/bold]")
+                console.print(f"[bold]Cost: ${llm_response['cost']:.6f}[/bold]")
+            except MarkupError as me:
+                console.print(f"[bold yellow]Warning:[/bold yellow] LLM analysis contained invalid markup: {me}")
+                console.print("[bold yellow]Raw LLM Analysis (unformatted):[/bold yellow]")
+                print(analysis_results) # Print raw string
+                # Still print cost and tokens if available
+                console.print(f"[bold]Output tokens: {llm_response.get('output_tokens', 'unknown')}[/bold]")
+                console.print(f"[bold]Cost: ${llm_response['cost']:.6f}[/bold]")
+            except Exception as e:
+                print("DEBUG: About to print error displaying LLM analysis output") # DEBUG
+                console.print(f"[bold red]Error displaying LLM analysis output: {e}[/bold red]")
     
     except Exception as e:
         error_msg = f"Error during LLM analysis: {str(e)}"
         if verbose:
+            print("DEBUG: About to print error during LLM analysis") # DEBUG
             console.print(f"[bold red]{error_msg}[/bold red]")
         
         # Log the error to the error file
@@ -174,6 +186,7 @@ async def _fix_errors_from_unit_tests_async(
                 f.write(error_log)
         except Exception as file_err:
             if verbose:
+                print("DEBUG: About to print error writing error log within LLM except") # DEBUG
                 console.print(f"[bold red]Failed to write to error file: {str(file_err)}[/bold red]")
         
         # Return default values
@@ -216,16 +229,9 @@ async def _fix_errors_from_unit_tests_async(
             console.print(f"[bold green]Analysis logged to {error_file}[/bold green]")
     except Exception as e:
         if verbose:
+            print("DEBUG: About to print error writing analysis log") # DEBUG
             console.print(f"[bold red]Failed to write to error file: {str(e)}[/bold red]")
     
-    # Step 4: Pretty print the analysis results if verbose
-    if verbose:
-        console.print("[bold blue]Step 4: Displaying analysis results...[/bold blue]")
-        console.print(Panel(
-            Markdown(analysis_results),
-            title="Analysis Results",
-            expand=False
-        ))
     
     # Initialize variables for return values
     update_unit_test = False
@@ -248,12 +254,17 @@ async def _fix_errors_from_unit_tests_async(
             if verbose:
                 console.print(f"[bold]Applying unit test fixes...[/bold]")
             
-            # Apply fixes using run_edit_in_subprocess for process isolation
-            test_success, test_error = run_edit_in_subprocess(
+            # Apply fixes using edit_file_tool's edit_file
+            test_success, test_error, test_cost = await edit_file_tool_edit(
                 file_path=temp_test_file,
-                edit_instructions=corrected_unit_test_text
+                edit_instructions=corrected_unit_test_text,
+                verbose=verbose,
+                max_iterations=25
             )
             
+            # Accumulate the cost
+            total_cost += test_cost
+
             # Read the modified file
             if test_success and os.path.exists(temp_test_file):
                 with open(temp_test_file, 'r') as f:
@@ -264,6 +275,7 @@ async def _fix_errors_from_unit_tests_async(
                     console.print(f"[bold green]Unit test fixes applied successfully[/bold green]")
             else:
                 if verbose:
+                    print("DEBUG: About to print failure applying unit test fixes") # DEBUG
                     console.print(f"[bold red]Failed to apply unit test fixes: {test_error}[/bold red]")
             
             # Clean up
@@ -272,6 +284,7 @@ async def _fix_errors_from_unit_tests_async(
             
         except Exception as e:
             if verbose:
+                print("DEBUG: About to print exception applying unit test fixes") # DEBUG
                 console.print(f"[bold red]Error applying unit test fixes: {str(e)}[/bold red]")
     else:
         if verbose:
@@ -288,12 +301,17 @@ async def _fix_errors_from_unit_tests_async(
             if verbose:
                 console.print(f"[bold]Applying code fixes...[/bold]")
             
-            # Apply fixes using run_edit_in_subprocess for process isolation
-            code_success, code_error = run_edit_in_subprocess(
+            # Apply fixes using edit_file_tool's edit_file
+            code_success, code_error, code_cost = await edit_file_tool_edit(
                 file_path=temp_code_file,
-                edit_instructions=corrected_code_text
+                edit_instructions=corrected_code_text,
+                verbose=verbose,
+                max_iterations=25
             )
             
+            # Accumulate the cost
+            total_cost += code_cost
+
             # Read the modified file
             if code_success and os.path.exists(temp_code_file):
                 with open(temp_code_file, 'r') as f:
@@ -304,6 +322,7 @@ async def _fix_errors_from_unit_tests_async(
                     console.print(f"[bold green]Code fixes applied successfully[/bold green]")
             else:
                 if verbose:
+                    print("DEBUG: About to print failure applying code fixes") # DEBUG
                     console.print(f"[bold red]Failed to apply code fixes: {code_error}[/bold red]")
             
             # Clean up
@@ -312,6 +331,7 @@ async def _fix_errors_from_unit_tests_async(
             
         except Exception as e:
             if verbose:
+                print("DEBUG: About to print exception applying code fixes") # DEBUG
                 console.print(f"[bold red]Error applying code fixes: {str(e)}[/bold red]")
     else:
         if verbose:
