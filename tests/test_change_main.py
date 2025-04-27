@@ -296,7 +296,7 @@ def test_change_main_non_csv_success(
     )
 
     # Assert
-    assert result == (modified_prompt, total_cost, model_name)
+    assert result == (f"Modified prompt saved to {Path(output).resolve()}", total_cost, model_name)
     # Check that open was called correctly by the code
     mock_open_function.assert_called_once_with(Path(output), 'w', encoding='utf-8')
     # Get the file handle mock from the return_value of the mock_open_function
@@ -334,9 +334,9 @@ def test_change_main_non_csv_missing_input_prompt_file(mock_rprint):
     )
 
     # Assert
-    expected_error = "Error: 'input_prompt_file' is required when not using '--csv' mode."
+    expected_error = "[bold red]Error:[/bold red] --input-prompt-file is required when not using --csv mode."
     assert result == (expected_error, 0.0, "")
-    mock_rprint.assert_called_once_with(f"[bold red]{expected_error}[/bold red]")
+    mock_rprint.assert_called_once_with(expected_error)
 
 def test_change_main_non_csv_construct_paths_error(
     mock_construct_paths,
@@ -567,9 +567,9 @@ def test_change_main_csv_input_code_not_directory(
     )
 
     # Assert - Expect the directory error now
-    expected_error = f"Input code directory not found or not a directory: {input_code_file}"
+    expected_error = f"[bold red]Error:[/bold red] In CSV mode, --input-code ('{input_code_file}') must be a valid directory."
     assert result == (expected_error, 0.0, "")
-    mock_rprint.assert_called_once_with(f"[bold red]Error: {expected_error}[/bold red]")
+    mock_rprint.assert_called_once_with(expected_error)
     # Verify is_file was called (for CSV) and is_dir was called (for input_code)
     mock_is_file.assert_called()
     mock_is_dir.assert_called()
@@ -801,12 +801,14 @@ def test_change_main_csv_output_directory_saves_individual_files(
     mock_is_file.side_effect = lambda self: self.resolve() in [input_csv_path.resolve(), prompt1_path.resolve(), code1_path.resolve(), prompt2_path.resolve(), code2_path.resolve()]
 
     # 4. Mock CSV reading
-    mock_csv_dictreader.return_value = [
+    # Create a MagicMock that also behaves like an iterable but preserves fieldnames
+    mock_reader = MagicMock()
+    mock_reader.__iter__.return_value = iter([
         {'prompt_name': prompt1_path.name, 'change_instructions': 'Change 1'},
         {'prompt_name': prompt2_path.name, 'change_instructions': 'Change 2'}
-    ]
-    # Also mock fieldnames for validation step
-    mock_csv_dictreader.return_value.fieldnames = ['prompt_name', 'change_instructions']
+    ])
+    mock_reader.fieldnames = ['prompt_name', 'change_instructions']
+    mock_csv_dictreader.return_value = mock_reader
 
 
     # 5. Mock change_func returns
