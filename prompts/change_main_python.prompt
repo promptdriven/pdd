@@ -53,49 +53,49 @@
       - Set the logging level to DEBUG for detailed logging.
 
    2. **Parse Arguments and Options**:
+      - Retrieve global options from the context (`ctx.obj`), including `force`, `quiet`, `strength`, `temperature`, `budget`, `language`, `extension`. Handle defaults appropriately (e.g., `DEFAULT_STRENGTH`, budget defaulting to 5.0).
       - Check if the `use_csv` flag is set.
       - Validate mandatory arguments: `change_prompt_file` and `input_code` are always required.
-      - When `use_csv` is False, validate that `input_prompt_file` is provided. If `use_csv` is True, ensure `input_prompt_file` is *not* used and `input_code` refers to a valid directory.
-      - Provide informative messages if required arguments are missing or invalid based on the mode.
+      - When `use_csv` is False, validate that `input_prompt_file` is provided and `input_code` is a file.
+      - When `use_csv` is True, ensure `input_prompt_file` is *not* used and `input_code` refers to a valid directory.
+      - Provide informative error messages if required arguments are missing or invalid based on the mode.
 
    3. **Construct File Paths**:
-      - Use `construct_paths` to load input files and establish output file paths.
-      - When `use_csv` is True, `input_code` should be treated as a directory path and *not* loaded as a file content; it's used by `process_csv_change` to locate corresponding code files.
-      - Respect `--force` and `--quiet` options from the CLI context.
+      - Prepare the `input_file_paths` dictionary for `construct_paths`. In CSV mode, only include `change_prompt_file`. In non-CSV mode, include `change_prompt_file`, `input_code`, and `input_prompt_file`.
+      - Use `construct_paths` to load input file contents (except for `input_code` in CSV mode) and establish output file paths.
+      - Pass `force` and `quiet` options to `construct_paths`.
 
    4. **Perform Prompt Modification**:
       - If `use_csv` is True:
-        - Verify that `input_code` is a valid directory path.
-        - Use `change_prompt_file` as the path to the input CSV file. Validate that this CSV file contains the required columns: `prompt_name` and `change_instructions`.
-        - Call `process_csv_change` to handle batch changes. This function should:
-          - Iterate through the rows of the CSV.
-          - For each row, parse the `prompt_name` to determine the `<basename>` and `<language>`.
-          - Locate the corresponding input prompt file using the `prompt_name`.
-          - Locate the corresponding code file (`<basename>.<language_extension>`) within the `input_code` directory.
-          - Perform the change using the `change_instructions` for that row.
+        - Verify that `input_code` points to a valid directory.
+        - Before calling `process_csv_change`, attempt to read and validate the header of the CSV file specified by `change_prompt_file`. Ensure it contains the required columns: `prompt_name` and `change_instructions`. Return an error if validation fails.
+        - Determine the target `language` and `extension` to be used by `process_csv_change`. Prioritize values provided via `--language` and `--extension` options in the Click context (`ctx.obj`). If not provided, attempt to derive the extension from the determined language (e.g., using `get_extension` with a fallback like 'python'). Return an error if the extension cannot be determined.
+        - Call `process_csv_change` to handle batch changes, passing `change_prompt_file`, `strength`, `temperature`, the `input_code` directory path, the determined `language` and `extension`, and `budget`.
         - Ensure that `process_csv_change` returns a tuple with four elements: (success, modified_prompts_list, total_cost, model_name), where `modified_prompts_list` is a list of dictionaries, each containing 'file_name' (original prompt path) and 'modified_prompt' (content).
       - Else (non-CSV mode):
-        - Load `input_code_content` and `input_prompt_content` from the `input_strings` dictionary returned by `construct_paths`.
-        - Call `change_func` to modify the single `input_prompt_content` based on the `change_prompt_file` content and `input_code_content`.
+        - Retrieve `change_prompt_content`, `input_code_content`, and `input_prompt_content` from the `input_strings` dictionary returned by `construct_paths`. Check that all required contents were loaded successfully.
+        - Call `change_func` to modify the single `input_prompt_content` based on `change_prompt_content` and `input_code_content`, passing `strength` and `temperature`.
 
    5. **Save Results**:
       - For CSV mode:
         - Determine the output target based on the `output` argument.
-        - If `output` is not specified or is a directory path: Iterate through the `modified_prompts_list`. For each dictionary in the list, save the `modified_prompt` content as an individual file within the target directory (current working directory or the specified one), using the default naming convention derived from the `file_name` or overwriting if `--force` is used.
-        - If `output` specifies a CSV file path: Create a new CSV file at this path. Iterate through the `modified_prompts_list`. For each dictionary, write a row with the `file_name` mapped to the `prompt_name` column and the `modified_prompt` mapped to the `modified_prompt` column.
+        - If `output` specifies a CSV file path (ending in `.csv`): Create a new CSV file at this path. Iterate through the `modified_prompts_list`. For each dictionary, write a row mapping the dictionary's `file_name` key to the `prompt_name` column and the `modified_prompt` key to the `modified_prompt` column.
+        - If `output` is not specified, is a directory path, or is a non-CSV file path: Treat the target as a directory (using the parent directory if a non-CSV file path was given). Iterate through the `modified_prompts_list`. For each dictionary, save the `modified_prompt` content as an individual file within the target directory, using the original filename from the `file_name` key. Respect the `--force` flag when overwriting existing files.
       - For non-CSV mode:
-        - Write the single modified prompt string returned by `change_func` to the output location determined by `construct_paths` (respecting `--output` and defaults).
-      - Use the `output_file_paths` dictionary from `construct_paths` to determine the output path when not explicitly provided in non-CSV mode or when saving individual files in CSV mode with a directory output.
+        - Determine the output file path. Use the `--output` argument if provided, otherwise use the default path (`output_prompt_file`) from `output_file_paths`. Ensure a valid path is determined.
+        - Write the single modified prompt string returned by `change_func` to the determined output location.
+      - Ensure output directories are created if they don't exist.
 
    6. **Provide User Feedback**:
-      - Use `rprint` to display messages about the operation's success or failure.
-      - Respect verbosity settings from the CLI context.
-      - In CSV mode, provide information about the number of prompts processed and where the results were saved (individual files in a directory or a single output CSV file).
+      - Use `rprint` to display messages about the operation's success or failure, respecting the `quiet` setting.
+      - Display the final cost and model used upon success.
+      - In CSV mode, provide information about the number of prompts processed/saved and where the results were saved (individual files in a directory or a single output CSV file).
+      - In non-CSV mode and if not quiet, print the saved file path and optionally the modified content.
 
    7. **Error Handling and Logging**:
-      - Implement try-except blocks to catch exceptions at various stages.
-      - Log detailed information about the execution flow and any errors encountered.
-      - Return appropriate error messages, costs, and model names in case of failures.
+      - Implement comprehensive try-except blocks to catch potential exceptions (`FileNotFoundError`, `IOError`, `csv.Error`, `NotADirectoryError`, etc.) at various stages (file reading, path construction, CSV processing, file writing).
+      - Log detailed information about the execution flow, decisions made (e.g., language/extension derivation), and any errors encountered using the logger.
+      - Return appropriate error messages, costs (potentially partial), and model names in case of failures.
 
 % Ensure adherence to the existing codebase's style, including type annotations, docstrings, and exception handling. Use logging extensively for debugging and tracing the execution flow. Handle all potential error scenarios and provide informative error messages.
 
