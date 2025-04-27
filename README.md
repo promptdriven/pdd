@@ -562,9 +562,15 @@ When using the `--double` option:
 - Special handling is applied for code blocks (JSON, JavaScript, TypeScript, Python)
 - Multiline variables with curly brackets receive special handling
 
-Use the `--exclude` option to specify keys that should be excluded from curly bracket doubling. This means that if a key listed in `--exclude` appears exactly within single curly braces (e.g., `{key}`), those braces will not be doubled. Braces containing other content, even if related to the key (e.g., `var={key}_value`), will still be doubled.
+Use the `--exclude` option to specify keys that should be excluded from curly bracket doubling. This option **only applies** if the **entire string** inside a pair of single curly braces **exactly matches** one of the excluded keys.
 
-Example:
+For example, with `--exclude model`:
+- `{model}` remains `{model}` (excluded due to exact match).
+- `{model_name}` is doubled, as 'model_name' is not an exact match for 'model'.
+- `{api_model}` is doubled, not an exact match.
+- Braces containing other content, even if related to the key (e.g., `var={key}_value`), will generally still follow doubling rules unless the inner `{key}` itself is excluded.
+
+Example command usage:
 ```
 pdd [GLOBAL OPTIONS] preprocess --output preprocessed/factorial_calculator_python_preprocessed.prompt --recursive --double --exclude model,temperature factorial_calculator_python.prompt
 ```
