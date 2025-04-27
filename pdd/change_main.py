@@ -64,7 +64,8 @@ def change_main(
     quiet: bool = ctx.obj.get("quiet", False)
     strength: float = ctx.obj.get("strength", DEFAULT_STRENGTH)
     temperature: float = ctx.obj.get("temperature", 0.0)
-    budget: Optional[float] = ctx.obj.get("budget", None)
+    # Default budget to 5.0 if not specified - needed for process_csv_change
+    budget: float = ctx.obj.get("budget", 5.0) 
     # --- Get language and extension from context --- 
     # These are crucial for knowing the target code file types, especially in CSV mode
     target_language: str = ctx.obj.get("language", "") # Get from context
@@ -290,8 +291,8 @@ def change_main(
                             logger.warning(f"Skipping save for item due to missing data: {item}")
                             continue
 
-                        # Construct default output name: modified_<original_basename>.prompt
-                        output_filename = f"modified_{original_prompt_path.stem}.prompt"
+                        # Use original filename instead of adding a modified_ prefix
+                        output_filename = os.path.basename(original_prompt_path)
                         individual_output_path = output_dir / output_filename
 
                         if not force and individual_output_path.exists():

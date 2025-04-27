@@ -8,7 +8,7 @@
         'strength' - A float between 0 and 1 that represents the strength of the LLM model to use.
         'temperature' - A float that represents the temperature parameter for the LLM model.
         'code_directory' - A string containing the path to the directory where the code files are stored.
-        'language' - A string representing the programming language of the code files. 
+        'language' - A string representing the default programming language of the code files if they don't have a language suffix. 
         'extension' - A string representing the file extension of the code files. Includes the '.' in front of the extension.
         'budget' - A float representing the maximum cost allowed for the change process.
     Outputs:
@@ -19,23 +19,38 @@
 
 % Here are examples of how to use internal modules:
 <internal_example_modules>
-    % Here is an example of the change function that will be used: <change_example><include>context/change_example.py</include></change_example>
+    % Here is an example of the change function that will be used: 
+        <change_example><include>context/change_example.py</include></change_example>
+
+    % Here is how to use the `get_extension` function:
+        <get_extension_example>
+        <include>context/get_extension_example.py</include>
+        </get_extension_example>
 </internal_example_modules>
 
 % This function will do the following:
     Step 1. Read in the csv file with columns prompt_name and change_instructions.
+        Note on prompt file path resolution:
+        - For each prompt_name in the CSV file, attempt to locate the prompt file by trying:
+            1. The exact path as specified in the CSV file
+            2. The current working directory with the basename of the prompt_name
+            3. The directory containing the CSV file with the basename of the prompt_name
+            4. The code_directory with the basename of the prompt_name
+        - If the prompt file is found in any of these locations, use it; otherwise, log an error and skip this row.
+    
     Step 2. Loop through each line in the csv file:
         a. Initialize variables:
             - Initialize a list_of_jsons to store the modified prompts.
             - Read the prompt from the prompt_name column (text file).
             - Parse the prompt_name into a input_code name:
-                - remove the path and suffix _language.prompt from the prompt_name
-                - add the suffix extension to the prompt_name
-                - change the directory to code_directory
+                i.  remove the path and suffix _language.prompt from the prompt_name
+                ii. use the `get_extension` function to infer the extension of the input_code file, if it doesn't have a language suffix use the default input extension.
+                iii. add the suffix extension to the prompt_name
+                iv. change the directory to code_directory + path from prompt_name (Step i).
             - Read the input_code from the input_code_name as a string
             - Read the change_instructions from the change_instructions column
         b. Call the change function with the input_prompt, input_code, and change_prompt.
         c. Add the returned total_cost to the total cost accumulator.
         d. If the total cost exceeds the budget, break the loop.
-        e. If the change was successful, add the modified prompt to the list_of_jsons. Use the original prompt_name (full path) as the "file_name" in the output dictionary.
+        e. If the change was successful, add the modified prompt to the list_of_jsons. Use the original prompt_name (full path) as the "file_name" in the output dictionary. When saving individual files to a directory, preserve the original filenames without adding any prefix.
     Step 3. Return the success status, list of modified prompts, total cost, and model name.
