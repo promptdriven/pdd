@@ -2,6 +2,7 @@ import sys
 from typing import Tuple, Optional
 import click
 from rich import print as rprint
+from rich.markup import MarkupError, escape
 
 import requests
 import asyncio
@@ -143,15 +144,30 @@ def fix_main(
 
         # Provide user feedback
         if not ctx.obj.get('quiet', False):
+            print("DEBUG: About to print success/fail message") # DEBUG
             rprint(f"[bold]{'Success' if success else 'Failed'} to fix errors[/bold]")
+            print("DEBUG: About to print attempts") # DEBUG
             rprint(f"[bold]Total attempts:[/bold] {attempts}")
+            print("DEBUG: About to print cost") # DEBUG
             rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
+            print("DEBUG: About to print model name") # DEBUG
             rprint(f"[bold]Model used:[/bold] {model_name}")
             if verbose and analysis_results:
                 # Log the first 200 characters of analysis if in verbose mode
                 analysis_preview = analysis_results[:200] + "..." if len(analysis_results) > 200 else analysis_results
-                rprint(f"[bold]Analysis preview:[/bold] {analysis_preview}")
+                print("DEBUG: About to print analysis preview") # DEBUG
+                try:
+                    # Attempt to print the preview using rich markup parsing
+                    rprint(f"[bold]Analysis preview:[/bold] {analysis_preview}")
+                except MarkupError as me:
+                    # If markup fails, print a warning and the escaped preview
+                    rprint(f"[bold yellow]Warning:[/bold yellow] Analysis preview contained invalid markup: {me}")
+                    rprint(f"[bold]Raw Analysis preview (escaped):[/bold] {escape(analysis_preview)}")
+                except Exception as e:
+                    # Handle other potential errors during preview printing
+                    rprint(f"[bold red]Error printing analysis preview: {e}[/bold red]")
             if success:
+                print("DEBUG: About to print saved file paths") # DEBUG
                 rprint("[bold green]Fixed files saved:[/bold green]")
                 rprint(f"  Test file: {output_file_paths['output_test']}")
                 rprint(f"  Code file: {output_file_paths['output_code']}")
@@ -160,8 +176,10 @@ def fix_main(
 
                 # Auto-submit example if requested and successful
                 if auto_submit:
+                    print("DEBUG: Entering auto_submit block") # DEBUG
                     try:
                         # Get JWT token for cloud authentication
+                        print("DEBUG: Getting JWT token") # DEBUG
                         jwt_token = asyncio.run(get_jwt_token(
                             firebase_api_key=os.environ.get("REACT_APP_FIREBASE_API_KEY"),
                             github_client_id=os.environ.get("GITHUB_CLIENT_ID"),
@@ -274,5 +292,11 @@ def fix_main(
 
     except Exception as e:
         if not ctx.obj.get('quiet', False):
-            rprint(f"[bold red]Error:[/bold red] {str(e)}")
+            # Safely handle and print MarkupError
+            if isinstance(e, MarkupError):
+                 rprint(f"[bold red]Markup Error in fix_main:[/bold red]")
+                 rprint(escape(str(e)))
+            else:
+                 # Print other errors normally (might still fail if they contain markup)
+                 rprint(f"[bold red]Error:[/bold red] {str(e)}")
         sys.exit(1)
