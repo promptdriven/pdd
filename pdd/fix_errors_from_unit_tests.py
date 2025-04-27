@@ -1,10 +1,9 @@
 import os
 import re
-import json
 import asyncio
 import tempfile
 from datetime import datetime
-from typing import Dict, Tuple, Any, Optional, List, Union
+from typing import Tuple
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -27,7 +26,8 @@ async def _fix_errors_from_unit_tests_async(
     error_file: str,
     strength: float,
     temperature: float = 0.0,
-    verbose: bool = False
+    verbose: bool = False,
+    max_iterations: int = 30
 ) -> Tuple[bool, bool, str, str, str, float, str]:
     """
     Fix unit test errors and warnings in code files.
@@ -41,6 +41,7 @@ async def _fix_errors_from_unit_tests_async(
         strength: Strength of the LLM model to use (0-1)
         temperature: Temperature for LLM output (0-1)
         verbose: Whether to print detailed information
+        max_iterations: Maximum iterations for the edit_file tool
         
     Returns:
         Tuple containing:
@@ -254,7 +255,7 @@ async def _fix_errors_from_unit_tests_async(
                 file_path=temp_test_file,
                 edit_instructions=corrected_unit_test_text,
                 verbose=verbose,
-                max_iterations=25
+                max_iterations=max_iterations
             )
             
             # Accumulate the cost
@@ -299,7 +300,7 @@ async def _fix_errors_from_unit_tests_async(
                 file_path=temp_code_file,
                 edit_instructions=corrected_code_text,
                 verbose=verbose,
-                max_iterations=25
+                max_iterations=max_iterations
             )
             
             # Accumulate the cost
@@ -358,7 +359,8 @@ def fix_errors_from_unit_tests(
     error_file: str,
     strength: float,
     temperature: float = 0.0,
-    verbose: bool = False
+    verbose: bool = False,
+    max_iterations: int = 30
 ) -> Tuple[bool, bool, str, str, str, float, str]:
     """
     Synchronous wrapper for fixing unit test errors and warnings in code files.
@@ -372,6 +374,7 @@ def fix_errors_from_unit_tests(
         strength: Strength of the LLM model to use (0-1)
         temperature: Temperature for LLM output (0-1)
         verbose: Whether to print detailed information
+        max_iterations: Maximum iterations for the edit_file tool
         
     Returns:
         Tuple containing:
@@ -410,7 +413,8 @@ def fix_errors_from_unit_tests(
             error_file=error_file,
             strength=strength,
             temperature=temperature,
-            verbose=verbose
+            verbose=verbose,
+            max_iterations=max_iterations
         ))
     finally:
         # Clean up the loop
