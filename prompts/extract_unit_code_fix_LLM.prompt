@@ -328,5 +328,5 @@
     - 'explanation': String explanation of whether the code under test needs to be fix and/or if the unit test needs to be fixed. Also, explain whether only a fragment of code was provided and the entire unit test and/or code under test needs to be reassembled from the original code and/or unit test.
     - 'update_unit_test': Boolean indicating whether the unit test needs to be updated.
     - 'update_code': Boolean indicating whether the code under test needs to be updated.
-    - 'fixed_unit_test': The entire updated unit test code or empty String if no update is needed.
-    - 'fixed_code': The entire updated code under test or empty String if no update is needed.
+    - 'fixed_unit_test': The entire updated unit test code or empty String if no update is needed. Don't lose prior comments in the unit test unless they are no longer valid.
+    - 'fixed_code': The entire updated code under test or empty String if no update is needed. Don't lose prior comments in the code under test unless they are no longer valid.
