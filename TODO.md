@@ -1,5 +1,9 @@
 # TODO
 - [ ] Python 3.13 support
+- [ ] AWS support
+- [ ] ask for and store API keys
+- [ ] display model list
+- [ ] reasoning support, allow strength to go above 1 to allocate more thinking tokens
 
 ## On Deck
 - [ ] during fix rather than just have the fix loop check to see if the example crashed, have it use a llm to check if the results are largely correct still
@@ -29,13 +33,12 @@
 - [ ] autogenerate the model.csv file and print out the strength of each model
 - [ ] agentic prompt to code
 - [ ] agentic additional context inclusion via context 7 MCP
+- [ ] re-ranker for the example using a LLM
+
 
 ## Bugs
 
 ## Improvements
-- [ ] ask for and store API keys
-- [ ] display model list
-- [ ] reasoning support, allow strength to go above 1 to allocate more thinking tokens
 - [ ] update prompt for makefile
 - [ ] MLX support for faster local
 - [ ] fix make file production and prepopulate
