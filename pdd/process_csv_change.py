@@ -214,6 +214,7 @@ def process_csv_change(
 
                         file_stem = base_name
                         actual_language = language # Default language
+                        language_from_suffix = False # Track if language came from suffix
 
                         # Check for _language suffix
                         if '_' in base_name:
@@ -223,6 +224,7 @@ def process_csv_change(
                                 file_stem = parts[0]
                                 # Use capitalize for consistency, matching get_extension examples
                                 actual_language = parts[1].capitalize()
+                                language_from_suffix = True # Set flag
                                 console.print(f"    [dim]Inferred language from filename:[/dim] {actual_language}")
                             else:
                                 console.print(f"    [dim]Suffix '_{parts[1]}' not recognized as language, using default:[/dim] {language}")
@@ -232,13 +234,24 @@ def process_csv_change(
 
                         # ii. use get_extension to infer the extension
                         try:
+                            # print(f"DEBUG: Trying get_extension for language: '{actual_language}'") # Keep commented
                             # Use the capitalized version for lookup
                             code_extension = get_extension(actual_language.capitalize())
                             console.print(f"    [dim]Inferred extension for {actual_language}:[/dim] '{code_extension}'")
                         except ValueError: # Handle case where get_extension doesn't know the language
-                            console.print(f"[bold yellow]Warning:[/bold yellow] Could not determine extension for language '{actual_language}'. Using default extension '{extension}' (row {row_num}).")
-                            code_extension = extension # Fallback to the provided default extension parameter
-                            # Do not mark overall_success as False for this warning, it's a fallback mechanism
+                            # print(f"DEBUG: get_extension failed. Falling back to default extension parameter: '{extension}'") # Keep commented
+                            if language_from_suffix:
+                                # Suffix was present but get_extension failed for it! Error out for this row.
+                                console.print(f"[bold red]Error:[/bold red] Language '{actual_language}' found in prompt suffix, but its extension is unknown (row {row_num}). Skipping.")
+                                overall_success = False # Mark failure
+                                continue # Skip to next row
+                            else:
+                                # No suffix, and get_extension failed for the default language.
+                                # Fallback to the 'extension' parameter as a last resort (current behavior).
+                                console.print(f"[bold yellow]Warning:[/bold yellow] Could not determine extension for default language '{actual_language}'. Using default extension parameter '{extension}' (row {row_num}).")
+                                code_extension = extension # Fallback to the provided default extension parameter
+                                # Do not mark overall_success as False for this warning, it's a fallback mechanism
+                        # print(f"DEBUG: Determined code extension: '{code_extension}'") # Keep commented
 
                         # iii. add the suffix extension to the prompt_name (stem)
                         input_code_filename = file_stem + code_extension
@@ -246,6 +259,7 @@ def process_csv_change(
                         # iv. Construct code file path: place it directly in code_directory.
                         input_code_path = os.path.join(code_directory, input_code_filename)
                         console.print(f"  [dim]Derived target code path:[/dim] {input_code_path}")
+                        print(f"DEBUG: Attempting to access code file path: '{input_code_path}'") # Added log
 
 
                         # Read the input code from the input_code_path
