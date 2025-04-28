@@ -18,6 +18,8 @@ from .change_main import change_main
 from .cmd_test_main import cmd_test_main
 from .code_generator_main import code_generator_main
 from .conflicts_main import conflicts_main
+# Need to import construct_paths for tests patching pdd.cli.construct_paths
+from .construct_paths import construct_paths
 from .context_generator_main import context_generator_main
 from .crash_main import crash_main
 from .detect_change_main import detect_change_main
@@ -29,6 +31,7 @@ from .split_main import split_main
 from .trace_main import trace_main
 from .track_cost import track_cost
 from .update_main import update_main
+
 
 # --- Initialize Rich Console ---
 # Define a custom theme for consistent styling
@@ -919,6 +922,7 @@ def auto_deps(
     command_name = "auto-deps"
     try:
         # Strip quotes from directory_path if present
+        # Corrected the unterminated string literal error
         clean_directory_path = directory_path.strip('\'"')
 
         # auto_deps_main handles its own path logic and output file generation
