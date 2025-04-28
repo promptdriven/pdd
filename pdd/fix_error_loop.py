@@ -343,7 +343,7 @@ def fix_error_loop(unit_test_file: str,
         fix_attempts += 1  # We used one fix attempt
         total_cost += cost
         if verbose:
-            rprint(f"[cyan]Iteration fix cost: ${cost:.6f}, Total cost: ${total_cost:.6f}[/cyan]")
+            rprint(f"[cyan]Iteration {iteration} Fix Cost: ${cost:.6f}, Cumulative Total Cost: ${total_cost:.6f}[/cyan]")
         if total_cost > budget:
             rprint(f"[red]Exceeded the budget of ${budget:.6f}. Ending fixing loop.[/red]")
             break
