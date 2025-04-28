@@ -9,6 +9,7 @@ from rich.console import Console
 from rich.panel import Panel
 from tempfile import NamedTemporaryFile
 
+from . import DEFAULT_STRENGTH
 from .preprocess import preprocess
 from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
@@ -210,7 +211,7 @@ def fix_errors_from_unit_tests(
                 "unit_test": unit_test,
                 "code": code
             },
-            strength=0.8,  # Fixed strength as per requirements
+            strength=DEFAULT_STRENGTH,  # Fixed strength as per requirements
             temperature=temperature,
             output_pydantic=CodeFix,
             verbose=verbose
