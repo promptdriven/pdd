@@ -18,7 +18,7 @@ def escape_brackets(text: str) -> str:
     """Escape square brackets so Rich doesn't misinterpret them."""
     return text.replace("[", "\\[").replace("]", "\\]")
 
-def run_pytest_on_file(test_file: str) -> (int, int, int, str):
+def run_pytest_on_file(test_file: str) -> tuple[int, int, int, str]:
     """
     Run pytest on the specified test file using subprocess.
     Returns a tuple: (failures, errors, warnings, logs)
@@ -63,9 +63,9 @@ def format_log_for_output(log_structure):
     
     # Initial test output (only for first iteration)
     if log_structure["iterations"] and "initial_test_output" in log_structure["iterations"][0]:
-        formatted_text += f"<pytest_output iteration=1>\n"
+        formatted_text += "<pytest_output iteration=1>\n"
         formatted_text += f"{log_structure['iterations'][0]['initial_test_output']}\n"
-        formatted_text += f"</pytest_output>\n\n"
+        formatted_text += "</pytest_output>\n\n"
     
     for i, iteration in enumerate(log_structure["iterations"]):
         formatted_text += f"=== Attempt iteration {iteration['number']} ===\n\n"
@@ -74,23 +74,23 @@ def format_log_for_output(log_structure):
         if iteration.get("fix_attempt"):
             formatted_text += f"<fix_attempt iteration={iteration['number']}>\n"
             formatted_text += f"{iteration['fix_attempt']}\n"
-            formatted_text += f"</fix_attempt>\n\n"
+            formatted_text += "</fix_attempt>\n\n"
         
         # Verification with XML tags
         if iteration.get("verification"):
             formatted_text += f"<verification_output iteration={iteration['number']}>\n"
             formatted_text += f"{iteration['verification']}\n"
-            formatted_text += f"</verification_output>\n\n"
+            formatted_text += "</verification_output>\n\n"
         
         # Post-fix test results (except for last iteration to avoid duplication)
         if i < len(log_structure["iterations"]) - 1 and iteration.get("post_test_output"):
             formatted_text += f"<pytest_output iteration={iteration['number']+1}>\n"
             formatted_text += f"{iteration['post_test_output']}\n"
-            formatted_text += f"</pytest_output>\n\n"
+            formatted_text += "</pytest_output>\n\n"
     
     # Final run (using last iteration's post-test output)
     if log_structure["iterations"] and log_structure["iterations"][-1].get("post_test_output"):
-        formatted_text += f"=== Final Pytest Run ===\n"
+        formatted_text += "=== Final Pytest Run ===\n"
         formatted_text += f"{log_structure['iterations'][-1]['post_test_output']}\n"
     
     return formatted_text
@@ -539,7 +539,7 @@ if __name__ == "__main__":
         verbose
     )
 
-    rprint(f"\n[bold]Process complete.[/bold]")
+    rprint("\n[bold]Process complete.[/bold]")
     rprint(f"Success: {success}")
     rprint(f"Attempts: {attempts}")
     rprint(f"Total cost: ${total_cost:.6f}")
