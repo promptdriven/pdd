@@ -107,7 +107,7 @@ def fix_errors_from_unit_tests(
     strength: float,
     temperature: float,
     verbose: bool = False
-) -> Tuple[bool, bool, str, str, float, str]:
+) -> Tuple[bool, bool, str, str, str, float, str]:
     """
     Fix errors in unit tests using LLM models and log the process.
 
@@ -239,10 +239,10 @@ def fix_errors_from_unit_tests(
         if verbose:
             console.print(f"[bold red]{error_msg}[/bold red]")
         write_to_error_file(error_file, error_msg)
-        return False, False, "", "", 0.0, ""
+        return False, False, "", "", "", 0.0, ""
     except Exception as e:
         error_msg = f"Error in fix_errors_from_unit_tests: {str(e)}"
         if verbose:
             console.print(f"[bold red]{error_msg}[/bold red]")
         write_to_error_file(error_file, error_msg)
-        return False, False, "", "", 0.0, ""
+        return False, False, "", "", "", 0.0, ""
