@@ -77,6 +77,15 @@ def change_main(
     success: bool = False
     modified_prompts_list: List[Dict[str, str]] = [] # For CSV mode
 
+    # Normalize output path at the start if it has a trailing separator
+    normalized_output: Optional[str] = None
+    if output and output.endswith((os.sep, "/", "\\")):
+        logger.debug(f"Output path has trailing separator: {output}")
+        normalized_output = os.path.normpath(output)
+        logger.debug(f"Normalized output path: {normalized_output}")
+    else:
+        normalized_output = output
+
     try:
         # --- 1. Argument Validation --- 
         if not change_prompt_file or not input_code:
@@ -133,7 +142,7 @@ def change_main(
 
         # --- 2. Construct Paths and Read Inputs (where applicable) --- 
         input_file_paths: Dict[str, str] = {}
-        command_options: Dict[str, Any] = {"output": output} if output else {}
+        command_options: Dict[str, Any] = {"output": normalized_output} if normalized_output else {}
 
         if use_csv:
             # Only the CSV file needs to be read by construct_paths initially
@@ -280,21 +289,16 @@ def change_main(
         # --- 4. Save Results --- 
         if success:
             output_path_obj: Optional[Path] = None
-            if output:
-                output_path_obj = Path(output).resolve()
-                logger.debug(f"User specified output path: {output_path_obj}")
+            if normalized_output:
+                output_path_obj = Path(normalized_output).resolve()
+                logger.debug(f"Using normalized output path: {output_path_obj}")
             elif not use_csv and "output_prompt_file" in output_file_paths:
                  output_path_obj = Path(output_file_paths["output_prompt_file"]).resolve()
                  logger.debug(f"Using default output path from construct_paths: {output_path_obj}")
 
             if use_csv:
-                # Handle potential directory paths ending with a separator
-                if output_path_obj and str(output_path_obj).endswith((os.sep, "/", "\\")):
-                    logger.debug(f"Output path has trailing separator: {output_path_obj}")
-                    output_path_obj = Path(os.path.normpath(str(output_path_obj)))
-                    logger.debug(f"Normalized output path: {output_path_obj}")
-                
                 output_is_csv = output_path_obj and output_path_obj.suffix.lower() == ".csv"
+                
                 if output_is_csv:
                     logger.info(f"Saving batch results to CSV: {output_path_obj}")
                     try:
@@ -325,12 +329,6 @@ def change_main(
                     # Save each modified prompt to an individual file
                     output_dir = None
                     if output_path_obj:
-                        # Check if the normalized path IS a directory (even if it needs creation)
-                        # Using suffix check is fragile, rely on os.path.isdir or expected behavior
-                        # If it *looks* like a directory (no common file suffix or ends in / before norm), treat as dir.
-                        # Safest: Assume dir if it doesn't end with a typical file extension or if explicitly created as one.
-                        # Let's refine the logic: if output path exists AND is a file, error unless force? No, spec is save *in* dir.
-                        # If output path is specified, treat it as the target directory.
                         output_dir = output_path_obj
                         logger.debug(f"Output target is directory: {output_dir}")
                     else:
