@@ -1213,16 +1213,28 @@ def test_change_main_csv_output_dir_slash_saves_individual_files(
         params={'force': False},
         obj={'quiet': True, 'language': 'python', 'extension': '.py'}
     )
+    
     # 3. Mock Path validation
-    all_files = {str(input_csv_path.resolve()), str(prompt1_path.resolve()), str(code1_path.resolve())}
-    # Treat the normalized path as the directory for checks
-    all_dirs_before_creation = {str(code_dir.resolve()), str(tmp_path.resolve())}
-    all_dirs_after_creation = {str(code_dir.resolve()), str(output_dir_normalized.resolve()), str(tmp_path.resolve())}
-
-    mock_is_file.side_effect = lambda self: str(self.resolve()) in all_files
-    # is_dir should resolve to True for the *normalized* path if checked *after* creation
-    mock_is_dir.side_effect = lambda self: str(self.resolve()) in all_dirs_after_creation
-    mock_os_isdir.side_effect = lambda path: str(Path(path).resolve()) in all_dirs_before_creation
+    # Critical fix: Make Path.is_file always return True for the prompt file by name
+    def is_file_mock(self):
+        # If this is our prompt file (by name), always return True
+        if self.name == prompt1_name:
+            return True
+        # Otherwise, check against the list of other files
+        return str(self.resolve()) in {
+            str(input_csv_path.resolve()),
+            str(code1_path.resolve())
+        }
+    
+    mock_is_file.side_effect = is_file_mock
+    mock_is_dir.side_effect = lambda self: str(self.resolve()) in {
+        str(code_dir.resolve()),
+        str(output_dir_normalized.resolve()),
+        str(tmp_path.resolve())
+    }
+    
+    # Always return True for os.path.isdir checks on the code directory
+    mock_os_isdir.side_effect = lambda path: True if str(path) == str(code_dir) else False
 
     # Properly mock the CSV reader with fieldnames
     reader_instance = MagicMock()
@@ -1234,21 +1246,29 @@ def test_change_main_csv_output_dir_slash_saves_individual_files(
 
     # 5. Mock change_func returns
     mock_change_func.return_value = ('Modified 1', 0.01, "model-x")
+    
     # Mock normpath to return the normalized version when called with the slash version
     mock_normpath.side_effect = lambda path: str(output_dir_normalized) if path == output_dir_with_slash_str else path
 
-    # Mock file opens
-    mock_read_handles = {
-        str(input_csv_path.resolve()): mock_open(read_data=csv_content).return_value,
-        str(prompt1_path.resolve()): mock_open(read_data="Prompt 1").return_value,
-        str(code1_path.resolve()): mock_open(read_data="Code 1").return_value,
-    }
+    # Mock file opens - provide content based on filename to handle different path formats
     def flexible_open(file, mode='r', *args, **kwargs):
-        resolved_path_str = str(Path(file).resolve())
+        path_obj = Path(file)
         if mode.startswith('r'):
-            handle = mock_read_handles.get(resolved_path_str)
-            if handle: handle.seek(0); return handle
-            else: return mock_open().return_value
+            # Return appropriate content based on filename
+            if path_obj.name == prompt1_name:
+                handle = mock_open(read_data="Prompt 1").return_value
+                handle.seek(0)
+                return handle
+            elif path_obj.name == "file1.py":
+                handle = mock_open(read_data="Code 1").return_value
+                handle.seek(0)
+                return handle
+            elif str(path_obj.resolve()) == str(input_csv_path.resolve()):
+                handle = mock_open(read_data=csv_content).return_value
+                handle.seek(0)
+                return handle
+            # Default fallback
+            return mock_open().return_value
         elif mode.startswith('w'):
             return mock_open_fixture(file, mode, *args, **kwargs)
         return mock_open_fixture(file, mode, *args, **kwargs)
@@ -1265,6 +1285,7 @@ def test_change_main_csv_output_dir_slash_saves_individual_files(
             {'output': output_dir_with_slash_str}, # Pass path with slash
             'python'
         )
+        
         result_message, result_cost, result_model = change_main(
             ctx=ctx,
             change_prompt_file=str(input_csv_path),
@@ -1289,7 +1310,6 @@ def test_change_main_csv_output_dir_slash_saves_individual_files(
     assert write_calls[0] == call(expected_file_path, 'w', encoding='utf-8')
 
     # 4. Check that CSV writing was NOT attempted on the directory itself
-    # Check if open was called with the directory path in write mode
     directory_write_attempted = any(
         call_args.args[0] == output_dir_normalized and call_args.args[1].startswith('w')
         for call_args in mock_open_fixture.call_args_list
