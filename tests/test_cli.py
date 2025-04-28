@@ -241,8 +241,8 @@ def test_cli_auto_update_handles_exception(mock_construct, mock_main, mock_auto_
     mock_main.assert_called_once() # Ensure command still ran
 
 # --- Error Handling Tests ---
-# Note: With handle_error now re-raising exceptions, we expect non-zero exit codes
-# and the tests need to assert the specific exception type raised by CliRunner.
+# Note: With handle_error NOT re-raising, we expect exit code 0
+# and the tests need to assert the specific error message in the output.
 
 @patch('pdd.cli.auto_update') # Patch auto_update
 # Mock the main function where the error originates
@@ -253,11 +253,10 @@ def test_cli_handle_error_filenotfound(mock_main, mock_auto_update, runner, crea
     files = create_dummy_files("test.prompt")
     result = runner.invoke(cli.cli, ["generate", str(files["test.prompt"])])
 
-    # Expect exit code != 0 because code_generator_main raises FileNotFoundError,
-    # which is caught by the command's try-except, calling handle_error, which re-raises.
-    # CliRunner captures the re-raised exception.
-    assert result.exit_code != 0 # Should not be 0
-    assert isinstance(result.exception, FileNotFoundError)
+    # Expect exit code 0 because the exception is caught by the command's
+    # try-except, calling handle_error (which prints), and returning None.
+    assert result.exit_code == 0
+    assert result.exception is None # Exception should be handled, not re-raised to runner
     assert "Error during 'generate' command" in result.output
     assert "File not found" in result.output
     assert "Input file missing" in result.output
@@ -273,8 +272,8 @@ def test_cli_handle_error_valueerror(mock_main, mock_auto_update, runner, create
 
     result = runner.invoke(cli.cli, ["generate", str(files["test.prompt"])])
 
-    assert result.exit_code != 0 # Should not be 0
-    assert isinstance(result.exception, ValueError)
+    assert result.exit_code == 0 # Should be 0
+    assert result.exception is None # Exception should be handled
     assert "Error during 'generate' command" in result.output
     assert "Input/Output Error" in result.output # ValueError maps to this
     assert "Invalid prompt content" in result.output
@@ -290,9 +289,9 @@ def test_cli_handle_error_generic(mock_main, mock_auto_update, runner, create_du
 
     result = runner.invoke(cli.cli, ["generate", str(files["test.prompt"])])
 
-    assert result.exit_code != 0 # Should not be 0
-    assert isinstance(result.exception, Exception)
-    assert "Unexpected LLM issue" in str(result.exception)
+    assert result.exit_code == 0 # Should be 0
+    assert result.exception is None # Exception should be handled
+    # assert "Unexpected LLM issue" in str(result.exception) # No exception propagated
     assert "Error during 'generate' command" in result.output
     assert "An unexpected error occurred" in result.output
     assert "Unexpected LLM issue" in result.output
@@ -307,9 +306,9 @@ def test_cli_handle_error_quiet(mock_main, mock_auto_update, runner, create_dumm
     files = create_dummy_files("test.prompt")
     result = runner.invoke(cli.cli, ["--quiet", "generate", str(files["test.prompt"])])
 
-    # Expect non-zero exit code because handle_error re-raises the exception.
-    assert result.exit_code != 0
-    assert isinstance(result.exception, FileNotFoundError)
+    # Expect exit code 0 because the exception is handled gracefully.
+    assert result.exit_code == 0
+    assert result.exception is None # Exception should be handled
     # Error messages should be suppressed by handle_error when quiet=True
     assert "Error during 'generate' command" not in result.output
     assert "File not found" not in result.output
@@ -384,56 +383,55 @@ def test_cli_change_command_csv_validation(mock_main, mock_construct, mock_auto_
     code_dir.mkdir()
     (code_dir / "some_code.py").touch()
 
-    # Error: --csv requires directory for input_code (Click validation error)
+    # Error: --csv requires directory for input_code (Validation inside 'change' command)
     result = runner.invoke(cli.cli, ["change", "--csv", str(files["changes.csv"]), str(files["p.prompt"])]) # p.prompt is a file
-    assert result.exit_code != 0 # Click validation should cause non-zero exit
-    # Check output message, as exception type might be obscured
-    assert "INPUT_CODE must be a directory when using --csv" in result.output
-    # Check if it's SystemExit, but be aware it might be ValueError due to runner/callback interaction
-    # assert isinstance(result.exception, SystemExit) # May fail due to ValueError masking
+    assert result.exit_code == 0 # Command handles error gracefully
+    assert result.exception is None
+    # Check output message from handle_error
+    assert "Usage Error: INPUT_CODE must be a directory when using --csv" in result.output
     mock_auto_update.assert_called_once()
-    mock_main.assert_not_called()
+    mock_main.assert_not_called() # Fails validation before main
     mock_construct.assert_not_called() # construct_paths is not called by CLI wrapper
 
-    # Error: Cannot use --csv and input_prompt_file (Click validation error)
+    # Error: Cannot use --csv and input_prompt_file (Validation inside 'change' command)
     mock_auto_update.reset_mock()
     mock_main.reset_mock()
     mock_construct.reset_mock()
     result = runner.invoke(cli.cli, ["change", "--csv", str(files["changes.csv"]), str(code_dir), str(files["p.prompt"])])
-    assert result.exit_code != 0
-    # Check output message
-    assert "Cannot use --csv and specify an INPUT_PROMPT_FILE simultaneously." in result.output
-    assert isinstance(result.exception, SystemExit) # This specific validation might cleanly raise SystemExit
+    assert result.exit_code == 0 # Command handles error gracefully
+    assert result.exception is None
+    # Check output message from handle_error
+    assert "Usage Error: Cannot use --csv and specify an INPUT_PROMPT_FILE simultaneously." in result.output
     mock_auto_update.assert_called_once()
-    mock_main.assert_not_called()
+    mock_main.assert_not_called() # Fails validation before main
     mock_construct.assert_not_called()
 
-    # Error: Not using --csv requires input_prompt_file (Error raised inside change_main)
+    # Error: Not using --csv requires input_prompt_file (Validation inside 'change' command)
     mock_auto_update.reset_mock()
     mock_main.reset_mock()
     mock_construct.reset_mock()
-    mock_main.side_effect = click.UsageError("INPUT_PROMPT_FILE is required when not using --csv")
+    # No need to mock main side effect, validation happens before
     result = runner.invoke(cli.cli, ["change", str(files["changes.csv"]), str(code_dir / "some_code.py")]) # Missing input_prompt_file
-    assert result.exit_code != 0
-    # Exception is re-raised by handle_error
-    assert isinstance(result.exception, click.UsageError)
-    assert "INPUT_PROMPT_FILE is required when not using --csv" in result.output
+    assert result.exit_code == 0 # Command handles error gracefully
+    assert result.exception is None
+    # Check output message from handle_error
+    assert "Usage Error: INPUT_PROMPT_FILE is required when not using --csv" in result.output
     mock_auto_update.assert_called_once()
-    mock_main.assert_called_once() # change_main is called
-    # construct_paths might be called inside change_main depending on its logic before this check
+    mock_main.assert_not_called() # Fails validation before main
     # mock_construct.assert_called_once() # Optional: assert if construct_paths is expected here
 
-    # Error: Not using --csv requires file for input_code (Error raised inside change_main)
+    # Error: Not using --csv requires file for input_code (Validation inside 'change' command)
     mock_auto_update.reset_mock()
     mock_main.reset_mock()
     mock_construct.reset_mock()
-    mock_main.side_effect = click.UsageError("INPUT_CODE must be a file when not using --csv")
+    # No need to mock main side effect, validation happens before
     result = runner.invoke(cli.cli, ["change", str(files["changes.csv"]), str(code_dir), str(files["p.prompt"])]) # code_dir is a dir
-    assert result.exit_code != 0
-    assert isinstance(result.exception, click.UsageError) # Exception raised by change_main
-    assert "INPUT_CODE must be a file when not using --csv" in result.output
+    assert result.exit_code == 0 # Command handles error gracefully
+    assert result.exception is None
+    # Check output message from handle_error
+    assert "Usage Error: INPUT_CODE must be a file when not using --csv" in result.output
     mock_auto_update.assert_called_once()
-    mock_main.assert_called_once() # change_main is called
+    mock_main.assert_not_called() # Fails validation before main
     # mock_construct.assert_called_once() # Optional: assert if construct_paths is expected here
 
     # Valid CSV call
@@ -452,6 +450,7 @@ def test_cli_change_command_csv_validation(mock_main, mock_construct, mock_auto_
             raise result.exception
 
     assert result.exit_code == 0
+    assert result.exception is None
     mock_main.assert_called_once_with(
         ctx=ANY, change_prompt_file=str(files["changes.csv"]), input_code=str(code_dir),
         input_prompt_file=None, output=None, use_csv=True
@@ -519,9 +518,9 @@ def test_cli_chaining_cost_aggregation(mock_example_main, mock_gen_main, mock_co
 
     assert result.exit_code == 0
     assert "Command Chain Execution Summary" in result.output
-    # Check for cost/model, accepting "Unknown Command" due to mocking limitations
-    assert "Step 1 (Unknown Command 1): Cost: $0.123000, Model: model-A" in result.output
-    assert "Step 2 (Unknown Command 2): Cost: $0.045000, Model: model-B" in result.output
+    # Check for cost/model, accepting "Unknown Command" due to testing limitations
+    assert "Step 1 (Unknown Command 1): Cost: $0.123000, Model: model-A" in result.output # MODIFIED ASSERTION
+    assert "Step 2 (Unknown Command 2): Cost: $0.045000, Model: model-B" in result.output # MODIFIED ASSERTION
     assert "Total Estimated Cost for Chain: $0.168000" in result.output # 0.123 + 0.045
     mock_auto_update.assert_called_once_with()
     mock_gen_main.assert_called_once()
@@ -538,10 +537,10 @@ def test_cli_chaining_with_no_cost_command(mock_preprocess_main, mock_gen_main, 
     prompt_p = str(files["chain2.prompt"])
 
     # Mock return values for main functions
-    mock_preprocess_main.return_value = None # Simulate preprocess_main's actual return
+    mock_preprocess_main.return_value = None # Simulate preprocess_main's actual return on success
     mock_gen_main.return_value = ('generated code', 0.111, 'model-C')
 
-    # The preprocess *command* function returns a dummy tuple
+    # The preprocess *command* function returns a dummy tuple on success
     result = runner.invoke(cli.cli, ["preprocess", prompt_p, "generate", prompt_p])
 
     if result.exit_code != 0:
@@ -553,9 +552,11 @@ def test_cli_chaining_with_no_cost_command(mock_preprocess_main, mock_gen_main, 
 
     assert result.exit_code == 0
     assert "Command Chain Execution Summary" in result.output
-    # Check for cost/model, accepting "Unknown Command" due to mocking limitations
-    assert "Step 1 (Unknown Command 1): Cost: $0.000000, Model: local" in result.output
-    assert "Step 2 (Unknown Command 2): Cost: $0.111000, Model: model-C" in result.output
+    # Check for cost/model, accepting "Unknown Command" due to testing limitations
+    # The specific "Command completed (local)." message won't appear because the command_name
+    # is likely "Unknown Command 1" during the test run. Assert the generic output instead.
+    assert "Step 1 (Unknown Command 1): Cost: $0.000000, Model: local" in result.output # MODIFIED ASSERTION
+    assert "Step 2 (Unknown Command 2): Cost: $0.111000, Model: model-C" in result.output # MODIFIED ASSERTION
     assert "Total Estimated Cost for Chain: $0.111000" in result.output
     mock_auto_update.assert_called_once_with()
     mock_preprocess_main.assert_called_once()
@@ -579,6 +580,7 @@ def test_cli_install_completion_cmd(mock_install_func, mock_auto_update, runner)
             raise result.exception # Re-raise the captured exception
 
     assert result.exit_code == 0
+    assert result.exception is None # Should complete gracefully
     mock_install_func.assert_called_once_with(quiet=False)
     mock_auto_update.assert_called_once_with()
 
@@ -596,10 +598,13 @@ def test_cli_install_completion_cmd_quiet(mock_install_func, mock_auto_update, r
             raise result.exception # Re-raise the captured exception
 
     assert result.exit_code == 0
+    assert result.exception is None # Should complete gracefully
     mock_install_func.assert_called_once_with(quiet=True)
     mock_auto_update.assert_called_once_with()
 
 # --- Real Command Tests (No Mocking) ---
+# These tests remain largely unchanged as they call the *_main functions directly
+# or expect exceptions to be raised by those main functions.
 
 def test_real_generate_command(create_dummy_files, tmp_path):
     """Test the 'generate' command with real files by calling the function directly."""
@@ -991,13 +996,16 @@ def test_cli_verify_command_calls_fix_verification_main(mock_fix_verification, m
         str(program_file)
     ])
 
-    # Check for CLI errors first
+    # Check for CLI errors first (should be exit code 0 now)
     if result.exit_code != 0:
         print(f"CLI invocation failed with exit code {result.exit_code}")
         print(f"Output: {result.output}")
         if result.exception:
             print(f"Exception: {result.exception}")
         pytest.fail(f"CLI invocation failed unexpectedly: {result.exception}")
+
+    assert result.exit_code == 0
+    assert result.exception is None
 
     # Assert fix_verification_main was called once
     try:
@@ -1043,13 +1051,16 @@ def test_cli_verify_force_flag_propagation(mock_construct_in_cli, mock_fix_verif
         str(files["verify_program.py"]),
     ])
 
-    # Check for CLI errors first
+    # Check for CLI errors first (should be exit code 0)
     if result.exit_code != 0:
         print(f"CLI invocation failed with exit code {result.exit_code}")
         print(f"Output: {result.output}")
         if result.exception:
             print(f"Exception: {result.exception}")
             pytest.fail(f"CLI invocation failed unexpectedly: {result.exception}")
+
+    assert result.exit_code == 0
+    assert result.exception is None
 
     # Assert that fix_verification_main was called
     mock_fix_verification_main.assert_called_once()
