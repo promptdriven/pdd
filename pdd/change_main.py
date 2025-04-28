@@ -71,7 +71,7 @@ def change_main(
     target_language: str = ctx.obj.get("language", "") # Get from context
     target_extension: Optional[str] = ctx.obj.get("extension", None)
 
-    result_message: str = "An unexpected error occurred."
+    result_message: str = ""
     total_cost: float = 0.0
     model_name: str = ""
     success: bool = False
@@ -98,7 +98,6 @@ def change_main(
                 return msg, 0.0, ""
             if not change_prompt_file.lower().endswith(".csv"):
                  logger.warning(f"Input change file '{change_prompt_file}' does not end with .csv. Assuming it's a CSV.")
-            # Further CSV validation happens within process_csv_change or just before calling it
 
         else: # Non-CSV mode
             if not input_prompt_file:
@@ -111,7 +110,6 @@ def change_main(
                  if not quiet: rprint(msg)
                  logger.error(msg)
                  return msg, 0.0, ""
-
 
         # --- 2. Construct Paths and Read Inputs (where applicable) ---
         input_file_paths: Dict[str, str] = {}
@@ -128,87 +126,115 @@ def change_main(
             input_file_paths["input_prompt_file"] = input_prompt_file
 
         logger.debug(f"Calling construct_paths with inputs: {input_file_paths}")
-        input_strings, output_file_paths, language = construct_paths(
-            input_file_paths=input_file_paths,
-            force=force,
-            quiet=quiet,
-            command="change",
-            command_options=command_options,
-        )
-        logger.debug(f"construct_paths returned:")
-        logger.debug(f"  input_strings keys: {list(input_strings.keys())}")
-        logger.debug(f"  output_file_paths: {output_file_paths}")
-        logger.debug(f"  language: {language}") # Language might be inferred or needed for defaults
+        try:
+            input_strings, output_file_paths, language = construct_paths(
+                input_file_paths=input_file_paths,
+                force=force,
+                quiet=quiet,
+                command="change",
+                command_options=command_options,
+            )
+            logger.debug(f"construct_paths returned:")
+            logger.debug(f"  input_strings keys: {list(input_strings.keys())}")
+            logger.debug(f"  output_file_paths: {output_file_paths}")
+            logger.debug(f"  language: {language}") # Language might be inferred or needed for defaults
+        except Exception as e:
+            msg = f"Error constructing paths: {str(e)}"
+            if not quiet: rprint(f"[bold red]Error: {msg}[/bold red]")
+            logger.error(msg, exc_info=True)
+            return msg, 0.0, ""
 
         # --- 3. Perform Prompt Modification ---
         if use_csv:
             logger.info("Running in CSV mode.")
-            # Validate CSV header before calling process_csv_change
+            # Validate CSV header and process each row
             try:
                 with open(change_prompt_file, 'r', newline='', encoding='utf-8') as csvfile:
-                    reader = csv.reader(csvfile)
-                    header = next(reader)
-                    if "prompt_name" not in header or "change_instructions" not in header:
-                        msg = f"[bold red]Error:[/bold red] CSV file '{change_prompt_file}' must contain 'prompt_name' and 'change_instructions' columns."
-                        if not quiet: rprint(msg)
+                    reader = csv.DictReader(csvfile)
+                    if not reader.fieldnames or "prompt_name" not in reader.fieldnames or "change_instructions" not in reader.fieldnames:
+                        msg = "CSV file must contain 'prompt_name' and 'change_instructions' columns."
+                        if not quiet: rprint(f"[bold red]Error: {msg}[/bold red]")
                         logger.error(msg)
                         return msg, 0.0, ""
+                    logger.debug(f"CSV validated. Columns: {reader.fieldnames}")
+                    row_number = 0
+                    for row in reader:
+                        row_number += 1
+                        logger.debug(f"Processing row {row_number}")
+                        prompt_name = row["prompt_name"]
+                        change_instructions = row["change_instructions"]
+                        try:
+                            prompt_path = Path(prompt_name)
+                            if not prompt_path.is_file():
+                                prompt_path = Path.cwd() / prompt_name
+                                if not prompt_path.is_file():
+                                    logger.warning(f"Prompt file not found: {prompt_name}. Skipping.")
+                                    if not quiet: rprint(f"[yellow]Prompt file not found:[/yellow] {prompt_name}")
+                                    continue
+                            input_prompt = prompt_path.read_text(encoding='utf-8')
+                            code_file_name = Path(prompt_name).stem
+                            lang_suffix = None
+                            if '_' in code_file_name:
+                                code_file_name_split = code_file_name.rsplit('_', 1)
+                                if len(code_file_name_split) == 2:
+                                    code_file_name, lang_suffix = code_file_name_split
+                            # Determine extension
+                            if target_extension:
+                                ext = target_extension
+                            else:
+                                try:
+                                    ext = get_extension(target_language or language or 'python')
+                                except ValueError:
+                                    ext = '.txt' # Fallback
+                            code_file_path = Path(input_code) / f"{code_file_name}{ext}"
+                            if not code_file_path.is_file():
+                                logger.warning(f"Code file not found: {code_file_path}. Skipping.")
+                                if not quiet: rprint(f"[yellow]Code file not found:[/yellow] {code_file_path}")
+                                continue
+                            input_code_content = code_file_path.read_text(encoding='utf-8')
+                            logger.debug(f"Calling change_func for row {row_number}")
+                            try:
+                                modified_prompt, cost, row_model_name = change_func(
+                                    input_prompt=input_prompt,
+                                    input_code=input_code_content,
+                                    change_prompt=change_instructions,
+                                    strength=strength,
+                                    temperature=temperature,
+                                    verbose=ctx.obj.get("verbose", False),
+                                )
+                                total_cost += cost
+                                if not model_name:
+                                    model_name = row_model_name
+                                logger.debug(f"change_func completed. Cost: {cost}")
+                                modified_prompts_list.append({
+                                    'file_name': prompt_name,
+                                    'modified_prompt': modified_prompt
+                                })
+                                logger.info(f"Row {row_number} processed successfully.")
+                            except Exception as e:
+                                logger.error(f"Error processing row {row_number}: {e}", exc_info=True)
+                                if not quiet: rprint(f"[red]Error processing row {row_number} ('{prompt_name}'): {str(e)}. Skipping.[/red]")
+                                continue
+                        except Exception as e:
+                            logger.error(f"Error preparing files for row {row_number}: {e}", exc_info=True)
+                            if not quiet: rprint(f"[red]Error preparing files for row {row_number} ('{prompt_name}'): {str(e)}. Skipping.[/red]")
+                            continue
+                    success = len(modified_prompts_list) > 0
             except FileNotFoundError:
-                msg = f"[bold red]Error:[/bold red] CSV file not found: {change_prompt_file}"
-                if not quiet: rprint(msg)
+                msg = f"CSV file not found: {change_prompt_file}"
+                if not quiet: rprint(f"[bold red]Error:[/bold red] {msg}")
                 logger.error(msg)
                 return msg, 0.0, ""
             except Exception as e:
-                msg = f"[bold red]Error:[/bold red] Failed to read or validate CSV header: {e}"
-                if not quiet: rprint(msg)
-                logger.error(f"CSV header validation error: {e}", exc_info=True)
+                msg = f"Failed to read or validate CSV: {e}"
+                if not quiet: rprint(f"[bold red]Error:[/bold red] {msg}")
+                logger.error(f"CSV validation error: {e}", exc_info=True)
                 return msg, 0.0, ""
-
-            # Determine language and extension for process_csv_change
-            # Use the target_language from the context if available, otherwise fallback (though fallback might be wrong)
-            csv_target_language = target_language or language or "python" # Prioritize context language
-            try:
-                # If target_extension was provided in context, use it directly
-                if target_extension:
-                    extension = target_extension
-                    logger.debug(f"Using extension '{extension}' from context for CSV processing.")
-                else:
-                    # Otherwise, derive from the determined language
-                    extension = get_extension(csv_target_language)
-                    logger.debug(f"Derived language '{csv_target_language}' and extension '{extension}' for CSV processing.")
-            except ValueError as e:
-                 msg = f"[bold red]Error:[/bold red] Could not determine file extension for language '{csv_target_language}': {e}"
-                 if not quiet: rprint(msg)
-                 logger.error(msg)
-                 return msg, 0.0, ""
-
-
-            success, modified_prompts_list, total_cost, model_name = process_csv_change(
-                csv_file=change_prompt_file,
-                strength=strength,
-                temperature=temperature,
-                code_directory=input_code, # Pass the directory path
-                language=csv_target_language,
-                extension=extension,
-                budget=budget,
-            )
-
-            if success:
-                result_message = f"Successfully processed {len(modified_prompts_list)} prompts from CSV."
-                logger.info(result_message)
-            else:
-                result_message = f"[bold red]Error:[/bold red] Failed to process prompts from CSV. Check logs for details."
-                if not quiet: rprint(result_message)
-                logger.error("process_csv_change reported failure.")
-                # Cost and model might still be partially accumulated
-                return result_message, total_cost, model_name
-
-        else: # Non-CSV mode
+        else:
             logger.info("Running in single-file mode.")
             change_prompt_content = input_strings.get("change_prompt_file")
             input_code_content = input_strings.get("input_code")
             input_prompt_content = input_strings.get("input_prompt_file")
-
             if not all([change_prompt_content, input_code_content, input_prompt_content]):
                  missing = [k for k, v in {"change_prompt_file": change_prompt_content,
                                            "input_code": input_code_content,
@@ -217,18 +243,22 @@ def change_main(
                  if not quiet: rprint(msg)
                  logger.error(msg)
                  return msg, 0.0, ""
-
-            modified_prompt, total_cost, model_name = change_func(
-                input_prompt=input_prompt_content,
-                input_code=input_code_content,
-                change_prompt=change_prompt_content,
-                strength=strength,
-                temperature=temperature,
-            )
-            result_message = modified_prompt # Store the content for saving
-            success = True # Assume success if no exception
-            logger.info("Single prompt change successful.")
-
+            try:
+                modified_prompt, total_cost, model_name = change_func(
+                    input_prompt=input_prompt_content,
+                    input_code=input_code_content,
+                    change_prompt=change_prompt_content,
+                    strength=strength,
+                    temperature=temperature,
+                )
+                result_message = modified_prompt # Store the content for saving
+                success = True # Assume success if no exception
+                logger.info("Single prompt change successful.")
+            except Exception as e:
+                msg = f"Error during prompt modification: {str(e)}"
+                if not quiet: rprint(f"[bold red]Error: {msg}[/bold red]")
+                logger.error(msg, exc_info=True)
+                return msg, 0.0, ""
 
         # --- 4. Save Results ---
         if success:
@@ -237,136 +267,130 @@ def change_main(
                 output_path_obj = Path(output).resolve()
                 logger.debug(f"User specified output path: {output_path_obj}")
             elif not use_csv and "output_prompt_file" in output_file_paths:
-                 # Use default path from construct_paths for single file mode if no --output
                  output_path_obj = Path(output_file_paths["output_prompt_file"]).resolve()
                  logger.debug(f"Using default output path from construct_paths: {output_path_obj}")
 
-
             if use_csv:
+                # For directory paths ending with a slash
+                if output_path_obj and str(output_path_obj).endswith((os.sep, "/", "\\")):
+                    output_path_obj = Path(os.path.normpath(str(output_path_obj)))
                 output_is_csv = output_path_obj and output_path_obj.suffix.lower() == ".csv"
-
                 if output_is_csv:
-                    # Save all results to a single CSV file
                     logger.info(f"Saving batch results to CSV: {output_path_obj}")
                     try:
                         output_path_obj.parent.mkdir(parents=True, exist_ok=True)
                         with open(output_path_obj, 'w', newline='', encoding='utf-8') as outfile:
-                            fieldnames = ['prompt_name', 'modified_prompt']
+                            fieldnames = ['file_name', 'modified_prompt']
                             writer = csv.DictWriter(outfile, fieldnames=fieldnames)
                             writer.writeheader()
-                            # Map 'file_name' from process_csv_change output to 'prompt_name'
                             for item in modified_prompts_list:
                                 writer.writerow({
-                                    'prompt_name': item.get('file_name', 'unknown_prompt'),
+                                    'file_name': item.get('file_name', 'unknown_prompt'),
                                     'modified_prompt': item.get('modified_prompt', '')
                                 })
-                        result_message += f" Results saved to {output_path_obj}"
-                        if not quiet: rprint(f"[green]Results saved to:[/green] {output_path_obj}")
+                        logger.info("Results saved to CSV successfully")
+                        if not quiet: rprint(f"[bold]Results saved to CSV:[/bold] {output_path_obj}")
                     except IOError as e:
-                        msg = f"[bold red]Error:[/bold red] Failed to write output CSV '{output_path_obj}': {e}"
-                        if not quiet: rprint(msg)
-                        logger.error(msg, exc_info=True)
-                        return msg, total_cost, model_name # Return error after processing
-                    except Exception as e:
-                        msg = f"[bold red]Error:[/bold red] Unexpected error writing output CSV '{output_path_obj}': {e}"
-                        if not quiet: rprint(msg)
+                        msg = f"Failed to write output CSV '{output_path_obj}': {e}"
+                        if not quiet: rprint(f"[bold red]Error:[/bold red] {msg}")
                         logger.error(msg, exc_info=True)
                         return msg, total_cost, model_name
-
+                    except Exception as e:
+                        msg = f"Unexpected error writing output CSV '{output_path_obj}': {e}"
+                        if not quiet: rprint(f"[bold red]Error:[/bold red] {msg}")
+                        logger.error(msg, exc_info=True)
+                        return msg, total_cost, model_name
                 else:
                     # Save each modified prompt to an individual file
-                    output_dir = output_path_obj if output_path_obj and output_path_obj.is_dir() else Path.cwd()
-                    if output_path_obj and not output_path_obj.is_dir():
-                         # If user specified a non-csv file path, treat its parent as the dir
-                         output_dir = output_path_obj.parent
-                         logger.warning(f"Output path '{output_path_obj}' is not a directory or CSV. Saving individual files to parent directory: {output_dir}")
-
-                    logger.info(f"Saving individual modified prompts to directory: {output_dir}")
-                    output_dir.mkdir(parents=True, exist_ok=True)
+                    output_dir = None
+                    if output_path_obj:
+                        if output_path_obj.is_dir():
+                            output_dir = output_path_obj
+                        else:
+                            output_dir = output_path_obj
+                        if not output_dir.exists():
+                            os.makedirs(output_dir, exist_ok=True)
+                    else:
+                        output_dir = Path.cwd()
+                        os.makedirs(output_dir, exist_ok=True)
+                    logger.info(f"Saving individual files to directory: {output_dir}")
                     saved_files_count = 0
                     for item in modified_prompts_list:
-                        original_prompt_path = Path(item.get('file_name', ''))
+                        original_prompt_path = item.get('file_name', '')
                         modified_content = item.get('modified_prompt', '')
                         if not original_prompt_path or not modified_content:
                             logger.warning(f"Skipping save for item due to missing data: {item}")
                             continue
-
-                        # Use original filename instead of adding a modified_ prefix
                         output_filename = os.path.basename(original_prompt_path)
                         individual_output_path = output_dir / output_filename
-
+                        logger.debug(f"Attempting to save file to: {individual_output_path}")
                         if not force and individual_output_path.exists():
                             logger.warning(f"Output file exists, skipping: {individual_output_path}. Use --force to overwrite.")
                             if not quiet: rprint(f"[yellow]Skipping existing file:[/yellow] {individual_output_path}")
                             continue
-
                         try:
-                            individual_output_path.write_text(modified_content, encoding='utf-8')
+                            with open(individual_output_path, 'w', encoding='utf-8') as f:
+                                f.write(modified_content)
                             logger.debug(f"Saved modified prompt to: {individual_output_path}")
                             saved_files_count += 1
                         except IOError as e:
-                            msg = f"[bold red]Error:[/bold red] Failed to write output file '{individual_output_path}': {e}"
-                            if not quiet: rprint(msg)
+                            msg = f"Failed to write output file '{individual_output_path}': {e}"
+                            if not quiet: rprint(f"[bold red]Error:[/bold red] {msg}")
                             logger.error(msg, exc_info=True)
-                            # Continue saving others, but report error at the end? Or stop? Let's continue for now.
+                            # Continue to next file
                         except Exception as e:
-                             msg = f"[bold red]Error:[/bold red] Unexpected error writing output file '{individual_output_path}': {e}"
-                             if not quiet: rprint(msg)
+                             msg = f"Unexpected error writing output file '{individual_output_path}': {e}"
+                             if not quiet: rprint(f"[bold red]Error:[/bold red] {msg}")
                              logger.error(msg, exc_info=True)
-
-                    result_message += f" {saved_files_count} modified prompts saved individually in {output_dir}"
-                    if not quiet: rprint(f"[green]Saved {saved_files_count} modified prompts to:[/green] {output_dir}")
-
-
-            else: # Non-CSV mode saving
+                    logger.info("Results saved as individual files in directory successfully")
+                    if not quiet: rprint(f"[bold]Saved {saved_files_count} modified prompts to:[/bold] {output_dir}")
+                result_message = "Multiple prompts have been updated."
+            else:
                 if not output_path_obj:
                      msg = "[bold red]Error:[/bold red] Could not determine output path for modified prompt."
                      if not quiet: rprint(msg)
                      logger.error(msg)
                      return msg, total_cost, model_name
-
                 logger.info(f"Saving single modified prompt to: {output_path_obj}")
                 try:
                     output_path_obj.parent.mkdir(parents=True, exist_ok=True)
-                    output_path_obj.write_text(result_message, encoding='utf-8') # result_message holds the content here
+                    with open(output_path_obj, 'w', encoding='utf-8') as f:
+                        f.write(result_message)
                     if not quiet:
-                        rprint(f"[green]Modified prompt saved to:[/green] {output_path_obj}")
+                        rprint(f"[bold]Modified prompt saved to:[/bold] {output_path_obj}")
                         rprint(Panel(result_message, title="Modified Prompt Content", expand=False))
-                    # Update result_message for return value to be a status, not the full content
                     result_message = f"Modified prompt saved to {output_path_obj}"
-
                 except IOError as e:
-                    msg = f"[bold red]Error:[/bold red] Failed to write output file '{output_path_obj}': {e}"
-                    if not quiet: rprint(msg)
-                    logger.error(msg, exc_info=True)
-                    return msg, total_cost, model_name # Return error after processing
-                except Exception as e:
-                    msg = f"[bold red]Error:[/bold red] Unexpected error writing output file '{output_path_obj}': {e}"
-                    if not quiet: rprint(msg)
+                    msg = f"Failed to write output file '{output_path_obj}': {e}"
+                    if not quiet: rprint(f"[bold red]Error:[/bold red] {msg}")
                     logger.error(msg, exc_info=True)
                     return msg, total_cost, model_name
-
+                except Exception as e:
+                    msg = f"Unexpected error writing output file '{output_path_obj}': {e}"
+                    if not quiet: rprint(f"[bold red]Error:[/bold red] {msg}")
+                    logger.error(msg, exc_info=True)
+                    return msg, total_cost, model_name
         # --- 5. Final User Feedback ---
         if not quiet and success:
-            rprint(f"[cyan]Model Used:[/cyan] {model_name}")
-            rprint(f"[cyan]Total Cost:[/cyan] ${total_cost:.6f}")
+            rprint("[bold green]Prompt modification completed successfully.[/bold green]")
+            rprint(f"[bold]Model used:[/bold] {model_name}")
+            rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
 
     except FileNotFoundError as e:
-        msg = f"[bold red]Error:[/bold red] Input file not found: {e}"
-        if not quiet: rprint(msg)
+        msg = f"Input file not found: {e}"
+        if not quiet: rprint(f"[bold red]Error:[/bold red] {msg}")
         logger.error(msg, exc_info=True)
         return msg, 0.0, ""
     except NotADirectoryError as e:
-         msg = f"[bold red]Error:[/bold red] Expected a directory but found a file, or vice versa: {e}"
-         if not quiet: rprint(msg)
+         msg = f"Expected a directory but found a file, or vice versa: {e}"
+         if not quiet: rprint(f"[bold red]Error:[/bold red] {msg}")
          logger.error(msg, exc_info=True)
          return msg, 0.0, ""
     except Exception as e:
-        msg = f"[bold red]An unexpected error occurred during the 'change' operation:[/bold red] {e}"
-        if not quiet: rprint(msg)
+        msg = f"An unexpected error occurred: {e}"
+        if not quiet: rprint(f"[bold red]An unexpected error occurred during the 'change' operation:[/bold red] {e}")
         logger.error("Unexpected error in change_main", exc_info=True)
-        # Use the initialized default error message for return
-        return result_message, total_cost, model_name # Return potentially partial cost/model
+        return msg, 0.0, ""
 
     logger.debug("change_main finished.")
     return result_message, total_cost, model_name

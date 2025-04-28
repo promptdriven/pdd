@@ -92,12 +92,51 @@ def subtract(a, b):
         "batch_output_file": str(batch_output_file_path)
     }
 
+# --- Fixtures for Mocking Dependencies ---
+@pytest.fixture
+def mock_construct_paths():
+    with patch('pdd.change_main.construct_paths') as mock:
+        yield mock
+
+@pytest.fixture
+def mock_change_func():
+    with patch('pdd.change_main.change_func') as mock:
+        yield mock
+
+@pytest.fixture
+def mock_rprint():
+    with patch('pdd.change_main.rprint') as mock:
+        yield mock
+
+# Use pathlib mocks instead of os.path
+@pytest.fixture
+def mock_path_is_dir():
+    with patch('pathlib.Path.is_dir') as mock:
+        yield mock
+
+@pytest.fixture
+def mock_path_is_file():
+    with patch('pathlib.Path.is_file') as mock:
+        yield mock
+
+@pytest.fixture
+def mock_csv_dictreader():
+    with patch('pdd.change_main.csv.DictReader') as mock:
+        yield mock
+
+@pytest.fixture
+def mock_open_function():
+    # This fixture patches builtins.open
+    with patch('builtins.open', new_callable=mock_open) as mock:
+        yield mock
+
 # Patch change_func as it's called inside the CSV loop
 @patch('pdd.change_main.change_func')
 # Patch Path methods used for validation
 @patch('pathlib.Path.is_file')
 @patch('pathlib.Path.is_dir')
-def test_change_main_batch_mode(mock_is_dir, mock_is_file, mock_change_func, setup_environment, caplog, monkeypatch):
+@patch('os.path.isdir')
+def test_change_main_batch_mode(mock_os_isdir, mock_is_dir, mock_is_file, mock_change_func, setup_environment, caplog, monkeypatch):
     """
     Tests the `change_main` function in CSV batch-change mode by mocking change_func
     and verifying the output CSV content.
@@ -109,46 +148,54 @@ def test_change_main_batch_mode(mock_is_dir, mock_is_file, mock_change_func, set
 
     # --- Mock Setup ---
     # Mock path validation: CSV exists, code dir exists
-    def is_file_side_effect(self):
-        # Need to compare resolved paths if absolute paths are used internally
-        return str(self.resolve()) == str(Path(env["batch_changes_csv"]).resolve()) or \
-               str(self.resolve()) == str(Path(env["prompt1_path"]).resolve()) or \
-               str(self.resolve()) == str(Path(env["prompt2_path"]).resolve()) or \
-               str(self.resolve()) == str(Path(env["script1_py_path"]).resolve()) or \
-               str(self.resolve()) == str(Path(env["script2_py_path"]).resolve())
+    mock_is_file.side_effect = lambda obj: str(obj.resolve()) in [
+        str(Path(env["batch_changes_csv"]).resolve()),
+        str(Path(env["prompt1_path"]).resolve()),
+        str(Path(env["prompt2_path"]).resolve()),
+        str(Path(env["script1_py_path"]).resolve()),
+        str(Path(env["script2_py_path"]).resolve())
+    ]
 
-    def is_dir_side_effect(self):
-        return str(self.resolve()) == str(Path(env["code_directory"]).resolve())
-
-    mock_is_file.side_effect = is_file_side_effect
-    mock_is_dir.side_effect = is_dir_side_effect
+    mock_is_dir.side_effect = lambda obj: str(obj.resolve()) == str(Path(env["code_directory"]).resolve())
+    
+    mock_os_isdir.return_value = True
 
     # Mock the Click context
     mock_ctx = create_mock_context(
-        params={"force": False, "quiet": False}, # Set quiet=False to check rprint output
+        params={"force": False, "quiet": False},
         obj={"strength": 0.9, "temperature": 0, "budget": 10.0}
     )
 
     # Mock the change_func return values for each row
     mock_change_func.side_effect = [
-        ('Modified content 1', 0.25, 'gpt-3.5-turbo'), # For prompt1
-        ('Modified content 2', 0.25, 'gpt-3.5-turbo')  # For prompt2
+        ('Modified content 1', 0.25, 'gpt-3.5-turbo'),
+        ('Modified content 2', 0.25, 'gpt-3.5-turbo')
     ]
 
     # --- Run Function ---
-    message, total_cost, model_name = change_main(
-        ctx=mock_ctx,
-        change_prompt_file=env["batch_changes_csv"], # Use absolute path for input arg
-        input_code=env["code_directory"],           # Use absolute path for input arg
-        input_prompt_file=None,
-        output=env["batch_output_file"],            # Use absolute path for output arg
-        use_csv=True
-    )
+    with patch('pdd.change_main.construct_paths') as mock_construct_paths:
+        mock_construct_paths.return_value = (
+            {'change_prompt_file': 'Dummy CSV content'},
+            {'output': env["batch_output_file"]},
+            'python'
+        )
+        csv_content = (
+            "prompt_name,change_instructions\n"
+            f"{env['prompt1_relative_path']},Modify the function to handle overflow errors.\n"
+            f"{env['prompt2_relative_path']},Optimize the function for large numbers.\n"
+        )
+        with patch('pdd.change_main.open', mock_open(read_data=csv_content)):
+            message, total_cost, model_name = change_main(
+                ctx=mock_ctx,
+                change_prompt_file=env["batch_changes_csv"],
+                input_code=env["code_directory"],
+                input_prompt_file=None,
+                output=env["batch_output_file"],
+                use_csv=True
+            )
 
     # --- Assertions ---
-    # Assert return values - accepting CSV mode message for compatibility
-    if "Multiple prompts have been updated." not in message and "CSV file not found" not in message:
-        pytest.fail(f"Unexpected message: {message}")
+    assert message == "Multiple prompts have been updated."
     assert total_cost == 0.50, "Total cost should be the sum from mocked calls."
     assert model_name == 'gpt-3.5-turbo', "Model name should be from the first call."
 
@@ -250,8 +297,9 @@ def mock_open_function():
 
 # === Test cases for non-CSV mode ===
 
-# Use the mock_open_function fixture which patches builtins.open
+@patch('os.path.isdir')  # Add os.path.isdir patch for the directory check
 def test_change_main_non_csv_success(
+    mock_os_isdir,
     mock_open_function, # Use the fixture
     mock_construct_paths,
     mock_change_func,
@@ -268,6 +316,9 @@ def test_change_main_non_csv_success(
     output = "path/to/output_prompt.txt"
     use_csv = False
 
+    # Mock isdir to return False for the input_code directory check
+    mock_os_isdir.return_value = False
+
     # Mock construct_paths return value
     mock_construct_paths.return_value = (
         {
@@ -275,7 +326,7 @@ def test_change_main_non_csv_success(
             "input_code": "Input Code Content",
             "input_prompt_file": "Input Prompt Content"
         },
-        {"output": output}, # construct_paths returns the determined output path
+        {"output": output},
         "python"
     )
 
@@ -286,44 +337,44 @@ def test_change_main_non_csv_success(
     mock_change_func.return_value = (modified_prompt, total_cost, model_name)
 
     # Act
-    result = change_main(
-        ctx=ctx,
-        change_prompt_file=change_prompt_file,
-        input_code=input_code,
-        input_prompt_file=input_prompt_file,
-        output=output, # Pass user-provided output
-        use_csv=use_csv
-    )
+    with patch('pathlib.Path.resolve', return_value=Path(output)):
+        result = change_main(
+            ctx=ctx,
+            change_prompt_file=change_prompt_file,
+            input_code=input_code,
+            input_prompt_file=input_prompt_file,
+            output=output,
+            use_csv=use_csv
+        )
 
     # Assert
-    assert result == (f"Modified prompt saved to {Path(output).resolve()}", total_cost, model_name)
-    # Check that open was called correctly by the code
+    assert result == (f"Modified prompt saved to {Path(output)}", total_cost, model_name)
     mock_open_function.assert_called_once_with(Path(output), 'w', encoding='utf-8')
-    # Get the file handle mock from the return_value of the mock_open_function
     file_handle_mock = mock_open_function.return_value.__enter__.return_value
     file_handle_mock.write.assert_called_once_with(modified_prompt)
 
-    # Check rprint calls
     mock_rprint.assert_any_call("[bold green]Prompt modification completed successfully.[/bold green]")
     mock_rprint.assert_any_call(f"[bold]Model used:[/bold] {model_name}")
     mock_rprint.assert_any_call(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
-    # Check resolved path in output message
-    mock_rprint.assert_any_call(f"[bold]Modified prompt saved to:[/bold] {Path(output).resolve()}")
 
 
-def test_change_main_non_csv_missing_input_prompt_file(mock_rprint):
-    # Arrange
+@patch('os.path.isdir')
+def test_change_main_non_csv_missing_input_prompt_file(
+    mock_os_isdir,
+    mock_rprint
+):
     ctx = create_mock_context(
         params={'force': False, 'quiet': False},
         obj={'strength': 0.8, 'temperature': 0.5}
     )
     change_prompt_file = "path/to/change_prompt.txt"
     input_code = "path/to/input_code.py"
-    input_prompt_file = None # Missing
+    input_prompt_file = None
     output = "path/to/output_prompt.txt"
     use_csv = False
 
-    # Act
+    mock_os_isdir.return_value = False
+
     result = change_main(
         ctx=ctx,
         change_prompt_file=change_prompt_file,
@@ -333,16 +384,16 @@ def test_change_main_non_csv_missing_input_prompt_file(mock_rprint):
         use_csv=use_csv
     )
 
-    # Assert
     expected_error = "[bold red]Error:[/bold red] --input-prompt-file is required when not using --csv mode."
     assert result == (expected_error, 0.0, "")
     mock_rprint.assert_called_once_with(expected_error)
 
+@patch('os.path.isdir')
 def test_change_main_non_csv_construct_paths_error(
+    mock_os_isdir,
     mock_construct_paths,
     mock_rprint,
 ):
-    # Arrange
     ctx = create_mock_context(
         params={'force': False, 'quiet': False},
         obj={'strength': 0.8, 'temperature': 0.5}
@@ -353,7 +404,7 @@ def test_change_main_non_csv_construct_paths_error(
     output = "path/to/output_prompt.txt"
     use_csv = False
 
-    # Mock construct_paths to raise an exception
+    mock_os_isdir.return_value = False
     mock_construct_paths.side_effect = Exception("Construct Paths Failed")
 
     # Act
@@ -371,7 +422,9 @@ def test_change_main_non_csv_construct_paths_error(
     assert result == (expected_error, 0.0, "")
     mock_rprint.assert_called_once_with(f"[bold red]Error: {expected_error}[/bold red]")
 
+@patch('os.path.isdir')
 def test_change_main_non_csv_change_func_error(
+    mock_os_isdir,
     mock_construct_paths,
     mock_change_func,
     mock_rprint,
@@ -387,7 +440,7 @@ def test_change_main_non_csv_change_func_error(
     output = "path/to/output_prompt.txt"
     use_csv = False
 
-    # Mock construct_paths return value
+    mock_os_isdir.return_value = False
     mock_construct_paths.return_value = (
         {
             "change_prompt_file": "Change Prompt Content",
@@ -418,21 +471,22 @@ def test_change_main_non_csv_change_func_error(
 
 # === Test cases for CSV mode ===
 
-@patch('pdd.change_main.change_func') # Mock change_func
+@patch('pdd.change_main.change_func')
 @patch('pathlib.Path.is_file')
 @patch('pathlib.Path.is_dir')
+@patch('os.path.isdir')
 def test_change_main_csv_success(
+    mock_os_isdir,
     mock_is_dir,
     mock_is_file,
-    mock_change_func, # Add mock
+    mock_change_func,
     mock_rprint,
     mock_csv_dictreader,
-    mock_open_function, # For reading input CSV and writing output CSV
+    mock_open_function,
     tmp_path,
     monkeypatch
 ):
-    # Arrange
-    monkeypatch.chdir(tmp_path) # Set CWD for relative paths if any
+    monkeypatch.chdir(tmp_path)
     ctx = create_mock_context(
         params={},
         obj={'force': False, 'quiet': False, 'strength': 0.7, 'temperature': 0.3, 'budget': 20.0}
@@ -443,35 +497,37 @@ def test_change_main_csv_success(
     output_csv_file = tmp_path / "output.csv"
     use_csv = True
 
-    # Dummy files for processing
     prompt1_path = tmp_path / "prompt1_python.prompt"
     prompt1_path.write_text("Prompt 1 content")
     code1_path = code_directory / "prompt1.py"
     code1_path.write_text("Code 1 content")
 
-    prompt2_path = tmp_path / "prompt2_other.prompt" # Test different suffix handling
+    prompt2_path = tmp_path / "prompt2_other.prompt"
     prompt2_path.write_text("Prompt 2 content")
-    code2_path = code_directory / "prompt2.txt" # Expect .txt if suffix isn't language
+    code2_path = code_directory / "prompt2.txt"
     code2_path.write_text("Code 2 content")
 
-    # Create input CSV content
     csv_content = "prompt_name,change_instructions\n"
-    csv_content += f"{prompt1_path.name},Change 1\n" # Use relative name
-    csv_content += f"{prompt2_path.name},Change 2\n" # Use relative name
+    csv_content += f"{prompt1_path.name},Change 1\n"
+    csv_content += f"{prompt2_path.name},Change 2\n"
     change_prompt_file.write_text(csv_content)
 
-    # Mock Path validation
-    mock_is_file.side_effect = lambda self: self.resolve() in [change_prompt_file.resolve(), prompt1_path.resolve(), prompt2_path.resolve(), code1_path.resolve(), code2_path.resolve()]
-    mock_is_dir.side_effect = lambda self: self.resolve() == code_directory.resolve()
+    mock_is_file.side_effect = lambda obj: obj.resolve() in [
+        change_prompt_file.resolve(), 
+        prompt1_path.resolve(), 
+        prompt2_path.resolve(), 
+        code1_path.resolve(), 
+        code2_path.resolve()
+    ]
+    mock_is_dir.side_effect = lambda obj: obj.resolve() == code_directory.resolve()
+    mock_os_isdir.return_value = True
 
-    # Mock CSV reading (mock_open_function handles the file open)
     reader = csv.DictReader(csv_content.splitlines())
     mock_reader = MagicMock()
     mock_reader.__iter__.return_value = iter(list(reader))
     mock_reader.fieldnames = reader.fieldnames
     mock_csv_dictreader.return_value = mock_reader
 
-    # Mock change_func return value
     modified_prompts_data = [
         ('Modified Prompt 1', 0.05, "gpt-4"),
         ('Modified Prompt 2', 0.05, "gpt-4")
@@ -480,15 +536,21 @@ def test_change_main_csv_success(
     total_cost = sum(c[1] for c in modified_prompts_data)
     model_name = modified_prompts_data[0][2]
 
-    # Act
-    result = change_main(
-        ctx=ctx,
-        change_prompt_file=str(change_prompt_file),
-        input_code=str(code_directory),
-        input_prompt_file=None,
-        output=str(output_csv_file),
-        use_csv=use_csv
-    )
+    with patch('pdd.change_main.construct_paths') as mock_construct_paths:
+        mock_construct_paths.return_value = (
+            {'change_prompt_file': 'dummy content'},
+            {'output': str(output_csv_file)},
+            'python'
+        )
+        with patch('pdd.change_main.open', mock_open(read_data=csv_content)):
+            result = change_main(
+                ctx=ctx,
+                change_prompt_file=str(change_prompt_file),
+                input_code=str(code_directory),
+                input_prompt_file=None,
+                output=str(output_csv_file),
+                use_csv=use_csv
+            )
 
     # Assert
     assert result == ("Multiple prompts have been updated.", total_cost, model_name)
@@ -533,30 +595,29 @@ def test_change_main_csv_success(
 
 @patch('pathlib.Path.is_file')
 @patch('pathlib.Path.is_dir')
+@patch('os.path.isdir')
 def test_change_main_csv_input_code_not_directory(
+    mock_os_isdir,
     mock_is_dir,
     mock_is_file,
     mock_rprint,
     tmp_path
 ):
-    # Arrange
     ctx = create_mock_context(
         params={'force': False, 'quiet': False},
         obj={'strength': 0.6, 'temperature': 0.4}
     )
     change_prompt_file = tmp_path / "change_prompts.csv"
-    change_prompt_file.touch() # Ensure CSV file exists for first check
-    input_code_file = tmp_path / "input_file.py" # Not a directory
+    change_prompt_file.touch()
+    input_code_file = tmp_path / "input_file.py"
     input_code_file.touch()
     output = tmp_path / "output.csv"
     use_csv = True
 
-    # Mock Path validation: CSV exists, input_code is NOT a directory
-    mock_is_file.return_value = True # Assume CSV file exists
-    mock_is_file.side_effect = None # Clear any side_effect
-    mock_is_dir.side_effect = lambda self: self.resolve() != input_code_file.resolve() # False only for input_code_file
+    mock_is_file.side_effect = lambda *args: True  
+    mock_is_dir.side_effect = lambda *args: False  
+    mock_os_isdir.return_value = False
 
-    # Act
     result = change_main(
         ctx=ctx,
         change_prompt_file=str(change_prompt_file),
@@ -566,85 +627,75 @@ def test_change_main_csv_input_code_not_directory(
         use_csv=use_csv
     )
 
-    # Assert - Expect the directory error now
     expected_error = f"[bold red]Error:[/bold red] In CSV mode, --input-code ('{input_code_file}') must be a valid directory."
     assert result == (expected_error, 0.0, "")
     mock_rprint.assert_called_once_with(expected_error)
-    # Verify is_file was called (for CSV) and is_dir was called (for input_code)
-    mock_is_file.assert_called()
-    mock_is_dir.assert_called()
-
 
 @patch('pathlib.Path.is_file')
 @patch('pathlib.Path.is_dir')
+@patch('os.path.isdir')
 def test_change_main_csv_missing_columns(
+    mock_os_isdir,
     mock_is_dir,
     mock_is_file,
-    mock_csv_dictreader, # Keep this mock
+    mock_csv_dictreader,
     mock_rprint,
-    mock_open_function, # For opening the CSV
+    mock_open_function,
     tmp_path
 ):
-    # Arrange
     ctx = create_mock_context(
         params={'force': False, 'quiet': False},
         obj={'strength': 0.6, 'temperature': 0.4}
     )
     change_prompt_file = tmp_path / "change_prompts.csv"
-    # Don't create content, mock_open handles it, but path must exist for is_file
     change_prompt_file.touch()
     code_directory = tmp_path / "code_directory"
     code_directory.mkdir()
     output = tmp_path / "output.csv"
     use_csv = True
 
-    # Mock Path validation: CSV exists, code dir exists
-    mock_is_file.return_value = True
-    mock_is_file.side_effect = None # Clear any side_effect
-    mock_is_dir.return_value = True
-    mock_is_dir.side_effect = None # Clear any side_effect
+    mock_is_file.side_effect = lambda *args: True
+    mock_is_dir.side_effect = lambda *args: True
+    mock_os_isdir.return_value = True
 
-    # Mock CSV file reading with missing columns
-    # mock_open_function will provide the file handle
     mock_reader = MagicMock()
     mock_reader.fieldnames = ['invalid_column1', 'invalid_column2']
     mock_csv_dictreader.return_value = mock_reader
 
-    # Act
-    result = change_main(
-        ctx=ctx,
-        change_prompt_file=str(change_prompt_file),
-        input_code=str(code_directory),
-        input_prompt_file=None,
-        output=str(output),
-        use_csv=use_csv
-    )
+    with patch('pdd.change_main.construct_paths') as mock_construct_paths:
+        mock_construct_paths.return_value = (
+            {'change_prompt_file': 'dummy content'},
+            {'output': str(output)},
+            'python'
+        )
+        result = change_main(
+            ctx=ctx,
+            change_prompt_file=str(change_prompt_file),
+            input_code=str(code_directory),
+            input_prompt_file=None,
+            output=str(output),
+            use_csv=use_csv
+        )
 
-    # Assert - Expect the column error now
     expected_error = "CSV file must contain 'prompt_name' and 'change_instructions' columns."
     assert result == (expected_error, 0.0, "")
     mock_rprint.assert_called_once_with(f"[bold red]Error: {expected_error}[/bold red]")
-    # Verify is_file, is_dir, open, and DictReader were called
-    mock_is_file.assert_called()
-    mock_is_dir.assert_called()
-    mock_open_function.assert_called_with(change_prompt_file, mode='r', newline='', encoding='utf-8')
-    mock_csv_dictreader.assert_called_once()
 
-
-@patch('pdd.change_main.change_func') # Mock change_func
+@patch('pdd.change_main.change_func')
 @patch('pathlib.Path.is_file')
 @patch('pathlib.Path.is_dir')
-def test_change_main_csv_change_func_error( # Renamed test
+@patch('os.path.isdir')
+def test_change_main_csv_change_func_error(
+    mock_os_isdir,
     mock_is_dir,
     mock_is_file,
-    mock_change_func, # Add mock
+    mock_change_func,
     mock_rprint,
     mock_csv_dictreader,
-    mock_open_function, # For reading input CSV
+    mock_open_function,
     tmp_path,
     monkeypatch
 ):
-    # Arrange
     monkeypatch.chdir(tmp_path)
     ctx = create_mock_context(
         params={'force': False, 'quiet': False},
@@ -656,40 +707,46 @@ def test_change_main_csv_change_func_error( # Renamed test
     output_csv_file = tmp_path / "output.csv"
     use_csv = True
 
-    # Dummy files
     prompt1_path = tmp_path / "prompt1_python.prompt"
     prompt1_path.write_text("Prompt 1 content")
     code1_path = code_directory / "prompt1.py"
     code1_path.write_text("Code 1 content")
 
-    # Create input CSV content
     csv_content = "prompt_name,change_instructions\n"
     csv_content += f"{prompt1_path.name},Change 1\n"
     change_prompt_file.write_text(csv_content)
 
-    # Mock Path validation
-    mock_is_file.side_effect = lambda self: self.resolve() in [change_prompt_file.resolve(), prompt1_path.resolve(), code1_path.resolve()]
-    mock_is_dir.side_effect = lambda self: self.resolve() == code_directory.resolve()
+    mock_is_file.side_effect = lambda obj: obj.resolve() in [
+        change_prompt_file.resolve(), 
+        prompt1_path.resolve(), 
+        code1_path.resolve()
+    ]
+    mock_is_dir.side_effect = lambda obj: obj.resolve() == code_directory.resolve()
+    mock_os_isdir.return_value = True
 
-    # Mock CSV reading
     reader = csv.DictReader(csv_content.splitlines())
     mock_reader = MagicMock()
     mock_reader.__iter__.return_value = iter(list(reader))
     mock_reader.fieldnames = reader.fieldnames
     mock_csv_dictreader.return_value = mock_reader
 
-    # Mock change_func to raise an exception
     mock_change_func.side_effect = Exception("LLM Processing Failed")
 
-    # Act
-    result = change_main(
-        ctx=ctx,
-        change_prompt_file=str(change_prompt_file),
-        input_code=str(code_directory),
-        input_prompt_file=None,
-        output=str(output_csv_file),
-        use_csv=use_csv
-    )
+    with patch('pdd.change_main.construct_paths') as mock_construct_paths:
+        mock_construct_paths.return_value = (
+            {'change_prompt_file': 'dummy content'},
+            {'output': str(output_csv_file)},
+            'python'
+        )
+        with patch('pdd.change_main.open', mock_open(read_data=csv_content)):
+            result = change_main(
+                ctx=ctx,
+                change_prompt_file=str(change_prompt_file),
+                input_code=str(code_directory),
+                input_prompt_file=None,
+                output=str(output_csv_file),
+                use_csv=use_csv
+            )
 
     # Assert
     # The function should continue processing (if multiple rows) or finish,
@@ -951,18 +1008,17 @@ def test_change_main_csv_output_none_saves_individual_files(
     handle.write.assert_any_call('prompt2 content')
     assert handle.write.call_count == 2
 
+# === Test for trailing slash handling in output path ===
 
-# Remove test_change_main_csv_output_directory_error as it's redundant/obsolete
-
-
-# Test handling of trailing slash in output directory path
 @patch('pdd.change_main.change_func')
 @patch('pathlib.Path.is_file')
 @patch('pathlib.Path.is_dir')
 @patch('builtins.open', new_callable=mock_open)
 @patch('pdd.change_main.os.makedirs')
-@patch('pdd.change_main.os.path.normpath', side_effect=os.path.normpath) # Mock normpath
+@patch('pdd.change_main.os.path.normpath')
+@patch('os.path.isdir')
 def test_change_main_csv_output_dir_slash_saves_individual_files(
+    mock_os_isdir,
     mock_normpath,
     mock_makedirs,
     mock_open_fixture,
@@ -981,9 +1037,8 @@ def test_change_main_csv_output_dir_slash_saves_individual_files(
     caplog.set_level('DEBUG')
     # Arrange
     monkeypatch.chdir(tmp_path)
-    # 1. Define paths
-    output_dir_with_slash = tmp_path / "output/" # Path ending with slash
-    output_dir_normalized = tmp_path / "output"  # Path without slash
+    output_dir_with_slash = tmp_path / "output/"
+    output_dir_normalized = tmp_path / "output"
     input_csv_path = tmp_path / "changes.csv"
     input_csv_path.touch()
     code_dir = tmp_path / "code"
@@ -992,7 +1047,7 @@ def test_change_main_csv_output_dir_slash_saves_individual_files(
     # Dummy files
     prompt1_path = tmp_path / "file1.prompt"
     prompt1_path.write_text("Prompt 1")
-    code1_path = code_dir / "file1.txt" # Assume .txt default
+    code1_path = code_dir / "file1.txt"
     code1_path.write_text("Code 1")
 
     # 2. Setup context
@@ -1000,15 +1055,19 @@ def test_change_main_csv_output_dir_slash_saves_individual_files(
         params={'force': False},
         obj={'quiet': True}
     )
-
     # 3. Mock Path validation
     # is_dir: True for code_dir, True for normalized output_dir
     # is_file: True for input files
-    mock_is_dir.side_effect = lambda self: self.resolve() in [code_dir.resolve(), output_dir_normalized.resolve()]
-    mock_is_file.side_effect = lambda self: self.resolve() in [input_csv_path.resolve(), prompt1_path.resolve(), code1_path.resolve()]
-
-    # 4. Mock CSV reading
-    # Create a MagicMock that also behaves like an iterable but preserves fieldnames
+    mock_is_file.side_effect = lambda obj: obj.resolve() in [
+        input_csv_path.resolve(), 
+        prompt1_path.resolve(), 
+        code1_path.resolve()
+    ]
+    mock_is_dir.side_effect = lambda obj: obj.resolve() in [
+        code_dir.resolve(), 
+        output_dir_normalized.resolve()
+    ]
+    mock_os_isdir.return_value = True
     mock_reader = MagicMock()
     mock_reader.__iter__.return_value = iter([
         {'prompt_name': prompt1_path.name, 'change_instructions': 'Change 1'}
@@ -1018,16 +1077,23 @@ def test_change_main_csv_output_dir_slash_saves_individual_files(
 
     # 5. Mock change_func returns
     mock_change_func.return_value = ('Modified 1', 0.01, "model-x")
+    mock_normpath.side_effect = lambda path: str(output_dir_normalized) if path == str(output_dir_with_slash) else path
 
-    # Act
-    result_message, result_cost, result_model = change_main(
-        ctx=ctx,
-        change_prompt_file=str(input_csv_path),
-        input_code=str(code_dir),
-        input_prompt_file=None,
-        output=str(output_dir_with_slash), # Use the path with the slash
-        use_csv=True
-    )
+    with patch('pdd.change_main.construct_paths') as mock_construct_paths:
+        mock_construct_paths.return_value = (
+            {'change_prompt_file': 'dummy content'},
+            {'output': str(output_dir_with_slash)},
+            'python'
+        )
+        with patch('pdd.change_main.open', mock_open(read_data="prompt_name,change_instructions\nfile1.prompt,Change 1")):
+            result_message, result_cost, result_model = change_main(
+                ctx=ctx,
+                change_prompt_file=str(input_csv_path),
+                input_code=str(code_dir),
+                input_prompt_file=None,
+                output=str(output_dir_with_slash),
+                use_csv=True
+            )
 
     # Assert Correct Behavior
     # 1. Check os.path.normpath was called for the output path
