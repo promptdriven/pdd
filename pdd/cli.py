@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 from typing import Any, Dict, List, Optional, Tuple
+from pathlib import Path # Import Path
 
 import click
 from rich.console import Console
@@ -47,7 +48,7 @@ console = Console(theme=custom_theme)
 
 # --- Helper Function for Error Handling ---
 def handle_error(e: Exception, command_name: str, quiet: bool):
-    """Prints error messages using Rich console and re-raises the exception."""
+    """Prints error messages using Rich console.""" # Modified docstring
     if not quiet:
         console.print(f"[error]Error during '{command_name}' command:[/error]", style="error")
         if isinstance(e, FileNotFoundError):
@@ -56,15 +57,15 @@ def handle_error(e: Exception, command_name: str, quiet: bool):
             console.print(f"  [error]Input/Output Error:[/error] {e}", style="error")
         elif isinstance(e, click.UsageError): # Handle Click usage errors explicitly if needed
              console.print(f"  [error]Usage Error:[/error] {e}", style="error")
-             # click.UsageError should typically exit with 2, but re-raising allows test runner to handle it.
+             # click.UsageError should typically exit with 2, but we are handling it.
         elif isinstance(e, MarkupError):
             console.print("  [error]Markup Error:[/error] Invalid Rich markup encountered.", style="error")
             # Print the error message safely escaped
             console.print(escape(str(e)))
         else:
             console.print(f"  [error]An unexpected error occurred:[/error] {e}", style="error")
-    # Re-raise the exception to allow higher-level handlers (like pytest) to see it.
-    raise e
+    # Do NOT re-raise e here. Let the command function return None.
+
 
 # --- Main CLI Group ---
 @click.group(chain=True, help="PDD (Prompt-Driven Development) Command Line Interface.")
@@ -172,24 +173,42 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
     """
     total_chain_cost = 0.0
     # Get invoked subcommands directly from the group context if available (safer for testing)
+    # Note: This might yield "Unknown Command" during tests with CliRunner
     invoked_subcommands = getattr(ctx, 'invoked_subcommands', [])
+    num_commands = len(invoked_subcommands)
+    num_results = len(results) # Number of results actually received
 
     if not ctx.obj.get("quiet"):
         console.print("\n[info]--- Command Chain Execution Summary ---[/info]")
 
     for i, result_tuple in enumerate(results):
-        # Use the retrieved subcommand name
-        command_name = invoked_subcommands[i] if i < len(invoked_subcommands) else f"Unknown Command {i+1}"
-        # Check if the result is the expected tuple structure from @track_cost
-        if isinstance(result_tuple, tuple) and len(result_tuple) == 3:
+        # Use the retrieved subcommand name (might be "Unknown Command X" in tests)
+        command_name = invoked_subcommands[i] if i < num_commands else f"Unknown Command {i+1}"
+
+        # Check if the command failed (returned None)
+        if result_tuple is None:
+             if not ctx.obj.get("quiet"):
+                 # Check if it was install_completion (which normally returns None)
+                 if command_name == "install_completion":
+                     console.print(f"  [info]Step {i+1} ({command_name}):[/info] Command completed.")
+                 # Check if it was preprocess (which returns a dummy tuple on success)
+                 # This case handles actual failure for preprocess
+                 elif command_name == "preprocess":
+                      console.print(f"  [error]Step {i+1} ({command_name}):[/error] Command failed.")
+                 else:
+                     console.print(f"  [error]Step {i+1} ({command_name}):[/error] Command failed.")
+        # Check if the result is the expected tuple structure from @track_cost or preprocess success
+        elif isinstance(result_tuple, tuple) and len(result_tuple) == 3:
             _result_data, cost, model_name = result_tuple
             total_chain_cost += cost
             if not ctx.obj.get("quiet"):
-                 console.print(f"  [info]Step {i+1} ({command_name}):[/info] Cost: ${cost:.6f}, Model: {model_name}")
-        elif result_tuple is None:
-             # Handle commands that return None (like install_completion)
-             if not ctx.obj.get("quiet"):
-                 console.print(f"  [info]Step {i+1} ({command_name}):[/info] Command completed (no cost info).")
+                 # Special handling for preprocess success message (check actual command name)
+                 actual_command_name = invoked_subcommands[i] if i < num_commands else None # Get actual name if possible
+                 if actual_command_name == "preprocess" and cost == 0.0 and model_name == "local":
+                     console.print(f"  [info]Step {i+1} ({command_name}):[/info] Command completed (local).")
+                 else:
+                     # Generic output using potentially "Unknown Command" name
+                     console.print(f"  [info]Step {i+1} ({command_name}):[/info] Cost: ${cost:.6f}, Model: {model_name}")
         else:
             # Handle unexpected return types if necessary
             if not ctx.obj.get("quiet"):
@@ -198,7 +217,12 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
 
 
     if not ctx.obj.get("quiet"):
-        console.print(f"[info]Total Estimated Cost for Chain:[/info] ${total_chain_cost:.6f}")
+        # Only print total cost if at least one command potentially contributed cost
+        if any(res is not None and isinstance(res, tuple) and len(res) == 3 for res in results):
+             console.print(f"[info]Total Estimated Cost for Chain:[/info] ${total_chain_cost:.6f}")
+        # Indicate if the chain might have been incomplete due to errors
+        if num_results < num_commands and not all(res is None for res in results): # Avoid printing if all failed
+             console.print("[warning]Note: Chain may have terminated early due to errors.[/warning]")
         console.print("[info]-------------------------------------[/info]")
 
 
@@ -214,22 +238,20 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
 )
 @click.pass_context
 @track_cost
-def generate(ctx: click.Context, prompt_file: str, output: Optional[str]) -> Tuple[str, float, str]:
+def generate(ctx: click.Context, prompt_file: str, output: Optional[str]) -> Optional[Tuple[str, float, str]]: # Modified return type
     """Create runnable code from a prompt file."""
     quiet = ctx.obj.get("quiet", False)
     command_name = "generate"
     try:
-        # Pass the original 'output' to code_generator_main
         generated_code, total_cost, model_name = code_generator_main(
             ctx=ctx,
             prompt_file=prompt_file,
-            output=output, # Pass the original output argument
-            # Pass input_strings if needed by main func, e.g., input_strings.get("prompt_file")
+            output=output,
         )
         return generated_code, total_cost, model_name
     except Exception as e:
         handle_error(e, command_name, quiet)
-        # Removed raise statement
+        return None # Return None on failure
 
 
 @cli.command("example")
@@ -243,22 +265,21 @@ def generate(ctx: click.Context, prompt_file: str, output: Optional[str]) -> Tup
 )
 @click.pass_context
 @track_cost
-def example(ctx: click.Context, prompt_file: str, code_file: str, output: Optional[str]) -> Tuple[str, float, str]:
+def example(ctx: click.Context, prompt_file: str, code_file: str, output: Optional[str]) -> Optional[Tuple[str, float, str]]: # Modified return type
     """Create a compact example demonstrating functionality."""
     quiet = ctx.obj.get("quiet", False)
     command_name = "example"
     try:
-        # Pass the original 'output' to context_generator_main
         example_code, total_cost, model_name = context_generator_main(
             ctx=ctx,
             prompt_file=prompt_file,
             code_file=code_file,
-            output=output, # Pass the original output argument
+            output=output,
         )
         return example_code, total_cost, model_name
     except Exception as e:
         handle_error(e, command_name, quiet)
-        # Removed raise statement
+        return None # Return None on failure
 
 
 @cli.command("test")
@@ -307,18 +328,17 @@ def test(
     existing_tests: Optional[str],
     target_coverage: Optional[float],
     merge: bool,
-) -> Tuple[str, float, str]:
+) -> Optional[Tuple[str, float, str]]: # Modified return type
     """Generate or enhance unit tests."""
     quiet = ctx.obj.get("quiet", False)
     command_name = "test"
     try:
-        # Pass original 'output' and 'language' to cmd_test_main
         generated_test_code, total_cost, model_name = cmd_test_main(
             ctx=ctx,
             prompt_file=prompt_file,
             code_file=code_file,
-            output=output, # Pass original output argument
-            language=language, # Pass original language argument (main will resolve default)
+            output=output,
+            language=language,
             coverage_report=coverage_report,
             existing_tests=existing_tests,
             target_coverage=target_coverage,
@@ -327,7 +347,7 @@ def test(
         return generated_test_code, total_cost, model_name
     except Exception as e:
         handle_error(e, command_name, quiet)
-        # Removed raise statement
+        return None # Return None on failure
 
 
 @cli.command("preprocess")
@@ -372,28 +392,25 @@ def preprocess(
     recursive: bool,
     double: bool,
     exclude: Optional[Tuple[str, ...]],
-) -> Tuple[str, float, str]: # Returns dummy tuple
+) -> Optional[Tuple[str, float, str]]: # Modified return type (Optional)
     """Preprocess prompt files and save the results."""
     quiet = ctx.obj.get("quiet", False)
     command_name = "preprocess"
     try:
-        # Pass original 'output' to preprocess_main
         preprocess_main(
-            ctx=ctx, # Pass context for quiet/force flags if needed by preprocess_main
+            ctx=ctx,
             prompt_file=prompt_file,
-            output=output, # Pass original output argument
+            output=output,
             xml=xml,
             recursive=recursive,
             double=double,
-            exclude=list(exclude) if exclude else [], # Convert tuple to list
-            # Pass input_strings if needed
+            exclude=list(exclude) if exclude else [],
         )
-        # Return dummy values to fit the result_callback structure
+        # Return dummy values ONLY on success
         return "Preprocessing complete.", 0.0, "local"
-
     except Exception as e:
         handle_error(e, command_name, quiet)
-        # Removed raise statement
+        return None # Return None on failure
 
 
 @cli.command("fix")
@@ -462,7 +479,7 @@ def fix(
     max_attempts: int,
     budget: float,
     auto_submit: bool,
-) -> Tuple[Dict[str, Any], float, str]: # fix_main returns a dict, cost, model
+) -> Optional[Tuple[Dict[str, Any], float, str]]: # Modified return type
     """Fix errors in code and unit tests based on error messages."""
     quiet = ctx.obj.get("quiet", False)
     command_name = "fix"
@@ -475,7 +492,7 @@ def fix(
             prompt_file=prompt_file,
             code_file=code_file,
             unit_test_file=unit_test_file,
-            error_file=error_file, # Pass original path, construct_paths ensured it's handled
+            error_file=error_file,
             output_test=output_test,
             output_code=output_code,
             output_results=output_results,
@@ -492,14 +509,11 @@ def fix(
             "fixed_test_path": output_test,
             "fixed_code_path": output_code,
             "results_log_path": output_results,
-            # Optionally include content if needed downstream, but paths are usually sufficient
-            # "fixed_test_content": fixed_test,
-            # "fixed_code_content": fixed_code,
         }
         return result_data, cost, model
     except Exception as e:
         handle_error(e, command_name, quiet)
-        # Removed raise statement
+        return None # Return None on failure
 
 
 @cli.command("split")
@@ -527,24 +541,23 @@ def split(
     example_code: str,
     output_sub: Optional[str],
     output_modified: Optional[str],
-) -> Tuple[Dict[str, str], float, str]: # Returns dict with paths, cost, model
+) -> Optional[Tuple[Dict[str, str], float, str]]: # Modified return type
     """Split large complex prompt files into smaller ones."""
     quiet = ctx.obj.get("quiet", False)
     command_name = "split"
     try:
-        # Pass original output paths to split_main
         result_data, total_cost, model_name = split_main(
             ctx=ctx,
             input_prompt_file=input_prompt,
             input_code_file=input_code,
             example_code_file=example_code,
-            output_sub=output_sub, # Pass original output_sub
-            output_modified=output_modified, # Pass original output_modified
+            output_sub=output_sub,
+            output_modified=output_modified,
         )
-        # The result_data is already properly formatted by split_main
         return result_data, total_cost, model_name
     except Exception as e:
         handle_error(e, command_name, quiet)
+        return None # Return None on failure
 
 
 @cli.command("change")
@@ -573,30 +586,39 @@ def change(
     input_prompt_file: Optional[str],
     output: Optional[str],
     use_csv: bool,
-) -> Tuple[str | Dict, float, str]: # Returns string (single) or dict (csv), cost, model
+) -> Optional[Tuple[str | Dict, float, str]]: # Modified return type
     """Modify prompt(s) based on change instructions."""
     quiet = ctx.obj.get("quiet", False)
     command_name = "change"
     try:
+        # --- ADD VALIDATION LOGIC HERE ---
+        input_code_path = Path(input_code) # Convert to Path object
+        if use_csv:
+            if not input_code_path.is_dir():
+                raise click.UsageError("INPUT_CODE must be a directory when using --csv.")
+            if input_prompt_file:
+                raise click.UsageError("Cannot use --csv and specify an INPUT_PROMPT_FILE simultaneously.")
+        else: # Not using CSV
+            if not input_prompt_file:
+                 # This check might be better inside change_main, but can be here too
+                 raise click.UsageError("INPUT_PROMPT_FILE is required when not using --csv.")
+            if not input_code_path.is_file():
+                 # This check might be better inside change_main, but can be here too
+                 raise click.UsageError("INPUT_CODE must be a file when not using --csv.")
+        # --- END VALIDATION LOGIC ---
 
-
-        # change_main handles both single and CSV modes
-        # It returns: modified_prompt_content (single) or message (csv), total_cost, model_name
         result_data, total_cost, model_name = change_main(
             ctx=ctx,
             change_prompt_file=change_prompt_file,
-            input_code=input_code, # Pass original path/dir
-            input_prompt_file=input_prompt_file, # Pass original path or None
-            output=output, # Pass resolved path (single) or original (csv)
+            input_code=input_code,
+            input_prompt_file=input_prompt_file,
+            output=output,
             use_csv=use_csv,
         )
-        # result_data is string (single) or dict/message (csv)
         return result_data, total_cost, model_name
-    except click.UsageError as e: # Catch UsageError specifically
+    except (click.UsageError, Exception) as e: # Catch specific and general exceptions
         handle_error(e, command_name, quiet)
-    except Exception as e:
-        handle_error(e, command_name, quiet)
-        # Removed raise statement
+        return None # Return None on failure
 
 
 @cli.command("update")
@@ -624,7 +646,7 @@ def update(
     input_code_file: Optional[str],
     output: Optional[str],
     git: bool,
-) -> Tuple[str, float, str]: # Returns updated prompt content, cost, model
+) -> Optional[Tuple[str, float, str]]: # Modified return type
     """Update the original prompt file based on modified code."""
     quiet = ctx.obj.get("quiet", False)
     command_name = "update"
@@ -634,21 +656,18 @@ def update(
         if not git and not input_code_file:
             raise click.UsageError("INPUT_CODE_FILE is required when not using --git.")
 
-        # Pass original 'output' to update_main
         updated_prompt, total_cost, model_name = update_main(
             ctx=ctx,
             input_prompt_file=input_prompt_file,
             modified_code_file=modified_code_file,
-            input_code_file=input_code_file, # Pass original path or None
-            output=output, # Pass original output argument
+            input_code_file=input_code_file,
+            output=output,
             git=git,
         )
         return updated_prompt, total_cost, model_name
-    except click.UsageError as e: # Catch UsageError specifically
+    except (click.UsageError, Exception) as e: # Catch specific and general exceptions
         handle_error(e, command_name, quiet)
-    except Exception as e:
-        handle_error(e, command_name, quiet)
-        # Removed raise statement
+        return None # Return None on failure
 
 
 @cli.command("detect")
@@ -667,7 +686,7 @@ def detect(
     prompt_files: Tuple[str, ...],
     change_file: str,
     output: Optional[str],
-) -> Tuple[List[Dict[str, str]], float, str]: # Returns list of changes, cost, model
+) -> Optional[Tuple[List[Dict[str, str]], float, str]]: # Modified return type
     """Analyze prompts and a change description to find needed changes."""
     quiet = ctx.obj.get("quiet", False)
     command_name = "detect"
@@ -675,19 +694,16 @@ def detect(
         if not prompt_files:
              raise click.UsageError("At least one PROMPT_FILE must be provided.")
 
-        # detect_change_main handles its own path logic and output file generation
         changes_list, total_cost, model_name = detect_change_main(
             ctx=ctx,
-            prompt_files=list(prompt_files), # Convert tuple to list
+            prompt_files=list(prompt_files),
             change_file=change_file,
-            output=output, # Pass user-provided or default path
+            output=output,
         )
         return changes_list, total_cost, model_name
-    except click.UsageError as e: # Catch UsageError specifically
+    except (click.UsageError, Exception) as e: # Catch specific and general exceptions
         handle_error(e, command_name, quiet)
-    except Exception as e:
-        handle_error(e, command_name, quiet)
-        # Removed raise statement
+        return None # Return None on failure
 
 
 @cli.command("conflicts")
@@ -706,22 +722,21 @@ def conflicts(
     prompt1: str,
     prompt2: str,
     output: Optional[str],
-) -> Tuple[List[Dict[str, str]], float, str]: # Returns list of conflicts, cost, model
+) -> Optional[Tuple[List[Dict[str, str]], float, str]]: # Modified return type
     """Analyze two prompt files to find conflicts."""
     quiet = ctx.obj.get("quiet", False)
     command_name = "conflicts"
     try:
-        # conflicts_main handles its own path logic and output file generation
         conflicts_list, total_cost, model_name = conflicts_main(
             ctx=ctx,
             prompt1=prompt1,
             prompt2=prompt2,
-            output=output, # Pass user-provided or default path
+            output=output,
         )
         return conflicts_list, total_cost, model_name
     except Exception as e:
         handle_error(e, command_name, quiet)
-        # Removed raise statement
+        return None # Return None on failure
 
 
 @cli.command("crash")
@@ -769,20 +784,19 @@ def crash(
     loop: bool,
     max_attempts: int,
     budget: float,
-) -> Tuple[Dict[str, Any], float, str]: # Returns dict, cost, model
+) -> Optional[Tuple[Dict[str, Any], float, str]]: # Modified return type
     """Fix errors in a code module and calling program that caused a crash."""
     quiet = ctx.obj.get("quiet", False)
     command_name = "crash"
     try:
-        # Pass original output paths to crash_main
         success, fixed_code, fixed_program, attempts, cost, model = crash_main(
             ctx=ctx,
             prompt_file=prompt_file,
             code_file=code_file,
             program_file=program_file,
             error_file=error_file,
-            output=output, # Pass original output argument (for code)
-            output_program=output_program, # Pass original output_program argument
+            output=output,
+            output_program=output_program,
             loop=loop,
             max_attempts=max_attempts,
             budget=budget,
@@ -790,15 +804,13 @@ def crash(
         result_data = {
             "success": success,
             "attempts": attempts,
-            "fixed_code_path": output, # Use original path for reporting
-            "fixed_program_path": output_program, # Use original path for reporting
-            # "fixed_code_content": fixed_code, # Optional
-            # "fixed_program_content": fixed_program, # Optional
+            "fixed_code_path": output,
+            "fixed_program_path": output_program,
         }
         return result_data, cost, model
     except Exception as e:
         handle_error(e, command_name, quiet)
-        # Removed raise statement
+        return None # Return None on failure
 
 
 @cli.command("trace")
@@ -819,24 +831,29 @@ def trace(
     code_file: str,
     code_line: int,
     output: Optional[str],
-) -> Tuple[int | str, float, str]: # Returns line number or message, cost, model
+) -> Optional[Tuple[int | str, float, str]]: # Modified return type
     """Find the associated line number between a prompt file and generated code."""
     quiet = ctx.obj.get("quiet", False)
     command_name = "trace"
     try:
-        # trace_main handles its own path logic and output file generation
         prompt_line_result, total_cost, model_name = trace_main(
             ctx=ctx,
             prompt_file=prompt_file,
             code_file=code_file,
             code_line=code_line,
-            output=output, # Pass user-provided or default path
+            output=output,
         )
-        # prompt_line_result could be an int or a message string
+        # Check if trace_main indicated failure (e.g., by returning None or specific error)
+        # This depends on trace_main's implementation; assuming it raises exceptions for now.
+        if prompt_line_result is None and total_cost == 0.0 and model_name == 'local_error': # Example check if trace_main returns specific tuple on failure
+             # Optionally handle specific non-exception failures differently if needed
+             # For now, rely on exceptions being raised for errors like out-of-range.
+             pass
         return prompt_line_result, total_cost, model_name
     except Exception as e:
         handle_error(e, command_name, quiet)
-        # Removed raise statement
+        # Exit with non-zero status code on any exception
+        ctx.exit(1)
 
 
 @cli.command("bug")
@@ -863,26 +880,25 @@ def bug(
     desired_output_file: str,
     output: Optional[str],
     language: Optional[str],
-) -> Tuple[str, float, str]: # Returns unit test content, cost, model
+) -> Optional[Tuple[str, float, str]]: # Modified return type
     """Generate a unit test based on observed and desired outputs."""
     quiet = ctx.obj.get("quiet", False)
     command_name = "bug"
     try:
-        # bug_main handles its own path logic and output file generation
         unit_test_content, total_cost, model_name = bug_main(
             ctx=ctx,
             prompt_file=prompt_file,
             code_file=code_file,
             program_file=program_file,
-            current_output=current_output_file, # Pass path, main reads it
-            desired_output=desired_output_file, # Pass path, main reads it
-            output=output, # Pass user-provided or default path
+            current_output=current_output_file,
+            desired_output=desired_output_file,
+            output=output,
             language=language,
         )
         return unit_test_content, total_cost, model_name
     except Exception as e:
         handle_error(e, command_name, quiet)
-        # Removed raise statement
+        return None # Return None on failure
 
 
 @cli.command("auto-deps")
@@ -916,28 +932,25 @@ def auto_deps(
     output: Optional[str],
     auto_deps_csv_path: Optional[str],
     force_scan: bool,
-) -> Tuple[str, float, str]: # Returns modified prompt content, cost, model
+) -> Optional[Tuple[str, float, str]]: # Modified return type
     """Analyze prompt and insert dependencies from a directory."""
     quiet = ctx.obj.get("quiet", False)
     command_name = "auto-deps"
     try:
-        # Strip quotes from directory_path if present
-        # Corrected the unterminated string literal error
-        clean_directory_path = directory_path.strip('\'"')
+        clean_directory_path = directory_path.strip('\"')
 
-        # auto_deps_main handles its own path logic and output file generation
         modified_prompt, total_cost, model_name = auto_deps_main(
             ctx=ctx,
             prompt_file=prompt_file,
             directory_path=clean_directory_path,
-            auto_deps_csv_path=auto_deps_csv_path, # Pass user-provided or None
-            output=output, # Pass user-provided or None
+            auto_deps_csv_path=auto_deps_csv_path,
+            output=output,
             force_scan=force_scan,
         )
         return modified_prompt, total_cost, model_name
     except Exception as e:
         handle_error(e, command_name, quiet)
-        # Removed raise statement
+        return None # Return None on failure
 
 
 @cli.command("verify")
@@ -981,55 +994,50 @@ def verify(
     output_code: Optional[str],
     max_attempts: int,
     budget: float,
-) -> Tuple[Dict[str, Any], float, str]: # Returns dict, cost, model
+) -> Optional[Tuple[Dict[str, Any], float, str]]: # Modified return type
     """Verify code correctness against prompt using LLM judgment."""
     quiet = ctx.obj.get("quiet", False)
     command_name = "verify"
     try:
-        # fix_verification_main handles its own path logic and output files
-        # It uses loop=True internally and program_file acts as the verification trigger
-        # It returns: success, final_program_content, final_code_content, attempts, cost, model
         success, final_program, final_code, attempts, cost, model = fix_verification_main(
             ctx=ctx,
             prompt_file=prompt_file,
             code_file=code_file,
-            program_file=program_file, # Used for execution and LLM judgment
-            output_results=output_results, # Pass user-provided or None
-            output_code=output_code, # Pass user-provided or None
-            loop=True, # Verify inherently uses a loop structure
-            verification_program=program_file, # Re-use program_file for verification check logic within main
+            program_file=program_file,
+            output_results=output_results,
+            output_code=output_code,
+            loop=True,
+            verification_program=program_file,
             max_attempts=max_attempts,
             budget=budget,
         )
         result_data = {
             "success": success,
             "attempts": attempts,
-            "verified_code_path": output_code, # Path where code *should* be saved on success
+            "verified_code_path": output_code,
             "results_log_path": output_results,
-            # "final_code_content": final_code, # Optional
-            # "final_program_content": final_program, # Optional
         }
         return result_data, cost, model
     except Exception as e:
         handle_error(e, command_name, quiet)
-        # Removed raise statement
+        return None # Return None on failure
 
 
 @cli.command("install_completion")
 @click.pass_context
 # No @track_cost
-def install_completion_cmd(ctx: click.Context) -> None: # Returns None
+def install_completion_cmd(ctx: click.Context) -> None: # Return type remains None
     """Install shell completion for PDD."""
     quiet = ctx.obj.get("quiet", False)
     command_name = "install_completion"
     try:
-        # install_completion function handles everything internally, including printing
-        install_completion(quiet=quiet) # Pass quiet flag
-        # Return None, callback handles it
+        install_completion(quiet=quiet)
+        # Return None on success (as intended)
         return None
     except Exception as e:
         handle_error(e, command_name, quiet)
-        # Removed raise statement
+        # Explicitly return None on failure as well, consistent with other commands
+        return None
 
 
 # --- Entry Point ---
