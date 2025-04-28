@@ -871,3 +871,106 @@ def test_correct_prompt_path_resolution_integration(mock_change_fixture, tmp_pat
     # Check that language was inferred correctly
     assert "Inferred language from filename: Python" in captured.out
     assert "Overall Success Status: True" in captured.out
+
+def test_extension_fallback_bug(mock_change_fixture, capsys):
+    """
+    Test the scenario where prompt suffix indicates Python, but get_extension fails,
+    and the default extension parameter is .csv, leading to incorrect file lookup.
+    """
+    # Define paths (use absolute paths for mock reliability)
+    base_dir = os.path.abspath(".") # Test runs from project root usually
+    csv_file_path = os.path.join(base_dir, "test_fallback.csv")
+    code_dir_path = os.path.join(base_dir, "code_fallback")
+    prompt_dir_path = os.path.join(base_dir, "prompts_fallback")
+    prompt_name_in_csv = "prompts_fallback/my_func_python.prompt" # Path relative to CWD in CSV
+    full_prompt_path = os.path.join(base_dir, prompt_name_in_csv)
+    # THE ACTUAL python code file that SHOULD be found
+    correct_code_file_path = os.path.join(code_dir_path, "my_func.py")
+    # The INCORRECT csv code file the buggy logic looks for
+    incorrect_code_file_path = os.path.join(code_dir_path, "my_func.csv")
+
+    # File contents
+    csv_content = f"prompt_name,change_instructions\n{prompt_name_in_csv},\"Do something\""
+    prompt_content = "Prompt content for my_func."
+    code_content = "def my_func(): pass" # Content of the .py file
+
+    # Setup mock filesystem and file contents
+    # Crucially, incorrect_code_file_path does NOT exist
+    mock_exists, mock_isfile, mock_isdir = create_mock_fs(
+        existing_files={csv_file_path, full_prompt_path, correct_code_file_path},
+        existing_dirs={code_dir_path, prompt_dir_path, base_dir}
+    )
+    file_map = {
+        csv_file_path: csv_content,
+        full_prompt_path: prompt_content,
+        correct_code_file_path: code_content,
+    }
+    open_effect = create_open_side_effect(file_map)
+
+    # Mock get_extension to fail for 'Python'
+    def mock_get_ext_fail(lang):
+        if lang == "Python":
+            raise ValueError("Mocked failure for Python")
+        else:
+            # Provide a default for other potential calls if needed
+            return ".unknown" # Or raise error for unexpected languages
+    mock_get_extension = MagicMock(side_effect=mock_get_ext_fail)
+
+    # Mock resolve_prompt_path to simplify test (avoids complex path logic testing)
+    # It should resolve prompt_name_in_csv to full_prompt_path
+    def mock_resolve(p_name, csv_f, code_dir):
+         # print(f"DEBUG MOCK RESOLVE: p_name='{p_name}', csv_f='{csv_f}', code_dir='{code_dir}'")
+         # Simple check: if input matches the one from CSV, return the correct full path
+         if p_name == prompt_name_in_csv and csv_f == csv_file_path and code_dir == code_dir_path:
+              # print(f"DEBUG MOCK RESOLVE: Returning '{full_prompt_path}'")
+              return full_prompt_path
+         # print(f"DEBUG MOCK RESOLVE: Returning None")
+         return None # Indicate not found otherwise
+    mock_resolve_path = MagicMock(side_effect=mock_resolve)
+
+
+    # Patch everything
+    with patch("os.path.exists", mock_exists), \
+         patch("os.path.isfile", mock_isfile), \
+         patch("os.path.isdir", mock_isdir), \
+         patch("builtins.open", open_effect), \
+         patch("pdd.process_csv_change.get_extension", mock_get_extension), \
+         patch("pdd.process_csv_change.resolve_prompt_path", mock_resolve_path), \
+         patch("pdd.process_csv_change.console.print") as mock_console_print: # Add patch for console.print
+
+        # --- Call the function with the problematic parameters ---
+        success, list_of_jsons, total_cost, model_name = process_csv_change(
+            csv_file=csv_file_path,
+            strength=0.5,
+            temperature=0.5,
+            code_directory=code_dir_path,
+            language="IrrelevantDefault", # Language from suffix should override
+            extension=".csv", # <<< The problematic default fallback
+            budget=10.0
+        )
+
+    # Assertions
+    assert not success # Should fail because the row is skipped due to unknown extension
+    assert list_of_jsons == [] # No successful changes
+    assert total_cost == 0.0 # No cost incurred
+    assert model_name == "N/A" # No successful changes
+
+    # Check that get_extension was called correctly
+    mock_get_extension.assert_called_once_with("Python")
+
+    # Check that resolve_prompt_path was called
+    mock_resolve_path.assert_called_once_with(prompt_name_in_csv, csv_file_path, code_dir_path)
+
+
+    # Check that console.print was called with the NEW error message
+    expected_error_unknown_ext = f"[bold red]Error:[/bold red] Language 'Python' found in prompt suffix, but its extension is unknown (row 1). Skipping."
+    mock_console_print.assert_any_call(expected_error_unknown_ext)
+
+    # DO NOT check for the old warning or the subsequent file not found error,
+    # as the code should 'continue' after the unknown extension error.
+
+    # Check overall summary messages if needed (optional)
+    mock_console_print.assert_any_call("[bold]Overall Success Status:[/bold] False")
+
+    # Ensure the 'change' function was NOT called
+    mock_change_fixture.assert_not_called()
