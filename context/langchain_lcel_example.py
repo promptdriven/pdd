@@ -1,6 +1,7 @@
 import os
 from langchain_core.prompts import PromptTemplate
 from langchain_community.cache import SQLiteCache
+from langchain_community.llms.mlx_pipeline import MLXPipeline
 from langchain.globals import set_llm_cache
 from langchain_core.output_parsers import JsonOutputParser, PydanticOutputParser # Parsers are only avaiable in langchain_core.output_parsers not langchain.output_parsers
 from langchain_core.output_parsers import StrOutputParser
@@ -22,7 +23,11 @@ from langchain.schema import LLMResult
 
 import json
 
+from langchain_community.chat_models.mlx import ChatMLX
+from langchain_core.messages import HumanMessage
+
 from langchain_ollama.llms import OllamaLLM
+from langchain_aws import ChatBedrockConverse
 
 # Define a base output parser (e.g., PydanticOutputParser)
 from pydantic import BaseModel, Field
@@ -281,3 +286,27 @@ chain = prompt | model
 
 output = chain.invoke({"question": "Write a python function that calculates Pi"})
 print(output)
+
+
+
+llm = MLXPipeline.from_model_id(
+    "mlx-community/quantized-gemma-2b-it",
+    pipeline_kwargs={"max_tokens": 10, "temp": 0.1},
+)
+
+
+chat_model = ChatMLX(llm=llm)
+messages = [HumanMessage(content="What happens when an unstoppable force meets an immovable object?")]
+response = chat_model.invoke(messages)
+print(response.content)
+
+
+
+llm = ChatBedrockConverse(
+    model_id="anthropic.claude-3-5-sonnet-20240620-v1:0",
+    # Additional parameters like temperature, max_tokens can be set here
+)
+
+messages = [HumanMessage(content="What happens when an unstoppable force meets an immovable sonnet?")]
+response = llm.invoke(messages)
+print(response.content)
