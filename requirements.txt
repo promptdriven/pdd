@@ -35,3 +35,4 @@ pytest-asyncio
 twine
 firecrawl-py
 pytest-mock
+commitizen
