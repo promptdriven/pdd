@@ -1,12 +1,16 @@
 # TODO
-- [ ] Python 3.13 support
 - [ ] AWS support
 - [ ] ask for and store API keys
 - [ ] display model list
 - [ ] reasoning support, allow strength to go above 1 to allocate more thinking tokens
+- [ ] handle thinking model output
+- [ ] MLX support for faster local
+
 
 ## On Deck
 - [ ] during fix rather than just have the fix loop check to see if the example crashed, have it use a llm to check if the results are largely correct still
+- [ ] Python 3.13 support
+
 
 ## Features
 - [ ] Have test and example use the cloud option for giving better context
@@ -40,7 +44,6 @@
 
 ## Improvements
 - [ ] update prompt for makefile
-- [ ] MLX support for faster local
 - [ ] fix make file production and prepopulate
 - [ ] have fix remember what was the closest code passing and start from that to hill climb
 - [ ] AWS Nova support
@@ -49,6 +52,4 @@
 
 
 ## Documentation
-
-- [ ] Update README with usage
 - [ ] Model support
