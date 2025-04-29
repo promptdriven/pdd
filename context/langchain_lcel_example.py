@@ -20,12 +20,14 @@ from langchain_together import Together
 from langchain.callbacks.base import BaseCallbackHandler
 from langchain.schema import LLMResult
 
+import json
 
+from langchain_ollama.llms import OllamaLLM
 
 # Define a base output parser (e.g., PydanticOutputParser)
 from pydantic import BaseModel, Field
 
-import json
+
 
 class CompletionStatusHandler(BaseCallbackHandler):
     def __init__(self):
@@ -46,7 +48,7 @@ class CompletionStatusHandler(BaseCallbackHandler):
                 self.input_tokens = usage_metadata.get('input_tokens')
                 self.output_tokens = usage_metadata.get('output_tokens')
         # print("response:",response)
-        print(f"Extracted information:")
+        print("Extracted information:")
         print(f"Finish reason: {self.finish_reason}")
         print(f"Input tokens: {self.input_tokens}")
         print(f"Output tokens: {self.output_tokens}")
@@ -152,8 +154,8 @@ print("deepseek pydantic",result)
 
 # Set up the Azure ChatOpenAI LLM instance
 llm_no_struct = AzureChatOpenAI(
-    model="gpt-4o",
-    temperature=0,
+    model="o4-mini",
+    temperature=1,
     callbacks=[handler]
 )
 llm = llm_no_struct.with_structured_output(Joke) # with structured output forces the output to be a specific JSON format
@@ -168,14 +170,15 @@ print("Azure Result:", result)
 parser = JsonOutputParser(pydantic_object=Joke)
 
 llm = Fireworks(
-    model="accounts/fireworks/models/mixtral-8x7b-instruct",
+    model="accounts/fireworks/models/llama4-maverick-instruct-basic",
     temperature=0, callbacks=[handler])
 # Chain the components
 chain = prompt | llm | parser
 
 # Invoke the chain with a query
-result = chain.invoke({"query": "Tell me a joke about the president"})
-print("fireworks",result)
+# no money in account
+# result = chain.invoke({"query": "Tell me a joke about the president"})
+# print("fireworks",result)
 
 
 
@@ -208,8 +211,6 @@ result = chain.invoke({"topic": "Tell me a joke about the president"})
 print("config alt:",result)
 
 
-import json
-from langchain_anthropic import ChatAnthropic
 
 llm = ChatAnthropic(
     model="claude-3-7-sonnet-latest",
@@ -221,7 +222,7 @@ response = llm.invoke("What is the cube root of 50.653?")
 print(json.dumps(response.content, indent=2))
 
 
-llm = ChatGroq(temperature=0, model_name="mixtral-8x7b-32768", callbacks=[handler])
+llm = ChatGroq(temperature=0, model_name="qwen-qwq-32b", callbacks=[handler])
 system = "You are a helpful assistant."
 human = "{text}"
 prompt = ChatPromptTemplate.from_messages([("system", system), ("human", human)])
@@ -268,8 +269,7 @@ print(f"Response: {response}")
 print(f"Input tokens: {handler.input_tokens}")
 print(f"Output tokens: {handler.output_tokens}")
 
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_ollama.llms import OllamaLLM
+
 
 template = """Question: {question}"""
 
