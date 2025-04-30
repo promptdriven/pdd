@@ -36,6 +36,8 @@ Be sure to use the correct imports as shown in the above example.
     - Fireworks (Fireworks): For Fireworks-hosted models
     - Together (Together): For Together-hosted models
     - Groq (ChatGroq): For Groq-hosted models
+    - MLX (ChatMLX): For MLX-hosted models
+    - AWS (ChatBedrockConverse): For AWS-hosted models
     Each provider may have specific initialization parameters that should be set accordingly.
 
 % Here are the rules to follow when selecting the appropriate model:
