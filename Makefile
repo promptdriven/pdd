@@ -25,7 +25,10 @@ EXAMPLE_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(CONTEXT_DIR)/%_example.py,$(PY_O
 # Test files
 TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 
-.PHONY: all clean test requirements production coverage staging regression install build analysis fix crash update-extension generate
+# All Example files in context directory
+EXAMPLE_FILES := $(wildcard $(CONTEXT_DIR)/*_example.py)
+
+.PHONY: all clean test requirements production coverage staging regression install build analysis fix crash update-extension generate run-examples
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -87,6 +90,19 @@ else
 	@echo "Generating all Python files, examples, and tests"
 	@$(MAKE) $(PY_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 endif
+
+# Run example files
+run-examples: $(EXAMPLE_FILES)
+	@echo "Running all example files"
+	@for example_file in $(EXAMPLE_FILES); do \\
+		echo "Running $$example_file"; \\
+		conda run -n pdd --no-capture-output PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python $$example_file; \\
+		if [ $$? -ne 0 ]; then \\
+			echo "Error running $$example_file"; \\
+			exit 1; \\
+		fi; \\
+	done
+	@echo "All examples ran successfully"
 
 # Run tests
 test:
