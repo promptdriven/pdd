@@ -16,6 +16,9 @@ from langchain_core.prompts import PromptTemplate
 import warnings
 import time as time_module # Alias to avoid conflict with 'time' parameter
 
+# <<< SET LITELLM DEBUG LOGGING >>>
+os.environ['LITELLM_LOG'] = 'DEBUG'
+
 # --- Constants and Configuration ---
 
 # Determine project root: 1. PDD_PATH env var, 2. Search upwards from script, 3. CWD
@@ -83,23 +86,28 @@ GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")
 GCS_ENDPOINT_URL = "https://storage.googleapis.com" # GCS S3 compatibility endpoint
 GCS_REGION_NAME = os.getenv("GCS_REGION_NAME", "auto") # Often 'auto' works for GCS
 
-if GCS_BUCKET_NAME:
-    try:
-        # LiteLLM uses boto3 conventions for credentials (env vars, config files, instance metadata)
-        # Ensure GOOGLE_APPLICATION_CREDENTIALS is set or gcloud auth is configured
-        litellm.cache = litellm.Cache(
-            type="s3",
-            s3_bucket_name=GCS_BUCKET_NAME,
-            s3_region_name=GCS_REGION_NAME,
-            s3_endpoint_url=GCS_ENDPOINT_URL,
-        )
-        print(f"[INFO] LiteLLM cache configured for GCS bucket: {GCS_BUCKET_NAME}")
-    except Exception as e:
-        warnings.warn(f"Failed to configure LiteLLM S3/GCS cache: {e}")
-else:
-    warnings.warn("GCS_BUCKET_NAME environment variable not set. LiteLLM caching is disabled.")
-    # Optionally configure a different cache like in-memory or disk
-    # litellm.cache = litellm.Cache(type="local") # Example: In-memory cache
+# <<< COMMENTING OUT GCS CACHE CONFIGURATION >>>
+# if GCS_BUCKET_NAME:
+#     try:
+#         # LiteLLM uses boto3 conventions for credentials (env vars, config files, instance metadata)
+#         # Ensure GOOGLE_APPLICATION_CREDENTIALS is set or gcloud auth is configured
+#         litellm.cache = litellm.Cache(
+#             type="s3",
+#             s3_bucket_name=GCS_BUCKET_NAME,
+#             s3_region_name=GCS_REGION_NAME,
+#             s3_endpoint_url=GCS_ENDPOINT_URL,
+#         )
+#         print(f"[INFO] LiteLLM cache configured for GCS bucket: {GCS_BUCKET_NAME}")
+#     except Exception as e:
+#         warnings.warn(f"Failed to configure LiteLLM S3/GCS cache: {e}")
+# else:
+#     warnings.warn("GCS_BUCKET_NAME environment variable not set. LiteLLM caching is disabled.")
+#     # Optionally configure a different cache like in-memory or disk
+#     # litellm.cache = litellm.Cache(type="local") # Example: In-memory cache
+
+# <<< ADDING LOCAL DISK CACHE CONFIGURATION >>>
+print("[INFO] Configuring LiteLLM local disk cache.")
+litellm.cache = litellm.Cache(type="local") # Simple local disk cache
 
 # --- LiteLLM Callback for Success Logging ---
 
@@ -551,10 +559,11 @@ def llm_invoke(
             # --- 6. LLM Invocation ---
             try:
                 start_time = time_module.time()
+                # <<< EXPLICITLY ENABLE CACHING >>>
+                litellm_kwargs["caching"] = True 
                 if use_batch_mode:
                     if verbose: rprint(f"[INFO] Calling litellm.batch_completion for {model_name_litellm}...")
                     response = litellm.batch_completion(**litellm_kwargs)
-                    # Note: Batch response is a list of completion responses
                 else:
                     if verbose: rprint(f"[INFO] Calling litellm.completion for {model_name_litellm}...")
                     response = litellm.completion(**litellm_kwargs)
@@ -793,8 +802,7 @@ if __name__ == "__main__":
             prompt="Explain the theory of relativity simply.",
             input_json={},
             strength=0.6, # Try to get a model that might support thinking
-            temperature=0.3,
-            time=0.8, # Request significant thinking time/budget
+            temperature=0.0, # <<< SET TO 0 FOR DETERMINISM >>>
             verbose=True
         )
         # rprint("Example 5 Response:", response_thinking)
