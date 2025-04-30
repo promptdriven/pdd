@@ -1,4 +1,4 @@
-from get_language import get_language
+from pdd.get_language import get_language
 
 
 def main() -> None:
