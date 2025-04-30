@@ -41,6 +41,8 @@
     - Include clear print statements indicating which models are being checked/updated for costs and structured output support, and any warnings.
     - Ensure proper error handling for file operations and LiteLLM calls.
 
+% Here is an example (but not actual values) of the llm_model.csv: <llm_model_example><shell>head -6 data/llm_model.csv</shell></llm_model_example>
+
 % Relevant LiteLLM Documentation:
     - Model Cost Function: <litellm_model_cost_example><web>https://docs.litellm.ai/docs/completion/token_usage#8-model_cost</web></litellm_model_cost_example>
     - Check Schema Support: <litellm_supports_schema_example><web>https://docs.litellm.ai/docs/completion/json_mode#2-check-if-model-supports-json_schema</web></litellm_supports_schema_example>
