@@ -1,84 +1,143 @@
-% You are an expert Python engineer. Your goal is to write a python function, "llm_invoke", that will run a prompt with a given input. The entire code needed for this will be in a single file called llm_invoke.py. You will use the Langchain cache.
+% You are an expert Python engineer. Your goal is to write a python function, "llm_invoke", that will run a prompt with a given input using the LiteLLM library. The function will also handle fetching and saving missing API keys interactively. The entire code needed for this will be in a single file called llm_invoke.py.
 
 <include>context/python_preamble.prompt</include>
 
+% Dependencies:
+    - This function requires the `python-dotenv` library for managing environment variables from a `.env` file.
+
+% Startup Behavior:
+    - Upon initialization or first call, the function should attempt to load environment variables from a `.env` file located at the project root. The project root is determined by the `$PDD_PATH` environment variable if set, otherwise it defaults to the current working directory.
+
 % Here are the inputs and outputs of the function:
     Input:
-        'prompt' - String with the prompt to be used for the LLM model.
-        'input_json' - JSON object with the input to be used for the LLM model.
+        'prompt' - String with the prompt template to be used for the LLM model.
+        'input_json' - JSON object with the input variables OR **a list of JSON objects** if `use_batch_mode` is True.
         'strength' - Floating point number with 0 being the cheapest model, 0.5 being the base model and 1 being the model with the highest ELO score.
         'temperature' - Floating point number indicating the temperature of the LLM.
         'verbose' - Boolean indicating whether to print extra information.
         'output_pydantic' - Optional. This specifies a pydantic_object output format from the LLM model. If not given, the output will be a string.
         'time' - Optional. Floating point number between 0 and 1 representing the relative amount of thinking tokens to allocate (0=none, 1=max). Default is 0.25.
-        'use_kv_caching' - Optional. Boolean indicating whether to enable GPU KV caching if supported by the model/provider (default: False).
-        'use_batch_mode' - Optional. Boolean indicating whether to use batch processing if supported by the model/provider (default: False).
+        'use_batch_mode' - Optional. Boolean indicating whether to use batch processing if supported by the model/provider via LiteLLM (default: False).
     Output (dictionary):
-        'result' - Output from the LLM model.
-        'cost' - Cost of the invoke run.
-        'model_name' - Name of the selected model.
-        'thinking_output' - Optional. The reasoning or thinking process output from the model, if available.
+        'result' - Output from the LLM model (string or Pydantic object) OR **a list of outputs** if `use_batch_mode` was True.
+        'cost' - Cost of the invoke run, potentially obtained via LiteLLM's cost tracking. If batch mode, this should be the total cost.
+        'model_name' - Name of the selected model used by LiteLLM.
+        'thinking_output' - Optional. The reasoning or thinking process output from the model, if available in the LiteLLM response.
         
+% Function Logic Flow:
+    1. **Load Environment:** Load `.env` file using `dotenv.load_dotenv()`.
+    2. **Input Handling:** Determine if using provided `messages` or generating from `prompt` + `input_json`.
+    3. **Model Selection:** Based on `strength`, filter models from CSV (checking `api_key` env var *existence only initially*), calculate target cost/ELO, sort candidates, and select the top candidate.
+    4. **API Key Check & Acquisition (CRITICAL):**
+        a. Get the required API key environment variable *name* (e.g., "OPENAI_API_KEY") from the `api_key` column in the CSV for the selected model.
+        b. Check if `os.getenv(key_name)` returns a value (i.e., if the key is actually set in the environment).
+        c. **If the key is MISSING:**
+            i. Prompt the user interactively using `input(f"Please enter the API key for {key_name}: ")`.
+            ii. Basic validation: Ensure the user provided some input (not empty string).
+            iii. Set the environment variable for the current process: `os.environ[key_name] = user_provided_key`.
+            iv. **Update `.env` file:** 
+                - Read the contents of the `.env` file (in the project root).
+                - Create a new list of lines.
+                - Iterate through the original lines: If a line starts with `{key_name}=` (or `{key_name} =`), prepend it with `# ` (comment it out) before adding to the new list. Otherwise, add the line as is.
+                - Append the new key entry to the new list: `f'{key_name}="{user_provided_key}"\n'`.
+                - Write the entire new list of lines back to the `.env` file, overwriting its contents.
+            v. **Security Warning:** Print a message warning the user that the key has been saved to the `.env` file and to ensure this file is kept secure and not committed to version control.
+            vi. **Mark key as newly acquired:** Set a flag indicating that the key for this `key_name` was just obtained from the user in this session.
+        d. **If the key EXISTS:** Proceed silently. Ensure the "newly acquired" flag for this key is false.
+    5. **LLM Invocation:** Call `litellm.completion` or `litellm.batch_completion` with the selected model, formatted messages, and other parameters. LiteLLM will use the environment variables.
+    6. **Retry Logic:** 
+        a. **On Invocation Failure:** If the call in Step 5 fails:
+            i. **Check for Authentication Error:** If the exception is an `openai.AuthenticationError` (LiteLLM maps errors to OpenAI types) AND the "newly acquired" flag for the current `key_name` is true:
+                - Print a message indicating the provided key for `{key_name}` was likely incorrect.
+                - **Go back to Step 4.c.i** to re-prompt the user for the *same* `{key_name}`.
+                - After obtaining and saving the new key, **retry Step 5** with the *same* model.
+            ii. **Other Errors or Existing Key Failure:** If the error is not an `AuthenticationError`, or if the key was already present (not newly acquired), proceed to try the next model:
+                - Get the next candidate model from the sorted list generated in Step 3.
+                - If no more candidate models exist, raise the last encountered exception.
+                - If a next model exists, **go back to Step 4.a** to check/acquire the API key for this *new* model.
+    7. **Response Handling:** Process the LiteLLM response, extract results, cost, tokens, etc.
+    8. **Return Output:** Return the standard output dictionary.
+
 % The function should properly validate inputs and handle errors:
-    - Validate that prompt is a non-null string and input_json is a non-null dictionary.
-    - Handle prompt template errors separately from model invocation errors.
+    - Validate inputs based on the provided parameters (`messages` OR `prompt`+`input_json`).
+    - If `messages` is provided, use it directly. Ignore `prompt` and `input_json`.
+    - If `messages` is NOT provided, validate that `prompt` is a non-null string and `input_json` is a non-null dictionary/list. Format the messages using Langchain's `PromptTemplate` based on `prompt` and `input_json`.
+    - Handle prompt template formatting errors separately from model invocation errors.
     - For prompt template errors, raise a ValueError with a clear message.
-    - For model invocation errors, try each candidate model and raise Runtime errors only if all fail.
+    - For model invocation errors, use LiteLLM's retry logic. LiteLLM maps provider exceptions to OpenAI-compatible errors. Raise Runtime errors only if all retries fail across candidate models.
     - Provide detailed error messages in verbose mode.
-    
-% Here is an example of a Langchain LCEL program: <langchain_lcel_example><include>context/langchain_lcel_example.py</include></langchain_lcel_example>
-Be sure to use the correct imports as shown in the above example.
 
 % Here is an example (but not actual values) of the llm_model.csv: <llm_model_example><shell>head -6 data/llm_model.csv</shell></llm_model_example>
+% Here is how to use LiteLLM thinking: <litellm_thinking_example><web>https://docs.litellm.ai/docs/reasoning_content</web></litellm_thinking_example>
+% Here is how to use LiteLLM JSON mode: <litellm_json_mode_example><web>https://docs.litellm.ai/docs/completion/json_mode</web></litellm_json_mode_example>
+% Here is how to use LiteLLM batch mode: <litellm_batch_mode_example><web>https://docs.litellm.ai/docs/completion/batching</web></litellm_batch_mode_example>
+% Here is how to use LiteLLM reliable completions: <litellm_reliable_completions_example><web>https://docs.litellm.ai/docs/completion/reliable_completions</web></litellm_reliable_completions_example>
+% Here is how to use LiteLLM exception mapping: <litellm_exception_mapping_example><web>https://docs.litellm.ai/docs/exception_mapping</web></litellm_exception_mapping_example>
+% Here is how to use LiteLLM client side caches: <litellm_all_caches_example><web>https://docs.litellm.ai/docs/caching/all_caches</web></litellm_all_caches_example>
+% Here is how to use LiteLLM token usage and cost: <litellm_token_usage_example><web>https://docs.litellm.ai/docs/completion/token_usage</web></litellm_token_usage_example>
+% Here is how to use LiteLLM callbacks: <litellm_callbacks_example><web>https://docs.litellm.ai/docs/observability/callbacks</web></litellm_callbacks_example>
+% Here is how to use LiteLLM provider specific parameters: <litellm_provider_params_example><web>https://docs.litellm.ai/docs/completion/provider_specific_params</web></litellm_provider_params_example>
 
-% The code must handle the following LLM providers using their Langchain integrations:
-    - OpenAI (ChatOpenAI): Standard and Azure-hosted models
-    - Anthropic (ChatAnthropic): Including Claude models
-    - Google (ChatGoogleGenerativeAI): For Google's standard API
-    - Google Vertex AI (ChatVertexAI): For models hosted on Google Vertex AI
-    - Ollama (OllamaLLM): For local open-source models
-    - Fireworks (Fireworks): For Fireworks-hosted models
-    - Together (Together): For Together-hosted models
-    - Groq (ChatGroq): For Groq-hosted models
-    - MLX (ChatMLX): For MLX-hosted models
-    - AWS (ChatBedrockConverse): For AWS-hosted models
-    Each provider may have specific initialization parameters that should be set accordingly.
+% The code must use LiteLLM's `litellm.completion()` function to handle invocation across various LLM providers. LiteLLM standardizes the API calls. Configure LiteLLM to enable its built-in response caching, specifically targeting an S3-compatible backend configured for Google Cloud Storage (GCS).
 
-% Here are the rules to follow when selecting the appropriate model:
-    - If environmental variable $PDD_MODEL_DEFAULT is set, use that as the base model, otherwise it is "gpt-4.1-nano". If $PDD_PATH is set load $PDD_PATH/data/llm_model.csv, otherwise, assume $PDD_PATH is current working directory.
-    - When strength < 0.5 use strength to interpolate based on the average cost of input and output tokens from the base model down according to cost of the cheapest model and select the model with the closest average cost. If calling the model fails during invoke, use the next cheapest model, and repeat until a model is found that works.
-    - When strength > 0.5, use strength to interpolate based on ELO up from the base model to the highest ELO model and select the model with the closest ELO score. If calling the model fails during invoke, use the next highest ELO model, and repeat until a model is found that works.
-    - Use base model when strength is 0.5. If calling the model fails during invoke, use the next highest ELO model, and repeat until a model is found that works.
-    - Only consider models that have valid API keys available (check environment variables based on the api_key field from the CSV).
-    - Filter models first based on availability, then sort the candidates by how close they match the target cost (for strength < 0.5) or target ELO (for strength > 0.5).
-    - For test environments (where api_key is "EXISTING_KEY"), use a special logic that respects the mock model setup.
+% Here are the rules to follow when selecting the appropriate model via LiteLLM:
+    - If environmental variable $PDD_MODEL_DEFAULT is set, use that as the base model name (e.g., "gpt-4o-mini"), otherwise it is "gpt-4o-mini". If $PDD_PATH is set load $PDD_PATH/data/llm_model.csv, otherwise, assume $PDD_PATH is current working directory.
+    - Read the `llm_model.csv` file to get all necessary model details (LiteLLM model identifier, input/output costs, ELO, provider, **API key environment variable name**, max_completion_tokens, max_reasoning_tokens, structured_output flag, etc.). The `model_name` column must contain the identifier LiteLLM uses (e.g., "openai/gpt-3.5-turbo", "ollama/llama2"). **It is assumed that a separate utility keeps the cost and structured_output data in this CSV up-to-date.**
+    - Filter models first based on availability: initially check only if the required API key environment variable *name* exists in the CSV. **The actual presence of the key value in the environment is checked later (Step 4 in Logic Flow).**
+    - When strength < 0.5:
+        - Identify available candidate models based on the filtered CSV data.
+        - Use strength to interpolate based on the average cost (**using input/output costs read from the CSV**) from the base model down to the cheapest available model.
+        - Select the available model with the closest average cost to the target.
+        - If calling the model fails, LiteLLM should handle retries, or the logic should try the next cheapest model.
+    - When strength > 0.5:
+        - Use the **ELO score read from the CSV** to interpolate up from the base model to the highest ELO available model.
+        - Select the available model with the closest ELO score.
+        - If calling the model fails, retry with the next highest ELO model.
+    - Use base model when strength is 0.5. If calling the model fails, retry with the next highest ELO model (using ELO from CSV).
+    - Sort the final candidate models by how close they match the target cost (for strength < 0.5, using CSV costs) or target ELO (for strength > 0.5, using CSV ELO).
+    - For test environments (where api_key is "EXISTING_KEY"), use a special logic that respects the mock model setup, potentially by passing specific parameters to LiteLLM.
+    - Ensure proper error handling for file operations and LiteLLM calls.
 
-% To speed up model failure retries, check to see if the environment variable for the model is set before trying to invoke the model.
+% Pass necessary parameters to `litellm.completion()` (or `litellm.batch_completion()` if `use_batch_mode` is True):
+    - `model`: The selected model name identifier for LiteLLM.
+    - `messages`: The final list of messages. This is either passed directly by the caller OR generated internally from `prompt` and `input_json`. **If batching, this will be a list of message lists.**
+    - `temperature`: The specified temperature.
+    - `api_base`, `api_key`, `api_version`: Pass these if needed for specific setups (like Azure, local models), although LiteLLM often infers from environment variables. Consult `llm_model.csv` for provider-specific needs.
+    - `max_tokens`: Set based on the model's `max_completion_tokens` from the CSV, passed via `litellm.completion` or `litellm.batch_completion`.
+    - **Structured Output**: If `output_pydantic` is provided, use LiteLLM's mechanism for structured output (e.g., passing the Pydantic model to `response_format` or similar, check LiteLLM docs for the exact method).
+    - **Thinking/Reasoning (`time` parameter)**: Map the `time` parameter (0-1) to provider-specific parameters supported by LiteLLM. 
+        - Check if the selected model supports reasoning (e.g., using `litellm.supports_reasoning` or reading a flag from the CSV if added).
+        - **Read the `max_reasoning_tokens` value from the CSV.**
+        - If reasoning is supported and `max_reasoning_tokens` is available (> 0), calculate the requested budget (e.g., `budget = time * max_reasoning_tokens`).
+        - Pass the appropriate provider-specific parameter(s) (e.g., OpenAI's `reasoning`, Anthropic's `thinking` with the calculated budget) via LiteLLM. Default `time` is 0.25.
+    - **Batch Mode**: If `use_batch_mode` is True, use `litellm.batch_completion` and adapt input/output handling for lists.
 
-% CRITICAL: For models that support 'structured_output', use the '.with_structured_output()' when a desired Pydantic output is requested. Use PydanticOutputParser instead of JsonOutputParser for better Pydantic handling.
+% Provider-Level Prompt Caching Note:
+    - Leveraging provider-level prompt caching (e.g., Anthropic's `cache_control`, OpenAI's implicit caching) requires careful management of the `messages` list.
+    - For implicit caching providers, the caller must ensure consistency in the `messages` prefix across related calls, whether generated internally or provided directly.
+    - For explicit caching providers (requiring syntax like `cache_control`), the caller **must provide the fully constructed `messages` list** as input to this function, already containing the necessary provider-specific syntax. This function will not inject explicit caching syntax when generating messages from `prompt` and `input_json`.
 
 % CRITICAL: When handling model token limits:
-    - For Google providers (e.g. 'google' and 'googlevertexai'), use max_output_tokens instead of max_tokens
-    - When max_completion_tokens is available, set it in model_kwargs
-    - Otherwise, use max_tokens if available
-    - For OpenAI models with a base_url, set it during model initialization
-    - For OpenAI models starting with 'o', use the 'time' parameter to dynamically set reasoning effort. Map the 0-1 'time' range to the 'effort' setting (e.g., 0 could map to 'low', 0.25 to 'medium', 0.75 to 'high', 1 to 'extreme' - adjust mapping as needed).
-    - For Anthropic 'claude-3-7-sonnet' models, use the 'time' parameter to dynamically allocate the thinking token budget. Calculate the budget based on the maximum supported (e.g., if max is 4000, time=0.5 would allocate 2000 tokens). Default (time=0.25) corresponds to a proportional allocation.
-    - The default 'time' value of 0.25 should be used if the parameter is not provided.
+    - Use the `max_completion_tokens` value from the `llm_model.csv` and pass it as `max_tokens` to `litellm.completion()` or `litellm.batch_completion()`. LiteLLM should handle provider differences.
 
 % If verbose is set to True, print the following information:
-    - The selected model.
-    - The per input and output token cost (in dollars per million tokens) of the selected model and the number of input and output tokens.
-    - The cost of the invoke run.
-    - The strength used.
-    - The temperature used.
-    - The time used.
+    - **The ordered list of candidate models selected based on strength/ELO and availability (before attempting invocation).**
+    - The selected model name passed to LiteLLM (at the time of the attempt).
+    - The per input and output token cost (in dollars per million tokens) of the selected model (as read from the CSV used for selection) and the number of input and output tokens (obtainable from LiteLLM's response).
+    - The total cost of the invoke run (calculated/reported by LiteLLM in the response).
+    - The strength, temperature, and time used.
     - The input JSON (use try-except to handle rich printing failures, falling back to standard print).
     - The optional Pydantic output format.
     - The result using rprint.
 
-% CRITICAL: In the `CompletionStatusHandler`'s `on_llm_end` method, ensure robust token usage retrieval by implementing this logic:
-1. First, check if `generation.message` exists and has `usage_metadata`
-2. If not, fall back to checking `generation.generation_info` for usage metadata
-3. Default both `input_tokens` and `output_tokens` to 0 if no usage data is found in either location
-4. The handler should also capture the finish_reason from generation_info when available
+% LiteLLM Callback for Status/Usage:
+    - To capture token usage and finish reason, implement a custom LiteLLM callback function.
+    - Assign this function to `litellm.success_callback` (it should be a list, e.g., `litellm.success_callback = [my_custom_callback]`).
+    - The callback function will receive arguments including `kwargs` (original completion arguments) and `completion_response` (the LiteLLM response object).
+    - Inside the callback:
+        1. Retrieve token usage (`input_tokens`, `output_tokens`) from `completion_response.usage` object if available.
+        2. Default tokens to 0 if `usage` is not available.
+        3. Capture the `finish_reason` from `completion_response.choices[0].finish_reason` if available.
+        4. Store or log this information as needed by the application.
+
+% Ensure LiteLLM response caching is configured appropriately for S3/GCS (e.g., setting `litellm.cache = litellm.Cache(type='s3', s3_bucket_name=..., s3_region_name=..., s3_endpoint_url=...)` with GCS details).

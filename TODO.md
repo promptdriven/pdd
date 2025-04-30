@@ -5,6 +5,8 @@
 - [ ] reasoning support, allow strength to go above 1 to allocate more thinking tokens
 - [ ] handle thinking model output
 - [ ] MLX support for faster local
+- [ ] AWS Nova support
+- [ ] autogenerate the model.csv file and print out the strength of each model
 
 
 ## On Deck
@@ -34,7 +36,6 @@
 - [ ] Cache webscraping results
 - [ ] Retrieve what is most needed from a webscrape and condense it down
 - [ ] test out anthropic think tool
-- [ ] autogenerate the model.csv file and print out the strength of each model
 - [ ] agentic prompt to code
 - [ ] agentic additional context inclusion via context 7 MCP
 - [ ] re-ranker for the example using a LLM
@@ -46,7 +47,6 @@
 - [ ] update prompt for makefile
 - [ ] fix make file production and prepopulate
 - [ ] have fix remember what was the closest code passing and start from that to hill climb
-- [ ] AWS Nova support
 - [ ] fix quiet vs. verbose ambiguity
 - [ ] have a link from includes to the files for the vscode prompt extension
 - [ ] have update touch the source file py so that the Make file doesn't go into infinite loop

@@ -1,4 +1,4 @@
-provider,model,input,output,coding_arena_elo,base_url,api_key,counter,encoder,max_tokens,max_completion_tokens,structured_output
+provider,model,input,output,coding_arena_elo,base_url,api_key,counter,encoder,max_tokens,max_completion_tokens,max_reasoning_tokens,structured_output
 OpenAI,"gpt-4.1-nano",0.1,0.40,1246,,OPENAI_API_KEY,tiktoken,o200k_base,,32768,True
 OpenAI,"grok-3-beta",3,15,1255,"https://api.x.ai/v1",XAI_API_KEY,tiktoken,o200k_base,131072,,False
 Anthropic,"claude-3-5-haiku-20241022",1,5,1259,,ANTHROPIC_API_KEY,anthropic,claude-3-sonnet-20240229,8192,,False
