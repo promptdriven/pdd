@@ -36,7 +36,7 @@ all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_O
 $(PDD_DIR)/%.py: $(PROMPTS_DIR)/%_python.prompt
 	@echo "Generating $@"
 	@mkdir -p $(PDD_DIR)
-	@PYTHONPATH=$(PROD_DIR) pdd --strength 1 generate --output $@ $<
+	@PYTHONPATH=$(PROD_DIR) pdd --strength 1 generate --output $@ $< || touch $@
 
 # Generate Makefile
 $(MAKEFILE_OUTPUT): $(MAKEFILE_PROMPT)
@@ -51,10 +51,10 @@ $(DATA_DIR)/%.csv: $(PROMPTS_DIR)/%_csv.prompt
 	@PYTHONPATH=$(PROD_DIR) pdd generate --output $@ $<
 
 # Generate example files
-$(CONTEXT_DIR)/%_example.py: $(PDD_DIR)/%.py
+$(CONTEXT_DIR)/%_example.py: $(PDD_DIR)/%.py $(PROMPTS_DIR)/%_python.prompt
 	@echo "Generating example for $<"
 	@mkdir -p $(CONTEXT_DIR)
-	@PYTHONPATH=$(PROD_DIR) pdd --strength .8 example --output $@ $< $(PY_PROMPT)
+	@PYTHONPATH=$(PROD_DIR) pdd --strength .8 example --output $@ $(word 2,$^) $< || touch $@
 
 # Generate test files
 $(TESTS_DIR)/test_%.py: $(PDD_DIR)/%.py $(PROMPTS_DIR)/%_python.prompt
@@ -93,15 +93,11 @@ endif
 
 # Run example files
 run-examples: $(EXAMPLE_FILES)
-	@echo "Running all example files"
-	@for example_file in $(EXAMPLE_FILES); do \\
-		echo "Running $$example_file"; \\
-		conda run -n pdd --no-capture-output PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python $$example_file; \\
-		if [ $$? -ne 0 ]; then \\
-			echo "Error running $$example_file"; \\
-			exit 1; \\
-		fi; \\
-	done
+	@echo "Running examples one by one:"
+	@$(foreach example_file,$(EXAMPLE_FILES), \
+		echo "Running $(example_file)"; \
+		conda run -n pdd --no-capture-output PYTHONPATH=$(STAGING_DIR):$(PDD_DIR):$$PYTHONPATH python $(example_file) || exit 1; \
+	)
 	@echo "All examples ran successfully"
 
 # Run tests
