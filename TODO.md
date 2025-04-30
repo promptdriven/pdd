@@ -49,6 +49,7 @@
 - [ ] AWS Nova support
 - [ ] fix quiet vs. verbose ambiguity
 - [ ] have a link from includes to the files for the vscode prompt extension
+- [ ] have update touch the source file py so that the Make file doesn't go into infinite loop
 
 
 ## Documentation
