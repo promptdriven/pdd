@@ -98,7 +98,7 @@ test:
 coverage:
 	@echo "Running tests with coverage"
 	@cd $(STAGING_DIR)
-	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH pytest --cov=$(PDD_DIR) --cov-report=term-missing --cov-report=html $(TESTS_DIR)
+	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python -m pytest --cov=$(PDD_DIR) --cov-report=term-missing --cov-report=html $(TESTS_DIR)
 
 # Fix crashes in code
 crash:
