@@ -10,10 +10,12 @@
         'temperature' - Floating point number indicating the temperature of the LLM.
         'verbose' - Boolean indicating whether to print extra information.
         'output_pydantic' - Optional. This specifies a pydantic_object output format from the LLM model. If not given, the output will be a string.
+        'time' - Optional. Floating point number between 0 and 1 representing the relative amount of thinking tokens to allocate (0=none, 1=max). Default is 0.25.
     Output (dictionary):
         'result' - Output from the LLM model.
         'cost' - Cost of the invoke run.
         'model_name' - Name of the selected model.
+        'thinking_output' - Optional. The reasoning or thinking process output from the model, if available.
         
 % The function should properly validate inputs and handle errors:
     - Validate that prompt is a non-null string and input_json is a non-null dictionary.
@@ -58,8 +60,9 @@ Be sure to use the correct imports as shown in the above example.
     - When max_completion_tokens is available, set it in model_kwargs
     - Otherwise, use max_tokens if available
     - For OpenAI models with a base_url, set it during model initialization
-    - For OpenAI models starting with 'o', set reasoning={"effort": "high", "summary": "auto"}
-    - For 'claude-3-7-sonnet' models, set thinking token budget using thinking={"type": "enabled", "budget_tokens": 4000}
+    - For OpenAI models starting with 'o', use the 'time' parameter to dynamically set reasoning effort. Map the 0-1 'time' range to the 'effort' setting (e.g., 0 could map to 'low', 0.25 to 'medium', 0.75 to 'high', 1 to 'extreme' - adjust mapping as needed).
+    - For Anthropic 'claude-3-7-sonnet' models, use the 'time' parameter to dynamically allocate the thinking token budget. Calculate the budget based on the maximum supported (e.g., if max is 4000, time=0.5 would allocate 2000 tokens). Default (time=0.25) corresponds to a proportional allocation.
+    - The default 'time' value of 0.25 should be used if the parameter is not provided.
 
 % If verbose is set to True, print the following information:
     - The selected model.
@@ -67,6 +70,7 @@ Be sure to use the correct imports as shown in the above example.
     - The cost of the invoke run.
     - The strength used.
     - The temperature used.
+    - The time used.
     - The input JSON (use try-except to handle rich printing failures, falling back to standard print).
     - The optional Pydantic output format.
     - The result using rprint.
