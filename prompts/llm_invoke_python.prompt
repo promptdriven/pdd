@@ -11,6 +11,8 @@
         'verbose' - Boolean indicating whether to print extra information.
         'output_pydantic' - Optional. This specifies a pydantic_object output format from the LLM model. If not given, the output will be a string.
         'time' - Optional. Floating point number between 0 and 1 representing the relative amount of thinking tokens to allocate (0=none, 1=max). Default is 0.25.
+        'use_kv_caching' - Optional. Boolean indicating whether to enable GPU KV caching if supported by the model/provider (default: False).
+        'use_batch_mode' - Optional. Boolean indicating whether to use batch processing if supported by the model/provider (default: False).
     Output (dictionary):
         'result' - Output from the LLM model.
         'cost' - Cost of the invoke run.
