@@ -85,29 +85,33 @@ DEFAULT_BASE_MODEL = os.getenv("PDD_MODEL_DEFAULT", "gpt-4.1-nano") # Using Lite
 GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")
 GCS_ENDPOINT_URL = "https://storage.googleapis.com" # GCS S3 compatibility endpoint
 GCS_REGION_NAME = os.getenv("GCS_REGION_NAME", "auto") # Often 'auto' works for GCS
+GCS_HMAC_ACCESS_KEY_ID = os.getenv("GCS_HMAC_ACCESS_KEY_ID") # Load HMAC Key ID
+GCS_HMAC_SECRET_ACCESS_KEY = os.getenv("GCS_HMAC_SECRET_ACCESS_KEY") # Load HMAC Secret
 
-# <<< COMMENTING OUT GCS CACHE CONFIGURATION >>>
-# if GCS_BUCKET_NAME:
-#     try:
-#         # LiteLLM uses boto3 conventions for credentials (env vars, config files, instance metadata)
-#         # Ensure GOOGLE_APPLICATION_CREDENTIALS is set or gcloud auth is configured
-#         litellm.cache = litellm.Cache(
-#             type="s3",
-#             s3_bucket_name=GCS_BUCKET_NAME,
-#             s3_region_name=GCS_REGION_NAME,
-#             s3_endpoint_url=GCS_ENDPOINT_URL,
-#         )
-#         print(f"[INFO] LiteLLM cache configured for GCS bucket: {GCS_BUCKET_NAME}")
-#     except Exception as e:
-#         warnings.warn(f"Failed to configure LiteLLM S3/GCS cache: {e}")
-# else:
-#     warnings.warn("GCS_BUCKET_NAME environment variable not set. LiteLLM caching is disabled.")
-#     # Optionally configure a different cache like in-memory or disk
-#     # litellm.cache = litellm.Cache(type="local") # Example: In-memory cache
+# <<< CONFIGURING GCS CACHE (S3 Compatible) >>>
+if GCS_BUCKET_NAME and GCS_HMAC_ACCESS_KEY_ID and GCS_HMAC_SECRET_ACCESS_KEY:
+    try:
+        # LiteLLM uses boto3 conventions. Setting the standard AWS env vars
+        # AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY will be automatically picked up.
+        # We explicitly set them here from the GCS-specific vars for clarity
+        # and to ensure they override any other AWS credentials if present.
+        os.environ['AWS_ACCESS_KEY_ID'] = GCS_HMAC_ACCESS_KEY_ID
+        os.environ['AWS_SECRET_ACCESS_KEY'] = GCS_HMAC_SECRET_ACCESS_KEY
 
-# <<< ADDING LOCAL DISK CACHE CONFIGURATION >>>
-print("[INFO] Configuring LiteLLM local disk cache.")
-litellm.cache = litellm.Cache(type="local") # Simple local disk cache
+        litellm.cache = litellm.Cache(
+            type="s3",
+            s3_bucket_name=GCS_BUCKET_NAME,
+            s3_region_name=GCS_REGION_NAME,
+            s3_endpoint_url=GCS_ENDPOINT_URL,
+            # Note: LiteLLM/boto3 will use AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY from env
+        )
+        print(f"[INFO] LiteLLM cache configured for GCS bucket (S3 compatible): {GCS_BUCKET_NAME}")
+    except Exception as e:
+        warnings.warn(f"Failed to configure LiteLLM S3/GCS cache: {e}. Caching might be disabled or fallback.")
+        litellm.cache = None # Explicitly disable cache on failure
+else:
+    warnings.warn("Required GCS cache environment variables (GCS_BUCKET_NAME, GCS_HMAC_ACCESS_KEY_ID, GCS_HMAC_SECRET_ACCESS_KEY) not fully set. LiteLLM caching is disabled.")
+    litellm.cache = None # Explicitly disable cache
 
 # --- LiteLLM Callback for Success Logging ---
 
