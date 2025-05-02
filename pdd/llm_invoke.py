@@ -152,7 +152,7 @@ def _litellm_success_callback(
 
 # Register the callback with LiteLLM
 litellm.success_callback = [_litellm_success_callback]
-litellm.set_verbose=True # Enable detailed LiteLLM internal logging
+# litellm.set_verbose=True # DEPRECATED: Enable detailed LiteLLM internal logging (Use LITELLM_LOG env var instead)
 
 # --- Helper Functions ---
 
@@ -614,22 +614,51 @@ def llm_invoke(
                     try:
                         raw_result = resp_item.choices[0].message.content
                         if output_pydantic:
+                            parsed_result = None # Initialize parsed_result
+                            cleaned_result_str = None # Initialize cleaned string
+
                             try:
-                                # If LiteLLM returned the parsed object directly
+                                # Attempt 1: Check if LiteLLM already parsed it
                                 if isinstance(raw_result, output_pydantic):
                                      parsed_result = raw_result
-                                # If LiteLLM returned a JSON string
+                                     if verbose: rprint("[DEBUG] Pydantic object received directly from LiteLLM.")
+
+                                # Attempt 2: Try direct JSON validation (if it's a string)
                                 elif isinstance(raw_result, str):
-                                     parsed_result = output_pydantic.model_validate_json(raw_result)
-                                else:
-                                     # Try converting to dict first if it's dict-like
+                                    try:
+                                        parsed_result = output_pydantic.model_validate_json(raw_result)
+                                        if verbose: rprint("[DEBUG] Parsed JSON string directly.")
+                                    except (json.JSONDecodeError, ValidationError):
+                                        # Attempt 3: Clean markdown fences and retry JSON validation
+                                        cleaned_result_str = raw_result.strip()
+                                        if cleaned_result_str.startswith("```json"):
+                                            cleaned_result_str = cleaned_result_str[7:] # Remove ```json
+                                        elif cleaned_result_str.startswith("```"):
+                                             cleaned_result_str = cleaned_result_str[3:] # Remove ```
+                                        if cleaned_result_str.endswith("```"):
+                                             cleaned_result_str = cleaned_result_str[:-3] # Remove ```
+                                        cleaned_result_str = cleaned_result_str.strip() # Strip again
+
+                                        if verbose: rprint(f"[DEBUG] Attempting parse after cleaning markdown fences. Cleaned string: '{cleaned_result_str}'")
+                                        # Retry validation with the cleaned string
+                                        parsed_result = output_pydantic.model_validate_json(cleaned_result_str)
+
+                                # Attempt 4: Try direct dictionary validation (if it's dict-like)
+                                elif isinstance(raw_result, dict):
                                      parsed_result = output_pydantic.model_validate(raw_result)
+                                     if verbose: rprint("[DEBUG] Validated dictionary-like object.")
+
+                                # If none of the above worked, raise error
+                                if parsed_result is None:
+                                     raise TypeError(f"Raw result type {type(raw_result)} could not be validated against {output_pydantic.__name__}.")
 
                                 results.append(parsed_result)
+
                             except (ValidationError, json.JSONDecodeError, TypeError) as parse_error:
                                 rprint(f"[ERROR] Failed to parse response into Pydantic model {output_pydantic.__name__} for item {i}: {parse_error}")
-                                rprint("[ERROR] Raw content:", raw_result)
-                                # Append raw string or raise error depending on desired strictness
+                                error_content = cleaned_result_str if cleaned_result_str is not None else raw_result
+                                rprint("[ERROR] Raw/Cleaned content:", error_content)
+                                # Append error string or raise depending on desired strictness
                                 results.append(f"ERROR: Failed to parse Pydantic. Raw: {raw_result}")
                                 # Or raise ValueError(f"Failed to parse response into Pydantic model: {parse_error}")
                         else:
