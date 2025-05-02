@@ -16,6 +16,9 @@ from langchain_core.prompts import PromptTemplate
 import warnings
 import time as time_module # Alias to avoid conflict with 'time' parameter
 
+# Opt-in to future pandas behavior regarding downcasting
+pd.set_option('future.no_silent_downcasting', True)
+
 # <<< SET LITELLM DEBUG LOGGING >>>
 os.environ['LITELLM_LOG'] = 'DEBUG'
 
