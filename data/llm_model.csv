@@ -2,7 +2,7 @@ provider,model,input,output,coding_arena_elo,base_url,api_key,counter,encoder,ma
 OpenAI,"gpt-4.1-nano",0.1,0.40,1246,,OPENAI_API_KEY,tiktoken,o200k_base,,32768,True
 OpenAI,"grok-3-beta",3,15,1255,"https://api.x.ai/v1",XAI_API_KEY,tiktoken,o200k_base,131072,,False
 Anthropic,"claude-3-5-haiku-20241022",1,5,1259,,ANTHROPIC_API_KEY,anthropic,claude-3-sonnet-20240229,8192,,False
-OpenAI,"deepseek-coder",0.14,0.28,1279,https://api.deepseek.com/beta,DEEPSEEK_API_KEY,autotokenizer,deepseek-coder-7b-instruct-v1.5,8192,,False
+Deepseek,"deepseek/deepseek-coder",0.14,0.28,1279,https://api.deepseek.com/beta,DEEPSEEK_API_KEY,autotokenizer,deepseek-coder-7b-instruct-v1.5,8192,,False
 Google,"gemini-2.5-flash-preview-04-17",.15,3.5,1291,,GOOGLE_API_KEY,,,65535,,False
 GoogleVertexAI,"gemini-2.5-pro-exp-03-25",1.25,10,1299,,VERTEX_AI_API_KEY,,,65535,,False
 Anthropic,claude-3-7-sonnet-20250219,3,15,1312,,ANTHROPIC_API_KEY,anthropic,claude-3-sonnet-20240229,64000,,False
