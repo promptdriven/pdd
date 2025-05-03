@@ -140,15 +140,47 @@ def _litellm_success_callback(
     input_tokens = getattr(usage, 'prompt_tokens', 0)
     output_tokens = getattr(usage, 'completion_tokens', 0)
     finish_reason = getattr(completion_response.choices[0], 'finish_reason', None)
-    cost = getattr(completion_response, 'cost', 0.0)
+
+    calculated_cost = 0.0
+    try:
+        # Attempt 1: Use the response object directly (works for most single calls)
+        cost_val = litellm.completion_cost(completion_response=completion_response)
+        calculated_cost = cost_val if cost_val is not None else 0.0
+    except Exception as e1:
+        # Attempt 2: If response object failed (e.g., missing provider in model name),
+        # try again using explicit model from kwargs and tokens from usage.
+        # This is often needed for batch completion items.
+        try:
+            model_name = kwargs.get("model") # Get original model name from input kwargs
+            if model_name and usage:
+                prompt_tokens = getattr(usage, 'prompt_tokens', 0)
+                completion_tokens = getattr(usage, 'completion_tokens', 0)
+                cost_val = litellm.completion_cost(
+                    model=model_name,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens
+                )
+                calculated_cost = cost_val if cost_val is not None else 0.0
+            else:
+                # If we can't get model name or usage, fallback to 0
+                calculated_cost = 0.0
+                # Optional: Log the original error e1 if needed
+                # print(f"[Callback WARN] Failed to calculate cost with response object ({e1}) and fallback failed.")
+        except Exception as e2:
+            # Optional: Log secondary error e2 if needed
+            # print(f"[Callback WARN] Failed to calculate cost with fallback method: {e2}")
+            calculated_cost = 0.0 # Default to 0 on any error
 
     _LAST_CALLBACK_DATA["input_tokens"] = input_tokens
     _LAST_CALLBACK_DATA["output_tokens"] = output_tokens
     _LAST_CALLBACK_DATA["finish_reason"] = finish_reason
-    _LAST_CALLBACK_DATA["cost"] = cost
+    _LAST_CALLBACK_DATA["cost"] = calculated_cost # Store the calculated cost
+
+    # Callback doesn't need to return a value now
+    # return calculated_cost
 
     # Example of logging within the callback (can be expanded)
-    # print(f"[Callback] Tokens: In={input_tokens}, Out={output_tokens}. Reason: {finish_reason}. Cost: ${cost:.6f}")
+    # print(f"[Callback] Tokens: In={input_tokens}, Out={output_tokens}. Reason: {finish_reason}. Cost: ${calculated_cost:.6f}")
 
 # Register the callback with LiteLLM
 litellm.success_callback = [_litellm_success_callback]
@@ -567,13 +599,26 @@ def llm_invoke(
             try:
                 start_time = time_module.time()
                 # <<< EXPLICITLY ENABLE CACHING >>>
-                litellm_kwargs["caching"] = True 
+                litellm_kwargs["caching"] = True
+                # callback_results = [] # To store results from callback - Removed
+                # total_cost = 0.0 # Initialize total cost here - Removed
+
                 if use_batch_mode:
                     if verbose: rprint(f"[INFO] Calling litellm.batch_completion for {model_name_litellm}...")
                     response = litellm.batch_completion(**litellm_kwargs)
+                    # # batch_completion returns callback results as a list - Removed
+                    # callback_results = litellm.callbacks # Access results from module attribute - Removed
+                    # # Sum costs returned by the callback for each item - Removed
+                    # total_cost = sum(cost if isinstance(cost, (int, float)) else 0.0 for cost in callback_results) - Removed
+
                 else:
                     if verbose: rprint(f"[INFO] Calling litellm.completion for {model_name_litellm}...")
                     response = litellm.completion(**litellm_kwargs)
+                    # # completion returns callback result directly if callback returns a value - Removed
+                    # callback_results = litellm.callbacks # Access results from module attribute - Removed
+                    # # Get the cost from the single callback result - Removed
+                    # total_cost = callback_results[0] if callback_results and isinstance(callback_results[0], (int, float)) else 0.0 - Removed
+
                 end_time = time_module.time()
 
                 if verbose:
@@ -581,25 +626,12 @@ def llm_invoke(
 
                 # --- 7. Process Response ---
                 results = []
-                total_cost = 0.0
                 thinking_outputs = []
 
                 response_list = response if use_batch_mode else [response]
 
                 for i, resp_item in enumerate(response_list):
-                    # Cost
-                    item_cost = getattr(resp_item, 'cost', 0.0)
-                    if item_cost is None: # Handle potential None cost
-                         item_cost = 0.0
-                         # Try calculating manually if needed and possible
-                         # usage = getattr(resp_item, 'usage', None)
-                         # if usage:
-                         #    prompt_tokens = getattr(usage, 'prompt_tokens', 0)
-                         #    completion_tokens = getattr(usage, 'completion_tokens', 0)
-                         #    try:
-                         #        item_cost = litellm.completion_cost(model=model_name_litellm, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
-                         #    except: pass # Ignore cost calculation errors
-                    total_cost += item_cost
+                    # Cost calculation is handled entirely by the success callback
 
                     # Thinking Output
                     thinking = None
@@ -667,41 +699,34 @@ def llm_invoke(
                          rprint(f"[ERROR] Could not extract result content from response item {i}: {e}")
                          results.append(f"ERROR: Could not extract result content. Response: {resp_item}")
 
+                # --- Retrieve Cost from Callback Data --- (Reinstated)
+                # For batch, this will reflect the cost associated with the *last* item processed by the callback.
+                # A fully accurate batch total would require a more complex callback class to aggregate.
+                total_cost = _LAST_CALLBACK_DATA.get("cost", 0.0)
+                # ----------------------------------------
 
                 final_result = results if use_batch_mode else results[0]
                 final_thinking = thinking_outputs if use_batch_mode else thinking_outputs[0]
 
                 # --- Verbose Output for Success ---
                 if verbose:
-                    # Get token usage from the *last* callback data (hacky, but per prompt)
-                    # A better way is to get it directly from response if batch_completion provides aggregated usage
-                    input_tokens = _LAST_CALLBACK_DATA["input_tokens"] # May not be accurate for batch
-                    output_tokens = _LAST_CALLBACK_DATA["output_tokens"] # May not be accurate for batch
-                    # Try getting from response directly (might be None or only for last item in batch)
-                    try:
-                         usage_obj = getattr(response_list[-1], 'usage', None)
-                         if usage_obj:
-                              input_tokens = getattr(usage_obj, 'prompt_tokens', input_tokens)
-                              output_tokens = getattr(usage_obj, 'completion_tokens', output_tokens)
-                    except: pass
+                    # Get token usage from the *last* callback data (might not be accurate for batch)
+                    input_tokens = _LAST_CALLBACK_DATA.get("input_tokens", 0)
+                    output_tokens = _LAST_CALLBACK_DATA.get("output_tokens", 0)
 
-                    cost_input_pm = model_info.get('input', 0.0) * 1_000_000 if pd.notna(model_info.get('input')) else 0.0
-                    cost_output_pm = model_info.get('output', 0.0) * 1_000_000 if pd.notna(model_info.get('output')) else 0.0
+                    cost_input_pm = model_info.get('input', 0.0) if pd.notna(model_info.get('input')) else 0.0
+                    cost_output_pm = model_info.get('output', 0.0) if pd.notna(model_info.get('output')) else 0.0
 
                     rprint(f"[RESULT] Model Used: {model_name_litellm}")
                     rprint(f"[RESULT] Cost (Input): ${cost_input_pm:.2f}/M tokens")
                     rprint(f"[RESULT] Cost (Output): ${cost_output_pm:.2f}/M tokens")
                     rprint(f"[RESULT] Tokens (Prompt): {input_tokens}")
                     rprint(f"[RESULT] Tokens (Completion): {output_tokens}")
-                    rprint(f"[RESULT] Total Cost: ${total_cost:.6f}") # Use cost from response
+                    # Display the cost captured by the callback
+                    rprint(f"[RESULT] Total Cost (from callback): ${total_cost:.6g}") # Renamed label for clarity
                     if final_thinking:
                         rprint("[RESULT] Thinking Output:")
                         rprint(final_thinking)
-                    rprint("[RESULT] Final Output:")
-                    try:
-                        rprint(final_result)
-                    except Exception:
-                        print(final_result) # Fallback print
 
                 # --- Return Success ---
                 return {
