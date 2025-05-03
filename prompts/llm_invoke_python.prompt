@@ -74,6 +74,7 @@
 % Here is how to use LiteLLM reliable completions: <litellm_reliable_completions_example><web>https://docs.litellm.ai/docs/completion/reliable_completions</web></litellm_reliable_completions_example>
 % Here is how to use LiteLLM exception mapping: <litellm_exception_mapping_example><web>https://docs.litellm.ai/docs/exception_mapping</web></litellm_exception_mapping_example>
 % Here is how to use LiteLLM client side caches: <litellm_all_caches_example><web>https://docs.litellm.ai/docs/caching/all_caches</web></litellm_all_caches_example>
+% Here is how to use Google Cloud Storage (GCS) HMAC for S3 caching: <litellm_gcs_caching_example><include>context/gcs_hmac_test.py</include></litellm_gcs_caching_example>
 % Here is how to use LiteLLM token usage and cost: <litellm_token_usage_example><web>https://docs.litellm.ai/docs/completion/token_usage</web></litellm_token_usage_example>
 % Here is how to use LiteLLM callbacks: <litellm_callbacks_example><web>https://docs.litellm.ai/docs/observability/callbacks</web></litellm_callbacks_example>
 % Here is how to use LiteLLM provider specific parameters: <litellm_provider_params_example><web>https://docs.litellm.ai/docs/completion/provider_specific_params</web></litellm_provider_params_example>
@@ -86,7 +87,7 @@
     - Filter models first based on availability: initially check only if the required API key environment variable *name* exists in the CSV. **The actual presence of the key value in the environment is checked later (Step 4 in Logic Flow).**
     - When strength < 0.5:
         - Identify available candidate models based on the filtered CSV data.
-        - Use strength to interpolate based on the average cost (**using input/output costs read from the CSV**) from the base model down to the cheapest available model.
+        - Use strength to interpolate based on the average cost (**using input/output costs read directly from the CSV, which are in $/Million tokens**) from the base model down to the cheapest available model.
         - Select the available model with the closest average cost to the target.
         - If calling the model fails, LiteLLM should handle retries, or the logic should try the next cheapest model.
     - When strength > 0.5:
