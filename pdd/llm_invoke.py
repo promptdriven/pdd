@@ -890,11 +890,11 @@ if __name__ == "__main__":
         response_thinking = llm_invoke(
             prompt="Explain the theory of relativity simply.",
             input_json={},
-            strength=0.85, # Try to get a model that might support thinking
-            temperature=1, # <<< SET TO 0 FOR DETERMINISM >>>
+            strength=0.865, # Try to get a model that might support thinking
+            temperature=0, # <<< SET TO 0 FOR DETERMINISM >>>
             verbose=True
         )
-        # rprint("Example 5 Response:", response_thinking)
+        rprint("Example 5 Response:", response_thinking)
     except Exception as e:
         rprint(f"Example 5 Failed: {e}")
 
