@@ -16,7 +16,7 @@
         'temperature' - Floating point number indicating the temperature of the LLM.
         'verbose' - Boolean indicating whether to print extra information.
         'output_pydantic' - Optional. This specifies a pydantic_object output format from the LLM model. If not given, the output will be a string.
-        'time' - Optional. Floating point number between 0 and 1 representing the relative amount of thinking tokens to allocate (0=none, 1=max). Default is 0.25.
+        'time' - Optional. Floating point number between 0 and 1 representing the relative amount of thinking effort requested. Default is 0.25. **How this is interpreted depends on the selected model's `reasoning_type` specified in the CSV.**
         'use_batch_mode' - Optional. Boolean indicating whether to use batch processing if supported by the model/provider via LiteLLM (default: False).
     Output (dictionary):
         'result' - Output from the LLM model (string or Pydantic object) OR **a list of outputs** if `use_batch_mode` was True.
@@ -82,8 +82,8 @@
 % The code must use LiteLLM's `litellm.completion()` function to handle invocation across various LLM providers. LiteLLM standardizes the API calls. Configure LiteLLM to enable its built-in response caching, specifically targeting an S3-compatible backend configured for Google Cloud Storage (GCS).
 
 % Here are the rules to follow when selecting the appropriate model via LiteLLM:
-    - If environmental variable $PDD_MODEL_DEFAULT is set, use that as the base model name (e.g., "gpt-4o-mini"), otherwise it is "gpt-4o-mini". If $PDD_PATH is set load $PDD_PATH/data/llm_model.csv, otherwise, assume $PDD_PATH is current working directory.
-    - Read the `llm_model.csv` file to get all necessary model details (LiteLLM model identifier, input/output costs, ELO, provider, **API key environment variable name**, max_reasoning_tokens, structured_output flag, etc.). The `model_name` column must contain the identifier LiteLLM uses (e.g., "openai/gpt-3.5-turbo", "ollama/llama2"). **It is assumed that a separate utility keeps the cost and structured_output data in this CSV up-to-date.**
+    - If environmental variable $PDD_MODEL_DEFAULT is set, use that as the base model name (e.g., "openai/gpt-4o-mini"), otherwise it is "openai/gpt-4o-mini". If $PDD_PATH is set load $PDD_PATH/data/llm_model.csv, otherwise, assume $PDD_PATH is current working directory.
+    - Read the `llm_model.csv` file to get all necessary model details (LiteLLM model identifier, input/output costs, ELO, provider, **API key environment variable name**, **`reasoning_type` (e.g., 'none', 'budget', 'effort')**, **`max_reasoning_tokens` (only used if `reasoning_type` is 'budget')**, structured_output flag, etc.). The `model_name` column must contain the identifier LiteLLM uses (e.g., "openai/gpt-3.5-turbo", "anthropic/claude-3-7-sonnet-20250219"). **It is assumed that a separate utility keeps the cost, structured_output, `reasoning_type`, and `max_reasoning_tokens` data in this CSV up-to-date.**
     - Filter models first based on availability: initially check only if the required API key environment variable *name* exists in the CSV. **The actual presence of the key value in the environment is checked later (Step 4 in Logic Flow).**
     - When strength < 0.5:
         - Identify available candidate models based on the filtered CSV data.
@@ -105,12 +105,12 @@
     - `temperature`: The specified temperature.
     - `api_base`, `api_key`, `api_version`: Pass these if needed for specific setups (like Azure, local models), although LiteLLM often infers from environment variables. Consult `llm_model.csv` for provider-specific needs.
     - `max_tokens`: **Do not set this.** Allow LiteLLM and the underlying provider to use the default maximum completion tokens based on the model and input prompt length.
-    - **Structured Output**: If `output_pydantic` is provided, use LiteLLM's mechanism for structured output (e.g., passing the Pydantic model to `response_format` or similar, check LiteLLM docs for the exact method).
-    - **Thinking/Reasoning (`time` parameter)**: Map the `time` parameter (0-1) to provider-specific parameters supported by LiteLLM. 
-        - Check if the selected model supports reasoning (e.g., using `litellm.supports_reasoning` or reading a flag from the CSV if added).
-        - **Read the `max_reasoning_tokens` value from the CSV.**
-        - If reasoning is supported and `max_reasoning_tokens` is available (> 0), calculate the requested budget (e.g., `budget = time * max_reasoning_tokens`).
-        - Pass the appropriate provider-specific parameter(s) (e.g., OpenAI's `reasoning`, Anthropic's `thinking` with the calculated budget) via LiteLLM. Default `time` is 0.25.
+    - **Structured Output**: If `output_pydantic` is provided, check the `structured_output` flag from the CSV. If `True`, use LiteLLM's mechanism for structured output (e.g., passing the Pydantic model to `response_format` or similar). If `False`, proceed without requesting structured output but still attempt parsing if `output_pydantic` was given.
+    - **Thinking/Reasoning (`time` parameter)**: Use the `reasoning_type` and `max_reasoning_tokens` columns from the CSV to determine how to handle the `time` parameter (0-1):
+        - **If `reasoning_type` is 'none'**: Ignore `time`, pass no reasoning parameters.
+        - **If `reasoning_type` is 'budget'**: Check if `max_reasoning_tokens` > 0. If so, calculate `budget = int(time * max_reasoning_tokens)`. If `budget > 0`, pass the provider-specific parameter(s) via LiteLLM (e.g., Anthropic's `thinking` requires `{"type": "enabled", "budget_tokens": budget}`).
+        - **If `reasoning_type` is 'effort'**: Map `time` to a category ("low": 0-0.3, "medium": >0.3-0.7, "high": >0.7-1.0). Pass this category to the `reasoning_effort` parameter in LiteLLM.
+        - Default `time` is 0.25.
     - **Batch Mode**: If `use_batch_mode` is True, use `litellm.batch_completion` and adapt input/output handling for lists.
 
 % Provider-Level Prompt Caching Note:
