@@ -1225,6 +1225,25 @@ A dedicated VS Code extension (`utils/vscode_prompt`) provides syntax highlighti
 
 The `pdd-mcp-server` (`utils/mcp`) acts as a bridge using the Model Context Protocol (MCP). This allows agentic clients like Cursor, Claude Desktop, Continue.dev, and others to invoke `pdd-cli` commands programmatically. See the [MCP Server README](utils/mcp/README.md) for configuration and usage instructions.
 
+## Utilities
+
+### Update LLM Model Data (`pdd/update_model_costs.py`)
+
+This script automatically updates the `data/llm_model.csv` file. It uses the `litellm` library to:
+
+*   Fetch and fill in missing input/output costs for listed models (converting per-token costs to per-million-token costs).
+*   Check and update the `structured_output` flag (True/False) based on `litellm.supports_response_schema`.
+*   Validate model identifiers using `litellm` before processing.
+
+**Usage:**
+
+```bash
+conda activate pdd
+python pdd/update_model_costs.py [--csv-path path/to/your/llm_model.csv]
+```
+
+*Note: The `max_reasoning_tokens` column requires manual maintenance.*
+
 ## Conclusion
 
 PDD (Prompt-Driven Development) CLI provides a comprehensive set of tools for managing prompt files, generating code, creating examples, running tests, and handling various aspects of prompt-driven development. By leveraging the power of AI models and iterative processes, PDD aims to streamline the development workflow and improve code quality.
