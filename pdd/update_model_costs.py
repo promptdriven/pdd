@@ -139,12 +139,45 @@ def update_model_data(csv_path: str) -> None:
             console.print(f"[yellow]Warning:[/yellow] Skipping row {index} due to missing model identifier.")
             continue
 
+        # --- 5. Initial Model Validation & Schema Check ---
+        # Attempt an early check using supports_response_schema.
+        # A ValueError here often indicates the model identifier is unknown to litellm.
+        is_valid_model = True
+        schema_check_result = None # Store result if check succeeds
+        struct_check_error = None # Store potential error details
+
+        try:
+            # This serves as an initial validation. If it fails with ValueError,
+            # we assume the model identifier might be invalid/unknown.
+            schema_check_result = litellm.supports_response_schema(model=model_identifier)
+        except ValueError as ve:
+            is_valid_model = False
+            struct_check_error = ve # Store the specific error
+            row_status = "[red]Fail (Invalid/Unknown Model?)[/red]"
+            cost_update_msg = "[red]Skipped[/red]"
+            struct_update_msg = f"[red]Validation Failed: {ve}[/red]"
+            df.loc[index, '_failed'] = True
+        except Exception as e:
+             # Catch other potential errors during the initial check
+             is_valid_model = False # Treat other errors as validation failure too
+             struct_check_error = e
+             row_status = "[red]Fail (Schema Check Error)[/red]"
+             cost_update_msg = "[red]Skipped[/red]"
+             struct_update_msg = f"[red]Check Error: {e}[/red]"
+             df.loc[index, '_failed'] = True
+
+        # If initial validation failed, skip further processing for this row
+        if not is_valid_model:
+            table.add_row(model_identifier, cost_update_msg, struct_update_msg, row_status)
+            continue
+
+        # --- If validation passed, proceed with cost and struct updates ---
         cost_update_msg = "Checked"
         struct_update_msg = "Checked"
         row_status = "[green]OK[/green]"
         needs_update = False
 
-        # --- 5. Check and Update Costs ---
+        # --- 6. Check and Update Costs --- (Renumbered from 5)
         # Use pd.isna() which works correctly with Int64Dtype, float, object etc.
         input_cost_missing = pd.isna(row['input']) # No need for placeholder check if NA is used consistently
         output_cost_missing = pd.isna(row['output'])
@@ -190,34 +223,31 @@ def update_model_data(csv_path: str) -> None:
                 row_status = "[red]Fail (Cost Error)[/red]"
                 # We count specific failures below if needed, no need to increment here
 
-        # --- 6. Check and Update Structured Output Support ---
+        # --- 7. Check and Update Structured Output Support --- (Renumbered from 6)
         # Update if 'structured_output' is NA (missing or failed previous conversion)
         struct_output_missing = pd.isna(row['structured_output'])
 
         if struct_output_missing:
-            struct_update_msg = "Attempting check..."
-            try:
-                # Ensure the model identifier is valid for litellm functions
-                # Note: litellm might expect specific formats like 'openai/gpt-4o-mini'
-                # The CSV 'model' column MUST contain these valid identifiers.
-                supports_schema = litellm.supports_response_schema(model=model_identifier)
-                df.loc[index, 'structured_output'] = bool(supports_schema) # Store as True/False
-                struct_update_msg = f"[green]Updated ({bool(supports_schema)})[/green]"
+            # Use the result from the initial check if it succeeded
+            if schema_check_result is not None:
+                df.loc[index, 'structured_output'] = bool(schema_check_result) # Store as True/False
+                struct_update_msg = f"[green]Updated ({bool(schema_check_result)})[/green]"
                 needs_update = True
-            except ValueError as ve:
-                 # Often indicates model not known to litellm for this check
-                 struct_update_msg = f"[yellow]Check failed (Unknown Model?): {ve}[/yellow]"
-                 # Leave as NA to indicate uncertainty
-                 df.loc[index, 'structured_output'] = pd.NA
-                 if row_status == "[green]OK[/green]": # Don't overwrite a cost failure status
-                     row_status = "[yellow]Partial Fail (Struct)[/yellow]"
-            except Exception as e:
-                struct_update_msg = f"[red]Error checking support: {e}[/red]"
-                # Leave as NA
-                df.loc[index, 'structured_output'] = pd.NA
-                if "Fail" not in row_status: # Prioritize showing full failure
-                    row_status = "[red]Fail (Struct Error)[/red]"
-                # Consider if this should increment models_failed_count
+            else:
+                # This case should ideally not be reached if initial validation succeeded
+                # but handle potential errors stored during the initial check
+                if struct_check_error:
+                     struct_update_msg = f"[red]Update Failed (Initial Check Error): {struct_check_error}[/red]"
+                     df.loc[index, 'structured_output'] = pd.NA # Ensure NA on error
+                     if "Fail" not in row_status:
+                         row_status = "[red]Fail (Struct Error)[/red]"
+                else:
+                    # Should not happen, but fallback
+                    struct_update_msg = "[orange]Update Skipped (Unknown State)[/orange]"
+                    df.loc[index, 'structured_output'] = pd.NA
+        else:
+            # Value already exists, no need to update
+            struct_update_msg = "Checked (Exists)"
 
         # Tally updates and failures more accurately
         if "Fail" in row_status:
@@ -232,7 +262,6 @@ def update_model_data(csv_path: str) -> None:
              elif "[yellow]" in row_status:
                  row_status = "[blue]Updated (Info)[/blue]" # Indicate update happened alongside info
 
-
         table.add_row(model_identifier, cost_update_msg, struct_update_msg, row_status)
 
     console.print(table)
@@ -244,8 +273,11 @@ def update_model_data(csv_path: str) -> None:
     unique_failed_models = df[df['_failed']]['model'].nunique()
     console.print(f"- Models with fetch/check errors: {unique_failed_models}") # More accurate count
 
+    # Add confirmation if all models passed initial validation
+    if unique_failed_models == 0 and len(df) > 0:
+        console.print(f"[green]All {len(df)} model identifiers passed initial validation.[/green]")
 
-    # --- 7. Save Updated DataFrame ---
+    # --- 8. Save Updated DataFrame ---
     if models_updated_count > 0 or updated_schema:
         try:
             # Ensure NA values are saved correctly (as empty strings by default)
@@ -258,7 +290,7 @@ def update_model_data(csv_path: str) -> None:
     else:
         console.print("\n[bold blue]No updates needed or made to the CSV file.[/bold blue]")
 
-    # --- 8. Reminder about Manual Column ---
+    # --- 9. Reminder about Manual Column ---
     console.print(f"\n[bold yellow]Reminder:[/bold yellow] The '{'max_reasoning_tokens'}' column is not automatically updated by this script and requires manual maintenance.")
     console.print(f"[bold blue]Model data update process finished.[/bold blue]")
 
