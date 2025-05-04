@@ -424,6 +424,7 @@ def llm_invoke(
     """
     Runs a prompt with given input using LiteLLM, handling model selection,
     API key acquisition, structured output, batching, and reasoning time.
+    The maximum completion token length defaults to the provider's maximum.
 
     Args:
         prompt: Prompt template string (required if messages is None).
@@ -531,18 +532,6 @@ def llm_invoke(
             api_base = model_info.get('base_url')
             if pd.notna(api_base) and api_base:
                 litellm_kwargs["api_base"] = str(api_base)
-
-            # Add max_tokens (completion tokens)
-            max_completion_tokens = model_info.get('max_completion_tokens')
-            if pd.notna(max_completion_tokens) and max_completion_tokens > 0:
-                litellm_kwargs["max_tokens"] = int(max_completion_tokens)
-            else:
-                 # Fallback to max_tokens if max_completion_tokens is missing/invalid
-                 max_tokens_fallback = model_info.get('max_tokens')
-                 if pd.notna(max_tokens_fallback) and max_tokens_fallback > 0:
-                      litellm_kwargs["max_tokens"] = int(max_tokens_fallback)
-                      if verbose: rprint(f"[WARN] Using 'max_tokens' ({int(max_tokens_fallback)}) as fallback for {model_name_litellm}")
-
 
             # Handle Structured Output (JSON Mode / Pydantic)
             if output_pydantic:
@@ -724,6 +713,7 @@ def llm_invoke(
                     rprint(f"[RESULT] Tokens (Completion): {output_tokens}")
                     # Display the cost captured by the callback
                     rprint(f"[RESULT] Total Cost (from callback): ${total_cost:.6g}") # Renamed label for clarity
+                    rprint(f"[RESULT] Max Completion Tokens: Provider Default") # Indicate default limit
                     if final_thinking:
                         rprint("[RESULT] Thinking Output:")
                         rprint(final_thinking)

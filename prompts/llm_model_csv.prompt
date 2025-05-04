@@ -3,5 +3,10 @@
     - 'model': the available model strings for that provider (e.g. "gpt-4.1-nano")
     - 'input': The input cost per million tokens (e.g. 0.15)
     - 'output': The output cost per million tokens (e.g. 0.60)
+    - 'coding_arena_elo': The ELO score (e.g., 1300) (Integer, nullable)
+    - 'api_key': Name of the environment variable holding the API key (e.g., OPENAI_API_KEY)
+    - 'base_url': Optional base URL for specific providers (e.g., Azure, Ollama)
+    - 'max_reasoning_tokens': Optional maximum tokens for internal reasoning (Integer, nullable)
+    - 'structured_output': Boolean indicating if the model reliably supports structured output (True/False)
 
 % Search the internet to get this data. Check to make sure this is valid CSV format

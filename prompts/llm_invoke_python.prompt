@@ -83,7 +83,7 @@
 
 % Here are the rules to follow when selecting the appropriate model via LiteLLM:
     - If environmental variable $PDD_MODEL_DEFAULT is set, use that as the base model name (e.g., "gpt-4o-mini"), otherwise it is "gpt-4o-mini". If $PDD_PATH is set load $PDD_PATH/data/llm_model.csv, otherwise, assume $PDD_PATH is current working directory.
-    - Read the `llm_model.csv` file to get all necessary model details (LiteLLM model identifier, input/output costs, ELO, provider, **API key environment variable name**, max_completion_tokens, max_reasoning_tokens, structured_output flag, etc.). The `model_name` column must contain the identifier LiteLLM uses (e.g., "openai/gpt-3.5-turbo", "ollama/llama2"). **It is assumed that a separate utility keeps the cost and structured_output data in this CSV up-to-date.**
+    - Read the `llm_model.csv` file to get all necessary model details (LiteLLM model identifier, input/output costs, ELO, provider, **API key environment variable name**, max_reasoning_tokens, structured_output flag, etc.). The `model_name` column must contain the identifier LiteLLM uses (e.g., "openai/gpt-3.5-turbo", "ollama/llama2"). **It is assumed that a separate utility keeps the cost and structured_output data in this CSV up-to-date.**
     - Filter models first based on availability: initially check only if the required API key environment variable *name* exists in the CSV. **The actual presence of the key value in the environment is checked later (Step 4 in Logic Flow).**
     - When strength < 0.5:
         - Identify available candidate models based on the filtered CSV data.
@@ -104,7 +104,7 @@
     - `messages`: The final list of messages. This is either passed directly by the caller OR generated internally from `prompt` and `input_json`. **If batching, this will be a list of message lists.**
     - `temperature`: The specified temperature.
     - `api_base`, `api_key`, `api_version`: Pass these if needed for specific setups (like Azure, local models), although LiteLLM often infers from environment variables. Consult `llm_model.csv` for provider-specific needs.
-    - `max_tokens`: Set based on the model's `max_completion_tokens` from the CSV, passed via `litellm.completion` or `litellm.batch_completion`.
+    - `max_tokens`: **Do not set this.** Allow LiteLLM and the underlying provider to use the default maximum completion tokens based on the model and input prompt length.
     - **Structured Output**: If `output_pydantic` is provided, use LiteLLM's mechanism for structured output (e.g., passing the Pydantic model to `response_format` or similar, check LiteLLM docs for the exact method).
     - **Thinking/Reasoning (`time` parameter)**: Map the `time` parameter (0-1) to provider-specific parameters supported by LiteLLM. 
         - Check if the selected model supports reasoning (e.g., using `litellm.supports_reasoning` or reading a flag from the CSV if added).
@@ -119,7 +119,7 @@
     - For explicit caching providers (requiring syntax like `cache_control`), the caller **must provide the fully constructed `messages` list** as input to this function, already containing the necessary provider-specific syntax. This function will not inject explicit caching syntax when generating messages from `prompt` and `input_json`.
 
 % CRITICAL: When handling model token limits:
-    - Use the `max_completion_tokens` value from the `llm_model.csv` and pass it as `max_tokens` to `litellm.completion()` or `litellm.batch_completion()`. LiteLLM should handle provider differences.
+    - **The function will NOT pass a `max_tokens` parameter to LiteLLM.** Rely on the default maximum completion tokens set by the provider for the specific model.
 
 % If verbose is set to True, print the following information:
     - **The ordered list of candidate models selected based on strength/ELO and availability (before attempting invocation).**
@@ -129,6 +129,7 @@
     - The strength, temperature, and time used.
     - The input JSON (use try-except to handle rich printing failures, falling back to standard print).
     - The optional Pydantic output format.
+    - **Indication that the provider's default max completion tokens were used.**
     - The result using rprint.
 
 % LiteLLM Callback for Status/Usage:

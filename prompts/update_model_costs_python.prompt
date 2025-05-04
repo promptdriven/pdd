@@ -22,7 +22,7 @@
 % Core Logic:
     1. Define expected columns including `max_reasoning_tokens`. Define columns intended to be nullable integers.
     2. Load the CSV file into a Pandas DataFrame. Handle potential file not found errors. Check if all expected columns exist; add missing ones with `pd.NA`.
-    3. **Enforce Data Types:** Convert columns to their intended types (float, `'Int64'`, object for boolean/NA).
+    3. **Enforce Data Types:** Convert columns to their intended types (float, `'Int64'`, object for boolean/NA). Specifically handle `coding_arena_elo` and `max_reasoning_tokens` as `'Int64'`.
     4. **Pre-fetch Costs:** Get the `litellm.model_cost` dictionary. Handle potential errors during fetch.
     5. Iterate through each row of the DataFrame.
     6. Get the LiteLLM model identifier from the 'model' column.
