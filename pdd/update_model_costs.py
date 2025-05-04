@@ -18,6 +18,9 @@ EXPECTED_COLUMNS = [
     'max_reasoning_tokens', 'structured_output'
 ]
 
+# Define columns that should be nullable integers
+INT_COLUMNS = ['coding_arena_elo', 'max_tokens', 'max_completion_tokens', 'max_reasoning_tokens']
+
 # Placeholder for missing numeric values (optional, pd.NA is generally better)
 MISSING_VALUE_PLACEHOLDER = -1.0
 
@@ -55,35 +58,58 @@ def update_model_data(csv_path: str) -> None:
                 df[col] = pd.NA
             elif col == 'max_reasoning_tokens':
                  # Use pandas NA for missing int/float
-                df[col] = pd.NA
+                 # Type will be enforced later
+                 df[col] = pd.NA
+            elif col in INT_COLUMNS: # Handle other integer columns
+                 df[col] = pd.NA # Initialize with NA, enforce type later
             else:
                 # Default for other potentially missing columns (like max_tokens etc.)
                 df[col] = pd.NA # Or appropriate default like 0 or '' if known
     if updated_schema:
         console.print("[cyan]CSV schema updated with missing columns.[/cyan]")
 
-    # Ensure correct dtypes for columns we might fill
-    # Convert potential placeholders like -1 to NA before checking pd.isna
-    if 'input' in df.columns:
-        df['input'] = pd.to_numeric(df['input'], errors='coerce')
-    if 'output' in df.columns:
-        df['output'] = pd.to_numeric(df['output'], errors='coerce')
-    # For structured_output, keep as object to allow True/False/NA
-    if 'structured_output' in df.columns:
-       # Attempt to convert to boolean, coercing errors (like strings) to NA
-       # This handles existing True/False strings or actual booleans
-       df['structured_output'] = df['structured_output'].apply(
-           lambda x: pd.NA if pd.isna(x) else (
-               True if str(x).strip().lower() == 'true' else (
-                   False if str(x).strip().lower() == 'false' else pd.NA
-               )
-           )
-       ).astype('object') # Keep as object to hold True, False, pd.NA
+    # --- 3. Enforce Correct Data Types ---
+    # Do this *after* loading and adding any missing columns
+    console.print("\n[bold blue]Enforcing data types...[/bold blue]")
+    try:
+        # Floats (allow NA)
+        if 'input' in df.columns:
+            df['input'] = pd.to_numeric(df['input'], errors='coerce')
+        if 'output' in df.columns:
+            df['output'] = pd.to_numeric(df['output'], errors='coerce')
 
+        # Boolean/Object (allow NA)
+        if 'structured_output' in df.columns:
+            df['structured_output'] = df['structured_output'].apply(
+                lambda x: pd.NA if pd.isna(x) else (
+                    True if str(x).strip().lower() == 'true' else (
+                        False if str(x).strip().lower() == 'false' else pd.NA
+                    )
+                )
+            ).astype('object') # Keep as object to hold True, False, pd.NA
 
-    # --- 3. Iterate Through Models and Update ---
+        # Integers (allow NA)
+        for col in INT_COLUMNS:
+            if col in df.columns:
+                # Convert to numeric first (handles strings like '123', errors become NA),
+                # then cast to nullable Int64.
+                df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
+                console.print(f"[cyan]Ensured '{col}' is nullable integer (Int64).[/cyan]")
+
+        console.print("[green]Data types enforced successfully.[/green]")
+
+    except Exception as e:
+        console.print(f"[bold red]Error during type enforcement:[/bold red] {e}")
+        return # Exit if types can't be enforced correctly
+
+    # Remove older, less robust type handling blocks if they exist
+    # (The code originally had some dtype checks spread out, this consolidates them)
+
+    # --- 4. Iterate Through Models and Update ---
     models_updated_count = 0
     models_failed_count = 0
+    # Add a temporary column to track failures directly
+    df['_failed'] = False
     rows_to_update = []
 
     console.print("\n[bold blue]Processing models...[/bold blue]")
@@ -95,8 +121,14 @@ def update_model_data(csv_path: str) -> None:
 
     # Pre-fetch all model costs from LiteLLM once
     try:
-        all_model_costs = litellm.model_cost
-        console.print("[green]Successfully fetched LiteLLM model cost data.[/green]")
+        # Note: litellm.model_cost might need adjustment based on actual usage
+        # If it requires specific model names not in the CSV, this might fail.
+        # For now, assuming it returns a dict keyed by model names matching the CSV.
+        all_model_costs = getattr(litellm, 'model_cost', {}) # Safely get attribute
+        if not all_model_costs:
+             console.print("[yellow]Warning:[/yellow] Could not fetch or find `litellm.model_cost`. Cost updates might be skipped.")
+        else:
+            console.print("[green]Successfully fetched LiteLLM model cost data.[/green]")
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] Could not fetch LiteLLM model cost data: {e}")
         all_model_costs = {} # Proceed without cost updates if fetch fails
@@ -112,9 +144,10 @@ def update_model_data(csv_path: str) -> None:
         row_status = "[green]OK[/green]"
         needs_update = False
 
-        # --- 4. Check and Update Costs ---
-        input_cost_missing = pd.isna(row['input']) or row['input'] == MISSING_VALUE_PLACEHOLDER
-        output_cost_missing = pd.isna(row['output']) or row['output'] == MISSING_VALUE_PLACEHOLDER
+        # --- 5. Check and Update Costs ---
+        # Use pd.isna() which works correctly with Int64Dtype, float, object etc.
+        input_cost_missing = pd.isna(row['input']) # No need for placeholder check if NA is used consistently
+        output_cost_missing = pd.isna(row['output'])
 
         if input_cost_missing or output_cost_missing:
             cost_update_msg = "Attempting fetch..."
@@ -148,14 +181,16 @@ def update_model_data(csv_path: str) -> None:
 
                 else:
                     cost_update_msg = "[yellow]Cost data not found in LiteLLM[/yellow]"
-                    row_status = "[yellow]Partial Fail (Cost)[/yellow]"
+                    # Don't mark as fail, just unavailable
+                    if row_status == "[green]OK[/green]":
+                         row_status = "[yellow]Info (No Cost Data)[/yellow]"
 
             except Exception as e:
                 cost_update_msg = f"[red]Error fetching costs: {e}[/red]"
                 row_status = "[red]Fail (Cost Error)[/red]"
-                models_failed_count += 1 # Count failure if cost fetch errors out
+                # We count specific failures below if needed, no need to increment here
 
-        # --- 5. Check and Update Structured Output Support ---
+        # --- 6. Check and Update Structured Output Support ---
         # Update if 'structured_output' is NA (missing or failed previous conversion)
         struct_output_missing = pd.isna(row['structured_output'])
 
@@ -182,12 +217,20 @@ def update_model_data(csv_path: str) -> None:
                 df.loc[index, 'structured_output'] = pd.NA
                 if "Fail" not in row_status: # Prioritize showing full failure
                     row_status = "[red]Fail (Struct Error)[/red]"
-                models_failed_count += 1 # Count failure if struct check errors out
+                # Consider if this should increment models_failed_count
 
-        if needs_update and "Fail" not in row_status:
+        # Tally updates and failures more accurately
+        if "Fail" in row_status:
+             # models_failed_count += 1 # Increment if any part failed (Original line, less accurate)
+             df.loc[index, '_failed'] = True # Mark failure in the DataFrame
+        elif needs_update: # Only count as updated if no failure occurred
              models_updated_count += 1
-             if row_status == "[green]OK[/green]": # Only change if previously OK
+             if row_status == "[green]OK[/green]": # Status was OK before update checks
                  row_status = "[blue]Updated[/blue]"
+             # If status was yellow (e.g., no cost data), keep it yellow but acknowledge update elsewhere?
+             # Or maybe change yellow to Updated? Let's make Updated override yellow info.
+             elif "[yellow]" in row_status:
+                 row_status = "[blue]Updated (Info)[/blue]" # Indicate update happened alongside info
 
 
         table.add_row(model_identifier, cost_update_msg, struct_update_msg, row_status)
@@ -195,25 +238,27 @@ def update_model_data(csv_path: str) -> None:
     console.print(table)
     console.print(f"\n[bold]Summary:[/bold]")
     console.print(f"- Models processed: {len(df)}")
-    console.print(f"- Rows potentially updated: {models_updated_count}")
-    # Note: models_failed_count might double count if both cost and struct fail,
-    # but gives an idea of how many models had issues.
-    # A more precise count would track unique failed models.
-    # console.print(f"- Models with fetch/check errors: {models_failed_count}")
+    console.print(f"- Models successfully updated: {models_updated_count}")
+    # Count unique models with failures for better reporting
+    # Calculate based on the temporary '_failed' column in the DataFrame
+    unique_failed_models = df[df['_failed']]['model'].nunique()
+    console.print(f"- Models with fetch/check errors: {unique_failed_models}") # More accurate count
 
 
-    # --- 6. Save Updated DataFrame ---
+    # --- 7. Save Updated DataFrame ---
     if models_updated_count > 0 or updated_schema:
         try:
             # Ensure NA values are saved correctly (as empty strings by default)
-            df.to_csv(csv_path, index=False, na_rep='') # Save NA as empty string
+            # Drop the temporary failure column before saving
+            df_to_save = df.drop(columns=['_failed'])
+            df_to_save.to_csv(csv_path, index=False, na_rep='') # Save NA as empty string
             console.print(f"\n[bold green]Successfully saved updated data to:[/bold green] {csv_path}")
         except Exception as e:
             console.print(f"[bold red]Error:[/bold red] Failed to save updated CSV file: {e}")
     else:
         console.print("\n[bold blue]No updates needed or made to the CSV file.[/bold blue]")
 
-    # --- 7. Reminder about Manual Column ---
+    # --- 8. Reminder about Manual Column ---
     console.print(f"\n[bold yellow]Reminder:[/bold yellow] The '{'max_reasoning_tokens'}' column is not automatically updated by this script and requires manual maintenance.")
     console.print(f"[bold blue]Model data update process finished.[/bold blue]")
 
