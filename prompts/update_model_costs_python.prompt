@@ -3,48 +3,56 @@
 <include>context/python_preamble.prompt</include>
 
 % Script Goal:
-    - Read the `llm_model.csv` file.
-    - For each model listed, check if the 'input' or 'output' cost columns are missing (e.g., blank, NaN, or a predefined placeholder like -1).
-    - If costs are missing, attempt to fetch them from LiteLLM using `litellm.model_cost`.
-    - For each model listed, check if the 'structured_output' column is missing or needs verification.
-    - If needed, determine structured output support using `litellm.supports_response_schema`.
-    - Update the CSV file in place with the fetched costs and structured output support flags.
-    - **Note:** This script does *not* automatically populate the `max_reasoning_tokens` column, as this data is not directly available via a standard LiteLLM function. This column needs manual maintenance.
+    - Read the `llm_model.csv` file using Pandas.
+    - Pre-fetch the entire `litellm.model_cost` dictionary for efficiency.
+    - For each model listed, check if the 'input' or 'output' cost columns are missing (`pd.isna()`).
+    - If costs are missing, retrieve the 'input_cost_per_token' and 'output_cost_per_token' from the pre-fetched LiteLLM data.
+    - **Convert** these per-token costs to per-million token costs (cost * 1,000,000) before updating the DataFrame.
+    - For each model listed, check if the 'structured_output' column is missing (`pd.isna()`).
+    - If needed, determine structured output support using `litellm.supports_response_schema` and update the DataFrame with True/False.
+    - Add any missing expected columns (like `max_reasoning_tokens`) with `pd.NA`.
+    - **Enforce Data Types:** After loading and adding columns, explicitly cast relevant columns (e.g., `coding_arena_elo`, `max_tokens`, `max_completion_tokens`, `max_reasoning_tokens`) to nullable integers (`'Int64'`).
+    - Update the CSV file in place with the fetched/calculated costs and structured output support flags.
+    - **Note:** This script does *not* automatically populate the `max_reasoning_tokens` column's values, as this data is not reliably available via LiteLLM. This column needs manual maintenance.
 
 % Inputs:
     - The script should accept the path to the `llm_model.csv` file as a command-line argument (e.g., using `argparse`). Default path should be 'data/llm_model.csv'.
+    - Ensure the directory for the CSV path exists, creating it if necessary (`os.makedirs`).
 
 % Core Logic:
-    1. Define expected columns including `max_reasoning_tokens`.
-    2. Load the CSV file into a Pandas DataFrame. Handle potential file not found errors. Check if all expected columns exist; add missing ones with default null/placeholder values if desired.
-    3. Iterate through each row of the DataFrame.
-    4. Get the LiteLLM model identifier from the 'model' column for the current row. This identifier *must* be in the format LiteLLM expects (e.g., "openai/gpt-4o-mini", "ollama/llama3").
-    5. **Check and Update Costs:**
-        a. Check if the 'input' column value is missing/invalid (e.g., `pd.isna(row['input'])` or `row['input'] == -1`). Do the same for the 'output' column.
-        b. If either cost is missing:
-            i. Call `litellm.model_cost.get(model_identifier)` to retrieve the cost dictionary. Handle exceptions.
-            ii. If successful, extract the 'input_cost_per_million_tokens' and 'output_cost_per_million_tokens' (or similar keys provided by LiteLLM). These values are expected to be in $/Million tokens.
-            iii. Update the 'input' and/or 'output' cells in the DataFrame with these fetched values *directly* if they were originally missing.
-            iv. If costs cannot be fetched, print a warning.
-    6. **Check and Update Structured Output Support:**
-        a. Check if the 'structured_output' column value is missing/invalid (e.g., `pd.isna(row['structured_output'])` or needs re-verification based on script logic/arguments - for simplicity, let's assume it updates if missing).
-        b. If the flag needs updating:
-            i. Call `litellm.supports_response_schema(model=model_identifier)`. Handle potential exceptions (e.g., if LiteLLM doesn't know the model).
-            ii. If the call succeeds, update the 'structured_output' cell in the DataFrame with the boolean result (True/False).
-            iii. If the check fails or raises an exception, print a warning and leave the cell unchanged or set to a default (e.g., False).
-    7. **Max Reasoning Tokens:** (No automated action in this script - column should exist but is manually maintained).
-    8. After iterating through all rows, save the potentially modified DataFrame back to the original CSV file path, overwriting the existing file. Ensure the index is not written to the CSV.
+    1. Define expected columns including `max_reasoning_tokens`. Define columns intended to be nullable integers.
+    2. Load the CSV file into a Pandas DataFrame. Handle potential file not found errors. Check if all expected columns exist; add missing ones with `pd.NA`.
+    3. **Enforce Data Types:** Convert columns to their intended types (float, `'Int64'`, object for boolean/NA).
+    4. **Pre-fetch Costs:** Get the `litellm.model_cost` dictionary. Handle potential errors during fetch.
+    5. Iterate through each row of the DataFrame.
+    6. Get the LiteLLM model identifier from the 'model' column.
+    7. **Check and Update Costs:**
+        a. Check if 'input' or 'output' values are missing (`pd.isna()`).
+        b. If missing, look up the model in the pre-fetched cost dictionary.
+        c. If found, get 'input_cost_per_token'/'output_cost_per_token'. Handle cases where these keys might be missing.
+        d. **Calculate:** Multiply the per-token cost by 1,000,000.
+        e. Update the DataFrame cell with the calculated per-million token cost.
+        f. If costs cannot be fetched/calculated, report appropriately.
+    8. **Check and Update Structured Output Support:**
+        a. Check if 'structured_output' is missing (`pd.isna()`).
+        b. If missing, call `litellm.supports_response_schema(model=model_identifier)`. Handle potential exceptions (e.g., unknown model).
+        c. If successful, update the DataFrame cell with the boolean result.
+        d. If the check fails, report appropriately and leave the cell as `pd.NA` or a default.
+    9. **Track Failures:** Implement a reliable method to track models that encountered errors during cost or structured output checks.
+    10. After iterating, save the modified DataFrame back to the CSV file path, overwriting the existing file. Ensure the index is not written and use `na_rep=''` to represent `pd.NA` as empty strings.
 
 % Implementation Details:
-    - Use `pandas` for reading and writing the CSV.
-    - Use `litellm` for fetching costs (`litellm.model_cost`) and checking structured output (`litellm.supports_response_schema`).
-    - Use `argparse` for handling command-line arguments.
-    - Include clear print statements indicating which models are being checked/updated for costs and structured output support, and any warnings.
-    - Ensure proper error handling for file operations and LiteLLM calls.
+    - Use `pandas` for CSV I/O and data manipulation.
+    - Use `litellm` for fetching cost data and checking structured output support.
+    - Use `argparse` for command-line arguments.
+    - Use `os` for directory operations.
+    - Use the `rich` library (`Console`, `Table`) to provide clear, formatted console output detailing the update status for each model and a final summary.
+    - The summary should include an accurate count of models that had processing errors, based on the failure tracking.
+    - Ensure proper error handling for file operations, LiteLLM calls, and data type conversions.
 
 % Here is an example (but not actual values) of the llm_model.csv: <llm_model_example><shell>head -6 data/llm_model.csv</shell></llm_model_example>
 
 % Relevant LiteLLM Documentation:
-    - Model Cost Function: <litellm_model_cost_example><web>https://docs.litellm.ai/docs/completion/token_usage#8-model_cost</web></litellm_model_cost_example>
+    - Model Cost Data Structure (illustrative): <litellm_model_cost_example><web>https://docs.litellm.ai/docs/completion/token_usage#8-model_cost</web></litellm_model_cost_example>
     - Check Schema Support: <litellm_supports_schema_example><web>https://docs.litellm.ai/docs/completion/json_mode#2-check-if-model-supports-json_schema</web></litellm_supports_schema_example>
     - Supported Providers/Models (for identifiers): <litellm_providers_list><web>https://docs.litellm.ai/docs/providers</web></litellm_providers_list> 
