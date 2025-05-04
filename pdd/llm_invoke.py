@@ -195,7 +195,7 @@ def _load_model_data(csv_path: Path) -> pd.DataFrame:
     try:
         df = pd.read_csv(csv_path)
         # Basic validation and type conversion
-        required_cols = ['provider', 'model', 'input', 'output', 'coding_arena_elo', 'api_key']
+        required_cols = ['provider', 'model', 'input', 'output', 'coding_arena_elo', 'api_key', 'structured_output', 'reasoning_type']
         for col in required_cols:
             if col not in df.columns:
                 raise ValueError(f"Missing required column in CSV: {col}")
@@ -212,6 +212,8 @@ def _load_model_data(csv_path: Path) -> pd.DataFrame:
         df['input'] = df['input'].fillna(0.0)
         df['output'] = df['output'].fillna(0.0)
         df['coding_arena_elo'] = df['coding_arena_elo'].fillna(0) # Use 0 ELO for missing
+        # Ensure max_reasoning_tokens is numeric, fillna with 0
+        df['max_reasoning_tokens'] = df['max_reasoning_tokens'].fillna(0).astype(int) # Ensure int
 
         # Calculate average cost (handle potential division by zero if needed, though unlikely with fillna)
         df['avg_cost'] = (df['input'] + df['output']) / 2
@@ -221,6 +223,9 @@ def _load_model_data(csv_path: Path) -> pd.DataFrame:
              df['structured_output'] = df['structured_output'].fillna(False).astype(bool)
         else:
              df['structured_output'] = False # Assume false if column missing
+
+        # Ensure reasoning_type is string, fillna with 'none' and lowercase
+        df['reasoning_type'] = df['reasoning_type'].fillna('none').astype(str).str.lower()
 
         return df
     except Exception as e:
@@ -555,31 +560,42 @@ def llm_invoke(
                     if verbose: rprint(f"[WARN] Model {model_name_litellm} does not support structured output via CSV flag. Output might not be valid {output_pydantic.__name__}.")
                     # Proceed without forcing JSON mode, parsing will be attempted later
 
-            # Handle Reasoning/Thinking Time
-            max_reasoning_tokens = model_info.get('max_reasoning_tokens')
-            if pd.notna(max_reasoning_tokens) and max_reasoning_tokens > 0 and time > 0:
-                 budget = int(time * max_reasoning_tokens)
-                 if budget > 0:
-                     # Provider-specific handling based on LiteLLM docs/examples
-                     if provider == 'anthropic':
-                         litellm_kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
-                         if verbose: rprint(f"[INFO] Requesting Anthropic thinking with budget: {budget} tokens")
-                     # Add other providers if LiteLLM supports direct budget mapping
-                     # elif provider == 'google': # Example if Google supported it
-                     #     litellm_kwargs["reasoning_budget"] = budget # Fictional parameter
-                     else:
-                         # Fallback: Map 'time' to 'reasoning_effort' if budget not directly supported
-                         effort = "low"
-                         if time > 0.7: effort = "high"
-                         elif time > 0.3: effort = "medium"
-                         try:
-                             if litellm.supports_reasoning(model=model_name_litellm):
-                                 litellm_kwargs["reasoning_effort"] = effort
-                                 if verbose: rprint(f"[INFO] Requesting reasoning_effort='{effort}' for {model_name_litellm} based on time={time}")
-                             elif verbose:
-                                 rprint(f"[INFO] Model {model_name_litellm} does not support reasoning via litellm.supports_reasoning.")
-                         except Exception as e_reason:
-                              if verbose: rprint(f"[WARN] Could not check reasoning support for {model_name_litellm}: {e_reason}")
+            # --- NEW REASONING LOGIC ---
+            reasoning_type = model_info.get('reasoning_type', 'none') # Defaults to 'none'
+            max_reasoning_tokens_val = model_info.get('max_reasoning_tokens', 0) # Defaults to 0
+
+            if time > 0: # Only apply reasoning if time is requested
+                if reasoning_type == 'budget':
+                    if max_reasoning_tokens_val > 0:
+                        budget = int(time * max_reasoning_tokens_val)
+                        if budget > 0:
+                            # Currently known: Anthropic uses 'thinking'
+                            # Model name comparison is more robust than provider string
+                            if provider == 'anthropic': # Check provider column instead of model prefix
+                                litellm_kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
+                                if verbose: rprint(f"[INFO] Requesting Anthropic thinking (budget type) with budget: {budget} tokens for {model_name_litellm}")
+                            else:
+                                # If other providers adopt a budget param recognized by LiteLLM, add here
+                                if verbose: rprint(f"[WARN] Reasoning type is 'budget' for {model_name_litellm}, but no specific LiteLLM budget parameter known for this provider. Parameter not sent.")
+                        elif verbose: rprint(f"[INFO] Calculated reasoning budget is 0 for {model_name_litellm}, skipping reasoning parameter.")
+                    elif verbose:
+                        rprint(f"[WARN] Reasoning type is 'budget' for {model_name_litellm}, but 'max_reasoning_tokens' is missing or zero in CSV. Reasoning parameter not sent.")
+
+                elif reasoning_type == 'effort':
+                    effort = "low"
+                    if time > 0.7: effort = "high"
+                    elif time > 0.3: effort = "medium"
+                    # Use the common 'reasoning_effort' param LiteLLM provides
+                    litellm_kwargs["reasoning_effort"] = effort
+                    if verbose: rprint(f"[INFO] Requesting reasoning_effort='{effort}' (effort type) for {model_name_litellm} based on time={time}")
+
+                elif reasoning_type == 'none':
+                    if verbose: rprint(f"[INFO] Model {model_name_litellm} has reasoning_type='none'. No reasoning parameter sent.")
+
+                else: # Unknown reasoning_type in CSV
+                     if verbose: rprint(f"[WARN] Unknown reasoning_type '{reasoning_type}' for model {model_name_litellm} in CSV. No reasoning parameter sent.")
+
+            # --- END NEW REASONING LOGIC ---
 
             # Add caching control per call if needed (example: force refresh)
             # litellm_kwargs["cache"] = {"no-cache": True}
@@ -625,65 +641,87 @@ def llm_invoke(
                     # Thinking Output
                     thinking = None
                     try:
-                        # Access reasoning content if available in the response structure
-                        thinking = resp_item.choices[0].message.get('reasoning_content')
-                    except (AttributeError, IndexError, KeyError):
-                        pass # Ignore if structure doesn't match
+                        # Attempt 1: Check _hidden_params based on isolated test script
+                        if hasattr(resp_item, '_hidden_params') and resp_item._hidden_params and 'thinking' in resp_item._hidden_params:
+                             thinking = resp_item._hidden_params['thinking']
+                             if verbose: rprint("[DEBUG] Extracted thinking output from response._hidden_params['thinking']")
+                        # Attempt 2: Fallback to reasoning_content in message
+                        elif resp_item.choices[0].message.get('reasoning_content'):
+                            thinking = resp_item.choices[0].message.get('reasoning_content')
+                            if verbose: rprint("[DEBUG] Extracted thinking output from response.choices[0].message.get('reasoning_content')")
+
+                    except (AttributeError, IndexError, KeyError, TypeError):
+                        if verbose: rprint("[DEBUG] Failed to extract thinking output from known locations.")
+                        pass # Ignore if structure doesn't match or errors occur
                     thinking_outputs.append(thinking)
 
                     # Result (String or Pydantic)
                     try:
                         raw_result = resp_item.choices[0].message.content
                         if output_pydantic:
-                            parsed_result = None # Initialize parsed_result
-                            cleaned_result_str = None # Initialize cleaned string
+                            parsed_result = None
+                            json_string_to_parse = None
 
                             try:
                                 # Attempt 1: Check if LiteLLM already parsed it
                                 if isinstance(raw_result, output_pydantic):
-                                     parsed_result = raw_result
-                                     if verbose: rprint("[DEBUG] Pydantic object received directly from LiteLLM.")
+                                    parsed_result = raw_result
+                                    if verbose: rprint("[DEBUG] Pydantic object received directly from LiteLLM.")
 
-                                # Attempt 2: Try direct JSON validation (if it's a string)
+                                # Attempt 2: Check if raw_result is dict-like and validate
+                                elif isinstance(raw_result, dict):
+                                    parsed_result = output_pydantic.model_validate(raw_result)
+                                    if verbose: rprint("[DEBUG] Validated dictionary-like object directly.")
+
+                                # Attempt 3: Process as string (if not already parsed/validated)
                                 elif isinstance(raw_result, str):
+                                    json_string_to_parse = raw_result # Start with the raw string
                                     try:
-                                        parsed_result = output_pydantic.model_validate_json(raw_result)
-                                        if verbose: rprint("[DEBUG] Parsed JSON string directly.")
-                                    except (json.JSONDecodeError, ValidationError):
-                                        # Attempt 3: Clean markdown fences and retry JSON validation
+                                        # Look for first { and last }
+                                        start_brace = json_string_to_parse.find('{')
+                                        end_brace = json_string_to_parse.rfind('}')
+                                        if start_brace != -1 and end_brace != -1 and end_brace > start_brace:
+                                            potential_json = json_string_to_parse[start_brace:end_brace+1]
+                                            if potential_json.strip().startswith('{'):
+                                                if verbose: rprint(f"[DEBUG] Attempting to parse extracted JSON block: '{potential_json}'")
+                                                parsed_result = output_pydantic.model_validate_json(potential_json)
+                                            else:
+                                                raise ValueError("Extracted block doesn't start with {")
+                                        else:
+                                            raise ValueError("Could not find enclosing {}")
+                                    except (json.JSONDecodeError, ValidationError, ValueError) as extraction_error:
+                                        if verbose: rprint(f"[DEBUG] JSON block extraction/validation failed ({extraction_error}). Trying markdown cleaning.")
+                                        # Fallback: Clean markdown fences and retry JSON validation
                                         cleaned_result_str = raw_result.strip()
                                         if cleaned_result_str.startswith("```json"):
-                                            cleaned_result_str = cleaned_result_str[7:] # Remove ```json
+                                            cleaned_result_str = cleaned_result_str[7:]
                                         elif cleaned_result_str.startswith("```"):
-                                             cleaned_result_str = cleaned_result_str[3:] # Remove ```
+                                            cleaned_result_str = cleaned_result_str[3:]
                                         if cleaned_result_str.endswith("```"):
-                                             cleaned_result_str = cleaned_result_str[:-3] # Remove ```
-                                        cleaned_result_str = cleaned_result_str.strip() # Strip again
-
+                                            cleaned_result_str = cleaned_result_str[:-3]
+                                        cleaned_result_str = cleaned_result_str.strip()
                                         if verbose: rprint(f"[DEBUG] Attempting parse after cleaning markdown fences. Cleaned string: '{cleaned_result_str}'")
-                                        # Retry validation with the cleaned string
-                                        parsed_result = output_pydantic.model_validate_json(cleaned_result_str)
+                                        json_string_to_parse = cleaned_result_str
+                                        parsed_result = output_pydantic.model_validate_json(json_string_to_parse)
 
-                                # Attempt 4: Try direct dictionary validation (if it's dict-like)
-                                elif isinstance(raw_result, dict):
-                                     parsed_result = output_pydantic.model_validate(raw_result)
-                                     if verbose: rprint("[DEBUG] Validated dictionary-like object.")
-
-                                # If none of the above worked, raise error
+                                # Check if any parsing attempt succeeded
                                 if parsed_result is None:
-                                     raise TypeError(f"Raw result type {type(raw_result)} could not be validated against {output_pydantic.__name__}.")
+                                    raise TypeError(f"Raw result type {type(raw_result)} or content could not be validated/parsed against {output_pydantic.__name__}.")
 
-                                results.append(parsed_result)
-
-                            except (ValidationError, json.JSONDecodeError, TypeError) as parse_error:
+                            except (ValidationError, json.JSONDecodeError, TypeError, ValueError) as parse_error:
                                 rprint(f"[ERROR] Failed to parse response into Pydantic model {output_pydantic.__name__} for item {i}: {parse_error}")
-                                error_content = cleaned_result_str if cleaned_result_str is not None else raw_result
-                                rprint("[ERROR] Raw/Cleaned content:", error_content)
-                                # Append error string or raise depending on desired strictness
+                                error_content = json_string_to_parse if json_string_to_parse is not None else raw_result
+                                rprint("[ERROR] Content attempted for parsing:", error_content)
                                 results.append(f"ERROR: Failed to parse Pydantic. Raw: {raw_result}")
-                                # Or raise ValueError(f"Failed to parse response into Pydantic model: {parse_error}")
+                                continue # Skip appending result below if parsing failed
+
+                            # If parsing succeeded, append the parsed_result
+                            results.append(parsed_result)
+
                         else:
-                            results.append(raw_result) # String output
+                            # If output_pydantic was not requested, append the raw result
+                            results.append(raw_result)
+
                     except (AttributeError, IndexError) as e:
                          rprint(f"[ERROR] Could not extract result content from response item {i}: {e}")
                          results.append(f"ERROR: Could not extract result content. Response: {resp_item}")
@@ -852,8 +890,8 @@ if __name__ == "__main__":
         response_thinking = llm_invoke(
             prompt="Explain the theory of relativity simply.",
             input_json={},
-            strength=0.6, # Try to get a model that might support thinking
-            temperature=0.0, # <<< SET TO 0 FOR DETERMINISM >>>
+            strength=0.85, # Try to get a model that might support thinking
+            temperature=1, # <<< SET TO 0 FOR DETERMINISM >>>
             verbose=True
         )
         # rprint("Example 5 Response:", response_thinking)
