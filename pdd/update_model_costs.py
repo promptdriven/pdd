@@ -14,12 +14,12 @@ console = Console()
 # Define expected columns in the CSV, including the manually maintained one
 EXPECTED_COLUMNS = [
     'provider', 'model', 'input', 'output', 'coding_arena_elo', 'base_url',
-    'api_key', 'counter', 'encoder', 'max_tokens', 'max_completion_tokens',
+    'api_key', 'counter', 'encoder',
     'max_reasoning_tokens', 'structured_output'
 ]
 
 # Define columns that should be nullable integers
-INT_COLUMNS = ['coding_arena_elo', 'max_tokens', 'max_completion_tokens', 'max_reasoning_tokens']
+INT_COLUMNS = ['coding_arena_elo', 'max_reasoning_tokens']
 
 # Placeholder for missing numeric values (optional, pd.NA is generally better)
 MISSING_VALUE_PLACEHOLDER = -1.0
