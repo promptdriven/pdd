@@ -7,6 +7,7 @@ import litellm
 from rich.console import Console
 from rich.table import Table
 import math # For isnan check, although pd.isna is preferred
+from pathlib import Path
 
 # Initialize Rich Console for pretty printing
 console = Console()
@@ -371,7 +372,36 @@ def main():
             console.print(f"[bold red]Error:[/bold red] Could not create directory {csv_dir}: {e}")
             return # Exit if directory cannot be created
 
-    update_model_data(args.csv_path)
+    # --- Determine final CSV path ---
+    user_pdd_dir = Path.home() / ".pdd"
+    user_model_csv_path = user_pdd_dir / "llm_model.csv"
+    default_csv_path = Path(args.csv_path).resolve() # Resolve the default path
+
+    final_csv_path = default_csv_path # Start with the default/provided path
+
+    if user_model_csv_path.is_file():
+        final_csv_path = user_model_csv_path
+        console.print(f"[bold cyan]Found user-specific config, using:[/bold cyan] {final_csv_path}")
+    else:
+        # Check if the default/provided path actually exists *before* attempting to use it
+        if not default_csv_path.is_file():
+             # If neither user nor default exists, check if the *directory* for default exists
+            default_csv_dir = default_csv_path.parent
+            if not default_csv_dir.exists():
+                try:
+                    os.makedirs(default_csv_dir)
+                    console.print(f"[cyan]Created directory for default CSV:[/cyan] {default_csv_dir}")
+                    # We still might not have the *file*, update_model_data will handle file not found
+                except OSError as e:
+                    console.print(f"[bold red]Error:[/bold red] Could not create directory {default_csv_dir}: {e}")
+                    return # Exit if directory cannot be created
+            # Keep final_csv_path as default_csv_path, update_model_data will report if file doesn't exist
+            console.print(f"[cyan]User-specific config not found. Using default/provided path:[/cyan] {final_csv_path}")
+        else:
+             console.print(f"[cyan]User-specific config not found. Using default/provided path:[/cyan] {final_csv_path}")
+
+    # Pass the determined path to the update function
+    update_model_data(str(final_csv_path))
 
 if __name__ == "__main__":
     # --- Crucial Note ---

@@ -6,7 +6,8 @@
     - This function requires the `python-dotenv` library for managing environment variables from a `.env` file.
 
 % Startup Behavior:
-    - Upon initialization or first call, the function should attempt to load environment variables from a `.env` file located at the project root. The project root is determined by the `$PDD_PATH` environment variable if set, otherwise it defaults to the current working directory.
+    - Upon initialization or first call, the function should attempt to load environment variables from a `.env` file located at the project root.
+    - The project root is determined by: 1. Checking the `$PDD_PATH` environment variable. 2. If not set or invalid, searching upwards from the script's directory for project markers (like `.git`, `pyproject.toml`, `data/`, `.env`). 3. If no markers are found, defaulting to the current working directory.
 
 % Here are the inputs and outputs of the function:
     Input:
@@ -20,7 +21,7 @@
         'use_batch_mode' - Optional. Boolean indicating whether to use batch processing if supported by the model/provider via LiteLLM (default: False).
     Output (dictionary):
         'result' - Output from the LLM model (string or Pydantic object) OR **a list of outputs** if `use_batch_mode` was True.
-        'cost' - Cost of the invoke run, potentially obtained via LiteLLM's cost tracking. If batch mode, this should be the total cost.
+        'cost' - Total cost of the invoke run, calculated via a LiteLLM callback and the `litellm.completion_cost` function.
         'model_name' - Name of the selected model used by LiteLLM.
         'thinking_output' - Optional. The reasoning or thinking process output from the model, if available in the LiteLLM response.
         
@@ -83,7 +84,9 @@
 
 % Here are the rules to follow when selecting the appropriate model via LiteLLM:
     - If environmental variable $PDD_MODEL_DEFAULT is set, use that as the base model name (e.g., "openai/gpt-4o-mini"), otherwise it is "openai/gpt-4o-mini". If $PDD_PATH is set load $PDD_PATH/data/llm_model.csv, otherwise, assume $PDD_PATH is current working directory.
-    - Read the `llm_model.csv` file to get all necessary model details (LiteLLM model identifier, input/output costs, ELO, provider, **API key environment variable name**, **`reasoning_type` (e.g., 'none', 'budget', 'effort')**, **`max_reasoning_tokens` (only used if `reasoning_type` is 'budget')**, structured_output flag, etc.). The `model_name` column must contain the identifier LiteLLM uses (e.g., "openai/gpt-3.5-turbo", "anthropic/claude-3-7-sonnet-20250219"). **It is assumed that a separate utility keeps the cost, structured_output, `reasoning_type`, and `max_reasoning_tokens` data in this CSV up-to-date.**
+    - The base model name (e.g., "gpt-4.1-nano") is determined by the `$PDD_MODEL_DEFAULT` environment variable if set, otherwise it defaults to `"gpt-4.1-nano"`.
+    - Read the `llm_model.csv` file to get all necessary model details. **The script first checks for `~/.pdd/llm_model.csv` and uses it if it exists; otherwise, it uses the file located at `<PROJECT_ROOT>/data/llm_model.csv` (where `<PROJECT_ROOT>` is determined as described in Startup Behavior).**
+    - The CSV contains the LiteLLM model identifier, input/output costs, ELO, provider, **API key environment variable name**, **`reasoning_type` (e.g., 'none', 'budget', 'effort')**, **`max_reasoning_tokens` (only used if `reasoning_type` is 'budget')**, structured_output flag, etc.). The `model_name` column must contain the identifier LiteLLM uses (e.g., "openai/gpt-3.5-turbo", "anthropic/claude-3-7-sonnet-20250219"). **It is assumed that a separate utility keeps the cost, structured_output, `reasoning_type`, and `max_reasoning_tokens` data in this CSV up-to-date.**
     - Filter models first based on availability: initially check only if the required API key environment variable *name* exists in the CSV. **The actual presence of the key value in the environment is checked later (Step 4 in Logic Flow).**
     - When strength < 0.5:
         - Identify available candidate models based on the filtered CSV data.
@@ -105,7 +108,7 @@
     - `temperature`: The specified temperature.
     - `api_base`, `api_key`, `api_version`: Pass these if needed for specific setups (like Azure, local models), although LiteLLM often infers from environment variables. Consult `llm_model.csv` for provider-specific needs.
     - `max_tokens`: **Do not set this.** Allow LiteLLM and the underlying provider to use the default maximum completion tokens based on the model and input prompt length.
-    - **Structured Output**: If `output_pydantic` is provided, check the `structured_output` flag from the CSV. If `True`, use LiteLLM's mechanism for structured output (e.g., passing the Pydantic model to `response_format` or similar). If `False`, proceed without requesting structured output but still attempt parsing if `output_pydantic` was given.
+    - **Structured Output**: If `output_pydantic` is provided, check the `structured_output` flag from the CSV. If `True`, use LiteLLM's mechanism for structured output (e.g., passing the Pydantic model to `response_format` or similar). If `False`, or if the initial structured response fails validation, **fallback parsing logic (like cleaning markdown fences and re-attempting JSON validation) should be used** to attempt to create the Pydantic object.
     - **Thinking/Reasoning (`time` parameter)**: Use the `reasoning_type` and `max_reasoning_tokens` columns from the CSV to determine how to handle the `time` parameter (0-1):
         - **If `reasoning_type` is 'none'**: Ignore `time`, pass no reasoning parameters.
         - **If `reasoning_type` is 'budget'**: Check if `max_reasoning_tokens` > 0. If so, calculate `budget = int(time * max_reasoning_tokens)`. If `budget > 0`, pass the provider-specific parameter(s) via LiteLLM (e.g., Anthropic's `thinking` requires `{"type": "enabled", "budget_tokens": budget}`).
@@ -141,5 +144,7 @@
         2. Default tokens to 0 if `usage` is not available.
         3. Capture the `finish_reason` from `completion_response.choices[0].finish_reason` if available.
         4. Store or log this information as needed by the application.
+        4. Calculate the cost using `litellm.completion_cost(completion_response=...)` or potentially using `kwargs` if the response object fails.
+        5. Store or log this information (tokens, cost, finish reason) as needed by the application.
 
 % Ensure LiteLLM response caching is configured appropriately for S3/GCS (e.g., setting `litellm.cache = litellm.Cache(type='s3', s3_bucket_name=..., s3_region_name=..., s3_endpoint_url=...)` with GCS details).

@@ -69,7 +69,18 @@ if PROJECT_ROOT is None: # Fallback to CWD if no method succeeded
 
 
 ENV_PATH = PROJECT_ROOT / ".env"
-LLM_MODEL_CSV_PATH = PROJECT_ROOT / "data" / "llm_model.csv"
+# --- Determine LLM_MODEL_CSV_PATH ---
+# Prioritize ~/.pdd/llm_model.csv
+user_pdd_dir = Path.home() / ".pdd"
+user_model_csv_path = user_pdd_dir / "llm_model.csv"
+
+if user_model_csv_path.is_file():
+    LLM_MODEL_CSV_PATH = user_model_csv_path
+    print(f"[INFO] Using user-specific LLM model CSV: {LLM_MODEL_CSV_PATH}")
+else:
+    LLM_MODEL_CSV_PATH = PROJECT_ROOT / "data" / "llm_model.csv"
+    print(f"[INFO] Using project LLM model CSV: {LLM_MODEL_CSV_PATH}")
+# ---------------------------------
 
 # Load environment variables from .env file
 # print(f"[DEBUG] Attempting to load .env from: {ENV_PATH}") # Optional debug
