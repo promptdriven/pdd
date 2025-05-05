@@ -14,7 +14,7 @@ console = Console()
 # Define expected columns in the CSV, including the manually maintained one
 EXPECTED_COLUMNS = [
     'provider', 'model', 'input', 'output', 'coding_arena_elo', 'base_url',
-    'api_key', 'counter', 'encoder',
+    'api_key',
     'max_reasoning_tokens', 'structured_output'
 ]
 
@@ -108,6 +108,7 @@ def update_model_data(csv_path: str) -> None:
     # --- 4. Iterate Through Models and Update ---
     models_updated_count = 0
     models_failed_count = 0
+    mismatched_cost_count = 0 # Track mismatches
     # Add a temporary column to track failures directly
     df['_failed'] = False
     rows_to_update = []
@@ -117,6 +118,7 @@ def update_model_data(csv_path: str) -> None:
     table.add_column("Model Identifier", style="cyan")
     table.add_column("Cost Update", style="magenta")
     table.add_column("Struct. Output Update", style="yellow")
+    table.add_column("Cost Match", style="blue") # New column for matching status
     table.add_column("Status", style="green")
 
     # Pre-fetch all model costs from LiteLLM once
@@ -139,6 +141,12 @@ def update_model_data(csv_path: str) -> None:
             console.print(f"[yellow]Warning:[/yellow] Skipping row {index} due to missing model identifier.")
             continue
 
+        # --- Cost Comparison Variables ---
+        fetched_input_cost = None
+        fetched_output_cost = None
+        cost_match_status = "[grey]N/A[/grey]" # Default if no litellm data or comparison not possible
+        cost_data_available = False
+
         # --- 5. Initial Model Validation & Schema Check ---
         # Attempt an early check using supports_response_schema.
         # A ValueError here often indicates the model identifier is unknown to litellm.
@@ -157,6 +165,7 @@ def update_model_data(csv_path: str) -> None:
             cost_update_msg = "[red]Skipped[/red]"
             struct_update_msg = f"[red]Validation Failed: {ve}[/red]"
             df.loc[index, '_failed'] = True
+            cost_match_status = "[red]Skipped (Validation Failed)[/red]" # Also skip matching
         except Exception as e:
              # Catch other potential errors during the initial check
              is_valid_model = False # Treat other errors as validation failure too
@@ -165,10 +174,11 @@ def update_model_data(csv_path: str) -> None:
              cost_update_msg = "[red]Skipped[/red]"
              struct_update_msg = f"[red]Check Error: {e}[/red]"
              df.loc[index, '_failed'] = True
+             cost_match_status = "[red]Skipped (Schema Check Error)[/red]" # Also skip matching
 
         # If initial validation failed, skip further processing for this row
         if not is_valid_model:
-            table.add_row(model_identifier, cost_update_msg, struct_update_msg, row_status)
+            table.add_row(model_identifier, cost_update_msg, struct_update_msg, cost_match_status, row_status)
             continue
 
         # --- If validation passed, proceed with cost and struct updates ---
@@ -178,50 +188,89 @@ def update_model_data(csv_path: str) -> None:
         needs_update = False
 
         # --- 6. Check and Update Costs --- (Renumbered from 5)
-        # Use pd.isna() which works correctly with Int64Dtype, float, object etc.
-        input_cost_missing = pd.isna(row['input']) # No need for placeholder check if NA is used consistently
-        output_cost_missing = pd.isna(row['output'])
+        # Always attempt to fetch cost data if available
+        cost_data = all_model_costs.get(model_identifier)
+        cost_fetch_error = None
 
-        if input_cost_missing or output_cost_missing:
-            cost_update_msg = "Attempting fetch..."
+        if cost_data:
+            cost_data_available = True
             try:
-                # Use the pre-fetched dictionary
-                cost_data = all_model_costs.get(model_identifier)
+                input_cost_per_token = cost_data.get('input_cost_per_token')
+                output_cost_per_token = cost_data.get('output_cost_per_token')
 
-                if cost_data:
-                    input_cost_per_token = cost_data.get('input_cost_per_token')
-                    output_cost_per_token = cost_data.get('output_cost_per_token')
-
-                    updated_costs = []
-                    if input_cost_missing and input_cost_per_token is not None:
-                        # Convert cost per token to cost per million tokens
-                        input_cost_per_million = input_cost_per_token * 1_000_000
-                        df.loc[index, 'input'] = input_cost_per_million
-                        updated_costs.append(f"Input: {input_cost_per_million:.4f}")
-                        needs_update = True
-
-                    if output_cost_missing and output_cost_per_token is not None:
-                        # Convert cost per token to cost per million tokens
-                        output_cost_per_million = output_cost_per_token * 1_000_000
-                        df.loc[index, 'output'] = output_cost_per_million
-                        updated_costs.append(f"Output: {output_cost_per_million:.4f}")
-                        needs_update = True
-
-                    if updated_costs:
-                        cost_update_msg = f"[green]Updated ({', '.join(updated_costs)})[/green]"
-                    else:
-                         cost_update_msg = "[yellow]No missing costs found/updated[/yellow]"
-
-                else:
-                    cost_update_msg = "[yellow]Cost data not found in LiteLLM[/yellow]"
-                    # Don't mark as fail, just unavailable
-                    if row_status == "[green]OK[/green]":
-                         row_status = "[yellow]Info (No Cost Data)[/yellow]"
+                if input_cost_per_token is not None:
+                    fetched_input_cost = input_cost_per_token * 1_000_000
+                if output_cost_per_token is not None:
+                    fetched_output_cost = output_cost_per_token * 1_000_000
 
             except Exception as e:
-                cost_update_msg = f"[red]Error fetching costs: {e}[/red]"
-                row_status = "[red]Fail (Cost Error)[/red]"
-                # We count specific failures below if needed, no need to increment here
+                cost_fetch_error = e
+                cost_update_msg = f"[red]Error processing costs: {e}[/red]"
+                if "Fail" not in row_status: row_status = "[red]Fail (Cost Error)[/red]"
+
+        # Decide action based on fetched data and existing values
+        input_cost_missing = pd.isna(row['input'])
+        output_cost_missing = pd.isna(row['output'])
+
+        updated_costs_messages = []
+        mismatched_costs_messages = []
+        matched_costs_messages = []
+
+        if cost_data_available and not cost_fetch_error:
+            # Update Input Cost if missing
+            if input_cost_missing and fetched_input_cost is not None:
+                df.loc[index, 'input'] = fetched_input_cost
+                updated_costs_messages.append(f"Input: {fetched_input_cost:.4f}")
+                needs_update = True
+            # Compare Input Cost if not missing
+            elif not input_cost_missing and fetched_input_cost is not None:
+                if not math.isclose(row['input'], fetched_input_cost, rel_tol=1e-6):
+                    mismatched_costs_messages.append(f"Input (CSV: {row['input']:.4f}, LLM: {fetched_input_cost:.4f})")
+                else:
+                    matched_costs_messages.append("Input")
+
+            # Update Output Cost if missing
+            if output_cost_missing and fetched_output_cost is not None:
+                df.loc[index, 'output'] = fetched_output_cost
+                updated_costs_messages.append(f"Output: {fetched_output_cost:.4f}")
+                needs_update = True
+            # Compare Output Cost if not missing
+            elif not output_cost_missing and fetched_output_cost is not None:
+                if not math.isclose(row['output'], fetched_output_cost, rel_tol=1e-6):
+                    mismatched_costs_messages.append(f"Output (CSV: {row['output']:.4f}, LLM: {fetched_output_cost:.4f})")
+                else:
+                    matched_costs_messages.append("Output")
+
+            # Set Cost Update Message
+            if updated_costs_messages:
+                cost_update_msg = f"[green]Updated ({', '.join(updated_costs_messages)})[/green]"
+            elif mismatched_costs_messages or matched_costs_messages: # If compared, even if no update
+                cost_update_msg = "[blue]Checked (No missing values)[/blue]"
+            else: # No cost data in litellm for either input/output
+                cost_update_msg = "[yellow]No comparable cost data in LiteLLM[/yellow]"
+                if row_status == "[green]OK[/green]": row_status = "[yellow]Info (No Cost Data)[/yellow]"
+
+            # Set Cost Match Status Message
+            if mismatched_costs_messages:
+                cost_match_status = f"[bold red]Mismatch! ({', '.join(mismatched_costs_messages)})[/bold red]"
+                mismatched_cost_count += 1 # Increment mismatch counter
+            elif matched_costs_messages:
+                cost_match_status = f"[green]Match ({', '.join(matched_costs_messages)})[/green]"
+            elif updated_costs_messages: # If costs were updated, they now 'match'
+                 cost_match_status = f"[blue]N/A (Updated)[/blue]"
+            else: # If no costs existed to compare (e.g., LLM has no cost data)
+                cost_match_status = "[grey]N/A (No LLM Data)[/grey]"
+
+        elif cost_fetch_error:
+            cost_match_status = "[red]Error during fetch[/red]"
+
+        elif not cost_data_available:
+            cost_update_msg = "[yellow]Cost data not found in LiteLLM[/yellow]"
+            cost_match_status = "[grey]N/A (No LLM Data)[/grey]"
+            if row_status == "[green]OK[/green]": row_status = "[yellow]Info (No Cost Data)[/yellow]"
+        else: # Should not happen, but catchall
+             cost_update_msg = "[orange]Unknown Cost State[/orange]"
+             cost_match_status = "[orange]Unknown[/orange]"
 
         # --- 7. Check and Update Structured Output Support --- (Renumbered from 6)
         # Update if 'structured_output' is NA (missing or failed previous conversion)
@@ -262,7 +311,8 @@ def update_model_data(csv_path: str) -> None:
              elif "[yellow]" in row_status:
                  row_status = "[blue]Updated (Info)[/blue]" # Indicate update happened alongside info
 
-        table.add_row(model_identifier, cost_update_msg, struct_update_msg, row_status)
+        # Add the cost match status to the table row
+        table.add_row(model_identifier, cost_update_msg, struct_update_msg, cost_match_status, row_status)
 
     console.print(table)
     console.print(f"\n[bold]Summary:[/bold]")
@@ -272,6 +322,9 @@ def update_model_data(csv_path: str) -> None:
     # Calculate based on the temporary '_failed' column in the DataFrame
     unique_failed_models = df[df['_failed']]['model'].nunique()
     console.print(f"- Models with fetch/check errors: {unique_failed_models}") # More accurate count
+    console.print(f"- Models with cost mismatches: {mismatched_cost_count}") # Report mismatches
+    if mismatched_cost_count > 0:
+        console.print(f"  [bold red](Note: Mismatched costs were NOT automatically updated. Check CSV vs LiteLLM.)[/bold red]")
 
     # Add confirmation if all models passed initial validation
     if unique_failed_models == 0 and len(df) > 0:
