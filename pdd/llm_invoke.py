@@ -104,25 +104,58 @@ GCS_HMAC_SECRET_ACCESS_KEY = os.getenv("GCS_HMAC_SECRET_ACCESS_KEY") # Load HMAC
 
 # <<< CONFIGURING GCS CACHE (S3 Compatible) >>>
 if GCS_BUCKET_NAME and GCS_HMAC_ACCESS_KEY_ID and GCS_HMAC_SECRET_ACCESS_KEY:
+    # Store original AWS credentials before overwriting for GCS cache setup
+    original_aws_access_key_id = os.environ.get('AWS_ACCESS_KEY_ID')
+    original_aws_secret_access_key = os.environ.get('AWS_SECRET_ACCESS_KEY')
+    # Store other potentially relevant AWS env vars if needed (e.g., SESSION_TOKEN, REGION)
+    original_aws_region_name = os.environ.get('AWS_REGION_NAME') # Added for completeness
+
     try:
-        # LiteLLM uses boto3 conventions. Setting the standard AWS env vars
-        # AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY will be automatically picked up.
-        # We explicitly set them here from the GCS-specific vars for clarity
-        # and to ensure they override any other AWS credentials if present.
+        # Temporarily set AWS env vars to GCS HMAC keys for S3 compatible cache
         os.environ['AWS_ACCESS_KEY_ID'] = GCS_HMAC_ACCESS_KEY_ID
         os.environ['AWS_SECRET_ACCESS_KEY'] = GCS_HMAC_SECRET_ACCESS_KEY
+        # If GCS region is different from default AWS region, set it temporarily too
+        # Note: LiteLLM cache seems to use s3_region_name param, so this might be less critical
+        # if GCS_REGION_NAME and GCS_REGION_NAME != original_aws_region_name:
+        #     os.environ['AWS_REGION_NAME'] = GCS_REGION_NAME
 
         litellm.cache = litellm.Cache(
             type="s3",
             s3_bucket_name=GCS_BUCKET_NAME,
-            s3_region_name=GCS_REGION_NAME,
+            s3_region_name=GCS_REGION_NAME, # Pass region explicitly to cache
             s3_endpoint_url=GCS_ENDPOINT_URL,
-            # Note: LiteLLM/boto3 will use AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY from env
+            # Note: LiteLLM/boto3 will use AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY from env *at this moment*
         )
         print(f"[INFO] LiteLLM cache configured for GCS bucket (S3 compatible): {GCS_BUCKET_NAME}")
+
     except Exception as e:
         warnings.warn(f"Failed to configure LiteLLM S3/GCS cache: {e}. Caching might be disabled or fallback.")
         litellm.cache = None # Explicitly disable cache on failure
+
+    finally:
+        # Restore original AWS credentials after cache setup attempt
+        if original_aws_access_key_id is not None:
+            os.environ['AWS_ACCESS_KEY_ID'] = original_aws_access_key_id
+        elif 'AWS_ACCESS_KEY_ID' in os.environ:
+            # If it didn't exist originally but got set, remove it
+            del os.environ['AWS_ACCESS_KEY_ID']
+
+        if original_aws_secret_access_key is not None:
+            os.environ['AWS_SECRET_ACCESS_KEY'] = original_aws_secret_access_key
+        elif 'AWS_SECRET_ACCESS_KEY' in os.environ:
+            del os.environ['AWS_SECRET_ACCESS_KEY']
+
+        # Restore original region too
+        if original_aws_region_name is not None:
+            os.environ['AWS_REGION_NAME'] = original_aws_region_name
+        elif 'AWS_REGION_NAME' in os.environ:
+             # If it was temporarily set but didn't exist before, remove it
+             # Check carefully if this is desired based on how region is used elsewhere
+             # For now, mirroring the key/secret logic:
+             # del os.environ['AWS_REGION_NAME'] # Potentially remove if needed
+             pass # Or just leave it if the temporary setting wasn't done/needed
+
+
 else:
     warnings.warn("Required GCS cache environment variables (GCS_BUCKET_NAME, GCS_HMAC_ACCESS_KEY_ID, GCS_HMAC_SECRET_ACCESS_KEY) not fully set. LiteLLM caching is disabled.")
     litellm.cache = None # Explicitly disable cache
@@ -238,6 +271,10 @@ def _load_model_data(csv_path: Path) -> pd.DataFrame:
         # Ensure reasoning_type is string, fillna with 'none' and lowercase
         df['reasoning_type'] = df['reasoning_type'].fillna('none').astype(str).str.lower()
 
+        # Ensure api_key is treated as string, fill NaN with empty string ''
+        # This handles cases where read_csv might interpret empty fields as NaN
+        df['api_key'] = df['api_key'].fillna('').astype(str)
+
         return df
     except Exception as e:
         raise RuntimeError(f"Error loading or processing LLM model CSV {csv_path}: {e}") from e
@@ -252,10 +289,20 @@ def _select_model_candidates(
     # 1. Filter by API Key Name Presence (initial availability check)
     # Keep models with a non-empty api_key field in the CSV.
     # The actual key value check happens later.
-    available_df = model_df[model_df['api_key'].notna() & (model_df['api_key'] != '')].copy()
+    # Allow models with empty api_key (e.g., Bedrock using AWS creds, local models)
+    available_df = model_df[model_df['api_key'].notna()].copy()
 
+    # --- Check if the initial DataFrame itself was empty ---
+    if model_df.empty:
+        raise ValueError("Loaded model data is empty. Check CSV file.")
+
+    # --- Check if filtering resulted in empty (might indicate all models had NaN api_key) ---
     if available_df.empty:
-        raise ValueError("No models available after initial filtering (missing 'api_key' in CSV?).")
+        # This case is less likely if notna() is the only filter, but good to check.
+        rprint("[WARN] No models found after filtering for non-NaN api_key. Check CSV 'api_key' column.")
+        # Decide if this should be a hard error or allow proceeding if logic permits
+        # For now, let's raise an error as it likely indicates a CSV issue.
+        raise ValueError("No models available after initial filtering (all had NaN 'api_key'?).")
 
     # 2. Find Base Model
     base_model_row = available_df[available_df['model'] == base_model_name]
@@ -313,6 +360,17 @@ def _select_model_candidates(
     if not candidates:
          # This should ideally not happen if available_df was not empty
          raise RuntimeError("Model selection resulted in an empty candidate list.")
+
+    # --- DEBUGGING PRINT ---
+    if os.getenv("PDD_DEBUG_SELECTOR"): # Add env var check for debug prints
+        print("--- DEBUG: Inside _select_model_candidates ---")
+        print(f"Strength: {strength}, Base Model: {base_model_name}")
+        print("Available DF (Sorted by metric):")
+        print(available_df.sort_values(by='sort_metric')[['model', 'coding_arena_elo', 'sort_metric']])
+        print("Final Candidates List (Model Names):")
+        print([c['model'] for c in candidates])
+        print("---------------------------------------------")
+    # --- END DEBUGGING PRINT ---
 
     return candidates
 
