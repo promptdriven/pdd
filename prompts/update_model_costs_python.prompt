@@ -18,6 +18,7 @@
 % Inputs:
     - The script should accept the path to the `llm_model.csv` file as a command-line argument (e.g., using `argparse`). Default path should be 'data/llm_model.csv'.
     - Ensure the directory for the CSV path exists, creating it if necessary (`os.makedirs`).
+    - **CSV Path Precedence:** The script first checks for the existence of `~/.pdd/llm_model.csv`. If this file exists, it will be used *instead* of the path provided by the `--csv-path` argument. If the user-specific file does not exist, the script proceeds to use the path from the `--csv-path` argument (or its default).
 
 % Core Logic:
     1. Define expected columns including `max_reasoning_tokens`. Define columns intended to be nullable integers.
@@ -36,7 +37,8 @@
         c. If found, get 'input_cost_per_token'/'output_cost_per_token'. Handle cases where these keys might be missing.
         d. **Calculate:** Multiply the per-token cost by 1,000,000.
         e. Update the DataFrame cell with the calculated per-million token cost.
-        f. If costs cannot be fetched/calculated, report appropriately.
+        f. **If cost values already exist** in the CSV for the model, compare them to the fetched/calculated LiteLLM values. Report any mismatches found in the console output, but **do not automatically overwrite** the existing CSV values if they differ.
+        g. If costs cannot be fetched/calculated, report appropriately.
     9. **Check and Update Structured Output Support (only if validation passed):**
         a. Check if 'structured_output' is missing (`pd.isna()`).
         b. If missing, use the stored result from the initial validation step to update the DataFrame cell with the boolean result (True/False).
