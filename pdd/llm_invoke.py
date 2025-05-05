@@ -462,6 +462,17 @@ def llm_invoke(
         RuntimeError: If all candidate models fail.
         openai.*Error: If LiteLLM encounters API errors after retries.
     """
+    rprint(f"[DEBUG llm_invoke start] Arguments received:")
+    rprint(f"  prompt: {'provided' if prompt else 'None'}")
+    rprint(f"  input_json: {'provided' if input_json is not None else 'None'}")
+    rprint(f"  strength: {strength}")
+    rprint(f"  temperature: {temperature}")
+    rprint(f"  verbose: {verbose}")
+    rprint(f"  output_pydantic: {output_pydantic.__name__ if output_pydantic else 'None'}")
+    rprint(f"  time: {time}")
+    rprint(f"  use_batch_mode: {use_batch_mode}")
+    rprint(f"  messages: {'provided' if messages else 'None'}")
+
     # --- 1. Load Environment & Validate Inputs ---
     # .env loading happens at module level
 
@@ -616,24 +627,16 @@ def llm_invoke(
                 start_time = time_module.time()
                 # <<< EXPLICITLY ENABLE CACHING >>>
                 litellm_kwargs["caching"] = True
-                # callback_results = [] # To store results from callback - Removed
-                # total_cost = 0.0 # Initialize total cost here - Removed
+
 
                 if use_batch_mode:
                     if verbose: rprint(f"[INFO] Calling litellm.batch_completion for {model_name_litellm}...")
                     response = litellm.batch_completion(**litellm_kwargs)
-                    # # batch_completion returns callback results as a list - Removed
-                    # callback_results = litellm.callbacks # Access results from module attribute - Removed
-                    # # Sum costs returned by the callback for each item - Removed
-                    # total_cost = sum(cost if isinstance(cost, (int, float)) else 0.0 for cost in callback_results) - Removed
+
 
                 else:
                     if verbose: rprint(f"[INFO] Calling litellm.completion for {model_name_litellm}...")
                     response = litellm.completion(**litellm_kwargs)
-                    # # completion returns callback result directly if callback returns a value - Removed
-                    # callback_results = litellm.callbacks # Access results from module attribute - Removed
-                    # # Get the cost from the single callback result - Removed
-                    # total_cost = callback_results[0] if callback_results and isinstance(callback_results[0], (int, float)) else 0.0 - Removed
 
                 end_time = time_module.time()
 
@@ -826,7 +829,7 @@ if __name__ == "__main__":
             temperature=0.7,
             verbose=True
         )
-        # rprint("Example 1 Response:", response)
+        rprint("Example 1 Response:", response)
     except Exception as e:
         rprint(f"Example 1 Failed: {e}")
 
@@ -848,7 +851,7 @@ if __name__ == "__main__":
             output_pydantic=JokeStructure,
             verbose=True
         )
-        # rprint("Example 2 Response:", response_structured)
+        rprint("Example 2 Response:", response_structured)
         if isinstance(response_structured.get('result'), JokeStructure):
              rprint("Pydantic object received successfully:", response_structured['result'].model_dump())
         else:
@@ -901,8 +904,8 @@ if __name__ == "__main__":
         response_thinking = llm_invoke(
             prompt="Explain the theory of relativity simply.",
             input_json={},
-            strength=0.865, # Try to get a model that might support thinking
-            temperature=0, # <<< SET TO 0 FOR DETERMINISM >>>
+            strength=1, # Try to get a model that might support thinking
+            temperature=1, # <<< SET TO 0 FOR DETERMINISM >>>
             verbose=True
         )
         rprint("Example 5 Response:", response_thinking)
