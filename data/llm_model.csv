@@ -15,4 +15,4 @@ Fireworks,fireworks_ai/accounts/fireworks/models/deepseek-r1,3.0,8.0,1338,,FIREW
 OpenAI,chatgpt-4o-latest,2.0,8.0,1369,,OPENAI_API_KEY,0,False,none
 Anthropic,bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0,3.0,15.0,1339,,,64000,True,budget
 OpenAI,azure/o4-mini,1.1,4.4,1334,,OPENAI_API_KEY,0,True,effort
-OpenAI,openai/mlx-community/Qwen3-30B-A3B-4bit,0,0,1293,http://localhost:8080,PWD,0,True,none
+OpenAI,openai/mlx-community/Qwen3-30B-A3B-4bit,0,0,1293,http://localhost:8080,,0,True,none
