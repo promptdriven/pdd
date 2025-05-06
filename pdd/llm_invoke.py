@@ -610,8 +610,8 @@ def llm_invoke(
             else:
                 return 0.5
         
-        model_strengths = [(c['model'], round(calc_strength(c), 3)) for c in candidate_models]
-        rprint("[INFO] Candidate models selected and ordered (with strength):", model_strengths)
+        model_strengths_formatted = [(c['model'], f"{float(calc_strength(c)):.3f}") for c in candidate_models]
+        rprint("[INFO] Candidate models selected and ordered (with strength):", model_strengths_formatted)
         rprint(f"[INFO] Strength: {strength}, Temperature: {temperature}, Time: {time}")
         if use_batch_mode: rprint("[INFO] Batch mode enabled.")
         if output_pydantic: rprint(f"[INFO] Pydantic output requested: {output_pydantic.__name__}")
