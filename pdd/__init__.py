@@ -5,3 +5,10 @@ __version__ = "0.0.25"
 EXTRACTION_STRENGTH = 0.9
 
 DEFAULT_STRENGTH = 0.9
+
+"""PDD - Python Data Driven"""
+
+# Define constants used across the package
+DEFAULT_LLM_MODEL = "gpt-4.1-nano"
+
+# You can add other package-level initializations or imports here
