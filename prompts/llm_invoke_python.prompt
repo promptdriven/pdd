@@ -83,8 +83,8 @@
 % The code must use LiteLLM's `litellm.completion()` function to handle invocation across various LLM providers. LiteLLM standardizes the API calls. Configure LiteLLM to enable its built-in response caching, specifically targeting an S3-compatible backend configured for Google Cloud Storage (GCS).
 
 % Here are the rules to follow when selecting the appropriate model via LiteLLM:
-    - If environmental variable $PDD_MODEL_DEFAULT is set, use that as the base model name (e.g., "openai/gpt-4o-mini"), otherwise it is "openai/gpt-4o-mini". If $PDD_PATH is set load $PDD_PATH/data/llm_model.csv, otherwise, assume $PDD_PATH is current working directory.
-    - The base model name (e.g., "gpt-4.1-nano") is determined by the `$PDD_MODEL_DEFAULT` environment variable if set, otherwise it defaults to `"gpt-4.1-nano"`.
+    - If environmental variable $PDD_MODEL_DEFAULT is set, use that as the base model name.
+    - Otherwise, the base model name is defined by the `DEFAULT_LLM_MODEL` constant imported from `pdd/__init__.py`.
     - Read the `llm_model.csv` file to get all necessary model details. **The script first checks for `~/.pdd/llm_model.csv` and uses it if it exists; otherwise, it uses the file located at `<PROJECT_ROOT>/data/llm_model.csv` (where `<PROJECT_ROOT>` is determined as described in Startup Behavior).**
     - The CSV contains the LiteLLM model identifier, input/output costs, ELO, provider, **API key environment variable name**, **`reasoning_type` (e.g., 'none', 'budget', 'effort')**, **`max_reasoning_tokens` (only used if `reasoning_type` is 'budget')**, structured_output flag, etc.). The `model_name` column must contain the identifier LiteLLM uses (e.g., "openai/gpt-3.5-turbo", "anthropic/claude-3-7-sonnet-20250219"). **It is assumed that a separate utility keeps the cost, structured_output, `reasoning_type`, and `max_reasoning_tokens` data in this CSV up-to-date.**
     - Filter models first based on availability: initially check only if the required API key environment variable *name* exists in the CSV. **The actual presence of the key value in the environment is checked later (Step 4 in Logic Flow).**
