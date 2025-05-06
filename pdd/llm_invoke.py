@@ -2,12 +2,10 @@
 # Added optional debugging prints in _select_model_candidates
 
 import os
-import sys
 import pandas as pd
 import litellm
 import json
 from rich import print as rprint
-from rich.pretty import pretty_repr
 from dotenv import load_dotenv
 from pathlib import Path
 from typing import Optional, Dict, List, Any, Type, Union
@@ -199,6 +197,7 @@ def _litellm_success_callback(
         # Attempt 2: If response object failed (e.g., missing provider in model name),
         # try again using explicit model from kwargs and tokens from usage.
         # This is often needed for batch completion items.
+        print(f"[DEBUG] Attempting cost calculation with fallback method: {e1}")
         try:
             model_name = kwargs.get("model") # Get original model name from input kwargs
             if model_name and usage:
@@ -219,6 +218,7 @@ def _litellm_success_callback(
             # Optional: Log secondary error e2 if needed
             # print(f"[Callback WARN] Failed to calculate cost with fallback method: {e2}")
             calculated_cost = 0.0 # Default to 0 on any error
+            print(f"[DEBUG] Cost calculation failed with fallback method: {e2}")
 
     _LAST_CALLBACK_DATA["input_tokens"] = input_tokens
     _LAST_CALLBACK_DATA["output_tokens"] = output_tokens
@@ -326,7 +326,7 @@ def _select_model_candidates(
     target_metric_value = None # For debugging print
 
     if strength == 0.5:
-        target_model = base_model
+        # target_model = base_model
         # Sort remaining by ELO descending as fallback
         available_df['sort_metric'] = -available_df['coding_arena_elo'] # Negative for descending sort
         candidates = available_df.sort_values(by='sort_metric').to_dict('records')
@@ -427,7 +427,7 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
                         lines = f.readlines()
 
                 new_lines = []
-                key_updated = False
+                # key_updated = False
                 prefix = f"{key_name}="
                 prefix_spaced = f"{key_name} =" # Handle potential spaces
 
@@ -436,7 +436,7 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
                     if stripped_line.startswith(prefix) or stripped_line.startswith(prefix_spaced):
                         # Comment out the old key
                         new_lines.append(f"# {line}")
-                        key_updated = True # Indicates we found an old line to comment
+                        # key_updated = True # Indicates we found an old line to comment
                     elif stripped_line.startswith(f"# {prefix}") or stripped_line.startswith(f"# {prefix_spaced}"):
                          # Keep already commented lines as they are
                          new_lines.append(line)
@@ -535,7 +535,7 @@ def llm_invoke(
         openai.*Error: If LiteLLM encounters API errors after retries.
     """
     if verbose: # Print args early if verbose
-        rprint(f"[DEBUG llm_invoke start] Arguments received:")
+        rprint("[DEBUG llm_invoke start] Arguments received:")
         rprint(f"  prompt: {'provided' if prompt else 'None'}")
         rprint(f"  input_json: {'provided' if input_json is not None else 'None'}")
         rprint(f"  strength: {strength}")
@@ -616,8 +616,10 @@ def llm_invoke(
         model_strengths_formatted = [(c['model'], f"{float(calc_strength(c)):.3f}") for c in candidate_models]
         rprint("[INFO] Candidate models selected and ordered (with strength):", model_strengths_formatted)
         rprint(f"[INFO] Strength: {strength}, Temperature: {temperature}, Time: {time}")
-        if use_batch_mode: rprint("[INFO] Batch mode enabled.")
-        if output_pydantic: rprint(f"[INFO] Pydantic output requested: {output_pydantic.__name__}")
+        if use_batch_mode:
+            rprint("[INFO] Batch mode enabled.")
+        if output_pydantic:
+            rprint(f"[INFO] Pydantic output requested: {output_pydantic.__name__}")
         try:
             # Only print input_json if it was actually provided (not when messages were used)
             if input_json is not None:
@@ -649,7 +651,8 @@ def llm_invoke(
             # --- 4. API Key Check & Acquisition ---
             if not _ensure_api_key(model_info, newly_acquired_keys, verbose):
                 # Problem getting key, break inner loop, try next model candidate
-                if verbose: rprint(f"[SKIP] Skipping {model_name_litellm} due to API key issue.")
+                if verbose:
+                    rprint(f"[SKIP] Skipping {model_name_litellm} due to API key issue.")
                 break # Breaks the 'while retry_with_same_model' loop
 
             # --- 5. Prepare LiteLLM Arguments ---
@@ -676,7 +679,8 @@ def llm_invoke(
                 #     except: pass # Ignore errors in supports_response_schema check
 
                 if supports_structured:
-                    if verbose: rprint(f"[INFO] Requesting structured output (Pydantic: {output_pydantic.__name__}) for {model_name_litellm}")
+                    if verbose:
+                        rprint(f"[INFO] Requesting structured output (Pydantic: {output_pydantic.__name__}) for {model_name_litellm}")
                     # Pass the Pydantic model directly if supported, else use json_object
                     # LiteLLM handles passing Pydantic models for supported providers
                     litellm_kwargs["response_format"] = output_pydantic
@@ -685,7 +689,8 @@ def llm_invoke(
                     # And potentially enable client-side validation:
                     # litellm.enable_json_schema_validation = True # Enable globally if needed
                 else:
-                    if verbose: rprint(f"[WARN] Model {model_name_litellm} does not support structured output via CSV flag. Output might not be valid {output_pydantic.__name__}.")
+                    if verbose:
+                        rprint(f"[WARN] Model {model_name_litellm} does not support structured output via CSV flag. Output might not be valid {output_pydantic.__name__}.")
                     # Proceed without forcing JSON mode, parsing will be attempted later
 
             # --- NEW REASONING LOGIC ---
@@ -701,27 +706,35 @@ def llm_invoke(
                             # Model name comparison is more robust than provider string
                             if provider == 'anthropic': # Check provider column instead of model prefix
                                 litellm_kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
-                                if verbose: rprint(f"[INFO] Requesting Anthropic thinking (budget type) with budget: {budget} tokens for {model_name_litellm}")
+                                if verbose:
+                                    rprint(f"[INFO] Requesting Anthropic thinking (budget type) with budget: {budget} tokens for {model_name_litellm}")
                             else:
                                 # If other providers adopt a budget param recognized by LiteLLM, add here
-                                if verbose: rprint(f"[WARN] Reasoning type is 'budget' for {model_name_litellm}, but no specific LiteLLM budget parameter known for this provider. Parameter not sent.")
-                        elif verbose: rprint(f"[INFO] Calculated reasoning budget is 0 for {model_name_litellm}, skipping reasoning parameter.")
+                                if verbose:
+                                    rprint(f"[WARN] Reasoning type is 'budget' for {model_name_litellm}, but no specific LiteLLM budget parameter known for this provider. Parameter not sent.")
+                        elif verbose:
+                            rprint(f"[INFO] Calculated reasoning budget is 0 for {model_name_litellm}, skipping reasoning parameter.")
                     elif verbose:
                         rprint(f"[WARN] Reasoning type is 'budget' for {model_name_litellm}, but 'max_reasoning_tokens' is missing or zero in CSV. Reasoning parameter not sent.")
 
                 elif reasoning_type == 'effort':
                     effort = "low"
-                    if time > 0.7: effort = "high"
-                    elif time > 0.3: effort = "medium"
+                    if time > 0.7:
+                        effort = "high"
+                    elif time > 0.3:
+                        effort = "medium"
                     # Use the common 'reasoning_effort' param LiteLLM provides
                     litellm_kwargs["reasoning_effort"] = effort
-                    if verbose: rprint(f"[INFO] Requesting reasoning_effort='{effort}' (effort type) for {model_name_litellm} based on time={time}")
+                    if verbose:
+                        rprint(f"[INFO] Requesting reasoning_effort='{effort}' (effort type) for {model_name_litellm} based on time={time}")
 
                 elif reasoning_type == 'none':
-                    if verbose: rprint(f"[INFO] Model {model_name_litellm} has reasoning_type='none'. No reasoning parameter sent.")
+                    if verbose:
+                        rprint(f"[INFO] Model {model_name_litellm} has reasoning_type='none'. No reasoning parameter sent.")
 
                 else: # Unknown reasoning_type in CSV
-                     if verbose: rprint(f"[WARN] Unknown reasoning_type '{reasoning_type}' for model {model_name_litellm} in CSV. No reasoning parameter sent.")
+                     if verbose:
+                         rprint(f"[WARN] Unknown reasoning_type '{reasoning_type}' for model {model_name_litellm} in CSV. No reasoning parameter sent.")
 
             # --- END NEW REASONING LOGIC ---
 
@@ -738,12 +751,14 @@ def llm_invoke(
 
 
                 if use_batch_mode:
-                    if verbose: rprint(f"[INFO] Calling litellm.batch_completion for {model_name_litellm}...")
+                    if verbose:
+                        rprint(f"[INFO] Calling litellm.batch_completion for {model_name_litellm}...")
                     response = litellm.batch_completion(**litellm_kwargs)
 
 
                 else:
-                    if verbose: rprint(f"[INFO] Calling litellm.completion for {model_name_litellm}...")
+                    if verbose:
+                        rprint(f"[INFO] Calling litellm.completion for {model_name_litellm}...")
                     response = litellm.completion(**litellm_kwargs)
 
                 end_time = time_module.time()
@@ -766,15 +781,18 @@ def llm_invoke(
                         # Attempt 1: Check _hidden_params based on isolated test script
                         if hasattr(resp_item, '_hidden_params') and resp_item._hidden_params and 'thinking' in resp_item._hidden_params:
                              thinking = resp_item._hidden_params['thinking']
-                             if verbose: rprint("[DEBUG] Extracted thinking output from response._hidden_params['thinking']")
+                             if verbose:
+                                 rprint("[DEBUG] Extracted thinking output from response._hidden_params['thinking']")
                         # Attempt 2: Fallback to reasoning_content in message
                         # Use .get() for safer access
                         elif hasattr(resp_item, 'choices') and resp_item.choices and hasattr(resp_item.choices[0], 'message') and hasattr(resp_item.choices[0].message, 'get') and resp_item.choices[0].message.get('reasoning_content'):
                             thinking = resp_item.choices[0].message.get('reasoning_content')
-                            if verbose: rprint("[DEBUG] Extracted thinking output from response.choices[0].message.get('reasoning_content')")
+                            if verbose:
+                                rprint("[DEBUG] Extracted thinking output from response.choices[0].message.get('reasoning_content')")
 
                     except (AttributeError, IndexError, KeyError, TypeError):
-                        if verbose: rprint("[DEBUG] Failed to extract thinking output from known locations.")
+                        if verbose:
+                            rprint("[DEBUG] Failed to extract thinking output from known locations.")
                         pass # Ignore if structure doesn't match or errors occur
                     thinking_outputs.append(thinking)
 
@@ -789,12 +807,14 @@ def llm_invoke(
                                 # Attempt 1: Check if LiteLLM already parsed it
                                 if isinstance(raw_result, output_pydantic):
                                     parsed_result = raw_result
-                                    if verbose: rprint("[DEBUG] Pydantic object received directly from LiteLLM.")
+                                    if verbose:
+                                        rprint("[DEBUG] Pydantic object received directly from LiteLLM.")
 
                                 # Attempt 2: Check if raw_result is dict-like and validate
                                 elif isinstance(raw_result, dict):
                                     parsed_result = output_pydantic.model_validate(raw_result)
-                                    if verbose: rprint("[DEBUG] Validated dictionary-like object directly.")
+                                    if verbose:
+                                        rprint("[DEBUG] Validated dictionary-like object directly.")
 
                                 # Attempt 3: Process as string (if not already parsed/validated)
                                 elif isinstance(raw_result, str):
@@ -807,7 +827,8 @@ def llm_invoke(
                                             potential_json = json_string_to_parse[start_brace:end_brace+1]
                                             # Basic check if it looks like JSON
                                             if potential_json.strip().startswith('{') and potential_json.strip().endswith('}'):
-                                                if verbose: rprint(f"[DEBUG] Attempting to parse extracted JSON block: '{potential_json}'")
+                                                if verbose:
+                                                    rprint(f"[DEBUG] Attempting to parse extracted JSON block: '{potential_json}'")
                                                 parsed_result = output_pydantic.model_validate_json(potential_json)
                                             else:
                                                 # If block extraction fails, try cleaning markdown next
@@ -816,7 +837,8 @@ def llm_invoke(
                                              # If no braces found, try cleaning markdown next
                                             raise ValueError("Could not find enclosing {}")
                                     except (json.JSONDecodeError, ValidationError, ValueError) as extraction_error:
-                                        if verbose: rprint(f"[DEBUG] JSON block extraction/validation failed ('{extraction_error}'). Trying markdown cleaning.")
+                                        if verbose:
+                                            rprint(f"[DEBUG] JSON block extraction/validation failed ('{extraction_error}'). Trying markdown cleaning.")
                                         # Fallback: Clean markdown fences and retry JSON validation
                                         cleaned_result_str = raw_result.strip()
                                         if cleaned_result_str.startswith("```json"):
@@ -828,7 +850,8 @@ def llm_invoke(
                                         cleaned_result_str = cleaned_result_str.strip()
                                         # Check again if it looks like JSON before parsing
                                         if cleaned_result_str.startswith('{') and cleaned_result_str.endswith('}'):
-                                            if verbose: rprint(f"[DEBUG] Attempting parse after cleaning markdown fences. Cleaned string: '{cleaned_result_str}'")
+                                            if verbose:
+                                                rprint(f"[DEBUG] Attempting parse after cleaning markdown fences. Cleaned string: '{cleaned_result_str}'")
                                             json_string_to_parse = cleaned_result_str # Update string for error reporting
                                             parsed_result = output_pydantic.model_validate_json(json_string_to_parse)
                                         else:
@@ -885,7 +908,7 @@ def llm_invoke(
                     rprint(f"[RESULT] Tokens (Completion): {output_tokens}")
                     # Display the cost captured by the callback
                     rprint(f"[RESULT] Total Cost (from callback): ${total_cost:.6g}") # Renamed label for clarity
-                    rprint(f"[RESULT] Max Completion Tokens: Provider Default") # Indicate default limit
+                    rprint("[RESULT] Max Completion Tokens: Provider Default") # Indicate default limit
                     if final_thinking:
                         rprint("[RESULT] Thinking Output:")
                         rprint(final_thinking) # Rich print should handle the thinking output format
