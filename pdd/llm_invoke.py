@@ -1,4 +1,5 @@
-# llm_invoke.py
+# Corrected code_under_test (llm_invoke.py)
+# Added optional debugging prints in _select_model_candidates
 
 import os
 import sys
@@ -20,7 +21,7 @@ import time as time_module # Alias to avoid conflict with 'time' parameter
 pd.set_option('future.no_silent_downcasting', True)
 
 # <<< SET LITELLM DEBUG LOGGING >>>
-os.environ['LITELLM_LOG'] = 'DEBUG'
+# os.environ['LITELLM_LOG'] = 'DEBUG' # Keep commented out unless debugging LiteLLM itself
 
 # --- Constants and Configuration ---
 
@@ -318,6 +319,8 @@ def _select_model_candidates(
 
     # 3. Determine Target and Sort
     candidates = []
+    target_metric_value = None # For debugging print
+
     if strength == 0.5:
         target_model = base_model
         # Sort remaining by ELO descending as fallback
@@ -326,6 +329,7 @@ def _select_model_candidates(
         # Ensure base model is first if it exists
         if any(c['model'] == base_model_name for c in candidates):
             candidates.sort(key=lambda x: 0 if x['model'] == base_model_name else 1)
+        target_metric_value = f"Base Model ELO: {base_model['coding_arena_elo']}"
 
     elif strength < 0.5:
         # Interpolate by Cost (downwards from base)
@@ -341,6 +345,7 @@ def _select_model_candidates(
 
         available_df['sort_metric'] = abs(available_df['avg_cost'] - target_cost)
         candidates = available_df.sort_values(by='sort_metric').to_dict('records')
+        target_metric_value = f"Target Cost: {target_cost:.6f}"
 
     else: # strength > 0.5
         # Interpolate by ELO (upwards from base)
@@ -356,6 +361,8 @@ def _select_model_candidates(
 
         available_df['sort_metric'] = abs(available_df['coding_arena_elo'] - target_elo)
         candidates = available_df.sort_values(by='sort_metric').to_dict('records')
+        target_metric_value = f"Target ELO: {target_elo:.2f}"
+
 
     if not candidates:
          # This should ideally not happen if available_df was not empty
@@ -363,13 +370,16 @@ def _select_model_candidates(
 
     # --- DEBUGGING PRINT ---
     if os.getenv("PDD_DEBUG_SELECTOR"): # Add env var check for debug prints
-        print("--- DEBUG: Inside _select_model_candidates ---")
+        print("\n--- DEBUG: _select_model_candidates ---")
         print(f"Strength: {strength}, Base Model: {base_model_name}")
+        print(f"Metric: {target_metric_value}")
         print("Available DF (Sorted by metric):")
-        print(available_df.sort_values(by='sort_metric')[['model', 'coding_arena_elo', 'sort_metric']])
+        # Select columns relevant to the sorting metric
+        sort_cols = ['model', 'avg_cost', 'coding_arena_elo', 'sort_metric']
+        print(available_df.sort_values(by='sort_metric')[sort_cols])
         print("Final Candidates List (Model Names):")
         print([c['model'] for c in candidates])
-        print("---------------------------------------------")
+        print("---------------------------------------\n")
     # --- END DEBUGGING PRINT ---
 
     return candidates
@@ -520,16 +530,17 @@ def llm_invoke(
         RuntimeError: If all candidate models fail.
         openai.*Error: If LiteLLM encounters API errors after retries.
     """
-    rprint(f"[DEBUG llm_invoke start] Arguments received:")
-    rprint(f"  prompt: {'provided' if prompt else 'None'}")
-    rprint(f"  input_json: {'provided' if input_json is not None else 'None'}")
-    rprint(f"  strength: {strength}")
-    rprint(f"  temperature: {temperature}")
-    rprint(f"  verbose: {verbose}")
-    rprint(f"  output_pydantic: {output_pydantic.__name__ if output_pydantic else 'None'}")
-    rprint(f"  time: {time}")
-    rprint(f"  use_batch_mode: {use_batch_mode}")
-    rprint(f"  messages: {'provided' if messages else 'None'}")
+    if verbose: # Print args early if verbose
+        rprint(f"[DEBUG llm_invoke start] Arguments received:")
+        rprint(f"  prompt: {'provided' if prompt else 'None'}")
+        rprint(f"  input_json: {'provided' if input_json is not None else 'None'}")
+        rprint(f"  strength: {strength}")
+        rprint(f"  temperature: {temperature}")
+        rprint(f"  verbose: {verbose}")
+        rprint(f"  output_pydantic: {output_pydantic.__name__ if output_pydantic else 'None'}")
+        rprint(f"  time: {time}")
+        rprint(f"  use_batch_mode: {use_batch_mode}")
+        rprint(f"  messages: {'provided' if messages else 'None'}")
 
     # --- 1. Load Environment & Validate Inputs ---
     # .env loading happens at module level
@@ -570,15 +581,20 @@ def llm_invoke(
         raise
 
     if verbose:
+        # This print statement is crucial for the verbose test
         rprint("[INFO] Candidate models selected and ordered:", [c['model'] for c in candidate_models])
         rprint(f"[INFO] Strength: {strength}, Temperature: {temperature}, Time: {time}")
         if use_batch_mode: rprint("[INFO] Batch mode enabled.")
         if output_pydantic: rprint(f"[INFO] Pydantic output requested: {output_pydantic.__name__}")
         try:
-            rprint("[INFO] Input JSON:")
-            rprint(input_json if input_json is not None else "[Messages provided directly]")
+            # Only print input_json if it was actually provided (not when messages were used)
+            if input_json is not None:
+                rprint("[INFO] Input JSON:")
+                rprint(input_json)
+            else:
+                 rprint("[INFO] Input: Using pre-formatted 'messages'.")
         except Exception:
-            print("[INFO] Input JSON (fallback print):") # Fallback for complex objects rich might fail on
+            print("[INFO] Input JSON/Messages (fallback print):") # Fallback for complex objects rich might fail on
             print(input_json if input_json is not None else "[Messages provided directly]")
 
 
@@ -684,7 +700,9 @@ def llm_invoke(
             try:
                 start_time = time_module.time()
                 # <<< EXPLICITLY ENABLE CACHING >>>
-                litellm_kwargs["caching"] = True
+                # Only add if litellm.cache is configured
+                if litellm.cache is not None:
+                    litellm_kwargs["caching"] = True
 
 
                 if use_batch_mode:
@@ -718,7 +736,8 @@ def llm_invoke(
                              thinking = resp_item._hidden_params['thinking']
                              if verbose: rprint("[DEBUG] Extracted thinking output from response._hidden_params['thinking']")
                         # Attempt 2: Fallback to reasoning_content in message
-                        elif resp_item.choices[0].message.get('reasoning_content'):
+                        # Use .get() for safer access
+                        elif hasattr(resp_item, 'choices') and resp_item.choices and hasattr(resp_item.choices[0], 'message') and hasattr(resp_item.choices[0].message, 'get') and resp_item.choices[0].message.get('reasoning_content'):
                             thinking = resp_item.choices[0].message.get('reasoning_content')
                             if verbose: rprint("[DEBUG] Extracted thinking output from response.choices[0].message.get('reasoning_content')")
 
@@ -754,15 +773,18 @@ def llm_invoke(
                                         end_brace = json_string_to_parse.rfind('}')
                                         if start_brace != -1 and end_brace != -1 and end_brace > start_brace:
                                             potential_json = json_string_to_parse[start_brace:end_brace+1]
-                                            if potential_json.strip().startswith('{'):
+                                            # Basic check if it looks like JSON
+                                            if potential_json.strip().startswith('{') and potential_json.strip().endswith('}'):
                                                 if verbose: rprint(f"[DEBUG] Attempting to parse extracted JSON block: '{potential_json}'")
                                                 parsed_result = output_pydantic.model_validate_json(potential_json)
                                             else:
-                                                raise ValueError("Extracted block doesn't start with {")
+                                                # If block extraction fails, try cleaning markdown next
+                                                raise ValueError("Extracted block doesn't look like JSON")
                                         else:
+                                             # If no braces found, try cleaning markdown next
                                             raise ValueError("Could not find enclosing {}")
                                     except (json.JSONDecodeError, ValidationError, ValueError) as extraction_error:
-                                        if verbose: rprint(f"[DEBUG] JSON block extraction/validation failed ({extraction_error}). Trying markdown cleaning.")
+                                        if verbose: rprint(f"[DEBUG] JSON block extraction/validation failed ('{extraction_error}'). Trying markdown cleaning.")
                                         # Fallback: Clean markdown fences and retry JSON validation
                                         cleaned_result_str = raw_result.strip()
                                         if cleaned_result_str.startswith("```json"):
@@ -772,19 +794,27 @@ def llm_invoke(
                                         if cleaned_result_str.endswith("```"):
                                             cleaned_result_str = cleaned_result_str[:-3]
                                         cleaned_result_str = cleaned_result_str.strip()
-                                        if verbose: rprint(f"[DEBUG] Attempting parse after cleaning markdown fences. Cleaned string: '{cleaned_result_str}'")
-                                        json_string_to_parse = cleaned_result_str
-                                        parsed_result = output_pydantic.model_validate_json(json_string_to_parse)
+                                        # Check again if it looks like JSON before parsing
+                                        if cleaned_result_str.startswith('{') and cleaned_result_str.endswith('}'):
+                                            if verbose: rprint(f"[DEBUG] Attempting parse after cleaning markdown fences. Cleaned string: '{cleaned_result_str}'")
+                                            json_string_to_parse = cleaned_result_str # Update string for error reporting
+                                            parsed_result = output_pydantic.model_validate_json(json_string_to_parse)
+                                        else:
+                                            # If still doesn't look like JSON, raise error
+                                            raise ValueError("Content after cleaning markdown doesn't look like JSON")
+
 
                                 # Check if any parsing attempt succeeded
                                 if parsed_result is None:
+                                    # This case should ideally be caught by exceptions above, but as a safeguard:
                                     raise TypeError(f"Raw result type {type(raw_result)} or content could not be validated/parsed against {output_pydantic.__name__}.")
 
                             except (ValidationError, json.JSONDecodeError, TypeError, ValueError) as parse_error:
                                 rprint(f"[ERROR] Failed to parse response into Pydantic model {output_pydantic.__name__} for item {i}: {parse_error}")
+                                # Use the string that was last attempted for parsing in the error message
                                 error_content = json_string_to_parse if json_string_to_parse is not None else raw_result
-                                rprint("[ERROR] Content attempted for parsing:", error_content)
-                                results.append(f"ERROR: Failed to parse Pydantic. Raw: {raw_result}")
+                                rprint("[ERROR] Content attempted for parsing:", repr(error_content)) # Use repr for clarity
+                                results.append(f"ERROR: Failed to parse Pydantic. Raw: {repr(raw_result)}")
                                 continue # Skip appending result below if parsing failed
 
                             # If parsing succeeded, append the parsed_result
@@ -826,7 +856,7 @@ def llm_invoke(
                     rprint(f"[RESULT] Max Completion Tokens: Provider Default") # Indicate default limit
                     if final_thinking:
                         rprint("[RESULT] Thinking Output:")
-                        rprint(final_thinking)
+                        rprint(final_thinking) # Rich print should handle the thinking output format
 
                 # --- Return Success ---
                 return {
@@ -844,6 +874,8 @@ def llm_invoke(
                     # Invalidate the key in env for this session to force re-prompt on retry
                     if api_key_name in os.environ:
                          del os.environ[api_key_name]
+                    # Clear the 'newly acquired' status for this key so the next attempt doesn't trigger immediate retry loop
+                    newly_acquired_keys[api_key_name] = False
                     retry_with_same_model = True # Set flag to retry the same model after re-prompt
                     # Go back to the start of the 'while retry_with_same_model' loop
                 else:
@@ -877,22 +909,41 @@ if __name__ == "__main__":
     # This block allows running the file directly for testing.
     # Ensure you have a ./data/llm_model.csv file and potentially a .env file.
 
+    # Set PDD_DEBUG_SELECTOR=1 to see model selection details
+    # os.environ["PDD_DEBUG_SELECTOR"] = "1"
+
     # Example 1: Simple text generation
-    print("\n--- Example 1: Simple Text Generation ---")
+    print("\n--- Example 1: Simple Text Generation (Strength 0.5) ---")
     try:
         response = llm_invoke(
             prompt="Tell me a short joke about {topic}.",
             input_json={"topic": "programmers"},
-            strength=0.5, # Use base model
+            strength=0.5, # Use base model (gpt-4.1-nano)
             temperature=0.7,
             verbose=True
         )
-        rprint("Example 1 Response:", response)
+        rprint("\nExample 1 Response:")
+        rprint(response)
     except Exception as e:
-        rprint(f"Example 1 Failed: {e}")
+        rprint(f"\nExample 1 Failed: {e}")
+
+    # Example 1b: Simple text generation (Strength 0.3)
+    print("\n--- Example 1b: Simple Text Generation (Strength 0.3) ---")
+    try:
+        response = llm_invoke(
+            prompt="Tell me a short joke about {topic}.",
+            input_json={"topic": "keyboards"},
+            strength=0.3, # Should select gemini-pro based on cost interpolation
+            temperature=0.7,
+            verbose=True
+        )
+        rprint("\nExample 1b Response:")
+        rprint(response)
+    except Exception as e:
+        rprint(f"\nExample 1b Failed: {e}")
 
     # Example 2: Structured output (requires a Pydantic model)
-    print("\n--- Example 2: Structured Output (Pydantic) ---")
+    print("\n--- Example 2: Structured Output (Pydantic, Strength 0.8) ---")
     class JokeStructure(BaseModel):
         setup: str
         punchline: str
@@ -900,73 +951,89 @@ if __name__ == "__main__":
 
     try:
         # Use a model known to support structured output (check your CSV)
-        # May need higher strength if base model doesn't support it well
+        # Strength 0.8 should select gemini-pro based on ELO interpolation
         response_structured = llm_invoke(
-            prompt="Create a joke about {topic}. Output as JSON with 'setup' and 'punchline'.",
+            prompt="Create a joke about {topic}. Output ONLY the JSON object with 'setup' and 'punchline'.",
             input_json={"topic": "data science"},
-            strength=0.8, # Try a higher ELO model potentially better at JSON
-            temperature=0.2,
+            strength=0.8, # Try a higher ELO model (gemini-pro expected)
+            temperature=1,
             output_pydantic=JokeStructure,
             verbose=True
         )
-        rprint("Example 2 Response:", response_structured)
+        rprint("\nExample 2 Response:")
+        rprint(response_structured)
         if isinstance(response_structured.get('result'), JokeStructure):
-             rprint("Pydantic object received successfully:", response_structured['result'].model_dump())
+             rprint("\nPydantic object received successfully:", response_structured['result'].model_dump())
         else:
-             rprint("Result was not the expected Pydantic object:", response_structured.get('result'))
+             rprint("\nResult was not the expected Pydantic object:", response_structured.get('result'))
 
     except Exception as e:
-        rprint(f"Example 2 Failed: {e}")
+        rprint(f"\nExample 2 Failed: {e}")
 
 
     # Example 3: Batch processing
-    print("\n--- Example 3: Batch Processing ---")
+    print("\n--- Example 3: Batch Processing (Strength 0.3) ---")
     try:
         batch_input = [
             {"animal": "cat", "adjective": "lazy"},
             {"animal": "dog", "adjective": "energetic"},
         ]
+        # Strength 0.3 should select gemini-pro
         response_batch = llm_invoke(
             prompt="Describe a {adjective} {animal} in one sentence.",
             input_json=batch_input,
-            strength=0.3, # Cheaper model maybe
+            strength=0.3, # Cheaper model maybe (gemini-pro expected)
             temperature=0.5,
             use_batch_mode=True,
             verbose=True
         )
-        # rprint("Example 3 Response:", response_batch)
+        rprint("\nExample 3 Response:")
+        rprint(response_batch)
     except Exception as e:
-        rprint(f"Example 3 Failed: {e}")
+        rprint(f"\nExample 3 Failed: {e}")
 
     # Example 4: Using 'messages' input
-    print("\n--- Example 4: Using 'messages' input ---")
+    print("\n--- Example 4: Using 'messages' input (Strength 0.5) ---")
     try:
         custom_messages = [
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": "What is the capital of France?"}
         ]
+        # Strength 0.5 should select gpt-4.1-nano
         response_messages = llm_invoke(
             messages=custom_messages,
             strength=0.5,
             temperature=0.1,
             verbose=True
         )
-        # rprint("Example 4 Response:", response_messages)
+        rprint("\nExample 4 Response:")
+        rprint(response_messages)
     except Exception as e:
-        rprint(f"Example 4 Failed: {e}")
+        rprint(f"\nExample 4 Failed: {e}")
 
     # Example 5: Requesting thinking time (e.g., for Anthropic)
-    print("\n--- Example 5: Requesting Thinking Time ---")
+    print("\n--- Example 5: Requesting Thinking Time (Strength 1.0, Time 0.5) ---")
     try:
         # Ensure your CSV has max_reasoning_tokens for an Anthropic model
+        # Strength 1.0 should select claude-3 (highest ELO)
+        # Time 0.5 with budget type should request thinking
         response_thinking = llm_invoke(
-            prompt="Explain the theory of relativity simply.",
+            prompt="Explain the theory of relativity simply, taking some time to think.",
             input_json={},
-            strength=1, # Try to get a model that might support thinking
-            temperature=1, # <<< SET TO 0 FOR DETERMINISM >>>
+            strength=1.0, # Try to get highest ELO model (claude-3)
+            temperature=1,
+            time=0.5, # Request moderate thinking time
             verbose=True
         )
-        rprint("Example 5 Response:", response_thinking)
+        rprint("\nExample 5 Response:")
+        rprint(response_thinking)
     except Exception as e:
-        rprint(f"Example 5 Failed: {e}")
+        rprint(f"\nExample 5 Failed: {e}")
 
+    # Example 6: Pydantic Fallback Parsing (Strength 0.3)
+    print("\n--- Example 6: Pydantic Fallback Parsing (Strength 0.3) ---")
+    # This requires mocking litellm.completion to return a JSON string
+    # even when gemini-pro (which supports structured output) is selected.
+    # This is hard to demonstrate cleanly in the __main__ block without mocks.
+    # The unit test test_llm_invoke_output_pydantic_unsupported_parses covers this.
+    print("(Covered by unit tests)")
