@@ -913,6 +913,13 @@ def llm_invoke(
                         rprint("[RESULT] Thinking Output:")
                         rprint(final_thinking) # Rich print should handle the thinking output format
 
+                # --- Print raw output before returning if verbose ---
+                if verbose:
+                    rprint("[DEBUG] Raw output before return:")
+                    print(f"  Raw Result (repr): {repr(final_result)}")
+                    print(f"  Raw Thinking (repr): {repr(final_thinking)}")
+                    rprint("-" * 20) # Separator
+
                 # --- Return Success ---
                 return {
                     'result': final_result,
