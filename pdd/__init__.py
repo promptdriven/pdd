@@ -6,7 +6,7 @@ EXTRACTION_STRENGTH = 0.9
 
 DEFAULT_STRENGTH = 0.9
 
-"""PDD - Python Data Driven"""
+"""PDD - Prompt Driven Development"""
 
 # Define constants used across the package
 DEFAULT_LLM_MODEL = "gpt-4.1-nano"
