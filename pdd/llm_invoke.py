@@ -16,6 +16,8 @@ import openai  # Import openai for exception handling as LiteLLM maps to its typ
 from langchain_core.prompts import PromptTemplate
 import warnings
 import time as time_module # Alias to avoid conflict with 'time' parameter
+# Import the default model constant
+from pdd import DEFAULT_LLM_MODEL
 
 # Opt-in to future pandas behavior regarding downcasting
 pd.set_option('future.no_silent_downcasting', True)
@@ -94,7 +96,8 @@ else:
     pass # Silently proceed if .env is optional
 
 # Default model if PDD_MODEL_DEFAULT is not set
-DEFAULT_BASE_MODEL = os.getenv("PDD_MODEL_DEFAULT", "gpt-4.1-nano") # Using LiteLLM format potentially
+# Use the imported constant as the default
+DEFAULT_BASE_MODEL = os.getenv("PDD_MODEL_DEFAULT", DEFAULT_LLM_MODEL)
 
 # --- LiteLLM Cache Configuration (S3 compatible for GCS, with SQLite fallback) ---
 GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")
