@@ -141,7 +141,7 @@ ifdef MODULE
 	prompt="$(PROMPTS_DIR)/$${name}_python.prompt"; \
 	echo "Fixing $$name"; \
 	if [ -f "$(CONTEXT_DIR)/$${name}_example.py" ]; then \
-		pdd --strength .8 --temperature 0 --verbose --force fix --loop --auto-submit --max-attempts 5 --output-test output/ --output-code output/ --verification-program $(CONTEXT_DIR)/$${name}_example.py $$prompt $(PDD_DIR)/$${name}.py $(TESTS_DIR)/test_$${name}.py $${name}.log; \
+		pdd --strength .9 --temperature 0 --verbose --force fix --loop --auto-submit --max-attempts 5 --output-test output/ --output-code output/ --verification-program $(CONTEXT_DIR)/$${name}_example.py $$prompt $(PDD_DIR)/$${name}.py $(TESTS_DIR)/test_$${name}.py $${name}.log; \
 	else \
 		echo "Warning: No verification program found for $$name"; \
 	fi;
@@ -151,7 +151,7 @@ else
 		name=$$(basename $$prompt _python.prompt); \
 		echo "Fixing $$name"; \
 		if [ -f "$(CONTEXT_DIR)/$${name}_example.py" ]; then \
-			pdd --strength .95 --temperature 1 --verbose --force fix --loop --auto-submit --max-attempts 5 --output-test output/ --output-code output/ --verification-program $(CONTEXT_DIR)/$${name}_example.py $$prompt $(PDD_DIR)/$${name}.py $(TESTS_DIR)/test_$${name}.py $${name}.log; \
+			pdd --strength .9 --temperature 0 --verbose --force fix --loop --auto-submit --max-attempts 5 --output-test output/ --output-code output/ --verification-program $(CONTEXT_DIR)/$${name}_example.py $$prompt $(PDD_DIR)/$${name}.py $(TESTS_DIR)/test_$${name}.py $${name}.log; \
 		else \
 			echo "Warning: No verification program found for $$name"; \
 		fi; \
@@ -228,7 +228,7 @@ analysis:
 	if [ -d "$$LATEST_REGRESSION_DIR" ]; then \
 		echo "Using latest regression directory: $$LATEST_REGRESSION_DIR"; \
 		ANALYSIS_FILE="$$LATEST_REGRESSION_DIR/regression_analysis.md"; \
-		PYTHONPATH=$(PDD_DIR):$$PYTHONPATH REGRESSION_TARGET_DIR=$$LATEST_REGRESSION_DIR pdd --strength .8 --local generate --output "$$ANALYSIS_FILE" prompts/regression_analysis_log.prompt; \
+		PYTHONPATH=$(PDD_DIR):$$PYTHONPATH REGRESSION_TARGET_DIR=$$LATEST_REGRESSION_DIR pdd --strength .9 --local generate --output "$$ANALYSIS_FILE" prompts/regression_analysis_log.prompt; \
 		echo "Analysis results:"; \
 		python -c "from rich.console import Console; from rich.syntax import Syntax; console = Console(); content = open('$$ANALYSIS_FILE').read(); syntax = Syntax(content, 'python', theme='monokai', line_numbers=True); console.print(syntax)"; \
 	else \
