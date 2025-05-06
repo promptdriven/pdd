@@ -289,6 +289,7 @@ def fix_main(
                  rprint(f"[bold red]Markup Error in fix_main:[/bold red]")
                  rprint(escape(str(e)))
             else:
-                 # Print other errors normally (might still fail if they contain markup)
-                 rprint(f"[bold red]Error:[/bold red] {str(e)}")
+                 # Print other errors normally, escaping the error string
+                 from rich.markup import escape # Ensure escape is imported
+                 rprint(f"[bold red]Error:[/bold red] {escape(str(e))}")
         sys.exit(1)
