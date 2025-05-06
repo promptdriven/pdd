@@ -133,9 +133,9 @@ def create_base_df(data=None, columns_override=None):
     if 'structured_output' in df.columns:
         # Keep as object to hold True, False, pd.NA. Script handles 'True'/'False' string conversion.
         df['structured_output'] = df['structured_output'].astype('object')
-    for col in ['coding_arena_elo', 'max_reasoning_tokens']: # These are INT_COLUMNS in script
+    for col in ['coding_arena_elo', 'max_reasoning_tokens']:
          if col in df.columns:
-             df[col] = pd.to_numeric(df[col], errors='coerce') # Will be float if NaNs present
+             df[col] = pd.to_numeric(df[col], errors='coerce')
 
     # Ensure 'model' column is object/string type if it exists and isn't all NA
     # This is critical to prevent 'model' identifiers from becoming NaN if they were, e.g., all numbers
@@ -169,62 +169,87 @@ def test_directory_creation(mocker, tmp_path, capsys_rich):
     mock_console = mocker.patch("pdd.update_model_costs.console")
     mock_os_makedirs = mocker.patch("pdd.update_model_costs.os.makedirs")
 
-    non_existent_dir = tmp_path / "new_dir"
-    csv_path = non_existent_dir / "llm_model.csv"
+    non_existent_dir_path = tmp_path / "new_dir"
+    csv_file_path = non_existent_dir_path / "llm_model.csv"
 
-    mock_user_config_file = MagicMock(spec=Path); mock_user_config_file.is_file.return_value = False
-    mock_home_dot_pdd_dir = MagicMock(spec=Path); mock_home_dot_pdd_dir.__truediv__.return_value = mock_user_config_file
-    mock_home_dir = MagicMock(spec=Path); mock_home_dir.__truediv__.return_value = mock_home_dot_pdd_dir
-    mocker.patch("pdd.update_model_costs.Path.home", return_value=mock_home_dir)
+    # Mock for Path.home() chain
+    mock_home_dir_obj = MagicMock(spec=Path, name="mock_home_dir_obj")
+    mock_home_pdd_dir_obj = MagicMock(spec=Path, name="mock_home_pdd_dir_obj")
+    mock_user_config_file_obj = MagicMock(spec=Path, name="mock_user_config_file_obj")
+    mock_home_dir_obj.__truediv__.return_value = mock_home_pdd_dir_obj
+    mock_home_pdd_dir_obj.__truediv__.return_value = mock_user_config_file_obj
+    mock_user_config_file_obj.is_file.return_value = False # User config does not exist
 
-    mock_csv_path_obj_resolved = MagicMock(spec=Path)
-    mock_csv_path_obj_resolved.parent.exists.return_value = False
-    mock_csv_path_obj_resolved.parent.__str__.return_value = str(non_existent_dir)
-    mock_csv_path_obj_resolved.__str__.return_value = str(csv_path)
-    mock_csv_path_obj_unresolved = MagicMock(spec=Path)
-    mock_csv_path_obj_unresolved.resolve.return_value = mock_csv_path_obj_resolved
-    mocker.patch("pdd.update_model_costs.Path", return_value=mock_csv_path_obj_unresolved)
+    # Mock for Path(args.csv_path) chain
+    mock_arg_path_resolved_obj = MagicMock(spec=Path, name="mock_arg_path_resolved_obj")
+    mock_arg_parent_dir_obj = MagicMock(spec=Path, name="mock_arg_parent_dir_obj")
+    mock_arg_parent_dir_obj.exists.return_value = False # Parent dir of arg path does not exist
+    mock_arg_parent_dir_obj.__str__.return_value = str(non_existent_dir_path)
+    mock_arg_path_resolved_obj.parent = mock_arg_parent_dir_obj
+    mock_arg_path_resolved_obj.__str__.return_value = str(csv_file_path)
 
-    mocker.patch('sys.argv', ['update_model_costs.py', '--csv-path', str(csv_path)])
+    mock_arg_path_unresolved_obj = MagicMock(spec=Path, name="mock_arg_path_unresolved_obj")
+    mock_arg_path_unresolved_obj.resolve.return_value = mock_arg_path_resolved_obj
+
+    # Mock Path class itself
+    mock_path_class = mocker.patch("pdd.update_model_costs.Path", autospec=True)
+    mock_path_class.home.return_value = mock_home_dir_obj # Path.home() behavior
+    mock_path_class.return_value = mock_arg_path_unresolved_obj # Path(...) constructor behavior
+
+    mocker.patch('sys.argv', ['update_model_costs.py', '--csv-path', str(csv_file_path)])
     main()
 
-    mock_os_makedirs.assert_called_once_with(mock_csv_path_obj_resolved.parent, exist_ok=True)
-    mock_console.print.assert_any_call(f"[cyan]Created directory:[/cyan] {mock_csv_path_obj_resolved.parent}")
-    mock_read_csv.assert_called_with(str(csv_path))
+    mock_os_makedirs.assert_called_once_with(mock_arg_parent_dir_obj, exist_ok=True)
+    mock_console.print.assert_any_call(f"[cyan]Created directory:[/cyan] {mock_arg_parent_dir_obj}")
+    mock_read_csv.assert_called_with(str(csv_file_path)) # update_model_data called with this
+    # No updates to data or schema, so to_csv not called
     mock_to_csv.assert_not_called()
     mock_console.print.assert_any_call("\n[bold blue]No schema changes or data updates needed. CSV file not saved.[/bold blue]")
+
 
 def test_directory_creation_permission_error(mocker, tmp_path, capsys_rich):
     mock_update_model_data = mocker.patch("pdd.update_model_costs.update_model_data")
     mock_os_makedirs = mocker.patch("pdd.update_model_costs.os.makedirs", side_effect=OSError("Permission denied"))
     mock_console = mocker.patch("pdd.update_model_costs.console")
 
-    non_existent_dir = tmp_path / "new_dir"
-    csv_path_str = str(non_existent_dir / "llm_model.csv")
+    non_existent_dir_path = tmp_path / "new_dir"
+    csv_file_path_str = str(non_existent_dir_path / "llm_model.csv")
 
-    mock_user_config_file = MagicMock(spec=Path); mock_user_config_file.is_file.return_value = False
-    mock_home_dot_pdd_dir = MagicMock(spec=Path); mock_home_dot_pdd_dir.__truediv__.return_value = mock_user_config_file
-    mock_home_dir = MagicMock(spec=Path); mock_home_dir.__truediv__.return_value = mock_home_dot_pdd_dir
-    mocker.patch("pdd.update_model_costs.Path.home", return_value=mock_home_dir)
+    # Mock for Path.home() chain
+    mock_home_dir_obj = MagicMock(spec=Path, name="mock_home_dir_obj")
+    mock_home_pdd_dir_obj = MagicMock(spec=Path, name="mock_home_pdd_dir_obj")
+    mock_user_config_file_obj = MagicMock(spec=Path, name="mock_user_config_file_obj")
+    mock_home_dir_obj.__truediv__.return_value = mock_home_pdd_dir_obj
+    mock_home_pdd_dir_obj.__truediv__.return_value = mock_user_config_file_obj
+    mock_user_config_file_obj.is_file.return_value = False # User config does not exist
 
-    mock_csv_path_obj_resolved = MagicMock(spec=Path)
-    mock_csv_path_obj_resolved.parent.exists.return_value = False
-    mock_csv_path_obj_resolved.parent.__str__.return_value = str(non_existent_dir)
-    mock_csv_path_obj_unresolved = MagicMock(spec=Path)
-    mock_csv_path_obj_unresolved.resolve.return_value = mock_csv_path_obj_resolved
-    mocker.patch("pdd.update_model_costs.Path", return_value=mock_csv_path_obj_unresolved)
+    # Mock for Path(args.csv_path) chain
+    mock_arg_path_resolved_obj = MagicMock(spec=Path, name="mock_arg_path_resolved_obj")
+    mock_arg_parent_dir_obj = MagicMock(spec=Path, name="mock_arg_parent_dir_obj")
+    mock_arg_parent_dir_obj.exists.return_value = False # Parent dir of arg path does not exist
+    mock_arg_parent_dir_obj.__str__.return_value = str(non_existent_dir_path)
+    mock_arg_path_resolved_obj.parent = mock_arg_parent_dir_obj
+    # __str__ for resolved path not strictly needed here as update_model_data is mocked
+
+    mock_arg_path_unresolved_obj = MagicMock(spec=Path, name="mock_arg_path_unresolved_obj")
+    mock_arg_path_unresolved_obj.resolve.return_value = mock_arg_path_resolved_obj
+
+    # Mock Path class itself
+    mock_path_class = mocker.patch("pdd.update_model_costs.Path", autospec=True)
+    mock_path_class.home.return_value = mock_home_dir_obj
+    mock_path_class.return_value = mock_arg_path_unresolved_obj
     
-    mocker.patch('sys.argv', ['update_model_costs.py', '--csv-path', csv_path_str])
+    mocker.patch('sys.argv', ['update_model_costs.py', '--csv-path', csv_file_path_str])
     main()
 
-    mock_os_makedirs.assert_called_once_with(mock_csv_path_obj_resolved.parent, exist_ok=True)
-    mock_console.print.assert_any_call(f"[bold red]Error:[/bold red] Could not create directory {mock_csv_path_obj_resolved.parent}: Permission denied")
+    mock_os_makedirs.assert_called_once_with(mock_arg_parent_dir_obj, exist_ok=True)
+    mock_console.print.assert_any_call(f"[bold red]Error:[/bold red] Could not create directory {mock_arg_parent_dir_obj}: Permission denied")
     mock_update_model_data.assert_not_called()
+
 
 def test_file_write_error(mocker, temp_csv_path, capsys_rich):
     mock_df_data = [{'provider': 'OpenAI', 'model': 'gpt-test', 'input': pd.NA, 'output': pd.NA, 'structured_output': pd.NA}]
     mock_df_initial = create_base_df(mock_df_data)
-    # Ensure 'model' is a string for LiteLLM calls
     assert mock_df_initial.loc[0, 'model'] == 'gpt-test'
 
 
@@ -236,7 +261,7 @@ def test_file_write_error(mocker, temp_csv_path, capsys_rich):
 
     update_model_data(str(temp_csv_path))
 
-    assert mock_to_csv.call_count >= 1 # Should be called if updates occur
+    assert mock_to_csv.call_count >= 1
     if mock_to_csv.call_args:
         assert mock_to_csv.call_args.args[1] == str(temp_csv_path)
         assert mock_to_csv.call_args.kwargs['index'] is False
@@ -249,7 +274,7 @@ def test_load_csv_missing_columns(mocker, temp_csv_path, capsys_rich):
     temp_csv_path.write_text(initial_csv_missing_cols)
     df_from_csv = pd.read_csv(io.StringIO(initial_csv_missing_cols))
     
-    mocker.patch("pandas.read_csv", return_value=df_from_csv) # Script will add missing columns
+    mocker.patch("pandas.read_csv", return_value=df_from_csv)
     mocker.patch("litellm.model_cost", {})
     mocker.patch("litellm.supports_response_schema", return_value=False)
     mock_df_to_csv = mocker.patch("pandas.DataFrame.to_csv", autospec=True)
@@ -476,7 +501,7 @@ def test_update_both_missing(mocker, temp_csv_path, capsys_rich):
         {'provider': 'Anthropic', 'model': 'claude-test', 'input': 1.0, 'output': 2.0, 'structured_output': pd.NA}
     ]
     mock_df = create_base_df(mock_df_data)
-    assert mock_df.loc[mock_df['model'] == 'gpt-test', 'model'].iloc[0] == 'gpt-test' # Verify model name
+    assert mock_df.loc[mock_df['model'] == 'gpt-test', 'model'].iloc[0] == 'gpt-test' 
     assert not pd.isna(mock_df.loc[mock_df['model'] == 'gpt-test', 'model'].iloc[0])
 
     mocker.patch("pandas.read_csv", return_value=mock_df.copy())
@@ -492,7 +517,7 @@ def test_update_both_missing(mocker, temp_csv_path, capsys_rich):
 
     update_model_data(str(temp_csv_path))
 
-    mock_to_csv.assert_called_once()
+    mock_to_csv.assert_called_once() # This is the assertion that was failing
     called_df = mock_to_csv.call_args.args[0]
     assert isinstance(called_df, pd.DataFrame)
     
@@ -536,7 +561,7 @@ def test_litellm_cost_fetch_failure(mocker, temp_csv_path, capsys_rich):
         "[grey]N/A (No LLM Data)[/grey]",
         "[blue]Updated (Info)[/blue]"
     )
-    mock_to_csv.assert_called_once() # Called because structured_output was updated
+    mock_to_csv.assert_called_once() 
 
 def test_litellm_cost_model_not_found(mocker, temp_csv_path, capsys_rich):
     mock_df_data = [{'provider': 'OpenAI', 'model': 'gpt-test', 'input': pd.NA, 'output': pd.NA, 'structured_output': pd.NA}]
@@ -560,7 +585,7 @@ def test_litellm_cost_model_not_found(mocker, temp_csv_path, capsys_rich):
         "[grey]N/A (No LLM Data)[/grey]", 
         "[blue]Updated (Info)[/blue]"
     )
-    mock_to_csv.assert_called_once() # Called because structured_output was updated
+    mock_to_csv.assert_called_once()
 
 def test_litellm_cost_missing_keys(mocker, temp_csv_path, capsys_rich):
     mock_df_data = [
@@ -677,8 +702,7 @@ def test_csv_with_missing_model_identifier(mocker, temp_csv_path, capsys_rich):
         {'provider': 'Anthropic', 'model': pd.NA, 'input': 1.0, 'output': 2.0, 'structured_output': 'True'},
         {'provider': 'Google', 'model': 'gemini-test', 'input': 3.0, 'output': 4.0, 'structured_output': pd.NA},
     ]
-    mock_df = create_base_df(mock_df_data) # create_base_df will handle NAs
-    # The row with Anthropic will have model=pd.NA
+    mock_df = create_base_df(mock_df_data)
     
     mocker.patch("pandas.read_csv", return_value=mock_df.copy())
     mocker.patch("litellm.model_cost", {
@@ -740,7 +764,6 @@ def test_output_messages(mocker, temp_csv_path, capsys_rich):
 
 def test_save_no_updates(mocker, temp_csv_path, capsys_rich):
     mock_df_data = [{'provider': 'OpenAI', 'model': 'gpt-test', 'input': 1.0, 'output': 2.0, 'structured_output': True}]
-    # Note: structured_output is already boolean here, aligning with post-script-processing state.
     mock_df = create_base_df(mock_df_data)
     
     mocker.patch("pandas.read_csv", return_value=mock_df.copy())
@@ -759,13 +782,13 @@ def test_save_no_updates(mocker, temp_csv_path, capsys_rich):
 def test_save_with_updates(mocker, temp_csv_path, capsys_rich):
     mock_df_data = [{'provider': 'OpenAI', 'model': 'gpt-test', 'input': pd.NA, 'output': pd.NA, 'structured_output': pd.NA}]
     mock_df = create_base_df(mock_df_data)
-    assert mock_df.loc[0, 'model'] == 'gpt-test' # Ensure model name is correct before script runs
+    assert mock_df.loc[0, 'model'] == 'gpt-test'
 
     mocker.patch("pandas.read_csv", return_value=mock_df.copy())
     mocker.patch("litellm.model_cost", {
         'gpt-test': {'input_cost_per_token': 0.000001, 'output_cost_per_token': 0.000002},
     })
-    mocker.patch("litellm.supports_response_schema", return_value=True) # This will cause an update
+    mocker.patch("litellm.supports_response_schema", return_value=True) 
     mock_to_csv = mocker.patch("pandas.DataFrame.to_csv", autospec=True)
     mock_console = mocker.patch("pdd.update_model_costs.console")
 
@@ -786,86 +809,119 @@ def test_save_with_updates(mocker, temp_csv_path, capsys_rich):
 # 6. Main Function / Argument Parsing
 def test_main_default_path(mocker, capsys_rich):
     mock_update = mocker.patch("pdd.update_model_costs.update_model_data")
-    mocker.patch('sys.argv', ['update_model_costs.py'])
+    mocker.patch('sys.argv', ['update_model_costs.py']) # No --csv-path, uses default
 
-    mock_user_csv_file = MagicMock(spec=Path); mock_user_csv_file.is_file.return_value = False
-    mock_home_pdd_dir = MagicMock(spec=Path); mock_home_pdd_dir.__truediv__.return_value = mock_user_csv_file
-    mock_home_dir = MagicMock(spec=Path); mock_home_dir.__truediv__.return_value = mock_home_pdd_dir
-    mocker.patch("pdd.update_model_costs.Path.home", return_value=mock_home_dir)
+    default_path_str = "data/llm_model.csv" # Default path in argparse
+    resolved_default_path_obj_str = str(Path(default_path_str).resolve())
 
-    default_path_str = "data/llm_model.csv"
-    resolved_default_path = Path(default_path_str).resolve()
-    mock_resolved_default_obj = MagicMock(spec=Path)
-    mock_resolved_default_obj.parent.exists.return_value = True
-    mock_resolved_default_obj.__str__.return_value = str(resolved_default_path)
-    mock_unresolved_default_obj = MagicMock(spec=Path)
-    mock_unresolved_default_obj.resolve.return_value = mock_resolved_default_obj
-    mocker.patch("pdd.update_model_costs.Path", return_value=mock_unresolved_default_obj) 
+    # Mock for Path.home() chain
+    mock_home_dir_obj = MagicMock(spec=Path, name="mock_home_dir_obj")
+    mock_home_pdd_dir_obj = MagicMock(spec=Path, name="mock_home_pdd_dir_obj")
+    mock_user_config_file_obj = MagicMock(spec=Path, name="mock_user_config_file_obj")
+    mock_home_dir_obj.__truediv__.return_value = mock_home_pdd_dir_obj
+    mock_home_pdd_dir_obj.__truediv__.return_value = mock_user_config_file_obj
+    mock_user_config_file_obj.is_file.return_value = False # User config does NOT exist
+
+    # Mock for Path(args.csv_path) chain (args.csv_path will be default_path_str)
+    mock_default_path_resolved_obj = MagicMock(spec=Path, name="mock_default_path_resolved_obj")
+    mock_default_path_resolved_obj.parent.exists.return_value = True # Assume default dir exists
+    mock_default_path_resolved_obj.__str__.return_value = resolved_default_path_obj_str
+
+    mock_default_path_unresolved_obj = MagicMock(spec=Path, name="mock_default_path_unresolved_obj")
+    mock_default_path_unresolved_obj.resolve.return_value = mock_default_path_resolved_obj
     
+    # Mock Path class itself
+    mock_path_class = mocker.patch("pdd.update_model_costs.Path", autospec=True)
+    mock_path_class.home.return_value = mock_home_dir_obj
+    # When Path(default_path_str) is called by main():
+    mock_path_class.side_effect = lambda p: mock_default_path_unresolved_obj if p == default_path_str else MagicMock()
+
+
     mock_os_makedirs = mocker.patch('pdd.update_model_costs.os.makedirs')
     main()
 
-    mock_update.assert_called_once_with(str(resolved_default_path))
-    mock_os_makedirs.assert_not_called()
+    mock_update.assert_called_once_with(resolved_default_path_obj_str)
+    mock_os_makedirs.assert_not_called() # Because parent.exists is True
 
 def test_main_custom_path(mocker, capsys_rich):
     mock_update = mocker.patch("pdd.update_model_costs.update_model_data")
+    
     custom_path_str = "custom/data/my_models.csv"
-    resolved_custom_path = Path(custom_path_str).resolve()
+    resolved_custom_path_obj_str = str(Path(custom_path_str).resolve())
+    custom_path_parent_str = str(Path(custom_path_str).parent)
+
     mocker.patch('sys.argv', ['update_model_costs.py', '--csv-path', custom_path_str])
 
-    mock_user_csv_file = MagicMock(spec=Path); mock_user_csv_file.is_file.return_value = False
-    mock_home_pdd_dir = MagicMock(spec=Path); mock_home_pdd_dir.__truediv__.return_value = mock_user_csv_file
-    mock_home_dir = MagicMock(spec=Path); mock_home_dir.__truediv__.return_value = mock_home_pdd_dir
-    mocker.patch("pdd.update_model_costs.Path.home", return_value=mock_home_dir)
+    # Mock for Path.home() chain
+    mock_home_dir_obj = MagicMock(spec=Path, name="mock_home_dir_obj")
+    mock_home_pdd_dir_obj = MagicMock(spec=Path, name="mock_home_pdd_dir_obj")
+    mock_user_config_file_obj = MagicMock(spec=Path, name="mock_user_config_file_obj")
+    mock_home_dir_obj.__truediv__.return_value = mock_home_pdd_dir_obj
+    mock_home_pdd_dir_obj.__truediv__.return_value = mock_user_config_file_obj
+    mock_user_config_file_obj.is_file.return_value = False # User config does NOT exist
 
-    mock_resolved_custom_obj = MagicMock(spec=Path)
-    mock_resolved_custom_obj.parent.exists.return_value = False
-    mock_resolved_custom_obj.parent.__str__.return_value = str(Path(custom_path_str).parent)
-    mock_resolved_custom_obj.__str__.return_value = str(resolved_custom_path)
-    mock_unresolved_custom_obj = MagicMock(spec=Path)
-    mock_unresolved_custom_obj.resolve.return_value = mock_resolved_custom_obj
-    mocker.patch("pdd.update_model_costs.Path", return_value=mock_unresolved_custom_obj)
+    # Mock for Path(args.csv_path) chain (args.csv_path will be custom_path_str)
+    mock_custom_path_resolved_obj = MagicMock(spec=Path, name="mock_custom_path_resolved_obj")
+    mock_custom_parent_dir_obj = MagicMock(spec=Path, name="mock_custom_parent_dir_obj")
+    mock_custom_parent_dir_obj.exists.return_value = False # Custom dir does NOT exist
+    mock_custom_parent_dir_obj.__str__.return_value = custom_path_parent_str
+    mock_custom_path_resolved_obj.parent = mock_custom_parent_dir_obj
+    mock_custom_path_resolved_obj.__str__.return_value = resolved_custom_path_obj_str
     
+    mock_custom_path_unresolved_obj = MagicMock(spec=Path, name="mock_custom_path_unresolved_obj")
+    mock_custom_path_unresolved_obj.resolve.return_value = mock_custom_path_resolved_obj
+
+    # Mock Path class itself
+    mock_path_class = mocker.patch("pdd.update_model_costs.Path", autospec=True)
+    mock_path_class.home.return_value = mock_home_dir_obj
+    # When Path(custom_path_str) is called by main():
+    mock_path_class.side_effect = lambda p: mock_custom_path_unresolved_obj if p == Path(custom_path_str) or p == custom_path_str else MagicMock()
+
+
     mock_os_makedirs = mocker.patch('pdd.update_model_costs.os.makedirs')
     mock_console = mocker.patch("pdd.update_model_costs.console")
     main()
 
-    mock_update.assert_called_once_with(str(resolved_custom_path))
-    mock_os_makedirs.assert_called_once_with(Path(custom_path_str).parent, exist_ok=True)
-    mock_console.print.assert_any_call(f"[cyan]Created directory:[/cyan] {Path(custom_path_str).parent}")
+    mock_update.assert_called_once_with(resolved_custom_path_obj_str)
+    mock_os_makedirs.assert_called_once_with(mock_custom_parent_dir_obj, exist_ok=True)
+    mock_console.print.assert_any_call(f"[cyan]Created directory:[/cyan] {mock_custom_parent_dir_obj}")
+
 
 def test_main_user_path_precedence(mocker, capsys_rich):
     mock_update = mocker.patch("pdd.update_model_costs.update_model_data")
-    custom_path_arg_str = "custom/data/my_models.csv"
-    
-    # Determine the actual string value for user_path_str for assertion
-    # This needs to be the string that update_model_data will be called with.
-    # Path.home() itself is mocked, so we construct the string based on what the mock returns.
-    user_path_str_for_assertion = str(Path.home() / ".pdd" / "llm_model.csv") # Example, adjust if mock_home_dir changes this
+    custom_path_arg_str = "custom/data/my_models.csv" # This will be ignored
+
+    # Path.home() itself is not mocked here, we use real Path.home() to build the string
+    # but the Path objects used by the SCRIPT will be mocked.
+    user_path_obj_for_assertion = Path.home() / ".pdd" / "llm_model.csv"
+    user_path_str_for_assertion = str(user_path_obj_for_assertion)
 
     mocker.patch('sys.argv', ['update_model_costs.py', '--csv-path', custom_path_arg_str])
 
-    mock_user_csv_file = MagicMock(spec=Path)
-    mock_user_csv_file.is_file.return_value = True 
-    mock_user_csv_file.__str__.return_value = user_path_str_for_assertion # This mock Path obj will be str()-ed
+    # Mock for Path.home() chain
+    mock_home_dir_obj = MagicMock(spec=Path, name="mock_home_dir_obj")
+    mock_home_pdd_dir_obj = MagicMock(spec=Path, name="mock_home_pdd_dir_obj")
+    mock_user_config_file_obj = MagicMock(spec=Path, name="mock_user_config_file_obj")
+    
+    mock_home_dir_obj.__truediv__.return_value = mock_home_pdd_dir_obj
+    mock_home_pdd_dir_obj.__truediv__.return_value = mock_user_config_file_obj
+    
+    mock_user_config_file_obj.is_file.return_value = True # User config DOES exist
+    mock_user_config_file_obj.__str__.return_value = user_path_str_for_assertion # Critical for assertion
 
-    mock_home_pdd_dir = MagicMock(spec=Path)
-    mock_home_pdd_dir.__truediv__.return_value = mock_user_csv_file
+    # Mock for Path(args.csv_path) - not strictly needed to be fully configured if user path takes precedence
+    mock_arg_path_unresolved_obj = MagicMock(spec=Path, name="mock_arg_path_unresolved_obj")
+    # mock_arg_path_unresolved_obj.resolve.return_value = ... (not essential if this path isn't used)
 
-    mock_home_dir = MagicMock(spec=Path)
-    mock_home_dir.__truediv__.return_value = mock_home_pdd_dir
-    mocker.patch("pdd.update_model_costs.Path.home", return_value=mock_home_dir)
+    # Mock Path class itself
+    mock_path_class = mocker.patch("pdd.update_model_costs.Path", autospec=True)
+    mock_path_class.home.return_value = mock_home_dir_obj
+    mock_path_class.return_value = mock_arg_path_unresolved_obj # For Path(custom_path_arg_str)
 
-    # Path(args.csv_path) will also be constructed. Mock it simply.
-    mock_arg_path_obj = MagicMock(spec=Path)
-    mock_arg_path_obj.resolve.return_value = mock_arg_path_obj 
-    mocker.patch("pdd.update_model_costs.Path", return_value=mock_arg_path_obj) # Mocks Path() constructor
-        
     mock_os_makedirs = mocker.patch('pdd.update_model_costs.os.makedirs')
     mock_console = mocker.patch("pdd.update_model_costs.console")
     main()
 
     mock_update.assert_called_once_with(user_path_str_for_assertion)
-    mock_os_makedirs.assert_not_called()
-    mock_console.print.assert_any_call(f"[bold cyan]Found user-specific config, using:[/bold cyan] {user_path_str_for_assertion}")
+    mock_os_makedirs.assert_not_called() # Because user path is used, no dir creation for arg path
+    mock_console.print.assert_any_call(f"[bold cyan]Found user-specific config, using:[/bold cyan] {mock_user_config_file_obj}")
