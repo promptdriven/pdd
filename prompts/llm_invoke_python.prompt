@@ -57,6 +57,7 @@
                 - If no more candidate models exist, raise the last encountered exception.
                 - If a next model exists, **go back to Step 4.a** to check/acquire the API key for this *new* model.
     7. **Response Handling:** Process the LiteLLM response, extract results, cost, tokens, etc.
+        a. **Thinking Output:** Extract reasoning/thinking output if available. **Check common locations within the LiteLLM response object, such as `response._hidden_params['thinking']` or potentially within `response.choices[0].message` attributes (like `reasoning_content`), handling potential `AttributeError` or `KeyError` exceptions gracefully.**
     8. **Return Output:** Return the standard output dictionary.
 
 % The function should properly validate inputs and handle errors:
@@ -67,6 +68,7 @@
     - For prompt template errors, raise a ValueError with a clear message.
     - For model invocation errors, use LiteLLM's retry logic. LiteLLM maps provider exceptions to OpenAI-compatible errors. Raise Runtime errors only if all retries fail across candidate models.
     - Provide detailed error messages in verbose mode.
+    - **Implement the core logic within the `llm_invoke` function. Consider breaking down complex parts like model loading/selection and API key handling into internal helper functions for better organization and readability.**
 
 % Here is an example (but not actual values) of the llm_model.csv: <llm_model_example><shell>head -6 data/llm_model.csv</shell></llm_model_example>
 % Here is how to use LiteLLM thinking: <litellm_thinking_example><web>https://docs.litellm.ai/docs/reasoning_content</web></litellm_thinking_example>
@@ -80,14 +82,14 @@
 % Here is how to use LiteLLM callbacks: <litellm_callbacks_example><web>https://docs.litellm.ai/docs/observability/callbacks</web></litellm_callbacks_example>
 % Here is how to use LiteLLM provider specific parameters: <litellm_provider_params_example><web>https://docs.litellm.ai/docs/completion/provider_specific_params</web></litellm_provider_params_example>
 
-% The code must use LiteLLM's `litellm.completion()` function to handle invocation across various LLM providers. LiteLLM standardizes the API calls. Configure LiteLLM to enable its built-in response caching, specifically targeting an S3-compatible backend configured for Google Cloud Storage (GCS).
+% The code must use LiteLLM's `litellm.completion()` function to handle invocation across various LLM providers. LiteLLM standardizes the API calls. Configure LiteLLM to enable its built-in response caching, specifically targeting an S3-compatible backend configured for Google Cloud Storage (GCS). **Implement an SQLite cache (`litellm.Cache(type='sqlite', ...)`) as a fallback if the S3/GCS configuration fails.**
 
 % Here are the rules to follow when selecting the appropriate model via LiteLLM:
     - If environmental variable $PDD_MODEL_DEFAULT is set, use that as the base model name.
     - Otherwise, the base model name is defined by the `DEFAULT_LLM_MODEL` constant imported from `pdd/__init__.py`.
     - Read the `llm_model.csv` file to get all necessary model details. **The script first checks for `~/.pdd/llm_model.csv` and uses it if it exists; otherwise, it uses the file located at `<PROJECT_ROOT>/data/llm_model.csv` (where `<PROJECT_ROOT>` is determined as described in Startup Behavior).**
     - The CSV contains the LiteLLM model identifier, input/output costs, ELO, provider, **API key environment variable name**, **`reasoning_type` (e.g., 'none', 'budget', 'effort')**, **`max_reasoning_tokens` (only used if `reasoning_type` is 'budget')**, structured_output flag, etc.). The `model_name` column must contain the identifier LiteLLM uses (e.g., "openai/gpt-3.5-turbo", "anthropic/claude-3-7-sonnet-20250219"). **It is assumed that a separate utility keeps the cost, structured_output, `reasoning_type`, and `max_reasoning_tokens` data in this CSV up-to-date.**
-    - Filter models first based on availability: initially check only if the required API key environment variable *name* exists in the CSV. **The actual presence of the key value in the environment is checked later (Step 4 in Logic Flow).**
+    - Filter models first based on availability: initially check only if the required API key environment variable *name* exists in the CSV. **The actual presence of the key value in the environment is checked later (Step 4 in Logic Flow).** **If the `api_key` name in the CSV is empty or exactly `"EXISTING_KEY"`, assume the key is handled externally (e.g., via IAM roles or mock setups) and skip the interactive check/acquisition process (Steps 4.b-4.vi).**
     - When strength < 0.5:
         - Identify available candidate models based on the filtered CSV data.
         - Use strength to interpolate based on the average cost (**using input/output costs read directly from the CSV, which are in $/Million tokens**) from the base model down to the cheapest available model.
@@ -108,7 +110,7 @@
     - `temperature`: The specified temperature.
     - `api_base`, `api_key`, `api_version`: Pass these if needed for specific setups (like Azure, local models), although LiteLLM often infers from environment variables. Consult `llm_model.csv` for provider-specific needs.
     - `max_tokens`: **Do not set this.** Allow LiteLLM and the underlying provider to use the default maximum completion tokens based on the model and input prompt length.
-    - **Structured Output**: If `output_pydantic` is provided, check the `structured_output` flag from the CSV. If `True`, use LiteLLM's mechanism for structured output (e.g., passing the Pydantic model to `response_format` or similar). If `False`, or if the initial structured response fails validation, **fallback parsing logic (like cleaning markdown fences and re-attempting JSON validation) should be used** to attempt to create the Pydantic object.
+    - **Structured Output**: If `output_pydantic` is provided, check the `structured_output` flag from the CSV. If `True`, use LiteLLM's mechanism for structured output (e.g., passing the Pydantic model to `response_format` or similar). If `False`, or if the initial structured response fails validation, fallback parsing logic should be used: **attempt to extract a JSON block (e.g., finding the first `{` and last `}`), clean potential markdown fences (like ```json ... ```), and re-attempt Pydantic validation on the cleaned string.**
     - **Thinking/Reasoning (`time` parameter)**: Use the `reasoning_type` and `max_reasoning_tokens` columns from the CSV to determine how to handle the `time` parameter (0-1):
         - **If `reasoning_type` is 'none'**: Ignore `time`, pass no reasoning parameters.
         - **If `reasoning_type` is 'budget'**: Check if `max_reasoning_tokens` > 0. If so, calculate `budget = int(time * max_reasoning_tokens)`. If `budget > 0`, pass the provider-specific parameter(s) via LiteLLM (e.g., Anthropic's `thinking` requires `{"type": "enabled", "budget_tokens": budget}`).
@@ -144,7 +146,7 @@
         2. Default tokens to 0 if `usage` is not available.
         3. Capture the `finish_reason` from `completion_response.choices[0].finish_reason` if available.
         4. Store or log this information as needed by the application.
-        4. Calculate the cost using `litellm.completion_cost(completion_response=...)` or potentially using `kwargs` if the response object fails.
+        4. Calculate the cost primarily using `litellm.completion_cost(completion_response=...)`. **If this fails (e.g., due to missing provider info in the response object, common in batch results), attempt calculation again using the `model` from the original `kwargs` and token counts from the `usage` object.**
         5. Store or log this information (tokens, cost, finish reason) as needed by the application.
 
 % Ensure LiteLLM response caching is configured appropriately for S3/GCS (e.g., setting `litellm.cache = litellm.Cache(type='s3', s3_bucket_name=..., s3_region_name=..., s3_endpoint_url=...)` with GCS details).
