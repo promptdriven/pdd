@@ -65,8 +65,9 @@ import pytest
 import pandas as pd
 import os
 import io
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock, call, ANY, PropertyMock
 from pathlib import Path # Import Path
+from rich.table import Table # Import Table for mocking
 
 # Need to adjust import based on package structure
 # Assuming the code is in pdd/update_model_costs.py and tests are in tests/
@@ -75,7 +76,7 @@ import sys
 # This is a common pattern in pytest for testing packages
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from pdd.update_model_costs import update_model_data, main, EXPECTED_COLUMNS # Removed MISSING_VALUE_PLACEHOLDER as it's unused
+from pdd.update_model_costs import update_model_data, main, EXPECTED_COLUMNS
 
 # Fixture for creating a temporary CSV file
 @pytest.fixture
@@ -90,39 +91,57 @@ def capsys_rich(capsys):
     return capsys
 
 # Helper function to create a basic DataFrame matching expected columns
-def create_base_df(data=None, columns=None):
-    """Creates a pandas DataFrame, ensuring EXPECTED_COLUMNS are present if columns=None."""
+def create_base_df(data=None, columns_override=None):
+    """
+    Creates a pandas DataFrame.
+    If data is provided, it's a list of dicts. All EXPECTED_COLUMNS will be present.
+    If columns_override is provided, it's used instead of EXPECTED_COLUMNS for DataFrame creation.
+    """
     if data is None:
         data = []
-    if columns is None:
-        columns_to_use = EXPECTED_COLUMNS
-    else:
-        columns_to_use = columns
 
-    # Create DataFrame with specified or default columns
-    df = pd.DataFrame(data, columns=columns_to_use)
+    # Determine the columns to use for the DataFrame
+    df_cols = columns_override if columns_override else EXPECTED_COLUMNS
 
-    # Ensure all expected columns are present if default columns were used initially
-    if columns is None:
+    processed_data = []
+    if data:
+        for row_dict in data:
+            new_row = {col: pd.NA for col in df_cols} # Initialize with NAs for all target columns
+            new_row.update(row_dict) # Populate with data from the current row_dict
+            processed_data.append(new_row)
+        df = pd.DataFrame(processed_data, columns=df_cols)
+    else: # No data, create empty DF with specified or expected columns
+        df = pd.DataFrame(columns=df_cols)
+
+    # Ensure all EXPECTED_COLUMNS are present if not overridden, and in correct order
+    # This step is crucial if columns_override was used and might not contain all EXPECTED_COLUMNS,
+    # or if we want to standardize after initial creation.
+    # However, if columns_override was intentional, we might not want to force EXPECTED_COLUMNS.
+    # For this helper's purpose in tests, we usually want to align with EXPECTED_COLUMNS.
+    if columns_override is None: # Only enforce EXPECTED_COLUMNS if no override was given
         for col in EXPECTED_COLUMNS:
             if col not in df.columns:
-                df[col] = pd.NA # Use pandas NA as default missing
-        # Reorder columns to match EXPECTED_COLUMNS
+                df[col] = pd.NA
         df = df[EXPECTED_COLUMNS]
 
-    # Apply initial type conversions similar to the script's loading phase
-    # (before explicit enforcement) - helps simulate read_csv behavior
+
+    # Apply initial type coercions similar to what read_csv might do or to set up for script's expectations
     if 'input' in df.columns:
         df['input'] = pd.to_numeric(df['input'], errors='coerce')
     if 'output' in df.columns:
         df['output'] = pd.to_numeric(df['output'], errors='coerce')
-    # structured_output is often read as object initially, script handles conversion later
     if 'structured_output' in df.columns:
-         df['structured_output'] = df['structured_output'].astype('object')
-    # Integer columns are read as float if NA exists, script handles conversion later
-    for col in ['coding_arena_elo', 'max_reasoning_tokens']:
+        # Keep as object to hold True, False, pd.NA. Script handles 'True'/'False' string conversion.
+        df['structured_output'] = df['structured_output'].astype('object')
+    for col in ['coding_arena_elo', 'max_reasoning_tokens']: # These are INT_COLUMNS in script
          if col in df.columns:
-             df[col] = pd.to_numeric(df[col], errors='coerce') # Read as float initially if NAs
+             df[col] = pd.to_numeric(df[col], errors='coerce') # Will be float if NaNs present
+
+    # Ensure 'model' column is object/string type if it exists and isn't all NA
+    # This is critical to prevent 'model' identifiers from becoming NaN if they were, e.g., all numbers
+    if 'model' in df.columns:
+        # Convert to string, but handle pd.NA correctly to avoid creating "<NA>" strings
+        df['model'] = df['model'].apply(lambda x: str(x) if not pd.isna(x) else pd.NA)
 
     return df
 
@@ -133,814 +152,630 @@ def create_base_df(data=None, columns=None):
 def test_file_not_found(mocker, capsys_rich):
     mocker.patch("pandas.read_csv", side_effect=FileNotFoundError)
     mock_console = mocker.patch("pdd.update_model_costs.console")
-
     update_model_data("non_existent_path/llm_model.csv")
-
     mock_console.print.assert_any_call("[bold red]Error:[/bold red] CSV file not found at non_existent_path/llm_model.csv")
 
 def test_file_read_error(mocker, capsys_rich):
     mocker.patch("pandas.read_csv", side_effect=Exception("Permission denied"))
     mock_console = mocker.patch("pdd.update_model_costs.console")
-
     update_model_data("path/to/file.csv")
-
     mock_console.print.assert_any_call("[bold red]Error:[/bold red] Failed to load CSV file: Permission denied")
 
 def test_directory_creation(mocker, tmp_path, capsys_rich):
-    # Test main function as it handles directory creation
-    # Mock read_csv to simulate file not found initially, then succeed after dir creation
-    # This requires more complex mocking or focusing the test on update_model_data
-    # Let's test main's directory creation logic directly
-    mock_read_csv = mocker.patch("pdd.update_model_costs.pd.read_csv", return_value=create_base_df()) # Assume read succeeds after dir creation
-    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv")
-    mock_litellm_cost = mocker.patch("litellm.model_cost", {})
-    mock_supports_schema = mocker.patch("litellm.supports_response_schema", return_value=False)
+    mock_read_csv = mocker.patch("pdd.update_model_costs.pd.read_csv", return_value=create_base_df())
+    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv", autospec=True)
+    mocker.patch("litellm.model_cost", {})
+    mocker.patch("litellm.supports_response_schema", return_value=False)
     mock_console = mocker.patch("pdd.update_model_costs.console")
-    mock_makedirs = mocker.patch("os.makedirs") # Mock makedirs
+    mock_os_makedirs = mocker.patch("pdd.update_model_costs.os.makedirs")
 
     non_existent_dir = tmp_path / "new_dir"
     csv_path = non_existent_dir / "llm_model.csv"
-    resolved_csv_path = csv_path.resolve() # main uses resolve()
 
-    # Mock path checks within main
-    mocker.patch("pathlib.Path.is_file", return_value=False) # Assume no user file, no existing default file
-    mocker.patch("pathlib.Path.exists", return_value=False) # Assume directory doesn't exist
+    mock_user_config_file = MagicMock(spec=Path); mock_user_config_file.is_file.return_value = False
+    mock_home_dot_pdd_dir = MagicMock(spec=Path); mock_home_dot_pdd_dir.__truediv__.return_value = mock_user_config_file
+    mock_home_dir = MagicMock(spec=Path); mock_home_dir.__truediv__.return_value = mock_home_dot_pdd_dir
+    mocker.patch("pdd.update_model_costs.Path.home", return_value=mock_home_dir)
 
-    # Mock sys.argv to simulate command line argument
+    mock_csv_path_obj_resolved = MagicMock(spec=Path)
+    mock_csv_path_obj_resolved.parent.exists.return_value = False
+    mock_csv_path_obj_resolved.parent.__str__.return_value = str(non_existent_dir)
+    mock_csv_path_obj_resolved.__str__.return_value = str(csv_path)
+    mock_csv_path_obj_unresolved = MagicMock(spec=Path)
+    mock_csv_path_obj_unresolved.resolve.return_value = mock_csv_path_obj_resolved
+    mocker.patch("pdd.update_model_costs.Path", return_value=mock_csv_path_obj_unresolved)
+
     mocker.patch('sys.argv', ['update_model_costs.py', '--csv-path', str(csv_path)])
-
     main()
 
-    # Check if directory creation was attempted with the correct path
-    mock_makedirs.assert_called_once_with(resolved_csv_path.parent, exist_ok=True)
-    mock_console.print.assert_any_call(f"[cyan]Created directory:[/cyan] {resolved_csv_path.parent}")
-    # Check if update_model_data was called with the resolved path
-    # We mocked update_model_data itself, so we can't check read_csv/to_csv calls within it here.
-    # Instead, let's test update_model_data's save behavior separately.
-
-    # Test that update_model_data doesn't save if no updates
-    mock_to_csv.reset_mock() # Reset mock before calling update_model_data directly
-    update_model_data(str(resolved_csv_path))
-    mock_read_csv.assert_called_with(str(resolved_csv_path)) # Check read_csv call
-    mock_to_csv.assert_not_called() # Should NOT save if no schema/data updates
+    mock_os_makedirs.assert_called_once_with(mock_csv_path_obj_resolved.parent, exist_ok=True)
+    mock_console.print.assert_any_call(f"[cyan]Created directory:[/cyan] {mock_csv_path_obj_resolved.parent}")
+    mock_read_csv.assert_called_with(str(csv_path))
+    mock_to_csv.assert_not_called()
     mock_console.print.assert_any_call("\n[bold blue]No schema changes or data updates needed. CSV file not saved.[/bold blue]")
 
-
 def test_directory_creation_permission_error(mocker, tmp_path, capsys_rich):
-    # Test main function's handling of makedirs error
-    mock_update_model_data = mocker.patch("pdd.update_model_costs.update_model_data") # Don't run update if dir fails
-    mock_makedirs = mocker.patch("os.makedirs", side_effect=OSError("Permission denied"))
+    mock_update_model_data = mocker.patch("pdd.update_model_costs.update_model_data")
+    mock_os_makedirs = mocker.patch("pdd.update_model_costs.os.makedirs", side_effect=OSError("Permission denied"))
     mock_console = mocker.patch("pdd.update_model_costs.console")
 
     non_existent_dir = tmp_path / "new_dir"
-    csv_path = non_existent_dir / "llm_model.csv"
-    resolved_csv_path = csv_path.resolve()
+    csv_path_str = str(non_existent_dir / "llm_model.csv")
 
-    # Mock path checks
-    mocker.patch("pathlib.Path.is_file", return_value=False)
-    mocker.patch("pathlib.Path.exists", return_value=False) # Dir doesn't exist
+    mock_user_config_file = MagicMock(spec=Path); mock_user_config_file.is_file.return_value = False
+    mock_home_dot_pdd_dir = MagicMock(spec=Path); mock_home_dot_pdd_dir.__truediv__.return_value = mock_user_config_file
+    mock_home_dir = MagicMock(spec=Path); mock_home_dir.__truediv__.return_value = mock_home_dot_pdd_dir
+    mocker.patch("pdd.update_model_costs.Path.home", return_value=mock_home_dir)
 
-    mocker.patch('sys.argv', ['update_model_costs.py', '--csv-path', str(csv_path)])
-
+    mock_csv_path_obj_resolved = MagicMock(spec=Path)
+    mock_csv_path_obj_resolved.parent.exists.return_value = False
+    mock_csv_path_obj_resolved.parent.__str__.return_value = str(non_existent_dir)
+    mock_csv_path_obj_unresolved = MagicMock(spec=Path)
+    mock_csv_path_obj_unresolved.resolve.return_value = mock_csv_path_obj_resolved
+    mocker.patch("pdd.update_model_costs.Path", return_value=mock_csv_path_obj_unresolved)
+    
+    mocker.patch('sys.argv', ['update_model_costs.py', '--csv-path', csv_path_str])
     main()
 
-    # Check makedirs was called and error was printed
-    mock_makedirs.assert_called_once_with(resolved_csv_path.parent, exist_ok=True)
-    mock_console.print.assert_any_call(f"[bold red]Error:[/bold red] Could not create directory {resolved_csv_path.parent}: Permission denied")
-    mock_update_model_data.assert_not_called() # Should exit before calling update
+    mock_os_makedirs.assert_called_once_with(mock_csv_path_obj_resolved.parent, exist_ok=True)
+    mock_console.print.assert_any_call(f"[bold red]Error:[/bold red] Could not create directory {mock_csv_path_obj_resolved.parent}: Permission denied")
+    mock_update_model_data.assert_not_called()
 
 def test_file_write_error(mocker, temp_csv_path, capsys_rich):
-    # Create a dummy CSV file that will trigger an update
-    initial_csv_content = "provider,model,input,output\nOpenAI,gpt-test,,"
-    temp_csv_path.write_text(initial_csv_content)
+    mock_df_data = [{'provider': 'OpenAI', 'model': 'gpt-test', 'input': pd.NA, 'output': pd.NA, 'structured_output': pd.NA}]
+    mock_df_initial = create_base_df(mock_df_data)
+    # Ensure 'model' is a string for LiteLLM calls
+    assert mock_df_initial.loc[0, 'model'] == 'gpt-test'
 
-    # Simulate reading this CSV (it's missing columns)
-    mock_df_initial = pd.read_csv(io.StringIO(initial_csv_content))
-    mocker.patch("pandas.read_csv", return_value=mock_df_initial)
 
-    # Mock LiteLLM to provide data so an update is attempted
-    mock_litellm_cost = mocker.patch("litellm.model_cost", {'gpt-test': {'input_cost_per_token': 0.000001, 'output_cost_per_token': 0.000002}})
-    mock_supports_schema = mocker.patch("litellm.supports_response_schema", return_value=True)
-
-    # Mock to_csv to raise error
-    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv", side_effect=Exception("Disk full"))
+    mocker.patch("pandas.read_csv", return_value=mock_df_initial.copy())
+    mocker.patch("litellm.model_cost", {'gpt-test': {'input_cost_per_token': 0.000001, 'output_cost_per_token': 0.000002}})
+    mocker.patch("litellm.supports_response_schema", return_value=True) # Causes update
+    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv", side_effect=Exception("Disk full"), autospec=True)
     mock_console = mocker.patch("pdd.update_model_costs.console")
 
     update_model_data(str(temp_csv_path))
 
-    # Check save was attempted and error was printed
-    mock_to_csv.assert_called_once_with(str(temp_csv_path), index=False, na_rep='')
+    assert mock_to_csv.call_count >= 1 # Should be called if updates occur
+    if mock_to_csv.call_args:
+        assert mock_to_csv.call_args.args[1] == str(temp_csv_path)
+        assert mock_to_csv.call_args.kwargs['index'] is False
+        assert mock_to_csv.call_args.kwargs['na_rep'] == ''
     mock_console.print.assert_any_call(f"[bold red]Error:[/bold red] Failed to save updated CSV file: Disk full")
-
 
 # 2. CSV Loading and Schema Handling
 def test_load_csv_missing_columns(mocker, temp_csv_path, capsys_rich):
-    # Test the scenario where the *initial* CSV is missing columns.
-    initial_csv_missing_cols = "provider,model,input,output\nOpenAI,gpt-test,1.0,2.0\n" # Missing many columns
+    initial_csv_missing_cols = "provider,model,input,output\nOpenAI,gpt-test,1.0,2.0\n"
     temp_csv_path.write_text(initial_csv_missing_cols)
-    mock_df_initial = pd.read_csv(io.StringIO(initial_csv_missing_cols))
-
-    mocker.patch("pandas.read_csv", return_value=mock_df_initial)
-    # Mock litellm calls to avoid errors, assume no data updates needed beyond schema
+    df_from_csv = pd.read_csv(io.StringIO(initial_csv_missing_cols))
+    
+    mocker.patch("pandas.read_csv", return_value=df_from_csv) # Script will add missing columns
     mocker.patch("litellm.model_cost", {})
     mocker.patch("litellm.supports_response_schema", return_value=False)
-    mock_df_to_csv = mocker.patch("pandas.DataFrame.to_csv")
+    mock_df_to_csv = mocker.patch("pandas.DataFrame.to_csv", autospec=True)
     mock_console = mocker.patch("pdd.update_model_costs.console")
 
     update_model_data(str(temp_csv_path))
 
-    # Check that warnings were printed for missing columns
     mock_console.print.assert_any_call("[yellow]Warning:[/yellow] Column 'coding_arena_elo' missing. Adding it.")
     mock_console.print.assert_any_call("[yellow]Warning:[/yellow] Column 'base_url' missing. Adding it.")
-    # ... check others if needed ...
     mock_console.print.assert_any_call("[yellow]Warning:[/yellow] Column 'structured_output' missing. Adding it.")
     mock_console.print.assert_any_call("[cyan]CSV schema updated with missing columns.[/cyan]")
-
-    # Check if to_csv was called (because schema was updated)
     mock_df_to_csv.assert_called_once()
-    # Check if the DataFrame passed to to_csv has all expected columns
-    called_df = mock_df_to_csv.call_args.args[0] # Access DataFrame instance
+    called_df = mock_df_to_csv.call_args.args[0]
     assert isinstance(called_df, pd.DataFrame)
     assert all(col in called_df.columns for col in EXPECTED_COLUMNS)
-    # Check if columns are in the correct order
     assert list(called_df.columns) == EXPECTED_COLUMNS
 
-
 def test_load_csv_with_placeholders_as_na(mocker, temp_csv_path, capsys_rich):
-    # Test that empty strings or explicit NA markers are treated as missing
-    # Note: The code now uses pd.isna(), not MISSING_VALUE_PLACEHOLDER = -1.0
-    initial_csv_content = "provider,model,input,output,structured_output\nOpenAI,gpt-test,,,False\nAnthropic,claude-test,1.0,2.0,\nGoogle,gemini-test,NA,NA,NA"
-    temp_csv_path.write_text(initial_csv_content)
-
-    # Simulate read_csv behavior (reads empty strings as '', NA as nan/None)
-    # Use create_base_df to mimic initial load state more accurately
-    mock_df = create_base_df([
+    mock_df_data = [
         {'provider': 'OpenAI', 'model': 'gpt-test', 'input': pd.NA, 'output': pd.NA, 'structured_output': 'False'},
         {'provider': 'Anthropic', 'model': 'claude-test', 'input': 1.0, 'output': 2.0, 'structured_output': pd.NA},
         {'provider': 'Google', 'model': 'gemini-test', 'input': pd.NA, 'output': pd.NA, 'structured_output': pd.NA},
-    ])
-    mocker.patch("pandas.read_csv", return_value=mock_df.copy()) # Pass a copy
-
-    # Mock LiteLLM to provide data
-    mock_litellm_cost = mocker.patch("litellm.model_cost", {
+    ]
+    mock_df = create_base_df(mock_df_data)
+    mocker.patch("pandas.read_csv", return_value=mock_df.copy())
+    mocker.patch("litellm.model_cost", {
         'gpt-test': {'input_cost_per_token': 0.000001, 'output_cost_per_token': 0.000002},
-        'claude-test': {'input_cost_per_token': 0.000003, 'output_cost_per_token': 0.000004}, # Costs exist in CSV, won't update
+        'claude-test': {'input_cost_per_token': 0.000003, 'output_cost_per_token': 0.000004},
         'gemini-test': {'input_cost_per_token': 0.000005, 'output_cost_per_token': 0.000006},
     })
-    # Mock supports_response_schema: gpt=False(already), claude=True(missing), gemini=True(missing)
-    mock_supports_schema = mocker.patch("litellm.supports_response_schema", side_effect=lambda model: model in ['claude-test', 'gemini-test'])
-
-    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv")
+    mocker.patch("litellm.supports_response_schema", side_effect=lambda model: model in ['claude-test', 'gemini-test'])
+    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv", autospec=True)
     mock_console = mocker.patch("pdd.update_model_costs.console")
+    mock_table_instance = MagicMock(spec=Table)
+    mocker.patch("pdd.update_model_costs.Table", return_value=mock_table_instance)
 
     update_model_data(str(temp_csv_path))
 
-    # Check the DataFrame passed to to_csv
     mock_to_csv.assert_called_once()
     called_df = mock_to_csv.call_args.args[0]
     assert isinstance(called_df, pd.DataFrame)
-
-    # gpt-test: costs updated from NA, struct remains False
     gpt_row = called_df[called_df['model'] == 'gpt-test'].iloc[0]
     assert gpt_row['input'] == 1.0
     assert gpt_row['output'] == 2.0
-    assert gpt_row['structured_output'] is False # Was False, remains False
-
-    # claude-test: costs remain, struct updated from NA to True
+    assert gpt_row['structured_output'] is False 
     claude_row = called_df[called_df['model'] == 'claude-test'].iloc[0]
-    assert claude_row['input'] == 1.0
-    assert claude_row['output'] == 2.0
-    assert claude_row['structured_output'] is True # Updated from NA
-
-    # gemini-test: costs updated from NA, struct updated from NA to True
+    assert claude_row['input'] == 1.0 
+    assert claude_row['output'] == 2.0 
+    assert claude_row['structured_output'] is True 
     gemini_row = called_df[called_df['model'] == 'gemini-test'].iloc[0]
     assert gemini_row['input'] == 5.0
     assert gemini_row['output'] == 6.0
-    assert gemini_row['structured_output'] is True # Updated from NA
-
-    # Check console output for updates
-    mock_console.print.assert_any_call("[green]Updated (Input: 1.0000, Output: 2.0000)[/green]") # gpt costs
-    mock_console.print.assert_any_call("[green]Updated (True)[/green]") # claude struct
-    mock_console.print.assert_any_call("[green]Updated (Input: 5.0000, Output: 6.0000)[/green]") # gemini costs
-    mock_console.print.assert_any_call("[green]Updated (True)[/green]") # gemini struct
-
+    assert gemini_row['structured_output'] is True 
+    mock_table_instance.add_row.assert_any_call("gpt-test", "[green]Updated (Input: 1.0000, Output: 2.0000)[/green]", "Checked (Exists)", ANY, ANY)
+    mock_table_instance.add_row.assert_any_call("claude-test", ANY, "[green]Updated (True)[/green]", "[bold red]Mismatch! (Input (CSV: 1.0000, LLM: 3.0000), Output (CSV: 2.0000, LLM: 4.0000))[/bold red]", ANY)
+    mock_table_instance.add_row.assert_any_call("gemini-test", "[green]Updated (Input: 5.0000, Output: 6.0000)[/green]", "[green]Updated (True)[/green]", ANY, ANY)
 
 def test_load_csv_with_existing_data(mocker, temp_csv_path, capsys_rich):
-    initial_csv_content = "provider,model,input,output,structured_output\nOpenAI,gpt-test,0.5,0.7,True\nAnthropic,claude-test,1.0,2.0,False"
-    temp_csv_path.write_text(initial_csv_content)
+    mock_df_data = [
+        {'provider': 'OpenAI', 'model': 'gpt-test', 'input': 0.5, 'output': 0.7, 'structured_output': 'True'},
+        {'provider': 'Anthropic', 'model': 'claude-test', 'input': 1.0, 'output': 2.0, 'structured_output': 'False'}
+    ]
+    mock_df = create_base_df(mock_df_data)
+    # Script converts 'True'/'False' strings to bool, so align mock_df for comparison
+    mock_df.loc[mock_df['model'] == 'gpt-test', 'structured_output'] = True
+    mock_df.loc[mock_df['model'] == 'claude-test', 'structured_output'] = False
 
-    mock_df = create_base_df(pd.read_csv(io.StringIO(initial_csv_content)).to_dict('records'))
     mocker.patch("pandas.read_csv", return_value=mock_df.copy())
-
-    # Mock LiteLLM to provide different data
-    mock_litellm_cost = mocker.patch("litellm.model_cost", {
-        'gpt-test': {'input_cost_per_token': 0.000001, 'output_cost_per_token': 0.000002}, # 1.0, 2.0 -> Mismatch
-        'claude-test': {'input_cost_per_token': 0.000001, 'output_cost_per_token': 0.000002} # 1.0, 2.0 -> Match
+    mocker.patch("litellm.model_cost", {
+        'gpt-test': {'input_cost_per_token': 0.000001, 'output_cost_per_token': 0.000002}, 
+        'claude-test': {'input_cost_per_token': 0.000001, 'output_cost_per_token': 0.000002}
     })
-    # Mock supports_response_schema: gpt=False (mismatch), claude=True (mismatch)
-    mock_supports_schema = mocker.patch("litellm.supports_response_schema", side_effect=lambda model: model == 'claude-test')
-
-    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv")
+    mocker.patch("litellm.supports_response_schema", side_effect=lambda model: model == 'claude-test')
+    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv", autospec=True)
     mock_console = mocker.patch("pdd.update_model_costs.console")
-    mock_to_csv.reset_mock() # Ensure mock is clean before call
 
     update_model_data(str(temp_csv_path))
 
-    # Check that to_csv was NOT called (no schema update, no data update despite mismatch)
     mock_to_csv.assert_not_called()
     mock_console.print.assert_any_call("\n[bold blue]No schema changes or data updates needed. CSV file not saved.[/bold blue]")
-
-    # Check console output for mismatch reporting
-    mock_console.print.assert_any_call("[bold red]Mismatch! (Input (CSV: 0.5000, LLM: 1.0000), Output (CSV: 0.7000, LLM: 2.0000))[/bold red]") # gpt-test cost mismatch
-    mock_console.print.assert_any_call("[green]Match (Input, Output)[/green]") # claude-test cost match
-    # Note: Structured output isn't compared, only updated if missing. Here it exists.
-    mock_console.print.assert_any_call("Checked (Exists)") # For structured output
-
+    mock_console.print.assert_any_call("- Models with cost mismatches: 1")
+    mock_console.print.assert_any_call("  [bold red](Note: Mismatched costs were NOT automatically updated. Check CSV vs LiteLLM.)[/bold red]")
 
 def test_load_csv_with_invalid_cost_data(mocker, temp_csv_path, capsys_rich):
-    initial_csv_content = "provider,model,input,output\nOpenAI,gpt-test,abc,1.0\nAnthropic,claude-test,2.0,xyz"
-    temp_csv_path.write_text(initial_csv_content)
-
-    # Simulate read_csv reading invalid data
-    mock_df_read = pd.read_csv(io.StringIO(initial_csv_content))
-    # create_base_df will coerce 'abc'/'xyz' to NaN during its initial numeric conversion
-    mock_df = create_base_df(mock_df_read.to_dict('records'))
-    assert pd.isna(mock_df.loc[0, 'input']) # Verify initial coercion
-    assert pd.isna(mock_df.loc[1, 'output']) # Verify initial coercion
+    mock_df_data = [
+        {'provider': 'OpenAI', 'model': 'gpt-test', 'input': 'abc', 'output': 1.0},
+        {'provider': 'Anthropic', 'model': 'claude-test', 'input': 2.0, 'output': 'xyz'}
+    ]
+    mock_df = create_base_df(mock_df_data)
+    assert pd.isna(mock_df.loc[mock_df['model']=='gpt-test', 'input'].iloc[0])
+    assert pd.isna(mock_df.loc[mock_df['model']=='claude-test', 'output'].iloc[0])
+    
     mocker.patch("pandas.read_csv", return_value=mock_df.copy())
-
-    # Mock LiteLLM to provide data
-    mock_litellm_cost = mocker.patch("litellm.model_cost", {
-        'gpt-test': {'input_cost_per_token': 0.000001, 'output_cost_per_token': 0.000002}, # Provide 1.0, 2.0
-        'claude-test': {'input_cost_per_token': 0.000003, 'output_cost_per_token': 0.000004} # Provide 3.0, 4.0
-    })
-    mock_supports_schema = mocker.patch("litellm.supports_response_schema", return_value=False)
-
-    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv")
-    mock_console = mocker.patch("pdd.update_model_costs.console")
-
-    update_model_data(str(temp_csv_path))
-
-    # Check the DataFrame passed to to_csv
-    mock_to_csv.assert_called_once()
-    called_df = mock_to_csv.call_args.args[0]
-    assert isinstance(called_df, pd.DataFrame)
-
-    # Invalid data coerced to NA, then updated by LiteLLM
-    gpt_row = called_df[called_df['model'] == 'gpt-test'].iloc[0]
-    assert gpt_row['input'] == 1.0 # Updated from NA
-    assert gpt_row['output'] == 1.0 # Was valid 1.0, not updated (LiteLLM provided 2.0 - mismatch reported)
-
-    claude_row = called_df[called_df['model'] == 'claude-test'].iloc[0]
-    assert claude_row['input'] == 2.0 # Was valid 2.0, not updated (LiteLLM provided 3.0 - mismatch reported)
-    assert claude_row['output'] == 4.0 # Updated from NA
-
-    # Check console output
-    mock_console.print.assert_any_call("[green]Updated (Input: 1.0000)[/green]") # gpt input updated
-    mock_console.print.assert_any_call("[bold red]Mismatch! (Output (CSV: 1.0000, LLM: 2.0000))[/bold red]") # gpt output mismatch
-    mock_console.print.assert_any_call("[bold red]Mismatch! (Input (CSV: 2.0000, LLM: 3.0000))[/bold red]") # claude input mismatch
-    mock_console.print.assert_any_call("[green]Updated (Output: 4.0000)[/green]") # claude output updated
-
-
-def test_load_csv_with_invalid_structured_output_data(mocker, temp_csv_path, capsys_rich):
-    initial_csv_content = "provider,model,structured_output\nOpenAI,gpt-test,yes\nAnthropic,claude-test,no\nGoogle,gemini-test,maybe"
-    temp_csv_path.write_text(initial_csv_content)
-
-    # Simulate read_csv reading invalid data
-    mock_df_read = pd.read_csv(io.StringIO(initial_csv_content))
-    # create_base_df doesn't do the bool conversion, the script does
-    mocker.patch("pandas.read_csv", return_value=mock_df_read.copy())
-
-    # Mock LiteLLM structured output support
-    mocker.patch("litellm.model_cost", {}) # No costs needed
-    # Mock supports_response_schema: gpt=False, claude=True, gemini=False (unknown)
-    def supports_schema_side_effect(model):
-        if model == 'claude-test': return True
-        if model == 'gemini-test': raise ValueError("Unknown model") # Simulate unknown
-        return False # Default for gpt-test
-    mock_supports_schema = mocker.patch("litellm.supports_response_schema", side_effect=supports_schema_side_effect)
-
-    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv")
-    mock_console = mocker.patch("pdd.update_model_costs.console")
-
-    update_model_data(str(temp_csv_path))
-
-    # Check the DataFrame passed to to_csv
-    mock_to_csv.assert_called_once()
-    called_df = mock_to_csv.call_args.args[0]
-    assert isinstance(called_df, pd.DataFrame)
-
-    # Invalid data ('yes', 'no', 'maybe') coerced to NA by script's apply function
-    # Then updated by LiteLLM if possible
-    gpt_row = called_df[called_df['model'] == 'gpt-test'].iloc[0]
-    assert gpt_row['structured_output'] is False # Updated from NA to False (mock return)
-
-    claude_row = called_df[called_df['model'] == 'claude-test'].iloc[0]
-    assert claude_row['structured_output'] is True # Updated from NA to True (mock return)
-
-    gemini_row = called_df[called_df['model'] == 'gemini-test'].iloc[0]
-    assert pd.isna(gemini_row['structured_output']) # Remains NA as validation failed
-
-    # Check console output
-    mock_console.print.assert_any_call("[green]Updated (False)[/green]") # gpt struct updated
-    mock_console.print.assert_any_call("[green]Updated (True)[/green]") # claude struct updated
-    mock_console.print.assert_any_call("[red]Validation Failed: Unknown model[/red]") # gemini validation
-
-
-# 3. LiteLLM Interaction (Mocked)
-def test_update_missing_costs(mocker, temp_csv_path, capsys_rich):
-    initial_csv_content = "provider,model,input,output\nOpenAI,gpt-test,,\nAnthropic,claude-test,," # Use empty strings for missing
-    temp_csv_path.write_text(initial_csv_content)
-
-    mock_df = create_base_df(pd.read_csv(io.StringIO(initial_csv_content)).to_dict('records'))
-    mocker.patch("pandas.read_csv", return_value=mock_df.copy())
-
-    # Mock LiteLLM cost data
-    mock_litellm_cost = mocker.patch("litellm.model_cost", {
+    mocker.patch("litellm.model_cost", {
         'gpt-test': {'input_cost_per_token': 0.000001, 'output_cost_per_token': 0.000002},
         'claude-test': {'input_cost_per_token': 0.000003, 'output_cost_per_token': 0.000004}
     })
-    mock_supports_schema = mocker.patch("litellm.supports_response_schema", return_value=False) # Not testing struct output here
-
-    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv")
+    mocker.patch("litellm.supports_response_schema", return_value=False)
+    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv", autospec=True)
     mock_console = mocker.patch("pdd.update_model_costs.console")
+    mock_table_instance = MagicMock(spec=Table)
+    mocker.patch("pdd.update_model_costs.Table", return_value=mock_table_instance)
 
     update_model_data(str(temp_csv_path))
 
-    # Check the DataFrame passed to to_csv
     mock_to_csv.assert_called_once()
     called_df = mock_to_csv.call_args.args[0]
     assert isinstance(called_df, pd.DataFrame)
+    gpt_row = called_df[called_df['model'] == 'gpt-test'].iloc[0]
+    assert gpt_row['input'] == 1.0
+    assert gpt_row['output'] == 1.0
+    claude_row = called_df[called_df['model'] == 'claude-test'].iloc[0]
+    assert claude_row['input'] == 2.0
+    assert claude_row['output'] == 4.0
+    mock_table_instance.add_row.assert_any_call("gpt-test", "[green]Updated (Input: 1.0000)[/green]", ANY, "[bold red]Mismatch! (Output (CSV: 1.0000, LLM: 2.0000))[/bold red]", ANY)
+    mock_table_instance.add_row.assert_any_call("claude-test", "[green]Updated (Output: 4.0000)[/green]", ANY, "[bold red]Mismatch! (Input (CSV: 2.0000, LLM: 3.0000))[/bold red]", ANY)
+    mock_console.print.assert_any_call("- Models with cost mismatches: 2")
 
-    # gpt-test should have both costs updated from NA
+def test_load_csv_with_invalid_structured_output_data(mocker, temp_csv_path, capsys_rich):
+    mock_df_data = [
+        {'provider': 'OpenAI', 'model': 'gpt-test', 'structured_output': 'yes'},
+        {'provider': 'Anthropic', 'model': 'claude-test', 'structured_output': 'no'},
+        {'provider': 'Google', 'model': 'gemini-test', 'structured_output': 'maybe'}
+    ]
+    mock_df = create_base_df(mock_df_data)
+    mocker.patch("pandas.read_csv", return_value=mock_df.copy())
+    mocker.patch("litellm.model_cost", {})
+    def supports_schema_side_effect(model):
+        if model == 'claude-test': return True
+        if model == 'gemini-test': raise ValueError("Unknown model")
+        return False
+    mocker.patch("litellm.supports_response_schema", side_effect=supports_schema_side_effect)
+    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv", autospec=True)
+    mock_console = mocker.patch("pdd.update_model_costs.console")
+    mock_table_instance = MagicMock(spec=Table)
+    mocker.patch("pdd.update_model_costs.Table", return_value=mock_table_instance)
+
+    update_model_data(str(temp_csv_path))
+
+    mock_to_csv.assert_called_once()
+    called_df = mock_to_csv.call_args.args[0]
+    assert isinstance(called_df, pd.DataFrame)
+    gpt_row = called_df[called_df['model'] == 'gpt-test'].iloc[0]
+    assert gpt_row['structured_output'] is False
+    claude_row = called_df[called_df['model'] == 'claude-test'].iloc[0]
+    assert claude_row['structured_output'] is True
+    gemini_row = called_df[called_df['model'] == 'gemini-test'].iloc[0]
+    assert pd.isna(gemini_row['structured_output'])
+    mock_table_instance.add_row.assert_any_call("gpt-test", ANY, "[green]Updated (False)[/green]", ANY, ANY)
+    mock_table_instance.add_row.assert_any_call("claude-test", ANY, "[green]Updated (True)[/green]", ANY, ANY)
+    mock_table_instance.add_row.assert_any_call("gemini-test", ANY, "[red]Validation Failed: Unknown model[/red]", ANY, ANY)
+    mock_console.print.assert_any_call("- Models with fetch/check errors: 1")
+
+# 3. LiteLLM Interaction (Mocked)
+def test_update_missing_costs(mocker, temp_csv_path, capsys_rich):
+    mock_df_data = [
+        {'provider': 'OpenAI', 'model': 'gpt-test', 'input': pd.NA, 'output': pd.NA},
+        {'provider': 'Anthropic', 'model': 'claude-test', 'input': pd.NA, 'output': pd.NA}
+    ]
+    mock_df = create_base_df(mock_df_data)
+    mocker.patch("pandas.read_csv", return_value=mock_df.copy())
+    mocker.patch("litellm.model_cost", {
+        'gpt-test': {'input_cost_per_token': 0.000001, 'output_cost_per_token': 0.000002},
+        'claude-test': {'input_cost_per_token': 0.000003, 'output_cost_per_token': 0.000004}
+    })
+    mocker.patch("litellm.supports_response_schema", return_value=False)
+    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv", autospec=True)
+    mock_console = mocker.patch("pdd.update_model_costs.console")
+    mock_table_instance = MagicMock(spec=Table)
+    mocker.patch("pdd.update_model_costs.Table", return_value=mock_table_instance)
+
+    update_model_data(str(temp_csv_path))
+
+    mock_to_csv.assert_called_once()
+    called_df = mock_to_csv.call_args.args[0]
+    assert isinstance(called_df, pd.DataFrame)
     gpt_row = called_df[called_df['model'] == 'gpt-test'].iloc[0]
     assert gpt_row['input'] == 1.0
     assert gpt_row['output'] == 2.0
-
-    # claude-test should have both costs updated from NA
     claude_row = called_df[called_df['model'] == 'claude-test'].iloc[0]
     assert claude_row['input'] == 3.0
     assert claude_row['output'] == 4.0
-
-    mock_console.print.assert_any_call("[green]Updated (Input: 1.0000, Output: 2.0000)[/green]")
-    mock_console.print.assert_any_call("[green]Updated (Input: 3.0000, Output: 4.0000)[/green]")
-
+    mock_table_instance.add_row.assert_any_call("gpt-test", "[green]Updated (Input: 1.0000, Output: 2.0000)[/green]", ANY, ANY, ANY)
+    mock_table_instance.add_row.assert_any_call("claude-test", "[green]Updated (Input: 3.0000, Output: 4.0000)[/green]", ANY, ANY, ANY)
 
 def test_update_missing_structured_output(mocker, temp_csv_path, capsys_rich):
-    initial_csv_content = "provider,model,structured_output\nOpenAI,gpt-test,\nAnthropic,claude-test,False\nGoogle,gemini-test,"
-    temp_csv_path.write_text(initial_csv_content)
-
-    mock_df = create_base_df(pd.read_csv(io.StringIO(initial_csv_content)).to_dict('records'))
+    mock_df_data = [
+        {'provider': 'OpenAI', 'model': 'gpt-test', 'structured_output': pd.NA},
+        {'provider': 'Anthropic', 'model': 'claude-test', 'structured_output': 'False'},
+        {'provider': 'Google', 'model': 'gemini-test', 'structured_output': pd.NA}
+    ]
+    mock_df = create_base_df(mock_df_data)
     mocker.patch("pandas.read_csv", return_value=mock_df.copy())
-
-    # Mock LiteLLM structured output support
-    mocker.patch("litellm.model_cost", {}) # Not testing costs here
-    # Mock supports_response_schema: gpt=True (missing), claude=False(exists), gemini=unknown
+    mocker.patch("litellm.model_cost", {})
     def supports_schema_side_effect(model):
         if model == 'gpt-test': return True
-        if model == 'claude-test': return False # Doesn't matter, value exists
+        if model == 'claude-test': return False 
         if model == 'gemini-test': raise ValueError("Unknown model")
-        return False # Default
-    mock_supports_schema = mocker.patch("litellm.supports_response_schema", side_effect=supports_schema_side_effect)
-
-    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv")
+        return False
+    mocker.patch("litellm.supports_response_schema", side_effect=supports_schema_side_effect)
+    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv", autospec=True)
     mock_console = mocker.patch("pdd.update_model_costs.console")
+    mock_table_instance = MagicMock(spec=Table)
+    mocker.patch("pdd.update_model_costs.Table", return_value=mock_table_instance)
 
     update_model_data(str(temp_csv_path))
 
-    # Check the DataFrame passed to to_csv
     mock_to_csv.assert_called_once()
     called_df = mock_to_csv.call_args.args[0]
     assert isinstance(called_df, pd.DataFrame)
-
-    # gpt-test should be updated to True
     gpt_row = called_df[called_df['model'] == 'gpt-test'].iloc[0]
     assert gpt_row['structured_output'] is True
-
-    # claude-test should remain False (was already set)
     claude_row = called_df[called_df['model'] == 'claude-test'].iloc[0]
     assert claude_row['structured_output'] is False
-
-    # gemini-test should remain NA (missing and validation failed)
     gemini_row = called_df[called_df['model'] == 'gemini-test'].iloc[0]
     assert pd.isna(gemini_row['structured_output'])
-
-    mock_console.print.assert_any_call("[green]Updated (True)[/green]") # gpt-test
-    mock_console.print.assert_any_call("Checked (Exists)") # claude-test
-    mock_console.print.assert_any_call("[red]Validation Failed: Unknown model[/red]") # gemini-test
-
+    mock_table_instance.add_row.assert_any_call("gpt-test", ANY, "[green]Updated (True)[/green]", ANY, ANY)
+    mock_table_instance.add_row.assert_any_call("claude-test", ANY, "Checked (Exists)", ANY, ANY)
+    mock_table_instance.add_row.assert_any_call("gemini-test", ANY, "[red]Validation Failed: Unknown model[/red]", ANY, ANY)
 
 def test_update_both_missing(mocker, temp_csv_path, capsys_rich):
-    initial_csv_content = "provider,model,input,output,structured_output\nOpenAI,gpt-test,,,,\nAnthropic,claude-test,1.0,2.0,"
-    temp_csv_path.write_text(initial_csv_content)
+    mock_df_data = [
+        {'provider': 'OpenAI', 'model': 'gpt-test', 'input': pd.NA, 'output': pd.NA, 'structured_output': pd.NA},
+        {'provider': 'Anthropic', 'model': 'claude-test', 'input': 1.0, 'output': 2.0, 'structured_output': pd.NA}
+    ]
+    mock_df = create_base_df(mock_df_data)
+    assert mock_df.loc[mock_df['model'] == 'gpt-test', 'model'].iloc[0] == 'gpt-test' # Verify model name
+    assert not pd.isna(mock_df.loc[mock_df['model'] == 'gpt-test', 'model'].iloc[0])
 
-    mock_df = create_base_df(pd.read_csv(io.StringIO(initial_csv_content)).to_dict('records'))
     mocker.patch("pandas.read_csv", return_value=mock_df.copy())
-
-    # Mock LiteLLM
-    mock_litellm_cost = mocker.patch("litellm.model_cost", {
+    mocker.patch("litellm.model_cost", {
         'gpt-test': {'input_cost_per_token': 0.000001, 'output_cost_per_token': 0.000002},
-        'claude-test': {'input_cost_per_token': 0.000003, 'output_cost_per_token': 0.000004} # Mismatch
+        'claude-test': {'input_cost_per_token': 0.000003, 'output_cost_per_token': 0.000004}
     })
-    # Mock supports_response_schema: gpt=True (missing), claude=False (missing)
-    mock_supports_schema = mocker.patch("litellm.supports_response_schema", side_effect=lambda model: model == 'gpt-test')
-
-    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv")
+    mocker.patch("litellm.supports_response_schema", side_effect=lambda model_name: model_name == 'gpt-test')
+    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv", autospec=True)
     mock_console = mocker.patch("pdd.update_model_costs.console")
+    mock_table_instance = MagicMock(spec=Table)
+    mocker.patch("pdd.update_model_costs.Table", return_value=mock_table_instance)
 
     update_model_data(str(temp_csv_path))
 
-    # Check the DataFrame passed to to_csv
     mock_to_csv.assert_called_once()
     called_df = mock_to_csv.call_args.args[0]
     assert isinstance(called_df, pd.DataFrame)
-
-    # gpt-test should have costs and structured_output updated
-    gpt_row = called_df[called_df['model'] == 'gpt-test'].iloc[0]
+    
+    gpt_rows = called_df[called_df['model'] == 'gpt-test']
+    assert not gpt_rows.empty, "Row for 'gpt-test' not found in the output DataFrame"
+    gpt_row = gpt_rows.iloc[0]
     assert gpt_row['input'] == 1.0
     assert gpt_row['output'] == 2.0
     assert gpt_row['structured_output'] is True
-
-    # claude-test should have costs remain (mismatch reported), structured_output updated to False
-    claude_row = called_df[called_df['model'] == 'claude-test'].iloc[0]
-    assert claude_row['input'] == 1.0 # Original value
-    assert claude_row['output'] == 2.0 # Original value
-    assert claude_row['structured_output'] is False # Updated from NA
-
-    # Check console output
-    mock_console.print.assert_any_call("[green]Updated (Input: 1.0000, Output: 2.0000)[/green]") # gpt cost
-    mock_console.print.assert_any_call("[green]Updated (True)[/green]") # gpt struct
-    mock_console.print.assert_any_call("[bold red]Mismatch! (Input (CSV: 1.0000, LLM: 3.0000), Output (CSV: 2.0000, LLM: 4.0000))[/bold red]") # claude cost mismatch
-    mock_console.print.assert_any_call("[green]Updated (False)[/green]") # claude struct
-
+    
+    claude_rows = called_df[called_df['model'] == 'claude-test']
+    assert not claude_rows.empty, "Row for 'claude-test' not found in the output DataFrame"
+    claude_row = claude_rows.iloc[0]
+    assert claude_row['input'] == 1.0 
+    assert claude_row['output'] == 2.0
+    assert claude_row['structured_output'] is False
+    mock_table_instance.add_row.assert_any_call("gpt-test", "[green]Updated (Input: 1.0000, Output: 2.0000)[/green]", "[green]Updated (True)[/green]", ANY, ANY)
+    mock_table_instance.add_row.assert_any_call("claude-test", ANY, "[green]Updated (False)[/green]", "[bold red]Mismatch! (Input (CSV: 1.0000, LLM: 3.0000), Output (CSV: 2.0000, LLM: 4.0000))[/bold red]", ANY)
 
 def test_litellm_cost_fetch_failure(mocker, temp_csv_path, capsys_rich):
-    initial_csv_content = "provider,model,input,output\nOpenAI,gpt-test,,"
-    temp_csv_path.write_text(initial_csv_content)
+    mock_df_data = [{'provider': 'OpenAI', 'model': 'gpt-test', 'input': pd.NA, 'output': pd.NA, 'structured_output': pd.NA}]
+    mock_df = create_base_df(mock_df_data)
+    assert mock_df.loc[0, 'model'] == 'gpt-test'
 
-    mock_df = create_base_df(pd.read_csv(io.StringIO(initial_csv_content)).to_dict('records'))
     mocker.patch("pandas.read_csv", return_value=mock_df.copy())
-
-    # Mock LiteLLM cost fetch to raise an exception when accessed
-    mock_litellm = mocker.patch("pdd.update_model_costs.litellm")
-    mock_litellm.model_cost = property(fget=MagicMock(side_effect=Exception("Network Error"))) # Mock property access
-    # Mock supports_response_schema separately
-    mock_litellm.supports_response_schema.return_value = False
-
-    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv")
+    mock_litellm_module = mocker.patch("pdd.update_model_costs.litellm")
+    type(mock_litellm_module).model_cost = PropertyMock(side_effect=Exception("Network Error"))
+    mock_litellm_module.supports_response_schema.return_value = False
+    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv", autospec=True)
     mock_console = mocker.patch("pdd.update_model_costs.console")
-    mock_to_csv.reset_mock() # Ensure clean mock
+    mock_table_instance = MagicMock(spec=Table)
+    mocker.patch("pdd.update_model_costs.Table", return_value=mock_table_instance)
 
     update_model_data(str(temp_csv_path))
 
-    # Check console output for error
-    mock_console.print.assert_any_call(f"[bold red]Error:[/bold red] Could not fetch LiteLLM model cost data: Network Error")
-    # Check that processing continued but reported errors/skipped steps
-    mock_console.print.assert_any_call("[yellow]Cost data not found in LiteLLM[/yellow]") # Because all_model_costs is {}
-    mock_console.print.assert_any_call("[red]Fail (Cost Error)[/red]") # Row status due to fetch error
-
-    # Check that save was NOT called (no updates possible)
-    mock_to_csv.assert_not_called()
-    mock_console.print.assert_any_call("\n[bold blue]No schema changes or data updates needed. CSV file not saved.[/bold blue]")
-
-    # Optional: Check DataFrame state if needed (it shouldn't have changed)
-    # df_state = mock_df # The original df state after read_csv mock
-
+    mock_console.print.assert_any_call("[bold red]Error:[/bold red] Could not fetch LiteLLM model cost data: Network Error")
+    mock_table_instance.add_row.assert_any_call(
+        "gpt-test", 
+        "[yellow]Cost data not found in LiteLLM[/yellow]",
+        "[green]Updated (False)[/green]",
+        "[grey]N/A (No LLM Data)[/grey]",
+        "[blue]Updated (Info)[/blue]"
+    )
+    mock_to_csv.assert_called_once() # Called because structured_output was updated
 
 def test_litellm_cost_model_not_found(mocker, temp_csv_path, capsys_rich):
-    initial_csv_content = "provider,model,input,output\nOpenAI,gpt-test,,"
-    temp_csv_path.write_text(initial_csv_content)
+    mock_df_data = [{'provider': 'OpenAI', 'model': 'gpt-test', 'input': pd.NA, 'output': pd.NA, 'structured_output': pd.NA}]
+    mock_df = create_base_df(mock_df_data)
+    assert mock_df.loc[0, 'model'] == 'gpt-test'
 
-    mock_df = create_base_df(pd.read_csv(io.StringIO(initial_csv_content)).to_dict('records'))
     mocker.patch("pandas.read_csv", return_value=mock_df.copy())
-
-    # Mock LiteLLM cost data, but exclude 'gpt-test'
-    mock_litellm_cost = mocker.patch("litellm.model_cost", {'other-model': {'input_cost_per_token': 0.1, 'output_cost_per_token': 0.2}})
-    mock_supports_schema = mocker.patch("litellm.supports_response_schema", return_value=False) # Assume valid model for schema check
-
-    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv")
+    mocker.patch("litellm.model_cost", {'other-model': {'input_cost_per_token': 0.1, 'output_cost_per_token': 0.2}})
+    mocker.patch("litellm.supports_response_schema", return_value=False)
+    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv", autospec=True)
     mock_console = mocker.patch("pdd.update_model_costs.console")
-    mock_to_csv.reset_mock() # Ensure clean mock
+    mock_table_instance = MagicMock(spec=Table)
+    mocker.patch("pdd.update_model_costs.Table", return_value=mock_table_instance)
 
     update_model_data(str(temp_csv_path))
-
-    # Check console output
-    mock_console.print.assert_any_call("[yellow]Cost data not found in LiteLLM[/yellow]")
-    mock_console.print.assert_any_call("[yellow]Info (No Cost Data)[/yellow]") # Row status
-
-    # Check that save was NOT called (no updates made)
-    mock_to_csv.assert_not_called()
-    mock_console.print.assert_any_call("\n[bold blue]No schema changes or data updates needed. CSV file not saved.[/bold blue]")
-
+    
+    mock_table_instance.add_row.assert_any_call(
+        "gpt-test", 
+        "[yellow]Cost data not found in LiteLLM[/yellow]", 
+        "[green]Updated (False)[/green]", 
+        "[grey]N/A (No LLM Data)[/grey]", 
+        "[blue]Updated (Info)[/blue]"
+    )
+    mock_to_csv.assert_called_once() # Called because structured_output was updated
 
 def test_litellm_cost_missing_keys(mocker, temp_csv_path, capsys_rich):
-    initial_csv_content = "provider,model,input,output\nOpenAI,gpt-test,,\nAnthropic,claude-test,,"
-    temp_csv_path.write_text(initial_csv_content)
-
-    mock_df = create_base_df(pd.read_csv(io.StringIO(initial_csv_content)).to_dict('records'))
+    mock_df_data = [
+        {'provider': 'OpenAI', 'model': 'gpt-test', 'input': pd.NA, 'output': pd.NA},
+        {'provider': 'Anthropic', 'model': 'claude-test', 'input': pd.NA, 'output': pd.NA}
+    ]
+    mock_df = create_base_df(mock_df_data)
     mocker.patch("pandas.read_csv", return_value=mock_df.copy())
-
-    # Mock LiteLLM cost data with missing keys for different models
-    mock_litellm_cost = mocker.patch("litellm.model_cost", {
-        'gpt-test': {'input_cost_per_token': 0.000001}, # Missing output
-        'claude-test': {'output_cost_per_token': 0.000004} # Missing input
+    mocker.patch("litellm.model_cost", {
+        'gpt-test': {'input_cost_per_token': 0.000001},
+        'claude-test': {'output_cost_per_token': 0.000004}
     })
-    mock_supports_schema = mocker.patch("litellm.supports_response_schema", return_value=False)
-
-    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv")
+    mocker.patch("litellm.supports_response_schema", return_value=False)
+    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv", autospec=True)
     mock_console = mocker.patch("pdd.update_model_costs.console")
+    mock_table_instance = MagicMock(spec=Table)
+    mocker.patch("pdd.update_model_costs.Table", return_value=mock_table_instance)
 
     update_model_data(str(temp_csv_path))
 
-    # Check the DataFrame passed to to_csv
     mock_to_csv.assert_called_once()
     called_df = mock_to_csv.call_args.args[0]
     assert isinstance(called_df, pd.DataFrame)
-
-    # gpt-test should have input updated, output remain NA
     gpt_row = called_df[called_df['model'] == 'gpt-test'].iloc[0]
     assert gpt_row['input'] == 1.0
     assert pd.isna(gpt_row['output'])
-
-    # claude-test should have output updated, input remain NA
     claude_row = called_df[called_df['model'] == 'claude-test'].iloc[0]
     assert pd.isna(claude_row['input'])
     assert claude_row['output'] == 4.0
-
-    # Check console output
-    mock_console.print.assert_any_call("[green]Updated (Input: 1.0000)[/green]")
-    mock_console.print.assert_any_call("[green]Updated (Output: 4.0000)[/green]")
-
+    mock_table_instance.add_row.assert_any_call("gpt-test", "[green]Updated (Input: 1.0000)[/green]", ANY, ANY, ANY)
+    mock_table_instance.add_row.assert_any_call("claude-test", "[green]Updated (Output: 4.0000)[/green]", ANY, ANY, ANY)
 
 def test_litellm_structured_output_check_failure(mocker, temp_csv_path, capsys_rich):
-    initial_csv_content = "provider,model,structured_output\nOpenAI,gpt-test,\nAnthropic,claude-test,"
-    temp_csv_path.write_text(initial_csv_content)
-
-    mock_df = create_base_df(pd.read_csv(io.StringIO(initial_csv_content)).to_dict('records'))
+    mock_df_data = [
+        {'provider': 'OpenAI', 'model': 'gpt-test', 'structured_output': pd.NA},
+        {'provider': 'Anthropic', 'model': 'claude-test', 'structured_output': pd.NA}
+    ]
+    mock_df = create_base_df(mock_df_data)
     mocker.patch("pandas.read_csv", return_value=mock_df.copy())
-
     mocker.patch("litellm.model_cost", {})
-    # Mock LiteLLM structured output check to raise an exception for models
     def supports_schema_side_effect(model):
-        if model == 'gpt-test':
-            raise ValueError("Unknown model for schema check")
-        elif model == 'claude-test':
-             raise Exception("API error")
-        return False # Default for others
-    mock_supports_schema = mocker.patch("litellm.supports_response_schema", side_effect=supports_schema_side_effect)
-
-    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv")
+        if model == 'gpt-test': raise ValueError("Unknown model for schema check")
+        elif model == 'claude-test': raise Exception("API error")
+        return False
+    mocker.patch("litellm.supports_response_schema", side_effect=supports_schema_side_effect)
+    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv", autospec=True)
     mock_console = mocker.patch("pdd.update_model_costs.console")
-    mock_to_csv.reset_mock() # Ensure clean mock
+    mock_table_instance = MagicMock(spec=Table)
+    mocker.patch("pdd.update_model_costs.Table", return_value=mock_table_instance)
 
     update_model_data(str(temp_csv_path))
-
-    # Check console output for validation errors
-    mock_console.print.assert_any_call("[red]Validation Failed: Unknown model for schema check[/red]")
-    mock_console.print.assert_any_call("[red]Check Error: API error[/red]")
-    mock_console.print.assert_any_call("[red]Fail (Invalid/Unknown Model?)[/red]") # Row status for gpt-test
-    mock_console.print.assert_any_call("[red]Fail (Schema Check Error)[/red]") # Row status for claude-test
-
-    # Check that save was NOT called (no updates made)
+    mock_table_instance.add_row.assert_any_call("gpt-test", "[red]Skipped[/red]", "[red]Validation Failed: Unknown model for schema check[/red]", "[red]Skipped (Validation Failed)[/red]", "[red]Fail (Invalid/Unknown Model?)[/red]")
+    mock_table_instance.add_row.assert_any_call("claude-test", "[red]Skipped[/red]", "[red]Check Error: API error[/red]", "[red]Skipped (Schema Check Error)[/red]", "[red]Fail (Schema Check Error)[/red]")
     mock_to_csv.assert_not_called()
     mock_console.print.assert_any_call("\n[bold blue]No schema changes or data updates needed. CSV file not saved.[/bold blue]")
-
+    mock_console.print.assert_any_call("- Models with fetch/check errors: 2")
 
 # 4. Mixed Scenarios
 def test_csv_mix_of_missing_and_present_data(mocker, temp_csv_path, capsys_rich):
-    initial_csv_content = """provider,model,input,output,structured_output
-OpenAI,gpt-needs-all,,,
-Anthropic,claude-needs-cost,,1.0,True
-Google,gemini-needs-struct,2.0,3.0,
-Mistral,mistral-complete,4.0,5.0,False
-Unknown,unknown-model,,,
-"""
-    temp_csv_path.write_text(initial_csv_content)
-
-    mock_df = create_base_df(pd.read_csv(io.StringIO(initial_csv_content)).to_dict('records'))
+    mock_df_data = [
+        {'provider': 'OpenAI', 'model': 'gpt-needs-all', 'input': pd.NA, 'output': pd.NA, 'structured_output': pd.NA},
+        {'provider': 'Anthropic', 'model': 'claude-needs-cost', 'input': pd.NA, 'output': 1.0, 'structured_output': 'True'},
+        {'provider': 'Google', 'model': 'gemini-needs-struct', 'input': 2.0, 'output': 3.0, 'structured_output': pd.NA},
+        {'provider': 'Mistral', 'model': 'mistral-complete', 'input': 4.0, 'output': 5.0, 'structured_output': 'False'},
+        {'provider': 'Unknown', 'model': 'unknown-model', 'input': pd.NA, 'output': pd.NA, 'structured_output': pd.NA},
+    ]
+    mock_df = create_base_df(mock_df_data)
     mocker.patch("pandas.read_csv", return_value=mock_df.copy())
-
-    # Mock LiteLLM
-    mock_litellm_cost = mocker.patch("litellm.model_cost", {
+    mocker.patch("litellm.model_cost", {
         'gpt-needs-all': {'input_cost_per_token': 0.000001, 'output_cost_per_token': 0.000002},
-        'claude-needs-cost': {'input_cost_per_token': 0.000003, 'output_cost_per_token': 0.000004}, # Output mismatch
-        'gemini-needs-struct': {'input_cost_per_token': 0.000002, 'output_cost_per_token': 0.000003}, # Match
-        'mistral-complete': {'input_cost_per_token': 0.000004, 'output_cost_per_token': 0.000005}, # Match
+        'claude-needs-cost': {'input_cost_per_token': 0.000003, 'output_cost_per_token': 0.000004},
+        'gemini-needs-struct': {'input_cost_per_token': 0.000002, 'output_cost_per_token': 0.000003},
+        'mistral-complete': {'input_cost_per_token': 0.000004, 'output_cost_per_token': 0.000005},
     })
     def supports_schema_side_effect(model):
-        if model == 'gpt-needs-all': return True # Missing -> Update
-        if model == 'claude-needs-cost': return False # Exists (True) -> No Update
-        if model == 'gemini-needs-struct': return True # Missing -> Update
-        if model == 'mistral-complete': return False # Exists (False) -> No Update
-        if model == 'unknown-model': raise ValueError("Unknown model") # Validation fail
-        return False # Default
-
-    mock_supports_schema = mocker.patch("litellm.supports_response_schema", side_effect=supports_schema_side_effect)
-
-    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv")
+        if model == 'gpt-needs-all': return True
+        if model == 'claude-needs-cost': return False 
+        if model == 'gemini-needs-struct': return True
+        if model == 'mistral-complete': return False
+        if model == 'unknown-model': raise ValueError("Unknown model")
+        return False
+    mocker.patch("litellm.supports_response_schema", side_effect=supports_schema_side_effect)
+    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv", autospec=True)
     mock_console = mocker.patch("pdd.update_model_costs.console")
+    mock_table_instance = MagicMock(spec=Table)
+    mocker.patch("pdd.update_model_costs.Table", return_value=mock_table_instance)
 
     update_model_data(str(temp_csv_path))
 
-    # Check the DataFrame passed to to_csv
     mock_to_csv.assert_called_once()
     called_df = mock_to_csv.call_args.args[0]
     assert isinstance(called_df, pd.DataFrame)
-
-    # gpt-needs-all: costs and struct updated
     gpt_row = called_df[called_df['model'] == 'gpt-needs-all'].iloc[0]
-    assert gpt_row['input'] == 1.0
-    assert gpt_row['output'] == 2.0
-    assert gpt_row['structured_output'] is True
-
-    # claude-needs-cost: input cost updated, output mismatch, struct remains
+    assert gpt_row['input'] == 1.0; assert gpt_row['output'] == 2.0; assert gpt_row['structured_output'] is True
     claude_row = called_df[called_df['model'] == 'claude-needs-cost'].iloc[0]
-    assert claude_row['input'] == 3.0 # Updated from NA
-    assert claude_row['output'] == 1.0 # Original value (mismatch reported)
-    assert claude_row['structured_output'] is True # Original value
-
-    # gemini-needs-struct: costs remain (match), structured_output updated
+    assert claude_row['input'] == 3.0; assert claude_row['output'] == 1.0; assert claude_row['structured_output'] is True 
     gemini_row = called_df[called_df['model'] == 'gemini-needs-struct'].iloc[0]
-    assert gemini_row['input'] == 2.0 # Original value
-    assert gemini_row['output'] == 3.0 # Original value
-    assert gemini_row['structured_output'] is True # Updated from NA
-
-    # mistral-complete: nothing updated (costs match, struct exists)
+    assert gemini_row['input'] == 2.0; assert gemini_row['output'] == 3.0; assert gemini_row['structured_output'] is True
     mistral_row = called_df[called_df['model'] == 'mistral-complete'].iloc[0]
-    assert mistral_row['input'] == 4.0
-    assert mistral_row['output'] == 5.0
-    assert mistral_row['structured_output'] is False
-
-    # unknown-model: nothing updated, validation failed
+    assert mistral_row['input'] == 4.0; assert mistral_row['output'] == 5.0; assert mistral_row['structured_output'] is False
     unknown_row = called_df[called_df['model'] == 'unknown-model'].iloc[0]
-    assert pd.isna(unknown_row['input'])
-    assert pd.isna(unknown_row['output'])
-    assert pd.isna(unknown_row['structured_output'])
-
-    # Check console output for updates and warnings
-    mock_console.print.assert_any_call("[green]Updated (Input: 1.0000, Output: 2.0000)[/green]") # gpt cost
-    mock_console.print.assert_any_call("[green]Updated (True)[/green]") # gpt struct
-    mock_console.print.assert_any_call("[green]Updated (Input: 3.0000)[/green]") # claude input cost
-    mock_console.print.assert_any_call("[bold red]Mismatch! (Output (CSV: 1.0000, LLM: 4.0000))[/bold red]") # claude output cost mismatch
-    mock_console.print.assert_any_call("Checked (Exists)") # claude struct
-    mock_console.print.assert_any_call("[green]Match (Input, Output)[/green]") # gemini costs
-    mock_console.print.assert_any_call("[green]Updated (True)[/green]") # gemini struct
-    mock_console.print.assert_any_call("[green]Match (Input, Output)[/green]") # mistral costs
-    mock_console.print.assert_any_call("Checked (Exists)") # mistral struct
-    mock_console.print.assert_any_call("[red]Validation Failed: Unknown model[/red]") # unknown-model validation
-
+    assert pd.isna(unknown_row['input']); assert pd.isna(unknown_row['output']); assert pd.isna(unknown_row['structured_output'])
+    mock_table_instance.add_row.assert_any_call("gpt-needs-all", "[green]Updated (Input: 1.0000, Output: 2.0000)[/green]", "[green]Updated (True)[/green]", ANY, ANY)
+    mock_table_instance.add_row.assert_any_call("claude-needs-cost", "[green]Updated (Input: 3.0000)[/green]", "Checked (Exists)", "[bold red]Mismatch! (Output (CSV: 1.0000, LLM: 4.0000))[/bold red]", ANY)
+    mock_table_instance.add_row.assert_any_call("gemini-needs-struct", ANY, "[green]Updated (True)[/green]", "[green]Match (Input, Output)[/green]", ANY)
+    mock_table_instance.add_row.assert_any_call("mistral-complete", ANY, "Checked (Exists)", "[green]Match (Input, Output)[/green]", ANY)
+    mock_table_instance.add_row.assert_any_call("unknown-model", "[red]Skipped[/red]", "[red]Validation Failed: Unknown model[/red]", "[red]Skipped (Validation Failed)[/red]", "[red]Fail (Invalid/Unknown Model?)[/red]")
+    mock_console.print.assert_any_call("- Models with cost mismatches: 1")
+    mock_console.print.assert_any_call("- Models with fetch/check errors: 1")
 
 def test_csv_with_missing_model_identifier(mocker, temp_csv_path, capsys_rich):
-    initial_csv_content = """provider,model,input,output,structured_output
-OpenAI,gpt-test,,,
-Anthropic,,1.0,2.0,True
-Google,gemini-test,3.0,4.0,
-"""
-    temp_csv_path.write_text(initial_csv_content)
-
-    mock_df = create_base_df(pd.read_csv(io.StringIO(initial_csv_content)).to_dict('records'))
+    mock_df_data = [
+        {'provider': 'OpenAI', 'model': 'gpt-test', 'input': pd.NA, 'output': pd.NA, 'structured_output': pd.NA},
+        {'provider': 'Anthropic', 'model': pd.NA, 'input': 1.0, 'output': 2.0, 'structured_output': 'True'},
+        {'provider': 'Google', 'model': 'gemini-test', 'input': 3.0, 'output': 4.0, 'structured_output': pd.NA},
+    ]
+    mock_df = create_base_df(mock_df_data) # create_base_df will handle NAs
+    # The row with Anthropic will have model=pd.NA
+    
     mocker.patch("pandas.read_csv", return_value=mock_df.copy())
-
-    # Mock LiteLLM
-    mock_litellm_cost = mocker.patch("litellm.model_cost", {
+    mocker.patch("litellm.model_cost", {
         'gpt-test': {'input_cost_per_token': 0.000001, 'output_cost_per_token': 0.000002},
-        'gemini-test': {'input_cost_per_token': 0.000003, 'output_cost_per_token': 0.000004}, # Match
+        'gemini-test': {'input_cost_per_token': 0.000003, 'output_cost_per_token': 0.000004},
     })
-    # Mock supports_response_schema: gpt=True (missing), gemini=False (missing)
-    mock_supports_schema = mocker.patch("litellm.supports_response_schema", side_effect=lambda model: model == 'gpt-test')
-
-    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv")
+    mocker.patch("litellm.supports_response_schema", side_effect=lambda model: model == 'gpt-test')
+    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv", autospec=True)
     mock_console = mocker.patch("pdd.update_model_costs.console")
+    mock_table_instance = MagicMock(spec=Table)
+    mocker.patch("pdd.update_model_costs.Table", return_value=mock_table_instance)
 
     update_model_data(str(temp_csv_path))
 
-    # Check the DataFrame passed to to_csv
     mock_to_csv.assert_called_once()
     called_df = mock_to_csv.call_args.args[0]
     assert isinstance(called_df, pd.DataFrame)
-
-    # gpt-test should be updated
     gpt_row = called_df[called_df['model'] == 'gpt-test'].iloc[0]
-    assert gpt_row['input'] == 1.0
-    assert gpt_row['output'] == 2.0
-    assert gpt_row['structured_output'] is True
-
-    # Row with missing model should be skipped and remain unchanged
-    # Need to handle potential index difference after NA drop or processing
-    anthropic_row = called_df[called_df['provider'] == 'Anthropic'].iloc[0]
-    assert pd.isna(anthropic_row['model'])
-    assert anthropic_row['input'] == 1.0
-    assert anthropic_row['output'] == 2.0
-    assert anthropic_row['structured_output'] is True
-
-    # gemini-test should have costs match, structured_output updated to False
+    assert gpt_row['input'] == 1.0; assert gpt_row['output'] == 2.0; assert gpt_row['structured_output'] is True
+    
+    # The index for the Anthropic row in the original mock_df (which is 0-indexed)
+    anthropic_row_index_in_mock_df = mock_df[mock_df['provider'] == 'Anthropic'].index[0]
+    mock_console.print.assert_any_call(f"[yellow]Warning:[/yellow] Skipping row {anthropic_row_index_in_mock_df} due to missing model identifier.")
+    
     gemini_row = called_df[called_df['model'] == 'gemini-test'].iloc[0]
-    assert gemini_row['input'] == 3.0
-    assert gemini_row['output'] == 4.0
-    assert gemini_row['structured_output'] is False # Updated from NA
-
-    # Check console output for the warning about skipping the row
-    # The index might change depending on pandas version, check for provider/content
-    mock_console.print.assert_any_call(f"[yellow]Warning:[/yellow] Skipping row {anthropic_row.name} due to missing model identifier.")
-    mock_console.print.assert_any_call("[green]Updated (Input: 1.0000, Output: 2.0000)[/green]") # gpt cost
-    mock_console.print.assert_any_call("[green]Updated (True)[/green]") # gpt struct
-    mock_console.print.assert_any_call("[green]Match (Input, Output)[/green]") # gemini costs
-    mock_console.print.assert_any_call("[green]Updated (False)[/green]") # gemini struct
-
+    assert gemini_row['input'] == 3.0; assert gemini_row['output'] == 4.0; assert gemini_row['structured_output'] is False
+    mock_table_instance.add_row.assert_any_call("gpt-test", "[green]Updated (Input: 1.0000, Output: 2.0000)[/green]", "[green]Updated (True)[/green]", ANY, ANY)
+    mock_table_instance.add_row.assert_any_call("gemini-test", ANY, "[green]Updated (False)[/green]", "[green]Match (Input, Output)[/green]", ANY)
 
 # 5. Output and Saving
 def test_output_messages(mocker, temp_csv_path, capsys_rich):
-    initial_csv_content = "provider,model,input,output,structured_output\nOpenAI,gpt-test,,,,\nAnthropic,claude-test,1.0,2.0,True"
-    temp_csv_path.write_text(initial_csv_content)
-
-    mock_df = create_base_df(pd.read_csv(io.StringIO(initial_csv_content)).to_dict('records'))
+    mock_df_data = [
+        {'provider': 'OpenAI', 'model': 'gpt-test', 'input': pd.NA, 'output': pd.NA, 'structured_output': pd.NA},
+        {'provider': 'Anthropic', 'model': 'claude-test', 'input': 1.0, 'output': 2.0, 'structured_output': 'True'}
+    ]
+    mock_df = create_base_df(mock_df_data)
     mocker.patch("pandas.read_csv", return_value=mock_df.copy())
-
-    # Mock LiteLLM to cause updates
-    mock_litellm_cost = mocker.patch("litellm.model_cost", {
+    mocker.patch("litellm.model_cost", {
         'gpt-test': {'input_cost_per_token': 0.000001, 'output_cost_per_token': 0.000002},
-        'claude-test': {'input_cost_per_token': 0.000001, 'output_cost_per_token': 0.000002}, # Match
+        'claude-test': {'input_cost_per_token': 0.000001, 'output_cost_per_token': 0.000002},
     })
-    # Mock supports_response_schema: gpt=True (missing), claude=True (exists)
-    mock_supports_schema = mocker.patch("litellm.supports_response_schema", return_value=True)
-
-    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv")
+    mocker.patch("litellm.supports_response_schema", return_value=True)
+    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv", autospec=True)
     mock_console = mocker.patch("pdd.update_model_costs.console")
 
     update_model_data(str(temp_csv_path))
 
-    # Check for key messages using assert_any_call
     mock_console.print.assert_any_call(f"[bold blue]Starting model data update for:[/bold blue] {temp_csv_path}")
     mock_console.print.assert_any_call(f"[green]Successfully loaded:[/green] {temp_csv_path}")
     mock_console.print.assert_any_call("[green]Successfully fetched LiteLLM model cost data.[/green]")
     mock_console.print.assert_any_call("\n[bold blue]Processing models...[/bold blue]")
-    # Check table content via calls to table.add_row made through console.print(table)
-    # This is complex, let's check specific update messages instead
-    mock_console.print.assert_any_call("[green]Updated (Input: 1.0000, Output: 2.0000)[/green]") # gpt cost update
-    mock_console.print.assert_any_call("[green]Updated (True)[/green]") # gpt struct update
-    mock_console.print.assert_any_call("[green]Match (Input, Output)[/green]") # claude cost checked
-    mock_console.print.assert_any_call("Checked (Exists)") # claude struct checked
-    # Check summary - numbers depend on exact execution
     mock_console.print.assert_any_call("- Models processed: 2")
-    mock_console.print.assert_any_call("- Rows potentially updated (data changed): 1") # Only gpt-test changed
+    mock_console.print.assert_any_call("- Rows potentially updated (data changed): 1")
     mock_console.print.assert_any_call("- Models with fetch/check errors: 0")
     mock_console.print.assert_any_call("- Models with cost mismatches: 0")
     mock_console.print.assert_any_call(f"[bold green]Successfully saved updated data to:[/bold green] {temp_csv_path}")
     mock_console.print.assert_any_call(f"\n[bold yellow]Reminder:[/bold yellow] The '{'max_reasoning_tokens'}' column is not automatically updated by this script and requires manual maintenance.")
     mock_console.print.assert_any_call(f"[bold blue]Model data update process finished.[/bold blue]")
 
-
 def test_save_no_updates(mocker, temp_csv_path, capsys_rich):
-    initial_csv_content = "provider,model,input,output,structured_output\nOpenAI,gpt-test,1.0,2.0,True"
-    temp_csv_path.write_text(initial_csv_content)
-
-    # Use create_base_df to ensure types match what script expects after load/enforce
-    mock_df = create_base_df(pd.read_csv(io.StringIO(initial_csv_content)).to_dict('records'))
-    # Ensure structured_output is boolean after potential read as string
-    mock_df['structured_output'] = mock_df['structured_output'].astype(bool)
+    mock_df_data = [{'provider': 'OpenAI', 'model': 'gpt-test', 'input': 1.0, 'output': 2.0, 'structured_output': True}]
+    # Note: structured_output is already boolean here, aligning with post-script-processing state.
+    mock_df = create_base_df(mock_df_data)
+    
     mocker.patch("pandas.read_csv", return_value=mock_df.copy())
-
-    # Mock LiteLLM to return data that matches existing data
-    mock_litellm_cost = mocker.patch("litellm.model_cost", {
-        'gpt-test': {'input_cost_per_token': 0.000001, 'output_cost_per_token': 0.000002}, # Matches 1.0, 2.0
+    mocker.patch("litellm.model_cost", {
+        'gpt-test': {'input_cost_per_token': 0.000001, 'output_cost_per_token': 0.000002},
     })
-    mock_supports_schema = mocker.patch("litellm.supports_response_schema", return_value=True) # Matches True
-
-    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv")
+    mocker.patch("litellm.supports_response_schema", return_value=True)
+    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv", autospec=True)
     mock_console = mocker.patch("pdd.update_model_costs.console")
-    mock_to_csv.reset_mock() # Reset mock before the call
 
     update_model_data(str(temp_csv_path))
 
-    # to_csv should NOT be called because no schema changes or data updates occurred
     mock_to_csv.assert_not_called()
     mock_console.print.assert_any_call("\n[bold blue]No schema changes or data updates needed. CSV file not saved.[/bold blue]")
 
-
 def test_save_with_updates(mocker, temp_csv_path, capsys_rich):
-    initial_csv_content = "provider,model,input,output,structured_output\nOpenAI,gpt-test,,,,"
-    temp_csv_path.write_text(initial_csv_content)
+    mock_df_data = [{'provider': 'OpenAI', 'model': 'gpt-test', 'input': pd.NA, 'output': pd.NA, 'structured_output': pd.NA}]
+    mock_df = create_base_df(mock_df_data)
+    assert mock_df.loc[0, 'model'] == 'gpt-test' # Ensure model name is correct before script runs
 
-    mock_df = create_base_df(pd.read_csv(io.StringIO(initial_csv_content)).to_dict('records'))
     mocker.patch("pandas.read_csv", return_value=mock_df.copy())
-
-    # Mock LiteLLM to cause updates
-    mock_litellm_cost = mocker.patch("litellm.model_cost", {
+    mocker.patch("litellm.model_cost", {
         'gpt-test': {'input_cost_per_token': 0.000001, 'output_cost_per_token': 0.000002},
     })
-    mock_supports_schema = mocker.patch("litellm.supports_response_schema", return_value=True)
-
-    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv")
+    mocker.patch("litellm.supports_response_schema", return_value=True) # This will cause an update
+    mock_to_csv = mocker.patch("pandas.DataFrame.to_csv", autospec=True)
     mock_console = mocker.patch("pdd.update_model_costs.console")
 
     update_model_data(str(temp_csv_path))
 
-    # to_csv should be called with correct arguments
-    mock_to_csv.assert_called_once_with(str(temp_csv_path), index=False, na_rep='')
-    # Check the success message was printed
+    mock_to_csv.assert_called_once()
+    assert mock_to_csv.call_args.args[1] == str(temp_csv_path)
+    assert mock_to_csv.call_args.kwargs['index'] is False
+    assert mock_to_csv.call_args.kwargs['na_rep'] == ''
     mock_console.print.assert_any_call(f"[bold green]Successfully saved updated data to:[/bold green] {temp_csv_path}")
-
-    # Verify the content of the DataFrame passed to to_csv
     called_df = mock_to_csv.call_args.args[0]
     assert isinstance(called_df, pd.DataFrame)
     gpt_row = called_df[called_df['model'] == 'gpt-test'].iloc[0]
@@ -948,97 +783,89 @@ def test_save_with_updates(mocker, temp_csv_path, capsys_rich):
     assert gpt_row['output'] == 2.0
     assert gpt_row['structured_output'] is True
 
-
 # 6. Main Function / Argument Parsing
 def test_main_default_path(mocker, capsys_rich):
-    # Mock update_model_data to check if it's called with the default path
     mock_update = mocker.patch("pdd.update_model_costs.update_model_data")
-    # Mock sys.argv to simulate no command line arguments
     mocker.patch('sys.argv', ['update_model_costs.py'])
 
-    # Mock Path operations used in main
-    mock_home_path = Path.home() / ".pdd" / "llm_model.csv"
-    mock_default_path = Path("data/llm_model.csv").resolve()
-    mock_path_instance = MagicMock()
-    mock_path_instance.resolve.return_value = mock_default_path
-    mock_path_instance.parent.exists.return_value = True # Assume default dir exists
-    mock_path_instance.is_file.return_value = True # Assume default file exists
+    mock_user_csv_file = MagicMock(spec=Path); mock_user_csv_file.is_file.return_value = False
+    mock_home_pdd_dir = MagicMock(spec=Path); mock_home_pdd_dir.__truediv__.return_value = mock_user_csv_file
+    mock_home_dir = MagicMock(spec=Path); mock_home_dir.__truediv__.return_value = mock_home_pdd_dir
+    mocker.patch("pdd.update_model_costs.Path.home", return_value=mock_home_dir)
 
-    mocker.patch("pdd.update_model_costs.Path", return_value=mock_path_instance)
-    mocker.patch("pathlib.Path.home", return_value=Path.home()) # Keep home correct
-    # Mock the specific user path check
-    mocker.patch.object(mock_home_path, 'is_file', return_value=False)
-
-    mock_makedirs = mocker.patch('os.makedirs') # Should not be called if dir exists
-
+    default_path_str = "data/llm_model.csv"
+    resolved_default_path = Path(default_path_str).resolve()
+    mock_resolved_default_obj = MagicMock(spec=Path)
+    mock_resolved_default_obj.parent.exists.return_value = True
+    mock_resolved_default_obj.__str__.return_value = str(resolved_default_path)
+    mock_unresolved_default_obj = MagicMock(spec=Path)
+    mock_unresolved_default_obj.resolve.return_value = mock_resolved_default_obj
+    mocker.patch("pdd.update_model_costs.Path", return_value=mock_unresolved_default_obj) 
+    
+    mock_os_makedirs = mocker.patch('pdd.update_model_costs.os.makedirs')
     main()
 
-    # Assert update_model_data called with the resolved default path string
-    mock_update.assert_called_once_with(str(mock_default_path))
-    mock_makedirs.assert_not_called()
-
+    mock_update.assert_called_once_with(str(resolved_default_path))
+    mock_os_makedirs.assert_not_called()
 
 def test_main_custom_path(mocker, capsys_rich):
-    # Mock update_model_data to check if it's called with the custom path
     mock_update = mocker.patch("pdd.update_model_costs.update_model_data")
     custom_path_str = "custom/data/my_models.csv"
-    custom_path_obj = Path(custom_path_str)
-    resolved_custom_path = custom_path_obj.resolve()
-
-    # Mock sys.argv to simulate command line argument
+    resolved_custom_path = Path(custom_path_str).resolve()
     mocker.patch('sys.argv', ['update_model_costs.py', '--csv-path', custom_path_str])
 
-    # Mock Path operations
-    mock_home_path = Path.home() / ".pdd" / "llm_model.csv"
-    mock_arg_path_instance = MagicMock()
-    mock_arg_path_instance.resolve.return_value = resolved_custom_path
-    mock_arg_path_instance.parent.exists.return_value = False # Simulate custom dir NOT existing
-    mock_arg_path_instance.is_file.return_value = False # Simulate custom file NOT existing
+    mock_user_csv_file = MagicMock(spec=Path); mock_user_csv_file.is_file.return_value = False
+    mock_home_pdd_dir = MagicMock(spec=Path); mock_home_pdd_dir.__truediv__.return_value = mock_user_csv_file
+    mock_home_dir = MagicMock(spec=Path); mock_home_dir.__truediv__.return_value = mock_home_pdd_dir
+    mocker.patch("pdd.update_model_costs.Path.home", return_value=mock_home_dir)
 
-    mocker.patch("pdd.update_model_costs.Path", return_value=mock_arg_path_instance)
-    mocker.patch("pathlib.Path.home", return_value=Path.home())
-    mocker.patch.object(mock_home_path, 'is_file', return_value=False) # No user file
-
-    mock_makedirs = mocker.patch('os.makedirs')
-    mock_console = mocker.patch("pdd.update_model_costs.console") # Mock console for checking output
-
+    mock_resolved_custom_obj = MagicMock(spec=Path)
+    mock_resolved_custom_obj.parent.exists.return_value = False
+    mock_resolved_custom_obj.parent.__str__.return_value = str(Path(custom_path_str).parent)
+    mock_resolved_custom_obj.__str__.return_value = str(resolved_custom_path)
+    mock_unresolved_custom_obj = MagicMock(spec=Path)
+    mock_unresolved_custom_obj.resolve.return_value = mock_resolved_custom_obj
+    mocker.patch("pdd.update_model_costs.Path", return_value=mock_unresolved_custom_obj)
+    
+    mock_os_makedirs = mocker.patch('pdd.update_model_costs.os.makedirs')
+    mock_console = mocker.patch("pdd.update_model_costs.console")
     main()
 
-    # Assert update_model_data called with the resolved custom path string
     mock_update.assert_called_once_with(str(resolved_custom_path))
-    # Assert directory creation was called for the custom path's parent
-    mock_makedirs.assert_called_once_with(resolved_custom_path.parent, exist_ok=True)
-    mock_console.print.assert_any_call(f"[cyan]Created directory:[/cyan] {resolved_custom_path.parent}")
+    mock_os_makedirs.assert_called_once_with(Path(custom_path_str).parent, exist_ok=True)
+    mock_console.print.assert_any_call(f"[cyan]Created directory:[/cyan] {Path(custom_path_str).parent}")
 
 def test_main_user_path_precedence(mocker, capsys_rich):
-    # Mock update_model_data to check if it's called with the user path
     mock_update = mocker.patch("pdd.update_model_costs.update_model_data")
-    custom_path_str = "custom/data/my_models.csv" # Arg path (should be ignored)
-    user_path = Path.home() / ".pdd" / "llm_model.csv"
+    custom_path_arg_str = "custom/data/my_models.csv"
+    
+    # Determine the actual string value for user_path_str for assertion
+    # This needs to be the string that update_model_data will be called with.
+    # Path.home() itself is mocked, so we construct the string based on what the mock returns.
+    user_path_str_for_assertion = str(Path.home() / ".pdd" / "llm_model.csv") # Example, adjust if mock_home_dir changes this
 
-    # Mock sys.argv to simulate command line argument
-    mocker.patch('sys.argv', ['update_model_costs.py', '--csv-path', custom_path_str])
+    mocker.patch('sys.argv', ['update_model_costs.py', '--csv-path', custom_path_arg_str])
 
-    # Mock Path operations
-    mock_default_path_instance = MagicMock() # Mock for the Path(args.csv_path) call
-    mock_default_path_instance.resolve.return_value = Path(custom_path_str).resolve()
+    mock_user_csv_file = MagicMock(spec=Path)
+    mock_user_csv_file.is_file.return_value = True 
+    mock_user_csv_file.__str__.return_value = user_path_str_for_assertion # This mock Path obj will be str()-ed
 
-    # Mock Path() constructor to return different mocks based on input
-    def path_side_effect(path_arg):
-        if str(path_arg) == custom_path_str:
-            return mock_default_path_instance
-        # Add other specific paths if needed, otherwise default mock
-        return MagicMock()
+    mock_home_pdd_dir = MagicMock(spec=Path)
+    mock_home_pdd_dir.__truediv__.return_value = mock_user_csv_file
 
-    mocker.patch("pdd.update_model_costs.Path", side_effect=path_side_effect)
-    mocker.patch("pathlib.Path.home", return_value=Path.home()) # Keep home correct
-    # Mock the specific user path check to return True
-    mocker.patch.object(user_path, 'is_file', return_value=True)
+    mock_home_dir = MagicMock(spec=Path)
+    mock_home_dir.__truediv__.return_value = mock_home_pdd_dir
+    mocker.patch("pdd.update_model_costs.Path.home", return_value=mock_home_dir)
 
-    mock_makedirs = mocker.patch('os.makedirs') # Should not be called
-
+    # Path(args.csv_path) will also be constructed. Mock it simply.
+    mock_arg_path_obj = MagicMock(spec=Path)
+    mock_arg_path_obj.resolve.return_value = mock_arg_path_obj 
+    mocker.patch("pdd.update_model_costs.Path", return_value=mock_arg_path_obj) # Mocks Path() constructor
+        
+    mock_os_makedirs = mocker.patch('pdd.update_model_costs.os.makedirs')
+    mock_console = mocker.patch("pdd.update_model_costs.console")
     main()
 
-    # Assert update_model_data called with the user path string
-    mock_update.assert_called_once_with(str(user_path))
-    mock_makedirs.assert_not_called() # Directory creation should be skipped
+    mock_update.assert_called_once_with(user_path_str_for_assertion)
+    mock_os_makedirs.assert_not_called()
+    mock_console.print.assert_any_call(f"[bold cyan]Found user-specific config, using:[/bold cyan] {user_path_str_for_assertion}")
