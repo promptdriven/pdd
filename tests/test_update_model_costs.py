@@ -509,7 +509,7 @@ def test_update_both_missing(mocker, temp_csv_path, capsys_rich):
         'gpt-test': {'input_cost_per_token': 0.000001, 'output_cost_per_token': 0.000002},
         'claude-test': {'input_cost_per_token': 0.000003, 'output_cost_per_token': 0.000004}
     })
-    mocker.patch("litellm.supports_response_schema", side_effect=lambda model_name: model_name == 'gpt-test')
+    mocker.patch("litellm.supports_response_schema", side_effect=lambda model: model == 'gpt-test')
     mock_to_csv = mocker.patch("pandas.DataFrame.to_csv", autospec=True)
     mock_console = mocker.patch("pdd.update_model_costs.console")
     mock_table_instance = MagicMock(spec=Table)
@@ -517,7 +517,7 @@ def test_update_both_missing(mocker, temp_csv_path, capsys_rich):
 
     update_model_data(str(temp_csv_path))
 
-    mock_to_csv.assert_called_once() # This is the assertion that was failing
+    mock_to_csv.assert_called_once()
     called_df = mock_to_csv.call_args.args[0]
     assert isinstance(called_df, pd.DataFrame)
     
