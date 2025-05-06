@@ -96,49 +96,45 @@ else:
 # Default model if PDD_MODEL_DEFAULT is not set
 DEFAULT_BASE_MODEL = os.getenv("PDD_MODEL_DEFAULT", "gpt-4.1-nano") # Using LiteLLM format potentially
 
-# --- LiteLLM Cache Configuration (S3 compatible for GCS) ---
+# --- LiteLLM Cache Configuration (S3 compatible for GCS, with SQLite fallback) ---
 GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")
 GCS_ENDPOINT_URL = "https://storage.googleapis.com" # GCS S3 compatibility endpoint
 GCS_REGION_NAME = os.getenv("GCS_REGION_NAME", "auto") # Often 'auto' works for GCS
 GCS_HMAC_ACCESS_KEY_ID = os.getenv("GCS_HMAC_ACCESS_KEY_ID") # Load HMAC Key ID
 GCS_HMAC_SECRET_ACCESS_KEY = os.getenv("GCS_HMAC_SECRET_ACCESS_KEY") # Load HMAC Secret
 
-# <<< CONFIGURING GCS CACHE (S3 Compatible) >>>
+cache_configured = False
+
 if GCS_BUCKET_NAME and GCS_HMAC_ACCESS_KEY_ID and GCS_HMAC_SECRET_ACCESS_KEY:
     # Store original AWS credentials before overwriting for GCS cache setup
     original_aws_access_key_id = os.environ.get('AWS_ACCESS_KEY_ID')
     original_aws_secret_access_key = os.environ.get('AWS_SECRET_ACCESS_KEY')
-    # Store other potentially relevant AWS env vars if needed (e.g., SESSION_TOKEN, REGION)
-    original_aws_region_name = os.environ.get('AWS_REGION_NAME') # Added for completeness
+    original_aws_region_name = os.environ.get('AWS_REGION_NAME')
 
     try:
         # Temporarily set AWS env vars to GCS HMAC keys for S3 compatible cache
         os.environ['AWS_ACCESS_KEY_ID'] = GCS_HMAC_ACCESS_KEY_ID
         os.environ['AWS_SECRET_ACCESS_KEY'] = GCS_HMAC_SECRET_ACCESS_KEY
-        # If GCS region is different from default AWS region, set it temporarily too
-        # Note: LiteLLM cache seems to use s3_region_name param, so this might be less critical
-        # if GCS_REGION_NAME and GCS_REGION_NAME != original_aws_region_name:
-        #     os.environ['AWS_REGION_NAME'] = GCS_REGION_NAME
+        # os.environ['AWS_REGION_NAME'] = GCS_REGION_NAME  # Uncomment if needed
 
         litellm.cache = litellm.Cache(
             type="s3",
             s3_bucket_name=GCS_BUCKET_NAME,
             s3_region_name=GCS_REGION_NAME, # Pass region explicitly to cache
             s3_endpoint_url=GCS_ENDPOINT_URL,
-            # Note: LiteLLM/boto3 will use AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY from env *at this moment*
         )
         print(f"[INFO] LiteLLM cache configured for GCS bucket (S3 compatible): {GCS_BUCKET_NAME}")
+        cache_configured = True
 
     except Exception as e:
-        warnings.warn(f"Failed to configure LiteLLM S3/GCS cache: {e}. Caching might be disabled or fallback.")
-        litellm.cache = None # Explicitly disable cache on failure
+        warnings.warn(f"Failed to configure LiteLLM S3/GCS cache: {e}. Attempting SQLite cache fallback.")
+        litellm.cache = None # Explicitly disable cache on failure (will try SQLite next)
 
     finally:
         # Restore original AWS credentials after cache setup attempt
         if original_aws_access_key_id is not None:
             os.environ['AWS_ACCESS_KEY_ID'] = original_aws_access_key_id
         elif 'AWS_ACCESS_KEY_ID' in os.environ:
-            # If it didn't exist originally but got set, remove it
             del os.environ['AWS_ACCESS_KEY_ID']
 
         if original_aws_secret_access_key is not None:
@@ -146,20 +142,25 @@ if GCS_BUCKET_NAME and GCS_HMAC_ACCESS_KEY_ID and GCS_HMAC_SECRET_ACCESS_KEY:
         elif 'AWS_SECRET_ACCESS_KEY' in os.environ:
             del os.environ['AWS_SECRET_ACCESS_KEY']
 
-        # Restore original region too
         if original_aws_region_name is not None:
             os.environ['AWS_REGION_NAME'] = original_aws_region_name
         elif 'AWS_REGION_NAME' in os.environ:
-             # If it was temporarily set but didn't exist before, remove it
-             # Check carefully if this is desired based on how region is used elsewhere
-             # For now, mirroring the key/secret logic:
-             # del os.environ['AWS_REGION_NAME'] # Potentially remove if needed
-             pass # Or just leave it if the temporary setting wasn't done/needed
+            pass # Or just leave it if the temporary setting wasn't done/needed
 
+if not cache_configured:
+    try:
+        # Try SQLite-based cache as a fallback
+        sqlite_cache_path = PROJECT_ROOT / "litellm_cache.sqlite"
+        litellm.cache = litellm.Cache(type="sqlite", cache_path=str(sqlite_cache_path))
+        print(f"[INFO] LiteLLM SQLite cache configured at {sqlite_cache_path}")
+        cache_configured = True
+    except Exception as e2:
+        warnings.warn(f"Failed to configure LiteLLM SQLite cache: {e2}. Caching is disabled.")
+        litellm.cache = None
 
-else:
-    warnings.warn("Required GCS cache environment variables (GCS_BUCKET_NAME, GCS_HMAC_ACCESS_KEY_ID, GCS_HMAC_SECRET_ACCESS_KEY) not fully set. LiteLLM caching is disabled.")
-    litellm.cache = None # Explicitly disable cache
+if not cache_configured:
+    warnings.warn("All LiteLLM cache configuration attempts failed. Caching is disabled.")
+    litellm.cache = None
 
 # --- LiteLLM Callback for Success Logging ---
 
@@ -582,7 +583,35 @@ def llm_invoke(
 
     if verbose:
         # This print statement is crucial for the verbose test
-        rprint("[INFO] Candidate models selected and ordered:", [c['model'] for c in candidate_models])
+        # Calculate and print strength for each candidate model
+        # Find min/max for cost and ELO
+        min_cost = model_df['avg_cost'].min()
+        max_elo = model_df['coding_arena_elo'].max()
+        base_cost = model_df[model_df['model'] == DEFAULT_BASE_MODEL]['avg_cost'].iloc[0] if not model_df[model_df['model'] == DEFAULT_BASE_MODEL].empty else min_cost
+        base_elo = model_df[model_df['model'] == DEFAULT_BASE_MODEL]['coding_arena_elo'].iloc[0] if not model_df[model_df['model'] == DEFAULT_BASE_MODEL].empty else max_elo
+        
+        def calc_strength(candidate):
+            # If strength < 0.5, interpolate by cost (cheaper = 0, base = 0.5)
+            # If strength > 0.5, interpolate by ELO (base = 0.5, highest = 1.0)
+            avg_cost = candidate.get('avg_cost', min_cost)
+            elo = candidate.get('coding_arena_elo', base_elo)
+            if strength < 0.5:
+                # Map cost to [0, 0.5]
+                if base_cost == min_cost:
+                    return 0.5 # Avoid div by zero
+                rel = (avg_cost - min_cost) / (base_cost - min_cost)
+                return max(0.0, min(0.5, rel * 0.5))
+            elif strength > 0.5:
+                # Map ELO to [0.5, 1.0]
+                if max_elo == base_elo:
+                    return 0.5 # Avoid div by zero
+                rel = (elo - base_elo) / (max_elo - base_elo)
+                return max(0.5, min(1.0, 0.5 + rel * 0.5))
+            else:
+                return 0.5
+        
+        model_strengths = [(c['model'], round(calc_strength(c), 3)) for c in candidate_models]
+        rprint("[INFO] Candidate models selected and ordered (with strength):", model_strengths)
         rprint(f"[INFO] Strength: {strength}, Temperature: {temperature}, Time: {time}")
         if use_batch_mode: rprint("[INFO] Batch mode enabled.")
         if output_pydantic: rprint(f"[INFO] Pydantic output requested: {output_pydantic.__name__}")
