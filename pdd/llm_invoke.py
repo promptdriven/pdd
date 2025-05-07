@@ -4,6 +4,36 @@
 import os
 import pandas as pd
 import litellm
+import logging # ADDED FOR DETAILED LOGGING
+
+# --- Configure Detailed Logging for LiteLLM --- MODIFIED SECTION
+PROJECT_ROOT_FOR_LOG = '/Users/gregtanaka/Documents/pdd_cloud/pdd' # Explicit project root
+LOG_FILE_PATH = os.path.join(PROJECT_ROOT_FOR_LOG, 'litellm_debug.log')
+
+# Get the litellm logger specifically
+litellm_logger = logging.getLogger("litellm")
+litellm_logger.setLevel(logging.DEBUG) # Set its level to DEBUG
+
+# Create a file handler
+file_handler = logging.FileHandler(LOG_FILE_PATH, mode='w')
+file_handler.setLevel(logging.DEBUG)
+
+# Create a formatter and add it to the handler
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+file_handler.setFormatter(formatter)
+
+# Add the handler to the litellm logger
+# Check if handlers are already present to avoid duplication if module is reloaded
+if not litellm_logger.handlers:
+    litellm_logger.addHandler(file_handler)
+
+# Also ensure the root logger has a basic handler if nothing else is configured
+# This can help catch messages if litellm logs to root or other unnamed loggers
+if not logging.getLogger().handlers: # Check root logger
+    logging.basicConfig(level=logging.DEBUG) # Default to console for other logs
+# --- End Detailed Logging Configuration ---
+
+
 import json
 from rich import print as rprint
 from dotenv import load_dotenv
@@ -233,7 +263,6 @@ def _litellm_success_callback(
 
 # Register the callback with LiteLLM
 litellm.success_callback = [_litellm_success_callback]
-# litellm.set_verbose=True # DEPRECATED: Enable detailed LiteLLM internal logging (Use LITELLM_LOG env var instead)
 
 # --- Helper Functions ---
 
@@ -652,7 +681,7 @@ def llm_invoke(
             if not _ensure_api_key(model_info, newly_acquired_keys, verbose):
                 # Problem getting key, break inner loop, try next model candidate
                 if verbose:
-                    rprint(f"[SKIP] Skipping {model_name_litellm} due to API key issue.")
+                    rprint(f"[SKIP] Skipping {model_name_litellm} due to API key/credentials issue after prompt.")
                 break # Breaks the 'while retry_with_same_model' loop
 
             # --- 5. Prepare LiteLLM Arguments ---
@@ -660,9 +689,72 @@ def llm_invoke(
                 "model": model_name_litellm,
                 "messages": formatted_messages,
                 "temperature": temperature,
-                # LiteLLM uses env vars for keys by default, but can be overridden
-                # "api_key": os.getenv(api_key_name) if api_key_name else None,
             }
+
+            api_key_name_from_csv = model_info.get('api_key') # From CSV
+            # Determine if it's a Vertex AI model for special handling
+            is_vertex_model = (provider.lower() == 'google') or \
+                              (provider.lower() == 'googlevertexai') or \
+                              (provider.lower() == 'vertex_ai') or \
+                              model_name_litellm.startswith('vertex_ai/')
+
+            if is_vertex_model and api_key_name_from_csv == 'VERTEX_CREDENTIALS':
+                credentials_file_path = os.getenv("VERTEX_CREDENTIALS") # Path from env var
+                vertex_project_env = os.getenv("VERTEX_PROJECT")
+                vertex_location_env = os.getenv("VERTEX_LOCATION")
+
+                if credentials_file_path and vertex_project_env and vertex_location_env:
+                    try:
+                        with open(credentials_file_path, 'r') as f:
+                            loaded_credentials = json.load(f)
+                        vertex_credentials_json_string = json.dumps(loaded_credentials)
+                        
+                        litellm_kwargs["vertex_credentials"] = vertex_credentials_json_string
+                        litellm_kwargs["vertex_project"] = vertex_project_env
+                        litellm_kwargs["vertex_location"] = vertex_location_env
+                        if verbose:
+                            rprint(f"[INFO] For Vertex AI: using vertex_credentials from '{credentials_file_path}', project '{vertex_project_env}', location '{vertex_location_env}'.")
+                    except FileNotFoundError:
+                        if verbose:
+                            rprint(f"[ERROR] Vertex credentials file not found at path specified by VERTEX_CREDENTIALS env var: '{credentials_file_path}'. LiteLLM may try ADC or fail.")
+                    except json.JSONDecodeError:
+                        if verbose:
+                            rprint(f"[ERROR] Failed to decode JSON from Vertex credentials file: '{credentials_file_path}'. Check file content. LiteLLM may try ADC or fail.")
+                    except Exception as e:
+                        if verbose:
+                            rprint(f"[ERROR] Failed to load or process Vertex credentials from '{credentials_file_path}': {e}. LiteLLM may try ADC or fail.")
+                else:
+                    if verbose:
+                        rprint(f"[WARN] For Vertex AI (using '{api_key_name_from_csv}'): One or more required environment variables (VERTEX_CREDENTIALS, VERTEX_PROJECT, VERTEX_LOCATION) are missing.")
+                        if not credentials_file_path: rprint(f"  Reason: VERTEX_CREDENTIALS (path to JSON file) env var not set or empty.")
+                        if not vertex_project_env: rprint(f"  Reason: VERTEX_PROJECT env var not set or empty.")
+                        if not vertex_location_env: rprint(f"  Reason: VERTEX_LOCATION env var not set or empty.")
+                        rprint(f"  LiteLLM may attempt to use Application Default Credentials or the call may fail.")
+
+            elif api_key_name_from_csv: # For other api_key_names specified in CSV (e.g., OPENAI_API_KEY, or a direct VERTEX_AI_API_KEY string)
+                key_value = os.getenv(api_key_name_from_csv)
+                if key_value:
+                    litellm_kwargs["api_key"] = key_value
+                    if verbose:
+                        rprint(f"[INFO] Explicitly passing API key from env var '{api_key_name_from_csv}' as 'api_key' parameter to LiteLLM.")
+                    
+                    # If this model is Vertex AI AND uses a direct API key string (not VERTEX_CREDENTIALS from CSV),
+                    # also pass project and location from env vars.
+                    if is_vertex_model: 
+                        vertex_project_env = os.getenv("VERTEX_PROJECT")
+                        vertex_location_env = os.getenv("VERTEX_LOCATION")
+                        if vertex_project_env and vertex_location_env:
+                            litellm_kwargs["vertex_project"] = vertex_project_env
+                            litellm_kwargs["vertex_location"] = vertex_location_env
+                            if verbose:
+                                rprint(f"[INFO] For Vertex AI model (using direct API key '{api_key_name_from_csv}'), also passing vertex_project='{vertex_project_env}' and vertex_location='{vertex_location_env}' from env vars.")
+                        elif verbose:
+                             rprint(f"[WARN] For Vertex AI model (using direct API key '{api_key_name_from_csv}'), VERTEX_PROJECT or VERTEX_LOCATION env vars not set. This might be required by LiteLLM.")
+                elif verbose: # api_key_name_from_csv was in CSV, but corresponding env var was not set/empty
+                    rprint(f"[WARN] API key name '{api_key_name_from_csv}' found in CSV, but the environment variable '{api_key_name_from_csv}' is not set or empty. LiteLLM will use default authentication if applicable (e.g., other standard env vars or ADC).")
+            
+            elif verbose: # No api_key_name_from_csv in CSV for this model
+                rprint(f"[INFO] No API key name specified in CSV for model '{model_name_litellm}'. LiteLLM will use its default authentication mechanisms (e.g., standard provider env vars or ADC for Vertex AI).")
 
             # Add api_base if present in CSV
             api_base = model_info.get('base_url')
@@ -744,10 +836,19 @@ def llm_invoke(
             # --- 6. LLM Invocation ---
             try:
                 start_time = time_module.time()
+
+                # --- ADDED CACHE STATUS DEBUGGING (NOW UNCONDITIONAL) ---
+                print(f"[DEBUG llm_invoke] Cache Check: litellm.cache is None: {litellm.cache is None}") # MODIFIED: unconditional print
+                if litellm.cache is not None:
+                    print(f"[DEBUG llm_invoke] litellm.cache type: {type(litellm.cache)}, ID: {id(litellm.cache)}") # MODIFIED: unconditional print
+                # --- END ADDED CACHE STATUS DEBUGGING ---
+
                 # <<< EXPLICITLY ENABLE CACHING >>>
                 # Only add if litellm.cache is configured
                 if litellm.cache is not None:
                     litellm_kwargs["caching"] = True
+                else: # MODIFIED: unconditional print for this path too
+                    print(f"[DEBUG llm_invoke] NOT ENABLING CACHING: litellm.cache is None at call time.")
 
 
                 if use_batch_mode:
