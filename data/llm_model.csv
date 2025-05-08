@@ -3,10 +3,10 @@ OpenAI,gpt-4.1-nano,0.1,0.4,1249,,OPENAI_API_KEY,0,True,none
 xai,xai/grok-3-beta,3.0,15.0,1332,https://api.x.ai/v1,XAI_API_KEY,0,False,none
 Anthropic,claude-3-5-haiku-20241022,.8,4,1261,,ANTHROPIC_API_KEY,0,True,none
 OpenAI,deepseek/deepseek-chat,.27,1.1,1353,https://api.deepseek.com/beta,DEEPSEEK_API_KEY,0,False,none
-Google,vertex_ai/gemini-2.5-flash-preview-04-17,0.15,0.6,1330,,GOOGLE_API_KEY,0,True,effort
-GoogleVertexAI,gemini-2.5-pro-exp-03-25,1.25,10.0,1360,,VERTEX_AI_API_KEY,0,True,none
+Google,vertex_ai/gemini-2.5-flash-preview-04-17,0.15,0.6,1330,,VERTEX_CREDENTIALS,0,True,effort
+Google,gemini-2.5-pro-exp-03-25,1.25,10.0,1360,,GOOGLE_API_KEY,0,True,none
 Anthropic,claude-3-7-sonnet-20250219,3.0,15.0,1340,,ANTHROPIC_API_KEY,64000,True,budget
-Google,vertex_ai/gemini-2.5-pro-preview-05-06,1.25,10.0,1361,,GOOGLE_API_KEY,0,True,none
+Google,vertex_ai/gemini-2.5-pro-preview-05-06,1.25,10.0,1361,,VERTEX_CREDENTIALS,0,True,none
 OpenAI,o4-mini,1.1,4.4,1333,,OPENAI_API_KEY,0,True,effort
 OpenAI,o3,10.0,40.0,1389,,OPENAI_API_KEY,0,True,effort
 OpenAI,gpt-4.1,2.0,8.0,1335,,OPENAI_API_KEY,0,True,none
