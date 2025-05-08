@@ -17,4 +17,11 @@
     Step 4. Provide the complete fixed code_module and program with explanations for each significant change made.
     Step 5. Verify that the fixed code meets all requirements from the original prompt and addresses all identified issues.
 
-% Write the detail explanation for each step above in a <explanation> XML tag, the fixed code_module in a <fixed_code> XML tag and the fixed program in a <fixed_program> XML tag
+% Return your response as a single, valid JSON object.
+% The JSON object must conform to the following structure:
+% {{
+%   "explanation": "Detailed explanation of all steps taken, including analysis of issues, solutions developed, and verification that the fixes are correct and meet prompt requirements.",
+%   "fixed_code": "The complete, runnable, and fixed Python code for the code_module. This should ONLY be the code, with no additional text or commentary.",
+%   "fixed_program": "The complete, runnable, and fixed Python code for the program. This should ONLY be the code, with no additional text or commentary."
+% }}
+% Ensure that the "fixed_code" and "fixed_program" fields contain only the raw source code. Do not include any markdown formatting, comments (unless part of the code itself), or any other explanatory text within these fields.
