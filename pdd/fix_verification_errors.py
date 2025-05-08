@@ -1,9 +1,21 @@
 import re
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from rich import print as rprint
 from rich.markdown import Markdown
+from pydantic import BaseModel, Field
 from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
+
+# Define Pydantic model for structured LLM output for VERIFICATION
+class VerificationOutput(BaseModel):
+    issues_count: int = Field(description="The number of issues found during verification.")
+    details: Optional[str] = Field(description="Detailed explanation of any discrepancies or issues found. Can be null or empty if issues_count is 0.", default=None)
+
+# Define Pydantic model for structured LLM output for FIXES
+class FixerOutput(BaseModel):
+    explanation: str = Field(description="Detailed explanation of the analysis and fixes applied.")
+    fixed_code: str = Field(description="The complete, runnable, and fixed code module.")
+    fixed_program: str = Field(description="The complete, runnable, and fixed program that uses the code module.")
 
 def fix_verification_errors(
     program: str,
@@ -105,15 +117,17 @@ def fix_verification_errors(
             strength=strength,
             temperature=temperature,
             verbose=False, # Keep internal llm_invoke verbose off unless needed
+            output_pydantic=VerificationOutput # Use Pydantic model for structured output
         )
         total_cost += verification_response.get('cost', 0.0)
         model_name = verification_response.get('model_name', model_name)
-        verification_result = verification_response.get('result', '')
-
+        
         if verbose:
             rprint(f"[cyan]Verification LLM call complete.[/cyan]")
             rprint(f"  [dim]Model Used:[/dim] {verification_response.get('model_name', 'N/A')}")
             rprint(f"  [dim]Cost:[/dim] ${verification_response.get('cost', 0.0):.6f}")
+            # Optionally log raw text if needed for debugging
+            # rprint(f"  [dim]Raw LLM Text:[/dim] {verification_response.get('result_text', 'N/A')}")
 
     except Exception as e:
         rprint(f"[bold red]Error during verification LLM call:[/bold red] {e}")
@@ -127,62 +141,49 @@ def fix_verification_errors(
         }
 
     if verbose:
-        rprint("\n[blue]Verification Result:[/blue]")
-        # Markdown object handles its own rendering, no extra needed here
-        rprint(Markdown(verification_result))
+        rprint("\n[blue]Verification Result (parsed):[/blue]")
+        rprint(f"  Issues Count: {verification_issues_count}")
+        if verification_details:
+            rprint(Markdown(f"**Details:**\n{verification_details}"))
+        else:
+            rprint("  Details: None provided or no issues found.")
 
     issues_found = False
     try:
-        # Attempt to match and extract digits directly
-        count_match = re.search(r"<issues_count>(\d+)</issues_count>", verification_result)
-        if count_match:
-            verification_issues_count = int(count_match.group(1)) # Safe due to \d+
-        else:
-            # Specific match failed, check if tag exists with invalid content or is missing
-            generic_count_match = re.search(r"<issues_count>(.*?)</issues_count>", verification_result, re.DOTALL)
-            if generic_count_match:
-                # Tag found, but content is not \d+ -> Parsing Error
-                rprint("[bold red]Error:[/bold red] Could not parse integer value from <issues_count> tag.")
-                # Return the specific error structure for parsing errors after verification call
-                return {
-                    "explanation": None,
-                    "fixed_program": program,
-                    "fixed_code": code,
-                    "total_cost": total_cost, # Cost incurred so far
-                    "model_name": model_name, # Model used so far
-                    "verification_issues_count": 0, # Reset count on parsing error
-                }
-            else:
-                # Tag truly not found -> Warning
-                rprint("[yellow]Warning:[/yellow] Could not find <issues_count> tag in verification result. Assuming 0 issues.")
-                verification_issues_count = 0
+        verification_result_obj = verification_response.get('result')
+        if isinstance(verification_result_obj, VerificationOutput):
+            verification_issues_count = verification_result_obj.issues_count
+            verification_details = verification_result_obj.details
+            if verbose:
+                rprint("[green]Successfully parsed structured output from verification LLM.[/green]")
 
-        # Proceed to check for details tag if count > 0
-        if verification_issues_count > 0:
-            details_match = re.search(r"<details>(.*?)</details>", verification_result, re.DOTALL)
-            if details_match:
-                verification_details = details_match.group(1).strip()
-                if verification_details:
+            if verification_issues_count > 0:
+                if verification_details and verification_details.strip():
                     issues_found = True
                     if verbose:
                         rprint(f"\n[yellow]Found {verification_issues_count} potential issues. Proceeding to fix step.[/yellow]")
                 else:
-                    # Count > 0, but details empty -> Warning
-                    rprint("[yellow]Warning:[/yellow] <issues_count> is > 0, but <details> tag is empty. Treating as no issues found.")
-                    verification_issues_count = 0 # Reset count
+                    rprint(f"[yellow]Warning:[/yellow] <issues_count> is {verification_issues_count}, but <details> field is empty or missing. Treating as no actionable issues found.")
+                    verification_issues_count = 0 # Reset count as no details to act upon
             else:
-                # Count > 0, but no details tag -> Warning
-                rprint("[yellow]Warning:[/yellow] <issues_count> is > 0, but could not find <details> tag. Treating as no issues found.")
-                verification_issues_count = 0 # Reset count
+                if verbose:
+                    rprint("\n[green]No issues found during verification based on structured output.[/green]")
         else:
-            # verification_issues_count is 0 (either parsed as 0 or defaulted after warning)
-            if verbose:
-                rprint("\n[green]No issues found during verification.[/green]")
+            rprint(f"[bold red]Error:[/bold red] Verification LLM call did not return the expected structured output.")
+            rprint(f"  [dim]Received:[/dim] {verification_result_obj}")
+            rprint(f"  [dim]Raw LLM text was:[/dim] {verification_response.get('result_text', 'Not available')}")
+            # Return the specific error structure for parsing errors after verification call
+            return {
+                "explanation": None,
+                "fixed_program": program,
+                "fixed_code": code,
+                "total_cost": total_cost, # Cost incurred so far
+                "model_name": model_name, # Model used so far
+                "verification_issues_count": 0, # Reset count on parsing error
+            }
 
-    # Removed ValueError catch as it's handled by the logic above
     except Exception as e:
-        # Generic catch for other potential parsing issues
-        rprint(f"[bold red]Error parsing verification result:[/bold red] {e}")
+        rprint(f"[bold red]Error processing structured verification result:[/bold red] {e}")
         return {
             "explanation": None,
             "fixed_program": program,
@@ -211,69 +212,59 @@ def fix_verification_errors(
                 strength=strength,
                 temperature=temperature,
                 verbose=False, # Keep internal llm_invoke verbose off unless needed
+                output_pydantic=FixerOutput # Added Pydantic model for structured output
             )
             total_cost += fix_response.get('cost', 0.0)
             model_name = fix_response.get('model_name', model_name) # Update model name to the last one used
-            fix_result = fix_response.get('result', '')
-
+            
             if verbose:
                 rprint(f"[cyan]Fix LLM call complete.[/cyan]")
                 rprint(f"  [dim]Model Used:[/dim] {fix_response.get('model_name', 'N/A')}")
                 rprint(f"  [dim]Cost:[/dim] ${fix_response.get('cost', 0.0):.6f}")
-                rprint("\n[blue]Fix Result:[/blue]")
-                # Markdown object handles its own rendering, no extra needed here
-                rprint(Markdown(fix_result))
 
-            fixed_program_match = re.search(r"<fixed_program>(.*?)</fixed_program>", fix_result, re.DOTALL)
-            fixed_code_match = re.search(r"<fixed_code>(.*?)</fixed_code>", fix_result, re.DOTALL)
-            explanation_match = re.search(r"<explanation>(.*?)</explanation>", fix_result, re.DOTALL)
+            # Process structured output
+            fix_result_obj = fix_response.get('result')
 
-            if fixed_program_match:
-                fixed_program = fixed_program_match.group(1).strip()
-                if verbose: rprint("[green]Extracted fixed program.[/green]")
+            if isinstance(fix_result_obj, FixerOutput):
+                fixed_program = fix_result_obj.fixed_program
+                fixed_code = fix_result_obj.fixed_code
+                fix_explanation = fix_result_obj.explanation
+                if verbose: 
+                    rprint("[green]Successfully parsed structured output for fix.[/green]")
+                    rprint(Markdown(f"**Explanation from LLM:**\n{fix_explanation}"))
             else:
-                if verbose: rprint("[yellow]Warning:[/yellow] Could not find <fixed_program> tag in fix result. Using original program.")
-
-            if fixed_code_match:
-                fixed_code = fixed_code_match.group(1).strip()
-                if verbose: rprint("[green]Extracted fixed code module.[/green]")
-            else:
-                if verbose: rprint("[yellow]Warning:[/yellow] Could not find <fixed_code> tag in fix result. Using original code module.")
-
-            if explanation_match:
-                fix_explanation = explanation_match.group(1).strip()
-                if verbose: rprint("[green]Extracted fix explanation.[/green]")
-            else:
-                if verbose: rprint("[yellow]Warning:[/yellow] Could not find <explanation> tag in fix result.")
-                fix_explanation = "[Fix explanation not provided by LLM]"
+                rprint(f"[bold red]Error:[/bold red] Fix generation did not return the expected structured output.")
+                rprint(f"  [dim]Received:[/dim] {fix_result_obj}")
+                rprint(f"  [dim]Raw LLM text was:[/dim] {fix_response.get('result_text', 'Not available')}")
+                fix_explanation = "[Error: Failed to parse structured output from LLM for fix explanation]"
 
         except Exception as e:
-            rprint(f"[bold red]Error during fix LLM call or extraction:[/bold red] {e}")
-            # Combine verification details with the error message if fix failed
-            final_explanation = f"<error>Error during fix generation: {str(e)}</error>\n"
-            if verification_details:
+            rprint(f"[bold red]Error during fix LLM call or processing structured output:[/bold red] {e}")
+            if verification_details: # Ensure verification_details exists before trying to use it in f-string for final_explanation
                 fix_explanation = f"[Error during fix generation: {e}]"
             # Note: verification_issues_count should retain its value from the verification step
-
-    if verbose:
-        rprint(f"\n[bold blue]Total Cost for fix_verification_errors run:[/bold blue] ${total_cost:.6f}")
+            # Keep original program and code if an exception occurs here.
 
     # Construct final explanation only if issues were initially found and processed
     if verification_details:
-        if fix_explanation:
+        if fix_explanation: # fix_explanation would be set either from successful parsing or from an error message
              final_explanation = (
                  f"<verification_details>{verification_details}</verification_details>\n"
                  f"<fix_explanation>{fix_explanation}</fix_explanation>"
              )
         else:
-             # This case might occur if fix step wasn't run due to parsing issues after verification,
-             # or if fix_explanation extraction failed silently (though we added a default).
-             # Let's ensure we always provide some context if details were found.
+             # This case should ideally not be reached if logic above is correct,
+             # as fix_explanation is always set if verification_details is true.
              final_explanation = (
                  f"<verification_details>{verification_details}</verification_details>\n"
-                 f"<fix_explanation>[Fix explanation not available or fix step skipped]</fix_explanation>"
+                 f"<fix_explanation>[Fix explanation was not generated or captured]</fix_explanation>"
              )
     # If no issues were found initially (verification_details is None), final_explanation remains None
+
+    if verbose and not (issues_found and verification_details):
+        rprint(f"\n[bold blue]Total Cost for fix_verification_errors run (no fix attempt):[/bold blue] ${total_cost:.6f}")
+    elif verbose: # This implies issues_found and verification_details were true
+        rprint(f"\n[bold blue]Total Cost for fix_verification_errors run (including fix attempt):[/bold blue] ${total_cost:.6f}")
 
     return {
         "explanation": final_explanation,
