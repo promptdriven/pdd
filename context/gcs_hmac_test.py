@@ -3,12 +3,13 @@ import os
 from botocore.exceptions import ClientError
 import logging
 from dotenv import load_dotenv
+from botocore.client import Config
 
 # Load environment variables from .env file
 load_dotenv()
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- Configuration ---
 # Read required configuration from environment variables
@@ -29,12 +30,25 @@ object_name = "test-hmac-upload.txt" # The desired name for the object in the bu
 
 # --- Create S3 Client for GCS ---
 try:
+    # uncomment this if using Boto3 >1.35
+    # from botocore.config import Config
+
+    # cfg = Config(
+    #     signature_version='s3v4',
+    #     request_checksum_calculation='when_required',
+    #     response_checksum_validation='when_required',
+    #     s3={'addressing_style': 'path'}   # keeps path-style like before
+    # )
+
     s3_client = boto3.client(
         's3',
-        endpoint_url=gcs_endpoint_url,
+        endpoint_url='https://storage.googleapis.com',
         aws_access_key_id=gcs_access_key_id,
-        aws_secret_access_key=gcs_secret_access_key
+        aws_secret_access_key=gcs_secret_access_key,
+        region_name='auto',              # any string is fine; 'auto' is conventional
+        # config=cfg
     )
+    
     logging.info("Successfully created S3 client configured for GCS.")
 except Exception as e:
     logging.error(f"Failed to create S3 client: {e}")

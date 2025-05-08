@@ -47,6 +47,7 @@ dependencies = [
     "rich==14.0.0",
     "semver==3.0.2",
     "setuptools",
+    "boto3==1.35.99",
     "python-Levenshtein"]
 requires-python = ">=3.11"
 
