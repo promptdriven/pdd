@@ -56,7 +56,7 @@ The authentication token is securely stored locally and automatically refreshed 
 
 ### Local Mode Requirements
 
-When running in local mode with the `--local` flag, you'll need to set up API keys:
+When running in local mode with the `--local` flag, you'll need to set up API keys for the language models:
 
 ```bash
 # For OpenAI
@@ -65,12 +65,39 @@ export OPENAI_API_KEY=your_api_key_here
 # For Anthropic
 export ANTHROPIC_API_KEY=your_api_key_here
 
-# For other supported providers
+# For other supported providers (LiteLLM supports multiple LLM providers)
 export PROVIDER_API_KEY=your_api_key_here
 ```
 
 Add these to your `.bashrc`, `.zshrc`, or equivalent for persistence.
 
+PDD's local mode uses LiteLLM for interacting with language models, providing:
+
+- Support for multiple model providers (OpenAI, Anthropic, Google/Vertex AI, and more)
+- Automatic model selection based on strength settings
+- Response caching for improved performance
+- Smart token usage tracking and cost estimation
+- Interactive API key acquisition when keys are missing
+
+When keys are missing, PDD will prompt for them interactively and securely store them in your local `.env` file.
+
+### Local Model Configuration
+
+PDD uses a CSV file to configure model selection and capabilities. This configuration is loaded from:
+
+1. User-specific configuration: `~/.pdd/llm_model.csv` (takes precedence if it exists)
+2. Project-specific configuration: `<PROJECT_ROOT>/data/llm_model.csv`
+
+The CSV includes columns for:
+- `provider`: The LLM provider (e.g., "openai", "anthropic", "google")
+- `model`: The LiteLLM model identifier (e.g., "gpt-4", "claude-3-opus-20240229")
+- `input`/`output`: Costs per million tokens
+- `coding_arena_elo`: ELO rating for coding ability
+- `api_key`: The environment variable name for the required API key
+- `structured_output`: Whether the model supports structured JSON output
+- `reasoning_type`: Support for reasoning capabilities ("none", "budget", or "effort")
+
+For proper model identifiers to use in your custom configuration, refer to the [LiteLLM Model List](https://docs.litellm.ai/docs/providers) documentation. LiteLLM typically uses model identifiers in the format `provider/model_name` (e.g., "openai/gpt-4", "anthropic/claude-3-opus-20240229").
 
 ## Post-Installation Setup
 
@@ -284,6 +311,9 @@ These options can be used with any command:
 
 - `--force`: Overwrite existing files without asking for confirmation.
 - `--strength FLOAT`: Set the strength of the AI model (0.0 to 1.0, default is 0.5).
+  - 0.0: Cheapest available model
+  - 0.5: Default base model  
+  - 1.0: Most powerful model (highest ELO rating)
 - `--temperature FLOAT`: Set the temperature of the AI model (default is 0.0).
 - `--verbose`: Increase output verbosity for more detailed information.
 - `--quiet`: Decrease output verbosity for minimal information.
@@ -314,8 +344,15 @@ This is particularly useful in:
 
 PDD uses a large language model to generate and manipulate code. The `--strength` and `--temperature` options allow you to control the model's output:
 
-- Strength: Determines how powerful/expensive a model should be used. Higher values (closer to 1.0) result in high performance, while lower values are cheaper.
+- Strength: Determines how powerful/expensive a model should be used. Higher values (closer to 1.0) result in high performance models with better capabilities (selected by ELO rating), while lower values (closer to 0.0) select more cost-effective models.
 - Temperature: Controls the randomness of the output. Higher values increase diversity but may lead to less coherent results, while lower values produce more focused and deterministic outputs.
+
+When running in local mode, PDD uses LiteLLM to select and interact with language models based on a configuration file that includes:
+- Input and output costs per million tokens
+- ELO ratings for coding ability
+- Required API key environment variables
+- Structured output capability flags
+- Reasoning capabilities (budget-based or effort-based)
 
 ## Output Cost Tracking
 
@@ -339,7 +376,7 @@ PDD calculates costs based on the AI model usage for each operation. Costs are p
 2. Input size: Larger inputs (e.g., longer prompts or code files) typically incur higher costs.
 3. Operation complexity: Some operations (like `fix` and `crash` with multiple iterations) may be more costly than simpler operations.
 
-The exact cost per operation is determined by the AI service provider's current pricing model. PDD uses an internal pricing table that is regularly updated to reflect the most current rates.
+The exact cost per operation is determined by the LiteLLM integration using the provider's current pricing model. PDD uses an internal pricing table that is regularly updated to reflect the most current rates.
 
 ### CSV Output
 
