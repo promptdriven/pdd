@@ -1,10 +1,8 @@
-from tabnanny import verbose
-import click
 from pdd.conflicts_main import conflicts_main
 
 
-prompt1 = 'prompt1_LLM.prompt'
-prompt2 = 'prompt2_LLM.prompt'
+prompt1 = './output/prompt1_LLM.prompt'
+prompt2 = './output/prompt2_LLM.prompt'
 
 # Create example prompt files
 with open(prompt1, 'w') as f:
@@ -30,7 +28,7 @@ class MockContext:
 # Use the conflicts_main function
 ctx = MockContext()
 
-output = 'conflicts_output.csv'
+output = './output/outputconflicts_output.csv'
 
 conflicts, total_cost, model_name = conflicts_main(ctx, prompt1, prompt2, output, verbose=True)
 

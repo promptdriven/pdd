@@ -46,7 +46,7 @@ import pandas as pd
 
 # 1. Create a minimal CSV -----------------------------------------------------------------
 
-demo_csv_path = Path("sample_llm_model.csv")
+demo_csv_path = Path("./output/sample_llm_model.csv")
 
 demo_csv_path.write_text(
     """provider,model,input,output,coding_arena_elo,base_url,api_key,counter,encoder,max_tokens,max_completion_tokens,max_reasoning_tokens,structured_output
