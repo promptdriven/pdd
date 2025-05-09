@@ -33,7 +33,7 @@
             "console": "integratedTerminal",
             "args": [ ],
             "env": {
-                "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/pdd:${env:PYTHONPATH}"
+                "PYTHONPATH": "./pdd:"//"${workspaceFolder}:${workspaceFolder}/pdd:${env:PYTHONPATH}"
             }
         },
         {
@@ -46,6 +46,35 @@
                 // Add any additional arguments for the script execution here
             ],
             "console": "integratedTerminal"
+        },
+        {
+            "name": "PDD CLI: Debug Crash Simple Math",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pdd.cli",
+            "console": "integratedTerminal",
+            "args": [
+                "--verbose",
+                "--force",
+                "--output-cost",
+                "/Users/gregtanaka/Documents/pdd_cloud/pdd/staging/regression_20250505_130218/regression_cost.csv",
+                "--temperature",
+                "0.0",
+                "--strength",
+                "0.805",
+                "crash",
+                "--output",
+                "fixed_crash_simple_math.py",
+                "--output-program",
+                "fixed_crash_simple_math_example.py",
+                "/Users/gregtanaka/Documents/pdd_cloud/pdd/prompts/simple_math_python.prompt",
+                "simple_math.py",
+                "simple_math_example.py",
+                "math_error.log",
+                "/Users/gregtanaka/opt/anaconda3/envs/pdd/bin/python",
+                "/Users/gregtanaka/Documents/pdd_cloud/pdd/context/conflicts_main_example.py"
+            ],
+            "cwd": "/Users/gregtanaka/Documents/pdd_cloud/pdd/staging/regression_20250505_130218"
         }
     ]
 }
