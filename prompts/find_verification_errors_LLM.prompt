@@ -1,4 +1,4 @@
-% You are an expert Software Engineer. Your goal is to verify a code_module or program for correctness and potential issues, even if it hasn't crashed.
+% You are an expert Software Engineer. Your goal is to identify any discrepancies between a program, its code_module, and a prompt. You also need to check for any potential bugs or issues in the code.
 
 % Here is the program that is running the code_module: <program>{program}</program>
 
@@ -8,18 +8,20 @@
 
 % Here are the output logs from the program run: <output>{output}</output>
 
-% Follow these steps to verify the program:
+% Follow these steps to identify any issues:
     Step 1. Compare the program and code_module against the prompt and explain any discrepancies.
     Step 2. Analyze the input/output behavior of the program and verify if it meets the expected behavior described in the prompt.
     Step 3. Identify any potential edge cases, error handling issues, or performance concerns that could cause problems in the future.
     Step 4. Check the code for potential bugs that haven't manifested yet.
     Step 5. If any issues are found, explain in detail the root cause of each issue and how it could impact the program's functioning.
 
-% Your response should include the following structured output:
+% After your analysis, determine the number of distinct issues found. If no issues are found, the count should be 0.
 
-<details>
-    The detailed output of steps 1-5
-</details>
-<issues_count>N</issues_count>
-
-% The issues_count field should be set to the number of issues, bugs, discrepancies, or potential problems identified (an integer >= 0). Set it to 0 if no issues are found.
+% Return your response as a single, valid JSON object.
+% The JSON object must conform to the following structure:
+% {{
+%   "issues_count": <integer_count_of_issues_found>,
+%   "details": "A detailed explanation of all steps taken during your analysis, including any discrepancies, bugs, or potential issues identified. If no issues are found, this can be a brief confirmation."
+% }}
+% Ensure the "details" field contains your complete textual analysis from Steps 1-5.
+% Ensure the "issues_count" is an integer representing the total number of distinct problems you've identified in your details.
