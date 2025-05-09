@@ -7,6 +7,8 @@
 - [ ] MLX support for faster local
 - [ ] AWS Nova support
 - [ ] autogenerate the model.csv file and print out the strength of each model
+- [ ] Fallback to local cache
+
 
 
 ## On Deck
@@ -39,6 +41,9 @@
 - [ ] agentic prompt to code
 - [ ] agentic additional context inclusion via context 7 MCP
 - [ ] re-ranker for the example using a LLM
+- [ ] syncing Makefile
+- [ ] uv support, handle the auto-update situation
+- [ ] incremental generate that basically does a semantic diff of the prompt and does a surgical update of the code
 
 
 ## Bugs
@@ -50,6 +55,7 @@
 - [ ] fix quiet vs. verbose ambiguity
 - [ ] have a link from includes to the files for the vscode prompt extension
 - [ ] have update touch the source file py so that the Make file doesn't go into infinite loop
+- [ ] Anywhere cache https://cloud.google.com/storage/docs/anywhere-cache?hl=en&_gl=1*hrk570*_ga*MTM4MzA4MjkzMy4xNjcwNTM0ODI5*_ga_WH2QY8WWF5*czE3NDYzNzYwNjUkbzE2NyRnMSR0MTc0NjM3NjExMiRqMTMkbDAkaDA.
 
 
 ## Documentation
