@@ -109,7 +109,7 @@ def test_cli_global_options_explicit(mock_construct, mock_main, mock_auto_update
         "--strength", "0.9",
         "--temperature", "0.5",
         "--verbose",
-        "--output-cost", "costs.csv",
+        "--output-cost", "./output/costs.csv",
         "--local",
         "--review-examples",
         "generate", str(files["test.prompt"])
@@ -131,7 +131,7 @@ def test_cli_global_options_explicit(mock_construct, mock_main, mock_auto_update
     assert ctx.obj['temperature'] == 0.5
     assert ctx.obj['verbose'] is True # Not overridden by quiet
     assert ctx.obj['quiet'] is False
-    assert ctx.obj['output_cost'] == "costs.csv"
+    assert ctx.obj['output_cost'] == "./output/costs.csv"
     assert ctx.obj['local'] is True
     assert ctx.obj['review_examples'] is True # Check review_examples override
     mock_auto_update.assert_called_once_with() # Check auto_update was called
