@@ -7,7 +7,7 @@ set -u
 
 # Global settings
 VERBOSE=${VERBOSE:-1} # Default to 1 if not set
-STRENGTH=${STRENGTH:-0.5} # Default strength
+STRENGTH=${STRENGTH:-0.75} # Default strength
 TEMPERATURE=${TEMPERATURE:-0.0} # Default temperature
 TEST_LOCAL=${TEST_LOCAL:-false} # Default to cloud execution
 CLEANUP_ON_EXIT=false # Set to false to keep files for debugging
@@ -543,7 +543,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "6" ]; then
       log_error "Crash test error log is empty. Skipping 'crash' command."
   else
       # Run crash (non-loop) - Increase strength here
-      run_pdd_command --strength 0.8 crash --output "$CRASH_FIXED_SCRIPT" \
+      run_pdd_command crash --output "$CRASH_FIXED_SCRIPT" \
                             --output-program "$CRASH_FIXED_PROGRAM" \
                             "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" \
                             "$MATH_VERIFICATION_PROGRAM" "$MATH_ERROR_LOG"
@@ -585,7 +585,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "6" ]; then
       log_error "Crash loop test error log is empty. Skipping 'crash --loop' command."
   else
       # Run crash --loop - Increase strength here too
-      run_pdd_command_noexit --strength 0.8 crash --loop --max-attempts 2 --budget 5.0 \
+      run_pdd_command_noexit crash --loop --max-attempts 2 --budget 5.0 \
                             --output "${CRASH_FIXED_SCRIPT}_loop" \
                             --output-program "${CRASH_FIXED_PROGRAM}_loop" \
                             "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" \

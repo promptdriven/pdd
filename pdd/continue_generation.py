@@ -11,9 +11,11 @@ from . import EXTRACTION_STRENGTH
 console = Console()
 
 class TrimResultsStartOutput(BaseModel):
+    explanation: str = Field(description="The explanation of how you determined what to cut out")
     code_block: str = Field(description="The trimmed code block from the start")
 
 class TrimResultsOutput(BaseModel):
+    explanation: str = Field(description="The explanation of the code block")
     trimmed_continued_generation: str = Field(description="The trimmed continuation of the generation")
 
 def continue_generation(
@@ -70,7 +72,7 @@ def continue_generation(
         trim_start_response = llm_invoke(
             prompt=processed_prompts['trim_start'],
             input_json={"LLM_OUTPUT": llm_output},
-            strength=0.8,
+            strength=0.75,
             temperature=0,
             output_pydantic=TrimResultsStartOutput,
             verbose=verbose

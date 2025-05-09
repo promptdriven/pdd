@@ -56,7 +56,7 @@ The authentication token is securely stored locally and automatically refreshed 
 
 ### Local Mode Requirements
 
-When running in local mode with the `--local` flag, you'll need to set up API keys:
+When running in local mode with the `--local` flag, you'll need to set up API keys for the language models:
 
 ```bash
 # For OpenAI
@@ -65,12 +65,39 @@ export OPENAI_API_KEY=your_api_key_here
 # For Anthropic
 export ANTHROPIC_API_KEY=your_api_key_here
 
-# For other supported providers
+# For other supported providers (LiteLLM supports multiple LLM providers)
 export PROVIDER_API_KEY=your_api_key_here
 ```
 
 Add these to your `.bashrc`, `.zshrc`, or equivalent for persistence.
 
+PDD's local mode uses LiteLLM for interacting with language models, providing:
+
+- Support for multiple model providers (OpenAI, Anthropic, Google/Vertex AI, and more)
+- Automatic model selection based on strength settings
+- Response caching for improved performance
+- Smart token usage tracking and cost estimation
+- Interactive API key acquisition when keys are missing
+
+When keys are missing, PDD will prompt for them interactively and securely store them in your local `.env` file.
+
+### Local Model Configuration
+
+PDD uses a CSV file to configure model selection and capabilities. This configuration is loaded from:
+
+1. User-specific configuration: `~/.pdd/llm_model.csv` (takes precedence if it exists)
+2. Project-specific configuration: `<PROJECT_ROOT>/data/llm_model.csv`
+
+The CSV includes columns for:
+- `provider`: The LLM provider (e.g., "openai", "anthropic", "google")
+- `model`: The LiteLLM model identifier (e.g., "gpt-4", "claude-3-opus-20240229")
+- `input`/`output`: Costs per million tokens
+- `coding_arena_elo`: ELO rating for coding ability
+- `api_key`: The environment variable name for the required API key
+- `structured_output`: Whether the model supports structured JSON output
+- `reasoning_type`: Support for reasoning capabilities ("none", "budget", or "effort")
+
+For proper model identifiers to use in your custom configuration, refer to the [LiteLLM Model List](https://docs.litellm.ai/docs/providers) documentation. LiteLLM typically uses model identifiers in the format `provider/model_name` (e.g., "openai/gpt-4", "anthropic/claude-3-opus-20240229").
 
 ## Post-Installation Setup
 
@@ -284,6 +311,9 @@ These options can be used with any command:
 
 - `--force`: Overwrite existing files without asking for confirmation.
 - `--strength FLOAT`: Set the strength of the AI model (0.0 to 1.0, default is 0.5).
+  - 0.0: Cheapest available model
+  - 0.5: Default base model  
+  - 1.0: Most powerful model (highest ELO rating)
 - `--temperature FLOAT`: Set the temperature of the AI model (default is 0.0).
 - `--verbose`: Increase output verbosity for more detailed information.
 - `--quiet`: Decrease output verbosity for minimal information.
@@ -314,8 +344,15 @@ This is particularly useful in:
 
 PDD uses a large language model to generate and manipulate code. The `--strength` and `--temperature` options allow you to control the model's output:
 
-- Strength: Determines how powerful/expensive a model should be used. Higher values (closer to 1.0) result in high performance, while lower values are cheaper.
+- Strength: Determines how powerful/expensive a model should be used. Higher values (closer to 1.0) result in high performance models with better capabilities (selected by ELO rating), while lower values (closer to 0.0) select more cost-effective models.
 - Temperature: Controls the randomness of the output. Higher values increase diversity but may lead to less coherent results, while lower values produce more focused and deterministic outputs.
+
+When running in local mode, PDD uses LiteLLM to select and interact with language models based on a configuration file that includes:
+- Input and output costs per million tokens
+- ELO ratings for coding ability
+- Required API key environment variables
+- Structured output capability flags
+- Reasoning capabilities (budget-based or effort-based)
 
 ## Output Cost Tracking
 
@@ -339,7 +376,7 @@ PDD calculates costs based on the AI model usage for each operation. Costs are p
 2. Input size: Larger inputs (e.g., longer prompts or code files) typically incur higher costs.
 3. Operation complexity: Some operations (like `fix` and `crash` with multiple iterations) may be more costly than simpler operations.
 
-The exact cost per operation is determined by the AI service provider's current pricing model. PDD uses an internal pricing table that is regularly updated to reflect the most current rates.
+The exact cost per operation is determined by the LiteLLM integration using the provider's current pricing model. PDD uses an internal pricing table that is regularly updated to reflect the most current rates.
 
 ### CSV Output
 
@@ -974,6 +1011,17 @@ PDD uses several environment variables to customize its behavior:
 - **`PDD_VERIFY_CODE_OUTPUT_PATH`**: Default path for the verified code file generated by the `verify` command upon success.
 
 
+### Model Configuration (`llm_model.csv`)
+
+PDD uses a CSV file (`llm_model.csv`) to store information about available AI models, their costs, capabilities, and required API key names. When running commands locally (e.g., using the `update_model_costs.py` utility or potentially local execution modes if implemented), PDD determines which configuration file to use based on the following priority:
+
+1.  **User-specific:** `~/.pdd/llm_model.csv` - If this file exists, it takes precedence over any project-level configuration. This allows users to maintain a personal, system-wide model configuration.
+2.  **Project-specific:** `<PROJECT_ROOT>/data/llm_model.csv` - If the user-specific file is not found, PDD looks for the file within the `data` directory of the determined project root (based on `PDD_PATH` or auto-detection).
+
+This tiered approach allows for both shared project configurations and individual user overrides.
+*Note: This file-based configuration primarily affects local operations and utilities. Cloud execution modes likely rely on centrally managed configurations.*
+
+
 These environment variables allow you to set default output locations for each command. If an environment variable is set and the corresponding `--output` option is not used in the command, PDD will use the path specified by the environment variable. This can help streamline your workflow by reducing the need to specify output paths for frequently used commands.
 
 For example, if you set `PDD_GENERATE_OUTPUT_PATH=/path/to/generated/code/`, all files created by the `generate` command will be saved in that directory by default, unless overridden by the `--output` option in the command line.
@@ -1224,6 +1272,29 @@ A dedicated VS Code extension (`utils/vscode_prompt`) provides syntax highlighti
 ### MCP Server (for Agentic Clients)
 
 The `pdd-mcp-server` (`utils/mcp`) acts as a bridge using the Model Context Protocol (MCP). This allows agentic clients like Cursor, Claude Desktop, Continue.dev, and others to invoke `pdd-cli` commands programmatically. See the [MCP Server README](utils/mcp/README.md) for configuration and usage instructions.
+
+## Utilities
+
+### Update LLM Model Data (`pdd/update_model_costs.py`)
+
+This script automatically updates the `llm_model.csv` file. **It prioritizes updating the user-specific configuration at `~/.pdd/llm_model.csv` if it exists.** Otherwise, it targets the file specified by the `--csv-path` argument (defaulting to `<PROJECT_ROOT>/data/llm_model.csv`).
+
+It uses the `litellm` library to:
+*   Fetch and fill in missing input/output costs for listed models (converting per-token costs to per-million-token costs).
+*   Compare existing costs against LiteLLM data and report mismatches (without overwriting).
+*   Check and update the `structured_output` flag (True/False) based on `litellm.supports_response_schema`.
+*   Validate model identifiers using `litellm` before processing.
+
+**Usage:**
+
+```bash
+conda activate pdd
+# The script will automatically check ~/.pdd/llm_model.csv first.
+# If not found, it will use the path given by --csv-path (or the default project path).
+python pdd/update_model_costs.py [--csv-path path/to/your/project/llm_model.csv]
+```
+
+*Note: The `max_reasoning_tokens` column requires manual maintenance.*
 
 ## Conclusion
 

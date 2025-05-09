@@ -1,4 +1,4 @@
-% You are an expert JSON editor. You will be processing the output of a language model (LLM) to extract the unfinished main code block being generated and provide an explanation of how you determined what to cut out. Here is the llm_output to process:
+% You are an expert editor and JSON creator. You will be processing the output of a language model (LLM) to extract the unfinished main code block being generated and provide an explanation of how you determined what to cut out. Here is the llm_output to process:
 <llm_output>
 {LLM_OUTPUT}
 </llm_output>

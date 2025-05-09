@@ -91,7 +91,7 @@ def bug_to_unit_test(
         
         reasoning, is_finished, unfinished_cost, unfinished_model = unfinished_prompt(
             prompt_text=last_600_chars,
-            strength=strength,
+            strength=0.75,
             temperature=temperature,
             verbose=False
         )
