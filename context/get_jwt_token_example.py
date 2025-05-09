@@ -3,7 +3,7 @@ import os
 from pdd.get_jwt_token import get_jwt_token, AuthError, NetworkError, TokenError, UserCancelledError, RateLimitError
 
 # Constants for the CLI application (replace with your actual values)
-FIREBASE_API_KEY = os.environ.get("REACT_APP_FIREBASE_API_KEY")  # Your Firebase Web API key
+FIREBASE_API_KEY = os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY")  # Your Firebase Web API key
 GITHUB_CLIENT_ID = os.environ.get("GITHUB_CLIENT_ID")  # Your GitHub OAuth App's client ID
 APP_NAME = "Prompt Driven Development"  # A unique name for your application
 
