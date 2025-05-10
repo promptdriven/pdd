@@ -25,6 +25,9 @@
 <instructions>
     % Examples of using internal modules:
 
+    % Important: Call get_local_pdd_path() at the beginning of the CLI function to ensure PDD_PATH is set correctly, especially for UV installations.
+    % This will ensure the environment variable is properly set before any commands run.
+
     <internal_example_modules>
         - The 'auto_update' function will be used to check if pdd is up to date if `PDD_AUTO_UPDATE` is not set or is True. Here is an example of how to use the 'auto_update' function:
         <auto_update_example>

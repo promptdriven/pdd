@@ -1,19 +1,10 @@
 # TODO
-- [ ] AWS support
 - [ ] ask for and store API keys
-- [ ] display model list
 - [ ] reasoning support, allow strength to go above 1 to allocate more thinking tokens
-- [ ] handle thinking model output
-- [ ] MLX support for faster local
-- [ ] AWS Nova support
-- [ ] autogenerate the model.csv file and print out the strength of each model
-- [ ] Fallback to local cache
-
 
 
 ## On Deck
 - [ ] during fix rather than just have the fix loop check to see if the example crashed, have it use a llm to check if the results are largely correct still
-- [ ] Python 3.13 support
 
 
 ## Features
@@ -42,7 +33,7 @@
 - [ ] agentic additional context inclusion via context 7 MCP
 - [ ] re-ranker for the example using a LLM
 - [ ] syncing Makefile
-- [ ] uv support, handle the auto-update situation
+- [ ] uv support, handle the ask the user to upgrade situation for uv
 - [ ] incremental generate that basically does a semantic diff of the prompt and does a surgical update of the code
 
 
