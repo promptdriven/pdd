@@ -987,6 +987,18 @@ def test_cli_verify_command_calls_fix_verification_main(mock_fix_verification, m
         "python"
     )
 
+    # It's important to ensure that CliRunner does not treat arguments intended for 'verify'
+    # as arguments for the main 'cli' group, especially with 'chain=True'.
+    # Using 'standalone_mode=False' can sometimes help if Click's context propagation
+    # in tests is tricky, but default behavior should work.
+    # Forcing a non-chained context for this specific test might be a workaround if the issue is deep in Click's chain handling.
+    # However, the goal is to test the chained behavior.
+    # One possible reason for the main help showing is if Click determines it cannot proceed
+    # with the command chain due to an issue with the first command.
+    # Let's try invoking with 'catch_exceptions=False' to see if a SystemExit(0) is indeed the cause.
+    # If so, the test itself would exit, which is not ideal for a test suite.
+    # The core issue is that Click's main dispatch is not handing off to 'verify'.
+
     result = runner.invoke(cli.cli, [
         "verify",
         mock_prompt_file,
@@ -994,30 +1006,37 @@ def test_cli_verify_command_calls_fix_verification_main(mock_fix_verification, m
         mock_program_file,
         "--output-results", mock_output_results,
         "--output-code", mock_output_code,
-        "--output-program", mock_output_program, # Added
+        "--output-program", mock_output_program,
         "--max-attempts", "5",
         "--budget", "10.0"
+    # ], catch_exceptions=False) # Avoid using this in general tests as it can stop the suite
     ])
+
 
     # Debugging: Print output if mock_fix_verification was not called
     if not mock_fix_verification.called and result.exit_code == 0:
         print(f"DEBUG: mock_fix_verification not called in test_cli_verify_command_calls_fix_verification_main.")
+        print(f"DEBUG: Result exit_code: {result.exit_code}")
         print(f"DEBUG: Result output:\n{result.output}")
         if result.exception:
-            print(f"DEBUG: Result exception (should be None):\n{result.exception}")
+            print(f"DEBUG: Result exception (should be None for exit_code 0 from handled error):\n{result.exception}")
+            print(f"DEBUG: Exception type: {type(result.exception)}")
     
     if result.exit_code != 0:
-        print(f"CLI Error: {result.output}")
+        print(f"CLI Error (exit code {result.exit_code}): {result.output}")
         if result.exception:
-            raise result.exception
+            print(f"Exception details: {result.exception}")
+            raise result.exception # Re-raise to fail test clearly
+    
+    # If the command 'verify' was correctly dispatched and its function executed,
+    # then result.exit_code should be 0 (due to try/except/handle_error/return None).
+    # The main help should NOT be printed if the command function was entered.
+    assert "Usage: cli [OPTIONS] COMMAND" not in result.output, "Main help was printed, indicating dispatch failure."
     assert result.exit_code == 0
-    # If the command is expected to succeed to the point of calling fix_verification_main,
-    # then no "Usage Error" should be in the output from handle_error.
-    assert "Usage Error:" not in result.output
 
 
     mock_auto_update.assert_called_once()
-    mock_fix_verification.assert_called_once()
+    mock_fix_verification.assert_called_once() # This is the failing assertion
     
     # Get the keyword arguments passed to fix_verification_main
     kwargs = mock_fix_verification.call_args.kwargs
@@ -1069,7 +1088,10 @@ def test_cli_verify_command_default_output_program(mock_fix_verification, mock_c
         print(f"CLI Error: {result.output}")
         if result.exception:
             raise result.exception
+    
+    assert "Usage: cli [OPTIONS] COMMAND" not in result.output, "Main help was printed, indicating dispatch failure."
     assert result.exit_code == 0
+
 
     mock_fix_verification.assert_called_once()
     kwargs = mock_fix_verification.call_args.kwargs
@@ -1113,6 +1135,8 @@ def test_cli_verify_command_env_var_output_program(mock_fix_verification, mock_c
         print(f"CLI Error: {result.output}")
         if result.exception:
             raise result.exception
+    
+    assert "Usage: cli [OPTIONS] COMMAND" not in result.output, "Main help was printed, indicating dispatch failure."
     assert result.exit_code == 0
 
     mock_fix_verification.assert_called_once()

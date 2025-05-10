@@ -1,3 +1,9 @@
+## v0.0.29 (2025-05-10)
+
+### Feat
+
+- ensure PDD_PATH is set before command execution in CLI
+
 ## v0.0.28 (2025-05-10)
 
 ### Fix
