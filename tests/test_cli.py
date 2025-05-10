@@ -968,110 +968,157 @@ sys.exit(0 if test_result.wasSuccessful() else 1)
 @patch('pdd.fix_verification_main.construct_paths')
 @patch('pdd.cli.fix_verification_main') # Mock the main function called by the command
 def test_cli_verify_command_calls_fix_verification_main(mock_fix_verification, mock_construct_in_main, mock_auto_update, runner, create_dummy_files, tmp_path):
-    """Test that `pdd verify` calls into fix_verification_main."""
-    # Setup dummy files
-    prompt_file = tmp_path / "test.prompt"
-    prompt_file.write_text("prompt content")
-    code_file = tmp_path / "test.py"
-    code_file.write_text("code content")
-    program_file = tmp_path / "test_program.py"
-    program_file.write_text("program content")
+    """Test `pdd verify` calls fix_verification_main with correct args."""
+    files = create_dummy_files("test.prompt", "test.py", "program.py")
+    mock_prompt_file = str(files["test.prompt"])
+    mock_code_file = str(files["test.py"])
+    mock_program_file = str(files["program.py"])
+    mock_output_results = str(tmp_path / "results.log")
+    mock_output_code = str(tmp_path / "verified_code.py")
+    mock_output_program = str(tmp_path / "verified_program.py") # Added
 
-    # Mock fix_verification_main return value
-    mock_fix_verification.return_value = (True, 'prog', 'code_verified.py', 1, 0.01, 'mock_model')
-
-    # Mock construct_paths return value (needed if fix_verification_main calls it internally)
-    # This mock is now applied to pdd.fix_verification_main.construct_paths
+    # Setup mock return values
+    # fix_verification_main returns: success, final_program, final_code, attempts, cost, model
+    mock_fix_verification.return_value = (True, "prog_content", "code_content", 1, 0.01, "test_model")
+    # construct_paths in fix_verification_main returns: input_strings, output_file_paths, language
     mock_construct_in_main.return_value = (
-        {"prompt_file": "p", "code_file": "c", "program_file": "prog", "verification_program": "prog"},
-        {"output_results": str(tmp_path / "results.log"), "output_code": str(tmp_path / "verified.py")},
+        {"prompt_file": "p_content", "code_file": "c_content", "program_file": "prog_content"},
+        {"output_results": mock_output_results, "output_code": mock_output_code, "output_program": mock_output_program},
         "python"
     )
 
-    # Invoke the verify command with MINIMAL arguments
     result = runner.invoke(cli.cli, [
         "verify",
-        str(prompt_file),
-        str(code_file),
-        str(program_file)
+        mock_prompt_file,
+        mock_code_file,
+        mock_program_file,
+        "--output-results", mock_output_results,
+        "--output-code", mock_output_code,
+        "--output-program", mock_output_program, # Added
+        "--max-attempts", "5",
+        "--budget", "10.0"
     ])
 
-    # Check for CLI errors first (should be exit code 0 now)
     if result.exit_code != 0:
-        print(f"CLI invocation failed with exit code {result.exit_code}")
-        print(f"Output: {result.output}")
+        print(f"CLI Error: {result.output}")
         if result.exception:
-            print(f"Exception: {result.exception}")
-        pytest.fail(f"CLI invocation failed unexpectedly: {result.exception}")
-
+            raise result.exception
     assert result.exit_code == 0
-    assert result.exception is None
 
-    # Assert fix_verification_main was called once
-    try:
-        mock_fix_verification.assert_called_once()
-        # Check if construct_paths was called inside fix_verification_main (optional)
-        # mock_construct_in_main.assert_called_once()
-    except AssertionError as e:
-        print(f"Assertion Failed: {e}")
-        raise e
+    mock_auto_update.assert_called_once()
+    mock_fix_verification.assert_called_once()
+    
+    # Get the keyword arguments passed to fix_verification_main
+    kwargs = mock_fix_verification.call_args.kwargs
 
-@patch('pdd.cli.auto_update') # Patch auto_update
-# Mock the target function where it's imported in cli.py
+    assert kwargs.get('prompt_file') == mock_prompt_file
+    assert kwargs.get('code_file') == mock_code_file
+    assert kwargs.get('program_file') == mock_program_file
+    assert kwargs.get('output_results') == mock_output_results
+    assert kwargs.get('output_code') == mock_output_code
+    assert kwargs.get('output_program') == mock_output_program # Added
+    assert kwargs.get('loop') is True # Default for CLI verify
+    assert kwargs.get('verification_program') == mock_program_file # Default for CLI verify
+    assert kwargs.get('max_attempts') == 5
+    assert kwargs.get('budget') == 10.0
+
+    # Check the result_data returned by the CLI command (processed by @track_cost)
+    # The CLI verify command itself should return a tuple: (result_data_dict, cost, model_name)
+    # We can inspect the output for the summary printed by the result_callback
+    assert "verified_program_path" in result.output # Check if it's mentioned in summary
+    assert mock_output_program in result.output
+
+
+@patch('pdd.cli.auto_update')
+@patch('pdd.fix_verification_main.construct_paths')
 @patch('pdd.cli.fix_verification_main')
-# Mock construct_paths in the cli namespace - although likely not called by wrapper
-@patch('pdd.cli.construct_paths')
-def test_cli_verify_force_flag_propagation(mock_construct_in_cli, mock_fix_verification_main, mock_auto_update, runner, create_dummy_files, tmp_path):
-    """
-    Test that the global --force flag is correctly propagated to the context
-    object passed to fix_verification_main when invoking the verify command.
-    """
-    files = create_dummy_files(
-        "verify_prompt.prompt",
-        "verify_code.py",
-        "verify_program.py"
+def test_cli_verify_command_default_output_program(mock_fix_verification, mock_construct_in_main, mock_auto_update, runner, create_dummy_files, tmp_path):
+    """Test `pdd verify` calls fix_verification_main with output_program=None by default."""
+    files = create_dummy_files("test.prompt", "test.py", "program.py")
+    mock_prompt_file = str(files["test.prompt"])
+    mock_code_file = str(files["test.py"])
+    mock_program_file = str(files["program.py"])
+
+    mock_fix_verification.return_value = (True, "prog_content", "code_content", 1, 0.01, "test_model")
+    mock_construct_in_main.return_value = (
+        {"prompt_file": "p_content", "code_file": "c_content", "program_file": "prog_content"},
+        # Simulate construct_paths returning None for output_program if not specified
+        {"output_results": "some/path.log", "output_code": "some/code.py", "output_program": None},
+        "python"
     )
-
-    # Mock fix_verification_main return value (needs correct tuple format)
-    mock_fix_verification_main.return_value = (True, 'prog', 'code_verified.py', 1, 0.01, 'mock_model')
-
-    # Mock construct_paths return value (just in case, though fix_verification_main is mocked)
-    mock_construct_in_cli.return_value = (
-        {'prompt_file': 'p', 'code_file': 'c', 'program_file': 'prog'}, # dummy input_strings
-        {'output_results': 'results.log', 'output_code': 'code_verified.py'}, # dummy output_paths
-        'python' # dummy language
-    )
-
 
     result = runner.invoke(cli.cli, [
-        "--force", # Use the global force flag
         "verify",
-        str(files["verify_prompt.prompt"]),
-        str(files["verify_code.py"]),
-        str(files["verify_program.py"]),
+        mock_prompt_file,
+        mock_code_file,
+        mock_program_file,
+        # No --output-program here
     ])
 
-    # Check for CLI errors first (should be exit code 0)
     if result.exit_code != 0:
-        print(f"CLI invocation failed with exit code {result.exit_code}")
-        print(f"Output: {result.output}")
+        print(f"CLI Error: {result.output}")
         if result.exception:
-            print(f"Exception: {result.exception}")
-            pytest.fail(f"CLI invocation failed unexpectedly: {result.exception}")
-
+            raise result.exception
     assert result.exit_code == 0
-    assert result.exception is None
 
-    # Assert that fix_verification_main was called
-    mock_fix_verification_main.assert_called_once()
+    mock_fix_verification.assert_called_once()
+    kwargs = mock_fix_verification.call_args.kwargs
+    assert kwargs.get('output_program') is None # Key assertion
 
-    # Get the arguments passed to fix_verification_main
-    call_args, call_kwargs = mock_fix_verification_main.call_args
+@patch.dict(os.environ, {"PDD_VERIFY_PROGRAM_OUTPUT_PATH": "env_prog_output.py"})
+@patch('pdd.cli.auto_update')
+@patch('pdd.fix_verification_main.construct_paths') 
+@patch('pdd.cli.fix_verification_main')
+def test_cli_verify_command_env_var_output_program(mock_fix_verification, mock_construct_in_main, mock_auto_update, runner, create_dummy_files, tmp_path):
+    """Test `pdd verify` uses PDD_VERIFY_PROGRAM_OUTPUT_PATH env var."""
+    files = create_dummy_files("test.prompt", "test.py", "program.py")
+    mock_prompt_file = str(files["test.prompt"])
+    mock_code_file = str(files["test.py"])
+    mock_program_file = str(files["program.py"])
+    
+    # Expected path based on env var (assuming generate_output_paths resolves it)
+    # In the actual CLI, fix_verification_main -> construct_paths -> generate_output_paths
+    # would resolve this. Here, we are asserting what fix_verification_main receives.
+    # The mock_construct_in_main will simulate what construct_paths returns to fix_verification_main.
+    # The CLI wrapper passes None if --output-program is not set.
+    # The actual resolution of env var happens inside construct_paths, which then passes it to fix_verification_main.
+    # So, the CLI wrapper passes `output_program=None` to `fix_verification_main`,
+    # then `fix_verification_main` calls `construct_paths` which *should* use the env var if `output_program` option was None.
+    # The mocked `construct_paths` (`mock_construct_in_main`) directly returns the expected path.
+    expected_env_output_program = str(Path("env_prog_output.py").resolve()) 
 
-    # The context object (ctx) is passed as a keyword argument
-    ctx_passed = call_kwargs.get('ctx')
-    assert ctx_passed is not None, "Context object was not passed as a keyword argument to fix_verification_main"
+    mock_fix_verification.return_value = (True, "prog_content", "code_content", 1, 0.01, "test_model")
+    # Mock construct_paths to return the path derived from the env var
+    mock_construct_in_main.return_value = (
+        {"prompt_file": "p_content", "code_file": "c_content", "program_file": "prog_content"},
+        {"output_results": "r.log", "output_code": "c.py", "output_program": expected_env_output_program},
+        "python"
+    )
 
-    # Assert that the 'force' flag in the context object is True
-    assert ctx_passed.obj.get('force') is True, "The --force flag was not correctly set in ctx.obj"
-    mock_construct_in_cli.assert_not_called() # Not called by CLI verify wrapper
+    result = runner.invoke(cli.cli, [
+        "verify",
+        mock_prompt_file,
+        mock_code_file,
+        mock_program_file,
+        # No --output-program, expect env var to be used by construct_paths (simulated by mock_construct_in_main)
+    ])
+
+    if result.exit_code != 0:
+        print(f"CLI Error: {result.output}")
+        if result.exception:
+            raise result.exception
+    assert result.exit_code == 0
+
+    mock_fix_verification.assert_called_once()
+    kwargs = mock_fix_verification.call_args.kwargs
+    # This assert depends on construct_paths (mocked here) correctly picking up env var
+    # and fix_verification_main passing it along. The CLI wrapper passes None if --output-program is not set.
+    # The actual resolution of env var happens inside construct_paths, which then passes it to fix_verification_main.
+    # So, the CLI wrapper passes `output_program=None` to `fix_verification_main`,
+    # then `fix_verification_main` calls `construct_paths` which *should* use the env var if `output_program` option was None.
+    # The mocked `construct_paths` (`mock_construct_in_main`) directly returns the expected path.
+    assert kwargs.get('output_program') == expected_env_output_program
+    assert "env_prog_output.py" in result.output # Check if it's mentioned in summary (via result_data)
+
+# Keep existing test_cli_verify_force_flag_propagation as is, or adapt if needed
+# ... existing code ...

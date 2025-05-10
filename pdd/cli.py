@@ -970,6 +970,12 @@ def auto_deps(
     help="Specify where to save the verified code file (file or directory).",
 )
 @click.option(
+    "--output-program",
+    type=click.Path(writable=True),
+    default=None,
+    help="Specify where to save the verified program file (file or directory).",
+)
+@click.option(
     "--max-attempts",
     type=int,
     default=3,
@@ -992,6 +998,7 @@ def verify(
     program_file: str,
     output_results: Optional[str],
     output_code: Optional[str],
+    output_program: Optional[str],
     max_attempts: int,
     budget: float,
 ) -> Optional[Tuple[Dict[str, Any], float, str]]: # Modified return type
@@ -1006,6 +1013,7 @@ def verify(
             program_file=program_file,
             output_results=output_results,
             output_code=output_code,
+            output_program=output_program,
             loop=True,
             verification_program=program_file,
             max_attempts=max_attempts,
@@ -1015,6 +1023,7 @@ def verify(
             "success": success,
             "attempts": attempts,
             "verified_code_path": output_code,
+            "verified_program_path": output_program,
             "results_log_path": output_results,
         }
         return result_data, cost, model

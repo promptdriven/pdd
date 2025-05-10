@@ -126,6 +126,7 @@ TRACE_RESULTS_LOG="trace_results.log"
 VERIFY_RESULTS_LOG="verify_results.log"
 VERIFY_CODE_OUTPUT="verified_${MATH_SCRIPT}"
 VERIFY_EXAMPLE_OUTPUT="verified_${MATH_VERIFICATION_PROGRAM}" # Example derived from verified code
+VERIFY_PROGRAM_OUTPUT="directly_verified_${MATH_VERIFICATION_PROGRAM}" # New: Direct output from verify
 VERIFY_HARNESS_LOG="verify_harness.log"
 VERIFY_ISOLATED_DIR="isolated_verify"
 VERIFY_SCRIPT_PATH="$PDD_BASE_DIR/tests/isolated_verify.py"
@@ -375,16 +376,16 @@ log_timestamped "======== Starting Regression Tests ========"
 # 1. Generate
 if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "1" ]; then
   log "1. Testing 'generate' command"
-  run_pdd_command generate --output "$MATH_SCRIPT" "$PROMPTS_PATH/$MATH_PROMPT"
+  run_pdd_command --local generate --output "$MATH_SCRIPT" "$PROMPTS_PATH/$MATH_PROMPT"
   check_exists "$MATH_SCRIPT" "'generate' output"
   cp "$MATH_SCRIPT" "$ORIGINAL_MATH_SCRIPT" # Backup for update test
 
   # 1a. Generate with different strength/temp
   log "1a. Testing 'generate' with different strength/temp"
   # Pass global options FIRST, then the command and its specific options/args
-  run_pdd_command --strength 0.1 --temperature 0.0 generate --output "gen_low_str.py" "$PROMPTS_PATH/$MATH_PROMPT"
+  run_pdd_command --local --strength 0.1 --temperature 0.0 generate --output "gen_low_str.py" "$PROMPTS_PATH/$MATH_PROMPT"
   check_exists "gen_low_str.py" "'generate' low strength output"
-  run_pdd_command --strength $STRENGTH --temperature 1.5 generate --output "gen_high_temp.py" "$PROMPTS_PATH/$MATH_PROMPT"
+  run_pdd_command --local --strength $STRENGTH --temperature 1.5 generate --output "gen_high_temp.py" "$PROMPTS_PATH/$MATH_PROMPT"
   check_exists "gen_high_temp.py" "'generate' high temp output"
 
   # 1b. Generate with env var output path
@@ -392,7 +393,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "1" ]; then
   ENV_OUT_DIR="env_out_generate"
   mkdir "$ENV_OUT_DIR"
   export PDD_GENERATE_OUTPUT_PATH="$ENV_OUT_DIR/" # Trailing slash indicates directory
-  run_pdd_command generate "$PROMPTS_PATH/$MATH_PROMPT" # No --output
+  run_pdd_command --local generate "$PROMPTS_PATH/$MATH_PROMPT" # No --output
   # Default name is <basename>.<lang_ext> which should be simple_math.py
   check_exists "$ENV_OUT_DIR/$MATH_SCRIPT" "'generate' output via env var" # Check for the Python file, not the prompt
   unset PDD_GENERATE_OUTPUT_PATH
@@ -630,6 +631,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "7" ]; then
       run_pdd_command_noexit verify \
           --output-results "$VERIFY_RESULTS_LOG" \
           --output-code "$VERIFY_CODE_OUTPUT" \
+          --output-program "$VERIFY_PROGRAM_OUTPUT" \
           --max-attempts 3 \
           --budget 5.0 \
           "$PROMPTS_PATH/$MATH_PROMPT" \
@@ -640,6 +642,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "7" ]; then
       if [ $VERIFY_STATUS -eq 0 ]; then
           log_timestamped "Validation success: pdd verify completed successfully."
           check_exists "$VERIFY_CODE_OUTPUT" "'verify' output code"
+          check_exists "$VERIFY_PROGRAM_OUTPUT" "'verify' direct output program"
 
           log "Checking if verify fixed the semantic error in $VERIFY_CODE_OUTPUT"
           if grep -q "return a + b" "$VERIFY_CODE_OUTPUT"; then
@@ -651,22 +654,35 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "7" ]; then
               exit 1 # Fail the test explicitly
           fi
 
-          # Adopt verified code
+          # Adopt verified code and direct program output
           cp "$VERIFY_CODE_OUTPUT" "$MATH_SCRIPT"
-          # Regenerate example program based on verified code
-          run_pdd_command example --output "$VERIFY_EXAMPLE_OUTPUT" \
-              "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
-          check_exists "$VERIFY_EXAMPLE_OUTPUT" "'example' from verified code"
-          cp "$VERIFY_EXAMPLE_OUTPUT" "$MATH_VERIFICATION_PROGRAM"
-          log "Running example program generated from verified code"
+          cp "$VERIFY_PROGRAM_OUTPUT" "$MATH_VERIFICATION_PROGRAM" # Prioritize direct output
+
+          # Run the adopted verified program
+          log "Running the program directly verified by 'verify' command"
           python "$MATH_VERIFICATION_PROGRAM" >> "$LOG_FILE" 2>&1
           if [ $? -ne 0 ]; then
-              log_error "Verified code example program failed."
-              log_timestamped "Validation failed: Verified code example program failed."
-              # Decide if this is fatal
+              log_error "Directly verified program failed to run."
+              log_timestamped "Validation failed: Directly verified program failed to run."
+              exit 1 # Treat this as a failure
           else
-              log "Verified code example program ran successfully."
-              log_timestamped "Validation success: Verified code example program ran successfully."
+              log "Directly verified program ran successfully."
+              log_timestamped "Validation success: Directly verified program ran successfully."
+          fi
+
+          # Optionally, still generate and check the example from verified code as a separate test of 'example'
+          log "Generating example from verified code (separate check of 'example' command)"
+          run_pdd_command example --output "$VERIFY_EXAMPLE_OUTPUT" \
+              "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" # MATH_SCRIPT is now the verified code
+          check_exists "$VERIFY_EXAMPLE_OUTPUT" "'example' output from verified code"
+          log "Running example program generated from verified code (separate check)"
+          python "$VERIFY_EXAMPLE_OUTPUT" >> "$LOG_FILE" 2>&1
+          if [ $? -ne 0 ]; then
+              log "Warning: Example program generated from verified code failed (non-fatal for this part)."
+              log_timestamped "Validation warning: Example program from verified code failed."
+          else
+              log "Example program from verified code ran successfully."
+              log_timestamped "Validation success: Example program from verified code ran successfully."
           fi
       else
           log_error "pdd verify failed with exit code $VERIFY_STATUS."

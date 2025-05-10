@@ -1356,3 +1356,85 @@ def test_construct_paths_force_overwrite(tmpdir):
 
     # Primary assertion: click.confirm should NOT have been called
     mock_confirm.assert_not_called()
+
+def test_construct_paths_verify_command_default_and_options(tmpdir):
+    """
+    Test construct_paths for the 'verify' command, checking default path generation
+    (via mocked generate_output_paths) and user-supplied command_options for output_program.
+    """
+    tmp_path = Path(str(tmpdir))
+    quiet = True
+    force = True
+
+    # Create dummy input files required by 'verify'
+    prompt_file = tmp_path / "verify_prompt_python.prompt"
+    prompt_file.write_text("Verify this prompt")
+    code_file = tmp_path / "verify_code.py"
+    code_file.write_text("print('hello')")
+    program_file = tmp_path / "run_verify.py" # The executable program
+    program_file.write_text("#!/usr/bin/env python\\nprint('program output')")
+
+    input_file_paths = {
+        "prompt_file": str(prompt_file),
+        "code_file": str(code_file),
+        "program_file": str(program_file), # Actual executable
+        "verification_program": str(program_file) # program_file is also used as verification_program for verify
+    }
+
+    # --- Scenario 1: Default paths via mocked generate_output_paths ---
+    command_options_default = {}
+    
+    mock_gen_paths_return_default = {
+        "output_results": str(tmp_path / "default_verify_results.log"),
+        "output_code": str(tmp_path / "default_verified_code.py"),
+        "output_program": str(tmp_path / "default_verified_program.py")
+    }
+
+    with patch('pdd.construct_paths.get_extension', return_value='.py'), \
+         patch('pdd.construct_paths.get_language', return_value='python'), \
+         patch('pdd.construct_paths.generate_output_paths', return_value=mock_gen_paths_return_default) as mock_gen_paths_default:
+        
+        _, output_paths_default, _ = construct_paths(
+            input_file_paths, force, quiet, "verify", command_options_default
+        )
+        
+        mock_gen_paths_default.assert_called_once()
+        assert output_paths_default == mock_gen_paths_return_default
+
+    # --- Scenario 2: User specifies output_program in command_options ---
+    user_output_program_path = str(tmp_path / "user_specified_program_verified.exe")
+    command_options_user_program = {
+        "output_program": user_output_program_path
+        # output_results and output_code will be determined by generate_output_paths
+    }
+
+    # generate_output_paths will be called with output_program already specified.
+    # It should respect it and generate defaults for others.
+    mock_gen_paths_return_user_program = {
+        "output_results": str(tmp_path / "default_verify_results_for_user_prog.log"),
+        "output_code": str(tmp_path / "default_verified_code_for_user_prog.py"),
+        "output_program": user_output_program_path # This should match the input
+    }
+
+    with patch('pdd.construct_paths.get_extension', return_value='.py'), \
+         patch('pdd.construct_paths.get_language', return_value='python'), \
+         patch('pdd.construct_paths.generate_output_paths', return_value=mock_gen_paths_return_user_program) as mock_gen_paths_user:
+        
+        _, output_paths_user, _ = construct_paths(
+            input_file_paths, force, quiet, "verify", command_options_user_program
+        )
+
+        # Check that generate_output_paths was called with output_program in its command_options
+        # The actual call to generate_output_paths inside construct_paths will have its
+        # output_locations (second arg) already populated with command_options.
+        args, kwargs = mock_gen_paths_user.call_args
+        # args[0] is command ('verify')
+        # args[1] is output_locations dict passed to generate_output_paths
+        # args[2] is basename_arg
+        # args[3] is language_arg
+        # args[4] is file_extension_arg
+        # args[5] is input_file_paths_arg
+        assert args[1].get("output_program") == user_output_program_path
+        
+        assert output_paths_user == mock_gen_paths_return_user_program
+        assert output_paths_user["output_program"] == user_output_program_path
