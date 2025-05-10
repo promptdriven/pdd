@@ -9,6 +9,22 @@
     - Upon initialization or first call, the function should attempt to load environment variables from a `.env` file located at the project root.
     - The project root is determined by: 1. Checking the `$PDD_PATH` environment variable. 2. If not set or invalid, searching upwards from the script's directory for project markers (like `.git`, `pyproject.toml`, `data/`, `.env`). 3. If no markers are found, defaulting to the current working directory.
 
+% Logging Configuration:
+    - Use Python's standard logging module with a hierarchical logger structure.
+    - Create a primary logger named "pdd.llm_invoke" for the module.
+    - Configure a separate logger for LiteLLM's logs named "litellm".
+    - Control logging verbosity through environment variables:
+        * PDD_LOG_LEVEL: Controls the module's default logging level (default: "INFO")
+        * LITELLM_LOG_LEVEL: Controls the LiteLLM logger's level (default: "WARNING" in production)
+        * PDD_ENVIRONMENT: When set to "production", automatically reduces logging to WARNING level
+        * PDD_VERBOSE_LOGGING: When set to "1", enables DEBUG level regardless of other settings
+    - Provide helper functions:
+        * setup_file_logging(): Configure rotating file handlers with size limits (10MB) and backups (5)
+        * set_verbose_logging(): Toggle DEBUG level based on the verbose flag or environment variable
+    - Replace all print/rprint statements with appropriate logger calls (logger.debug, logger.info, logger.warning, logger.error)
+    - In production environments, use WARNING level by default to reduce log output
+    - For development, use more verbose INFO level by default
+
 % Here are the inputs and outputs of the function:
     Input:
         'prompt' - String with the prompt template to be used for the LLM model.
@@ -26,10 +42,11 @@
         'thinking_output' - Optional. The reasoning or thinking process output from the model, if available in the LiteLLM response.
         
 % Function Logic Flow:
-    1. **Load Environment:** Load `.env` file using `dotenv.load_dotenv()`.
-    2. **Input Handling:** Determine if using provided `messages` or generating from `prompt` + `input_json`.
-    3. **Model Selection:** Based on `strength`, filter models from CSV (checking `api_key` env var *existence only initially*), calculate target cost/ELO, sort candidates, and select the top candidate.
-    4. **API Key Check & Acquisition (CRITICAL):**
+    1. **Configure Logging:** Initialize loggers (pdd.llm_invoke and litellm) with appropriate levels based on environment variables and the verbose flag.
+    2. **Load Environment:** Load `.env` file using `dotenv.load_dotenv()`.
+    3. **Input Handling:** Determine if using provided `messages` or generating from `prompt` + `input_json`.
+    4. **Model Selection:** Based on `strength`, filter models from CSV (checking `api_key` env var *existence only initially*), calculate target cost/ELO, sort candidates, and select the top candidate.
+    5. **API Key Check & Acquisition (CRITICAL):**
         a. Get the required API key environment variable *name* (e.g., "OPENAI_API_KEY") from the `api_key` column in the CSV for the selected model.
         b. Check if `os.getenv(key_name)` returns a value (i.e., if the key is actually set in the environment).
         c. **If the key is MISSING:**
@@ -45,8 +62,8 @@
             v. **Security Warning:** Print a message warning the user that the key has been saved to the `.env` file and to ensure this file is kept secure and not committed to version control.
             vi. **Mark key as newly acquired:** Set a flag indicating that the key for this `key_name` was just obtained from the user in this session.
         d. **If the key EXISTS:** Proceed silently. Ensure the "newly acquired" flag for this key is false.
-    5. **LLM Invocation:** Call `litellm.completion` or `litellm.batch_completion` with the selected model, formatted messages, and other parameters. LiteLLM will use the environment variables.
-    6. **Retry Logic:** 
+    6. **LLM Invocation:** Call `litellm.completion` or `litellm.batch_completion` with the selected model, formatted messages, and other parameters. LiteLLM will use the environment variables.
+    7. **Retry Logic:** 
         a. **On Invocation Failure:** If the call in Step 5 fails:
             i. **Check for Authentication Error:** If the exception is an `openai.AuthenticationError` (LiteLLM maps errors to OpenAI types) AND the "newly acquired" flag for the current `key_name` is true:
                 - Print a message indicating the provided key for `{key_name}` was likely incorrect.
@@ -56,9 +73,9 @@
                 - Get the next candidate model from the sorted list generated in Step 3.
                 - If no more candidate models exist, raise the last encountered exception.
                 - If a next model exists, **go back to Step 4.a** to check/acquire the API key for this *new* model.
-    7. **Response Handling:** Process the LiteLLM response, extract results, cost, tokens, etc.
+    8. **Response Handling:** Process the LiteLLM response, extract results, cost, tokens, etc.
         a. **Thinking Output:** Extract reasoning/thinking output if available. **Check common locations within the LiteLLM response object, such as `response._hidden_params['thinking']` or potentially within `response.choices[0].message` attributes (like `reasoning_content`), handling potential `AttributeError` or `KeyError` exceptions gracefully.**
-    8. **Return Output:** Return the standard output dictionary.
+    9. **Return Output:** Return the standard output dictionary.
 
 % The function should properly validate inputs and handle errors:
     - Validate inputs based on the provided parameters (`messages` OR `prompt`+`input_json`).
@@ -148,5 +165,12 @@
         4. Store or log this information as needed by the application.
         4. Calculate the cost primarily using `litellm.completion_cost(completion_response=...)`. **If this fails (e.g., due to missing provider info in the response object, common in batch results), attempt calculation again using the `model` from the original `kwargs` and token counts from the `usage` object.**
         5. Store or log this information (tokens, cost, finish reason) as needed by the application.
+
+% Deployment Considerations:
+    - When deploying to PyPI, ensure the logging level defaults to WARNING in production environments.
+    - Allow consumers of the library to control logging verbosity through environment variables.
+    - Use rotating file handlers for logging to prevent log files from growing too large.
+    - Ensure all print/rprint statements are replaced with appropriate logger calls.
+    - Consider the performance impact of excessive debug logging in production.
 
 % Ensure LiteLLM response caching is configured appropriately for S3/GCS (e.g., setting `litellm.cache = litellm.Cache(type='s3', s3_bucket_name=..., s3_region_name=..., s3_endpoint_url=...)` with GCS details).
