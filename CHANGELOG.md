@@ -1,3 +1,20 @@
+## v0.0.27 (2025-05-10)
+
+### Feat
+
+- add output paths for fixed code and program in verification process
+- add output program option to verify command and enhance documentation
+
+### Fix
+
+- correct newline character in program file and enhance test assertions
+
+### Refactor
+
+- enhance logging configuration in llm_invoke_python.prompt
+- update logging configuration and example usage in llm_invoke.py
+- enhance logging and remove print statements in llm_invoke.py
+
 ## v0.0.26 (2025-05-09)
 
 ### Fix
