@@ -1,5 +1,4 @@
 # TODO
-- [ ] ask for and store API keys
 - [ ] reasoning support, allow strength to go above 1 to allocate more thinking tokens
 
 
@@ -38,6 +37,8 @@
 
 
 ## Bugs
+- [ ] jwt token issue when not signed in
+- [ ] GCS bucket issue
 
 ## Improvements
 - [ ] update prompt for makefile
