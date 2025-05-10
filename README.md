@@ -4,17 +4,40 @@
 
 PDD (Prompt-Driven Development) is a versatile tool for generating code, creating examples, running unit tests, and managing prompt files. It leverages AI models to streamline the development process, allowing developers to work more efficiently with prompt-driven code generation.
 
-## Basic Installation
+## Installation
 
-Install PDD using pip:
+### Recommended Method: uv
+
+We recommend installing PDD using the [uv package manager](https://github.com/astral-sh/uv) for better dependency management and automatic environment configuration:
+
 ```bash
-pip install pdd-cli
+# Install uv if you haven't already 
+curl -sSf https://astral.sh/uv/install.sh | sh
+
+# Install PDD using uv tool install
+uv tool install pdd-cli
 ```
+
+This installation method ensures:
+- Faster installations with optimized dependency resolution
+- Automatic environment setup without manual configuration
+- Proper handling of the PDD_PATH environment variable
+- Better isolation from other Python packages
+
+The PDD CLI will be available immediately after installation without requiring any additional environment configuration.
 
 Verify installation:
 ```bash
 pdd --version
 ```
+
+### Alternative: pip Installation
+
+If you prefer using pip, you can install PDD with:
+```bash
+pip install pdd-cli
+```
+
 
 ## Advanced Installation Options
 
