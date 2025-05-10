@@ -49,6 +49,29 @@ Key Features
 Quick Installation
 ------------------
 
+**Recommended: Using uv (Faster & Better Dependency Management)**
+
+We recommend installing PDD using the `uv <https://github.com/astral-sh/uv>`_ package manager for better dependency management and automatic environment configuration:
+
+.. code-block:: console
+
+   # Install uv if you haven't already
+   curl -sSf https://astral.sh/uv/install.sh | sh
+
+   # Install PDD using uv tool install
+   uv tool install pdd-cli
+
+This installation method ensures:
+
+- Faster installations with optimized dependency resolution
+- Automatic environment setup without manual configuration
+- Proper handling of the PDD_PATH environment variable
+- Better isolation from other Python packages
+
+**Alternative: Using pip**
+
+If you prefer, you can install with pip:
+
 .. code-block:: console
 
    pip install pdd-cli
@@ -79,7 +102,9 @@ Create and activate a virtual environment, then install pdd-cli:
     # On Unix/MacOS:
    source pdd-env/bin/activate
 
-    # Install PDD
+    # Install PDD (with uv - recommended)
+   uv tool install pdd-cli
+    # OR with pip
    pip install pdd-cli
 
 
