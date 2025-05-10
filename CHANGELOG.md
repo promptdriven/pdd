@@ -1,3 +1,9 @@
+## v0.0.26 (2025-05-09)
+
+### Fix
+
+- update environment variable for Firebase API key and enhance VSCode launch configuration
+
 ## v0.0.25 (2025-04-28)
 
 ## v0.0.24 (2025-04-17)
