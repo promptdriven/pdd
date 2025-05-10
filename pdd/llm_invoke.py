@@ -66,7 +66,7 @@ def set_verbose_logging(verbose=False):
 # --- End Logging Configuration ---
 
 import json
-from rich import print as rprint
+# from rich import print as rprint # Replaced with logger
 from dotenv import load_dotenv
 from pathlib import Path
 from typing import Optional, Dict, List, Any, Type, Union
@@ -273,10 +273,10 @@ def _litellm_success_callback(
                 # If we can't get model name or usage, fallback to 0
                 calculated_cost = 0.0
                 # Optional: Log the original error e1 if needed
-                # print(f"[Callback WARN] Failed to calculate cost with response object ({e1}) and fallback failed.")
+                # logger.warning(f"[Callback WARN] Failed to calculate cost with response object ({e1}) and fallback failed.")
         except Exception as e2:
             # Optional: Log secondary error e2 if needed
-            # print(f"[Callback WARN] Failed to calculate cost with fallback method: {e2}")
+            # logger.warning(f"[Callback WARN] Failed to calculate cost with fallback method: {e2}")
             calculated_cost = 0.0 # Default to 0 on any error
             logger.debug(f"Cost calculation failed with fallback method: {e2}")
 
@@ -289,7 +289,7 @@ def _litellm_success_callback(
     # return calculated_cost
 
     # Example of logging within the callback (can be expanded)
-    # print(f"[Callback] Tokens: In={input_tokens}, Out={output_tokens}. Reason: {finish_reason}. Cost: ${calculated_cost:.6f}")
+    # logger.info(f"[Callback] Tokens: In={input_tokens}, Out={output_tokens}. Reason: {finish_reason}. Cost: ${calculated_cost:.6f}")
 
 # Register the callback with LiteLLM
 litellm.success_callback = [_litellm_success_callback]
@@ -363,7 +363,7 @@ def _select_model_candidates(
     # --- Check if filtering resulted in empty (might indicate all models had NaN api_key) ---
     if available_df.empty:
         # This case is less likely if notna() is the only filter, but good to check.
-        rprint("[WARN] No models found after filtering for non-NaN api_key. Check CSV 'api_key' column.")
+        logger.warning("No models found after filtering for non-NaN api_key. Check CSV 'api_key' column.")
         # Decide if this should be a hard error or allow proceeding if logic permits
         # For now, let's raise an error as it likely indicates a CSV issue.
         raise ValueError("No models available after initial filtering (all had NaN 'api_key'?).")
@@ -454,28 +454,28 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
 
     if not key_name or key_name == "EXISTING_KEY":
         if verbose:
-            rprint(f"[INFO] Skipping API key check for model {model_info.get('model')} (key name: {key_name})")
+            logger.info(f"Skipping API key check for model {model_info.get('model')} (key name: {key_name})")
         return True # Assume key is handled elsewhere or not needed
 
     key_value = os.getenv(key_name)
 
     if key_value:
         if verbose:
-            rprint(f"[INFO] API key '{key_name}' found in environment.")
+            logger.info(f"API key '{key_name}' found in environment.")
         newly_acquired_keys[key_name] = False # Mark as existing
         return True
     else:
-        rprint(f"[WARN] API key environment variable '{key_name}' for model '{model_info.get('model')}' is not set.")
+        logger.warning(f"API key environment variable '{key_name}' for model '{model_info.get('model')}' is not set.")
         try:
             # Interactive prompt
             user_provided_key = input(f"Please enter the API key for {key_name}: ").strip()
             if not user_provided_key:
-                rprint("[ERROR] No API key provided. Cannot proceed with this model.")
+                logger.error("No API key provided. Cannot proceed with this model.")
                 return False
 
             # Set environment variable for the current process
             os.environ[key_name] = user_provided_key
-            rprint(f"[INFO] API key '{key_name}' set for the current session.")
+            logger.info(f"API key '{key_name}' set for the current session.")
             newly_acquired_keys[key_name] = True # Mark as newly acquired
 
             # Update .env file
@@ -513,21 +513,21 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
                 with open(ENV_PATH, 'w') as f:
                     f.writelines(new_lines)
 
-                rprint(f"[INFO] API key '{key_name}' saved to {ENV_PATH}.")
-                rprint("[bold yellow]SECURITY WARNING:[/bold yellow] The API key has been saved to your .env file. "
+                logger.info(f"API key '{key_name}' saved to {ENV_PATH}.")
+                logger.warning("SECURITY WARNING: The API key has been saved to your .env file. "
                        "Ensure this file is kept secure and is included in your .gitignore.")
 
             except IOError as e:
-                rprint(f"[ERROR] Failed to update .env file at {ENV_PATH}: {e}")
+                logger.error(f"Failed to update .env file at {ENV_PATH}: {e}")
                 # Continue since the key is set in the environment for this session
 
             return True
 
         except EOFError: # Handle non-interactive environments
-             rprint(f"[ERROR] Cannot prompt for API key '{key_name}' in a non-interactive environment.")
+             logger.error(f"Cannot prompt for API key '{key_name}' in a non-interactive environment.")
              return False
         except Exception as e:
-             rprint(f"[ERROR] An unexpected error occurred during API key acquisition: {e}")
+             logger.error(f"An unexpected error occurred during API key acquisition: {e}")
              return False
 
 
@@ -676,7 +676,7 @@ def llm_invoke(
                 return 0.5
         
         model_strengths_formatted = [(c['model'], f"{float(calc_strength(c)):.3f}") for c in candidate_models]
-        logger.info("Candidate models selected and ordered (with strength):", model_strengths_formatted)
+        logger.info("Candidate models selected and ordered (with strength): %s", model_strengths_formatted) # CORRECTED
         logger.info(f"Strength: {strength}, Temperature: {temperature}, Time: {time}")
         if use_batch_mode:
             logger.info("Batch mode enabled.")
@@ -686,11 +686,11 @@ def llm_invoke(
             # Only print input_json if it was actually provided (not when messages were used)
             if input_json is not None:
                 logger.info("Input JSON:")
-                logger.info(input_json)
+                logger.info(input_json) 
             else:
                  logger.info("Input: Using pre-formatted 'messages'.")
         except Exception:
-            logger.info("Input JSON/Messages (fallback print):") # Fallback for complex objects rich might fail on
+            logger.info("Input JSON/Messages (fallback print):") 
             logger.info(input_json if input_json is not None else "[Messages provided directly]")
 
 
@@ -1001,7 +1001,7 @@ def llm_invoke(
                                 logger.error(f"[ERROR] Failed to parse response into Pydantic model {output_pydantic.__name__} for item {i}: {parse_error}")
                                 # Use the string that was last attempted for parsing in the error message
                                 error_content = json_string_to_parse if json_string_to_parse is not None else raw_result
-                                logger.error("[ERROR] Content attempted for parsing:", repr(error_content)) # Use repr for clarity
+                                logger.error("[ERROR] Content attempted for parsing: %s", repr(error_content)) # CORRECTED (or use f-string)
                                 results.append(f"ERROR: Failed to parse Pydantic. Raw: {repr(raw_result)}")
                                 continue # Skip appending result below if parsing failed
 
@@ -1044,7 +1044,7 @@ def llm_invoke(
                     logger.info("[RESULT] Max Completion Tokens: Provider Default") # Indicate default limit
                     if final_thinking:
                         logger.info("[RESULT] Thinking Output:")
-                        logger.info(final_thinking) # Rich print should handle the thinking output format
+                        logger.info(final_thinking) 
 
                 # --- Print raw output before returning if verbose ---
                 if verbose:
@@ -1079,14 +1079,14 @@ def llm_invoke(
 
             except (openai.RateLimitError, openai.APITimeoutError, openai.APIConnectionError,
                     openai.APIStatusError, openai.BadRequestError, openai.InternalServerError,
-                    Exception) as e:
+                    Exception) as e: # Catch generic Exception last
                 last_exception = e
                 error_type = type(e).__name__
                 logger.error(f"[ERROR] Invocation failed for {model_name_litellm} ({error_type}): {e}. Trying next model.")
                 # Log more details in verbose mode
                 if verbose:
-                    import traceback
-                    logger.debug(f"Detailed exception traceback:", exc_info=True)
+                    # import traceback # Not needed if using exc_info=True
+                    logger.debug(f"Detailed exception traceback for {model_name_litellm}:", exc_info=True)
                 break # Break inner loop, try next model candidate
 
         # If the inner loop was broken (not by success), continue to the next candidate model
@@ -1120,7 +1120,7 @@ if __name__ == "__main__":
         logger.info("\nExample 1 Response:")
         logger.info(response)
     except Exception as e:
-        logger.error(f"\nExample 1 Failed: {e}")
+        logger.error(f"\nExample 1 Failed: {e}", exc_info=True)
 
     # Example 1b: Simple text generation (Strength 0.3)
     logger.info("\n--- Example 1b: Simple Text Generation (Strength 0.3) ---")
@@ -1135,7 +1135,7 @@ if __name__ == "__main__":
         logger.info("\nExample 1b Response:")
         logger.info(response)
     except Exception as e:
-        logger.error(f"\nExample 1b Failed: {e}")
+        logger.error(f"\nExample 1b Failed: {e}", exc_info=True)
 
     # Example 2: Structured output (requires a Pydantic model)
     logger.info("\n--- Example 2: Structured Output (Pydantic, Strength 0.8) ---")
@@ -1158,12 +1158,12 @@ if __name__ == "__main__":
         logger.info("\nExample 2 Response:")
         logger.info(response_structured)
         if isinstance(response_structured.get('result'), JokeStructure):
-             logger.info("\nPydantic object received successfully:", response_structured['result'].model_dump())
+             logger.info("\nPydantic object received successfully: %s", response_structured['result'].model_dump())
         else:
-             logger.info("\nResult was not the expected Pydantic object:", response_structured.get('result'))
+             logger.info("\nResult was not the expected Pydantic object: %s", response_structured.get('result'))
 
     except Exception as e:
-        logger.error(f"\nExample 2 Failed: {e}")
+        logger.error(f"\nExample 2 Failed: {e}", exc_info=True)
 
 
     # Example 3: Batch processing
@@ -1185,7 +1185,7 @@ if __name__ == "__main__":
         logger.info("\nExample 3 Response:")
         logger.info(response_batch)
     except Exception as e:
-        logger.error(f"\nExample 3 Failed: {e}")
+        logger.error(f"\nExample 3 Failed: {e}", exc_info=True)
 
     # Example 4: Using 'messages' input
     logger.info("\n--- Example 4: Using 'messages' input (Strength 0.5) ---")
@@ -1204,7 +1204,7 @@ if __name__ == "__main__":
         logger.info("\nExample 4 Response:")
         logger.info(response_messages)
     except Exception as e:
-        logger.error(f"\nExample 4 Failed: {e}")
+        logger.error(f"\nExample 4 Failed: {e}", exc_info=True)
 
     # Example 5: Requesting thinking time (e.g., for Anthropic)
     logger.info("\n--- Example 5: Requesting Thinking Time (Strength 1.0, Time 0.5) ---")
@@ -1223,7 +1223,7 @@ if __name__ == "__main__":
         logger.info("\nExample 5 Response:")
         logger.info(response_thinking)
     except Exception as e:
-        logger.error(f"\nExample 5 Failed: {e}")
+        logger.error(f"\nExample 5 Failed: {e}", exc_info=True)
 
     # Example 6: Pydantic Fallback Parsing (Strength 0.3)
     logger.info("\n--- Example 6: Pydantic Fallback Parsing (Strength 0.3) ---")

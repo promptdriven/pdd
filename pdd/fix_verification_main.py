@@ -88,6 +88,7 @@ def fix_verification_main(
     program_file: str,
     output_results: Optional[str],
     output_code: Optional[str],
+    output_program: Optional[str],
     loop: bool,
     verification_program: Optional[str],  # Only used if loop=True
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
@@ -105,6 +106,7 @@ def fix_verification_main(
         program_file (str): Path to the program to run for verification.
         output_results (Optional[str]): Path to save verification results log.
         output_code (Optional[str]): Path to save the verified code file.
+        output_program (Optional[str]): Path to save the verified program file.
         loop (bool): If True, perform iterative verification and fixing.
         verification_program (Optional[str]): Path to a verification program (required if loop=True).
         max_attempts (int): Max attempts for the loop.
@@ -161,12 +163,14 @@ def fix_verification_main(
     command_options: Dict[str, Optional[str]] = {
         "output_results": output_results,
         "output_code": output_code,
+        "output_program": output_program,
     }
 
     # Initial default values (in case we need the manual fallback)
     input_strings: Dict[str, str] = {}
     output_code_path: Optional[str] = output_code
     output_results_path: Optional[str] = output_results
+    output_program_path: Optional[str] = output_program
     language: str = ""
 
     try:
@@ -180,6 +184,7 @@ def fix_verification_main(
         )
         output_code_path = output_file_paths.get("output_code")
         output_results_path = output_file_paths.get("output_results")
+        output_program_path = output_file_paths.get("output_program")
 
         if verbose:
             rich_print("[dim]Resolved output paths via construct_paths.[/dim]")
@@ -211,6 +216,9 @@ def fix_verification_main(
             if output_results_path is None:
                 base, _ = os.path.splitext(program_file)
                 output_results_path = f"{base}_verify_results.log"
+            if output_program_path is None:
+                base_prog, ext_prog = os.path.splitext(program_file)
+                output_program_path = f"{base_prog}_verified{ext_prog}"
 
             # Best‑effort language guess
             if program_file.endswith(".py"):
@@ -331,7 +339,7 @@ def fix_verification_main(
             model_name = fix_results['model_name']
 
             # Build results log content for single pass
-            results_log_content = f"PDD Verify Results (Single Pass)\n"
+            results_log_content = "PDD Verify Results (Single Pass)\n"
             results_log_content += f"Timestamp: {os.path.getmtime(prompt_file)}\n" # Use prompt timestamp as reference
             results_log_content += f"Prompt File: {prompt_file}\n"
             results_log_content += f"Code File: {code_file}\n"
@@ -361,6 +369,7 @@ def fix_verification_main(
     # --- Output File Writing ---
     saved_code_path: Optional[str] = None
     saved_results_path: Optional[str] = None
+    saved_program_path: Optional[str] = None
 
     if success and output_code_path:
         try:
@@ -371,6 +380,16 @@ def fix_verification_main(
                 rich_print(f"Successfully verified code saved to: [green]{output_code_path}[/green]")
         except IOError as e:
             rich_print(f"[bold red]Error:[/bold red] Failed to write verified code file '{output_code_path}': {e}")
+
+    if success and output_program_path:
+        try:
+            with open(output_program_path, "w") as f:
+                f.write(final_program)
+            saved_program_path = output_program_path
+            if not quiet:
+                rich_print(f"Successfully verified program saved to: [green]{output_program_path}[/green]")
+        except IOError as e:
+            rich_print(f"[bold red]Error:[/bold red] Failed to write verified program file '{output_program_path}': {e}")
 
     # Write results log (only for single pass, loop writes its own)
     if not loop and output_results_path:
@@ -398,6 +417,7 @@ def fix_verification_main(
             f"Total Cost: ${total_cost:.6f}\n"
             f"Model Used: {model_name}\n"
             f"Verified Code Saved: {saved_code_path or 'N/A'}\n"
+            f"Verified Program Saved: {saved_program_path or 'N/A'}\n"
             f"Results Log Saved: {saved_results_path or 'N/A'}",
             title=title,
             border_style="green" if success else "red"

@@ -122,7 +122,7 @@ def fix_verification_errors(
         model_name = verification_response.get('model_name', model_name)
 
         if verbose:
-            rprint(f"[cyan]Verification LLM call complete.[/cyan]")
+            rprint("[cyan]Verification LLM call complete.[/cyan]")
             rprint(f"  [dim]Model Used:[/dim] {verification_response.get('model_name', 'N/A')}")
             rprint(f"  [dim]Cost:[/dim] ${verification_response.get('cost', 0.0):.6f}")
 
@@ -209,7 +209,7 @@ def fix_verification_errors(
                 "verification_issues_count": 0,
             }
     else: # Not VerificationOutput and not a successfully parsed string
-        rprint(f"[bold red]Error:[/bold red] Verification LLM call did not return the expected structured output (e.g., parsing failed).")
+        rprint("[bold red]Error:[/bold red] Verification LLM call did not return the expected structured output (e.g., parsing failed).")
         rprint(f"  [dim]Expected type:[/dim] {VerificationOutput} or str")
         rprint(f"  [dim]Received type:[/dim] {type(verification_result_obj)}")
         content_str = str(verification_result_obj)
@@ -235,7 +235,7 @@ def fix_verification_errors(
             "program": program,
             "prompt": prompt,
             "code": code,
-            "output": output,
+            "output_logs": output,
             "issues": verification_details,
         }
 
