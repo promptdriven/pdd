@@ -1372,7 +1372,7 @@ def test_construct_paths_verify_command_default_and_options(tmpdir):
     code_file = tmp_path / "verify_code.py"
     code_file.write_text("print('hello')")
     program_file = tmp_path / "run_verify.py" # The executable program
-    program_file.write_text("#!/usr/bin/env python\\nprint('program output')")
+    program_file.write_text("#!/usr/bin/env python\nprint('program output')")
 
     input_file_paths = {
         "prompt_file": str(prompt_file),
@@ -1426,15 +1426,13 @@ def test_construct_paths_verify_command_default_and_options(tmpdir):
 
         # Check that generate_output_paths was called with output_program in its command_options
         # The actual call to generate_output_paths inside construct_paths will have its
-        # output_locations (second arg) already populated with command_options.
-        args, kwargs = mock_gen_paths_user.call_args
-        # args[0] is command ('verify')
-        # args[1] is output_locations dict passed to generate_output_paths
-        # args[2] is basename_arg
-        # args[3] is language_arg
-        # args[4] is file_extension_arg
-        # args[5] is input_file_paths_arg
-        assert args[1].get("output_program") == user_output_program_path
+        # output_locations (from command_options) passed as a keyword argument.
+        _args, called_kwargs = mock_gen_paths_user.call_args
+        
+        # Ensure 'output_locations' was passed as a keyword argument
+        assert "output_locations" in called_kwargs
+        # Check the content of the 'output_locations' dictionary
+        assert called_kwargs['output_locations'].get("output_program") == user_output_program_path
         
         assert output_paths_user == mock_gen_paths_return_user_program
         assert output_paths_user["output_program"] == user_output_program_path
