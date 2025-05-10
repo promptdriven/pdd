@@ -6,33 +6,64 @@ import pandas as pd
 import litellm
 import logging # ADDED FOR DETAILED LOGGING
 
-# --- Configure Detailed Logging for LiteLLM --- MODIFIED SECTION
-PROJECT_ROOT_FOR_LOG = '/Users/gregtanaka/Documents/pdd_cloud/pdd' # Explicit project root
-LOG_FILE_PATH = os.path.join(PROJECT_ROOT_FOR_LOG, 'litellm_debug.log')
+# --- Configure Standard Python Logging ---
+logger = logging.getLogger("pdd.llm_invoke")
 
-# Get the litellm logger specifically
+# Environment variable to control log level
+PDD_LOG_LEVEL = os.getenv("PDD_LOG_LEVEL", "INFO")
+PRODUCTION_MODE = os.getenv("PDD_ENVIRONMENT") == "production"
+
+# Set default level based on environment
+if PRODUCTION_MODE:
+    logger.setLevel(logging.WARNING)
+else:
+    logger.setLevel(getattr(logging, PDD_LOG_LEVEL, logging.INFO))
+
+# Configure LiteLLM logger separately
 litellm_logger = logging.getLogger("litellm")
-litellm_logger.setLevel(logging.DEBUG) # Set its level to DEBUG
+litellm_log_level = os.getenv("LITELLM_LOG_LEVEL", "WARNING" if PRODUCTION_MODE else "INFO")
+litellm_logger.setLevel(getattr(logging, litellm_log_level, logging.WARNING))
 
-# Create a file handler
-file_handler = logging.FileHandler(LOG_FILE_PATH, mode='w')
-file_handler.setLevel(logging.DEBUG)
+# Add a console handler if none exists
+if not logger.handlers:
+    console_handler = logging.StreamHandler()
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+    
+    # Only add handler to litellm logger if it doesn't have any
+    if not litellm_logger.handlers:
+        litellm_logger.addHandler(console_handler)
 
-# Create a formatter and add it to the handler
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-file_handler.setFormatter(formatter)
+# Function to set up file logging if needed
+def setup_file_logging(log_file_path=None):
+    """Configure rotating file handler for logging"""
+    if not log_file_path:
+        return
+        
+    try:
+        from logging.handlers import RotatingFileHandler
+        file_handler = RotatingFileHandler(
+            log_file_path, maxBytes=10*1024*1024, backupCount=5
+        )
+        file_handler.setFormatter(logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        ))
+        logger.addHandler(file_handler)
+        litellm_logger.addHandler(file_handler)
+        logger.info(f"File logging configured to: {log_file_path}")
+    except Exception as e:
+        logger.warning(f"Failed to set up file logging: {e}")
 
-# Add the handler to the litellm logger
-# Check if handlers are already present to avoid duplication if module is reloaded
-if not litellm_logger.handlers:
-    litellm_logger.addHandler(file_handler)
-
-# Also ensure the root logger has a basic handler if nothing else is configured
-# This can help catch messages if litellm logs to root or other unnamed loggers
-if not logging.getLogger().handlers: # Check root logger
-    logging.basicConfig(level=logging.DEBUG) # Default to console for other logs
-# --- End Detailed Logging Configuration ---
-
+# Function to set verbose logging
+def set_verbose_logging(verbose=False):
+    """Set verbose logging based on flag or environment variable"""
+    if verbose or os.getenv("PDD_VERBOSE_LOGGING") == "1":
+        logger.setLevel(logging.DEBUG)
+        litellm_logger.setLevel(logging.DEBUG)
+        logger.debug("Verbose logging enabled")
+    
+# --- End Logging Configuration ---
 
 import json
 from rich import print as rprint
@@ -63,7 +94,7 @@ if PDD_PATH_ENV:
     _path_from_env = Path(PDD_PATH_ENV)
     if _path_from_env.is_dir():
         PROJECT_ROOT = _path_from_env.resolve()
-        # print(f"[DEBUG] Using PROJECT_ROOT from PDD_PATH: {PROJECT_ROOT}") # Optional debug
+        logger.debug(f"Using PROJECT_ROOT from PDD_PATH: {PROJECT_ROOT}")
     else:
         warnings.warn(f"PDD_PATH environment variable ('{PDD_PATH_ENV}') is set but not a valid directory. Attempting auto-detection.")
 
@@ -81,7 +112,7 @@ if PROJECT_ROOT is None: # If PDD_PATH wasn't set or was invalid
 
             if has_git or has_pyproject or has_data or has_dotenv:
                 PROJECT_ROOT = current_dir
-                # print(f"[DEBUG] Determined PROJECT_ROOT by marker search: {PROJECT_ROOT}") # Optional debug
+                logger.debug(f"Determined PROJECT_ROOT by marker search: {PROJECT_ROOT}")
                 break
 
             parent_dir = current_dir.parent
@@ -107,21 +138,20 @@ user_model_csv_path = user_pdd_dir / "llm_model.csv"
 
 if user_model_csv_path.is_file():
     LLM_MODEL_CSV_PATH = user_model_csv_path
-    print(f"[INFO] Using user-specific LLM model CSV: {LLM_MODEL_CSV_PATH}")
+    logger.info(f"Using user-specific LLM model CSV: {LLM_MODEL_CSV_PATH}")
 else:
     LLM_MODEL_CSV_PATH = PROJECT_ROOT / "data" / "llm_model.csv"
-    print(f"[INFO] Using project LLM model CSV: {LLM_MODEL_CSV_PATH}")
+    logger.info(f"Using project LLM model CSV: {LLM_MODEL_CSV_PATH}")
 # ---------------------------------
 
 # Load environment variables from .env file
-# print(f"[DEBUG] Attempting to load .env from: {ENV_PATH}") # Optional debug
+logger.debug(f"Attempting to load .env from: {ENV_PATH}")
 if ENV_PATH.exists():
     load_dotenv(dotenv_path=ENV_PATH)
-    # print(f"[DEBUG] Loaded .env file from: {ENV_PATH}") # Optional debug
+    logger.debug(f"Loaded .env file from: {ENV_PATH}")
 else:
-    # Reduce verbosity if .env is optional or often missing
-    # warnings.warn(f".env file not found at {ENV_PATH}. API keys might be missing.")
-    pass # Silently proceed if .env is optional
+    # Silently proceed if .env is optional
+    logger.debug(f".env file not found at {ENV_PATH}. API keys might need to be provided manually.")
 
 # Default model if PDD_MODEL_DEFAULT is not set
 # Use the imported constant as the default
@@ -154,7 +184,7 @@ if GCS_BUCKET_NAME and GCS_HMAC_ACCESS_KEY_ID and GCS_HMAC_SECRET_ACCESS_KEY:
             s3_region_name=GCS_REGION_NAME, # Pass region explicitly to cache
             s3_endpoint_url=GCS_ENDPOINT_URL,
         )
-        print(f"[INFO] LiteLLM cache configured for GCS bucket (S3 compatible): {GCS_BUCKET_NAME}")
+        logger.info(f"LiteLLM cache configured for GCS bucket (S3 compatible): {GCS_BUCKET_NAME}")
         cache_configured = True
 
     except Exception as e:
@@ -183,7 +213,7 @@ if not cache_configured:
         # Try SQLite-based cache as a fallback
         sqlite_cache_path = PROJECT_ROOT / "litellm_cache.sqlite"
         litellm.cache = litellm.Cache(type="sqlite", cache_path=str(sqlite_cache_path))
-        print(f"[INFO] LiteLLM SQLite cache configured at {sqlite_cache_path}")
+        logger.info(f"LiteLLM SQLite cache configured at {sqlite_cache_path}")
         cache_configured = True
     except Exception as e2:
         warnings.warn(f"Failed to configure LiteLLM SQLite cache: {e2}. Caching is disabled.")
@@ -227,7 +257,7 @@ def _litellm_success_callback(
         # Attempt 2: If response object failed (e.g., missing provider in model name),
         # try again using explicit model from kwargs and tokens from usage.
         # This is often needed for batch completion items.
-        print(f"[DEBUG] Attempting cost calculation with fallback method: {e1}")
+        logger.debug(f"Attempting cost calculation with fallback method: {e1}")
         try:
             model_name = kwargs.get("model") # Get original model name from input kwargs
             if model_name and usage:
@@ -248,7 +278,7 @@ def _litellm_success_callback(
             # Optional: Log secondary error e2 if needed
             # print(f"[Callback WARN] Failed to calculate cost with fallback method: {e2}")
             calculated_cost = 0.0 # Default to 0 on any error
-            print(f"[DEBUG] Cost calculation failed with fallback method: {e2}")
+            logger.debug(f"Cost calculation failed with fallback method: {e2}")
 
     _LAST_CALLBACK_DATA["input_tokens"] = input_tokens
     _LAST_CALLBACK_DATA["output_tokens"] = output_tokens
@@ -403,16 +433,16 @@ def _select_model_candidates(
 
     # --- DEBUGGING PRINT ---
     if os.getenv("PDD_DEBUG_SELECTOR"): # Add env var check for debug prints
-        print("\n--- DEBUG: _select_model_candidates ---")
-        print(f"Strength: {strength}, Base Model: {base_model_name}")
-        print(f"Metric: {target_metric_value}")
-        print("Available DF (Sorted by metric):")
+        logger.debug("\n--- DEBUG: _select_model_candidates ---")
+        logger.debug(f"Strength: {strength}, Base Model: {base_model_name}")
+        logger.debug(f"Metric: {target_metric_value}")
+        logger.debug("Available DF (Sorted by metric):")
         # Select columns relevant to the sorting metric
         sort_cols = ['model', 'avg_cost', 'coding_arena_elo', 'sort_metric']
-        print(available_df.sort_values(by='sort_metric')[sort_cols])
-        print("Final Candidates List (Model Names):")
-        print([c['model'] for c in candidates])
-        print("---------------------------------------\n")
+        logger.debug(available_df.sort_values(by='sort_metric')[sort_cols])
+        logger.debug("Final Candidates List (Model Names):")
+        logger.debug([c['model'] for c in candidates])
+        logger.debug("---------------------------------------\n")
     # --- END DEBUGGING PRINT ---
 
     return candidates
@@ -563,24 +593,27 @@ def llm_invoke(
         RuntimeError: If all candidate models fail.
         openai.*Error: If LiteLLM encounters API errors after retries.
     """
-    if verbose: # Print args early if verbose
-        rprint("[DEBUG llm_invoke start] Arguments received:")
-        rprint(f"  prompt: {'provided' if prompt else 'None'}")
-        rprint(f"  input_json: {'provided' if input_json is not None else 'None'}")
-        rprint(f"  strength: {strength}")
-        rprint(f"  temperature: {temperature}")
-        rprint(f"  verbose: {verbose}")
-        rprint(f"  output_pydantic: {output_pydantic.__name__ if output_pydantic else 'None'}")
-        rprint(f"  time: {time}")
-        rprint(f"  use_batch_mode: {use_batch_mode}")
-        rprint(f"  messages: {'provided' if messages else 'None'}")
+    # Set verbose logging if requested
+    set_verbose_logging(verbose)
+    
+    if verbose:
+        logger.debug("llm_invoke start - Arguments received:")
+        logger.debug(f"  prompt: {'provided' if prompt else 'None'}")
+        logger.debug(f"  input_json: {'provided' if input_json is not None else 'None'}")
+        logger.debug(f"  strength: {strength}")
+        logger.debug(f"  temperature: {temperature}")
+        logger.debug(f"  verbose: {verbose}")
+        logger.debug(f"  output_pydantic: {output_pydantic.__name__ if output_pydantic else 'None'}")
+        logger.debug(f"  time: {time}")
+        logger.debug(f"  use_batch_mode: {use_batch_mode}")
+        logger.debug(f"  messages: {'provided' if messages else 'None'}")
 
     # --- 1. Load Environment & Validate Inputs ---
     # .env loading happens at module level
 
     if messages:
         if verbose:
-            rprint("[INFO] Using provided 'messages' input.")
+            logger.info("Using provided 'messages' input.")
         # Basic validation of messages format
         if use_batch_mode:
             if not isinstance(messages, list) or not all(isinstance(m_list, list) for m_list in messages):
@@ -610,7 +643,7 @@ def llm_invoke(
         model_df = _load_model_data(LLM_MODEL_CSV_PATH)
         candidate_models = _select_model_candidates(strength, DEFAULT_BASE_MODEL, model_df)
     except (FileNotFoundError, ValueError, RuntimeError) as e:
-        rprint(f"[ERROR] Failed during model loading or selection: {e}")
+        logger.error(f"Failed during model loading or selection: {e}")
         raise
 
     if verbose:
@@ -643,22 +676,22 @@ def llm_invoke(
                 return 0.5
         
         model_strengths_formatted = [(c['model'], f"{float(calc_strength(c)):.3f}") for c in candidate_models]
-        rprint("[INFO] Candidate models selected and ordered (with strength):", model_strengths_formatted)
-        rprint(f"[INFO] Strength: {strength}, Temperature: {temperature}, Time: {time}")
+        logger.info("Candidate models selected and ordered (with strength):", model_strengths_formatted)
+        logger.info(f"Strength: {strength}, Temperature: {temperature}, Time: {time}")
         if use_batch_mode:
-            rprint("[INFO] Batch mode enabled.")
+            logger.info("Batch mode enabled.")
         if output_pydantic:
-            rprint(f"[INFO] Pydantic output requested: {output_pydantic.__name__}")
+            logger.info(f"Pydantic output requested: {output_pydantic.__name__}")
         try:
             # Only print input_json if it was actually provided (not when messages were used)
             if input_json is not None:
-                rprint("[INFO] Input JSON:")
-                rprint(input_json)
+                logger.info("Input JSON:")
+                logger.info(input_json)
             else:
-                 rprint("[INFO] Input: Using pre-formatted 'messages'.")
+                 logger.info("Input: Using pre-formatted 'messages'.")
         except Exception:
-            print("[INFO] Input JSON/Messages (fallback print):") # Fallback for complex objects rich might fail on
-            print(input_json if input_json is not None else "[Messages provided directly]")
+            logger.info("Input JSON/Messages (fallback print):") # Fallback for complex objects rich might fail on
+            logger.info(input_json if input_json is not None else "[Messages provided directly]")
 
 
     # --- 3. Iterate Through Candidates and Invoke LLM ---
@@ -671,7 +704,7 @@ def llm_invoke(
         provider = model_info.get('provider', '').lower()
 
         if verbose:
-            rprint(f"\n[ATTEMPT] Trying model: {model_name_litellm} (Provider: {provider})")
+            logger.info(f"\n[ATTEMPT] Trying model: {model_name_litellm} (Provider: {provider})")
 
         retry_with_same_model = True
         while retry_with_same_model:
@@ -681,7 +714,7 @@ def llm_invoke(
             if not _ensure_api_key(model_info, newly_acquired_keys, verbose):
                 # Problem getting key, break inner loop, try next model candidate
                 if verbose:
-                    rprint(f"[SKIP] Skipping {model_name_litellm} due to API key/credentials issue after prompt.")
+                    logger.info(f"[SKIP] Skipping {model_name_litellm} due to API key/credentials issue after prompt.")
                 break # Breaks the 'while retry_with_same_model' loop
 
             # --- 5. Prepare LiteLLM Arguments ---
@@ -713,30 +746,30 @@ def llm_invoke(
                         litellm_kwargs["vertex_project"] = vertex_project_env
                         litellm_kwargs["vertex_location"] = vertex_location_env
                         if verbose:
-                            rprint(f"[INFO] For Vertex AI: using vertex_credentials from '{credentials_file_path}', project '{vertex_project_env}', location '{vertex_location_env}'.")
+                            logger.info(f"[INFO] For Vertex AI: using vertex_credentials from '{credentials_file_path}', project '{vertex_project_env}', location '{vertex_location_env}'.")
                     except FileNotFoundError:
                         if verbose:
-                            rprint(f"[ERROR] Vertex credentials file not found at path specified by VERTEX_CREDENTIALS env var: '{credentials_file_path}'. LiteLLM may try ADC or fail.")
+                            logger.error(f"[ERROR] Vertex credentials file not found at path specified by VERTEX_CREDENTIALS env var: '{credentials_file_path}'. LiteLLM may try ADC or fail.")
                     except json.JSONDecodeError:
                         if verbose:
-                            rprint(f"[ERROR] Failed to decode JSON from Vertex credentials file: '{credentials_file_path}'. Check file content. LiteLLM may try ADC or fail.")
+                            logger.error(f"[ERROR] Failed to decode JSON from Vertex credentials file: '{credentials_file_path}'. Check file content. LiteLLM may try ADC or fail.")
                     except Exception as e:
                         if verbose:
-                            rprint(f"[ERROR] Failed to load or process Vertex credentials from '{credentials_file_path}': {e}. LiteLLM may try ADC or fail.")
+                            logger.error(f"[ERROR] Failed to load or process Vertex credentials from '{credentials_file_path}': {e}. LiteLLM may try ADC or fail.")
                 else:
                     if verbose:
-                        rprint(f"[WARN] For Vertex AI (using '{api_key_name_from_csv}'): One or more required environment variables (VERTEX_CREDENTIALS, VERTEX_PROJECT, VERTEX_LOCATION) are missing.")
-                        if not credentials_file_path: rprint(f"  Reason: VERTEX_CREDENTIALS (path to JSON file) env var not set or empty.")
-                        if not vertex_project_env: rprint(f"  Reason: VERTEX_PROJECT env var not set or empty.")
-                        if not vertex_location_env: rprint(f"  Reason: VERTEX_LOCATION env var not set or empty.")
-                        rprint(f"  LiteLLM may attempt to use Application Default Credentials or the call may fail.")
+                        logger.warning(f"[WARN] For Vertex AI (using '{api_key_name_from_csv}'): One or more required environment variables (VERTEX_CREDENTIALS, VERTEX_PROJECT, VERTEX_LOCATION) are missing.")
+                        if not credentials_file_path: logger.warning(f"  Reason: VERTEX_CREDENTIALS (path to JSON file) env var not set or empty.")
+                        if not vertex_project_env: logger.warning(f"  Reason: VERTEX_PROJECT env var not set or empty.")
+                        if not vertex_location_env: logger.warning(f"  Reason: VERTEX_LOCATION env var not set or empty.")
+                        logger.warning(f"  LiteLLM may attempt to use Application Default Credentials or the call may fail.")
 
             elif api_key_name_from_csv: # For other api_key_names specified in CSV (e.g., OPENAI_API_KEY, or a direct VERTEX_AI_API_KEY string)
                 key_value = os.getenv(api_key_name_from_csv)
                 if key_value:
                     litellm_kwargs["api_key"] = key_value
                     if verbose:
-                        rprint(f"[INFO] Explicitly passing API key from env var '{api_key_name_from_csv}' as 'api_key' parameter to LiteLLM.")
+                        logger.info(f"[INFO] Explicitly passing API key from env var '{api_key_name_from_csv}' as 'api_key' parameter to LiteLLM.")
                     
                     # If this model is Vertex AI AND uses a direct API key string (not VERTEX_CREDENTIALS from CSV),
                     # also pass project and location from env vars.
@@ -747,14 +780,14 @@ def llm_invoke(
                             litellm_kwargs["vertex_project"] = vertex_project_env
                             litellm_kwargs["vertex_location"] = vertex_location_env
                             if verbose:
-                                rprint(f"[INFO] For Vertex AI model (using direct API key '{api_key_name_from_csv}'), also passing vertex_project='{vertex_project_env}' and vertex_location='{vertex_location_env}' from env vars.")
+                                logger.info(f"[INFO] For Vertex AI model (using direct API key '{api_key_name_from_csv}'), also passing vertex_project='{vertex_project_env}' and vertex_location='{vertex_location_env}' from env vars.")
                         elif verbose:
-                             rprint(f"[WARN] For Vertex AI model (using direct API key '{api_key_name_from_csv}'), VERTEX_PROJECT or VERTEX_LOCATION env vars not set. This might be required by LiteLLM.")
+                             logger.warning(f"[WARN] For Vertex AI model (using direct API key '{api_key_name_from_csv}'), VERTEX_PROJECT or VERTEX_LOCATION env vars not set. This might be required by LiteLLM.")
                 elif verbose: # api_key_name_from_csv was in CSV, but corresponding env var was not set/empty
-                    rprint(f"[WARN] API key name '{api_key_name_from_csv}' found in CSV, but the environment variable '{api_key_name_from_csv}' is not set or empty. LiteLLM will use default authentication if applicable (e.g., other standard env vars or ADC).")
+                    logger.warning(f"[WARN] API key name '{api_key_name_from_csv}' found in CSV, but the environment variable '{api_key_name_from_csv}' is not set or empty. LiteLLM will use default authentication if applicable (e.g., other standard env vars or ADC).")
             
             elif verbose: # No api_key_name_from_csv in CSV for this model
-                rprint(f"[INFO] No API key name specified in CSV for model '{model_name_litellm}'. LiteLLM will use its default authentication mechanisms (e.g., standard provider env vars or ADC for Vertex AI).")
+                logger.info(f"[INFO] No API key name specified in CSV for model '{model_name_litellm}'. LiteLLM will use its default authentication mechanisms (e.g., standard provider env vars or ADC for Vertex AI).")
 
             # Add api_base if present in CSV
             api_base = model_info.get('base_url')
@@ -772,7 +805,7 @@ def llm_invoke(
 
                 if supports_structured:
                     if verbose:
-                        rprint(f"[INFO] Requesting structured output (Pydantic: {output_pydantic.__name__}) for {model_name_litellm}")
+                        logger.info(f"[INFO] Requesting structured output (Pydantic: {output_pydantic.__name__}) for {model_name_litellm}")
                     # Pass the Pydantic model directly if supported, else use json_object
                     # LiteLLM handles passing Pydantic models for supported providers
                     litellm_kwargs["response_format"] = output_pydantic
@@ -782,7 +815,7 @@ def llm_invoke(
                     # litellm.enable_json_schema_validation = True # Enable globally if needed
                 else:
                     if verbose:
-                        rprint(f"[WARN] Model {model_name_litellm} does not support structured output via CSV flag. Output might not be valid {output_pydantic.__name__}.")
+                        logger.warning(f"[WARN] Model {model_name_litellm} does not support structured output via CSV flag. Output might not be valid {output_pydantic.__name__}.")
                     # Proceed without forcing JSON mode, parsing will be attempted later
 
             # --- NEW REASONING LOGIC ---
@@ -799,15 +832,15 @@ def llm_invoke(
                             if provider == 'anthropic': # Check provider column instead of model prefix
                                 litellm_kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
                                 if verbose:
-                                    rprint(f"[INFO] Requesting Anthropic thinking (budget type) with budget: {budget} tokens for {model_name_litellm}")
+                                    logger.info(f"[INFO] Requesting Anthropic thinking (budget type) with budget: {budget} tokens for {model_name_litellm}")
                             else:
                                 # If other providers adopt a budget param recognized by LiteLLM, add here
                                 if verbose:
-                                    rprint(f"[WARN] Reasoning type is 'budget' for {model_name_litellm}, but no specific LiteLLM budget parameter known for this provider. Parameter not sent.")
+                                    logger.warning(f"[WARN] Reasoning type is 'budget' for {model_name_litellm}, but no specific LiteLLM budget parameter known for this provider. Parameter not sent.")
                         elif verbose:
-                            rprint(f"[INFO] Calculated reasoning budget is 0 for {model_name_litellm}, skipping reasoning parameter.")
+                            logger.info(f"[INFO] Calculated reasoning budget is 0 for {model_name_litellm}, skipping reasoning parameter.")
                     elif verbose:
-                        rprint(f"[WARN] Reasoning type is 'budget' for {model_name_litellm}, but 'max_reasoning_tokens' is missing or zero in CSV. Reasoning parameter not sent.")
+                        logger.warning(f"[WARN] Reasoning type is 'budget' for {model_name_litellm}, but 'max_reasoning_tokens' is missing or zero in CSV. Reasoning parameter not sent.")
 
                 elif reasoning_type == 'effort':
                     effort = "low"
@@ -818,15 +851,15 @@ def llm_invoke(
                     # Use the common 'reasoning_effort' param LiteLLM provides
                     litellm_kwargs["reasoning_effort"] = effort
                     if verbose:
-                        rprint(f"[INFO] Requesting reasoning_effort='{effort}' (effort type) for {model_name_litellm} based on time={time}")
+                        logger.info(f"[INFO] Requesting reasoning_effort='{effort}' (effort type) for {model_name_litellm} based on time={time}")
 
                 elif reasoning_type == 'none':
                     if verbose:
-                        rprint(f"[INFO] Model {model_name_litellm} has reasoning_type='none'. No reasoning parameter sent.")
+                        logger.info(f"[INFO] Model {model_name_litellm} has reasoning_type='none'. No reasoning parameter sent.")
 
                 else: # Unknown reasoning_type in CSV
                      if verbose:
-                         rprint(f"[WARN] Unknown reasoning_type '{reasoning_type}' for model {model_name_litellm} in CSV. No reasoning parameter sent.")
+                         logger.warning(f"[WARN] Unknown reasoning_type '{reasoning_type}' for model {model_name_litellm} in CSV. No reasoning parameter sent.")
 
             # --- END NEW REASONING LOGIC ---
 
@@ -837,35 +870,34 @@ def llm_invoke(
             try:
                 start_time = time_module.time()
 
-                # --- ADDED CACHE STATUS DEBUGGING (NOW UNCONDITIONAL) ---
-                print(f"[DEBUG llm_invoke] Cache Check: litellm.cache is None: {litellm.cache is None}") # MODIFIED: unconditional print
+                # Log cache status with proper logging
+                logger.debug(f"Cache Check: litellm.cache is None: {litellm.cache is None}")
                 if litellm.cache is not None:
-                    print(f"[DEBUG llm_invoke] litellm.cache type: {type(litellm.cache)}, ID: {id(litellm.cache)}") # MODIFIED: unconditional print
-                # --- END ADDED CACHE STATUS DEBUGGING ---
+                    logger.debug(f"litellm.cache type: {type(litellm.cache)}, ID: {id(litellm.cache)}")
 
-                # <<< EXPLICITLY ENABLE CACHING >>>
                 # Only add if litellm.cache is configured
                 if litellm.cache is not None:
                     litellm_kwargs["caching"] = True
-                else: # MODIFIED: unconditional print for this path too
-                    print(f"[DEBUG llm_invoke] NOT ENABLING CACHING: litellm.cache is None at call time.")
+                    logger.debug("Caching enabled for this request")
+                else:
+                    logger.debug("NOT ENABLING CACHING: litellm.cache is None at call time")
 
 
                 if use_batch_mode:
                     if verbose:
-                        rprint(f"[INFO] Calling litellm.batch_completion for {model_name_litellm}...")
+                        logger.info(f"[INFO] Calling litellm.batch_completion for {model_name_litellm}...")
                     response = litellm.batch_completion(**litellm_kwargs)
 
 
                 else:
                     if verbose:
-                        rprint(f"[INFO] Calling litellm.completion for {model_name_litellm}...")
+                        logger.info(f"[INFO] Calling litellm.completion for {model_name_litellm}...")
                     response = litellm.completion(**litellm_kwargs)
 
                 end_time = time_module.time()
 
                 if verbose:
-                    rprint(f"[SUCCESS] Invocation successful for {model_name_litellm} (took {end_time - start_time:.2f}s)")
+                    logger.info(f"[SUCCESS] Invocation successful for {model_name_litellm} (took {end_time - start_time:.2f}s)")
 
                 # --- 7. Process Response ---
                 results = []
@@ -883,17 +915,17 @@ def llm_invoke(
                         if hasattr(resp_item, '_hidden_params') and resp_item._hidden_params and 'thinking' in resp_item._hidden_params:
                              thinking = resp_item._hidden_params['thinking']
                              if verbose:
-                                 rprint("[DEBUG] Extracted thinking output from response._hidden_params['thinking']")
+                                 logger.debug("[DEBUG] Extracted thinking output from response._hidden_params['thinking']")
                         # Attempt 2: Fallback to reasoning_content in message
                         # Use .get() for safer access
                         elif hasattr(resp_item, 'choices') and resp_item.choices and hasattr(resp_item.choices[0], 'message') and hasattr(resp_item.choices[0].message, 'get') and resp_item.choices[0].message.get('reasoning_content'):
                             thinking = resp_item.choices[0].message.get('reasoning_content')
                             if verbose:
-                                rprint("[DEBUG] Extracted thinking output from response.choices[0].message.get('reasoning_content')")
+                                logger.debug("[DEBUG] Extracted thinking output from response.choices[0].message.get('reasoning_content')")
 
                     except (AttributeError, IndexError, KeyError, TypeError):
                         if verbose:
-                            rprint("[DEBUG] Failed to extract thinking output from known locations.")
+                            logger.debug("[DEBUG] Failed to extract thinking output from known locations.")
                         pass # Ignore if structure doesn't match or errors occur
                     thinking_outputs.append(thinking)
 
@@ -909,13 +941,13 @@ def llm_invoke(
                                 if isinstance(raw_result, output_pydantic):
                                     parsed_result = raw_result
                                     if verbose:
-                                        rprint("[DEBUG] Pydantic object received directly from LiteLLM.")
+                                        logger.debug("[DEBUG] Pydantic object received directly from LiteLLM.")
 
                                 # Attempt 2: Check if raw_result is dict-like and validate
                                 elif isinstance(raw_result, dict):
                                     parsed_result = output_pydantic.model_validate(raw_result)
                                     if verbose:
-                                        rprint("[DEBUG] Validated dictionary-like object directly.")
+                                        logger.debug("[DEBUG] Validated dictionary-like object directly.")
 
                                 # Attempt 3: Process as string (if not already parsed/validated)
                                 elif isinstance(raw_result, str):
@@ -929,7 +961,7 @@ def llm_invoke(
                                             # Basic check if it looks like JSON
                                             if potential_json.strip().startswith('{') and potential_json.strip().endswith('}'):
                                                 if verbose:
-                                                    rprint(f"[DEBUG] Attempting to parse extracted JSON block: '{potential_json}'")
+                                                    logger.debug(f"[DEBUG] Attempting to parse extracted JSON block: '{potential_json}'")
                                                 parsed_result = output_pydantic.model_validate_json(potential_json)
                                             else:
                                                 # If block extraction fails, try cleaning markdown next
@@ -939,7 +971,7 @@ def llm_invoke(
                                             raise ValueError("Could not find enclosing {}")
                                     except (json.JSONDecodeError, ValidationError, ValueError) as extraction_error:
                                         if verbose:
-                                            rprint(f"[DEBUG] JSON block extraction/validation failed ('{extraction_error}'). Trying markdown cleaning.")
+                                            logger.debug(f"[DEBUG] JSON block extraction/validation failed ('{extraction_error}'). Trying markdown cleaning.")
                                         # Fallback: Clean markdown fences and retry JSON validation
                                         cleaned_result_str = raw_result.strip()
                                         if cleaned_result_str.startswith("```json"):
@@ -952,7 +984,7 @@ def llm_invoke(
                                         # Check again if it looks like JSON before parsing
                                         if cleaned_result_str.startswith('{') and cleaned_result_str.endswith('}'):
                                             if verbose:
-                                                rprint(f"[DEBUG] Attempting parse after cleaning markdown fences. Cleaned string: '{cleaned_result_str}'")
+                                                logger.debug(f"[DEBUG] Attempting parse after cleaning markdown fences. Cleaned string: '{cleaned_result_str}'")
                                             json_string_to_parse = cleaned_result_str # Update string for error reporting
                                             parsed_result = output_pydantic.model_validate_json(json_string_to_parse)
                                         else:
@@ -966,10 +998,10 @@ def llm_invoke(
                                     raise TypeError(f"Raw result type {type(raw_result)} or content could not be validated/parsed against {output_pydantic.__name__}.")
 
                             except (ValidationError, json.JSONDecodeError, TypeError, ValueError) as parse_error:
-                                rprint(f"[ERROR] Failed to parse response into Pydantic model {output_pydantic.__name__} for item {i}: {parse_error}")
+                                logger.error(f"[ERROR] Failed to parse response into Pydantic model {output_pydantic.__name__} for item {i}: {parse_error}")
                                 # Use the string that was last attempted for parsing in the error message
                                 error_content = json_string_to_parse if json_string_to_parse is not None else raw_result
-                                rprint("[ERROR] Content attempted for parsing:", repr(error_content)) # Use repr for clarity
+                                logger.error("[ERROR] Content attempted for parsing:", repr(error_content)) # Use repr for clarity
                                 results.append(f"ERROR: Failed to parse Pydantic. Raw: {repr(raw_result)}")
                                 continue # Skip appending result below if parsing failed
 
@@ -981,7 +1013,7 @@ def llm_invoke(
                             results.append(raw_result)
 
                     except (AttributeError, IndexError) as e:
-                         rprint(f"[ERROR] Could not extract result content from response item {i}: {e}")
+                         logger.error(f"[ERROR] Could not extract result content from response item {i}: {e}")
                          results.append(f"ERROR: Could not extract result content. Response: {resp_item}")
 
                 # --- Retrieve Cost from Callback Data --- (Reinstated)
@@ -1002,24 +1034,24 @@ def llm_invoke(
                     cost_input_pm = model_info.get('input', 0.0) if pd.notna(model_info.get('input')) else 0.0
                     cost_output_pm = model_info.get('output', 0.0) if pd.notna(model_info.get('output')) else 0.0
 
-                    rprint(f"[RESULT] Model Used: {model_name_litellm}")
-                    rprint(f"[RESULT] Cost (Input): ${cost_input_pm:.2f}/M tokens")
-                    rprint(f"[RESULT] Cost (Output): ${cost_output_pm:.2f}/M tokens")
-                    rprint(f"[RESULT] Tokens (Prompt): {input_tokens}")
-                    rprint(f"[RESULT] Tokens (Completion): {output_tokens}")
+                    logger.info(f"[RESULT] Model Used: {model_name_litellm}")
+                    logger.info(f"[RESULT] Cost (Input): ${cost_input_pm:.2f}/M tokens")
+                    logger.info(f"[RESULT] Cost (Output): ${cost_output_pm:.2f}/M tokens")
+                    logger.info(f"[RESULT] Tokens (Prompt): {input_tokens}")
+                    logger.info(f"[RESULT] Tokens (Completion): {output_tokens}")
                     # Display the cost captured by the callback
-                    rprint(f"[RESULT] Total Cost (from callback): ${total_cost:.6g}") # Renamed label for clarity
-                    rprint("[RESULT] Max Completion Tokens: Provider Default") # Indicate default limit
+                    logger.info(f"[RESULT] Total Cost (from callback): ${total_cost:.6g}") # Renamed label for clarity
+                    logger.info("[RESULT] Max Completion Tokens: Provider Default") # Indicate default limit
                     if final_thinking:
-                        rprint("[RESULT] Thinking Output:")
-                        rprint(final_thinking) # Rich print should handle the thinking output format
+                        logger.info("[RESULT] Thinking Output:")
+                        logger.info(final_thinking) # Rich print should handle the thinking output format
 
                 # --- Print raw output before returning if verbose ---
                 if verbose:
-                    rprint("[DEBUG] Raw output before return:")
-                    print(f"  Raw Result (repr): {repr(final_result)}")
-                    print(f"  Raw Thinking (repr): {repr(final_thinking)}")
-                    rprint("-" * 20) # Separator
+                    logger.debug("[DEBUG] Raw output before return:")
+                    logger.debug(f"  Raw Result (repr): {repr(final_result)}")
+                    logger.debug(f"  Raw Thinking (repr): {repr(final_thinking)}")
+                    logger.debug("-" * 20) # Separator
 
                 # --- Return Success ---
                 return {
@@ -1033,7 +1065,7 @@ def llm_invoke(
             except openai.AuthenticationError as e:
                 last_exception = e
                 if newly_acquired_keys.get(api_key_name):
-                    rprint(f"[AUTH ERROR] Authentication failed for {model_name_litellm} with the newly provided key for '{api_key_name}'. Please check the key and try again.")
+                    logger.warning(f"[AUTH ERROR] Authentication failed for {model_name_litellm} with the newly provided key for '{api_key_name}'. Please check the key and try again.")
                     # Invalidate the key in env for this session to force re-prompt on retry
                     if api_key_name in os.environ:
                          del os.environ[api_key_name]
@@ -1042,7 +1074,7 @@ def llm_invoke(
                     retry_with_same_model = True # Set flag to retry the same model after re-prompt
                     # Go back to the start of the 'while retry_with_same_model' loop
                 else:
-                    rprint(f"[AUTH ERROR] Authentication failed for {model_name_litellm} using existing key '{api_key_name}'. Trying next model.")
+                    logger.warning(f"[AUTH ERROR] Authentication failed for {model_name_litellm} using existing key '{api_key_name}'. Trying next model.")
                     break # Break inner loop, try next model candidate
 
             except (openai.RateLimitError, openai.APITimeoutError, openai.APIConnectionError,
@@ -1050,11 +1082,11 @@ def llm_invoke(
                     Exception) as e:
                 last_exception = e
                 error_type = type(e).__name__
-                rprint(f"[ERROR] Invocation failed for {model_name_litellm} ({error_type}): {e}. Trying next model.")
+                logger.error(f"[ERROR] Invocation failed for {model_name_litellm} ({error_type}): {e}. Trying next model.")
                 # Log more details in verbose mode
                 if verbose:
                     import traceback
-                    traceback.print_exc()
+                    logger.debug(f"Detailed exception traceback:", exc_info=True)
                 break # Break inner loop, try next model candidate
 
         # If the inner loop was broken (not by success), continue to the next candidate model
@@ -1064,7 +1096,7 @@ def llm_invoke(
     error_message = "All candidate models failed."
     if last_exception:
         error_message += f" Last error ({type(last_exception).__name__}): {last_exception}"
-    rprint(f"[FATAL] {error_message}")
+    logger.error(f"[FATAL] {error_message}")
     raise RuntimeError(error_message) from last_exception
 
 # --- Example Usage (Optional) ---
@@ -1076,7 +1108,7 @@ if __name__ == "__main__":
     # os.environ["PDD_DEBUG_SELECTOR"] = "1"
 
     # Example 1: Simple text generation
-    print("\n--- Example 1: Simple Text Generation (Strength 0.5) ---")
+    logger.info("\n--- Example 1: Simple Text Generation (Strength 0.5) ---")
     try:
         response = llm_invoke(
             prompt="Tell me a short joke about {topic}.",
@@ -1085,13 +1117,13 @@ if __name__ == "__main__":
             temperature=0.7,
             verbose=True
         )
-        rprint("\nExample 1 Response:")
-        rprint(response)
+        logger.info("\nExample 1 Response:")
+        logger.info(response)
     except Exception as e:
-        rprint(f"\nExample 1 Failed: {e}")
+        logger.error(f"\nExample 1 Failed: {e}")
 
     # Example 1b: Simple text generation (Strength 0.3)
-    print("\n--- Example 1b: Simple Text Generation (Strength 0.3) ---")
+    logger.info("\n--- Example 1b: Simple Text Generation (Strength 0.3) ---")
     try:
         response = llm_invoke(
             prompt="Tell me a short joke about {topic}.",
@@ -1100,13 +1132,13 @@ if __name__ == "__main__":
             temperature=0.7,
             verbose=True
         )
-        rprint("\nExample 1b Response:")
-        rprint(response)
+        logger.info("\nExample 1b Response:")
+        logger.info(response)
     except Exception as e:
-        rprint(f"\nExample 1b Failed: {e}")
+        logger.error(f"\nExample 1b Failed: {e}")
 
     # Example 2: Structured output (requires a Pydantic model)
-    print("\n--- Example 2: Structured Output (Pydantic, Strength 0.8) ---")
+    logger.info("\n--- Example 2: Structured Output (Pydantic, Strength 0.8) ---")
     class JokeStructure(BaseModel):
         setup: str
         punchline: str
@@ -1123,19 +1155,19 @@ if __name__ == "__main__":
             output_pydantic=JokeStructure,
             verbose=True
         )
-        rprint("\nExample 2 Response:")
-        rprint(response_structured)
+        logger.info("\nExample 2 Response:")
+        logger.info(response_structured)
         if isinstance(response_structured.get('result'), JokeStructure):
-             rprint("\nPydantic object received successfully:", response_structured['result'].model_dump())
+             logger.info("\nPydantic object received successfully:", response_structured['result'].model_dump())
         else:
-             rprint("\nResult was not the expected Pydantic object:", response_structured.get('result'))
+             logger.info("\nResult was not the expected Pydantic object:", response_structured.get('result'))
 
     except Exception as e:
-        rprint(f"\nExample 2 Failed: {e}")
+        logger.error(f"\nExample 2 Failed: {e}")
 
 
     # Example 3: Batch processing
-    print("\n--- Example 3: Batch Processing (Strength 0.3) ---")
+    logger.info("\n--- Example 3: Batch Processing (Strength 0.3) ---")
     try:
         batch_input = [
             {"animal": "cat", "adjective": "lazy"},
@@ -1150,13 +1182,13 @@ if __name__ == "__main__":
             use_batch_mode=True,
             verbose=True
         )
-        rprint("\nExample 3 Response:")
-        rprint(response_batch)
+        logger.info("\nExample 3 Response:")
+        logger.info(response_batch)
     except Exception as e:
-        rprint(f"\nExample 3 Failed: {e}")
+        logger.error(f"\nExample 3 Failed: {e}")
 
     # Example 4: Using 'messages' input
-    print("\n--- Example 4: Using 'messages' input (Strength 0.5) ---")
+    logger.info("\n--- Example 4: Using 'messages' input (Strength 0.5) ---")
     try:
         custom_messages = [
             {"role": "system", "content": "You are a helpful assistant."},
@@ -1169,13 +1201,13 @@ if __name__ == "__main__":
             temperature=0.1,
             verbose=True
         )
-        rprint("\nExample 4 Response:")
-        rprint(response_messages)
+        logger.info("\nExample 4 Response:")
+        logger.info(response_messages)
     except Exception as e:
-        rprint(f"\nExample 4 Failed: {e}")
+        logger.error(f"\nExample 4 Failed: {e}")
 
     # Example 5: Requesting thinking time (e.g., for Anthropic)
-    print("\n--- Example 5: Requesting Thinking Time (Strength 1.0, Time 0.5) ---")
+    logger.info("\n--- Example 5: Requesting Thinking Time (Strength 1.0, Time 0.5) ---")
     try:
         # Ensure your CSV has max_reasoning_tokens for an Anthropic model
         # Strength 1.0 should select claude-3 (highest ELO)
@@ -1188,15 +1220,15 @@ if __name__ == "__main__":
             time=0.5, # Request moderate thinking time
             verbose=True
         )
-        rprint("\nExample 5 Response:")
-        rprint(response_thinking)
+        logger.info("\nExample 5 Response:")
+        logger.info(response_thinking)
     except Exception as e:
-        rprint(f"\nExample 5 Failed: {e}")
+        logger.error(f"\nExample 5 Failed: {e}")
 
     # Example 6: Pydantic Fallback Parsing (Strength 0.3)
-    print("\n--- Example 6: Pydantic Fallback Parsing (Strength 0.3) ---")
+    logger.info("\n--- Example 6: Pydantic Fallback Parsing (Strength 0.3) ---")
     # This requires mocking litellm.completion to return a JSON string
     # even when gemini-pro (which supports structured output) is selected.
     # This is hard to demonstrate cleanly in the __main__ block without mocks.
     # The unit test test_llm_invoke_output_pydantic_unsupported_parses covers this.
-    print("(Covered by unit tests)")
+    logger.info("(Covered by unit tests)")
