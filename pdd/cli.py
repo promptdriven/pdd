@@ -937,7 +937,7 @@ def auto_deps(
     quiet = ctx.obj.get("quiet", False)
     command_name = "auto-deps"
     try:
-        clean_directory_path = directory_path.strip('"')
+        clean_directory_path = directory_path.strip('\"')
 
         modified_prompt, total_cost, model_name = auto_deps_main(
             ctx=ctx,
@@ -1014,8 +1014,8 @@ def verify(
             output_results=output_results,
             output_code=output_code,
             output_program=output_program,
-            loop=True, # Default for CLI verify command
-            verification_program=program_file, # Default for CLI verify command
+            loop=True,
+            verification_program=program_file,
             max_attempts=max_attempts,
             budget=budget,
         )
