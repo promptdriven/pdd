@@ -86,6 +86,8 @@ def fix_verification_errors_loop(
     max_attempts: int,
     budget: float,
     verification_log_file: str = "verification.log",
+    output_code_path: Optional[str] = None,
+    output_program_path: Optional[str] = None,
     verbose: bool = False,
     program_args: Optional[list[str]] = None,
 ) -> Dict[str, Any]:
@@ -103,6 +105,8 @@ def fix_verification_errors_loop(
         max_attempts: Maximum number of fix attempts.
         budget: Maximum allowed cost in USD.
         verification_log_file: Path for detailed XML logging (default: "verification.log").
+        output_code_path: Optional path to save fixed code (default: None).
+        output_program_path: Optional path to save fixed program (default: None).
         verbose: Enable verbose logging (default: False).
         program_args: Optional list of command-line arguments for the program_file.
 
@@ -423,7 +427,7 @@ def fix_verification_errors_loop(
                 output=program_output,
                 strength=strength,
                 temperature=temperature,
-                verbose=verbose # Pass verbose flag down
+                verbose=verbose
             )
 
             # 4f: Add cost

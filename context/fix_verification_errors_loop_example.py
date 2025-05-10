@@ -80,10 +80,18 @@ budget = 10.0  # Example budget
 # 9. verification_log_file: Path for the verification log file.
 verification_log_file = "output/verification.log"
 
-# 10. verbose: Enable detailed logging.
+# 10. output_code_path: Optional path to save the successfully fixed code.
+output_code_path = Path("output/calculator_module_fixed.py")
+
+# 11. output_program_path: Optional path to save the successfully fixed program.
+# (Note: fix_verification_errors_loop itself does not modify the program based on this path,
+# but it passes it down to fix_verification_errors, which might use it if it modifies the program content)
+output_program_path = Path("output/program_fixed.py")
+
+# 12. verbose: Enable detailed logging.
 verbose = True
 
-# 11. program_args: List of arguments to pass to the program file.
+# 13. program_args: List of arguments to pass to the program file.
 program_args = ["5", "3"] # Example arguments
 
 # --- Execute the Function ---
@@ -97,6 +105,8 @@ results = fix_verification_errors_loop(
     max_attempts=max_attempts,
     budget=budget,
     verification_log_file=verification_log_file,
+    output_code_path=str(output_code_path),
+    output_program_path=str(output_program_path),
     verbose=verbose,
     program_args=program_args # Pass the arguments here
 )
