@@ -1,3 +1,9 @@
+## v0.0.28 (2025-05-10)
+
+### Fix
+
+- update string handling and improve test assertions in CLI
+
 ## v0.0.27 (2025-05-10)
 
 ### Feat
