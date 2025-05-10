@@ -1,3 +1,9 @@
+## v0.0.30 (2025-05-10)
+
+### Feat
+
+- update installation instructions and recommend uv package manager
+
 ## v0.0.29 (2025-05-10)
 
 ### Feat
