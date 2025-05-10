@@ -19,10 +19,10 @@ def main():
     prompt = "Tell me a joke about {topic}"
     input_json = {"topic": "programmers"}
     temperature = 1
-    verbose = True
+    verbose = False
     
-    strength = 0.0
-    while strength <= 1:
+    strength = 0.5
+    while strength <= 0.5:
         print(f"\nStrength: {strength}")
         
         # Example 1: Unstructured Output
