@@ -26,7 +26,7 @@ from .crash_main import crash_main
 from .detect_change_main import detect_change_main
 from .fix_main import fix_main
 from .fix_verification_main import fix_verification_main
-from .install_completion import install_completion
+from .install_completion import install_completion, get_local_pdd_path
 from .preprocess_main import preprocess_main
 from .split_main import split_main
 from .trace_main import trace_main
@@ -136,6 +136,9 @@ def cli(
     Main entry point for the PDD CLI. Handles global options and initializes context.
     Supports multi-command chaining.
     """
+    # Ensure PDD_PATH is set before any commands run
+    get_local_pdd_path()
+    
     ctx.ensure_object(dict)
     ctx.obj["force"] = force
     ctx.obj["strength"] = strength
