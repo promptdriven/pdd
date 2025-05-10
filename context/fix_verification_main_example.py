@@ -106,8 +106,10 @@ except AssertionError as e:
     # Define output paths
     output_results_single = output_dir / "verify_results_single.log"
     output_code_single = output_dir / "calculator_verified_single.py"
+    output_program_single = output_dir / "run_calculator_verified_single.py"
     output_results_loop = output_dir / "verify_results_loop.log"
     output_code_loop = output_dir / "calculator_verified_loop.py"
+    output_program_loop = output_dir / "run_calculator_verified_loop.py"
 
     # --- 3. Run in Single Pass Mode (loop=False) ---
     print("[bold cyan]--- Running Single Pass Verification (loop=False) ---[/bold cyan]")
@@ -122,6 +124,7 @@ except AssertionError as e:
             program_file=str(program_file),
             output_results=str(output_results_single),
             output_code=str(output_code_single),
+            output_program=str(output_program_single),
             loop=False,
             verification_program=None, # Not needed for single pass
             max_attempts=1, # Ignored when loop=False, but set for clarity
@@ -137,6 +140,7 @@ except AssertionError as e:
         print(f"Final Code Content (first ~100 chars): {final_code[:100]}...")
         print(f"Results Log Saved To: {output_results_single if output_results_single.exists() else 'N/A'}")
         print(f"Verified Code Saved To: {output_code_single if success and output_code_single.exists() else 'N/A'}")
+        print(f"Verified Program Saved To: {output_program_single if success and output_program_single.exists() else 'N/A'}")
 
     except Exception as e:
         print(f"[bold red]Error during single pass verification:[/bold red] {e}")
@@ -162,6 +166,7 @@ except AssertionError as e:
             program_file=str(program_file),
             output_results=str(output_results_loop),
             output_code=str(output_code_loop),
+            output_program=str(output_program_loop),
             loop=True,
             verification_program=str(verification_program_file), # Required for loop
             max_attempts=loop_max_attempts,
@@ -177,6 +182,7 @@ except AssertionError as e:
         print(f"Final Code Content (first ~100 chars): {final_code_loop[:100]}...")
         print(f"Results Log Saved To: {output_results_loop if output_results_loop.exists() else 'N/A'}")
         print(f"Verified Code Saved To: {output_code_loop if success_loop and output_code_loop.exists() else 'N/A'}")
+        print(f"Verified Program Saved To: {output_program_loop if success_loop and output_program_loop.exists() else 'N/A'}")
 
         # Optionally, display the final fixed code if successful
         if success_loop and output_code_loop.exists():

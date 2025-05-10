@@ -25,7 +25,7 @@ COMMAND_OUTPUT_KEYS: Dict[str, List[str]] = {
     'trace': ['output'],
     'bug': ['output'],
     'auto-deps': ['output'],
-    'verify': ['output_results', 'output_code'],
+    'verify': ['output_results', 'output_code', 'output_program'],
 }
 
 # Define default filename patterns for each output key
@@ -61,6 +61,7 @@ DEFAULT_FILENAMES: Dict[str, Dict[str, str]] = {
     'verify': {
         'output_results': '{basename}_verify_results.log',
         'output_code': '{basename}_verified{ext}',
+        'output_program': '{basename}_program_verified{ext}',
     },
 }
 
@@ -93,6 +94,7 @@ ENV_VAR_MAP: Dict[str, Dict[str, str]] = {
     'verify': {
         'output_results': 'PDD_VERIFY_RESULTS_OUTPUT_PATH',
         'output_code': 'PDD_VERIFY_CODE_OUTPUT_PATH',
+        'output_program': 'PDD_VERIFY_PROGRAM_OUTPUT_PATH',
     },
 }
 
@@ -435,4 +437,43 @@ if __name__ == '__main__':
     # Expected: {
     #   'output_results': '/path/to/cwd/module_to_verify_verify_results.log',
     #   'output_code': '/path/to/cwd/module_to_verify_verified.py'
+    #   'output_program': '/path/to/cwd/module_to_verify_program_verified.py'
     # }
+
+    # --- Test Case 12: Verify command with user-specified output_program directory ---
+    print("\n--- Test Case 12: Verify (User Dir for output_program) ---")
+    test_dir_verify_prog = "temp_verify_prog_output"
+    os.makedirs(test_dir_verify_prog, exist_ok=True)
+    paths12 = generate_output_paths(
+        command='verify',
+        output_locations={'output_program': test_dir_verify_prog + os.path.sep},
+        basename="module_to_verify",
+        language="python",
+        file_extension=".py"
+    )
+    print(f"Result: {paths12}")
+    # Expected: {
+    #   'output_results': '/path/to/cwd/module_to_verify_verify_results.log',
+    #   'output_code': '/path/to/cwd/module_to_verify_verified.py',
+    #   'output_program': f'/path/to/cwd/{test_dir_verify_prog}/module_to_verify_program_verified.py'
+    # }
+    os.rmdir(test_dir_verify_prog) # Clean up
+
+    # --- Test Case 13: Verify command with environment variable for output_program ---
+    print("\n--- Test Case 13: Verify (Env Var for output_program) ---")
+    env_verify_prog_path = "env_verify_program_custom.py"
+    os.environ['PDD_VERIFY_PROGRAM_OUTPUT_PATH'] = env_verify_prog_path
+    paths13 = generate_output_paths(
+        command='verify',
+        output_locations={},
+        basename="another_module_verify",
+        language="python",
+        file_extension=".py"
+    )
+    print(f"Result: {paths13}")
+    # Expected: {
+    #   'output_results': '/path/to/cwd/another_module_verify_verify_results.log',
+    #   'output_code': '/path/to/cwd/another_module_verify_verified.py',
+    #   'output_program': f'/path/to/cwd/{env_verify_prog_path}'
+    # }
+    del os.environ['PDD_VERIFY_PROGRAM_OUTPUT_PATH'] # Clean up

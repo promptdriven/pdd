@@ -275,6 +275,42 @@ def test_prioritization_env_over_default(monkeypatch):
 
     monkeypatch.delenv(env_var) # Clean up
 
+# Specific test for verify command and output_program env var
+def test_verify_command_env_var_for_output_program(monkeypatch, temp_output_dir):
+    """Test ENV var for 'output_program' with the 'verify' command."""
+    command = "verify"
+    program_key = "output_program"
+    results_key = "output_results"
+    code_key = "output_code"
+
+    env_var_program = ENV_VAR_MAP[command][program_key]
+    env_program_file_path = temp_output_dir / "env_verify_program.out" # Specific file path
+
+    monkeypatch.setenv(env_var_program, str(env_program_file_path))
+
+    result = generate_output_paths(
+        command=command,
+        output_locations={}, # No user input for any key
+        basename=TEST_BASENAME,
+        language=TEST_LANG,
+        file_extension=TEST_EXT_WITH_DOT
+    )
+
+    # Check that output_program path is from ENV var
+    assert program_key in result
+    assert result[program_key] == str(env_program_file_path)
+
+    # Check that other keys for 'verify' get their default paths
+    expected_results_filename = get_expected_default_name(command, results_key, TEST_BASENAME, TEST_LANG, TEST_EXT_WITH_DOT)
+    expected_code_filename = get_expected_default_name(command, code_key, TEST_BASENAME, TEST_LANG, TEST_EXT_WITH_DOT)
+
+    assert results_key in result
+    assert result[results_key] == abs_path_cwd(expected_results_filename)
+    assert code_key in result
+    assert result[code_key] == abs_path_cwd(expected_code_filename)
+
+    monkeypatch.delenv(env_var_program) # Clean up
+
 # --- Multi-Output Command Tests ---
 def test_fix_command_mixed_inputs(monkeypatch, temp_output_dir):
     """Test 'fix' command with a mix of user, env, and default inputs."""

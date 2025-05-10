@@ -54,6 +54,7 @@ def mock_construct_paths_response(tmp_path):
     """Provides a default mock response for construct_paths."""
     output_code_path = tmp_path / "output_verified.py"
     output_results_path = tmp_path / "output_results.log"
+    output_program_path = tmp_path / "output_verified_program.py"
     return (
         { # input_strings
             "prompt_file": "Original prompt content",
@@ -65,6 +66,7 @@ def mock_construct_paths_response(tmp_path):
         { # output_file_paths
             "output_code": str(output_code_path),
             "output_results": str(output_results_path),
+            "output_program": str(output_program_path),
         },
         "python" # language
     )
@@ -93,6 +95,7 @@ def test_single_pass_success_no_issues(
 
     output_code_path = mock_construct_paths_response[1]["output_code"]
     output_results_path = mock_construct_paths_response[1]["output_results"]
+    output_program_path = mock_construct_paths_response[1]["output_program"]
 
     result = fix_verification_main(
         ctx=mock_context,
@@ -101,6 +104,7 @@ def test_single_pass_success_no_issues(
         program_file=setup_files["program"],
         output_results=None, # Use default from construct_paths mock
         output_code=None,    # Use default from construct_paths mock
+        output_program=None, # Use default from construct_paths mock
         loop=False,
         verification_program=None
     )
@@ -123,6 +127,8 @@ def test_single_pass_success_no_issues(
     assert result == (True, 'Original program content', 'Original code content', 1, 0.1, 'model-a')
     assert os.path.exists(output_code_path)
     assert open(output_code_path).read() == 'Original code content'
+    assert os.path.exists(output_program_path)
+    assert open(output_program_path).read() == 'Original program content'
     assert os.path.exists(output_results_path)
     assert "Success: True" in open(output_results_path).read()
     assert "Issues Found Count: 0" in open(output_results_path).read()
@@ -150,6 +156,7 @@ def test_single_pass_success_with_fixes(
 
     output_code_path = mock_construct_paths_response[1]["output_code"]
     output_results_path = mock_construct_paths_response[1]["output_results"]
+    output_program_path = mock_construct_paths_response[1]["output_program"]
 
     result = fix_verification_main(
         ctx=mock_context,
@@ -158,6 +165,7 @@ def test_single_pass_success_with_fixes(
         program_file=setup_files["program"],
         output_results=None,
         output_code=None,
+        output_program=None,
         loop=False,
         verification_program=None
     )
