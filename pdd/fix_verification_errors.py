@@ -235,7 +235,7 @@ def fix_verification_errors(
             "program": program,
             "prompt": prompt,
             "code": code,
-            "output_logs": output,
+            "output": output,
             "issues": verification_details,
         }
 
