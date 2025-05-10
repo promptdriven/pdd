@@ -1138,3 +1138,152 @@ def test_cli_verify_command_env_var_output_program(mock_fix_verification, mock_c
 
 # Keep existing test_cli_verify_force_flag_propagation as is, or adapt if needed
 # ... existing code ...
+
+@pytest.mark.real
+def test_real_verify_command(create_dummy_files, tmp_path):
+    """Test the 'verify' command with real files by calling the function directly."""
+    import os
+    import sys
+    import click
+    from pathlib import Path
+    from pdd.fix_verification_main import fix_verification_main as fix_verification_main_direct
+
+    # Create a simple prompt file with valid content
+    prompt_content = """// verify_python.prompt
+// Language: Python
+// Description: A simple function to divide two numbers
+// Inputs: Two numbers a and b
+// Outputs: The result of a divided by b
+
+def divide(a, b):
+    # Divide a by b and return the result
+    return a / b
+"""
+
+    # Create a code file with a potential issue (missing validation)
+    code_content = """# divide.py
+def divide(a, b):
+    # Divide a by b and return the result
+    return a / b
+"""
+
+    # Create a program file to test the functionality
+    program_content = """# test_divide.py
+from divide import divide
+
+def main():
+    # Test the divide function with various inputs
+    try:
+        # These should work
+        print(f"10 / 2 = {divide(10, 2)}")
+        print(f"5 / 2.5 = {divide(5, 2.5)}")
+        
+        # This will cause an error
+        print(f"5 / 0 = {divide(5, 0)}")
+    except Exception as e:
+        print(f"Error: {e}")
+
+if __name__ == "__main__":
+    main()
+"""
+
+    # Create files with the fixture, placing them directly in tmp_path
+    files_dict = {}
+    for name, content in {
+        "verify_python.prompt": prompt_content, 
+        "divide.py": code_content, 
+        "test_divide.py": program_content
+    }.items():
+        file_path = tmp_path / name
+        file_path.write_text(content)
+        files_dict[name] = file_path
+
+    # Get the file paths as strings
+    prompt_file = str(files_dict["verify_python.prompt"])
+    code_file = str(files_dict["divide.py"])
+    program_file = str(files_dict["test_divide.py"])
+
+    # Create output directory relative to tmp_path
+    output_dir = tmp_path / "output"
+    output_dir.mkdir(exist_ok=True)
+    output_results = str(output_dir / "verify_results.log")
+    output_code = str(output_dir / "verified_divide.py")
+    output_program = str(output_dir / "verified_test_divide.py")
+
+    # Print environment info for debugging
+    print(f"Temporary directory: {tmp_path}")
+    print(f"Current working directory: {os.getcwd()}")
+    print(f"Prompt file location: {prompt_file}")
+    print(f"Code file location: {code_file}")
+    print(f"Program file location: {program_file}")
+    print(f"Output directory: {output_dir}")
+
+    # Create a minimal context object with the necessary parameters
+    ctx = click.Context(click.Command("verify"))
+    ctx.obj = {
+        'force': True,
+        'quiet': False,
+        'verbose': True,
+        'strength': 0.8,
+        'temperature': 0.0,
+        'local': True,  # Use local execution to avoid API calls
+        'output_cost': None,
+        'review_examples': False,
+    }
+
+    # Change working directory to tmp_path so imports work correctly
+    original_cwd = os.getcwd()
+    os.chdir(tmp_path)
+
+    try:
+        # Call fix_verification_main directly - with minimal mocking
+        success, final_program, final_code, attempts, cost, model = fix_verification_main_direct(
+            ctx=ctx,
+            prompt_file=prompt_file,
+            code_file=code_file,
+            program_file=program_file,
+            output_results=output_results,
+            output_code=output_code,
+            output_program=output_program,
+            loop=True,
+            verification_program=program_file,
+            max_attempts=3,
+            budget=1.0
+        )
+
+        # Verify we got reasonable results back
+        assert isinstance(success, bool), "Success should be a boolean"
+        assert isinstance(final_code, str), "Final code should be a string"
+        assert isinstance(final_program, str), "Final program should be a string" 
+        assert attempts > 0, "Should have at least one attempt"
+        assert isinstance(cost, float), "Cost should be a float"
+        assert isinstance(model, str), "Model name should be a string"
+
+        # Check output files were created (if successful)
+        if success:
+            assert Path(output_code).exists(), f"Output code file not created at {output_code}"
+            assert Path(output_program).exists(), f"Output program file not created at {output_program}"
+            assert Path(output_results).exists(), f"Output results file not created at {output_results}"
+
+            # Verify content of generated code file (should include a division by zero check)
+            verified_code_content = Path(output_code).read_text()
+            assert "def divide" in verified_code_content, "Verified code should contain a divide function"
+            assert "if b == 0" in verified_code_content or "b != 0" in verified_code_content, "Verified code should include a check for division by zero"
+
+            # Print success message and contents
+            print("\nTest passed! Verified code:")
+            print(verified_code_content)
+        else:
+            # Still check if any intermediate files were created
+            for intermediate_file in output_dir.glob("*divide*.py"):
+                print(f"Intermediate file found: {intermediate_file}")
+                print(intermediate_file.read_text())
+
+    except Exception as e:
+        print(f"Error executing fix_verification_main: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+    finally:
+        # Change back to the original directory
+        os.chdir(original_cwd)
