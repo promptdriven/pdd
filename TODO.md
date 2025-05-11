@@ -34,6 +34,7 @@
 - [ ] re-ranker for the example using a LLM
 - [ ] syncing Makefile
 - [ ] uv support, handle the ask the user to upgrade situation for uv
+- [ ] integrate the csv llm model check into the cli and have it say the strength of the models
 
 
 
