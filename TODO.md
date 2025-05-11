@@ -1,8 +1,9 @@
 # TODO
-- [ ] reasoning support, allow strength to go above 1 to allocate more thinking tokens
+- [ ] incremental generate that basically does a semantic diff of the prompt and does a surgical update of the code
 
 
 ## On Deck
+- [ ] reasoning support, allow strength to go above 1 to allocate more thinking tokens via time parameter
 - [ ] during fix rather than just have the fix loop check to see if the example crashed, have it use a llm to check if the results are largely correct still
 
 
@@ -18,6 +19,7 @@
 - [ ] auto check inconsistencies between modules
 - [ ] routlellm
 - [ ] auto record which model works for each prompt
+- [ ] agentic additional context inclusion via context 7 MCP
 - [ ] Use perplexica to automatically find context
 - [ ] create a marketplace where people can earn LLM credits for their examples or people can put up bounties for examples
 - [ ] take a chat conversation and collapse down into a single prompt
@@ -29,11 +31,10 @@
 - [ ] Retrieve what is most needed from a webscrape and condense it down
 - [ ] test out anthropic think tool
 - [ ] agentic prompt to code
-- [ ] agentic additional context inclusion via context 7 MCP
 - [ ] re-ranker for the example using a LLM
 - [ ] syncing Makefile
 - [ ] uv support, handle the ask the user to upgrade situation for uv
-- [ ] incremental generate that basically does a semantic diff of the prompt and does a surgical update of the code
+
 
 
 ## Bugs
@@ -48,7 +49,6 @@
 - [ ] have a link from includes to the files for the vscode prompt extension
 - [ ] have update touch the source file py so that the Make file doesn't go into infinite loop
 - [ ] Anywhere cache https://cloud.google.com/storage/docs/anywhere-cache?hl=en&_gl=1*hrk570*_ga*MTM4MzA4MjkzMy4xNjcwNTM0ODI5*_ga_WH2QY8WWF5*czE3NDYzNzYwNjUkbzE2NyRnMSR0MTc0NjM3NjExMiRqMTMkbDAkaDA.
-
+- [ ] fix the overlogging
 
 ## Documentation
-- [ ] Model support
