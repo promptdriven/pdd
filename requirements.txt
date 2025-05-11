@@ -8,12 +8,8 @@ firebase_admin==6.6.0
 firecrawl_py==2.5.3
 httpx==0.28.1
 keyring==25.6.0
-# langchain==0.3.25
-# langchain_anthropic==0.3.13
-# langchain_community==0.3.23
+
 langchain_core==0.3.59
-# langchain_mcp_adapters==0.0.11
-# langgraph==0.4.3
 litellm==1.68.2
 nest_asyncio==1.6.0
 openai==1.78.0
