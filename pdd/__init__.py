@@ -10,5 +10,9 @@ DEFAULT_STRENGTH = 0.9
 
 # Define constants used across the package
 DEFAULT_LLM_MODEL = "gpt-4.1-nano"
+# When going to production, set the following constants:
+# REACT_APP_FIREBASE_API_KEY
+# GITHUB_CLIENT_ID
 
 # You can add other package-level initializations or imports here
+
