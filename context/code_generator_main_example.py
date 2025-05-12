@@ -35,7 +35,7 @@ def run_code_generation_example() -> None:
         - `REACT_APP_FIREBASE_API_KEY` and `GITHUB_CLIENT_ID` environment variables
           must be set for authentication.
     """
-    example_output_dir: Path = Path("pdd_example_output")
+    example_output_dir: Path = Path("output")
     example_output_dir.mkdir(exist_ok=True)
 
     prompt_filename: str = "calculator_python.prompt"
@@ -110,8 +110,10 @@ def run_code_generation_example() -> None:
                 break
         if not code_lines: # Handles empty string case
              print("  (No code was generated, or an error occurred during generation.)")
-        if Path(output_path_str).exists():
+        if Path(output_path_str).exists() and Path(output_path_str).read_text(encoding='utf-8') == generated_code:
             print(f"\n[Code has been saved to: {Path(output_path_str).resolve()}]")
+        elif Path(output_path_str).exists():
+             print(f"\n[Code was saved to {output_path_str}, but content might differ or be empty if generation failed after file creation.]")
         else:
             print(f"\n[Code was NOT saved to {output_path_str} (it might have been displayed to console by the module if no output path was resolved).]")
 

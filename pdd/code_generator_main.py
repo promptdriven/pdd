@@ -20,7 +20,7 @@ from .get_jwt_token import (AuthError, NetworkError, RateLimitError, TokenError,
                             UserCancelledError, get_jwt_token)
 from .incremental_code_generator import incremental_code_generator
 from .preprocess import preprocess
-from . import DEFAULT_STRENGTH, EXTRACTION_STRENGTH # Imports from pdd/__init__.py
+from . import DEFAULT_STRENGTH # Imports from pdd/__init__.py
 
 # Constants
 CLOUD_FUNCTION_URL = "https://us-central1-prompt-driven-development.cloudfunctions.net/generateCode"
@@ -142,6 +142,7 @@ def code_generator_main(
     strength = ctx.obj.get("strength", DEFAULT_STRENGTH)
     temperature = ctx.obj.get("temperature", 0.0)
     run_local_mode = ctx.obj.get("local", False) # True if --local is passed
+    quiet_mode = ctx.obj.get("quiet", False)
 
     generated_code_str: str = ""
     is_incremental_operation: bool = False
@@ -158,7 +159,7 @@ def code_generator_main(
         input_strings_map, output_paths_map, lang = construct_paths(
             input_file_paths=input_files_map,
             force=force_overwrite,
-            quiet=ctx.obj.get("quiet", False),
+            quiet=quiet_mode,
             command="generate",
             command_options=cli_command_options,
         )
@@ -169,6 +170,9 @@ def code_generator_main(
             return "", False, 0.0, ""
 
         output_code_file_path_str = output_paths_map.get("output_code_file")
+        if not output_code_file_path_str: # Fallback for specific file output from command_options
+            output_code_file_path_str = output_paths_map.get("output")
+        
         output_code_file_path = Path(output_code_file_path_str) if output_code_file_path_str else None
 
         if not lang:
@@ -179,25 +183,23 @@ def code_generator_main(
             console.print(f"Language determined: [cyan]{lang}[/cyan]")
             if output_code_file_path:
                 console.print(f"Output path: [cyan]{output_code_file_path}[/cyan]")
-            else: # Should not happen if construct_paths provides a default
-                console.print("[yellow]Warning: No output path determined by construct_paths.[/yellow]")
+            else: 
+                console.print("[yellow]Warning: No output path determined by construct_paths (checked 'output_code_file' and 'output' keys).[/yellow]")
 
         # --- Determine Generation Mode (Incremental vs. Full) ---
         attempt_incremental_gen = False
         original_prompt_str_for_inc: Optional[str] = None
         existing_code_str_for_inc: Optional[str] = None
         
-        # Get git root based on the prompt file's location to handle relative paths correctly
         git_repo_root = _get_git_root(prompt_file)
 
         if output_code_file_path and output_code_file_path.exists():
-            # Condition 1: Output file exists. Now check for original prompt.
-            if input_strings_map.get("original_prompt_file"): # --original-prompt was provided
+            if input_strings_map.get("original_prompt_file"): 
                 original_prompt_str_for_inc = input_strings_map["original_prompt_file"]
                 attempt_incremental_gen = True
                 if verbose:
                     console.print(f"[cyan]Using provided original prompt file: {original_prompt}[/cyan]")
-            elif git_repo_root: # Try to get from git
+            elif git_repo_root: 
                 abs_prompt_file = Path(prompt_file).resolve()
                 rel_prompt_to_git_root = os.path.relpath(abs_prompt_file, git_repo_root)
                 
@@ -218,33 +220,29 @@ def code_generator_main(
                     existing_code_str_for_inc = output_code_file_path.read_text(encoding="utf-8")
                 except Exception as e:
                     console.print(f"[red]Error reading existing code from '{output_code_file_path}': {e}[/red]")
-                    attempt_incremental_gen = False # Cannot do incremental
+                    attempt_incremental_gen = False 
             
-            if incremental and not attempt_incremental_gen: # --incremental flag but couldn't set up
+            if incremental and not attempt_incremental_gen: 
                  console.print(f"[yellow]Warning: --incremental flag was set, but failed to prepare for incremental generation (e.g., no original prompt). Performing full generation.[/yellow]")
-            elif incremental and attempt_incremental_gen: # --incremental flag and we are ready
+            elif incremental and attempt_incremental_gen: 
                 if verbose: console.print("[cyan]--incremental flag is set, proceeding with incremental attempt.[/cyan]")
-            elif not incremental and attempt_incremental_gen: # No --incremental flag, but we found changes and an original
+            elif not incremental and attempt_incremental_gen:
                 if verbose: console.print("[cyan]Changes detected and original prompt available. Attempting incremental generation automatically.[/cyan]")
 
-
-        elif incremental: # --incremental flag but output file does not exist
+        elif incremental: 
              console.print(f"[yellow]Warning: --incremental flag was set, but output file '{output_code_file_path or output}' does not exist. Performing full generation.[/yellow]")
              attempt_incremental_gen = False
 
-
-        # --- Perform Incremental Generation if conditions met ---
         if attempt_incremental_gen and original_prompt_str_for_inc and existing_code_str_for_inc:
             if verbose:
                 console.print(Panel("[bold blue]Attempting Incremental Code Generation[/bold blue]", expand=False))
 
-            if git_repo_root: # Stage files before modification if in git repo
+            if git_repo_root: 
                 _stage_file_if_needed(prompt_file, git_repo_root, verbose)
-                if output_code_file_path: # Must exist for incremental
+                if output_code_file_path: 
                      _stage_file_if_needed(str(output_code_file_path), git_repo_root, verbose)
             
             try:
-                # `incremental` (CLI flag) is passed as `force_incremental`
                 updated_code, was_inc, cost, model_name = incremental_code_generator(
                     original_prompt=original_prompt_str_for_inc,
                     new_prompt=current_prompt_content,
@@ -252,8 +250,8 @@ def code_generator_main(
                     language=lang,
                     strength=strength,
                     temperature=temperature,
-                    time=time,
-                    force_incremental=incremental, # Pass the CLI --incremental flag here
+                    time=time, 
+                    force_incremental=incremental, 
                     verbose=verbose,
                     preprocess_prompt=True 
                 )
@@ -264,7 +262,7 @@ def code_generator_main(
                     model_name_str = model_name
                     if verbose:
                         console.print("[green]Incremental generation successful.[/green]")
-                else: # Incremental generator decided full regeneration is better
+                else: 
                     if verbose:
                         console.print("[yellow]Incremental generator suggested full regeneration. Proceeding with full generation.[/yellow]")
             except Exception as e:
@@ -274,15 +272,14 @@ def code_generator_main(
                     console.print(f"Traceback: {traceback.format_exc()}")
                 console.print("[yellow]Falling back to full code generation.[/yellow]")
         
-        # --- Perform Full Generation if not incremental or if incremental failed/suggested fallback ---
         if not is_incremental_operation:
             if verbose:
                  title = "Proceeding with Full Code Generation" if attempt_incremental_gen else "Starting Full Code Generation"
                  console.print(Panel(f"[bold blue]{title}[/bold blue]", expand=False))
             
-            effective_run_local = run_local_mode # Start with the flag's value
+            effective_run_local = run_local_mode 
             
-            if not run_local_mode: # Try cloud if --local is not set
+            if not run_local_mode: 
                 if verbose: console.print("Attempting cloud execution...")
                 processed_prompt_for_cloud = preprocess(current_prompt_content, recursive=True, double_curly_brackets=True, exclude_keys=[])
                 if verbose:
@@ -322,19 +319,19 @@ def code_generator_main(
                     if verbose:
                         console.print(f"[green]Cloud code generation successful. Model: {model_name_str}, Cost: ${total_cost_val:.6f}[/green]")
                 
-                except (requests.RequestException, json.JSONDecodeError, ValueError, KeyError) as e: # Common operational errors
+                except (requests.RequestException, json.JSONDecodeError, ValueError, KeyError) as e: 
                     console.print(f"[yellow]Cloud execution failed: {e}.[/yellow]")
                     console.print("[yellow]Falling back to local execution.[/yellow]")
                     effective_run_local = True
-                except (AuthError, NetworkError, TokenError, RateLimitError) as e: # Auth specific errors
+                except (AuthError, NetworkError, TokenError, RateLimitError) as e: 
                     console.print(f"[red]Cloud authentication/token error: {e}.[/red]")
                     console.print("[yellow]Falling back to local execution (if API keys are set).[/yellow]")
                     effective_run_local = True
                 except UserCancelledError:
                     console.print("[red]Cloud authentication cancelled by user. Cannot proceed with cloud execution.[/red]")
                     console.print("[yellow]Falling back to local execution (if API keys are set).[/yellow]")
-                    effective_run_local = True # Fallback, though local might also need keys
-                except Exception as e: # Catch-all for other unexpected errors during cloud attempt
+                    effective_run_local = True 
+                except Exception as e: 
                     console.print(f"[red]An unexpected error occurred during cloud execution: {e}[/red]")
                     if verbose:
                         import traceback
@@ -346,11 +343,12 @@ def code_generator_main(
                 if verbose: console.print("Performing local code generation...")
                 try:
                     generated_code_str, total_cost_val, model_name_str = code_generator(
-                        prompt=current_prompt_content, # Use original prompt for local
+                        prompt=current_prompt_content, 
                         language=lang,
                         strength=strength,
                         temperature=temperature,
-                        verbose=verbose,
+                        verbose=verbose
+                        # time parameter is not passed as it's not supported by the local code_generator
                     )
                     if verbose:
                          console.print(f"[green]Local code generation successful. Model: {model_name_str}, Cost: ${total_cost_val:.6f}[/green]")
@@ -359,26 +357,26 @@ def code_generator_main(
                     if verbose:
                         import traceback
                         console.print(f"Traceback: {traceback.format_exc()}")
-                    # Generation failed, return any partial cost/model info if available
-                    return generated_code_str, is_incremental_operation, total_cost_val, model_name_str
+                    generated_code_str = "" 
+                    model_name_str = "local_generation_failed"
 
-        # --- Save the generated code ---
         if generated_code_str and output_code_file_path:
             try:
                 output_code_file_path.parent.mkdir(parents=True, exist_ok=True)
                 output_code_file_path.write_text(generated_code_str, encoding="utf-8")
                 if verbose:
                     console.print(f"Generated code saved to: [link=file://{output_code_file_path.resolve()}]{output_code_file_path}[/link]")
-                else:
+                elif not quiet_mode:
                     console.print(f"Generated code saved to: {output_code_file_path}")
             except Exception as e:
                 console.print(f"[red]Error saving generated code to '{output_code_file_path}': {e}[/red]")
         elif generated_code_str and not output_code_file_path:
-            console.print("[yellow]No output file path determined. Displaying generated code:[/yellow]")
-            console.print(Syntax(generated_code_str, lang, theme="monokai", line_numbers=True))
+            if not quiet_mode:
+                console.print("[yellow]No output file path determined. Displaying generated code:[/yellow]")
+                console.print(Syntax(generated_code_str, lang if lang else "python", theme="monokai", line_numbers=True))
         
         if verbose and generated_code_str:
-            console.print(Panel(Syntax(generated_code_str, lang, theme="monokai", line_numbers=True), title="Final Generated Code"))
+            console.print(Panel(Syntax(generated_code_str, lang if lang else "python", theme="monokai", line_numbers=True), title="Final Generated Code"))
         
         return generated_code_str, is_incremental_operation, total_cost_val, model_name_str
 
