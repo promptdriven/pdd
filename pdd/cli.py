@@ -246,7 +246,7 @@ def generate(ctx: click.Context, prompt_file: str, output: Optional[str]) -> Opt
     quiet = ctx.obj.get("quiet", False)
     command_name = "generate"
     try:
-        generated_code, total_cost, model_name = code_generator_main(
+        generated_code, incremental, total_cost, model_name = code_generator_main(
             ctx=ctx,
             prompt_file=prompt_file,
             output=output,
