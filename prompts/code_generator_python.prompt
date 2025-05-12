@@ -43,7 +43,7 @@
         </postprocess_example>
     </internal_modules>
 
-% This program will use Langchain to do the following:
+% This program will do the following:
     Step 1. Conditionally preprocess the raw prompt using the preprocess function from the preprocess module based on the value of 'preprocess_prompt'. If 'preprocess_prompt' is True, preprocess the prompt; otherwise, use the raw prompt directly.
 
     Step 2. Run the prompt (either preprocessed or raw) through llm_invoke with an empty dictionary ('{}') and the provided strength and temperature.
