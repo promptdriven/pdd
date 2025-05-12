@@ -15,8 +15,8 @@
         'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
         'preprocess_prompt' - A boolean that indicates whether to preprocess the prompt. Default is True.
     Outputs:
-        'updated_code' - A string that is the updated runnable code
-        'is_incremental' - A boolean indicating whether the update was incremental (True) or a full regeneration (False)
+        'updated_code' - A string that is the updated runnable code or None if a full regeneration is needed
+        'is_incremental' - A boolean indicating whether the update was incremental (True) or if full regeneration is needed (False)
         'total_cost' - A float that is the total cost of the model run
         'model_name' - A string that is the name of the selected LLM model
 
@@ -37,10 +37,6 @@
             <include>context/postprocess_example.py</include>
         </postprocess_example>
 
-        For calling code generation:
-        <code_generator_example>
-            <include>context/code_generator_example.py</include>
-        </code_generator_example>
     </internal_modules>
 
 % This program will use Langchain to do the following:
@@ -63,19 +59,9 @@
     
     Step 4. Based on the should_regenerate decision:
         - a. If should_regenerate is True (major change detected and not overridden):
-            * Call the existing code_generator function with the new_prompt to regenerate code from scratch:
-                runnable_code, gen_cost, gen_model_name = code_generator(
-                    prompt=new_prompt,
-                    language=language,
-                    strength=strength,
-                    temperature=temperature,
-                    time=time,
-                    verbose=verbose,
-                    preprocess_prompt=preprocess_prompt
-                )
-            * Set is_incremental to False
-            * Set updated_code to runnable_code
-
+            * Return None for updated_code, False for is_incremental, the cost incurred so far, and the model name used
+            * The calling function should handle the full regeneration
+        
         - b. If should_regenerate is False (minor change detected or force_incremental is True):
             * Load the 'code_patcher_LLM' prompt template using load_prompt_template
             * Run the code_patcher_LLM prompt through llm_invoke:
@@ -84,7 +70,6 @@
                 * Pass the provided time parameter
             * Extract 'patched_code', 'analysis', and 'planned_modifications' from the Pydantic output
             * If verbose is True, print the analysis and planned modifications
-            * Set is_incremental to True
-            * Set updated_code to patched_code
+            * Return patched_code, True for is_incremental, total cost (sum of all LLM invocations), and the model_name
     
     Step 5. Return the updated_code, is_incremental flag, total cost (sum of all LLM invocations), and the model_name used for the main operation. 

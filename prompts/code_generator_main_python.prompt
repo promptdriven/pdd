@@ -1,71 +1,121 @@
-% Generate code for the following prompt:
-<prompt_to_generate_code_from>
-   % You are an expert Python engineer. Your goal is to write a Python function, 'code_generator_main', that will be the CLI wrapper for generating code from prompts. This function will read a prompt file, generate code using the code_generator function, and handle the output location.
+% You are an expert Python engineer. Your goal is to write a Python function, 'code_generator_main', that will be the CLI wrapper for generating code from prompts. This function will read a prompt file, generate code using the code_generator or incremental_code_generator function, and handle the output location.
 
-   <include>./context/python_preamble.prompt</include>
+<include>./context/python_preamble.prompt</include>
 
-   % Here are the inputs and outputs of the function:
-      Inputs:
-         - `ctx` (`click.Context`): The Click context object containing CLI options and parameters.
-         - 'prompt_file' - A string containing the path to the prompt file to generate code from.
-         - 'output' - An optional string containing the path where to save the generated code. If None, uses default naming convention.
-      Outputs:
-         - Returns a tuple containing (`str`, `float`, `str`):
-               - `str`: The generated code.
-               - `float`: The total cost of the operation.
-               - `str`: The name of the model used.
+% Here are the inputs and outputs of the function:
+   Inputs:
+      - `ctx` (`click.Context`): The Click context object containing CLI options and parameters.
+      - 'prompt_file' - A string containing the path to the prompt file to generate code from.
+      - 'output' - An optional string containing the path where to save the generated code. If None, uses default naming convention.
+      - 'original_prompt' - An optional string containing the path to the original prompt file used for incremental generation. If None, attempts to use git to find the last committed version.
+      - 'incremental' - A boolean that forces the use of incremental patching even if the diff analyzer suggests full regeneration. Default is False.
+      - 'time' - A float that controls the thinking time or reasoning effort for the LLM model. Default is 0.25.
+   Outputs:
+      - Returns a tuple containing (`str`, `bool`, `float`, `str`):
+            - `str`: The generated or updated code.
+            - `bool`: Whether the operation was incremental (True) or a full regeneration (False).
+            - `float`: The total cost of the operation.
+            - `str`: The name of the model used.
 
-   <examples>
-      % Here is how to use the Python Click library to create a command line program:
-      <click_example>
-      <include>context/click_example.py</include>
-      </click_example>
+<examples>
+   % Here is how to use the Python Click library to create a command line program:
+   <click_example>
+   <include>context/click_example.py</include>
+   </click_example>
 
-      % Here are examples of how to use internal modules:
-      <internal_example_modules>
-         - Here is an example of how to use the `construct_paths` function:
-         <construct_paths_example>
-         <include>context/construct_paths_example.py</include>
-         </construct_paths_example>
+   % Here are examples of how to use internal modules:
+   <internal_example_modules>
+      - Here is an example of how to use the `construct_paths` function:
+      <construct_paths_example>
+      <include>context/construct_paths_example.py</include>
+      </construct_paths_example>
 
-         - Here is an example of how to use the `code_generator` function:
-         <code_generator_example>
-         <include>context/code_generator_example.py</include>
-         </code_generator_example>
+      - Here is an example of how to use the `code_generator` function:
+      <code_generator_example>
+      <include>context/code_generator_example.py</include>
+      </code_generator_example>
+      
+      - Here is an example of how to use the `incremental_code_generator` function:
+      <incremental_code_generator_example>
+      <include>context/incremental_code_generator_example.py</include>
+      </incremental_code_generator_example>
 
-         - Here is an example of how to use the `get_jwt_token` function to get the JWT_TOKEN:
-         <get_jwt_token_example>
-         <include>context/get_jwt_token_example.py</include>
-         </get_jwt_token_example>
-         % The `get_jwt_token` function is a async function and must be run with `asyncio.run`. Use the environment variable `REACT_APP_FIREBASE_API_KEY` to pass the firebase api key to the function.
+      - Here is an example of how to use the `get_jwt_token` function to get the JWT_TOKEN:
+      <get_jwt_token_example>
+      <include>context/get_jwt_token_example.py</include>
+      </get_jwt_token_example>
+      % The `get_jwt_token` function is a async function and must be run with `asyncio.run`. Use the environment variable `REACT_APP_FIREBASE_API_KEY` to pass the firebase api key to the function.
 
-         - Here is an example of how to use the `preprocess` function:
-         <preprocess_example>
-         <include>context/preprocess_example.py</include>
-         </preprocess_example>
+      - Here is an example of how to use the `preprocess` function:
+      <preprocess_example>
+      <include>context/preprocess_example.py</include>
+      </preprocess_example>
 
-      </internal_example_modules>
+   </internal_example_modules>
 
-      % Here is how to call the cloud version of the code generator when not using the `--local` flag:
-      <cloud_code_generator_example>
-         curl -X POST \
-               'https://us-central1-prompt-driven-development.cloudfunctions.net/generateCode' \
-               -H "Authorization: Bearer $JWT_TOKEN" \
-               -H 'Content-Type: application/json' \
-               -d '{
-            "promptContent": "Write a function to reverse sort a dictionary in python.",
-            "language": "python",
-            "strength": 0.5,
-            "temperature": 0.0,
-            "verbose": true
-         }'
-      </cloud_code_generator_example>
-   </examples>
+   % Here is how to call the cloud version of the code generator when not using the `--local` flag:
+   <cloud_code_generator_example>
+      curl -X POST \
+            'https://us-central1-prompt-driven-development.cloudfunctions.net/generateCode' \
+            -H "Authorization: Bearer $JWT_TOKEN" \
+            -H 'Content-Type: application/json' \
+            -d '{
+         "promptContent": "Write a function to reverse sort a dictionary in python.",
+         "language": "python",
+         "strength": 0.5,
+         "temperature": 0.0,
+         <pdd>"time": 0.25, # not yet implemented</pdd>
+         "verbose": true
+      }'
+   </cloud_code_generator_example>
+</examples>
 
-   % Here is the README for the cli command that has details of how the 'generate' command works:
-      <cli_command_readme>
-      <include>./README.md</include>
-      </cli_command_readme>
+% Here is the README for the cli command that has details of how the 'generate' command works:
+   <cli_command_readme>
+   <include>./README.md</include>
+   </cli_command_readme>
 
-   % Use the `--local` flag to determine whether to run the code generator locally or in the cloud.  When running in the cloud, preprocess the prompt using the `preprocess` function before sending it to the cloud function.  The `promptContent` field in the JSON payload should contain the *processed* prompt. If verbose is true, print the processed prompt to standard output.
-   </prompt_to_generate_code_from>
+% Cloud vs Local Execution Strategy:
+   1. If the `--local` flag is explicitly provided, use local execution directly.
+   2. Otherwise, attempt cloud execution first:
+      - Preprocess the prompt using the `preprocess` function
+      - Use the JWT token for authentication
+      - Set a reasonable timeout (e.g., 30 seconds) for the API request
+      - The `promptContent` field in JSON payload should contain the *processed* prompt
+   3. If cloud execution fails (API errors, timeouts, authentication issues):
+      - Log a warning message that cloud execution failed and is falling back to local
+      - Automatically fall back to local execution
+      - Ensure all required API keys for local execution are available
+   4. For both execution modes, if verbose is true, print relevant execution information
+
+% The function handles incremental code generation:
+    1. If an output location is provided and the file exists, attempt incremental generation if:
+       - The original_prompt is specified explicitly via the --original-prompt parameter, or
+       - The prompt file is tracked in git (in which case we can get the last committed version)
+    2. If incremental generation is performed, stage both the prompt file and output file with git add
+       if they aren't already staged or committed before writing the output file, to ensure the user can roll back if needed
+    3. Always perform full generation via the code_generator function if:
+       - No output location is provided, or
+       - The output file doesn't exist, or
+       - We can't get the original prompt (no --original-prompt and not in git)
+       - The incremental_code_generator returns is_incremental=False indicating a full regeneration is needed
+    4. Force incremental generation if the --incremental flag is set, but warn if no output file exists and do full generation
+
+% The function's implementation should include these key steps:
+    1. Process the prompt_file (read content and preprocess if needed)
+    2. Determine the language from the prompt file name
+    3. Determine whether to use incremental generation or full generation:
+       - Check if output is specified and file exists
+       - If original_prompt is specified, use it; otherwise try to get last committed version from git
+       - If both conditions met, try incremental generation
+    4. For incremental generation:
+       - Read the existing code from the output file
+       - Read original prompt content (from specified file or git)
+       - Stage prompt_file and output file with git (if they aren't already staged/committed)
+       - Call incremental_code_generator with appropriate parameters 
+       - If incremental_code_generator returns is_incremental=False, fall back to full generation
+    5. For full generation:
+       - Call code_generator with appropriate parameters, applying the cloud/local execution strategy
+       - If cloud execution fails, automatically fall back to local execution with appropriate warnings
+    6. Write the final code to the output location
+    7. Return the generated code, incremental flag, cost, and model name
