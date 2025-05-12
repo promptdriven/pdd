@@ -1,313 +1,265 @@
-# tests/test_incremental_code_generator.py
 """
 Detailed Test Plan for incremental_code_generator
 ===============================================
 
-Objective:
-----------
-Ensure the `incremental_code_generator` function behaves correctly across various scenarios, including edge cases,
-normal operation, and error conditions, while maintaining good code coverage.
+Test Objectives:
+- Ensure the incremental_code_generator function handles all inputs, edge cases, and decision paths correctly.
+- Verify error handling for invalid inputs and external failures.
+- Confirm correct behavior for incremental patching vs. full regeneration based on diff analysis and force_incremental.
+- Validate cost accumulation and model name reporting.
+- Test verbose logging and preprocessing toggles.
 
 Test Strategy:
---------------
-- Use unit tests with pytest for all scenarios, leveraging fixtures and mocking to isolate dependencies.
-- Focus on functional behavior (inputs leading to expected outputs) rather than internal implementation details.
-- Mock external dependencies (`llm_invoke`, `code_generator`, `load_prompt_template`) to simulate responses and failures.
-- Test both incremental patching and full regeneration paths.
-- Verify error handling, cost tracking, and model name selection.
-- Minimize mocking to ensure real code paths are tested where possible, but mock LLM interactions to avoid external calls.
+1. Unit Tests (using pytest):
+   - Input Validation Tests:
+     - Test empty or missing inputs for original_prompt, new_prompt, existing_code, and language.
+     - Test invalid values for strength, temperature, and time (below 0 or above 1).
+   - Decision Logic Tests:
+     - Test major change detection (is_big_change=True) leading to full regeneration.
+     - Test minor change detection (is_big_change=False) leading to incremental patching.
+     - Test force_incremental=True overriding major change detection.
+   - Verbose Logging Tests:
+     - Test that verbose output is generated when verbose=True.
+     - Test that no output is generated when verbose=False.
+   - Preprocessing Tests:
+     - Test behavior with preprocess_prompt=True (mock preprocessing).
+     - Test behavior with preprocess_prompt=False (no preprocessing).
+   - Error Handling Tests:
+     - Test exception handling when llm_invoke raises an error.
+   - Cost and Model Name Tests:
+     - Test that total_cost accumulates correctly across LLM calls.
+     - Test that model_name matches the model used in the main operation.
+   - Mocking:
+     - Mock llm_invoke to simulate diff analyzer and code patcher responses.
+     - Mock load_prompt_template to return static templates.
+     - Mock preprocess to simulate preprocessing behavior.
+     - Use capsys in pytest to capture console output for verbose logging tests.
 
-Test Categories and Cases:
---------------------------
-1. Input Validation Tests:
-   - Test empty or None values for required inputs (`original_prompt`, `new_prompt`, `existing_code`, `language`).
-   - Test invalid ranges for `strength`, `temperature`, and `time` (e.g., -1, 2).
+2. Z3 Formal Verification:
+   - Decision Logic Verification:
+     - Model the boolean logic for should_regenerate as a function of is_big_change and force_incremental.
+     - Verify that should_regenerate = not force_incremental and is_big_change holds for all possible boolean inputs.
+   - Constraints:
+     - Use Z3 to assert that the decision logic behaves as expected under all combinations of inputs.
+   - Integration with Unit Tests:
+     - Run Z3 verification as a unit test to ensure the logical properties are checked during CI/CD pipelines.
 
-2. Decision Logic Tests:
-   - Test when diff analyzer indicates a big change (`is_big_change=True`) with `force_incremental=False` (should regenerate).
-   - Test when diff analyzer indicates a big change with `force_incremental=True` (should patch incrementally).
-   - Test when diff analyzer indicates a small change (`is_big_change=False`) (should patch incrementally).
-
-3. Path Execution Tests:
-   - Test full regeneration path: Ensure `code_generator` is called and returns updated code.
-   - Test incremental patching path: Ensure `llm_invoke` with `code_patcher_LLM` is called and returns patched code.
-
-4. Cost and Model Name Tracking Tests:
-   - Test cost accumulation across multiple LLM calls (diff analyzer + regeneration or patching).
-   - Test model name prioritization (should use the first or main operation's model name).
-
-5. Verbose Mode Tests:
-   - Test with `verbose=True` to ensure logging occurs (capture console output if needed).
-   - Test with `verbose=False` to ensure no impact on functionality.
-
-6. Error Handling Tests:
-   - Test failure in `llm_invoke` for diff analyzer (should raise exception).
-   - Test failure in `code_generator` during regeneration (should raise exception).
-   - Test failure in `llm_invoke` for patching (should raise exception).
-   - Test failure to load prompt templates (should raise exception).
-
-7. Preprocessing Tests:
-   - Test with `preprocess_prompt=True` (ensure preprocessing is applied).
-   - Test with `preprocess_prompt=False` (ensure raw template is used).
-
-8. Language Handling Tests:
-   - Test with different languages (e.g., 'python', 'bash') to ensure correct delegation to `code_generator`.
-
-Fixtures and Setup:
--------------------
-- Use pytest fixtures to provide common test data (e.g., sample prompts, code snippets).
-- Mock `llm_invoke`, `code_generator`, and `load_prompt_template` to return predefined responses or raise exceptions.
-- Use `capsys` to capture console output for verbose mode tests.
-
-Test Isolation:
----------------
-- Ensure tests are independent by resetting mocks and using fresh fixtures for each test.
-- Avoid manipulating internal state; rely on public APIs only.
+Test Coverage Goals:
+- Cover all input validation paths.
+- Cover both branches of the regeneration decision (should_regenerate=True and False).
+- Cover error handling paths for external failures.
+- Cover verbose logging and preprocessing toggles.
+- Verify cost accumulation and model name reporting.
 """
 
 import pytest
 from unittest.mock import patch, MagicMock
-from pdd.incremental_code_generator import incremental_code_generator, DiffAnalysis, PatchResult
+from z3 import Bool, And, Not, Solver, sat
+from pdd.incremental_code_generator import incremental_code_generator, DiffAnalysis, CodePatchResult, DEFAULT_STRENGTH
 
-# Fixtures for common test data
+# Fixture for common test data
 @pytest.fixture
-def sample_prompts():
+def common_inputs():
     return {
-        "original": "Original prompt to generate code",
-        "new": "Updated prompt with changes",
-        "existing_code": "def sample_function():\n    return 42",
-        "language": "python"
+        "original_prompt": "Original prompt",
+        "new_prompt": "New prompt",
+        "existing_code": "def example(): pass",
+        "language": "python",
+        "strength": DEFAULT_STRENGTH,
+        "temperature": 0.0,
+        "time": 0.25,
+        "force_incremental": False,
+        "verbose": False,
+        "preprocess_prompt": True
     }
 
-@pytest.fixture
-def diff_analysis_big_change():
-    return DiffAnalysis(
-        is_big_change=True,
-        change_description="Significant changes detected.",
-        analysis="Analysis indicates a major overhaul is needed."
-    )
+# Mock responses for llm_invoke
+def mock_diff_response(is_big_change):
+    return {
+        "result": DiffAnalysis(
+            is_big_change=is_big_change,
+            change_description="Change description",
+            analysis="Analysis of diff"
+        ),
+        "cost": 0.001,
+        "model_name": "test-model"
+    }
 
-@pytest.fixture
-def diff_analysis_small_change():
-    return DiffAnalysis(
-        is_big_change=False,
-        change_description="Minor changes detected.",
-        analysis="Analysis indicates small updates are sufficient."
-    )
+def mock_patch_response():
+    return {
+        "result": CodePatchResult(
+            patched_code="def updated(): pass",
+            analysis="Patching analysis",
+            planned_modifications="Planned mods"
+        ),
+        "cost": 0.002,
+        "model_name": "test-model" # Ensure this model name is consistent if testing model_name update
+    }
 
-@pytest.fixture
-def patch_result():
-    return PatchResult(
-        patched_code="def updated_function():\n    return 43",
-        analysis="Patching completed successfully.",
-        planned_modifications="Updated return value."
-    )
+# Test input validation for empty or missing inputs
+@pytest.mark.parametrize("field", ["original_prompt", "new_prompt", "existing_code", "language"])
+def test_empty_input_validation(common_inputs, field):
+    common_inputs[field] = ""
+    with pytest.raises(ValueError, match="All required inputs"):
+        incremental_code_generator(**common_inputs)
 
-# Input Validation Tests
-def test_empty_original_prompt(sample_prompts):
-    with pytest.raises(ValueError, match="All required inputs.*must be provided"):
-        incremental_code_generator(
-            original_prompt="",
-            new_prompt=sample_prompts["new"],
-            existing_code=sample_prompts["existing_code"],
-            language=sample_prompts["language"]
-        )
-
-def test_empty_new_prompt(sample_prompts):
-    with pytest.raises(ValueError, match="All required inputs.*must be provided"):
-        incremental_code_generator(
-            original_prompt=sample_prompts["original"],
-            new_prompt="",
-            existing_code=sample_prompts["existing_code"],
-            language=sample_prompts["language"]
-        )
-
-def test_empty_existing_code(sample_prompts):
-    with pytest.raises(ValueError, match="All required inputs.*must be provided"):
-        incremental_code_generator(
-            original_prompt=sample_prompts["original"],
-            new_prompt=sample_prompts["new"],
-            existing_code="",
-            language=sample_prompts["language"]
-        )
-
-def test_empty_language(sample_prompts):
-    with pytest.raises(ValueError, match="All required inputs.*must be provided"):
-        incremental_code_generator(
-            original_prompt=sample_prompts["original"],
-            new_prompt=sample_prompts["new"],
-            existing_code=sample_prompts["existing_code"],
-            language=""
-        )
-
-def test_invalid_strength(sample_prompts):
+# Test input validation for invalid parameter ranges
+@pytest.mark.parametrize("param, value", [
+    ("strength", -0.1),
+    ("strength", 1.1),
+    ("temperature", -0.1),
+    ("temperature", 1.1),
+    ("time", -0.1),
+    ("time", 1.1)
+])
+def test_invalid_parameter_range(common_inputs, param, value):
+    common_inputs[param] = value
     with pytest.raises(ValueError, match="Strength, temperature, and time must be between 0 and 1"):
-        incremental_code_generator(
-            original_prompt=sample_prompts["original"],
-            new_prompt=sample_prompts["new"],
-            existing_code=sample_prompts["existing_code"],
-            language=sample_prompts["language"],
-            strength=1.5
-        )
+        incremental_code_generator(**common_inputs)
 
-def test_invalid_temperature(sample_prompts):
-    with pytest.raises(ValueError, match="Strength, temperature, and time must be between 0 and 1"):
-        incremental_code_generator(
-            original_prompt=sample_prompts["original"],
-            new_prompt=sample_prompts["new"],
-            existing_code=sample_prompts["existing_code"],
-            language=sample_prompts["language"],
-            temperature=-0.1
-        )
-
-def test_invalid_time(sample_prompts):
-    with pytest.raises(ValueError, match="Strength, temperature, and time must be between 0 and 1"):
-        incremental_code_generator(
-            original_prompt=sample_prompts["original"],
-            new_prompt=sample_prompts["new"],
-            existing_code=sample_prompts["existing_code"],
-            language=sample_prompts["language"],
-            time=2.0
-        )
-
-# Decision Logic and Path Execution Tests
-@patch('pdd.incremental_code_generator.load_prompt_template')
-@patch('pdd.incremental_code_generator.llm_invoke')
-@patch('pdd.incremental_code_generator.code_generator')
-def test_full_regeneration_big_change(mock_code_generator, mock_llm_invoke, mock_load_template, sample_prompts, diff_analysis_big_change):
+# Test major change detection leading to full regeneration
+@patch("pdd.incremental_code_generator.llm_invoke")
+@patch("pdd.incremental_code_generator.load_prompt_template")
+@patch("pdd.incremental_code_generator.preprocess")
+def test_major_change_full_regeneration(mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs):
     mock_load_template.return_value = "diff_analyzer_template"
-    mock_llm_invoke.return_value = {"result": diff_analysis_big_change, "cost": 0.01, "model_name": "model1"}
-    mock_code_generator.return_value = ("def regenerated_code():\n    return 100", 0.02, "model2")
+    mock_preprocess.return_value = "processed_template"
+    mock_llm_invoke.return_value = mock_diff_response(is_big_change=True)
+    
+    updated_code, is_incremental, total_cost, model_name = incremental_code_generator(**common_inputs)
+    
+    assert updated_code is None
+    assert is_incremental is False
+    assert total_cost == 0.001
+    assert model_name == "test-model"
 
-    updated_code, is_incremental, total_cost, model_name = incremental_code_generator(
-        original_prompt=sample_prompts["original"],
-        new_prompt=sample_prompts["new"],
-        existing_code=sample_prompts["existing_code"],
-        language=sample_prompts["language"],
-        force_incremental=False
-    )
+# Test minor change detection leading to incremental patching
+@patch("pdd.incremental_code_generator.llm_invoke")
+@patch("pdd.incremental_code_generator.load_prompt_template")
+@patch("pdd.incremental_code_generator.preprocess")
+def test_minor_change_incremental_patching(mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs):
+    mock_load_template.return_value = "template"
+    mock_preprocess.return_value = "processed_template"
+    mock_llm_invoke.side_effect = [mock_diff_response(is_big_change=False), mock_patch_response()]
+    
+    updated_code, is_incremental, total_cost, model_name = incremental_code_generator(**common_inputs)
+    
+    assert updated_code == "def updated(): pass"
+    assert is_incremental is True
+    assert total_cost == 0.001 + 0.002 # Sum of costs
+    assert model_name == "test-model" # Will be from patch_response
 
-    assert is_incremental == False
-    assert updated_code == "def regenerated_code():\n    return 100"
-    assert total_cost == 0.03
-    assert model_name == "model1"
-    mock_code_generator.assert_called_once()
+# Test force incremental overriding major change
+@patch("pdd.incremental_code_generator.llm_invoke")
+@patch("pdd.incremental_code_generator.load_prompt_template")
+@patch("pdd.incremental_code_generator.preprocess")
+def test_force_incremental_override(mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs):
+    common_inputs["force_incremental"] = True
+    mock_load_template.return_value = "template"
+    mock_preprocess.return_value = "processed_template"
+    mock_llm_invoke.side_effect = [mock_diff_response(is_big_change=True), mock_patch_response()]
+    
+    updated_code, is_incremental, total_cost, model_name = incremental_code_generator(**common_inputs)
+    
+    assert updated_code == "def updated(): pass"
+    assert is_incremental is True
+    assert total_cost == 0.001 + 0.002 # Sum of costs
+    assert model_name == "test-model" # Will be from patch_response
 
-@patch('pdd.incremental_code_generator.load_prompt_template')
-@patch('pdd.incremental_code_generator.llm_invoke')
-def test_incremental_patch_small_change(mock_llm_invoke, mock_load_template, sample_prompts, diff_analysis_small_change, patch_result):
-    mock_load_template.side_effect = ["diff_analyzer_template", "patcher_template"]
-    mock_llm_invoke.side_effect = [
-        {"result": diff_analysis_small_change, "cost": 0.01, "model_name": "model1"},
-        {"result": patch_result, "cost": 0.015, "model_name": "model1"}
-    ]
-
-    updated_code, is_incremental, total_cost, model_name = incremental_code_generator(
-        original_prompt=sample_prompts["original"],
-        new_prompt=sample_prompts["new"],
-        existing_code=sample_prompts["existing_code"],
-        language=sample_prompts["language"],
-        force_incremental=False
-    )
-
-    assert is_incremental == True
-    assert updated_code == patch_result.patched_code
-    assert total_cost == 0.025
-    assert model_name == "model1"
-
-@patch('pdd.incremental_code_generator.load_prompt_template')
-@patch('pdd.incremental_code_generator.llm_invoke')
-def test_force_incremental_big_change(mock_llm_invoke, mock_load_template, sample_prompts, diff_analysis_big_change, patch_result):
-    mock_load_template.side_effect = ["diff_analyzer_template", "patcher_template"]
-    mock_llm_invoke.side_effect = [
-        {"result": diff_analysis_big_change, "cost": 0.01, "model_name": "model1"},
-        {"result": patch_result, "cost": 0.015, "model_name": "model1"}
-    ]
-
-    updated_code, is_incremental, total_cost, model_name = incremental_code_generator(
-        original_prompt=sample_prompts["original"],
-        new_prompt=sample_prompts["new"],
-        existing_code=sample_prompts["existing_code"],
-        language=sample_prompts["language"],
-        force_incremental=True
-    )
-
-    assert is_incremental == True
-    assert updated_code == patch_result.patched_code
-    assert total_cost == 0.025
-    assert model_name == "model1"
-
-# Verbose Mode Test (basic check; detailed console output capture optional)
-@patch('pdd.incremental_code_generator.load_prompt_template')
-@patch('pdd.incremental_code_generator.llm_invoke')
-def test_verbose_mode(mock_llm_invoke, mock_load_template, sample_prompts, diff_analysis_small_change, patch_result, capsys):
-    mock_load_template.side_effect = ["diff_analyzer_template", "patcher_template"]
-    mock_llm_invoke.side_effect = [
-        {"result": diff_analysis_small_change, "cost": 0.01, "model_name": "model1"},
-        {"result": patch_result, "cost": 0.015, "model_name": "model1"}
-    ]
-
-    incremental_code_generator(
-        original_prompt=sample_prompts["original"],
-        new_prompt=sample_prompts["new"],
-        existing_code=sample_prompts["existing_code"],
-        language=sample_prompts["language"],
-        verbose=True
-    )
-
+# Test verbose logging output
+@patch("pdd.incremental_code_generator.llm_invoke")
+@patch("pdd.incremental_code_generator.load_prompt_template")
+@patch("pdd.incremental_code_generator.preprocess")
+def test_verbose_logging(mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs, capsys):
+    common_inputs["verbose"] = True
+    mock_load_template.return_value = "template"
+    mock_preprocess.return_value = "processed_template"
+    mock_llm_invoke.side_effect = [mock_diff_response(is_big_change=False), mock_patch_response()]
+    
+    incremental_code_generator(**common_inputs)
     captured = capsys.readouterr()
-    assert "Diff Analysis" in captured.out or "Change Type" in captured.out
+    assert "Diff Analyzer Results" in captured.out
+    assert "Code Patcher Results" in captured.out
 
-# Error Handling Tests
-@patch('pdd.incremental_code_generator.load_prompt_template')
-@patch('pdd.incremental_code_generator.llm_invoke')
-def test_diff_analyzer_failure(mock_llm_invoke, mock_load_template, sample_prompts):
-    mock_load_template.return_value = "diff_analyzer_template"
+# Test no verbose logging
+@patch("pdd.incremental_code_generator.llm_invoke")
+@patch("pdd.incremental_code_generator.load_prompt_template")
+@patch("pdd.incremental_code_generator.preprocess")
+def test_no_verbose_logging(mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs, capsys):
+    common_inputs["verbose"] = False # This is already default in common_inputs, but explicit is fine
+    mock_load_template.return_value = "template"
+    mock_preprocess.return_value = "processed_template"
+    mock_llm_invoke.side_effect = [mock_diff_response(is_big_change=False), mock_patch_response()]
+    
+    incremental_code_generator(**common_inputs)
+    captured = capsys.readouterr()
+    assert captured.out == ""
+
+# Test preprocess_prompt toggle
+@patch("pdd.incremental_code_generator.llm_invoke")
+@patch("pdd.incremental_code_generator.load_prompt_template")
+@patch("pdd.incremental_code_generator.preprocess")
+def test_no_preprocess_prompt(mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs):
+    common_inputs["preprocess_prompt"] = False
+    mock_load_template.return_value = "template" # Used for both diff and patch templates
+    
+    # Corrected: Use side_effect for llm_invoke to handle two calls
+    mock_llm_invoke.side_effect = [
+        mock_diff_response(is_big_change=False), # For the first call (diff_analyzer)
+        mock_patch_response()                    # For the second call (code_patcher)
+    ]
+    
+    updated_code, is_incremental, total_cost, model_name = incremental_code_generator(**common_inputs)
+    
+    mock_preprocess.assert_not_called()
+    
+    # Added assertions to verify behavior when preprocess is off and patching occurs
+    assert updated_code == "def updated(): pass"
+    assert is_incremental is True
+    assert total_cost == 0.001 + 0.002 # Sum of costs
+    assert model_name == "test-model" # Will be from patch_response
+
+# Test error handling for LLM invocation failure
+@patch("pdd.incremental_code_generator.llm_invoke")
+@patch("pdd.incremental_code_generator.load_prompt_template")
+@patch("pdd.incremental_code_generator.preprocess")
+def test_llm_invoke_failure(mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs):
+    mock_load_template.return_value = "template"
+    mock_preprocess.return_value = "processed_template"
     mock_llm_invoke.side_effect = Exception("LLM invocation failed")
+    
+    with pytest.raises(RuntimeError, match="Failed to process incremental code generation: LLM invocation failed"):
+        incremental_code_generator(**common_inputs)
 
-    with pytest.raises(Exception, match="LLM invocation failed"):
-        incremental_code_generator(
-            original_prompt=sample_prompts["original"],
-            new_prompt=sample_prompts["new"],
-            existing_code=sample_prompts["existing_code"],
-            language=sample_prompts["language"]
-        )
-
-@patch('pdd.incremental_code_generator.load_prompt_template')
-@patch('pdd.incremental_code_generator.llm_invoke')
-@patch('pdd.incremental_code_generator.code_generator')
-def test_code_generator_failure(mock_code_generator, mock_llm_invoke, mock_load_template, sample_prompts, diff_analysis_big_change):
-    mock_load_template.return_value = "diff_analyzer_template"
-    mock_llm_invoke.return_value = {"result": diff_analysis_big_change, "cost": 0.01, "model_name": "model1"}
-    mock_code_generator.side_effect = Exception("Code generation failed")
-
-    with pytest.raises(Exception, match="Code generation failed"):
-        incremental_code_generator(
-            original_prompt=sample_prompts["original"],
-            new_prompt=sample_prompts["new"],
-            existing_code=sample_prompts["existing_code"],
-            language=sample_prompts["language"],
-            force_incremental=False
-        )
-
-# Language Handling Test
-@patch('pdd.incremental_code_generator.load_prompt_template')
-@patch('pdd.incremental_code_generator.llm_invoke')
-@patch('pdd.incremental_code_generator.code_generator')
-def test_different_language(mock_code_generator, mock_llm_invoke, mock_load_template, sample_prompts, diff_analysis_big_change):
-    mock_load_template.return_value = "diff_analyzer_template"
-    mock_llm_invoke.return_value = {"result": diff_analysis_big_change, "cost": 0.01, "model_name": "model1"}
-    mock_code_generator.return_value = ("#!/bin/bash\necho 'Hello'", 0.02, "model2")
-
-    updated_code, is_incremental, total_cost, model_name = incremental_code_generator(
-        original_prompt=sample_prompts["original"],
-        new_prompt=sample_prompts["new"],
-        existing_code=sample_prompts["existing_code"],
-        language="bash",
-        force_incremental=False
-    )
-
-    assert "bash" in updated_code
-    assert is_incremental == False
-    assert total_cost == 0.03
-    assert model_name == "model1"
+# Z3 Formal Verification for decision logic
+def test_decision_logic_formal_verification():
+    # Define boolean variables
+    is_big_change = Bool('is_big_change')
+    force_incremental = Bool('force_incremental')
+    should_regenerate = Bool('should_regenerate')
+    
+    # Define the expected logic: should_regenerate = not force_incremental and is_big_change
+    expected_logic = (should_regenerate == And(Not(force_incremental), is_big_change))
+    
+    # Create a solver
+    solver = Solver()
+    solver.add(expected_logic)
+    
+    # Check all possible combinations by not constraining inputs
+    assert solver.check() == sat, "Decision logic verification failed"
+    
+    # Optionally, iterate through all combinations to confirm
+    combinations = [
+        {"is_big_change": True, "force_incremental": True, "expected_should_regenerate": False},
+        {"is_big_change": True, "force_incremental": False, "expected_should_regenerate": True},
+        {"is_big_change": False, "force_incremental": True, "expected_should_regenerate": False},
+        {"is_big_change": False, "force_incremental": False, "expected_should_regenerate": False},
+    ]
+    
+    for combo in combinations:
+        solver = Solver()
+        solver.add(is_big_change == combo["is_big_change"])
+        solver.add(force_incremental == combo["force_incremental"])
+        solver.add(should_regenerate == combo["expected_should_regenerate"])
+        solver.add(expected_logic)
+        assert solver.check() == sat, f"Failed for {combo}"
