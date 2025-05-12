@@ -128,10 +128,10 @@ def _stage_file_if_needed(file_path_str: str, git_root: Optional[str], verbose: 
 def code_generator_main(
     ctx: click.Context,
     prompt_file: str,
-    output: Optional[str],
-    original_prompt: Optional[str],
-    incremental: bool, # This is the --incremental flag from CLI
-    time: float,
+    output: Optional[str] = None,
+    original_prompt: Optional[str] = None,
+    incremental: bool = False, # This is the --incremental flag from CLI
+    time: float = 0.0, # Default to 0.0 if not provided
 ) -> Tuple[str, bool, float, str]:
     """
     CLI wrapper for generating code from prompts.
