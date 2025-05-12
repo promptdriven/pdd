@@ -7,6 +7,37 @@ CONTEXT_DIR := $(STAGING_DIR)/context
 TESTS_DIR := $(STAGING_DIR)/tests
 PROMPTS_DIR := prompts
 
+# Default target
+.PHONY: help
+help:
+	@echo "PDD Makefile Help"
+	@echo "================="
+	@echo ""
+	@echo "Generation Commands:"
+	@echo "  make generate [MODULE=name]  - Generate specific module or all files"
+	@echo "  make run-examples            - Run all example files"
+	@echo ""
+	@echo "Testing Commands:"
+	@echo "  make test                    - Run staging tests"
+	@echo "  make coverage                - Run tests with coverage"
+	@echo "  make regression              - Run regression tests"
+	@echo "  make analysis                - Run regression analysis"
+	@echo "  make verify MODULE=name      - Verify code functionality against prompt intent"
+	@echo ""
+	@echo "Fixing & Maintenance:"
+	@echo "  make fix [MODULE=name]       - Fix prompts command"
+	@echo "  make crash MODULE=name       - Fix crashes in code"
+	@echo "  make requirements            - Generate requirements.txt"
+	@echo "  make clean                   - Clean generated files"
+	@echo ""
+	@echo "Build & Deployment:"
+	@echo "  make install                 - Install pdd"
+	@echo "  make build                   - Build pdd package"
+	@echo "  make release                 - Bump version and build package"
+	@echo "  make staging                 - Copy files to staging"
+	@echo "  make production              - Copy files from staging to pdd"
+	@echo "  make update-extension        - Update VS Code extension"
+
 # Python files
 PY_PROMPTS := $(wildcard $(PROMPTS_DIR)/*_python.prompt)
 PY_OUTPUTS := $(patsubst $(PROMPTS_DIR)/%_python.prompt,$(PDD_DIR)/%.py,$(PY_PROMPTS))
@@ -28,7 +59,7 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory
 EXAMPLE_FILES := $(wildcard $(CONTEXT_DIR)/*_example.py)
 
-.PHONY: all clean test requirements production coverage staging regression install build analysis fix crash update-extension generate run-examples
+.PHONY: all clean test requirements production coverage staging regression install build analysis fix crash update-extension generate run-examples verify
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -75,17 +106,17 @@ ifdef MODULE
 	@# Generate Python file
 	@echo "Generating $(PY_FILE)"
 	@mkdir -p $(PDD_DIR)
-	-@PYTHONPATH=$(PROD_DIR) pdd --strength .8 generate --output $(PY_FILE) $(PY_PROMPT)
+	-@PYTHONPATH=$(PROD_DIR) pdd --strength .9 generate --output $(PY_FILE) $(PY_PROMPT)
 
 	@# Generate example file
 	@echo "Generating example for $(PY_FILE)"
 	@mkdir -p $(CONTEXT_DIR)
-	-@PYTHONPATH=$(PROD_DIR) pdd  --strength .95 --temperature 1  --verbose example --output $(EXAMPLE_FILE) $(PY_PROMPT) $(PY_FILE)
+	-@PYTHONPATH=$(PROD_DIR) pdd  --strength .9 --verbose example --output $(EXAMPLE_FILE) $(PY_PROMPT) $(PY_FILE)
 
 	@# Generate test file
 	@echo "Generating test for $(PY_FILE)"
 	@mkdir -p $(TESTS_DIR)
-	-@PYTHONPATH=$(PROD_DIR) pdd --strength .8 test --output $(TEST_FILE) $(PY_PROMPT) $(PY_FILE)
+	-@PYTHONPATH=$(PROD_DIR) pdd --strength .9 test --output $(TEST_FILE) $(PY_PROMPT) $(PY_FILE)
 else
 	@echo "Generating all Python files, examples, and tests"
 	@$(MAKE) $(PY_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
@@ -127,10 +158,27 @@ ifdef MODULE
 	@-PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python $(PROGRAM_FILE) 2> $(ERROR_FILE) || true
 	
 	@echo "Fixing crashes in $(PY_FILE)"
-	-pdd --strength .95 --temperature 1 --verbose crash --loop --max-attempts 3 --budget 5.0 --output $(PDD_DIR)/$(MODULE).py --output-program $(CONTEXT_DIR)/$(MODULE)_example.py $(PY_PROMPT) $(PY_FILE) $(PROGRAM_FILE) $(ERROR_FILE)
+	-pdd --strength .9 --temperature 0 --verbose crash --loop --max-attempts 3 --budget 5.0 --output $(PDD_DIR)/$(MODULE).py --output-program $(CONTEXT_DIR)/$(MODULE)_example.py $(PY_PROMPT) $(PY_FILE) $(PROGRAM_FILE) $(ERROR_FILE)
 else
 	@echo "Please specify a MODULE to fix crashes"
 	@echo "Usage: make crash MODULE=<module_name>"
+endif
+
+# Verify code functionality against prompt intent
+verify:
+ifdef MODULE
+	@echo "Verifying functionality for module: $(MODULE)"
+	@# Define file paths based on MODULE
+	$(eval PY_FILE := $(PDD_DIR)/$(MODULE).py)
+	$(eval PY_PROMPT := $(PROMPTS_DIR)/$(MODULE)_python.prompt)
+	$(eval PROGRAM_FILE := $(CONTEXT_DIR)/$(MODULE)_example.py)
+	$(eval RESULTS_FILE := $(MODULE)_verify_results.log)
+	
+	@echo "Verifying $(PY_FILE) functionality..."
+	-conda run -n pdd --no-capture-output pdd --strength .9 --verbose verify --max-attempts 3 --budget 5.0 --output-code $(PDD_DIR)/$(MODULE)_verified.py --output-program $(CONTEXT_DIR)/$(MODULE)_example_verified.py --output-results $(RESULTS_FILE) $(PY_PROMPT) $(PY_FILE) $(PROGRAM_FILE)
+else
+	@echo "Please specify a MODULE to verify"
+	@echo "Usage: make verify MODULE=<module_name>"
 endif
 
 # Fix prompts command
