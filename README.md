@@ -437,14 +437,11 @@ Here are the main commands provided by PDD:
 
 ### 1. generate
 
-Create runnable code from a prompt file. This command produces the full implementation code that fulfills all requirements in the prompt.
+Create runnable code from a prompt file. This command produces the full implementation code that fulfills all requirements in the prompt. When changes are detected between the current prompt and its last committed version, it can automatically perform incremental updates rather than full regeneration.
 
 ```bash
-# Cloud execution (default)
-pdd generate [OPTIONS] PROMPT_FILE
-
-# Local execution
-pdd --local generate [OPTIONS] PROMPT_FILE
+# Basic usage
+pdd [GLOBAL OPTIONS] generate [OPTIONS] PROMPT_FILE
 ```
 
 Arguments:
@@ -452,12 +449,31 @@ Arguments:
 
 Options:
 - `--output LOCATION`: Specify where to save the generated code. The default file name is `<basename>.<language_file_extension>`. If an environment variable `PDD_GENERATE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--original-prompt FILENAME`: The original prompt file used to generate the existing code. If not specified, the command automatically uses the last committed version of the prompt file from git.
+- `--incremental`: Force incremental patching even if changes are significant. This option is only valid when an output location is specified and the file exists.
 
-**When to use**: Choose this command when implementing new functionality from scratch or creating comprehensive implementation details. Use this when you need the complete functional code that other code can use.
+**Git Integration**:
+- When the command detects changes between the current prompt and its last committed version, it automatically considers incremental generation if the output file exists.
+- If incremental generation is performed, both the current prompt and code files are staged with `git add` (if not already committed/added) to ensure you can roll back if needed.
+- Full regeneration always happens for new files (when there's no existing output file to update) or when the existing output file is deleted.
 
-Example:
+**When to use**: Choose this command when implementing new functionality from scratch or updating existing code based on prompt changes. The command will automatically detect changes and determine whether to use incremental patching or full regeneration based on the significance of the changes.
+
+Examples:
 ```
-pdd [GLOBAL OPTIONS] generate --output src/factorial_calculator.py factorial_calculator_python.prompt 
+# Basic generation with automatic git-based change detection
+# (incremental if output file exists, full generation if it doesn't)
+pdd [GLOBAL OPTIONS] generate --output src/calculator.py calculator_python.prompt 
+
+# Force incremental patching (requires output file to exist)
+pdd [GLOBAL OPTIONS] generate --incremental --output src/calculator.py calculator_python.prompt
+
+# Force full regeneration (just delete the output file first)
+rm src/calculator.py  # Delete the file
+pdd [GLOBAL OPTIONS] generate --output src/calculator.py calculator_python.prompt
+
+# Specify a different original prompt (bypassing git detection)
+pdd [GLOBAL OPTIONS] generate --output src/calculator.py  --original-prompt old_calculator_python.prompt calculator_python.prompt
 ```
 
 ### 2. example
