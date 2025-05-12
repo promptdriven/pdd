@@ -91,8 +91,8 @@ def _stage_file_if_needed(file_path_str: str, git_root: Optional[str], verbose: 
             console.print(f"[red]Failed to get git status for {rel_file_path}: {status_output}[/red]")
             return
 
-
-    status_line = status_output.strip()
+    # status_output is already stripped by _run_git_command
+    status_line = status_output # Use status_output directly as it's already stripped. Redundant strip removed.
     needs_staging = False
 
     if not status_line:  # Committed and unchanged
@@ -103,11 +103,12 @@ def _stage_file_if_needed(file_path_str: str, git_root: Optional[str], verbose: 
         if verbose:
             console.print(f"File {rel_file_path} is untracked.")
     # XY format: X=Index, Y=Worktree. We care if Worktree is Modified.
-    elif len(status_line) >= 2 and status_line[1] == 'M':
+    # status_line[0] is X (index status), status_line[1] is Y (worktree status)
+    elif len(status_line) >= 2 and status_line[1] == 'M': # Worktree is Modified (e.g. " M path", "AM path")
         needs_staging = True
         if verbose:
             console.print(f"File {rel_file_path} has unstaged modifications (status: '{status_line}').")
-    elif len(status_line) >=2 and status_line[0] == 'A' and status_line[1] == ' ': # Added to index, not modified since
+    elif len(status_line) >=2 and status_line[0] == 'A' and status_line[1] == ' ': # Added to index, not modified since ("A  path")
         if verbose:
             console.print(f"File {rel_file_path} is staged for addition (status: '{status_line}').")
     else:
@@ -187,16 +188,19 @@ def code_generator_main(
                 console.print("[yellow]Warning: No output path determined by construct_paths (checked 'output_code_file' and 'output' keys).[/yellow]")
 
         # --- Determine Generation Mode (Incremental vs. Full) ---
-        attempt_incremental_gen = False
+        conditions_met_for_incremental_attempt = False
         original_prompt_str_for_inc: Optional[str] = None
         existing_code_str_for_inc: Optional[str] = None
         
         git_repo_root = _get_git_root(prompt_file)
 
         if output_code_file_path and output_code_file_path.exists():
+            conditions_met_for_incremental_attempt = True
+            if verbose:
+                console.print(f"[cyan]Output file '{output_code_file_path}' exists. Checking for original prompt...[/cyan]")
+
             if input_strings_map.get("original_prompt_file"): 
                 original_prompt_str_for_inc = input_strings_map["original_prompt_file"]
-                attempt_incremental_gen = True
                 if verbose:
                     console.print(f"[cyan]Using provided original prompt file: {original_prompt}[/cyan]")
             elif git_repo_root: 
@@ -209,31 +213,37 @@ def code_generator_main(
                 )
                 if git_success:
                     original_prompt_str_for_inc = git_orig_prompt
-                    attempt_incremental_gen = True
                     if verbose:
                         console.print(f"[cyan]Using last committed version of '{prompt_file}' from git as original prompt.[/cyan]")
                 elif verbose:
                     console.print(f"[yellow]Could not get last committed version of '{prompt_file}' from git: {git_orig_prompt}.[/yellow]")
             
-            if attempt_incremental_gen:
+            if original_prompt_str_for_inc: # Only read existing code if we have an original prompt
                 try:
                     existing_code_str_for_inc = output_code_file_path.read_text(encoding="utf-8")
                 except Exception as e:
                     console.print(f"[red]Error reading existing code from '{output_code_file_path}': {e}[/red]")
-                    attempt_incremental_gen = False 
+                    original_prompt_str_for_inc = None # Can't do incremental without existing code
             
-            if incremental and not attempt_incremental_gen: 
-                 console.print(f"[yellow]Warning: --incremental flag was set, but failed to prepare for incremental generation (e.g., no original prompt). Performing full generation.[/yellow]")
-            elif incremental and attempt_incremental_gen: 
+            # Warning logic based on CLI flag and actual possibility
+            can_actually_do_incremental = original_prompt_str_for_inc and existing_code_str_for_inc
+            if incremental and not can_actually_do_incremental:
+                 console.print(f"[yellow]Warning: --incremental flag was set, but failed to prepare for incremental generation (e.g., no original prompt or could not read existing code). Performing full generation.[/yellow]")
+            elif incremental and can_actually_do_incremental:
                 if verbose: console.print("[cyan]--incremental flag is set, proceeding with incremental attempt.[/cyan]")
-            elif not incremental and attempt_incremental_gen:
-                if verbose: console.print("[cyan]Changes detected and original prompt available. Attempting incremental generation automatically.[/cyan]")
+            elif not incremental and can_actually_do_incremental:
+                if verbose: console.print("[cyan]Output file exists and original prompt available. Attempting incremental generation automatically.[/cyan]")
+            elif not can_actually_do_incremental and conditions_met_for_incremental_attempt: # Output exists, but no original prompt or existing code
+                 if verbose: console.print(f"[yellow]Output file '{output_code_file_path}' exists, but no original prompt found or existing code unreadable (checked CLI arg, git, and file system). Proceeding with full generation.[/yellow]")
 
-        elif incremental: 
+        elif incremental: # Output does not exist, but --incremental flag set
              console.print(f"[yellow]Warning: --incremental flag was set, but output file '{output_code_file_path or output}' does not exist. Performing full generation.[/yellow]")
-             attempt_incremental_gen = False
+             # conditions_met_for_incremental_attempt remains False
 
-        if attempt_incremental_gen and original_prompt_str_for_inc and existing_code_str_for_inc:
+        # Actual decision to call incremental_code_generator
+        can_run_incremental = conditions_met_for_incremental_attempt and original_prompt_str_for_inc and existing_code_str_for_inc
+        
+        if can_run_incremental:
             if verbose:
                 console.print(Panel("[bold blue]Attempting Incremental Code Generation[/bold blue]", expand=False))
 
@@ -274,7 +284,7 @@ def code_generator_main(
         
         if not is_incremental_operation:
             if verbose:
-                 title = "Proceeding with Full Code Generation" if attempt_incremental_gen else "Starting Full Code Generation"
+                 title = "Proceeding with Full Code Generation" if conditions_met_for_incremental_attempt else "Starting Full Code Generation"
                  console.print(Panel(f"[bold blue]{title}[/bold blue]", expand=False))
             
             effective_run_local = run_local_mode 
@@ -305,7 +315,8 @@ def code_generator_main(
                     payload = {
                         "promptContent": processed_prompt_for_cloud, "language": lang,
                         "strength": strength, "temperature": temperature,
-                        "time": time, "verbose": verbose,
+                        "time": time, # Pass time parameter to cloud
+                        "verbose": verbose,
                     }
                     headers = {"Authorization": f"Bearer {jwt_token}", "Content-Type": "application/json"}
                     
@@ -342,13 +353,14 @@ def code_generator_main(
             if effective_run_local:
                 if verbose: console.print("Performing local code generation...")
                 try:
+                    # DO NOT pass time to local code_generator as it doesn't support it
                     generated_code_str, total_cost_val, model_name_str = code_generator(
                         prompt=current_prompt_content, 
                         language=lang,
                         strength=strength,
                         temperature=temperature,
+                        # time=time, # This was the error based on verification
                         verbose=verbose
-                        # time parameter is not passed as it's not supported by the local code_generator
                     )
                     if verbose:
                          console.print(f"[green]Local code generation successful. Model: {model_name_str}, Cost: ${total_cost_val:.6f}[/green]")

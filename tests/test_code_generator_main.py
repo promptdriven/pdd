@@ -1,90 +1,3 @@
-# Test Plan:
-#
-# I. Setup and Basic Cases:
-# 1.  Test Unreadable/Missing Prompt File:
-#     - Input: `prompt_file` path that `construct_paths` indicates as problematic.
-#     - Mock: `construct_paths` to return `None` for `current_prompt_content`.
-#     - Expected: Error message printed, returns `("", False, 0.0, "")`.
-# 2.  Test Unknown Language:
-#     - Input: `prompt_file` for which `construct_paths` cannot determine language.
-#     - Mock: `construct_paths` to return `None` for `lang`.
-#     - Expected: Error message printed, returns `("", False, 0.0, "")`.
-# 3.  Test Successful Full Generation (Local Mode, Output to File):
-#     - Input: Valid `prompt_file`, `output` path, `ctx` with `local=True`.
-#     - Mock: `construct_paths`, `code_generator`, `Path.write_text`.
-#     - Expected: `code_generator` called, code written to `output`, correct tuple returned.
-# 4.  Test Successful Full Generation (Local Mode, Output to Console if no output path):
-#     - Input: Valid `prompt_file`, `ctx` with `local=True`. `construct_paths` returns no `output_code_file`.
-#     - Mock: `construct_paths` (to return no output path for "output_code_file"), `code_generator`, `console.print` (for Syntax).
-#     - Expected: `code_generator` called, code printed to console, `Path.write_text` not called.
-#
-# II. Incremental Generation Scenarios:
-# 5.  Test Incremental: Output Exists, `original_prompt` Provided (CLI arg):
-#     - Input: `prompt_file`, `output` (existing), `original_prompt` (existing).
-#     - Mock: `construct_paths`, `Path.exists`, `Path.read_text`, `incremental_code_generator` (success), `_get_git_root` (no git).
-#     - Expected: `incremental_code_generator` called, `is_incremental_operation=True`.
-# 6.  Test Incremental: Output Exists, Git History for Original Prompt:
-#     - Input: `prompt_file`, `output` (existing).
-#     - Mock: `construct_paths`, `Path.exists`, `Path.read_text`, `_get_git_root` (returns path), `_run_git_command` (for `git show` and staging), `incremental_code_generator` (success).
-#     - Expected: Git commands for original prompt and staging, `incremental_code_generator` called.
-# 7.  Test Incremental: Fallback to Full (No Original Prompt, Not in Git):
-#     - Input: `prompt_file`, `output` (existing).
-#     - Mock: `construct_paths`, `Path.exists`, `Path.read_text`, `_get_git_root` (None or `git show` fails), `code_generator`.
-#     - Expected: Fallback to `code_generator`, `is_incremental_operation=False`.
-# 8.  Test Incremental: `--incremental` Flag, Output Does Not Exist (Warns & Full Gen):
-#     - Input: `prompt_file`, `output` (non-existing), `incremental=True` (CLI flag).
-#     - Mock: `construct_paths`, `Path.exists` (False), `code_generator`, `console.print` (for warning).
-#     - Expected: Warning, `code_generator` called, `is_incremental_operation=False`.
-# 9.  Test Incremental: `incremental_code_generator` Returns `is_incremental=False` (Fallback):
-#     - Input: Conditions for incremental met.
-#     - Mock: Setup for incremental, `incremental_code_generator` (returns `is_incremental=False`), `code_generator`.
-#     - Expected: `incremental_code_generator` called, then `code_generator` called.
-# 10. Test Incremental: `incremental_code_generator` Raises Exception (Fallback):
-#     - Input: Conditions for incremental met.
-#     - Mock: Setup for incremental, `incremental_code_generator` (raises Exception), `code_generator`, `console.print`.
-#     - Expected: Error printed, `code_generator` called.
-# 11. Test Incremental: Git Staging Logic (via `_stage_file_if_needed` effects):
-#     - Verify `_run_git_command` is called for `git add` when a file is untracked or modified.
-#     - Mock: `_get_git_root`, `_run_git_command` (to control `git status` output).
-#
-# III. Cloud vs. Local Execution:
-# 12. Test Cloud Execution Success:
-#     - Input: Valid `prompt_file`, `output`, `ctx` with `local=False`.
-#     - Mock: `construct_paths`, `preprocess`, `os.environ.get` (for keys), `asyncio.run` (for `get_jwt_token`), `requests.post` (success).
-#     - Expected: `requests.post` called, cloud result used, local `code_generator` not called.
-# 13. Test Cloud Execution: Fallback on `requests.RequestException`:
-#     - Input: As above.
-#     - Mock: Setup for cloud, `requests.post` (raises `RequestException`), local `code_generator`.
-#     - Expected: `requests.post` called, then local `code_generator` called.
-# 14. Test Cloud Execution: Fallback on `AuthError` from `get_jwt_token`:
-#     - Input: As above.
-#     - Mock: Setup for cloud, `asyncio.run` (for `get_jwt_token` raises `AuthError`), local `code_generator`.
-#     - Expected: `get_jwt_token` attempted, then local `code_generator` called.
-# 15. Test Cloud Execution: Fallback on Missing Firebase API Key:
-#     - Input: As above.
-#     - Mock: `os.environ.get` (for Firebase key returns `None`), local `code_generator`.
-#     - Expected: `requests.post` not called, local `code_generator` called.
-# 16. Test Explicit Local Mode (`--local` flag):
-#     - Input: `ctx` with `local=True`.
-#     - Mock: `construct_paths`, local `code_generator`.
-#     - Expected: `requests.post` (cloud) not attempted, local `code_generator` called.
-#
-# IV. Parameter Handling and Other Edge Cases:
-# 17. Test `time`, `strength`, `temperature`, `verbose` Propagation:
-#     - Input: `ctx` with specific values.
-#     - Mock: `code_generator` and `incremental_code_generator`.
-#     - Expected: Mocks called with correct values.
-# 18. Test Error During `construct_paths`:
-#     - Mock: `construct_paths` (raises Exception).
-#     - Expected: Main try-except catches, error printed, returns `("", False, 0.0, "")`.
-# 19. Test Error Saving Output File:
-#     - Input: Valid generation.
-#     - Mock: Successful generation, `Path.write_text` (raises `IOError`), `console.print`.
-#     - Expected: Error on save, returns generated code but indicates save failure.
-# 20. Test Main Exception Handler:
-#     - Mock an internal call (e.g., `preprocess`) to raise an unexpected `RuntimeError`.
-#     - Expected: `code_generator_main` catches it, prints error, returns default empty tuple.
-
 import pytest
 from unittest.mock import patch, MagicMock, mock_open, ANY, call
 import click
@@ -169,7 +82,7 @@ def test_successful_full_generation_local_output_to_file(mock_construct: MagicMo
     assert cost == 0.01
     assert model == "gpt-local"
     mock_cg.assert_called_once_with(
-        prompt="prompt content", language="python", strength=DEFAULT_STRENGTH, temperature=0.0, time=0.25, verbose=True
+        prompt="prompt content", language="python", strength=DEFAULT_STRENGTH, temperature=0.0, verbose=True # No time
     )
     mock_write.assert_called_once_with("generated code", encoding="utf-8")
 
@@ -195,7 +108,7 @@ def test_successful_full_generation_local_output_to_console(mock_construct: Magi
     assert not is_inc
     assert cost == 0.02
     assert model == "gpt-local-console"
-    mock_cg.assert_called_once()
+    mock_cg.assert_called_once() # Will check specific args in test_parameter_propagation
     mock_write.assert_not_called()
     # Check if console.print was called with Syntax object (or at least with the code)
     syntax_call_found = any("generated code for console" in c.args[0].code for c in mock_console_print.call_args_list if hasattr(c.args[0], 'code'))
@@ -213,14 +126,14 @@ def test_incremental_output_exists_original_prompt_provided(mock_construct: Magi
     mock_output_path_obj.exists.return_value = True
     mock_output_path_obj.read_text.return_value = "existing code"
     mock_output_path_obj.__str__.return_value = str(mock_paths_and_files["output_file"])
-    
+
     # When Path(str_path) is called, return our mock object
     def path_side_effect(path_arg: str | Path) -> Path | MagicMock:
         if str(path_arg) == mock_paths_and_files["output_file"]:
             return mock_output_path_obj
         elif str(path_arg) == mock_paths_and_files["prompt_file"]: # For .resolve() in _stage_file_if_needed
             m = MagicMock(spec=Path)
-            m.resolve.return_value = m 
+            m.resolve.return_value = m
             m.__str__.return_value = str(path_arg)
             return m
         return Path(path_arg) # Real Path for other cases if any
@@ -259,80 +172,82 @@ def test_incremental_output_exists_original_prompt_provided(mock_construct: Magi
 def test_incremental_git_history_original_prompt(mock_construct: MagicMock, mock_inc_cg: MagicMock, mock_get_git_root: MagicMock, mock_run_git: MagicMock, MockPathCls: MagicMock, mock_paths_and_files: dict[str, str | Path], tmp_path: Path) -> None:
     git_root_path = str(tmp_path / "git_repo")
     Path(git_root_path).mkdir()
-    
-    # Mock Path objects
+
+    abs_prompt_file_path = Path(git_root_path) / "test.prompt"
+    abs_output_file_path = Path(git_root_path) / "output" / "test.py"
+    (Path(git_root_path) / "output").mkdir(exist_ok=True)
+
     mock_output_path_obj = MagicMock(spec=Path)
     mock_output_path_obj.exists.return_value = True
     mock_output_path_obj.read_text.return_value = "existing code from git version"
-    mock_output_path_obj.__str__.return_value = str(mock_paths_and_files["output_file"])
-    mock_output_path_obj.resolve.return_value = mock_output_path_obj # for relpath
+    mock_output_path_obj.__str__.return_value = str(abs_output_file_path)
+    mock_output_path_obj.resolve.return_value = abs_output_file_path
+    mock_output_path_obj.parent = abs_output_file_path.parent
 
     mock_prompt_path_obj = MagicMock(spec=Path)
-    mock_prompt_path_obj.__str__.return_value = str(mock_paths_and_files["prompt_file"])
-    mock_prompt_path_obj.resolve.return_value = mock_prompt_path_obj # for relpath
+    mock_prompt_path_obj.__str__.return_value = str(abs_prompt_file_path)
+    mock_prompt_path_obj.resolve.return_value = abs_prompt_file_path
     mock_prompt_path_obj.is_file.return_value = True
-    mock_prompt_path_obj.parent = Path(git_root_path) # Ensure prompt is under git root for _get_git_root
+    mock_prompt_path_obj.parent = abs_prompt_file_path.parent
 
     def path_side_effect(path_arg: str | Path) -> Path | MagicMock:
         path_str = str(path_arg)
-        if path_str == mock_paths_and_files["output_file"]:
+        if path_str == str(abs_output_file_path):
             return mock_output_path_obj
-        if path_str == mock_paths_and_files["prompt_file"]:
+        if path_str == str(abs_prompt_file_path):
             return mock_prompt_path_obj
-        
         if path_str == git_root_path:
-             p = MagicMock(spec=Path)
-             p.__str__.return_value = path_str
-             p.is_file.return_value = False 
-             return p
-        
+             p_git_root = MagicMock(spec=Path)
+             p_git_root.__str__.return_value = path_str
+             p_git_root.is_file.return_value = False
+             p_git_root.resolve.return_value = p_git_root
+             return p_git_root
         p_real = Path(path_str)
         m_real = MagicMock(spec=Path)
         m_real.__str__.return_value = path_str
-        m_real.parent = MagicMock(spec=Path)
+        m_real.parent = MagicMock(spec=Path, __str__=lambda:str(p_real.parent))
         m_real.parent.mkdir = MagicMock()
-        m_real.exists.return_value = p_real.exists() 
+        m_real.exists.return_value = p_real.exists()
         m_real.is_file.return_value = p_real.is_file()
-        m_real.resolve.return_value = m_real 
+        m_real.resolve.return_value = m_real
+        m_real.read_text = lambda encoding: p_real.read_text(encoding=encoding) if p_real.exists() else ""
         return m_real
 
     MockPathCls.side_effect = path_side_effect
-    
     mock_get_git_root.return_value = git_root_path
 
-    def git_command_side_effect(command: list[str], cwd: str | None = None) -> tuple[bool, str]:
-        cmd_str = " ".join(command)
-        if "git show HEAD:" in cmd_str:
+    def git_command_side_effect(command_str: str, cwd: str | None = None) -> tuple[bool, str]: # Corrected signature
+        command_list = shlex.split(command_str) # Added shlex.split
+
+        expected_raw_rel_prompt_path = os.path.relpath(str(abs_prompt_file_path), git_root_path)
+        expected_quoted_rel_prompt_path_for_show = shlex.quote(expected_raw_rel_prompt_path)
+        if command_list[0] == 'git' and command_list[1] == 'show' and \
+           command_list[2] == f"HEAD:{expected_quoted_rel_prompt_path_for_show}":
             return True, "original prompt from git"
-        if "git status --porcelain" in cmd_str:
-            rel_path_prompt = os.path.relpath(str(mock_prompt_path_obj.resolve()), git_root_path)
-            rel_path_output = os.path.relpath(str(mock_output_path_obj.resolve()), git_root_path)
-            if rel_path_prompt in cmd_str:
-                 return True, f"?? {rel_path_prompt}"
-            if rel_path_output in cmd_str:
-                 return True, f" M {rel_path_output}" 
-        if "git add" in cmd_str:
+
+        if command_list[0] == 'git' and command_list[1] == 'status' and \
+           command_list[2] == '--porcelain' and command_list[3] == '--':
+            path_in_cmd_arg = command_list[4]
+            unquoted_rel_prompt = os.path.relpath(str(abs_prompt_file_path), git_root_path)
+            unquoted_rel_output = os.path.relpath(str(abs_output_file_path), git_root_path)
+            if path_in_cmd_arg == shlex.quote(unquoted_rel_prompt):
+                 return True, f"?? {unquoted_rel_prompt}"
+            if path_in_cmd_arg == shlex.quote(unquoted_rel_output):
+                 return True, f" M {unquoted_rel_output}" # Note the leading space for modified
+        
+        if command_list[0] == 'git' and command_list[1] == 'add' and command_list[2] == '--':
             return True, "added"
-        return False, "git command failed"
+            
+        return False, f"git command failed (unmocked in test for command: {command_str})" # Use command_str
     mock_run_git.side_effect = git_command_side_effect
 
     mock_construct.return_value = (
         {"prompt_file": "new prompt content"},
-        {"output_code_file": mock_paths_and_files["output_file"]},
+        {"output_code_file": str(abs_output_file_path)},
         "python"
     )
     mock_inc_cg.return_value = ("git updated code", True, 0.04, "gpt-inc-git")
     ctx = create_mock_context(verbose=True)
-
-    abs_prompt_file_path = Path(git_root_path) / "test.prompt"
-    mock_prompt_path_obj.__str__.return_value = str(abs_prompt_file_path)
-    mock_prompt_path_obj.resolve.return_value = abs_prompt_file_path
-
-    abs_output_file_path = Path(git_root_path) / "output/test.py"
-    mock_output_path_obj.__str__.return_value = str(abs_output_file_path)
-    mock_output_path_obj.resolve.return_value = abs_output_file_path
-    (Path(git_root_path) / "output").mkdir(exist_ok=True)
-
 
     code, is_inc, cost, model = code_generator_main(
         ctx, str(abs_prompt_file_path), str(abs_output_file_path), None, False, 0.25
@@ -340,49 +255,83 @@ def test_incremental_git_history_original_prompt(mock_construct: MagicMock, mock
 
     assert code == "git updated code"
     assert is_inc
+    assert cost == 0.04
+    assert model == "gpt-inc-git"
     mock_inc_cg.assert_called_once()
     
-    # Check git show call (command is a list of strings)
-    # Example: ['git', 'show', 'HEAD:test.prompt']
     show_call_found = False
+    expected_show_cmd_str_part = f"git show HEAD:{shlex.quote(os.path.relpath(str(abs_prompt_file_path), git_root_path))}"
     for call_args in mock_run_git.call_args_list:
-        cmd_list = call_args.args[0]
-        if cmd_list[0] == 'git' and cmd_list[1] == 'show' and f"HEAD:{shlex.quote(os.path.relpath(str(abs_prompt_file_path), git_root_path))}" in cmd_list[2]:
+        cmd_str_arg = call_args.args[0] 
+        if cmd_str_arg.startswith("git show") and expected_show_cmd_str_part in cmd_str_arg :
             show_call_found = True
             break
-    assert show_call_found
+    assert show_call_found, f"Git show call not found or incorrect. Expected part: {expected_show_cmd_str_part}. Calls: {mock_run_git.call_args_list}"
     
-    add_calls = [c for c in mock_run_git.call_args_list if "add" in c.args[0]]
-    assert len(add_calls) == 2 
+    add_calls = [c for c in mock_run_git.call_args_list if c.args[0].startswith("git add")]
+    assert len(add_calls) == 2, f"Expected 2 git add calls, got {len(add_calls)}. Calls: {mock_run_git.call_args_list}"
 
 
 @patch('pdd.code_generator_main.code_generator')
 @patch('pdd.code_generator_main.Path')
-@patch('pdd.code_generator_main._get_git_root', return_value=None) # No git
+@patch('pdd.code_generator_main._get_git_root', return_value=None)  # No git
 @patch('pdd.code_generator_main.construct_paths')
-def test_incremental_fallback_no_original_prompt_not_in_git(mock_construct: MagicMock, mock_git_root: MagicMock, MockPathCls: MagicMock, mock_cg: MagicMock, mock_paths_and_files: dict[str, str | Path], capsys: pytest.CaptureFixture) -> None:
+def test_incremental_fallback_no_original_prompt_not_in_git(
+    mock_construct: MagicMock,
+    mock_git_root: MagicMock,
+    MockPathCls: MagicMock,
+    mock_cg: MagicMock,
+    mock_paths_and_files: dict[str, str | Path],
+    capsys: pytest.CaptureFixture
+) -> None:
     mock_output_path_obj = MagicMock(spec=Path)
-    mock_output_path_obj.exists.return_value = True # Output file exists
+    mock_output_path_obj.exists.return_value = True
     mock_output_path_obj.read_text.return_value = "existing code"
-    MockPathCls.side_effect = lambda p: mock_output_path_obj if str(p) == mock_paths_and_files["output_file"] else Path(p)
+    mock_output_path_obj.__str__.return_value = "output/test.py"  # Use short path for test
+
+    def path_side_effect(path_arg: str | Path) -> Path | MagicMock:
+        if str(path_arg) == mock_paths_and_files["output_file"]:
+            return mock_output_path_obj
+        if str(path_arg) == mock_paths_and_files["prompt_file"]:
+            mp = MagicMock(spec=Path)
+            mp.__str__.return_value = str(path_arg)
+            mp.resolve.return_value = mp
+            mp.is_file.return_value = True
+            mp.parent = MagicMock(spec=Path)
+            return mp
+        return Path(path_arg)
+
+    MockPathCls.side_effect = path_side_effect
 
     mock_construct.return_value = (
-        {"prompt_file": "new prompt", "original_prompt_file": None}, # No original_prompt provided
+        {"prompt_file": "new prompt", "original_prompt_file": None},
         {"output_code_file": mock_paths_and_files["output_file"]},
         "python"
     )
     mock_cg.return_value = ("full gen code", 0.01, "gpt-fallback")
-    ctx = create_mock_context(verbose=True) # verbose to check logs
+    ctx = create_mock_context(verbose=True)
 
     code, is_inc, cost, model = code_generator_main(
-        ctx, str(mock_paths_and_files["prompt_file"]), str(mock_paths_and_files["output_file"]), None, False, 0.25
+        ctx,
+        str(mock_paths_and_files["prompt_file"]),
+        str(mock_paths_and_files["output_file"]),
+        None,
+        False,
+        0.25
     )
-    
+
     assert not is_inc
     assert code == "full gen code"
     mock_cg.assert_called_once()
+
     captured = capsys.readouterr().out
-    assert "Proceeding with Full Code Generation" in captured
+
+    # Check for key parts of the message separately
+    assert "Output file" in captured
+    assert "exists" in captured
+    assert "original prompt" in captured
+    assert "checked CLI arg" in captured
+    assert "Proceeding with Full Code Generation" in captured  # Updated to match actual output
 
 
 @patch('pdd.code_generator_main.code_generator')
@@ -424,7 +373,7 @@ def test_incremental_returns_is_incremental_false(mock_construct: MagicMock, moc
     mock_output_path_obj.exists.return_value = True
     mock_output_path_obj.read_text.return_value = "existing code"
     MockPathCls.side_effect = lambda p: mock_output_path_obj if str(p) == mock_paths_and_files["output_file"] else Path(p)
-    
+
     mock_construct.return_value = (
         {"prompt_file": "new prompt", "original_prompt_file": "original prompt"},
         {"output_code_file": mock_paths_and_files["output_file"]},
@@ -463,12 +412,12 @@ def test_cloud_execution_success(mock_construct: MagicMock, mock_preprocess: Mag
     )
     mock_preprocess.return_value = "processed cloud prompt"
     mock_asyncio_run.return_value = "mock_jwt_token" # For get_jwt_token
-    
+
     mock_response = MagicMock()
     mock_response.json.return_value = {"code": "cloud generated code", "cost": 0.05, "model_name": "gpt-cloud"}
     mock_response.raise_for_status = MagicMock()
     mock_requests_post.return_value = mock_response
-    
+
     ctx = create_mock_context(local=False, verbose=True) # Default is local=False
 
     code, is_inc, cost, model = code_generator_main(
@@ -519,6 +468,7 @@ def test_cloud_execution_fallback_on_request_exception(mock_construct: MagicMock
     assert "Falling back to local execution." in captured_out
 
 
+@pytest.mark.filterwarnings("ignore:coroutine 'get_jwt_token' was never awaited:RuntimeWarning")
 @patch('pdd.code_generator_main.code_generator') # Local fallback
 @patch('pdd.code_generator_main.asyncio.run')
 @patch.dict(os.environ, {"REACT_APP_FIREBASE_API_KEY": "fake_fb_key", "GITHUB_CLIENT_ID": "fake_gh_id"})
@@ -533,13 +483,14 @@ def test_cloud_execution_fallback_on_auth_error(mock_construct: MagicMock, mock_
     code, is_inc, cost, model = code_generator_main(
         ctx, str(mock_paths_and_files["prompt_file"]), str(mock_paths_and_files["output_file"]), None, False, 0.25
     )
-    
+
     assert code == "local fallback auth error"
     mock_async_run.assert_called_once()
     mock_local_cg.assert_called_once()
     assert "Cloud authentication/token error: Auth failed" in capsys.readouterr().out
 
 
+@pytest.mark.filterwarnings("ignore:coroutine 'get_jwt_token' was never awaited:RuntimeWarning")
 @patch('pdd.code_generator_main.code_generator') # Local fallback
 @patch('pdd.code_generator_main.requests.post') # To ensure it's NOT called
 @patch.dict(os.environ, {"GITHUB_CLIENT_ID": "fake_gh_id"}) # Firebase key missing
@@ -569,14 +520,14 @@ def test_cloud_fallback_missing_firebase_key(mock_construct: MagicMock, mock_pre
 def test_parameter_propagation_to_local_generator(mock_construct: MagicMock, mock_cg: MagicMock, mock_paths_and_files: dict[str, str | Path]) -> None:
     mock_construct.return_value = ({"prompt_file": "prompt"}, {"output_code_file": mock_paths_and_files["output_file"]}, "python")
     mock_cg.return_value = ("code", 0.1, "model")
-    
-    ctx = create_mock_context(local=True, verbose=True, strength=0.8, temperature=0.5)
-    time_val = 0.75
+
+    ctx = create_mock_context(local=True, verbose=True, strength=0.9, temperature=0.5)
+    time_val = 0.75 # This time_val is passed to code_generator_main
 
     code_generator_main(ctx, str(mock_paths_and_files["prompt_file"]), str(mock_paths_and_files["output_file"]), None, False, time_val)
 
     mock_cg.assert_called_once_with(
-        prompt="prompt", language="python", strength=0.8, temperature=0.5, time=time_val, verbose=True
+        prompt="prompt", language="python", strength=0.9, temperature=0.5, verbose=True # No time
     )
 
 @patch('pdd.code_generator_main.construct_paths', side_effect=Exception("Construct paths failed"))
@@ -597,7 +548,7 @@ def test_error_saving_output_file(mock_construct: MagicMock, mock_cg: MagicMock,
     code, is_inc, cost, model = code_generator_main(
         ctx, str(mock_paths_and_files["prompt_file"]), str(mock_paths_and_files["output_file"]), None, False, 0.25
     )
-    
+
     assert code == "generated code to save" # Code was generated
     captured_out = capsys.readouterr().out
     assert "Error saving generated code" in captured_out
@@ -614,7 +565,7 @@ def test_main_exception_handler(mock_preprocess_fail: MagicMock, mock_construct:
     ctx = create_mock_context(local=False, verbose=True) # Trigger cloud path where preprocess is called
 
     result = code_generator_main(ctx, str(mock_paths_and_files["prompt_file"]), str(mock_paths_and_files["output_file"]), None, False, 0.25)
-    
+
     assert result == ("", False, 0.0, "")
     captured = capsys.readouterr().out
     assert "An unexpected error occurred in code_generator_main: Unexpected preprocess error" in captured
