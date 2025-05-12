@@ -655,7 +655,7 @@ def add(a, b):
     try:
         # Call code_generator_main directly - with no mock this time
         # Let it use the real LLM implementation
-        code, cost, model = code_generator_main(
+        code, incremental, cost, model = code_generator_main(
             ctx=ctx,
             prompt_file=prompt_file,
             output=output_file
