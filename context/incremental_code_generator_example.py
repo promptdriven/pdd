@@ -1,63 +1,48 @@
 from pdd.incremental_code_generator import incremental_code_generator
-from pdd import DEFAULT_STRENGTH
 from rich.console import Console
-from rich.markdown import Markdown
+import os
 
 console = Console()
 
 def main():
-    """
-    Example usage of the incremental_code_generator from the `pdd` package.
+    """Example usage of incremental_code_generator with detailed input/output handling."""
+
+    # Load required inputs from files
+    # Ensure these files exist in the 'output/' directory relative to where this script is run.
+    # For example, if this script is in 'project_root/', then the files should be in 'project_root/output/'.
     
-    This script demonstrates how to perform an incremental code update given:
-    - An original prompt,
-    - An updated prompt,
-    - Previously generated code,
-    - And a target programming language (e.g., 'python').
+    # Create dummy files if they don't exist for the example to run
+    os.makedirs("output", exist_ok=True)
+    if not os.path.exists("output/test_original_prompt.txt"):
+        with open("output/test_original_prompt.txt", "w") as f:
+            f.write("Write a Python function that checks if a string is a palindrome.")
     
-    The script decides whether to regenerate the code from scratch or apply a structured, minimal diff
-    to the existing code using internal language model (LLM) tools.
+    if not os.path.exists("output/test_new_prompt.txt"):
+        with open("output/test_new_prompt.txt", "w") as f:
+            f.write("Write a Python function that checks if a string is a palindrome. Ignore punctuation and casing during the check.")
+            
+    if not os.path.exists("output/test_existing_code.py"):
+        with open("output/test_existing_code.py", "w") as f:
+            f.write("def is_palindrome(s: str) -> bool:\n    return s == s[::-1]")
 
-    Returns:
-        None. All results printed to the Rich console.
-    """
+    with open("output/test_original_prompt.txt", "r") as f:
+        original_prompt: str = f.read()
 
-    # --- INPUT PARAMETERS ---
-    
-    # Description of task changes
-    original_prompt = "Write a Python function to calculate the factorial of a number."
-    new_prompt = "Write a Python function to calculate the factorial with input validation (must be non-negative)."
-    
-    # Original code that was generated (based on original_prompt)
-    existing_code = """
-def factorial(n):
-    if n == 0 or n == 1:
-        return 1
-    return n * factorial(n - 1)
-"""
+    with open("output/test_new_prompt.txt", "r") as f:
+        new_prompt: str = f.read()
 
-    # Language of the source code
-    language = "python"
+    with open("output/test_existing_code.py", "r") as f:
+        existing_code: str = f.read()
 
-    # Strength [0.0 – 1.0] — how "precise" or "bold" the LLM should be
-    strength = DEFAULT_STRENGTH
+    language: str = "python"           # Programming language of the code
+    strength: float = 0.9                # Relative model strength, [0, 1]
+    temperature: float = 0.0             # Controls randomness, [0, 1]
+    time: float = 0.25                   # Reasoning budget, [0, 1]
+    force_incremental: bool = False     # Whether to override full regeneration
+    verbose: bool = True                # Show debug output
+    preprocess_prompt: bool = True     # Whether to preprocess prompts
 
-    # Temperature [0.0 – 1.0] — determines randomness in generation
-    temperature = 0.0
-
-    # Time budget [0.0 – 1.0] — higher values may allow more reasoning (unitless)
-    time = 0.25
-
-    # If True, force patching even when large structural changes are detected
-    force_incremental = False
-
-    # Show detailed output from each step
-    verbose = True
-
-    # Should the input prompt templates be preprocessed (for prompt standardization)?
-    preprocess_prompt = True
-
-    # --- RUN ---
+    # Call the function
     updated_code, is_incremental, total_cost, model_name = incremental_code_generator(
         original_prompt=original_prompt,
         new_prompt=new_prompt,
@@ -71,19 +56,13 @@ def factorial(n):
         preprocess_prompt=preprocess_prompt
     )
 
-    # --- OUTPUT ---
-    console.rule("[bold magenta]Update Result[/bold magenta]")
-
-    if is_incremental:
-        console.print("[bold green]Incremental patching was applied successfully.[/bold green]")
-        console.print(Markdown("### Updated Code:\n```python\n{}\n```".format(updated_code.strip())))
-    else:
-        console.print("[bold yellow]Full regeneration is recommended due to major changes.[/bold yellow]")
-        console.print("No incremental patch was generated; caller should regenerate the code from scratch.")
-
-    console.print()
-    console.print(f"[bold blue]Total Cost Incurred:[/bold blue] ${total_cost:.6f} (in dollars)")
-    console.print(f"[bold blue]Model Used:[/bold blue] {model_name}")
+    # Output results
+    console.rule("[bold blue]incremental_code_generator Output")
+    console.print(f"[bold green]Was Incremental?:[/bold green] {is_incremental}")
+    console.print(f"[bold green]Total LLM Cost:[/bold green] ${total_cost:.6f} (e.g., dollars per 1M tokens)")
+    console.print(f"[bold green]Used Model:[/bold green] {model_name}")
+    console.rule("[bold green]Updated Code")
+    console.print(updated_code)
 
 if __name__ == "__main__":
     main()
