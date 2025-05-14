@@ -131,7 +131,6 @@ def code_generator_main(
     output: Optional[str] = None,
     original_prompt: Optional[str] = None,
     incremental: bool = False, # This is the --incremental flag from CLI
-    time: float = 0.0, # Default to 0.0 if not provided
 ) -> Tuple[str, bool, float, str]:
     """
     CLI wrapper for generating code from prompts.
@@ -260,7 +259,6 @@ def code_generator_main(
                     language=lang,
                     strength=strength,
                     temperature=temperature,
-                    time=time, 
                     force_incremental=incremental, 
                     verbose=verbose,
                     preprocess_prompt=True 
@@ -309,13 +307,12 @@ def code_generator_main(
                     jwt_token = asyncio.run(get_jwt_token(
                         firebase_api_key=firebase_api_key,
                         github_client_id=github_client_id,
-                        app_name="Prompt Driven Development CLI"
+                        app_name="PDD Code Generator"
                     ))
 
                     payload = {
                         "promptContent": processed_prompt_for_cloud, "language": lang,
                         "strength": strength, "temperature": temperature,
-                        "time": time, # Pass time parameter to cloud
                         "verbose": verbose,
                     }
                     headers = {"Authorization": f"Bearer {jwt_token}", "Content-Type": "application/json"}

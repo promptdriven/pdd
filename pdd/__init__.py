@@ -6,6 +6,10 @@ EXTRACTION_STRENGTH = 0.9
 
 DEFAULT_STRENGTH = 0.9
 
+DEFAULT_TEMPERATURE = 0.0
+
+DEFAULT_TIME = 0.25
+
 """PDD - Prompt Driven Development"""
 
 # Define constants used across the package
