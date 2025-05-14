@@ -9,7 +9,6 @@
       - 'output' - An optional string containing the path where to save the generated code. If None, uses default naming convention.
       - 'original_prompt' - An optional string containing the path to the original prompt file used for incremental generation. If None, attempts to use git to find the last committed version.
       - 'incremental' - A boolean that forces the use of incremental patching even if the diff analyzer suggests full regeneration. Default is False.
-      - 'time' - A float that controls the thinking time or reasoning effort for the LLM model. Default is 0.25.
    Outputs:
       - Returns a tuple containing (`str`, `bool`, `float`, `str`):
             - `str`: The generated or updated code.
@@ -44,7 +43,7 @@
       <get_jwt_token_example>
       <include>context/get_jwt_token_example.py</include>
       </get_jwt_token_example>
-      % The `get_jwt_token` function is a async function and must be run with `asyncio.run`. Use the environment variable `REACT_APP_FIREBASE_API_KEY` to pass the firebase api key to the function.
+      % The `get_jwt_token` function is a async function and must be run with `asyncio.run`. Use the environment variable `REACT_APP_FIREBASE_API_KEY` to pass the firebase api key to the function. App name is "PDD Code Generator".
 
       - Here is an example of how to use the `preprocess` function:
       <preprocess_example>

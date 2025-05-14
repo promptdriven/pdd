@@ -335,8 +335,12 @@ These options can be used with any command:
 - `--force`: Overwrite existing files without asking for confirmation.
 - `--strength FLOAT`: Set the strength of the AI model (0.0 to 1.0, default is 0.5).
   - 0.0: Cheapest available model
-  - 0.5: Default base model  
+  - 0.5: Default base model
   - 1.0: Most powerful model (highest ELO rating)
+- `--time FLOAT`: Controls the reasoning allocation for LLM models supporting reasoning capabilities (0.0 to 1.0, default is 0.25).
+  - For models with specific reasoning token limits (e.g., 64k), a value of `1.0` utilizes the maximum available tokens.
+  - For models with discrete effort levels, `1.0` corresponds to the highest effort level.
+  - Values between 0.0 and 1.0 scale the allocation proportionally.
 - `--temperature FLOAT`: Set the temperature of the AI model (default is 0.0).
 - `--verbose`: Increase output verbosity for more detailed information.
 - `--quiet`: Decrease output verbosity for minimal information.
@@ -369,6 +373,7 @@ PDD uses a large language model to generate and manipulate code. The `--strength
 
 - Strength: Determines how powerful/expensive a model should be used. Higher values (closer to 1.0) result in high performance models with better capabilities (selected by ELO rating), while lower values (closer to 0.0) select more cost-effective models.
 - Temperature: Controls the randomness of the output. Higher values increase diversity but may lead to less coherent results, while lower values produce more focused and deterministic outputs.
+- Time: (Optional, controlled by `--time FLOAT`) For models supporting reasoning, this scales the allocated reasoning resources (e.g., tokens or effort level) between minimum (0.0) and maximum (1.0), with a default of 0.25.
 
 When running in local mode, PDD uses LiteLLM to select and interact with language models based on a configuration file that includes:
 - Input and output costs per million tokens

@@ -3,13 +3,13 @@
 
     "pdd": {
       "type": "stdio",
-      "command": "/opt/anaconda3/envs/pdd/bin/python",
+      "command": "/Users/gregtanaka/opt/anaconda3/envs/pdd/bin/python",
       "args": [
         "-u",
-        "/Users/gregtanaka/pdd/utils/mcp/pdd_mcp_server/main.py"
+        "/Users/gregtanaka/Documents/pdd_cloud/pdd/utils/mcp/pdd_mcp_server/main.py"
       ],
       "env": {
-        "PYTHONPATH": "/Users/gregtanaka/pdd",
+        "PYTHONPATH": "/Users/gregtanaka/Documents/pdd_cloud/pdd",
         "LOGLEVEL": "DEBUG",
         "PYTHONUNBUFFERED": "1",
         "SKIP_PYTHONDOTENV": "1"
