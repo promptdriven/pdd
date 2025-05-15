@@ -4,7 +4,7 @@
 
 % Here are the inputs and outputs of the function:
    Inputs:
-      - `ctx` (`click.Context`): The Click context object containing CLI options and parameters.
+      - `ctx` (`click.Context`): The Click context object containing CLI options(e.g. time, temperature, strength, etc.) and parameters.
       - 'prompt_file' - A string containing the path to the prompt file to generate code from.
       - 'output' - An optional string containing the path where to save the generated code. If None, uses default naming convention.
       - 'original_prompt' - An optional string containing the path to the original prompt file used for incremental generation. If None, attempts to use git to find the last committed version.
@@ -54,24 +54,13 @@
 
    % Here is how to call the cloud version of the code generator when not using the `--local` flag:
    <cloud_code_generator_example>
-      curl -X POST \
-            'https://us-central1-prompt-driven-development.cloudfunctions.net/generateCode' \
-            -H "Authorization: Bearer $JWT_TOKEN" \
-            -H 'Content-Type: application/json' \
-            -d '{
-         "promptContent": "Write a function to reverse sort a dictionary in python.",
-         "language": "python",
-         "strength": 0.5,
-         "temperature": 0.0,
-         <pdd>"time": 0.25, # not yet implemented</pdd>
-         "verbose": true
-      }'
+      <include>../docs/api-documentation.md</include>
    </cloud_code_generator_example>
 </examples>
 
 % Here is the README for the cli command that has details of how the 'generate' command works:
    <cli_command_readme>
-   <include>./README.md</include>
+      <include>./README.md</include>
    </cli_command_readme>
 
 % Cloud vs Local Execution Strategy:
