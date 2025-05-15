@@ -42,6 +42,8 @@
 ## Bugs
 - [ ] jwt token issue when not signed in
 - [ ] GCS bucket issue
+- [ ] should print out after authentication is successful with github
+- [ ] .env where PDD_PATH is instead of where the user runs the command
 
 ## Improvements
 - [ ] update prompt for makefile

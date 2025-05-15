@@ -69,7 +69,7 @@ def test_cli_global_options_defaults(mock_construct, mock_main, mock_auto_update
     files = create_dummy_files("test.prompt")
     # mock_construct is not called directly by the CLI command wrapper, only potentially by the main func
     # mock_construct.return_value = ({}, {'output': 'out.py'}, 'python') # Not needed if main is mocked
-    mock_main.return_value = ('code', 0.0, 'model')
+    mock_main.return_value = ('code', False, 0.0, 'model') # Corrected: 4-tuple
 
     result = runner.invoke(cli.cli, ["generate", str(files["test.prompt"])])
 
@@ -102,7 +102,7 @@ def test_cli_global_options_explicit(mock_construct, mock_main, mock_auto_update
     """Test explicit global options override defaults."""
     files = create_dummy_files("test.prompt")
     # mock_construct.return_value = ({}, {'output': 'out.py'}, 'python') # Not needed if main is mocked
-    mock_main.return_value = ('code', 0.0, 'model')
+    mock_main.return_value = ('code', False, 0.0, 'model') # Corrected: 4-tuple
 
     result = runner.invoke(cli.cli, [
         "--force",
@@ -143,7 +143,7 @@ def test_cli_global_options_quiet_overrides_verbose(mock_construct, mock_main, m
     """Test --quiet overrides --verbose."""
     files = create_dummy_files("test.prompt")
     # mock_construct.return_value = ({}, {'output': 'out.py'}, 'python') # Not needed if main is mocked
-    mock_main.return_value = ('code', 0.0, 'model')
+    mock_main.return_value = ('code', False, 0.0, 'model') # Corrected: 4-tuple
 
     result = runner.invoke(cli.cli, [
         "--verbose",
@@ -177,7 +177,7 @@ def test_cli_auto_update_called_by_default(mock_construct, mock_main, mock_auto_
     """Test auto_update is called by default."""
     files = create_dummy_files("test.prompt")
     # mock_construct.return_value = ({}, {'output': 'out.py'}, 'python') # Not needed if main is mocked
-    mock_main.return_value = ('code', 0.0, 'model')
+    mock_main.return_value = ('code', False, 0.0, 'model') # Corrected: 4-tuple
 
     result = runner.invoke(cli.cli, ["generate", str(files["test.prompt"])])
 
@@ -200,7 +200,7 @@ def test_cli_auto_update_not_called_when_disabled(mock_construct, mock_main, moc
     """Test auto_update is not called when PDD_AUTO_UPDATE=false."""
     files = create_dummy_files("test.prompt")
     # mock_construct.return_value = ({}, {'output': 'out.py'}, 'python') # Not needed if main is mocked
-    mock_main.return_value = ('code', 0.0, 'model')
+    mock_main.return_value = ('code', False, 0.0, 'model') # Corrected: 4-tuple
 
     result = runner.invoke(cli.cli, ["generate", str(files["test.prompt"])])
 
@@ -221,7 +221,7 @@ def test_cli_auto_update_handles_exception(mock_construct, mock_main, mock_auto_
     """Test auto_update exceptions are handled gracefully."""
     files = create_dummy_files("test.prompt")
     # mock_construct.return_value = ({}, {'output': 'out.py'}, 'python') # Not needed if main is mocked
-    mock_main.return_value = ('code', 0.0, 'model')
+    mock_main.return_value = ('code', False, 0.0, 'model') # Corrected: 4-tuple
 
     result = runner.invoke(cli.cli, ["generate", str(files["test.prompt"])])
 
@@ -504,8 +504,9 @@ def test_cli_chaining_cost_aggregation(mock_example_main, mock_gen_main, mock_co
     code_p = str(files["chain_code.py"])
 
     # Mock return values for main functions
-    mock_gen_main.return_value = ('generated code', 0.123, 'model-A')
-    mock_example_main.return_value = ('example code', 0.045, 'model-B')
+    # Corrected: mock_gen_main returns 4-tuple (code, incremental, cost, model)
+    mock_gen_main.return_value = ('generated code', False, 0.123, 'model-A')
+    mock_example_main.return_value = ('example code', 0.045, 'model-B') # context_generator_main returns 3-tuple
 
     result = runner.invoke(cli.cli, ["generate", prompt_p, "example", prompt_p, code_p])
 
@@ -519,8 +520,8 @@ def test_cli_chaining_cost_aggregation(mock_example_main, mock_gen_main, mock_co
     assert result.exit_code == 0
     assert "Command Chain Execution Summary" in result.output
     # Check for cost/model, accepting "Unknown Command" due to testing limitations
-    assert "Step 1 (Unknown Command 1): Cost: $0.123000, Model: model-A" in result.output # MODIFIED ASSERTION
-    assert "Step 2 (Unknown Command 2): Cost: $0.045000, Model: model-B" in result.output # MODIFIED ASSERTION
+    assert "Step 1 (Unknown Command 1): Cost: $0.123000, Model: model-A" in result.output
+    assert "Step 2 (Unknown Command 2): Cost: $0.045000, Model: model-B" in result.output
     assert "Total Estimated Cost for Chain: $0.168000" in result.output # 0.123 + 0.045
     mock_auto_update.assert_called_once_with()
     mock_gen_main.assert_called_once()
@@ -538,7 +539,8 @@ def test_cli_chaining_with_no_cost_command(mock_preprocess_main, mock_gen_main, 
 
     # Mock return values for main functions
     mock_preprocess_main.return_value = None # Simulate preprocess_main's actual return on success
-    mock_gen_main.return_value = ('generated code', 0.111, 'model-C')
+    # Corrected: mock_gen_main returns 4-tuple
+    mock_gen_main.return_value = ('generated code', False, 0.111, 'model-C')
 
     # The preprocess *command* function returns a dummy tuple on success
     result = runner.invoke(cli.cli, ["preprocess", prompt_p, "generate", prompt_p])
@@ -555,8 +557,8 @@ def test_cli_chaining_with_no_cost_command(mock_preprocess_main, mock_gen_main, 
     # Check for cost/model, accepting "Unknown Command" due to testing limitations
     # The specific "Command completed (local)." message won't appear because the command_name
     # is likely "Unknown Command 1" during the test run. Assert the generic output instead.
-    assert "Step 1 (Unknown Command 1): Cost: $0.000000, Model: local" in result.output # MODIFIED ASSERTION
-    assert "Step 2 (Unknown Command 2): Cost: $0.111000, Model: model-C" in result.output # MODIFIED ASSERTION
+    assert "Step 1 (Unknown Command 1): Cost: $0.000000, Model: local" in result.output
+    assert "Step 2 (Unknown Command 2): Cost: $0.111000, Model: model-C" in result.output
     assert "Total Estimated Cost for Chain: $0.111000" in result.output
     mock_auto_update.assert_called_once_with()
     mock_preprocess_main.assert_called_once()
@@ -655,10 +657,13 @@ def add(a, b):
     try:
         # Call code_generator_main directly - with no mock this time
         # Let it use the real LLM implementation
+        # Corrected: Added missing arguments
         code, incremental, cost, model = code_generator_main(
             ctx=ctx,
             prompt_file=prompt_file,
-            output=output_file
+            output=output_file,
+            original_prompt_file_path=None,
+            force_incremental_flag=False
         )
 
         # Verify we got reasonable results back
