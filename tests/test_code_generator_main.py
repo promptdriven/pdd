@@ -1,543 +1,683 @@
-# Test Plan:
-#
-# I. Setup and Basic File Operations
-#    - test_successful_invocation_with_minimal_params: Basic happy path for full generation (local).
-#    - test_prompt_file_not_found: Prompt file path is invalid, expecting early exit.
-#    - test_language_detection_error: Prompt file has an unidentifiable extension (via construct_paths).
-#    - test_output_file_write_error: Output file cannot be written due to permissions (mock Path.write_text).
-#    - test_construct_paths_key_error: Mock construct_paths to return a dict missing a required key.
-
-# II. Incremental Generation Logic
-#    A. Original Prompt Source & Output File
-#        - test_incremental_with_explicit_original_prompt_success: --original-prompt provided, file exists, output exists, incremental_code_generator succeeds.
-#        - test_incremental_with_explicit_original_prompt_file_not_found: --original-prompt provided, but file doesn't exist. Fallback to full.
-#        - test_incremental_git_original_prompt_success: No --original-prompt, git provides original, output exists, incremental_code_generator succeeds.
-#        - test_incremental_git_original_prompt_not_in_repo: Not a git repo. Fallback to full.
-#        - test_incremental_output_file_does_not_exist: Output file for incremental update is missing. Fallback to full.
-#    B. Incremental Flag (--incremental)
-#        - test_force_incremental_flag_with_success: --incremental set, conditions met, incremental_code_generator respects force_incremental.
-#        - test_force_incremental_flag_warns_if_output_missing: --incremental set, output missing. Warns, fallback to full.
-#    C. incremental_code_generator Behavior
-#        - test_incremental_generator_returns_is_incremental_false: incremental_code_generator suggests full regen. Fallback to full.
-#        - test_incremental_generator_raises_exception: incremental_code_generator fails. Fallback to full.
-#    D. Git Add Behavior
-#        - test_incremental_success_git_add_called: Successful incremental, verify git add attempts.
-
-# III. Full Generation Logic (Cloud and Local)
-#    A. Cloud Path (--local is False)
-#        - test_full_gen_cloud_success: All cloud steps succeed.
-#        - test_full_gen_cloud_env_vars_missing: Firebase/GitHub env vars missing. Fallback to local.
-#        - test_full_gen_cloud_auth_fails: get_jwt_token raises AuthError. Fallback to local.
-#        - test_full_gen_cloud_requests_post_timeout: requests.post times out. Fallback to local.
-#        - test_full_gen_cloud_requests_post_http_error: requests.post raises HTTPError. Fallback to local.
-#    B. Local Path
-#        - test_full_gen_local_success_forced: --local is True, code_generator succeeds.
-#        - test_full_gen_local_success_after_cloud_fallback: Cloud fails, then local code_generator succeeds.
-#        - test_full_gen_local_code_generator_fails: local code_generator raises Exception. Returns error state.
-
-# IV. Output and Return Values
-#    - test_return_tuple_on_success_full_gen: Correct tuple for successful full generation.
-#    - test_return_tuple_on_success_incremental_gen: Correct tuple for successful incremental generation.
-#    - test_return_tuple_on_setup_error: Correct tuple if construct_paths fails.
-#    - test_no_code_generated_message_if_all_fails: Verify warning if no code produced (and not quiet).
-
-# V. Context and Global Options
-#    - test_global_options_passed_to_generators: strength, temperature, time, verbose passed correctly.
-#    - test_quiet_option_suppresses_prints: Check a key print message is suppressed with --quiet.
-
-import pytest
-import click
-import subprocess
+import asyncio
+import json
 import os
-from pathlib import Path
-from unittest.mock import MagicMock, patch, mock_open, ANY
+import pathlib
+import shlex
+import subprocess
+import pytest
+from unittest.mock import MagicMock, patch, mock_open, AsyncMock
 
-# Assuming the code under test is in pdd.commands.generate
-from pdd.commands.generate import code_generator_main
-from pdd.construct_paths import PathConstructionError, LanguageDetectionError
-from pdd.get_jwt_token import AuthError
+import click
+import requests
 
-# Mock constants if direct import from `pdd` is problematic in test environment
-# For a robust setup, ensure `pdd` is in PYTHONPATH or installed.
-try:
-    from pdd import DEFAULT_STRENGTH, DEFAULT_TIME
-except ImportError:
-    DEFAULT_STRENGTH = 0.5
-    DEFAULT_TIME = 0.25
+# Import the function to be tested using an absolute path
+from pdd.code_generator_main import code_generator_main
+from pdd.get_jwt_token import AuthError, NetworkError, TokenError, UserCancelledError, RateLimitError
 
+# Constants for mocking
+DEFAULT_MOCK_GENERATED_CODE = "def hello():\n  print('Hello, world!')"
+DEFAULT_MOCK_COST = 0.001
+DEFAULT_MOCK_MODEL_NAME = "mock_model_v1"
+DEFAULT_MOCK_LANGUAGE = "python"
+
+# Test Plan
+#
+# I. Setup and Mocking (Fixtures)
+#    1.  `mock_ctx`: Pytest fixture for `click.Context`.
+#    2.  `temp_dir_setup`: Pytest fixture to create temporary directories for prompts, output. Manages cleanup.
+#    3.  `git_repo_setup`: Pytest fixture to initialize a temporary git repository, commit files, and provide paths.
+#    4.  `mock_env_vars`: Pytest fixture using `monkeypatch` to set/unset environment variables.
+#    5.  `mock_construct_paths_fixture`: Autouse fixture to mock `pdd.construct_paths.construct_paths`.
+#    6.  `mock_pdd_preprocess_fixture`: Autouse fixture to mock `pdd.preprocess.preprocess`.
+#    7.  `mock_local_generator_fixture`: Autouse fixture to mock `pdd.code_generator.local_code_generator_func`.
+#    8.  `mock_incremental_generator_fixture`: Autouse fixture to mock `pdd.incremental_code_generator.incremental_code_generator_func`.
+#    9.  `mock_get_jwt_token_fixture`: Autouse fixture to mock `pdd.get_jwt_token.get_jwt_token`.
+#   10.  `mock_requests_post_fixture`: Autouse fixture to mock `requests.post`.
+#   11.  `mock_subprocess_run_fixture`: Autouse fixture to mock `subprocess.run`.
+#   12.  `mock_rich_console_fixture`: Autouse fixture to mock `Console.print`.
+#
+# II. Core Functionality Tests
+#
+#    A. Full Generation - Local Execution
+#        1.  `test_full_gen_local_no_output_file`: Prompt exists, no output file yet. `--local` is True.
+#        2.  `test_full_gen_local_output_exists_no_incremental_possible`: Prompt exists, output file exists, but no original prompt source. `--local` is True.
+#        3.  `test_full_gen_local_output_to_console`: Prompt exists, no output path specified. `--local` is True, `quiet=False`.
+#
+#    B. Full Generation - Cloud Execution
+#        1.  `test_full_gen_cloud_success`: Prompt exists, no output file. `--local` is False. `get_jwt_token` and `requests.post` succeed.
+#        2.  `test_full_gen_cloud_auth_failure_fallback_to_local`: `--local` is False. `get_jwt_token` raises `AuthError`.
+#        3.  `test_full_gen_cloud_network_timeout_fallback_to_local`: `--local` is False. `requests.post` raises `requests.exceptions.Timeout`.
+#        4.  `test_full_gen_cloud_http_error_fallback_to_local`: `--local` is False. `requests.post` raises `requests.exceptions.HTTPError`.
+#        5.  `test_full_gen_cloud_json_error_fallback_to_local`: `--local` is False. `requests.post` returns non-JSON response.
+#        6.  `test_full_gen_cloud_no_code_returned_fallback_to_local`: `--local` is False. `requests.post` succeeds but JSON response has no `generatedCode`.
+#        7.  `test_full_gen_cloud_missing_env_vars_fallback_to_local`: `--local` is False. Firebase/GitHub env vars not set.
+#
+#    C. Incremental Generation
+#        1.  `test_incremental_gen_with_original_prompt_file`: Prompt, output, and original_prompt_file exist. `incremental_code_generator_func` returns `is_incremental=True`.
+#        2.  `test_incremental_gen_with_git_committed_prompt`: Prompt in git, modified. Output file exists. `incremental_code_generator_func` returns `is_incremental=True`.
+#        3.  `test_incremental_gen_git_staging_untracked_files`: Prompt is untracked, output file exists. Incremental attempt. `git_add_files` called.
+#        4.  `test_incremental_gen_git_staging_modified_files`: Prompt is committed and modified, output file exists. Incremental attempt. `git_add_files` called.
+#        5.  `test_incremental_gen_fallback_to_full_on_generator_suggestion`: Conditions for incremental met. `incremental_code_generator_func` returns `is_incremental=False`.
+#        6.  `test_incremental_gen_force_incremental_flag_success`: Conditions for incremental met. `force_incremental_flag=True`.
+#        7.  `test_incremental_gen_force_incremental_flag_but_no_output_file`: `force_incremental_flag=True`, but no output file. Warns, does full.
+#        8.  `test_incremental_gen_force_incremental_flag_but_no_original_prompt`: `force_incremental_flag=True`, output file exists, but no original prompt source. Warns, does full.
+#        9.  `test_incremental_gen_no_git_repo_fallback_to_full_if_git_needed`: Output file exists, prompt not in git, no `original_prompt_file` specified. Full generation.
+#
+#    D. File and Path Handling
+#        1.  `test_error_prompt_file_not_found`: `prompt_file` path is invalid.
+#        2.  `test_error_original_prompt_file_not_found`: `original_prompt_file_path` is invalid.
+#        3.  `test_output_file_creation_and_overwrite`: Test with and without `force=True` when output file exists.
+#
+#    E. Error and Edge Cases
+#        1.  `test_code_generation_fails_no_code_produced`: Generator returns `None` for code.
+#        2.  `test_unexpected_exception_during_generation`: Generator raises a generic `Exception`.
+#
+# III. Git Helper Function Tests (Simplified for brevity, focusing on `code_generator_main`'s usage)
+#    *   Git helper tests are implicitly covered by the incremental generation tests that rely on mocked `subprocess.run`.
+#       Dedicated tests for git helpers would mock `subprocess.run` and assert behavior of `is_git_repository`,
+#       `get_git_committed_content`, `get_file_git_status`, `git_add_files`.
+#       For this test suite, we focus on `code_generator_main`'s integration of these.
 
 @pytest.fixture
-def mock_ctx(mocker):
+def mock_ctx(monkeypatch):
     ctx = MagicMock(spec=click.Context)
     ctx.obj = {
-        "verbose": False,
-        "quiet": False,
-        "force": False,
-        "local": False,
-        "strength": DEFAULT_STRENGTH,
-        "temperature": 0.0,
-        "time": DEFAULT_TIME,
+        'local': False,
+        'strength': 0.5,
+        'temperature': 0.0,
+        'time': 0.25,
+        'verbose': False,
+        'force': False,
+        'quiet': False,
     }
     return ctx
 
 @pytest.fixture
-def mock_console(mocker):
-    return mocker.patch("pdd.commands.generate.Console").return_value
-
-@pytest.fixture
-def mock_construct_paths(mocker):
-    mock = mocker.patch("pdd.commands.generate.construct_paths")
-    # Default successful return
-    mock.return_value = (
-        {"prompt_file": "def main():\n  print('Hello')"}, # input_strings
-        {"output_file": "output/generated_code.py"},     # output_file_paths
-        "python"                                         # language
-    )
-    return mock
-
-@pytest.fixture
-def mock_code_generator(mocker):
-    mock = mocker.patch("pdd.commands.generate.code_generator")
-    mock.return_value = ("# Generated by local full", 0.01, "local_model_gpt4")
-    return mock
-
-@pytest.fixture
-def mock_incremental_code_generator(mocker):
-    mock = mocker.patch("pdd.commands.generate.incremental_code_generator")
-    mock.return_value = ("# Generated by incremental", True, 0.005, "inc_model_gpt3")
-    return mock
-
-@pytest.fixture
-def mock_preprocess(mocker):
-    mock = mocker.patch("pdd.commands.generate.preprocess")
-    mock.side_effect = lambda prompt, **kwargs: f"processed: {prompt}"
-    return mock
-
-@pytest.fixture
-def mock_get_jwt_token(mocker):
-    # Patch asyncio.run to return a mock that returns the token
-    mock_async_run = mocker.patch("asyncio.run")
-    mock_async_run.return_value = "test_jwt_token"
-    # The actual get_jwt_token function is not directly patched here,
-    # but its invocation via asyncio.run is.
-    return mock_async_run
-
-
-@pytest.fixture
-def mock_requests_post(mocker):
-    mock = mocker.patch("requests.post")
-    mock_response = MagicMock()
-    mock_response.json.return_value = {
-        "generatedCode": "# Generated by cloud",
-        "cost": 0.02,
-        "modelName": "cloud_model_claude",
-    }
-    mock_response.raise_for_status.return_value = None
-    mock.return_value = mock_response
-    return mock
-
-@pytest.fixture
-def mock_subprocess_run(mocker):
-    return mocker.patch("subprocess.run")
-
-@pytest.fixture
-def temp_prompt_file(tmp_path):
-    file_path = tmp_path / "test_prompt.py.prompt"
-    file_path.write_text("Create a Python hello world function.")
-    return str(file_path)
-
-@pytest.fixture
-def temp_output_dir(tmp_path):
+def temp_dir_setup(tmp_path, monkeypatch):
     output_dir = tmp_path / "output"
-    # Don't create it here, let the function do it or construct_paths handle it
-    return str(output_dir)
+    output_dir.mkdir(exist_ok=True)
+    
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir(exist_ok=True)
+
+    # Create a dummy PDD_PATH/data for construct_paths if it relies on it
+    pdd_path_data = tmp_path / "pdd_root" / "data"
+    pdd_path_data.mkdir(parents=True, exist_ok=True)
+    (pdd_path_data / "llm_model.csv").write_text("model,cost\nmock,0.01") # Dummy content
+    monkeypatch.setenv("PDD_PATH", str(tmp_path / "pdd_root"))
+
+    return {"output_dir": output_dir, "prompts_dir": prompts_dir, "tmp_path": tmp_path}
+
+@pytest.fixture
+def git_repo_setup(temp_dir_setup, monkeypatch):
+    git_dir = temp_dir_setup["tmp_path"] / "git_repo"
+    git_dir.mkdir()
+    
+    # Mock subprocess.run to simulate git commands
+    # This is a simplified git setup for testing purposes
+    original_subprocess_run = subprocess.run
+    
+    def mock_git_run(*args, **kwargs):
+        cmd = args[0]
+        cwd = kwargs.get("cwd", str(git_dir))
+
+        if cmd[0] == "git":
+            if cmd[1] == "rev-parse" and "--is-inside-work-tree" in cmd:
+                if pathlib.Path(cwd).resolve() == git_dir.resolve() or str(git_dir.resolve()) in str(pathlib.Path(cwd).resolve()):
+                     # Check if .git exists in git_dir
+                    if (git_dir / ".git").exists():
+                        return subprocess.CompletedProcess(args, 0, stdout="true", stderr="")
+                return subprocess.CompletedProcess(args, 0, stdout="false", stderr="") # Not a git repo or not inside
+            if cmd[1] == "rev-parse" and "--show-toplevel" in cmd:
+                if (git_dir / ".git").exists():
+                    return subprocess.CompletedProcess(args, 0, stdout=str(git_dir.resolve()), stderr="")
+                return subprocess.CompletedProcess(args, 128, stdout="", stderr="Not a git repository")
+            if cmd[1] == "show" and cmd[2].startswith("HEAD:"):
+                # This needs to be configured per test
+                pass # Let specific tests handle this via mock_subprocess_run_fixture
+            if cmd[1] == "status" and "--porcelain" in cmd:
+                # This needs to be configured per test
+                pass
+            if cmd[1] == "add":
+                return subprocess.CompletedProcess(args, 0, stdout="", stderr="") # Assume add always succeeds for mock
+            if cmd[1] == "diff" and "--quiet" in cmd and "HEAD" in cmd:
+                # Needs to be configured per test
+                pass
+        return original_subprocess_run(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, 'run', mock_git_run)
+    
+    # "Initialize" git repo by creating a .git directory
+    (git_dir / ".git").mkdir()
+    
+    return git_dir
 
 
-# I. Setup and Basic File Operations
+# --- Start Mocks for PDD internal functions ---
+@pytest.fixture
+def mock_construct_paths_fixture(monkeypatch):
+    mock = MagicMock()
+    monkeypatch.setattr("pdd.code_generator_main.construct_paths", mock)
+    # Default behavior
+    mock.return_value = (
+        {"prompt_file": "Test prompt content"}, 
+        {"output_file": "output/test_output.py"}, 
+        DEFAULT_MOCK_LANGUAGE
+    )
+    return mock
 
-def test_successful_invocation_with_minimal_params_local_forced(
-    mock_ctx, temp_prompt_file, temp_output_dir, mock_construct_paths, mock_code_generator, mock_console
+@pytest.fixture
+def mock_pdd_preprocess_fixture(monkeypatch):
+    mock = MagicMock(return_value="Preprocessed prompt content")
+    monkeypatch.setattr("pdd.code_generator_main.pdd_preprocess", mock)
+    return mock
+
+@pytest.fixture
+def mock_local_generator_fixture(monkeypatch):
+    mock = MagicMock(return_value=(DEFAULT_MOCK_GENERATED_CODE, DEFAULT_MOCK_COST, DEFAULT_MOCK_MODEL_NAME))
+    monkeypatch.setattr("pdd.code_generator_main.local_code_generator_func", mock)
+    return mock
+
+@pytest.fixture
+def mock_incremental_generator_fixture(monkeypatch):
+    mock = MagicMock(return_value=(DEFAULT_MOCK_GENERATED_CODE, True, DEFAULT_MOCK_COST, DEFAULT_MOCK_MODEL_NAME)) # Default to successful incremental
+    monkeypatch.setattr("pdd.code_generator_main.incremental_code_generator_func", mock)
+    return mock
+# --- End Mocks for PDD internal functions ---
+
+# --- Start Mocks for External Dependencies ---
+@pytest.fixture
+def mock_get_jwt_token_fixture(monkeypatch):
+    # Use AsyncMock for async functions
+    mock = AsyncMock(return_value="test_jwt_token")
+    # Patch where it's looked up
+    monkeypatch.setattr("pdd.code_generator_main.get_jwt_token", mock)
+    return mock
+
+@pytest.fixture
+def mock_requests_post_fixture(monkeypatch):
+    mock = MagicMock()
+    # Default successful response
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.json.return_value = {"generatedCode": DEFAULT_MOCK_GENERATED_CODE, "totalCost": DEFAULT_MOCK_COST, "modelName": "cloud_model"}
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock() # Does nothing if status is 200
+    mock.return_value = mock_response
+    monkeypatch.setattr("pdd.code_generator_main.requests.post", mock)
+    return mock
+
+@pytest.fixture
+def mock_subprocess_run_fixture(monkeypatch):
+    mock = MagicMock(return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""))
+    monkeypatch.setattr("pdd.code_generator_main.subprocess.run", mock)
+    # Specific git command mocks will be configured within tests if needed
+    return mock
+
+@pytest.fixture
+def mock_rich_console_fixture(monkeypatch):
+    mock_console_print = MagicMock()
+    # Patching the console instance used in the module
+    monkeypatch.setattr("pdd.code_generator_main.console.print", mock_console_print)
+    return mock_console_print
+
+@pytest.fixture
+def mock_env_vars(monkeypatch):
+    monkeypatch.setenv("NEXT_PUBLIC_FIREBASE_API_KEY", "test_firebase_key")
+    monkeypatch.setenv("GITHUB_CLIENT_ID", "test_github_id")
+    # PDD_PATH is set in temp_dir_setup
+
+# --- Helper to create files ---
+def create_file(path, content=""):
+    pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
+    pathlib.Path(path).write_text(content, encoding="utf-8")
+
+# === Test Cases ===
+
+# A. Full Generation - Local Execution
+def test_full_gen_local_no_output_file(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_local_generator_fixture, mock_env_vars
 ):
-    mock_ctx.obj["local"] = True
-    output_file_path = Path(temp_output_dir) / "generated.py"
-    mock_construct_paths.return_value = (
-        {"prompt_file": "prompt content"},
+    mock_ctx.obj['local'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "test_prompt_python.prompt"
+    create_file(prompt_file_path, "Local test prompt")
+    
+    output_file_name = "local_output.py"
+    output_file_path_str = str(temp_dir_setup["output_dir"] / output_file_name)
+
+    mock_construct_paths_fixture.return_value = (
+        {"prompt_file": "Local test prompt"},
+        {"output_file": output_file_path_str},
+        "python"
+    )
+
+    code, incremental, cost, model = code_generator_main(
+        mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+    )
+
+    assert code == DEFAULT_MOCK_GENERATED_CODE
+    assert not incremental
+    assert cost == DEFAULT_MOCK_COST
+    assert model == DEFAULT_MOCK_MODEL_NAME
+    mock_local_generator_fixture.assert_called_once_with(
+        prompt="Local test prompt", language="python", strength=0.5, temperature=0.0, verbose=False
+    )
+    assert (temp_dir_setup["output_dir"] / output_file_name).exists()
+    assert (temp_dir_setup["output_dir"] / output_file_name).read_text() == DEFAULT_MOCK_GENERATED_CODE
+
+def test_full_gen_local_output_exists_no_incremental_possible(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_local_generator_fixture, mock_env_vars
+):
+    mock_ctx.obj['local'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "test_prompt_python.prompt"
+    create_file(prompt_file_path, "Local test prompt")
+    
+    output_file_name = "existing_local_output.py"
+    output_file_path = temp_dir_setup["output_dir"] / output_file_name
+    create_file(output_file_path, "Old code")
+
+    mock_construct_paths_fixture.return_value = (
+        {"prompt_file": "Local test prompt"},
         {"output_file": str(output_file_path)},
         "python"
     )
+    # Ensure is_git_repository returns False so it doesn't try git
+    with patch("pdd.code_generator_main.is_git_repository", return_value=False):
+        code, _, _, _ = code_generator_main(
+            mock_ctx, str(prompt_file_path), str(output_file_path), None, False
+        )
 
-    code, is_inc, cost, model = code_generator_main(
-        mock_ctx, temp_prompt_file, str(output_file_path), None, False
-    )
+    assert code == DEFAULT_MOCK_GENERATED_CODE
+    mock_local_generator_fixture.assert_called_once()
+    assert output_file_path.read_text() == DEFAULT_MOCK_GENERATED_CODE
 
-    assert code == "# Generated by local full"
-    assert not is_inc
-    assert cost == 0.01
-    assert model == "local_model_gpt4"
-    mock_code_generator.assert_called_once()
-    assert output_file_path.exists()
-    assert output_file_path.read_text() == "# Generated by local full"
-    mock_console.print.assert_any_call(f"Generated code saved to: '{output_file_path.resolve()}'")
 
-def test_prompt_file_not_found(mock_ctx, mock_construct_paths, mock_console):
-    mock_construct_paths.side_effect = FileNotFoundError("Prompt file does not exist")
-    
-    code, is_inc, cost, model = code_generator_main(
-        mock_ctx, "non_existent.prompt", "output.py", None, False
-    )
-
-    assert code == ""
-    assert not is_inc
-    assert cost == 0.0
-    assert model == "error"
-    mock_console.print.assert_any_call("[bold red]Error during setup:[/bold red] Prompt file does not exist")
-
-def test_language_detection_error(mock_ctx, temp_prompt_file, mock_construct_paths, mock_console):
-    mock_construct_paths.side_effect = LanguageDetectionError("Cannot detect language")
-
-    code, is_inc, cost, model = code_generator_main(
-        mock_ctx, temp_prompt_file, "output.py", None, False
-    )
-    assert model == "error"
-    mock_console.print.assert_any_call("[bold red]Error during setup:[/bold red] Cannot detect language")
-
-@patch("pathlib.Path.write_text", side_effect=IOError("Permission denied"))
-def test_output_file_write_error(
-    mock_write_text, mock_ctx, temp_prompt_file, temp_output_dir, mock_construct_paths, mock_code_generator, mock_console
+def test_full_gen_local_output_to_console(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_local_generator_fixture, mock_rich_console_fixture, mock_env_vars
 ):
-    mock_ctx.obj["local"] = True # Force local to simplify
-    output_file_path = Path(temp_output_dir) / "generated.py"
-    mock_construct_paths.return_value = (
-        {"prompt_file": "prompt content"},
+    mock_ctx.obj['local'] = True
+    mock_ctx.obj['quiet'] = False # Ensure console output happens
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "test_prompt_python.prompt"
+    create_file(prompt_file_path, "Console test prompt")
+
+    mock_construct_paths_fixture.return_value = (
+        {"prompt_file": "Console test prompt"},
+        {"output_file": None}, # No output path
+        "python"
+    )
+
+    code, _, _, _ = code_generator_main(
+        mock_ctx, str(prompt_file_path), None, None, False
+    )
+
+    assert code == DEFAULT_MOCK_GENERATED_CODE
+    mock_local_generator_fixture.assert_called_once()
+    # Check if console.print was called with a Panel containing the code
+    # This is a bit fragile, depends on Rich's Panel structure
+    printed_to_console = False
+    for call_args in mock_rich_console_fixture.call_args_list:
+        args, _ = call_args
+        if args and hasattr(args[0], 'renderable') and hasattr(args[0].renderable, 'text'):
+            if DEFAULT_MOCK_GENERATED_CODE in args[0].renderable.text:
+                printed_to_console = True
+                break
+    assert printed_to_console
+
+
+# B. Full Generation - Cloud Execution
+def test_full_gen_cloud_success(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_pdd_preprocess_fixture,
+    mock_get_jwt_token_fixture, mock_requests_post_fixture, mock_env_vars
+):
+    mock_ctx.obj['local'] = False
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "cloud_prompt_python.prompt"
+    create_file(prompt_file_path, "Cloud test prompt")
+    
+    output_file_name = "cloud_output.py"
+    output_file_path_str = str(temp_dir_setup["output_dir"] / output_file_name)
+
+    mock_construct_paths_fixture.return_value = (
+        {"prompt_file": "Cloud test prompt"},
+        {"output_file": output_file_path_str},
+        "python"
+    )
+    mock_pdd_preprocess_fixture.return_value = "Preprocessed cloud prompt"
+
+    code, incremental, cost, model = code_generator_main(
+        mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+    )
+
+    assert code == DEFAULT_MOCK_GENERATED_CODE
+    assert not incremental
+    assert cost == DEFAULT_MOCK_COST 
+    assert model == "cloud_model" # From mock_requests_post
+    
+    mock_pdd_preprocess_fixture.assert_called_once_with("Cloud test prompt", recursive=True, double_curly_brackets=True, exclude_keys=[])
+    mock_get_jwt_token_fixture.assert_called_once()
+    mock_requests_post_fixture.assert_called_once()
+    
+    # Check payload to requests.post
+    call_args = mock_requests_post_fixture.call_args
+    assert call_args[1]['json']['promptContent'] == "Preprocessed cloud prompt"
+    assert call_args[1]['json']['language'] == "python"
+    
+    assert (temp_dir_setup["output_dir"] / output_file_name).exists()
+    assert (temp_dir_setup["output_dir"] / output_file_name).read_text() == DEFAULT_MOCK_GENERATED_CODE
+
+
+@pytest.mark.parametrize("cloud_error, local_fallback_expected", [
+    (AuthError("Auth failed"), True),
+    (requests.exceptions.Timeout("Timeout"), True),
+    (requests.exceptions.HTTPError(response=MagicMock(status_code=500, text="Server Error")), True),
+    (json.JSONDecodeError("msg", "doc", 0), True), # Simulate bad JSON from cloud
+    ("NO_CODE_RETURNED", True), # Special case for testing
+])
+def test_full_gen_cloud_fallback_scenarios(
+    cloud_error, local_fallback_expected, mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_pdd_preprocess_fixture, mock_get_jwt_token_fixture, mock_requests_post_fixture,
+    mock_local_generator_fixture, mock_rich_console_fixture, mock_env_vars
+):
+    mock_ctx.obj['local'] = False
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "fallback_prompt_python.prompt"
+    create_file(prompt_file_path, "Fallback test prompt")
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "fallback_output.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {"prompt_file": "Fallback test prompt"},
+        {"output_file": output_file_path_str}, "python"
+    )
+    mock_pdd_preprocess_fixture.return_value = "Preprocessed fallback prompt"
+
+    if isinstance(cloud_error, AuthError):
+        mock_get_jwt_token_fixture.side_effect = cloud_error
+    elif cloud_error == "NO_CODE_RETURNED":
+        # Configure requests.post mock to return success but no code
+        mock_response = MagicMock(spec=requests.Response)
+        mock_response.json.return_value = {"totalCost": 0.01, "modelName": "cloud_model_no_code"} # No generatedCode
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+        mock_requests_post_fixture.return_value = mock_response
+    elif isinstance(cloud_error, json.JSONDecodeError):
+         mock_response = MagicMock(spec=requests.Response)
+         mock_response.json.side_effect = cloud_error
+         mock_response.status_code = 200
+         mock_response.raise_for_status = MagicMock()
+         mock_requests_post_fixture.return_value = mock_response
+    else: # Timeout or HTTPError
+        mock_requests_post_fixture.side_effect = cloud_error
+        if isinstance(cloud_error, requests.exceptions.HTTPError): # Need to mock response for HTTPError
+             mock_requests_post_fixture.side_effect.response = cloud_error.response
+
+
+    code, _, _, _ = code_generator_main(
+        mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+    )
+
+    if local_fallback_expected:
+        mock_local_generator_fixture.assert_called_once()
+        assert code == DEFAULT_MOCK_GENERATED_CODE # From local generator
+        # Check for a warning print
+        assert any("Falling back to local" in str(call_args[0][0]).lower() for call_args in mock_rich_console_fixture.call_args_list if call_args[0])
+    else: # Should not happen with current parametrization
+        mock_local_generator_fixture.assert_not_called()
+
+
+def test_full_gen_cloud_missing_env_vars_fallback_to_local(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_get_jwt_token_fixture,
+    mock_local_generator_fixture, mock_rich_console_fixture, monkeypatch # Use monkeypatch directly here
+):
+    mock_ctx.obj['local'] = False
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "env_var_prompt_python.prompt"
+    create_file(prompt_file_path, "Env var test prompt")
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "env_var_output.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {"prompt_file": "Env var test prompt"},
+        {"output_file": output_file_path_str}, "python"
+    )
+    
+    # Simulate missing env var by having get_jwt_token raise AuthError
+    # Or, more directly, by unsetting them and letting the code handle it
+    monkeypatch.delenv("NEXT_PUBLIC_FIREBASE_API_KEY", raising=False)
+    # The actual get_jwt_token would raise, our mock needs to simulate this if it checks env vars
+    # For this test, we'll assume the check happens inside get_jwt_token or it's passed as None
+    # Let's make the mock raise if a key is missing (as the real one might)
+    async def mock_get_jwt_token_with_check(firebase_api_key, **kwargs):
+        if not firebase_api_key:
+            raise AuthError("Firebase API key not set.")
+        return "test_jwt_token"
+    mock_get_jwt_token_fixture.side_effect = mock_get_jwt_token_with_check
+    
+    code_generator_main(mock_ctx, str(prompt_file_path), output_file_path_str, None, False)
+
+    mock_local_generator_fixture.assert_called_once()
+    assert any("falling back to local" in str(call_args[0][0]).lower() for call_args in mock_rich_console_fixture.call_args_list if call_args[0])
+
+
+# C. Incremental Generation
+def test_incremental_gen_with_original_prompt_file(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_incremental_generator_fixture, mock_env_vars
+):
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "inc_prompt_python.prompt"
+    create_file(prompt_file_path, "New prompt content")
+    
+    output_file_name = "inc_output.py"
+    output_file_path = temp_dir_setup["output_dir"] / output_file_name
+    create_file(output_file_path, "Existing code content")
+
+    original_prompt_file_path = temp_dir_setup["prompts_dir"] / "inc_original_python.prompt"
+    create_file(original_prompt_file_path, "Original prompt content")
+
+    mock_construct_paths_fixture.return_value = (
+        {
+            "prompt_file": "New prompt content",
+            "original_prompt_file": "Original prompt content" # From construct_paths
+        },
         {"output_file": str(output_file_path)},
         "python"
     )
-    
-    code, is_inc, cost, model = code_generator_main(
-        mock_ctx, temp_prompt_file, str(output_file_path), None, False
+    mock_incremental_generator_fixture.return_value = ("Updated code", True, 0.002, "inc_model")
+
+    code, incremental, cost, model = code_generator_main(
+        mock_ctx, str(prompt_file_path), str(output_file_path), str(original_prompt_file_path), False
     )
 
-    assert code == "# Generated by local full" # Generation happens
-    mock_console.print.assert_any_call(f"[bold red]Error writing output file '{output_file_path}':[/bold red] Permission denied")
-    # The return tuple still reflects the successful generation attempt
-
-def test_construct_paths_key_error(mock_ctx, temp_prompt_file, mock_construct_paths, mock_console):
-    mock_construct_paths.return_value = ({"prompt_file": "content"}, {}, "python") # Missing "output_file"
-
-    code, is_inc, cost, model = code_generator_main(
-        mock_ctx, temp_prompt_file, "output.py", None, False
-    )
-    assert model == "error"
-    mock_console.print.assert_any_call("[bold red]Error accessing file paths or content after construct_paths:[/bold red] Missing key 'output_file'")
-
-
-# II. Incremental Generation Logic
-
-def test_incremental_with_explicit_original_prompt_success(
-    mock_ctx, temp_prompt_file, tmp_path, mock_construct_paths, mock_incremental_code_generator, mock_subprocess_run
-):
-    original_prompt_content = "original prompt"
-    original_prompt_file = tmp_path / "original.py.prompt"
-    original_prompt_file.write_text(original_prompt_content)
-
-    existing_code_content = "existing code"
-    output_file = tmp_path / "output" / "existing_code.py"
-    output_file.parent.mkdir(exist_ok=True)
-    output_file.write_text(existing_code_content)
-
-    mock_construct_paths.return_value = (
-        {"prompt_file": "new prompt content"},
-        {"output_file": str(output_file)},
-        "python"
-    )
-    # Simulate being in a git repo for git add
-    mock_subprocess_run.side_effect = [
-        MagicMock(returncode=0, stdout=str(tmp_path)), # git rev-parse
-        MagicMock(returncode=0), # git add prompt
-        MagicMock(returncode=0), # git add output
-    ]
-
-
-    code, is_inc, cost, model = code_generator_main(
-        mock_ctx, temp_prompt_file, str(output_file), str(original_prompt_file), False
-    )
-
-    assert code == "# Generated by incremental"
-    assert is_inc
-    mock_incremental_code_generator.assert_called_once_with(
-        original_prompt=original_prompt_content,
-        new_prompt="new prompt content",
-        existing_code=existing_code_content,
+    assert code == "Updated code"
+    assert incremental
+    assert cost == 0.002
+    assert model == "inc_model"
+    mock_incremental_generator_fixture.assert_called_once_with(
+        original_prompt="Original prompt content",
+        new_prompt="New prompt content",
+        existing_code="Existing code content",
         language="python",
-        strength=ANY, temperature=ANY, time=ANY,
-        force_incremental=False,
-        verbose=False,
-        preprocess_prompt=True
+        strength=0.5, temperature=0.0, time=0.25,
+        force_incremental=False, verbose=False, preprocess_prompt=True
     )
-    assert output_file.read_text() == "# Generated by incremental"
-    # Check git add calls
-    assert mock_subprocess_run.call_count >= 3 # rev-parse + 2 adds
-    
-    # More specific check for git add calls if needed
-    # calls = [
-    #     call(['git', 'add', str(Path(temp_prompt_file).resolve())], cwd=tmp_path, check=False),
-    #     call(['git', 'add', str(output_file.resolve())], cwd=tmp_path, check=False)
-    # ]
-    # mock_subprocess_run.assert_has_calls(calls, any_order=True)
+    assert output_file_path.read_text() == "Updated code"
 
 
-def test_incremental_with_explicit_original_prompt_file_not_found(
-    mock_ctx, temp_prompt_file, tmp_path, mock_construct_paths, mock_code_generator, mock_console
+def test_incremental_gen_with_git_committed_prompt(
+    mock_ctx, temp_dir_setup, git_repo_setup, mock_construct_paths_fixture, 
+    mock_incremental_generator_fixture, mock_subprocess_run_fixture, mock_env_vars
 ):
-    mock_ctx.obj["local"] = True # Ensure fallback goes to local
-    output_file = tmp_path / "output" / "existing_code.py"
-    output_file.parent.mkdir(exist_ok=True)
-    output_file.write_text("existing code")
+    prompt_filename = "git_prompt_python.prompt"
+    prompt_file_path_in_git = git_repo_setup / prompt_filename
+    create_file(prompt_file_path_in_git, "Original git prompt") # This is what get_git_committed_content will return
 
-    mock_construct_paths.return_value = (
-        {"prompt_file": "new prompt content"},
-        {"output_file": str(output_file)},
+    # Simulate 'git show HEAD:...'
+    def git_show_side_effect(*args, **kwargs):
+        cmd = args[0]
+        if "git" in cmd and "show" in cmd and f"HEAD:{prompt_filename}" in cmd[2]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="Original git prompt", stderr="")
+        if "git" in cmd and "rev-parse" in cmd and "--is-inside-work-tree" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout="true", stderr="")
+        if "git" in cmd and "rev-parse" in cmd and "--show-toplevel" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=str(git_repo_setup.resolve()), stderr="")
+        if "git" in cmd and "status" in cmd: # For get_file_git_status
+            return subprocess.CompletedProcess(cmd, 0, stdout=f" M {prompt_filename}", stderr="") # Modified
+        if "git" in cmd and "diff" in cmd and "--quiet" in cmd and "HEAD" in cmd: # For staging check
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="") # 1 means different
+        if "git" in cmd and "add" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="") # Default for other git commands
+    mock_subprocess_run_fixture.side_effect = git_show_side_effect
+    
+    # "Modify" the prompt file on disk for the new_prompt
+    create_file(prompt_file_path_in_git, "New git prompt content") 
+
+    output_file_name = "git_output.py"
+    output_file_path = temp_dir_setup["output_dir"] / output_file_name # Place output outside git repo for simplicity
+    create_file(output_file_path, "Existing code for git test")
+
+    mock_construct_paths_fixture.return_value = (
+        {"prompt_file": "New git prompt content"}, # Content from disk
+        {"output_file": str(output_file_path)},
         "python"
     )
+    mock_incremental_generator_fixture.return_value = ("Git updated code", True, 0.003, "git_inc_model")
+
+    # Patch is_git_repository to return True for the prompt's directory
+    with patch("pdd.code_generator_main.is_git_repository", return_value=True):
+        code, incremental, _, _ = code_generator_main(
+            mock_ctx, str(prompt_file_path_in_git), str(output_file_path), None, False # No original_prompt_file specified
+        )
+
+    assert code == "Git updated code"
+    assert incremental
+    mock_incremental_generator_fixture.assert_called_once_with(
+        original_prompt="Original git prompt", # From mocked git show
+        new_prompt="New git prompt content",
+        existing_code="Existing code for git test",
+        language="python",
+        strength=0.5, temperature=0.0, time=0.25,
+        force_incremental=False, verbose=False, preprocess_prompt=True
+    )
+    # Check if git add was called for the prompt file
+    add_called_for_prompt = False
+    for call in mock_subprocess_run_fixture.call_args_list:
+        args_list = call[0][0] # command is the first element of the first arg tuple
+        if "git" in args_list and "add" in args_list and str(prompt_file_path_in_git.resolve()) in args_list:
+            add_called_for_prompt = True
+            break
+    assert add_called_for_prompt
+
+
+def test_incremental_gen_fallback_to_full_on_generator_suggestion(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, 
+    mock_incremental_generator_fixture, mock_local_generator_fixture, mock_env_vars
+):
+    mock_ctx.obj['local'] = True # Ensure fallback is to local
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "inc_fallback_prompt.prompt"
+    create_file(prompt_file_path, "New prompt")
+    output_file_path = temp_dir_setup["output_dir"] / "inc_fallback_output.py"
+    create_file(output_file_path, "Existing code")
+    original_prompt_file_path = temp_dir_setup["prompts_dir"] / "inc_fallback_original.prompt"
+    create_file(original_prompt_file_path, "Original prompt")
+
+    mock_construct_paths_fixture.return_value = (
+        {"prompt_file": "New prompt", "original_prompt_file": "Original prompt"},
+        {"output_file": str(output_file_path)}, "python"
+    )
+    # Incremental generator suggests full regeneration
+    mock_incremental_generator_fixture.return_value = (None, False, 0.001, "inc_model_suggests_full")
 
     code_generator_main(
-        mock_ctx, temp_prompt_file, str(output_file), "non_existent_original.prompt", False
+        mock_ctx, str(prompt_file_path), str(output_file_path), str(original_prompt_file_path), False
     )
-    mock_console.print.assert_any_call("[yellow]Warning: Could not read specified original prompt 'non_existent_original.prompt': [Errno 2] No such file or directory: 'non_existent_original.prompt'. Will perform full generation.[/yellow]")
-    mock_code_generator.assert_called_once() # Fallback to full
 
-def test_incremental_git_original_prompt_success(
-    mock_ctx, temp_prompt_file, tmp_path, mock_construct_paths, mock_incremental_code_generator, mock_subprocess_run
+    mock_incremental_generator_fixture.assert_called_once()
+    mock_local_generator_fixture.assert_called_once_with( # Check if full local generation was called
+        prompt="New prompt", language="python", strength=0.5, temperature=0.0, verbose=False
+    )
+
+def test_incremental_gen_force_incremental_flag_but_no_output_file(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, 
+    mock_local_generator_fixture, mock_rich_console_fixture, mock_env_vars
 ):
-    output_file = tmp_path / "output" / "existing_code.py"
-    output_file.parent.mkdir(exist_ok=True)
-    output_file.write_text("existing code")
+    mock_ctx.obj['local'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "force_inc_no_out.prompt"
+    create_file(prompt_file_path, "Prompt content")
+    # No output file created
+    output_path_str = str(temp_dir_setup["output_dir"] / "force_inc_no_out.py")
 
-    mock_construct_paths.return_value = (
-        {"prompt_file": "new prompt content"},
-        {"output_file": str(output_file)},
+
+    mock_construct_paths_fixture.return_value = (
+        {"prompt_file": "Prompt content"},
+        {"output_file": output_path_str}, # construct_paths might still return it
         "python"
     )
     
-    # Simulate git environment
-    git_root = tmp_path
-    abs_prompt_file = Path(temp_prompt_file).resolve() # Ensure it's resolvable
+    code_generator_main(
+        mock_ctx, str(prompt_file_path), output_path_str, None, True # force_incremental_flag = True
+    )
+
+    mock_local_generator_fixture.assert_called_once() # Should do full generation
+    assert any("output file does not exist" in str(call_args[0][0]).lower() for call_args in mock_rich_console_fixture.call_args_list if call_args[0])
+
+
+# D. File and Path Handling
+def test_error_prompt_file_not_found(mock_ctx, mock_construct_paths_fixture, mock_env_vars):
+    mock_construct_paths_fixture.side_effect = FileNotFoundError("Prompt file missing")
     
-    mock_subprocess_run.side_effect = [
-        MagicMock(returncode=0, stdout=str(git_root) + "\n"),  # git rev-parse --show-toplevel
-        MagicMock(returncode=0),                             # git ls-files
-        MagicMock(returncode=0, stdout="original git prompt"), # git show HEAD:rel_path
-        MagicMock(returncode=0, stdout=str(git_root)), # git rev-parse for git add
-        MagicMock(returncode=0), # git add prompt
-        MagicMock(returncode=0), # git add output
-    ]
-
-    code, is_inc, _, _ = code_generator_main(
-        mock_ctx, temp_prompt_file, str(output_file), None, False # No explicit original_prompt
-    )
-    assert is_inc
-    mock_incremental_code_generator.assert_called_once()
-    assert mock_incremental_code_generator.call_args[1]['original_prompt'] == "original git prompt"
-
-
-def test_incremental_generator_returns_is_incremental_false(
-    mock_ctx, temp_prompt_file, tmp_path, mock_construct_paths, mock_incremental_code_generator, mock_code_generator, mock_console
-):
-    mock_ctx.obj["local"] = True # Ensure fallback goes to local
-    original_prompt_file = tmp_path / "original.py.prompt"
-    original_prompt_file.write_text("original")
-    output_file = tmp_path / "output" / "existing.py"
-    output_file.parent.mkdir(exist_ok=True)
-    output_file.write_text("existing")
-
-    mock_construct_paths.return_value = (
-        {"prompt_file": "new"}, {"output_file": str(output_file)}, "python"
-    )
-    mock_incremental_code_generator.return_value = ("# Full regen suggested", False, 0.0, "inc_model_fallback")
-
-    code_generator_main(mock_ctx, temp_prompt_file, str(output_file), str(original_prompt_file), False)
+    prompt_file = "non_existent_prompt.prompt"
     
-    mock_incremental_code_generator.assert_called_once()
-    mock_code_generator.assert_called_once() # Fallback to full
-    mock_console.print.assert_any_call("[blue]Incremental analysis suggests full regeneration. Proceeding with full generation.[/blue]")
-
-
-# III. Full Generation Logic
-
-@patch.dict(os.environ, {"REACT_APP_FIREBASE_API_KEY": "test_fb_key", "GITHUB_CLIENT_ID": "test_gh_id"})
-def test_full_gen_cloud_success(
-    mock_ctx, temp_prompt_file, temp_output_dir, mock_construct_paths, 
-    mock_preprocess, mock_get_jwt_token, mock_requests_post, mock_console
-):
-    output_file_path = Path(temp_output_dir) / "generated_cloud.py"
-    mock_construct_paths.return_value = (
-        {"prompt_file": "cloud prompt"},
-        {"output_file": str(output_file_path)},
-        "python"
-    )
-
-    code, is_inc, cost, model = code_generator_main(
-        mock_ctx, temp_prompt_file, str(output_file_path), None, False
-    )
-
-    assert code == "# Generated by cloud"
-    assert not is_inc
-    assert cost == 0.02
-    assert model == "cloud_model_claude"
-    mock_preprocess.assert_called_once_with("cloud prompt", recursive=True, double_curly_brackets=True, exclude_keys=[])
-    mock_get_jwt_token.assert_called_once() # Checks asyncio.run was called
-    mock_requests_post.assert_called_once()
-    assert output_file_path.read_text() == "# Generated by cloud"
-    mock_console.print.assert_any_call("[green]Cloud code generation successful.[/green]")
-
-@patch.dict(os.environ, {"REACT_APP_FIREBASE_API_KEY": "", "GITHUB_CLIENT_ID": ""}) # Missing keys
-def test_full_gen_cloud_env_vars_missing_falls_back_to_local(
-    mock_ctx, temp_prompt_file, temp_output_dir, mock_construct_paths, 
-    mock_code_generator, mock_console
-):
-    output_file_path = Path(temp_output_dir) / "generated_local_fallback.py"
-    mock_construct_paths.return_value = (
-        {"prompt_file": "prompt"}, {"output_file": str(output_file_path)}, "python"
-    )
-
-    code_generator_main(mock_ctx, temp_prompt_file, str(output_file_path), None, False)
-    
-    mock_console.print.assert_any_call("[yellow]Warning: Firebase API key or GitHub Client ID not found in environment. Skipping cloud generation.[/yellow]")
-    mock_console.print.assert_any_call("[dim]Falling back to local code generation...[/dim]")
-    mock_code_generator.assert_called_once()
-
-
-@patch.dict(os.environ, {"REACT_APP_FIREBASE_API_KEY": "test_fb_key", "GITHUB_CLIENT_ID": "test_gh_id"})
-def test_full_gen_cloud_auth_fails_falls_back_to_local(
-    mock_ctx, temp_prompt_file, temp_output_dir, mock_construct_paths, 
-    mock_get_jwt_token, mock_code_generator, mock_console
-):
-    output_file_path = Path(temp_output_dir) / "generated_local_fallback.py"
-    mock_construct_paths.return_value = (
-        {"prompt_file": "prompt"}, {"output_file": str(output_file_path)}, "python"
-    )
-    mock_get_jwt_token.side_effect = AuthError("Auth failed") # Mock asyncio.run raising AuthError
-
-    code_generator_main(mock_ctx, temp_prompt_file, str(output_file_path), None, False)
-    
-    mock_console.print.assert_any_call("[yellow]Cloud authentication failed: Auth failed. Falling back to local generation.[/yellow]")
-    mock_code_generator.assert_called_once()
-
-@patch.dict(os.environ, {"REACT_APP_FIREBASE_API_KEY": "test_fb_key", "GITHUB_CLIENT_ID": "test_gh_id"})
-def test_full_gen_cloud_requests_post_http_error_falls_back_to_local(
-    mock_ctx, temp_prompt_file, temp_output_dir, mock_construct_paths, 
-    mock_get_jwt_token, mock_requests_post, mock_code_generator, mock_console
-):
-    output_file_path = Path(temp_output_dir) / "generated_local_fallback.py"
-    mock_construct_paths.return_value = (
-        {"prompt_file": "prompt"}, {"output_file": str(output_file_path)}, "python"
-    )
-    
-    http_error_response = MagicMock()
-    http_error_response.status_code = 500
-    http_error_response.text = "Internal Server Error"
-    mock_requests_post.side_effect = requests.exceptions.HTTPError(response=http_error_response)
-
-    code_generator_main(mock_ctx, temp_prompt_file, str(output_file_path), None, False)
-    
-    mock_console.print.assert_any_call("[yellow]Cloud API error (500): Internal Server Error. Falling back to local generation.[/yellow]")
-    mock_code_generator.assert_called_once()
-
-
-def test_full_gen_local_code_generator_fails(
-    mock_ctx, temp_prompt_file, temp_output_dir, mock_construct_paths, mock_code_generator, mock_console
-):
-    mock_ctx.obj["local"] = True
-    output_file_path = Path(temp_output_dir) / "generated_failed.py"
-    mock_construct_paths.return_value = (
-        {"prompt_file": "prompt"}, {"output_file": str(output_file_path)}, "python"
-    )
-    mock_code_generator.side_effect = Exception("Local LLM exploded")
-
-    code, is_inc, cost, model = code_generator_main(
-        mock_ctx, temp_prompt_file, str(output_file_path), None, False
-    )
+    code, incremental, cost, model = code_generator_main(mock_ctx, prompt_file, None, None, False)
 
     assert code == ""
-    assert not is_inc
-    # Cost might be 0 or some partial cost depending on where exception occurs in real code_generator
-    assert model == "local_error"
-    mock_console.print.assert_any_call("[bold red]Error during local code generation:[/bold red] Local LLM exploded")
-    mock_console.print.assert_any_call("[bold red]Code generation failed. No code was produced.[/bold red]")
-    assert not output_file_path.exists() # Should not write if generation fails and content is empty
-
-
-# IV. Output and Return Values
-
-def test_return_tuple_on_success_full_gen(
-    mock_ctx, temp_prompt_file, temp_output_dir, mock_construct_paths, mock_code_generator
-):
-    mock_ctx.obj["local"] = True
-    output_file_path = Path(temp_output_dir) / "generated.py"
-    mock_construct_paths.return_value = (
-        {"prompt_file": "prompt"}, {"output_file": str(output_file_path)}, "python"
-    )
-    mock_code_generator.return_value = ("local code", 0.1, "local_m")
-
-    code, is_inc, cost, model_name = code_generator_main(
-        mock_ctx, temp_prompt_file, str(output_file_path), None, False
-    )
-    assert code == "local code"
-    assert not is_inc
-    assert cost == 0.1
-    assert model_name == "local_m"
-
-def test_return_tuple_on_setup_error(mock_ctx, mock_construct_paths):
-    mock_construct_paths.side_effect = PathConstructionError("Setup failed")
-    code, is_inc, cost, model_name = code_generator_main(
-        mock_ctx, "p.prompt", "o.py", None, False
-    )
-    assert code == ""
-    assert not is_inc
+    assert not incremental
     assert cost == 0.0
-    assert model_name == "error"
+    assert model == "error"
 
-
-# V. Context and Global Options
-
-def test_global_options_passed_to_generators(
-    mock_ctx, temp_prompt_file, temp_output_dir, mock_construct_paths, mock_code_generator
+# E. Error and Edge Cases
+def test_code_generation_fails_no_code_produced(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_local_generator_fixture, mock_rich_console_fixture, mock_env_vars
 ):
-    mock_ctx.obj["local"] = True
-    mock_ctx.obj["strength"] = 0.8
-    mock_ctx.obj["temperature"] = 0.5
-    mock_ctx.obj["time"] = 0.7
-    mock_ctx.obj["verbose"] = True
+    mock_ctx.obj['local'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "no_code_prompt.prompt"
+    create_file(prompt_file_path, "Prompt for no code")
+    output_path_str = str(temp_dir_setup["output_dir"] / "no_code_output.py")
 
-    output_file_path = Path(temp_output_dir) / "generated.py"
-    mock_construct_paths.return_value = (
-        {"prompt_file": "prompt"}, {"output_file": str(output_file_path)}, "python"
+    mock_construct_paths_fixture.return_value = (
+        {"prompt_file": "Prompt for no code"},
+        {"output_file": output_path_str}, "python"
     )
+    mock_local_generator_fixture.return_value = (None, 0.0, "model_failed") # Simulate no code
+
+    code, _, _, _ = code_generator_main(mock_ctx, str(prompt_file_path), output_path_str, None, False)
     
-    code_generator_main(mock_ctx, temp_prompt_file, str(output_file_path), None, False)
+    assert code == "" # Expect empty string if generation fails to produce code
+    assert any("code generation failed" in str(call_args[0][0]).lower() for call_args in mock_rich_console_fixture.call_args_list if call_args[0])
 
-    mock_code_generator.assert_called_once_with(
-        prompt="prompt",
-        language="python",
-        strength=0.8,
-        temperature=0.5,
-        verbose=True # Time param is not directly used by code_generator, but by incremental
-    )
 
-def test_quiet_option_suppresses_prints(
-    mock_ctx, temp_prompt_file, temp_output_dir, mock_construct_paths, mock_code_generator, mock_console
+def test_unexpected_exception_during_generation(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_local_generator_fixture, mock_rich_console_fixture, mock_env_vars
 ):
-    mock_ctx.obj["local"] = True
-    mock_ctx.obj["quiet"] = True
-    output_file_path = Path(temp_output_dir) / "generated.py"
-    mock_construct_paths.return_value = (
-        {"prompt_file": "prompt"}, {"output_file": str(output_file_path)}, "python"
-    )
+    mock_ctx.obj['local'] = True
+    mock_ctx.obj['verbose'] = True # To check traceback print
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "exception_prompt.prompt"
+    create_file(prompt_file_path, "Prompt for exception")
+    output_path_str = str(temp_dir_setup["output_dir"] / "exception_output.py")
 
-    code_generator_main(mock_ctx, temp_prompt_file, str(output_file_path), None, False)
+    mock_construct_paths_fixture.return_value = (
+        {"prompt_file": "Prompt for exception"},
+        {"output_file": output_path_str}, "python"
+    )
+    mock_local_generator_fixture.side_effect = Exception("Unexpected LLM error")
+
+    code, incremental, cost, model = code_generator_main(mock_ctx, str(prompt_file_path), output_path_str, None, False)
+
+    assert code == ""
+    assert not incremental # or depends on when exception occurs
+    assert model == "error"
     
-    # Check that a specific normally printed message was NOT printed
-    # For example, the "Generated code saved to..." message
-    for call_args in mock_console.print.call_args_list:
-        assert "Generated code saved to" not in call_args[0][0]
-        assert "Performing local code generation" not in call_args[0][0] # This is a [dim] message
+    printed_error = False
+    printed_traceback = False
+    for call_args in mock_rich_console_fixture.call_args_list:
+        args, _ = call_args
+        if args:
+            if "unexpected error occurred: unexpected llm error" in str(args[0]).lower():
+                printed_error = True
+            if "traceback (most recent call last)" in str(args[0]).lower():
+                printed_traceback = True
+    assert printed_error
+    assert printed_traceback

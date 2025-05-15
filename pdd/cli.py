@@ -239,9 +239,29 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
     default=None,
     help="Specify where to save the generated code (file or directory).",
 )
+@click.option(
+    "--original-prompt",
+    "original_prompt_file_path",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="Path to the original prompt file for incremental generation.",
+)
+@click.option(
+    "--force-incremental",
+    "force_incremental_flag",
+    is_flag=True,
+    default=False,
+    help="Force incremental generation even if full regeneration is suggested.",
+)
 @click.pass_context
 @track_cost
-def generate(ctx: click.Context, prompt_file: str, output: Optional[str]) -> Optional[Tuple[str, float, str]]: # Modified return type
+def generate(
+    ctx: click.Context,
+    prompt_file: str,
+    output: Optional[str],
+    original_prompt_file_path: Optional[str],
+    force_incremental_flag: bool,
+) -> Optional[Tuple[str, float, str]]: # Modified return type
     """Create runnable code from a prompt file."""
     quiet = ctx.obj.get("quiet", False)
     command_name = "generate"
@@ -250,6 +270,8 @@ def generate(ctx: click.Context, prompt_file: str, output: Optional[str]) -> Opt
             ctx=ctx,
             prompt_file=prompt_file,
             output=output,
+            original_prompt_file_path=original_prompt_file_path,
+            force_incremental_flag=force_incremental_flag,
         )
         return generated_code, total_cost, model_name
     except Exception as e:
