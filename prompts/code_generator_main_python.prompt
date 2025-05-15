@@ -28,6 +28,9 @@
       <construct_paths_example>
       <include>context/construct_paths_example.py</include>
       </construct_paths_example>
+      % When `construct_paths` is called with `command_options` (e.g., `{'output': output_value}`),
+      % the resolved path for that option will be available in the returned `output_file_paths` dictionary
+      % under the *same key* used in `command_options` (e.g., `output_file_paths.get('output')`).
 
       - Here is an example of how to use the `code_generator` function:
       <code_generator_example>

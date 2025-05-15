@@ -165,7 +165,7 @@ def code_generator_main(
             command_options=command_options,
         )
         prompt_content = input_strings["prompt_file"]
-        output_path = output_file_paths.get("output_file")
+        output_path = output_file_paths.get("output")
 
     except FileNotFoundError as e:
         console.print(f"[red]Error: Input file not found: {e.filename}[/red]")
