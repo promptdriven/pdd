@@ -430,11 +430,13 @@ def test_construct_paths_file_not_found(mock_construct, mock_context, setup_file
 
     assert e.value.code == 1
     captured = capsys.readouterr()
-    assert "Failed during path construction" in captured.out
+    # Check stderr for the rich_print output if it goes there, or stdout
+    # The code prints to rich_print, which defaults to stdout.
+    assert "Failed during path construction" in captured.out # Corrected to check captured.out
     assert 'force' in mock_construct.call_args[1]
 
 
-@patch('builtins.open', new_callable=mock_open)
+@patch('builtins.open', new_callable=MagicMock) # Use MagicMock for more control
 @patch('pdd.fix_verification_main.rich_print')
 @patch('pdd.fix_verification_main.fix_verification_errors_loop')
 @patch('pdd.fix_verification_main.fix_verification_errors')
@@ -447,9 +449,8 @@ def test_output_code_write_error(
     """Verify error message if writing verified code fails, but program file succeeds."""
     mock_construct.return_value = mock_construct_paths_response
     mock_run_prog.return_value = (True, "Program ran ok", "")
-    # Simulate success so that the code attempts to write the output file
     mock_fix_errors.return_value = {
-        'verification_issues_count': 0, # No issues, so success = True
+        'verification_issues_count': 0,
         'fixed_program': 'Original program content',
         'fixed_code': 'Original code content',
         'total_cost': 0.1, 'model_name': 'model-a', 'explanation': ['OK']
@@ -459,78 +460,42 @@ def test_output_code_write_error(
     output_results_path = mock_construct_paths_response[1]["output_results"]
     output_program_path = mock_construct_paths_response[1]["output_program"]
 
-
-    original_open_behavior = mock_open_func
-
-    def faulty_open(*args, **kwargs):
-        file_path = args[0]
-        mode = args[1] if len(args) > 1 else "r"
-
-        if file_path == output_code_path and "w" in mode:
+    # Define a simpler side_effect for mock_open_func
+    def open_side_effect(filename_arg, mode_arg="r", *args, **kwargs):
+        # nonlocal output_code_path # Not strictly needed due to closure
+        if filename_arg == output_code_path and "w" in mode_arg:
             raise IOError("Disk full simulation")
-        # For other files, use the original mock_open behavior
-        # but ensure the side_effect is reset for subsequent calls within this test
-        # This is tricky with mock_open. A simpler way is to have specific mocks for specific paths.
-        # However, for this test, we'll try to make it work.
-        current_side_effect = original_open_behavior.side_effect
-        original_open_behavior.side_effect = None # Temporarily disable side effect for this call
-        try:
-            # If original_open_behavior is just mock_open(), calling it directly is fine.
-            # If it had its own side_effect, that would be more complex.
-            # Here, we assume it's the mock_open instance.
-            if hasattr(original_open_behavior, '_mock_new_call'): # Check if it's a mock_open instance
-                 m = original_open_behavior(*args, **kwargs)
-            else: # Fallback if it's not a simple mock_open instance (e.g., already has a side_effect)
-                 m = MagicMock() # provide a generic mock
-                 if "w" in mode:
-                     m.write = MagicMock()
-                 else: # "r"
-                     m.read = MagicMock(return_value="Default read content") # if needed
-                 m.__enter__.return_value = m
-        finally:
-            original_open_behavior.side_effect = current_side_effect # Restore for next call to faulty_open
-        return m
+        
+        # For other files, return a functional mock file handle
+        mock_file_handle = MagicMock() 
+        mock_file_handle.write = MagicMock()
+        # mock_file_handle.read = MagicMock(return_value="Simulated read content") # Only if reads are expected
+        mock_file_handle.__enter__.return_value = mock_file_handle
+        mock_file_handle.__exit__.return_value = None
+        return mock_file_handle
 
-
-    mock_open_func.side_effect = faulty_open
+    mock_open_func.side_effect = open_side_effect
 
     result = fix_verification_main(
         ctx=mock_context,
         prompt_file=setup_files["prompt"],
         code_file=setup_files["code"],
         program_file=setup_files["program"],
-        output_results=None,
-        output_code=None,
-        output_program=None,
+        output_results=None, # Will use default from construct_paths
+        output_code=None,    # Will use default from construct_paths
+        output_program=None, # Will use default from construct_paths
         loop=False,
         verification_program=None
     )
 
     assert result[0] is True # Overall success was true before write error
-    # The code under test prints: f"[bold red]Error:[/bold red] Failed to write code file '{output_code_path}': {type(e).__name__} - {e}"
-    # With e = IOError("Disk full simulation"), this becomes:
-    # "[bold red]Error:[/bold red] Failed to write code file '{path}': IOError - Disk full simulation"
-    expected_error_msg = f"[bold red]Error:[/bold red] Failed to write code file '{output_code_path}': IOError - Disk full simulation"
+    
+    # Corrected expected message to use OSError as type(IOError()).__name__ is 'OSError'
+    expected_error_msg = f"[bold red]Error:[/bold red] Failed to write code file '{output_code_path}': OSError - Disk full simulation"
     mock_rich_print.assert_any_call(expected_error_msg)
 
     mock_open_func.assert_any_call(output_results_path, "w")
     mock_open_func.assert_any_call(output_program_path, "w")
-    # Check that write was attempted on the program file handle
-    # This requires inspecting the mock object returned by mock_open_func when output_program_path is opened
-    
-    # We need to find the mock handle for output_program_path
-    # This is a bit complex because faulty_open returns different mocks.
-    # A simpler check is that the program file *was* written successfully if the test logic implies it.
-    # The test asserts result[0] is True, and the mock_fix_errors implies success.
-    # The faulty_open only fails for output_code_path.
-    # So, if the program file exists and has content, that's an indirect check.
-    # However, the test setup doesn't allow os.path.exists on the mock_open'd files directly.
-
-    # Let's assume the mock_open_func.return_value is the last opened file handle (program file in this case)
-    # if the program file was indeed written.
-    # This part of the test might need refinement if it's critical to check the write content precisely
-    # when multiple files are opened with a complex side_effect.
-    # For now, the primary check is the rich_print error message.
 
 
 @patch('pdd.fix_verification_main.fix_verification_errors_loop')
@@ -559,9 +524,9 @@ def test_verbose_flag_propagation(
         strength=ANY, temperature=ANY, verbose=True
     )
 
-    mock_fix_errors.reset_mock() # Reset for the next call
-    mock_construct.reset_mock() # Reset construct_paths as it's called again
-    # mock_context.obj['verbose'] is already True
+    mock_fix_errors.reset_mock() 
+    mock_construct.reset_mock() 
+    mock_run_prog.reset_mock() # Reset run_program as it's called in single pass
 
     fix_verification_main(
         ctx=mock_context, prompt_file=setup_files["prompt"], code_file=setup_files["code"],
@@ -588,10 +553,10 @@ def test_force_flag_retrieved_from_ctx_obj(
     Test that fix_verification_main retrieves the 'force' flag from ctx.obj,
     not ctx.params.
     """
-    mock_context.obj['force'] = True # Set force in obj
+    mock_context.obj['force'] = True 
 
     mock_construct.return_value = mock_construct_paths_response
-    mock_fix_loop.return_value = { # Mock for loop mode
+    mock_fix_loop.return_value = { 
         'success': True,
         'final_program': 'Fixed program',
         'final_code': 'Fixed code',
@@ -599,7 +564,7 @@ def test_force_flag_retrieved_from_ctx_obj(
         'total_cost': 0.3,
         'model_name': 'model-loop'
     }
-    mock_fix_errors.return_value = { # Mock for single pass mode (if loop=False was tested)
+    mock_fix_errors.return_value = { 
         'verification_issues_count': 0,
         'fixed_program': 'Fixed program',
         'fixed_code': 'Fixed code',
@@ -610,8 +575,6 @@ def test_force_flag_retrieved_from_ctx_obj(
     mock_run_prog.return_value = (True, "Program output", "")
 
 
-    # Test with loop=False first to check construct_paths call with force
-    mock_context.obj['force'] = True
     fix_verification_main(
         ctx=mock_context,
         prompt_file=setup_files["prompt"],
@@ -620,21 +583,20 @@ def test_force_flag_retrieved_from_ctx_obj(
         output_results=None,
         output_code=None,
         output_program=None,
-        loop=False, # Test single pass
+        loop=False, 
         verification_program=None
     )
     mock_construct.assert_called_once()
-    call_args_single, call_kwargs_single = mock_construct.call_args
-    assert call_kwargs_single.get('force') is True, "construct_paths should have been called with force=True in single pass"
-    mock_fix_errors.assert_called_once() # Ensure single pass path was taken
+    # Accessing call_args directly can be (call_args, call_kwargs) or just call_args if no kwargs
+    # call_args[1] is safer for kwargs
+    assert mock_construct.call_args[1].get('force') is True, "construct_paths should have been called with force=True in single pass"
+    mock_fix_errors.assert_called_once() 
     mock_fix_loop.assert_not_called()
 
-    # Reset mocks for loop mode test
     mock_construct.reset_mock()
     mock_fix_errors.reset_mock()
-    mock_run_prog.reset_mock() # run_program is called in single pass
+    mock_run_prog.reset_mock() 
 
-    mock_context.obj['force'] = True # Ensure it's still set
     fix_verification_main(
         ctx=mock_context,
         prompt_file=setup_files["prompt"],
@@ -643,14 +605,13 @@ def test_force_flag_retrieved_from_ctx_obj(
         output_results=None,
         output_code=None,
         output_program=None,
-        loop=True, # Test loop mode
+        loop=True, 
         verification_program=setup_files["verifier"]
     )
 
     mock_construct.assert_called_once()
-    call_args_loop, call_kwargs_loop = mock_construct.call_args
-    assert call_kwargs_loop.get('force') is True, "construct_paths should have been called with force=True in loop mode"
+    assert mock_construct.call_args[1].get('force') is True, "construct_paths should have been called with force=True in loop mode"
 
-    mock_run_prog.assert_not_called() # Not called in loop mode by fix_verification_main directly
-    mock_fix_errors.assert_not_called() # Not called in loop mode
-    mock_fix_loop.assert_called_once() # Ensure loop path was taken
+    mock_run_prog.assert_not_called() 
+    mock_fix_errors.assert_not_called() 
+    mock_fix_loop.assert_called_once()
