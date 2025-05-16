@@ -1031,7 +1031,7 @@ def verify(
     quiet = ctx.obj.get("quiet", False)
     command_name = "verify"
     try:
-        success, final_program, final_code, attempts, cost, model = fix_verification_main(
+        success, final_program, final_code, attempts, total_cost_value, model_name_value = fix_verification_main(
             ctx=ctx,
             prompt_file=prompt_file,
             code_file=code_file,
@@ -1051,7 +1051,7 @@ def verify(
             "verified_program_path": output_program,
             "results_log_path": output_results,
         }
-        return result_data, cost, model
+        return result_data, total_cost_value, model_name_value
     except Exception as e:
         handle_error(e, command_name, quiet)
         return None # Return None on failure

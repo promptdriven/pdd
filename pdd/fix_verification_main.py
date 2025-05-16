@@ -2,12 +2,14 @@ import sys
 import os
 import subprocess
 import click
+import logging
 from typing import Optional, Tuple, List, Dict, Any
 
 # Use Rich for pretty printing to the console
 from rich import print as rich_print
 from rich.panel import Panel
 from rich.syntax import Syntax
+from rich.text import Text
 
 # Internal imports using relative paths
 from .construct_paths import construct_paths
@@ -17,9 +19,15 @@ from .fix_verification_errors_loop import fix_verification_errors_loop
 from . import DEFAULT_STRENGTH
 
 # Default values from the README
+DEFAULT_TEMPERATURE = 0.0
 DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_BUDGET = 5.0
-DEFAULT_TEMPERATURE = 0.0
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
+# Define a constant for the verification program name
+VERIFICATION_PROGRAM_NAME = "verification_program.py" # Example, adjust if needed
 
 def run_program(program_path: str, args: List[str] = []) -> Tuple[bool, str, str]:
     """
@@ -78,8 +86,8 @@ def run_program(program_path: str, args: List[str] = []) -> Tuple[bool, str, str
         rich_print(f"[bold red]Error:[/bold red] Program execution timed out: '{program_path}'")
         return False, "", f"Program execution timed out: {program_path}"
     except Exception as e:
-        rich_print(f"[bold red]Error:[/bold red] Failed to run program '{program_path}': {e}")
-        return False, "", f"Failed to run program: {e}"
+        logger.error(f"An unexpected error occurred while running {program_path}: {e}")
+        return False, "", f"An unexpected error occurred: {e}"
 
 def fix_verification_main(
     ctx: click.Context,
@@ -122,7 +130,6 @@ def fix_verification_main(
             - model_name (str): Name of the LLM used.
     """
     # Extract global options from context
-    # params = ctx.params # We need obj for global flags
     strength: float = ctx.obj.get('strength', DEFAULT_STRENGTH) # Get globals from obj
     temperature: float = ctx.obj.get('temperature', DEFAULT_TEMPERATURE)
     force: bool = ctx.obj.get('force', False) # <<< FIX: Get force from ctx.obj
@@ -371,25 +378,49 @@ def fix_verification_main(
     saved_results_path: Optional[str] = None
     saved_program_path: Optional[str] = None
 
-    if success and output_code_path:
+    if not quiet: 
+        rich_print(f"[cyan bold DEBUG] In fix_verification_main, BEFORE save attempt for CODE:")
+        rich_print(f"  output_code_path: {output_code_path!r}")
+        rich_print(f"  final_code is None: {final_code is None}")
+        if final_code is not None:
+            rich_print(f"  len(final_code): {len(final_code)}")
+
+    if output_code_path and final_code is not None:
         try:
+            if not quiet: 
+                rich_print(f"[cyan bold DEBUG] In fix_verification_main, ATTEMPTING to write code to: {output_code_path!r}")
             with open(output_code_path, "w") as f:
                 f.write(final_code)
             saved_code_path = output_code_path
             if not quiet:
-                rich_print(f"Successfully verified code saved to: [green]{output_code_path}[/green]")
-        except IOError as e:
-            rich_print(f"[bold red]Error:[/bold red] Failed to write verified code file '{output_code_path}': {e}")
+                if success: 
+                    rich_print(f"Successfully verified code saved to: [green]{output_code_path}[/green]")
+                else: 
+                    rich_print(f"Best effort code saved to: [yellow]{output_code_path}[/yellow] (Verification status: {'success' if success else 'failed'}, check logs for details and remaining issues)")
+        except Exception as e:
+            rich_print(f"[bold red]Error:[/bold red] Failed to write code file '{output_code_path}': {type(e).__name__} - {e}")
 
-    if success and output_program_path:
+    if not quiet: 
+        rich_print(f"[cyan bold DEBUG] In fix_verification_main, BEFORE save attempt for PROGRAM:")
+        rich_print(f"  output_program_path: {output_program_path!r}")
+        rich_print(f"  final_program is None: {final_program is None}")
+        if final_program is not None:
+            rich_print(f"  len(final_program): {len(final_program)}")
+
+    if output_program_path and final_program is not None:
         try:
+            if not quiet: 
+                rich_print(f"[cyan bold DEBUG] In fix_verification_main, ATTEMPTING to write program to: {output_program_path!r}")
             with open(output_program_path, "w") as f:
                 f.write(final_program)
             saved_program_path = output_program_path
             if not quiet:
-                rich_print(f"Successfully verified program saved to: [green]{output_program_path}[/green]")
-        except IOError as e:
-            rich_print(f"[bold red]Error:[/bold red] Failed to write verified program file '{output_program_path}': {e}")
+                if success: 
+                    rich_print(f"Successfully verified program saved to: [green]{output_program_path}[/green]")
+                else: 
+                     rich_print(f"Best effort program saved to: [yellow]{output_program_path}[/yellow] (Verification status: {'success' if success else 'failed'}, check logs for details and remaining issues)")
+        except Exception as e:
+            rich_print(f"[bold red]Error:[/bold red] Failed to write program file '{output_program_path}': {type(e).__name__} - {e}")
 
     # Write results log (only for single pass, loop writes its own)
     if not loop and output_results_path:
@@ -409,6 +440,8 @@ def fix_verification_main(
 
     # --- Final User Feedback ---
     if not quiet:
+        rich_print(f"[cyan bold DEBUG] Before summary - saved_code_path: {saved_code_path!r}, output_code_path: {output_code_path!r}[/cyan bold DEBUG]")
+        rich_print(f"[cyan bold DEBUG] Before summary - saved_program_path: {saved_program_path!r}, output_program_path: {output_program_path!r}[/cyan bold DEBUG]")
         rich_print("\n" + "="*40)
         title = "[bold green]Verification Complete[/bold green]" if success else "[bold red]Verification Failed[/bold red]"
         summary_panel = Panel(
@@ -427,6 +460,5 @@ def fix_verification_main(
         if verbose and not success and not loop:
              rich_print("[bold yellow]Final Code (after failed single pass):[/bold yellow]")
              rich_print(Syntax(final_code, language or "python", theme="default", line_numbers=True))
-
 
     return success, final_program, final_code, attempts, total_cost, model_name
