@@ -507,44 +507,70 @@ def fix_verification_errors_loop(
         # FIX: Restructured logic for success check and secondary verification
         secondary_verification_passed = True # Assume pass unless changes made and verification fails
         changes_applied_this_iteration = False
+        verify_ret_code = 0 # Default for skipped verification
+        verify_output = "Secondary verification not run." # Default for skipped
 
-        # Run secondary verification ONLY if code was updated
         if code_updated:
             if verbose:
-                console.print("Code change suggested, running secondary verification...")
-            try:
-                # Temporarily write the proposed code change
-                code_path.write_text(fixed_code, encoding="utf-8")
-
-                # Run verification program
-                verify_ret_code, verify_output = _run_program(verification_program_path)
-
-                # Determine pass/fail (simple: exit code 0 = pass)
-                secondary_verification_passed = (verify_ret_code == 0)
-
-                if verbose:
-                    console.print(f"Secondary verification exit code: {verify_ret_code}")
-                    console.print(f"Secondary verification passed: {secondary_verification_passed}")
-                    # console.print(f"Secondary verification output:\n{verify_output}")
-
-                passed_str = str(secondary_verification_passed).lower()
-                iteration_log_xml += f'  <SecondaryVerification passed="{passed_str}">\n'
-                iteration_log_xml += f'    <ExitCode>{verify_ret_code}</ExitCode>\n'
-                iteration_log_xml += f'    <Output>{escape(verify_output)}</Output>\n'
-                iteration_log_xml += f'  </SecondaryVerification>\n'
-
-                if not secondary_verification_passed:
-                    console.print("[yellow]Secondary verification failed. Restoring code file.[/yellow]")
-                    code_path.write_text(code_contents, encoding="utf-8") # Restore from memory state before this attempt
-
-            except IOError as e:
-                console.print(f"[bold red]Error during secondary verification I/O: {e}[/bold red]")
-                iteration_log_xml += f'  <Status>Error during secondary verification I/O: {escape(str(e))}</Status>\n'
-                secondary_verification_passed = False # Treat I/O error as failure
+                console.print("Code change suggested, attempting secondary verification...")
+            
+            if verification_program is not None and verification_program_path.is_file():
                 try:
-                    code_path.write_text(code_contents, encoding="utf-8")
-                except IOError:
-                    console.print(f"[bold red]Failed to restore code file after I/O error.[/bold red]")
+                    # Temporarily write the proposed code change
+                    code_path.write_text(fixed_code, encoding="utf-8")
+
+                    # Run verification program
+                    # Consider if verification_program_path needs arguments or specific env vars
+                    # For now, assuming it can run directly or uses env vars set externally
+                    current_verify_ret_code, current_verify_output = _run_program(verification_program_path)
+
+                    # Determine pass/fail (simple: exit code 0 = pass)
+                    secondary_verification_passed = (current_verify_ret_code == 0)
+                    verify_ret_code = current_verify_ret_code
+                    verify_output = current_verify_output
+
+                    if verbose:
+                        console.print(f"Secondary verification ran. Exit code: {verify_ret_code}")
+                        console.print(f"Secondary verification passed: {secondary_verification_passed}")
+                        # console.print(f"Secondary verification output:\\n{verify_output}")
+
+                    if not secondary_verification_passed:
+                        console.print("[yellow]Secondary verification failed. Restoring code file from memory.[/yellow]")
+                        code_path.write_text(code_contents, encoding="utf-8") # Restore from memory state before this attempt
+                
+                except IOError as e:
+                    console.print(f"[bold red]Error during secondary verification I/O: {e}[/bold red]")
+                    verify_output = f"Error during secondary verification I/O: {str(e)}"
+                    secondary_verification_passed = False # Treat I/O error as failure
+                    verify_ret_code = -1 # Indicate error
+                    try:
+                        code_path.write_text(code_contents, encoding="utf-8")
+                    except IOError:
+                        console.print(f"[bold red]Failed to restore code file after I/O error.[/bold red]")
+            else:
+                # No valid verification program provided, or it's not a file
+                secondary_verification_passed = True # Effectively skipped, so it doesn't block progress
+                verify_ret_code = 0
+                if verification_program is None:
+                    verify_output = "Secondary verification skipped: No verification program provided."
+                else:
+                    verify_output = f"Secondary verification skipped: Verification program '{verification_program}' not found or is not a file at '{verification_program_path}'."
+                if verbose:
+                    console.print(f"[dim]{verify_output}[/dim]")
+        else:
+            # Code was not updated by the fixer, so secondary verification is not strictly needed
+            secondary_verification_passed = True # No changes to verify
+            verify_ret_code = 0
+            verify_output = "Secondary verification not needed: Code was not modified by the fixer."
+            if verbose:
+                console.print(f"[dim]{verify_output}[/dim]")
+
+        # Always log the SecondaryVerification block
+        passed_str = str(secondary_verification_passed).lower()
+        iteration_log_xml += f'  <SecondaryVerification passed="{passed_str}">\n'
+        iteration_log_xml += f'    <ExitCode>{verify_ret_code}</ExitCode>\n'
+        iteration_log_xml += f'    <Output>{escape(verify_output)}</Output>\n'
+        iteration_log_xml += f'  </SecondaryVerification>\n'
 
         # Now, decide outcome based on issue count and verification status
         if secondary_verification_passed:

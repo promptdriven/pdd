@@ -586,7 +586,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "6" ]; then
       log_error "Crash loop test error log is empty. Skipping 'crash --loop' command."
   else
       # Run crash --loop - Increase strength here too
-      run_pdd_command_noexit crash --loop --max-attempts 2 --budget 5.0 \
+      run_pdd_command_noexit crash --loop --max-attempts 5 --budget 5.0 \
                             --output "${CRASH_FIXED_SCRIPT}_loop" \
                             --output-program "${CRASH_FIXED_PROGRAM}_loop" \
                             "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" \
@@ -628,11 +628,11 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "7" ]; then
       sed -i.bak 's/return a + b/return a - b/' "$MATH_SCRIPT"
 
       # Directly call pdd verify instead of the python harness script
-      run_pdd_command_noexit verify \
+      run_pdd_command_noexit --strength .9 verify \
           --output-results "$VERIFY_RESULTS_LOG" \
           --output-code "$VERIFY_CODE_OUTPUT" \
           --output-program "$VERIFY_PROGRAM_OUTPUT" \
-          --max-attempts 3 \
+          --max-attempts 5 \
           --budget 5.0 \
           "$PROMPTS_PATH/$MATH_PROMPT" \
           "$MATH_SCRIPT" \

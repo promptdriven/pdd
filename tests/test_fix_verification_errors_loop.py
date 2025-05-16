@@ -345,7 +345,12 @@ def run():
     iter2 = log_root.find("Iteration[@attempt='2']")
     assert iter2 is not None
     # Check the status of the last iteration (no changes were suggested)
-    assert iter2.find("SecondaryVerification") is None # Not run as no code changes suggested
+    # Secondary verification is skipped if no code changes suggested, but tag is still logged.
+    sv_tag_iter2 = iter2.find("SecondaryVerification")
+    assert sv_tag_iter2 is not None 
+    assert sv_tag_iter2.get("passed") == "true" # Skipped is treated as passed for this attribute
+    assert sv_tag_iter2.find("Output").text == "Secondary verification not needed: Code was not modified by the fixer."
+    assert sv_tag_iter2.find("ExitCode").text == "0"
     # FIX: Check the actual status logged when identical code is suggested
     assert iter2.find("Status").text == "No Effective Changes Suggested (Identical Code)"
 
@@ -423,7 +428,7 @@ def test_budget_exceeded_in_loop(setup_test_environment):
     actions = final_actions.findall("Action")
     assert any("Restored Best Iteration 1" in action.text for action in actions if action.text), \
            "Expected log action containing 'Restored Best Iteration 1'"
-    # assert final_actions.find("Action[contains(text(), 'Restored Best Iteration 1')]") is not None # Original failing line
+    # assert final_actions.find("Action[contains(text(), 'Restored Best Iteration 1')]') is not None # Original failing line
 
 
 def test_secondary_verification_fails_discard(setup_test_environment):
@@ -497,7 +502,13 @@ def test_secondary_verification_fails_discard(setup_test_environment):
     assert iter2 is not None
     # FIX: Check status for attempt 2
     assert iter2.find("Status").text == "No Effective Changes Suggested (Identical Code)"
-    assert iter2.find("SecondaryVerification") is None # Not run # Original
+    # Secondary verification is skipped if no code changes suggested, but tag is still logged.
+    sv_tag_iter2 = iter2.find("SecondaryVerification")
+    assert sv_tag_iter2 is not None
+    assert sv_tag_iter2.get("passed") == "true" # Skipped is treated as passed for this attribute
+    assert sv_tag_iter2.find("Output").text == "Secondary verification not needed: Code was not modified by the fixer."
+    assert sv_tag_iter2.find("ExitCode").text == "0"
+
 
     final_actions = log_root.find("FinalActions")
     assert final_actions is not None # Ensure FinalActions tag exists
@@ -890,7 +901,7 @@ def test_loop_handles_false_llm_success(setup_test_environment, capsys):
     # The loop's main success message should NOT be printed because secondary verification failed
     assert "[bold green]Success!" not in captured.out # General success message check
     # FIX: Check for the specific message printed when secondary verification fails
-    assert "Secondary verification failed. Restoring code file." in captured.out
+    assert "Secondary verification failed. Restoring code file from memory." in captured.out
 
     # Assertions for the loop's overall status:
     assert result["success"] is False
