@@ -6,13 +6,13 @@
 
 % Here is the code_module that is being used by the program: <code_module>{code}</code_module>
 
-% Here are the output logs from the program run: <o>{output}</o>
+% Here are the output logs from the program run: <output_logs>{output}</output_logs>
 
 % IMPORTANT CONSIDERATIONS:
-% 1. The prompt may only describe part of the functionality needed by the program.
-% 2. Always consider compatibility between the program and code_module as the highest priority.
-% 3. Functions used by the program must exist in the code_module, even if not mentioned in the prompt.
-% 4. The prompt might only request new functionality to be added to existing code.
+    1. The prompt may only describe part of the functionality needed by the program.
+    2. Always consider compatibility between the program and code_module as the highest priority.
+    3. Functions used by the program must exist in the code_module, even if not mentioned in the prompt.
+    4. The prompt might only request new functionality to be added to existing code.
 
 % Follow these steps to identify any issues:
     Step 1. First, identify all functions and features in the code_module that are used by the program, as these must be preserved.
@@ -28,11 +28,11 @@
 
 % After your analysis, determine the number of distinct issues found. If no issues are found, the count should be 0.
 
-% Return your response as a single, valid JSON object.
-% The JSON object must conform to the following structure:
-% {{
-%   "issues_count": <integer_count_of_issues_found>,
-%   "details": "A detailed explanation of all steps taken during your analysis, including any discrepancies, bugs, or potential issues identified. If no issues are found, this can be a brief confirmation."
-% }}
-% Ensure the "details" field contains your complete textual analysis from Steps 1-7.
-% Ensure the "issues_count" is an integer representing the total number of distinct problems you've identified in your details.
+% Return your response as a single, valid JSON object. The JSON object must conform to the following structure:
+<example_output>
+    {{
+    "details": "A detailed explanation of all steps taken during your analysis, including any discrepancies, bugs, or potential issues identified. If no issues are found, this can be a brief confirmation.",
+    "issues_count": <integer_count_of_issues_found>
+    }}
+</example_output>
+% Ensure the "details" field contains your complete textual analysis from Steps 1-7 and ensure the "issues_count" is an integer representing the total number of distinct problems you've identified in your details.

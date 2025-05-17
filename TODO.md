@@ -1,9 +1,8 @@
 # TODO
-- [ ] incremental generate that basically does a semantic diff of the prompt and does a surgical update of the code
+- [ ] reasoning support, allow strength to go above 1 to allocate more thinking tokens via time parameter
 
 
 ## On Deck
-- [ ] reasoning support, allow strength to go above 1 to allocate more thinking tokens via time parameter
 - [ ] during fix rather than just have the fix loop check to see if the example crashed, have it use a llm to check if the results are largely correct still
 
 
@@ -37,6 +36,7 @@
 - [ ] integrate the csv llm model check into the cli and have it say the strength of the models
 - [ ] Use codex for agentic mode
 - [ ] add tests vs. writing overthem if test file exists
+- [ ] update without need prior version of code
 
 
 ## Bugs
@@ -56,3 +56,4 @@
 - [ ] fix the overlogging
 
 ## Documentation
+- [ ] make readme accessible via cli
