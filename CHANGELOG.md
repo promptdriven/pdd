@@ -1,3 +1,29 @@
+## v0.0.31 (2025-05-17)
+
+### Feat
+
+- enhance Makefile and code generation example for improved usability
+- implement incremental code generation functionality
+- add real file verification test for CLI
+
+### Fix
+
+- update TODO list and enhance test assertions in test_fix_verification_main.py
+- update TODO list and correct mock return values in tests
+- update output path key in code generator and enhance prompt documentation
+
+### Refactor
+
+- clean up code formatting and improve readability in fix_verification_main.py and tests
+- improve verification process and logging in CLI and verification loop
+- enhance test coverage and improve mock setups in test_code_generator_main.py
+- enhance code generation example and improve CLI options
+- update PDD configuration and add get_comment function
+- update code generation function parameters for clarity and consistency
+- streamline code generation logic and improve incremental handling
+- update output directory and enhance code generation feedback
+- enhance incremental code generation example and improve code structure
+
 ## v0.0.30 (2025-05-10)
 
 ### Feat
