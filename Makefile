@@ -27,6 +27,9 @@ help:
 	@echo "Fixing & Maintenance:"
 	@echo "  make fix [MODULE=name]       - Fix prompts command"
 	@echo "  make crash MODULE=name       - Fix crashes in code"
+	@echo "  make detect CHANGE_FILE=path  - Detect which prompts need changes based on a description file"
+	@echo "  make change CHANGE_PROMPT=path CODE_FILE=path PROMPT_FILE=path [OUTPUT_FILE=path] - Modify a single prompt file"
+	@echo "  make change CSV_FILE=path [CODE_DIR=path] [OUTPUT_LOCATION=path] - Modify prompts in batch via CSV (CODE_DIR defaults to ./pdd)"
 	@echo "  make requirements            - Generate requirements.txt"
 	@echo "  make clean                   - Clean generated files"
 	@echo ""
@@ -59,7 +62,7 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory
 EXAMPLE_FILES := $(wildcard $(CONTEXT_DIR)/*_example.py)
 
-.PHONY: all clean test requirements production coverage staging regression install build analysis fix crash update-extension generate run-examples verify
+.PHONY: all clean test requirements production coverage staging regression install build analysis fix crash update-extension generate run-examples verify detect change
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -179,6 +182,117 @@ ifdef MODULE
 else
 	@echo "Please specify a MODULE to verify"
 	@echo "Usage: make verify MODULE=<module_name>"
+endif
+
+# Detect changes in prompts
+.PHONY: detect
+detect:
+ifdef CHANGE_FILE
+	@echo "Detecting which prompts need changes based on: $(CHANGE_FILE)"
+	@# Ensure CHANGE_FILE exists
+	@if [ ! -f "$(CHANGE_FILE)" ]; then \
+		echo "Error: CHANGE_FILE '$(CHANGE_FILE)' not found."; \
+		exit 1; \
+	fi
+	@# Define all prompt files
+	$(eval ALL_PROMPT_FILES := $(wildcard $(PROMPTS_DIR)/*.prompt))
+	@if [ -z "$(ALL_PROMPT_FILES)" ]; then \
+		echo "No prompt files found in $(PROMPTS_DIR)"; \
+		exit 1; \
+	fi
+	@echo "Analyzing prompts: $(ALL_PROMPT_FILES)"
+	@# Define output file based on CHANGE_FILE basename
+	$(eval CHANGE_FILE_BASENAME := $(basename $(notdir $(CHANGE_FILE))))
+	$(eval DETECT_OUTPUT_FILE := $(CHANGE_FILE_BASENAME)_detect.csv)
+	@echo "Output will be saved to $(DETECT_OUTPUT_FILE)"
+	@conda run -n pdd --no-capture-output pdd detect --output $(DETECT_OUTPUT_FILE) $(ALL_PROMPT_FILES) $(CHANGE_FILE)
+	@echo "Detection complete. Results in $(DETECT_OUTPUT_FILE)"
+else
+	@echo "Please specify a CHANGE_FILE to detect changes against."
+	@echo "Usage: make detect CHANGE_FILE=<path_to_description_file>"
+endif
+
+# Change prompt file based on instructions
+.PHONY: change
+change:
+ifeq ($(strip $(CSV_FILE)),) # If CSV_FILE is not set or empty, assume single prompt mode
+	@# Single prompt change mode
+ifdef CHANGE_PROMPT
+ifdef CODE_FILE
+ifdef PROMPT_FILE
+	@echo "Modifying single prompt file: $(PROMPT_FILE)"
+	@echo "Based on change prompt: $(CHANGE_PROMPT)"
+	@echo "And input code: $(CODE_FILE)"
+
+	@# Ensure input files exist for single mode
+	@if [ ! -f "$(CHANGE_PROMPT)" ]; then echo "Error: CHANGE_PROMPT '$(CHANGE_PROMPT)' not found."; exit 1; fi
+	@if [ ! -f "$(CODE_FILE)" ]; then echo "Error: CODE_FILE '$(CODE_FILE)' not found."; exit 1; fi
+	@if [ ! -f "$(PROMPT_FILE)" ]; then echo "Error: PROMPT_FILE '$(PROMPT_FILE)' not found."; exit 1; fi
+
+	$(eval PROMPT_BASENAME := $(basename $(notdir $(PROMPT_FILE))))
+	$(eval DEFAULT_OUTPUT_FILE := modified_$(PROMPT_BASENAME).prompt)
+	$(eval ACTUAL_OUTPUT_FILE := $(if $(OUTPUT_FILE),$(OUTPUT_FILE),$(DEFAULT_OUTPUT_FILE)))
+
+	@echo "Output will be saved to $(ACTUAL_OUTPUT_FILE)"
+	@conda run -n pdd --no-capture-output pdd change --output $(ACTUAL_OUTPUT_FILE) $(CHANGE_PROMPT) $(CODE_FILE) $(PROMPT_FILE)
+	@echo "Single prompt modification complete. Output at $(ACTUAL_OUTPUT_FILE)"
+else
+	@echo "Error: PROMPT_FILE must be specified for single prompt change mode."
+	@echo "Usage for single prompt: make change CHANGE_PROMPT=<c.prompt> CODE_FILE=<input.code> PROMPT_FILE=<orig.prompt> [OUTPUT_FILE=<o.prompt>]"
+	@echo "Usage for CSV batch:   make change CSV_FILE=<c.csv> [CODE_DIR=<code_dir/>] [OUTPUT_LOCATION=<out_dir_or_csv>]"
+	@exit 1
+endif
+else
+	@echo "Error: CODE_FILE must be specified for single prompt change mode."
+	@echo "Usage for single prompt: make change CHANGE_PROMPT=<c.prompt> CODE_FILE=<input.code> PROMPT_FILE=<orig.prompt> [OUTPUT_FILE=<o.prompt>]"
+	@echo "Usage for CSV batch:   make change CSV_FILE=<c.csv> [CODE_DIR=<code_dir/>] [OUTPUT_LOCATION=<out_dir_or_csv>]"
+	@exit 1
+endif
+else
+	@echo "Error: CHANGE_PROMPT must be specified for single prompt change mode (when CSV_FILE is not set)."
+	@echo "Usage for single prompt: make change CHANGE_PROMPT=<c.prompt> CODE_FILE=<input.code> PROMPT_FILE=<orig.prompt> [OUTPUT_FILE=<o.prompt>]"
+	@echo "Usage for CSV batch:   make change CSV_FILE=<c.csv> [CODE_DIR=<code_dir/>] [OUTPUT_LOCATION=<out_dir_or_csv>]"
+	@exit 1
+endif
+else
+	@# CSV batch change mode
+	$(eval EFFECTIVE_CODE_DIR := $(if $(CODE_DIR),$(CODE_DIR),./pdd))
+	@echo "Modifying prompts in batch using CSV file: $(CSV_FILE)"
+	@echo "Using code directory: $(EFFECTIVE_CODE_DIR) $(if $(CODE_DIR),,(default))"
+	@echo "Prompts are assumed to be in: $(PROMPTS_DIR)"
+ifdef CSV_FILE
+	@# Ensure input file/directory exist for CSV mode
+	@if [ ! -f "$(CSV_FILE)" ]; then echo "Error: CSV_FILE '$(CSV_FILE)' not found (expected relative to project root)."; exit 1; fi
+	@if [ ! -d "$(EFFECTIVE_CODE_DIR)" ]; then echo "Error: Code directory '$(EFFECTIVE_CODE_DIR)' not found or is not a directory."; exit 1; fi
+	@if [ ! -d "$(PROMPTS_DIR)" ]; then echo "Error: PROMPTS_DIR '$(PROMPTS_DIR)' not found or is not a directory."; exit 1; fi
+
+	$(eval REL_CSV_FILE := ../$(CSV_FILE))
+	$(eval REL_CODE_DIR := ../$(EFFECTIVE_CODE_DIR))
+	$(eval DEFAULT_CSV_OUTPUT_DIR := pdd_changed_output) # Output dir relative to PROMPTS_DIR
+	$(eval CMD_OUTPUT_ARG :=)
+
+	$(if $(OUTPUT_LOCATION), \
+		$(eval IS_ABS_OUTPUT := $(filter /%,$(OUTPUT_LOCATION))) \
+		$(if $(IS_ABS_OUTPUT), \
+			$(eval CMD_OUTPUT_ARG := --output $(OUTPUT_LOCATION)), \
+			$(eval CMD_OUTPUT_ARG := --output ../$(OUTPUT_LOCATION)) \
+		) \
+	, \
+		$(eval CMD_OUTPUT_ARG := --output $(DEFAULT_CSV_OUTPUT_DIR)) \
+		@mkdir -p $(PROMPTS_DIR)/$(DEFAULT_CSV_OUTPUT_DIR) \
+		@echo "No OUTPUT_LOCATION specified, defaulting to $(PROMPTS_DIR)/$(DEFAULT_CSV_OUTPUT_DIR)/" \
+	)
+
+	@if [ ! -z "$(OUTPUT_LOCATION)" ]; then echo "Output location specified by user: $(OUTPUT_LOCATION)"; fi
+	@echo "Executing from $(PROMPTS_DIR): conda run -n pdd --no-capture-output pdd change --csv $(CMD_OUTPUT_ARG) $(REL_CSV_FILE) $(REL_CODE_DIR)"
+	@cd $(PROMPTS_DIR) && conda run -n pdd --no-capture-output pdd change --csv $(CMD_OUTPUT_ARG) $(REL_CSV_FILE) $(REL_CODE_DIR)
+	@echo "CSV batch prompt modification complete."
+else # This means CSV_FILE was not defined, which contradicts the outer ifeq logic. This branch likely won't be hit if CSV_FILE is the primary condition.
+	@echo "Error: CSV_FILE must be specified for CSV batch change mode." # This case should ideally not be reached due to outer ifeq
+	@echo "Usage for CSV batch:   make change CSV_FILE=<c.csv> [CODE_DIR=<code_dir/>] [OUTPUT_LOCATION=<out_dir_or_csv>]"
+	@echo "Usage for single prompt: make change CHANGE_PROMPT=<c.prompt> CODE_FILE=<input.code> PROMPT_FILE=<orig.prompt> [OUTPUT_FILE=<o.prompt>]"
+	@exit 1
+endif
 endif
 
 # Fix prompts command

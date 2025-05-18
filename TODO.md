@@ -56,4 +56,4 @@
 - [ ] fix the overlogging
 
 ## Documentation
-- [ ] make readme accessible via cli
+- [ ] make readme accessible via cli/mcp server
