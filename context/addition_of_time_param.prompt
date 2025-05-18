@@ -1,0 +1,47 @@
+\
+% Purpose:
+% This prompt is designed to be used with the `pdd detect` command.
+% Its goal is to analyze an existing PDD CLI command's prompt file (hereafter referred to as "the target prompt")
+% and determine if it requires modifications due to the introduction of a new global `--time` parameter in the PDD CLI
+% and its corresponding `time` parameter in the underlying `llm_invoke` Python function.
+
+% Background:
+% The PDD CLI now features a global option `--time FLOAT` (value 0.0 to 1.0, default 0.25).
+% This option allows users to control the "thinking effort" or "reasoning allocation" of the Large Language Model (LLM)
+% used by PDD commands. This global `--time` option is passed to an internal Python function `llm_invoke`.
+
+% Details of the `llm_invoke` function's `time` parameter:
+% - Input: `time` (Optional) - Floating point number between 0 and 1 representing the relative amount of thinking effort requested. Default is 0.25.
+% - Behavior: How this `time` is interpreted depends on the selected model's `reasoning_type` (specified in a model configuration CSV):
+%     - If `reasoning_type` is 'none': The `time` parameter is ignored, and no specific reasoning parameters are passed to the LLM.
+%     - If `reasoning_type` is 'budget':
+%         - It checks if `max_reasoning_tokens` (from CSV) > 0.
+%         - If so, it calculates `budget = int(time * max_reasoning_tokens)`.
+%         - If `budget > 0`, it passes provider-specific parameter(s) to LiteLLM to enable reasoning with that token budget (e.g., Anthropic's `thinking` might be `{"type": "enabled", "budget_tokens": budget}`).
+%     - If `reasoning_type` is 'effort':
+%         - It maps the `time` value to a qualitative category:
+%             - "low": 0.0 - 0.3
+%             - "medium": >0.3 - 0.7
+%             - "high": >0.7 - 1.0
+%         - This category is then passed to a parameter like `reasoning_effort` in LiteLLM.
+
+% Global PDD CLI `--time` option (from README.md):
+%   `--time FLOAT`: Controls the reasoning allocation for LLM models supporting reasoning capabilities (0.0 to 1.0, default is 0.25).
+%   - For models with specific reasoning token limits (e.g., 64k), a value of `1.0` utilizes the maximum available tokens.
+%   - For models with discrete effort levels, `1.0` corresponds to the highest effort level.
+%   - Values between 0.0 and 1.0 scale the allocation proportionally.
+
+% Your Task:
+% You will be given a "target prompt" (the content of a PDD CLI command's prompt file).
+% Analyze this target prompt in the context of the new `time` parameter described above.
+% Determine if the target prompt needs to be changed.
+
+% Consider the following when analyzing the target prompt:
+% 1.  Implicit Behavior: Most PDD CLI command prompts call `llm_invoke` indirectly. The global `--time` flag will affect these calls without the target prompt needing specific changes, *unless* the target prompt contains conflicting instructions.
+% 2.  Conflicting Instructions: Does the target prompt contain any hardcoded instructions or assumptions about the LLM's reasoning, "thinking time," "effort level," or token budget for reasoning that would conflict with or be made redundant by the new global `--time` parameter?
+%     - Example of conflict: If a target prompt explicitly tells the LLM to "use minimal thinking time" or "spend extra time to reason deeply," this might conflict with the user's `--time` setting.
+% 3.  Parameter Relevance: Is the functionality of the target prompt highly sensitive to the trade-off between speed/cost and reasoning quality that the `time` parameter controls? If so, should the target prompt explicitly acknowledge or guide the use of the `time` parameter for its specific task? (This is less likely for `detect` but good to keep in mind).
+% 4.  Documentation/Messaging: Does the target prompt generate any user-facing help text, messages, or internal documentation (e.g., within generated code comments) that discusses model reasoning capabilities or effort? If so, these might need updating to reflect the new global `--time` option.
+% 5.  No Change Needed: If the target prompt is generic regarding LLM reasoning, or if its instructions are compatible with the global `--time` parameter influencing `llm_invoke` transparently, then no change is needed.
+
+

@@ -1,0 +1,795 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MediaPipe Consolidated (Optimized)</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+        
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        
+        .video-container {
+            position: relative;
+            width: 640px;
+            height: 480px;
+            margin-bottom: 20px;
+            border: 1px solid #ddd;
+            background-color: #000;
+            overflow: hidden;
+        }
+        
+        #video, #output_canvas {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            left: 0;
+            top: 0;
+        }
+        
+        #output_canvas {
+            z-index: 10;
+        }
+        
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        
+        button {
+            padding: 10px 15px;
+            background-color: #4285f4;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.3s;
+        }
+        
+        button:hover {
+            background-color: #3367d6;
+        }
+        
+        button.active {
+            background-color: #34a853;
+        }
+        
+        .status {
+            padding: 10px;
+            background-color: #fff;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            width: 100%;
+            max-width: 640px;
+        }
+        
+        .debug-log {
+            padding: 10px;
+            background-color: #fff;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 100%;
+            max-width: 640px;
+            height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>MediaPipe Consolidated (Optimized)</h1>
+        
+        <div class="video-container">
+            <video id="video" playsinline></video>
+            <canvas id="output_canvas"></canvas>
+        </div>
+        
+        <div class="controls">
+            <button id="faceDetectionBtn">Face Detection</button>
+            <button id="handTrackingBtn">Hand Tracking</button>
+            <button id="poseEstimationBtn">Pose Estimation</button>
+            <button id="cameraOnlyBtn">Camera Only</button>
+        </div>
+        
+        <div class="status" id="status">Status: Initializing...</div>
+        
+        <div class="debug-log" id="debug">
+            <!-- Debug logs will appear here -->
+        </div>
+    </div>
+
+    <script>
+        // Manual definition of MediaPipe connection data in case it doesn't load correctly
+        const MANUAL_HAND_CONNECTIONS = [
+            [0, 1], [1, 2], [2, 3], [3, 4],           // thumb
+            [0, 5], [5, 6], [6, 7], [7, 8],           // index finger
+            [0, 9], [9, 10], [10, 11], [11, 12],      // middle finger
+            [0, 13], [13, 14], [14, 15], [15, 16],    // ring finger
+            [0, 17], [17, 18], [18, 19], [19, 20],    // pinky
+            [5, 9], [9, 13], [13, 17], [0, 17],       // palm
+        ];
+
+        const MANUAL_FACE_OVAL = [
+            [10, 338], [338, 297], [297, 332], [332, 284], [284, 251], [251, 389], [389, 356], [356, 454],
+            [454, 323], [323, 361], [361, 288], [288, 397], [397, 365], [365, 379], [379, 378], [378, 400],
+            [400, 377], [377, 152], [152, 148], [148, 176], [176, 149], [149, 150], [150, 136], [136, 172],
+            [172, 58], [58, 132], [132, 93], [93, 234], [234, 127], [127, 162], [162, 21], [21, 54],
+            [54, 103], [103, 67], [67, 109], [109, 10]
+        ];
+
+        // Debug logging function
+        function log(message) {
+            console.log(message);
+            const debugElement = document.getElementById('debug');
+            const logEntry = document.createElement('div');
+            logEntry.textContent = `${new Date().toLocaleTimeString()}: ${message}`;
+            debugElement.appendChild(logEntry);
+            debugElement.scrollTop = debugElement.scrollHeight;
+        }
+
+        // Update status display
+        function updateStatus(message) {
+            const statusElement = document.getElementById('status');
+            statusElement.textContent = `Status: ${message}`;
+            log(message);
+        }
+
+        // Load scripts dynamically with fallback support
+        function loadScript(src, fallbackSrc = null) {
+            return new Promise((resolve, reject) => {
+                const script = document.createElement('script');
+                script.src = src;
+                script.onload = () => {
+                    log(`Successfully loaded: ${src}`);
+                    resolve(true);
+                };
+                script.onerror = () => {
+                    log(`Failed to load: ${src}`);
+                    if (fallbackSrc) {
+                        log(`Trying fallback: ${fallbackSrc}`);
+                        const fallbackScript = document.createElement('script');
+                        fallbackScript.src = fallbackSrc;
+                        fallbackScript.onload = () => {
+                            log(`Successfully loaded fallback: ${fallbackSrc}`);
+                            resolve(true);
+                        };
+                        fallbackScript.onerror = () => {
+                            const error = new Error(`Failed to load both primary and fallback scripts: ${src}, ${fallbackSrc}`);
+                            log(`Error: ${error.message}`);
+                            reject(error);
+                        };
+                        document.head.appendChild(fallbackScript);
+                    } else {
+                        const error = new Error(`Failed to load script: ${src}`);
+                        log(`Error: ${error.message}`);
+                        reject(error);
+                    }
+                };
+                document.head.appendChild(script);
+            });
+        }
+
+        // Global variables
+        let currentMode = null;
+        let videoElement = document.getElementById('video');
+        let canvasElement = document.getElementById('output_canvas');
+        let canvasCtx = canvasElement.getContext('2d');
+        let activeCamera = null;
+        
+        // MediaPipe instances
+        let hands = null;
+        let faceMesh = null;
+        let pose = null;
+        
+        // CDN URLs - Primary and Fallback
+        const CDN = {
+            // Primary CDNs (jsDelivr)
+            primary: {
+                drawingUtils: 'https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js',
+                camera: 'https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js',
+                hands: 'https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js',
+                faceMesh: 'https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js',
+                pose: 'https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js'
+            },
+            // Fallback CDNs (unpkg)
+            fallback: {
+                drawingUtils: 'https://unpkg.com/@mediapipe/drawing_utils/drawing_utils.js',
+                camera: 'https://unpkg.com/@mediapipe/camera_utils/camera_utils.js',
+                hands: 'https://unpkg.com/@mediapipe/hands/hands.js',
+                faceMesh: 'https://unpkg.com/@mediapipe/face_mesh/face_mesh.js',
+                pose: 'https://unpkg.com/@mediapipe/pose/pose.js'
+            },
+            // Google CDN (new)
+            google: {
+                hands: 'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/hands.js',
+                faceMesh: 'https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4/face_mesh.js',
+                pose: 'https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/pose.js'
+            },
+            // Specific model files base URLs
+            models: {
+                hands: 'https://cdn.jsdelivr.net/npm/@mediapipe/hands',
+                faceMesh: 'https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh',
+                pose: 'https://cdn.jsdelivr.net/npm/@mediapipe/pose'
+            }
+        };
+
+        // Initialization
+        async function init() {
+            updateStatus('Loading MediaPipe libraries...');
+            
+            try {
+                // Load required MediaPipe libraries with fallbacks
+                await Promise.all([
+                    loadScript(CDN.primary.drawingUtils, CDN.fallback.drawingUtils),
+                    loadScript(CDN.primary.camera, CDN.fallback.camera),
+                    // Try specific versions if default versions don't work
+                    loadScript(CDN.google.hands, CDN.primary.hands),
+                    loadScript(CDN.google.faceMesh, CDN.primary.faceMesh),
+                    loadScript(CDN.primary.pose, CDN.fallback.pose)
+                ]);
+                
+                log('All MediaPipe libraries loaded successfully');
+                
+                // Check if required objects are available
+                checkLibraryAvailability();
+                
+                // Set up buttons
+                document.getElementById('faceDetectionBtn').addEventListener('click', () => setMode('face'));
+                document.getElementById('handTrackingBtn').addEventListener('click', () => setMode('hands'));
+                document.getElementById('poseEstimationBtn').addEventListener('click', () => setMode('pose'));
+                document.getElementById('cameraOnlyBtn').addEventListener('click', () => setMode('camera'));
+                
+                // Set initial mode
+                setMode('pose'); // Start with a mode that works
+                
+            } catch (error) {
+                updateStatus(`Error initializing: ${error.message}`);
+                log(`Initialization failed: ${error.toString()}`);
+                logAvailableObjects();
+            }
+        }
+        
+        // Check if required MediaPipe objects are available
+        function checkLibraryAvailability() {
+            log('Checking MediaPipe library availability:');
+            
+            const required = {
+                'Hands': typeof Hands === 'function',
+                'FaceMesh': typeof FaceMesh === 'function',
+                'Pose': typeof Pose === 'function',
+                'Camera': typeof Camera === 'function',
+                'drawConnectors': typeof drawConnectors === 'function',
+                'drawLandmarks': typeof drawLandmarks === 'function'
+            };
+            
+            const missing = Object.entries(required)
+                .filter(([_, available]) => !available)
+                .map(([name]) => name);
+                
+            if (missing.length > 0) {
+                const error = `Missing required MediaPipe objects: ${missing.join(', ')}`;
+                log(`✗ ${error}`);
+                throw new Error(error);
+            } else {
+                log('✓ All required MediaPipe objects are available');
+            }
+            
+            // Check if constants are available
+            log('Checking MediaPipe constants:');
+            if (typeof HAND_CONNECTIONS === 'undefined') {
+                log('⚠️ HAND_CONNECTIONS not defined, using manual definition');
+                window.HAND_CONNECTIONS = MANUAL_HAND_CONNECTIONS;
+            } else {
+                log('✓ HAND_CONNECTIONS available');
+            }
+            
+            if (typeof FACEMESH_FACE_OVAL === 'undefined') {
+                log('⚠️ FACEMESH_FACE_OVAL not defined, using manual definition');
+                window.FACEMESH_FACE_OVAL = MANUAL_FACE_OVAL;
+                // Other face mesh constants might be missing too - but we'll handle those in the rendering function
+            } else {
+                log('✓ FACEMESH_FACE_OVAL available');
+            }
+        }
+        
+        // Log available objects for debugging
+        function logAvailableObjects() {
+            log('Available global objects:');
+            const mediapigeRelated = Object.keys(window).filter(k => 
+                k.includes('Hand') || 
+                k.includes('Face') || 
+                k.includes('Pose') || 
+                k.includes('Camera') || 
+                k.includes('draw') ||
+                k.includes('HAND_') ||
+                k.includes('FACE_') ||
+                k.includes('POSE_')
+            );
+            log(mediapigeRelated.join(', '));
+        }
+
+        // Set active mode
+        async function setMode(mode) {
+            try {
+                // Clear active class from all buttons
+                document.querySelectorAll('.controls button').forEach(btn => btn.classList.remove('active'));
+                
+                // Stop any existing camera instance
+                if (activeCamera) {
+                    log('Stopping current camera feed');
+                    activeCamera.stop();
+                    activeCamera = null;
+                }
+                
+                // Reset canvas
+                canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+                
+                // Set the new mode
+                currentMode = mode;
+                updateStatus(`Switching to ${mode} mode...`);
+                
+                // Highlight the active button
+                const buttonId = mode === 'face' ? 'faceDetectionBtn' : 
+                                mode === 'hands' ? 'handTrackingBtn' : 
+                                mode === 'pose' ? 'poseEstimationBtn' : 'cameraOnlyBtn';
+                document.getElementById(buttonId).classList.add('active');
+                log(`Activated button: ${buttonId}`);
+                
+                // Initialize the appropriate tracker based on mode
+                switch (mode) {
+                    case 'hands':
+                        await setupHandTracking();
+                        break;
+                    case 'face':
+                        await setupFaceDetection();
+                        break;
+                    case 'pose':
+                        await setupPoseEstimation();
+                        break;
+                    case 'camera':
+                        await setupCameraOnly();
+                        break;
+                }
+            } catch (error) {
+                updateStatus(`Error setting mode: ${error.message}`);
+                log(`Failed to set mode ${mode}: ${error.toString()}`);
+            }
+        }
+
+        // Hand tracking setup
+        async function setupHandTracking() {
+            try {
+                if (!hands) {
+                    updateStatus('Initializing hand tracking...');
+                    log('Creating Hands object...');
+                    
+                    hands = new Hands({
+                        locateFile: (file) => {
+                            const url = `${CDN.models.hands}/${file}`;
+                            log(`Locating hands file: ${url}`);
+                            return url;
+                        }
+                    });
+                    
+                    log('Setting Hands options...');
+                    hands.setOptions({
+                        maxNumHands: 2,
+                        modelComplexity: 1,
+                        minDetectionConfidence: 0.5,
+                        minTrackingConfidence: 0.5
+                    });
+                    
+                    log('Setting up hand results handler...');
+                    hands.onResults(onHandsResults);
+                }
+                
+                log('Initializing camera for hand tracking...');
+                // Start camera with hands model
+                activeCamera = new Camera(videoElement, {
+                    onFrame: async () => {
+                        try {
+                            canvasElement.width = videoElement.videoWidth;
+                            canvasElement.height = videoElement.videoHeight;
+                            await hands.send({image: videoElement});
+                        } catch (error) {
+                            log(`Error in camera frame handler: ${error.message}`);
+                        }
+                    },
+                    width: 640,
+                    height: 480
+                });
+                
+                log('Starting camera...');
+                await activeCamera.start();
+                updateStatus('Hand tracking active');
+            } catch (error) {
+                updateStatus(`Error setting up hand tracking: ${error.message}`);
+                log(`Hand tracking setup failed: ${error.toString()}`);
+                logAvailableObjects();
+                throw error;
+            }
+        }
+
+        // Face detection setup
+        async function setupFaceDetection() {
+            try {
+                if (!faceMesh) {
+                    updateStatus('Initializing face detection...');
+                    log('Creating FaceMesh object...');
+                    
+                    faceMesh = new FaceMesh({
+                        locateFile: (file) => {
+                            const url = `${CDN.models.faceMesh}/${file}`;
+                            log(`Locating face mesh file: ${url}`);
+                            return url;
+                        }
+                    });
+                    
+                    log('Setting FaceMesh options...');
+                    faceMesh.setOptions({
+                        maxNumFaces: 1,
+                        refineLandmarks: true,
+                        minDetectionConfidence: 0.5,
+                        minTrackingConfidence: 0.5
+                    });
+                    
+                    log('Setting up face results handler...');
+                    faceMesh.onResults(onFaceResults);
+                }
+                
+                log('Initializing camera for face detection...');
+                // Start camera with face model
+                activeCamera = new Camera(videoElement, {
+                    onFrame: async () => {
+                        try {
+                            canvasElement.width = videoElement.videoWidth;
+                            canvasElement.height = videoElement.videoHeight;
+                            await faceMesh.send({image: videoElement});
+                        } catch (error) {
+                            log(`Error in camera frame handler: ${error.message}`);
+                        }
+                    },
+                    width: 640,
+                    height: 480
+                });
+                
+                log('Starting camera...');
+                await activeCamera.start();
+                updateStatus('Face detection active');
+            } catch (error) {
+                updateStatus(`Error setting up face detection: ${error.message}`);
+                log(`Face detection setup failed: ${error.toString()}`);
+                logAvailableObjects();
+                throw error;
+            }
+        }
+
+        // Pose estimation setup
+        async function setupPoseEstimation() {
+            try {
+                if (!pose) {
+                    updateStatus('Initializing pose estimation...');
+                    log('Creating Pose object...');
+                    
+                    pose = new Pose({
+                        locateFile: (file) => {
+                            const url = `${CDN.models.pose}/${file}`;
+                            log(`Locating pose file: ${url}`);
+                            return url;
+                        }
+                    });
+                    
+                    log('Setting Pose options...');
+                    pose.setOptions({
+                        modelComplexity: 1,
+                        smoothLandmarks: true,
+                        enableSegmentation: false,
+                        smoothSegmentation: false,
+                        minDetectionConfidence: 0.5,
+                        minTrackingConfidence: 0.5
+                    });
+                    
+                    log('Setting up pose results handler...');
+                    pose.onResults(onPoseResults);
+                }
+                
+                log('Initializing camera for pose estimation...');
+                // Start camera with pose model
+                activeCamera = new Camera(videoElement, {
+                    onFrame: async () => {
+                        try {
+                            canvasElement.width = videoElement.videoWidth;
+                            canvasElement.height = videoElement.videoHeight;
+                            await pose.send({image: videoElement});
+                        } catch (error) {
+                            log(`Error in camera frame handler: ${error.message}`);
+                        }
+                    },
+                    width: 640,
+                    height: 480
+                });
+                
+                log('Starting camera...');
+                await activeCamera.start();
+                updateStatus('Pose estimation active');
+            } catch (error) {
+                updateStatus(`Error setting up pose estimation: ${error.message}`);
+                log(`Pose estimation setup failed: ${error.toString()}`);
+                logAvailableObjects();
+                throw error;
+            }
+        }
+
+        // Camera only mode
+        async function setupCameraOnly() {
+            try {
+                updateStatus('Setting up camera only mode...');
+                
+                // Start camera without ML processing
+                activeCamera = new Camera(videoElement, {
+                    onFrame: () => {
+                        canvasElement.width = videoElement.videoWidth;
+                        canvasElement.height = videoElement.videoHeight;
+                        // Just clear the canvas in camera-only mode
+                        canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+                    },
+                    width: 640,
+                    height: 480
+                });
+                
+                log('Starting camera...');
+                await activeCamera.start();
+                updateStatus('Camera only mode active');
+            } catch (error) {
+                updateStatus(`Error setting up camera: ${error.message}`);
+                log(`Camera setup failed: ${error.toString()}`);
+                throw error;
+            }
+        }
+
+        // Process hand tracking results
+        function onHandsResults(results) {
+            try {
+                if (currentMode !== 'hands') return;
+                
+                canvasCtx.save();
+                canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+                
+                // Optional: Draw camera image on canvas (comment out for transparent background)
+                canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+                
+                if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                    updateStatus(`${results.multiHandLandmarks.length} hand(s) detected`);
+                    
+                    // Draw hand landmarks
+                    for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+                        const landmarks = results.multiHandLandmarks[i];
+                        const handedness = results.multiHandedness && results.multiHandedness.length > i ? 
+                                          results.multiHandedness[i].label : 'Unknown';
+                        
+                        try {
+                            // Draw connections
+                            drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, 
+                                        {color: handedness === 'Left' ? '#FF0000' : '#00FF00', lineWidth: 3});
+                            
+                            // Draw landmarks
+                            drawLandmarks(canvasCtx, landmarks, 
+                                        {color: handedness === 'Left' ? '#FF0000' : '#00FF00', lineWidth: 1, radius: 3});
+                            
+                            // Add hand label
+                            const wristLandmark = landmarks[0];
+                            const wristX = wristLandmark.x * canvasElement.width;
+                            const wristY = wristLandmark.y * canvasElement.height;
+                            
+                            canvasCtx.fillStyle = handedness === 'Left' ? '#FF0000' : '#00FF00';
+                            canvasCtx.font = '16px Arial';
+                            canvasCtx.fillText(handedness, wristX, wristY - 10);
+                        } catch (error) {
+                            log(`Error drawing hand landmarks: ${error.message}`);
+                            
+                            // Fallback drawing method
+                            if (landmarks && landmarks.length >= 20) {
+                                log('Attempting fallback drawing method for hands');
+                                canvasCtx.fillStyle = handedness === 'Left' ? '#FF0000' : '#00FF00';
+                                
+                                // Draw points for each landmark
+                                for (const point of landmarks) {
+                                    canvasCtx.beginPath();
+                                    canvasCtx.arc(
+                                        point.x * canvasElement.width,
+                                        point.y * canvasElement.height,
+                                        3, 0, 2 * Math.PI);
+                                    canvasCtx.fill();
+                                }
+                                
+                                // Draw hand label
+                                if (landmarks[0]) {
+                                    const wristX = landmarks[0].x * canvasElement.width;
+                                    const wristY = landmarks[0].y * canvasElement.height;
+                                    canvasCtx.font = '16px Arial';
+                                    canvasCtx.fillText(handedness, wristX, wristY - 10);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    updateStatus('No hands detected');
+                }
+                
+                canvasCtx.restore();
+            } catch (error) {
+                log(`Error processing hand results: ${error.message}`);
+            }
+        }
+
+        // Process face detection results
+        function onFaceResults(results) {
+            try {
+                if (currentMode !== 'face') return;
+                
+                canvasCtx.save();
+                canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+                
+                // Optional: Draw camera image on canvas (comment out for transparent background)
+                canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+                
+                if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+                    updateStatus(`${results.multiFaceLandmarks.length} face(s) detected`);
+                    
+                    // Draw face mesh for each detected face
+                    for (const landmarks of results.multiFaceLandmarks) {
+                        try {
+                            // Draw face oval (contour)
+                            drawConnectors(canvasCtx, landmarks, FACEMESH_FACE_OVAL || MANUAL_FACE_OVAL, 
+                                         {color: '#E0E0E0', lineWidth: 2});
+                            
+                            // Check if other face mesh constants are available
+                            if (typeof FACEMESH_LEFT_EYE !== 'undefined') {
+                                // Draw eyes
+                                drawConnectors(canvasCtx, landmarks, FACEMESH_LEFT_EYE, 
+                                            {color: '#30FF30', lineWidth: 1});
+                                drawConnectors(canvasCtx, landmarks, FACEMESH_RIGHT_EYE, 
+                                            {color: '#FF3030', lineWidth: 1});
+                                
+                                // Draw eyebrows
+                                drawConnectors(canvasCtx, landmarks, FACEMESH_LEFT_EYEBROW, 
+                                            {color: '#30FF30', lineWidth: 1});
+                                drawConnectors(canvasCtx, landmarks, FACEMESH_RIGHT_EYEBROW, 
+                                            {color: '#FF3030', lineWidth: 1});
+                                
+                                // Draw lips
+                                drawConnectors(canvasCtx, landmarks, FACEMESH_LIPS, 
+                                            {color: '#E0E0E0', lineWidth: 1});
+                            } else {
+                                log('Detailed face mesh constants not available, using simplified rendering');
+                            }
+                        } catch (error) {
+                            log(`Error drawing face mesh: ${error.message}`);
+                            
+                            // Fallback drawing method
+                            log('Attempting fallback drawing method for face');
+                            canvasCtx.fillStyle = '#00FFFF';
+                            
+                            // Draw points for each landmark
+                            for (const point of landmarks) {
+                                canvasCtx.beginPath();
+                                canvasCtx.arc(
+                                    point.x * canvasElement.width,
+                                    point.y * canvasElement.height,
+                                    1, 0, 2 * Math.PI);
+                                canvasCtx.fill();
+                            }
+                            
+                            // Draw a rectangle around the face
+                            if (landmarks.length > 0) {
+                                const points = landmarks.map(p => ({ 
+                                    x: p.x * canvasElement.width, 
+                                    y: p.y * canvasElement.height 
+                                }));
+                                
+                                const minX = Math.min(...points.map(p => p.x));
+                                const maxX = Math.max(...points.map(p => p.x));
+                                const minY = Math.min(...points.map(p => p.y));
+                                const maxY = Math.max(...points.map(p => p.y));
+                                
+                                canvasCtx.strokeStyle = '#00FFFF';
+                                canvasCtx.lineWidth = 2;
+                                canvasCtx.strokeRect(minX, minY, maxX - minX, maxY - minY);
+                                
+                                canvasCtx.font = '16px Arial';
+                                canvasCtx.fillText('Face', minX, minY - 10);
+                            }
+                        }
+                    }
+                } else {
+                    updateStatus('No faces detected');
+                }
+                
+                canvasCtx.restore();
+            } catch (error) {
+                log(`Error processing face results: ${error.message}`);
+            }
+        }
+
+        // Process pose estimation results
+        function onPoseResults(results) {
+            try {
+                if (currentMode !== 'pose') return;
+                
+                canvasCtx.save();
+                canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+                
+                // Optional: Draw camera image on canvas (comment out for transparent background)
+                canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+                
+                if (results.poseLandmarks) {
+                    updateStatus('Pose detected');
+                    
+                    try {
+                        // Draw pose connections
+                        drawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS, 
+                                     {color: '#00FF00', lineWidth: 3});
+                        
+                        // Draw pose landmarks
+                        drawLandmarks(canvasCtx, results.poseLandmarks, {
+                            color: '#FF0000',
+                            lineWidth: 1,
+                            radius: 3,
+                            visibilityMin: 0.65
+                        });
+                    } catch (error) {
+                        log(`Error drawing pose: ${error.message}`);
+                        
+                        // Fallback drawing method
+                        log('Attempting fallback drawing method for pose');
+                        canvasCtx.fillStyle = '#FFFF00';
+                        
+                        // Draw points for each landmark
+                        for (const point of results.poseLandmarks) {
+                            if (point.visibility > 0.5) {
+                                canvasCtx.beginPath();
+                                canvasCtx.arc(
+                                    point.x * canvasElement.width,
+                                    point.y * canvasElement.height,
+                                    3, 0, 2 * Math.PI);
+                                canvasCtx.fill();
+                            }
+                        }
+                    }
+                } else {
+                    updateStatus('No pose detected');
+                }
+                
+                canvasCtx.restore();
+            } catch (error) {
+                log(`Error processing pose results: ${error.message}`);
+            }
+        }
+
+        // Start initialization when page loads
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html> 

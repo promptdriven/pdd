@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Hand Tracking Drawing with MediaPipe and Three.js</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #282c34;
+            color: #ffffff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            overflow: hidden; /* Prevent scrollbars from flashing during load */
+        }
+        #loadingMessage {
+            font-size: 1.5em;
+            text-align: center;
+        }
+        #mainContainer {
+            position: relative;
+            /* Dimensions will be set by JavaScript */
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+            background-color: #000; /* Fallback if video doesn't load */
+        }
+        #mainContainer canvas { /* Style the Three.js canvas */
+            display: block; /* Removes bottom space under canvas */
+        }
+        #controls {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 10px 15px;
+            background-color: rgba(40, 44, 52, 0.9);
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            z-index: 100;
+        }
+        #controls button {
+            padding: 8px 12px;
+            background-color: #61dafb;
+            color: #282c34;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.2s;
+        }
+        #controls button:hover {
+            background-color: #4fa8c5;
+        }
+        #controls label {
+            font-size: 14px;
+        }
+        #controls input[type="color"] {
+            width: 30px;
+            height: 30px;
+            border: none;
+            padding: 0;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        #controls input[type="range"] {
+            cursor: pointer;
+        }
+        /* Hide the actual video element used by MediaPipe */
+        #input_video {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="loadingMessage">
+        <p>Loading Application...</p>
+        <p>Please grant camera access when prompted.</p>
+    </div>
+
+    <div id="mainContainer" style="display: none;">
+        <video id="input_video" playsinline></video>
+        <!-- Three.js canvas will be appended here -->
+    </div>
+
+    <div id="controls" style="display: none;">
+        <button id="clearButton">Clear</button>
+        <label for="colorPicker">Color:</label>
+        <input type="color" id="colorPicker" value="#61dafb">
+        <label for="lineWidth">Width:</label>
+        <input type="range" id="lineWidth" min="1" max="30" value="5">
+    </div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.163.0/build/three.module.js"
+        }
+    }
+    </script>
+
+    <!-- MediaPipe CDN Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        const WEBCAM_WIDTH = 640; // Desired webcam resolution
+        const WEBCAM_HEIGHT = 480;
+
+        // DOM Elements
+        const loadingMessageEl = document.getElementById('loadingMessage');
+        const mainContainerEl = document.getElementById('mainContainer');
+        const videoElement = document.getElementById('input_video');
+        const controlsEl = document.getElementById('controls');
+        const clearButtonEl = document.getElementById('clearButton');
+        const colorPickerEl = document.getElementById('colorPicker');
+        const lineWidthEl = document.getElementById('lineWidth');
+
+        // Three.js variables
+        let scene, camera, renderer;
+        let videoPlane, drawingPlane;
+        let videoTexture, drawingCanvas, drawingContext, drawingTexture;
+
+        // MediaPipe variables
+        let hands, mpCamera;
+
+        // Drawing state
+        let lastKnownIndexFingerTip = null; // { x, y } in drawingCanvas coordinates
+        let isDrawingActive = false;
+        let strokeColor = '#61dafb';
+        let strokeWidth = 5;
+
+        async function initializeApp() {
+            try {
+                setupThreeJS();
+                setupMediaPipe();
+                await startWebcam();
+                setupEventListeners();
+
+                mainContainerEl.style.display = 'block';
+                controlsEl.style.display = 'flex';
+                loadingMessageEl.style.display = 'none';
+                
+                animate();
+            } catch (error) {
+                console.error("Initialization failed:", error);
+                loadingMessageEl.innerHTML = `<p>Error: ${error.message}</p><p>Please ensure camera access is granted and try refreshing.</p>`;
+            }
+        }
+
+        function setupThreeJS() {
+            // Scene
+            scene = new THREE.Scene();
+
+            // Camera (Orthographic for 2D-like view)
+            // Dimensions match webcam to avoid distortion
+            camera = new THREE.OrthographicCamera(
+                WEBCAM_WIDTH / -2, WEBCAM_WIDTH / 2,
+                WEBCAM_HEIGHT / 2, WEBCAM_HEIGHT / -2,
+                1, 1000
+            );
+            camera.position.z = 10; // Position camera to see planes at z=0, z=1
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(WEBCAM_WIDTH, WEBCAM_HEIGHT);
+            mainContainerEl.appendChild(renderer.domElement);
+            mainContainerEl.style.width = `${WEBCAM_WIDTH}px`;
+            mainContainerEl.style.height = `${WEBCAM_HEIGHT}px`;
+
+
+            // Video Plane (background)
+            videoTexture = new THREE.VideoTexture(videoElement);
+            const videoGeometry = new THREE.PlaneGeometry(WEBCAM_WIDTH, WEBCAM_HEIGHT);
+            const videoMaterial = new THREE.MeshBasicMaterial({ map: videoTexture });
+            videoPlane = new THREE.Mesh(videoGeometry, videoMaterial);
+            videoPlane.scale.x = -1; // Mirror the video for a natural webcam feel
+            videoPlane.position.z = 0; // Place it at the back
+            scene.add(videoPlane);
+
+            // Drawing Canvas & Texture (overlay)
+            drawingCanvas = document.createElement('canvas');
+            drawingCanvas.width = WEBCAM_WIDTH;
+            drawingCanvas.height = WEBCAM_HEIGHT;
+            drawingContext = drawingCanvas.getContext('2d');
+            drawingContext.lineCap = 'round';
+            drawingContext.lineJoin = 'round';
+
+            drawingTexture = new THREE.CanvasTexture(drawingCanvas);
+            const drawingGeometry = new THREE.PlaneGeometry(WEBCAM_WIDTH, WEBCAM_HEIGHT);
+            const drawingMaterial = new THREE.MeshBasicMaterial({ map: drawingTexture, transparent: true });
+            drawingPlane = new THREE.Mesh(drawingGeometry, drawingMaterial);
+            drawingPlane.scale.x = -1; // Mirror the drawing to align with the mirrored video
+            drawingPlane.position.z = 1; // Place it in front of the video plane
+            scene.add(drawingPlane);
+        }
+
+        function setupMediaPipe() {
+            hands = new Hands({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+            });
+
+            hands.setOptions({
+                maxNumHands: 1,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.6, // Increased for more stable detection
+                minTrackingConfidence: 0.6
+            });
+
+            hands.onResults(onHandResults);
+        }
+
+        async function startWebcam() {
+            return new Promise((resolve, reject) => {
+                videoElement.onloadedmetadata = () => {
+                    // Ensure video dimensions are set before MediaPipe Camera starts using them
+                    // (though we are fixing them with WEBCAM_WIDTH/HEIGHT)
+                    videoElement.width = WEBCAM_WIDTH;
+                    videoElement.height = WEBCAM_HEIGHT;
+                    console.log("Video metadata loaded, dimensions:", videoElement.videoWidth, videoElement.videoHeight);
+                };
+
+                mpCamera = new Camera(videoElement, {
+                    onFrame: async () => {
+                        if (videoElement.readyState >= HTMLMediaElement.HAVE_METADATA) {
+                             await hands.send({ image: videoElement });
+                        }
+                    },
+                    width: WEBCAM_WIDTH,
+                    height: WEBCAM_HEIGHT
+                });
+
+                mpCamera.start()
+                    .then(() => {
+                        console.log("Camera started successfully.");
+                        resolve();
+                    })
+                    .catch(err => {
+                        console.error("Failed to start camera:", err);
+                        reject(new Error("Could not access webcam. Please check permissions."));
+                    });
+            });
+        }
+
+        function onHandResults(results) {
+            let handDetectedThisFrame = false;
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0]; // Assuming one hand
+                const indexFingerTip = landmarks[8]; // INDEX_FINGER_TIP
+
+                if (indexFingerTip) {
+                    handDetectedThisFrame = true;
+                    // Convert normalized MediaPipe coordinates (0-1) to drawing canvas coordinates
+                    // MediaPipe coordinates are based on the unmirrored video.
+                    // Since our drawingPlane is also mirrored, direct mapping works.
+                    const currentX = indexFingerTip.x * drawingCanvas.width;
+                    const currentY = indexFingerTip.y * drawingCanvas.height;
+
+                    if (isDrawingActive && lastKnownIndexFingerTip) {
+                        // Draw line from last point to current point
+                        drawingContext.beginPath();
+                        drawingContext.moveTo(lastKnownIndexFingerTip.x, lastKnownIndexFingerTip.y);
+                        drawingContext.lineTo(currentX, currentY);
+                        drawingContext.strokeStyle = strokeColor;
+                        drawingContext.lineWidth = strokeWidth;
+                        drawingContext.stroke();
+                        drawingTexture.needsUpdate = true; // Tell Three.js to update the texture
+                    }
+                    lastKnownIndexFingerTip = { x: currentX, y: currentY };
+                }
+            }
+
+            // Update drawing state
+            if (handDetectedThisFrame) {
+                isDrawingActive = true; // "Pen down"
+            } else {
+                isDrawingActive = false; // "Pen up"
+                lastKnownIndexFingerTip = null; // Reset last point for next stroke
+            }
+        }
+
+        function setupEventListeners() {
+            clearButtonEl.addEventListener('click', () => {
+                drawingContext.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
+                drawingTexture.needsUpdate = true;
+            });
+
+            colorPickerEl.addEventListener('input', (event) => {
+                strokeColor = event.target.value;
+            });
+
+            lineWidthEl.addEventListener('input', (event) => {
+                strokeWidth = parseInt(event.target.value, 10);
+            });
+
+            // Handle window resize if you want a responsive canvas (more complex)
+            // For now, we use fixed size.
+            // window.addEventListener('resize', onWindowResize);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+
+        // Start the application
+        initializeApp();
+
+    </script>
+</body>
+</html>
