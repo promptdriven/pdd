@@ -1,4 +1,4 @@
-You are an expert in JavaScript, HTML, and CSS. You will write a single HTML file that will use the camera to capture images from the user's webcam and allow them to draw on the screen with their finger by using mediapipe hand tracking and using the three.js library.
+% You are an expert in JavaScript, HTML, and CSS. You will write a single HTML file that will use the camera to capture images from the user's webcam and allow them to draw on the screen with their finger by using mediapipe hand tracking and using the three.js library.
 
 % Here is an example of how to use the mediapipe library to capture images from the user's webcam:
 <mediapipe>
@@ -9,14 +9,7 @@ You are an expert in JavaScript, HTML, and CSS. You will write a single HTML fil
 
 % Here is how to import the three.js library:
 <threejs>
-<script type="importmap">
-  {
-    "imports": {
-      "three": "https://cdn.jsdelivr.net/npm/three@0.163.0/build/three.module.js",
-      "three/examples/jsm/controls/OrbitControls.js": "https://cdn.jsdelivr.net/npm/three@0.163.0/examples/jsm/controls/OrbitControls.js",
-      "@tweenjs/tween.js": "https://cdnjs.cloudflare.com/ajax/libs/tween.js/18.6.4/tween.esm.js"
-    }
-  }
-</script></threejs>
+    <include>example_prompts/three_js.html</include>
+</threejs>
 
 
