@@ -129,8 +129,9 @@
 
         // Three.js variables
         let scene, camera, renderer;
-        let videoPlane, drawingPlane;
+        let videoPlane, drawingPlane, skeletonPlane;
         let videoTexture, drawingCanvas, drawingContext, drawingTexture;
+        let skeletonCanvas, skeletonContext, skeletonTexture;
 
         // MediaPipe variables
         let hands, mpCamera;
@@ -140,6 +141,11 @@
         let isDrawingActive = false;
         let strokeColor = '#61dafb';
         let strokeWidth = 5;
+
+        // Erasing state
+        let isErasingActive = false;
+        let lastKnownErasePosition = null; // {x, y} in drawingCanvas coordinates
+        const eraseRadius = 20; // Radius for erasing tool
 
         async function initializeApp() {
             try {
@@ -164,13 +170,12 @@
             scene = new THREE.Scene();
 
             // Camera (Orthographic for 2D-like view)
-            // Dimensions match webcam to avoid distortion
             camera = new THREE.OrthographicCamera(
                 WEBCAM_WIDTH / -2, WEBCAM_WIDTH / 2,
                 WEBCAM_HEIGHT / 2, WEBCAM_HEIGHT / -2,
                 1, 1000
             );
-            camera.position.z = 10; // Position camera to see planes at z=0, z=1
+            camera.position.z = 10;
 
             // Renderer
             renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -179,15 +184,27 @@
             mainContainerEl.style.width = `${WEBCAM_WIDTH}px`;
             mainContainerEl.style.height = `${WEBCAM_HEIGHT}px`;
 
-
             // Video Plane (background)
             videoTexture = new THREE.VideoTexture(videoElement);
             const videoGeometry = new THREE.PlaneGeometry(WEBCAM_WIDTH, WEBCAM_HEIGHT);
             const videoMaterial = new THREE.MeshBasicMaterial({ map: videoTexture });
             videoPlane = new THREE.Mesh(videoGeometry, videoMaterial);
-            videoPlane.scale.x = -1; // Mirror the video for a natural webcam feel
-            videoPlane.position.z = 0; // Place it at the back
+            videoPlane.scale.x = -1; // Mirror video
+            videoPlane.position.z = 0;
             scene.add(videoPlane);
+
+            // Skeleton Canvas & Texture (middle layer)
+            skeletonCanvas = document.createElement('canvas');
+            skeletonCanvas.width = WEBCAM_WIDTH;
+            skeletonCanvas.height = WEBCAM_HEIGHT;
+            skeletonContext = skeletonCanvas.getContext('2d');
+            skeletonTexture = new THREE.CanvasTexture(skeletonCanvas);
+            const skeletonGeometry = new THREE.PlaneGeometry(WEBCAM_WIDTH, WEBCAM_HEIGHT);
+            const skeletonMaterial = new THREE.MeshBasicMaterial({ map: skeletonTexture, transparent: true });
+            skeletonPlane = new THREE.Mesh(skeletonGeometry, skeletonMaterial);
+            skeletonPlane.scale.x = -1; // Mirror skeleton to align with video
+            skeletonPlane.position.z = 0.5; // Position between video and drawing
+            scene.add(skeletonPlane);
 
             // Drawing Canvas & Texture (overlay)
             drawingCanvas = document.createElement('canvas');
@@ -201,8 +218,8 @@
             const drawingGeometry = new THREE.PlaneGeometry(WEBCAM_WIDTH, WEBCAM_HEIGHT);
             const drawingMaterial = new THREE.MeshBasicMaterial({ map: drawingTexture, transparent: true });
             drawingPlane = new THREE.Mesh(drawingGeometry, drawingMaterial);
-            drawingPlane.scale.x = -1; // Mirror the drawing to align with the mirrored video
-            drawingPlane.position.z = 1; // Place it in front of the video plane
+            drawingPlane.scale.x = -1; // Mirror drawing to align with video
+            drawingPlane.position.z = 1;
             scene.add(drawingPlane);
         }
 
@@ -214,7 +231,7 @@
             hands.setOptions({
                 maxNumHands: 1,
                 modelComplexity: 1,
-                minDetectionConfidence: 0.6, // Increased for more stable detection
+                minDetectionConfidence: 0.6,
                 minTrackingConfidence: 0.6
             });
 
@@ -224,8 +241,6 @@
         async function startWebcam() {
             return new Promise((resolve, reject) => {
                 videoElement.onloadedmetadata = () => {
-                    // Ensure video dimensions are set before MediaPipe Camera starts using them
-                    // (though we are fixing them with WEBCAM_WIDTH/HEIGHT)
                     videoElement.width = WEBCAM_WIDTH;
                     videoElement.height = WEBCAM_HEIGHT;
                     console.log("Video metadata loaded, dimensions:", videoElement.videoWidth, videoElement.videoHeight);
@@ -253,42 +268,144 @@
             });
         }
 
+        function getNormalizedDistance(p1, p2) {
+            if (!p1 || !p2) return 0;
+            return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
+        }
+
+        function isIndexFingerPointing(landmarks) {
+            const wrist = landmarks[0];
+            const indexTip = landmarks[8];
+            const indexMcp = landmarks[5];
+            const middleTip = landmarks[12];
+            const middleMcp = landmarks[9];
+            const ringTip = landmarks[16];
+            const ringMcp = landmarks[13];
+            const pinkyTip = landmarks[20];
+            const pinkyMcp = landmarks[17];
+
+            const palmSize = getNormalizedDistance(wrist, middleMcp);
+            if (palmSize === 0) return false;
+
+            const indexExtension = getNormalizedDistance(indexTip, indexMcp) / palmSize;
+            const middleExtension = getNormalizedDistance(middleTip, middleMcp) / palmSize;
+            const ringExtension = getNormalizedDistance(ringTip, ringMcp) / palmSize;
+            const pinkyExtension = getNormalizedDistance(pinkyTip, pinkyMcp) / palmSize;
+
+            const extendedThreshold = 0.5;
+            const curledThreshold = 0.6;
+
+            return indexExtension > extendedThreshold &&
+                   middleExtension < curledThreshold &&
+                   ringExtension < curledThreshold &&
+                   pinkyExtension < curledThreshold;
+        }
+
+        function isOpenHand(landmarks) {
+            const wrist = landmarks[0];
+            const indexTip = landmarks[8];
+            const indexMcp = landmarks[5];
+            const middleTip = landmarks[12];
+            const middleMcp = landmarks[9];
+            const ringTip = landmarks[16];
+            const ringMcp = landmarks[13];
+            const pinkyTip = landmarks[20];
+            const pinkyMcp = landmarks[17];
+
+            const palmSize = getNormalizedDistance(wrist, middleMcp);
+            if (palmSize === 0) return false;
+
+            const extendedThreshold = 0.5;
+            let extendedFingers = 0;
+            if (getNormalizedDistance(indexTip, indexMcp) / palmSize > extendedThreshold) extendedFingers++;
+            if (getNormalizedDistance(middleTip, middleMcp) / palmSize > extendedThreshold) extendedFingers++;
+            if (getNormalizedDistance(ringTip, ringMcp) / palmSize > extendedThreshold) extendedFingers++;
+            if (getNormalizedDistance(pinkyTip, pinkyMcp) / palmSize > extendedThreshold) extendedFingers++;
+            
+            return extendedFingers >= 3;
+        }
+
         function onHandResults(results) {
-            let handDetectedThisFrame = false;
+            skeletonContext.clearRect(0, 0, skeletonCanvas.width, skeletonCanvas.height);
+            let currentGesture = null;
 
             if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-                const landmarks = results.multiHandLandmarks[0]; // Assuming one hand
-                const indexFingerTip = landmarks[8]; // INDEX_FINGER_TIP
+                // Draw skeleton for each detected hand
+                for (const landmarks of results.multiHandLandmarks) {
+                    window.drawConnectors(skeletonContext, landmarks, Hands.HAND_CONNECTIONS, 
+                                       {color: '#00FF00', lineWidth: 2});
+                    window.drawLandmarks(skeletonContext, landmarks, 
+                                      {color: '#FF0000', lineWidth: 1, radius: 3});
+                }
 
-                if (indexFingerTip) {
-                    handDetectedThisFrame = true;
-                    // Convert normalized MediaPipe coordinates (0-1) to drawing canvas coordinates
-                    // MediaPipe coordinates are based on the unmirrored video.
-                    // Since our drawingPlane is also mirrored, direct mapping works.
+                const handLandmarksForGesture = results.multiHandLandmarks[0]; // Use the first hand for gestures
+
+                if (isIndexFingerPointing(handLandmarksForGesture)) {
+                    currentGesture = 'drawing';
+                } else if (isOpenHand(handLandmarksForGesture)) {
+                    currentGesture = 'erasing';
+                }
+
+                if (currentGesture === 'drawing') {
+                    isDrawingActive = true;
+                    isErasingActive = false;
+                    const indexFingerTip = handLandmarksForGesture[8];
                     const currentX = indexFingerTip.x * drawingCanvas.width;
                     const currentY = indexFingerTip.y * drawingCanvas.height;
 
-                    if (isDrawingActive && lastKnownIndexFingerTip) {
-                        // Draw line from last point to current point
+                    if (lastKnownIndexFingerTip) {
                         drawingContext.beginPath();
                         drawingContext.moveTo(lastKnownIndexFingerTip.x, lastKnownIndexFingerTip.y);
                         drawingContext.lineTo(currentX, currentY);
                         drawingContext.strokeStyle = strokeColor;
                         drawingContext.lineWidth = strokeWidth;
                         drawingContext.stroke();
-                        drawingTexture.needsUpdate = true; // Tell Three.js to update the texture
+                        drawingTexture.needsUpdate = true;
                     }
                     lastKnownIndexFingerTip = { x: currentX, y: currentY };
-                }
-            }
+                    lastKnownErasePosition = null; // Reset erase position
 
-            // Update drawing state
-            if (handDetectedThisFrame) {
-                isDrawingActive = true; // "Pen down"
-            } else {
-                isDrawingActive = false; // "Pen up"
-                lastKnownIndexFingerTip = null; // Reset last point for next stroke
+                } else if (currentGesture === 'erasing') {
+                    isDrawingActive = false;
+                    isErasingActive = true;
+                    
+                    // Use average of fingertips or a central palm landmark for erasing position
+                    const erasePointX = handLandmarksForGesture[9].x * drawingCanvas.width; // Middle finger MCP (landmark 9)
+                    const erasePointY = handLandmarksForGesture[9].y * drawingCanvas.height;
+
+                    drawingContext.globalCompositeOperation = 'destination-out';
+                    drawingContext.beginPath();
+                    if (lastKnownErasePosition) {
+                        drawingContext.moveTo(lastKnownErasePosition.x, lastKnownErasePosition.y);
+                        drawingContext.lineTo(erasePointX, erasePointY);
+                        drawingContext.lineWidth = eraseRadius * 2; // Diameter for line
+                        drawingContext.strokeStyle = 'rgba(0,0,0,1)';
+                        drawingContext.stroke();
+                    } else {
+                        // Erase a circle at the first point or if hand is stationary
+                        drawingContext.arc(erasePointX, erasePointY, eraseRadius, 0, Math.PI * 2, false);
+                        drawingContext.fillStyle = 'rgba(0,0,0,1)';
+                        drawingContext.fill();
+                    }
+                    drawingContext.globalCompositeOperation = 'source-over'; // Reset composite mode
+                    drawingTexture.needsUpdate = true;
+                    
+                    lastKnownErasePosition = { x: erasePointX, y: erasePointY };
+                    lastKnownIndexFingerTip = null; // Reset draw position
+
+                } else { // No specific gesture for drawing/erasing, but hand is present
+                    isDrawingActive = false;
+                    isErasingActive = false;
+                    lastKnownIndexFingerTip = null;
+                    lastKnownErasePosition = null;
+                }
+            } else { // No hand detected
+                isDrawingActive = false;
+                isErasingActive = false;
+                lastKnownIndexFingerTip = null;
+                lastKnownErasePosition = null;
             }
+            skeletonTexture.needsUpdate = true; // Update skeleton texture every frame it's processed
         }
 
         function setupEventListeners() {
@@ -304,10 +421,6 @@
             lineWidthEl.addEventListener('input', (event) => {
                 strokeWidth = parseInt(event.target.value, 10);
             });
-
-            // Handle window resize if you want a responsive canvas (more complex)
-            // For now, we use fixed size.
-            // window.addEventListener('resize', onWindowResize);
         }
 
         function animate() {
@@ -315,7 +428,6 @@
             renderer.render(scene, camera);
         }
 
-        // Start the application
         initializeApp();
 
     </script>
