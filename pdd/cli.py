@@ -590,6 +590,13 @@ def split(
 @click.argument("input_code", type=click.Path(exists=True)) # Can be file or dir
 @click.argument("input_prompt_file", type=click.Path(exists=True, dir_okay=False), required=False)
 @click.option(
+    "--budget",
+    type=float,
+    default=5.0,
+    show_default=True,
+    help="Maximum cost allowed for the change process.",
+)
+@click.option(
     "--output",
     type=click.Path(writable=True),
     default=None,
@@ -611,6 +618,7 @@ def change(
     input_prompt_file: Optional[str],
     output: Optional[str],
     use_csv: bool,
+    budget: float,
 ) -> Optional[Tuple[str | Dict, float, str]]: # Modified return type
     """Modify prompt(s) based on change instructions."""
     quiet = ctx.obj.get("quiet", False)
@@ -639,6 +647,7 @@ def change(
             input_prompt_file=input_prompt_file,
             output=output,
             use_csv=use_csv,
+            budget=budget,
         )
         return result_data, total_cost, model_name
     except (click.UsageError, Exception) as e: # Catch specific and general exceptions

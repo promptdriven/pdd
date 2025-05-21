@@ -268,7 +268,7 @@ ifdef CSV_FILE
 
 	$(eval REL_CSV_FILE := ../$(CSV_FILE))
 	$(eval REL_CODE_DIR := ../$(EFFECTIVE_CODE_DIR))
-	$(eval DEFAULT_CSV_OUTPUT_DIR := pdd_changed_output) # Output dir relative to PROMPTS_DIR
+	$(eval DEFAULT_CSV_OUTPUT_DIR := ../prompts) # Output dir relative to PROMPTS_DIR
 	$(eval CMD_OUTPUT_ARG :=)
 
 	$(if $(OUTPUT_LOCATION), \
@@ -284,8 +284,8 @@ ifdef CSV_FILE
 	)
 
 	@if [ ! -z "$(OUTPUT_LOCATION)" ]; then echo "Output location specified by user: $(OUTPUT_LOCATION)"; fi
-	@echo "Executing from $(PROMPTS_DIR): conda run -n pdd --no-capture-output pdd change --csv $(CMD_OUTPUT_ARG) $(REL_CSV_FILE) $(REL_CODE_DIR)"
-	@cd $(PROMPTS_DIR) && conda run -n pdd --no-capture-output pdd change --csv $(CMD_OUTPUT_ARG) $(REL_CSV_FILE) $(REL_CODE_DIR)
+	@echo "Executing from $(PROMPTS_DIR): conda run -n pdd --no-capture-output pdd --force change --budget 10.0 --csv $(CMD_OUTPUT_ARG) $(REL_CSV_FILE) $(REL_CODE_DIR)"
+	@cd $(PROMPTS_DIR) && conda run -n pdd --no-capture-output pdd --force change --budget 10.0 --csv $(CMD_OUTPUT_ARG) $(REL_CSV_FILE) $(REL_CODE_DIR)
 	@echo "CSV batch prompt modification complete."
 else # This means CSV_FILE was not defined, which contradicts the outer ifeq logic. This branch likely won't be hit if CSV_FILE is the primary condition.
 	@echo "Error: CSV_FILE must be specified for CSV batch change mode." # This case should ideally not be reached due to outer ifeq
