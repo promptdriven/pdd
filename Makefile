@@ -381,11 +381,11 @@ build:
 release:
 	@echo "Bumping version with commitizen"
 	@python -m commitizen bump --increment PATCH
-	@echo "Copying public README.md to project root"
-	@cp staging/public/pdd/README.md ./README.md
 	@echo "Building and uploading package"
 	@$(MAKE) build
-
+	@echo "Copying public README.md to project root"
+	@cp ./README.md staging/public/pdd/README.md
+	
 analysis:
 	@echo "Running regression analysis"
 	@LATEST_REGRESSION_DIR=$$(ls -td -- "staging/regression_"* 2>/dev/null | head -n 1); \
