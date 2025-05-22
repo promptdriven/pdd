@@ -381,6 +381,8 @@ build:
 release:
 	@echo "Bumping version with commitizen"
 	@python -m commitizen bump --increment PATCH
+	@echo "Copying public README.md to project root"
+	@cp staging/public/pdd/README.md ./README.md
 	@echo "Building and uploading package"
 	@$(MAKE) build
 
