@@ -4,7 +4,7 @@
 
 % Here are the inputs and outputs of the function:
     Inputs:
-    - `ctx` (`click.Context`): The Click context object containing CLI options and parameters.
+    - `ctx` (`click.Context`): The Click context object containing CLI options and parameters. The `time` parameter is also retrieved from `ctx.obj`.
     - `change_prompt_file` (`str`): Path to the change prompt file.
     - `input_code` (`str`): Path to the input code file or directory (when used with the '--csv' option).
     - `input_prompt_file` (`Optional[str]`): Path to the input prompt file. Optional and not used when '--csv' is specified.
@@ -53,7 +53,7 @@
       - Set the logging level to DEBUG for detailed logging.
 
    2. **Parse Arguments and Options**:
-      - Retrieve global options from the context (`ctx.obj`), including `force`, `quiet`, `strength`, `temperature`, `budget`, `language`, `extension`. Handle defaults appropriately (e.g., `DEFAULT_STRENGTH`, budget defaulting to 5.0).
+      - Retrieve global options from the context (`ctx.obj`), including `force`, `quiet`, `strength`, `temperature`, `budget`, `language`, `extension`, and `time`. Handle defaults appropriately (e.g., `DEFAULT_STRENGTH`, budget defaulting to 5.0, `DEFAULT_TIME`).
       - Check if the `use_csv` flag is set.
       - Validate mandatory arguments: `change_prompt_file` and `input_code` are always required.
       - When `use_csv` is False, validate that `input_prompt_file` is provided and `input_code` is a file.
@@ -70,11 +70,11 @@
         - Verify that `input_code` points to a valid directory.
         - Before calling `process_csv_change`, attempt to read and validate the header of the CSV file specified by `change_prompt_file`. Ensure it contains the required columns: `prompt_name` and `change_instructions`. Return an error if validation fails.
         - Determine the target `language` and `extension` to be used by `process_csv_change`. Prioritize values provided via `--language` and `--extension` options in the Click context (`ctx.obj`). If not provided, attempt to derive the extension from the determined language (e.g., using `get_extension` with a fallback like 'python'). Return an error if the extension cannot be determined.
-        - Call `process_csv_change` to handle batch changes, passing `change_prompt_file`, `strength`, `temperature`, the `input_code` directory path, the determined `language` and `extension`, and `budget`.
+        - Call `process_csv_change` to handle batch changes, passing `change_prompt_file`, `strength`, `temperature`, the `input_code` directory path, the determined `language` and `extension`, `budget`, and `time`.
         - Ensure that `process_csv_change` returns a tuple with four elements: (success, modified_prompts_list, total_cost, model_name), where `modified_prompts_list` is a list of dictionaries, each containing 'file_name' (original prompt path) and 'modified_prompt' (content).
       - Else (non-CSV mode):
         - Retrieve `change_prompt_content`, `input_code_content`, and `input_prompt_content` from the `input_strings` dictionary returned by `construct_paths`. Check that all required contents were loaded successfully.
-        - Call `change_func` to modify the single `input_prompt_content` based on `change_prompt_content` and `input_code_content`, passing `strength` and `temperature`.
+        - Call `change_func` to modify the single `input_prompt_content` based on `change_prompt_content` and `input_code_content`, passing `strength`, `temperature`, and `time`.
 
    5. **Save Results**:
       - For CSV mode:

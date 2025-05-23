@@ -50,12 +50,12 @@ dependencies = [
     "setuptools",
     "boto3==1.35.99",
     "python-Levenshtein"]
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 
 [project.urls]
-Homepage = "https://github.com/gltanaka/pdd"
-Repository = "https://github.com/gltanaka/pdd.git"
-Issue-Tracker = "https://github.com/gltanaka/pdd/issues"
+Homepage = "https://github.com/promptdriven/pdd.git"
+Repository = "https://github.com/promptdriven/pdd.git"
+Issue-Tracker = "https://github.com/promptdriven/pdd/issues"
 
 [project.scripts]
 pdd = "pdd.cli:cli"
