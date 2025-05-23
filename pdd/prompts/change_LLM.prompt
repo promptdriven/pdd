@@ -14,7 +14,11 @@
     </output>
 </inputs_outputs_definitions>
 
-```<./prompts/xml/change_example_partial_processed.prompt>```
+<change_prompt_examples>
+    <include>
+        ../prompts/xml/change_example_partial_processed.prompt
+    </include>
+</change_prompt_examples>
 
 <context>
     Here is the input_prompt to change: <input_prompt>{input_prompt}</input_prompt>

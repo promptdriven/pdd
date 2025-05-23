@@ -186,19 +186,21 @@ def test_change_main_batch_mode(mock_process_csv, setup_environment, caplog, mon
             )
 
             # Execute the function under test
+            ctx_instance = create_mock_context(
+                params={"force": True},
+                obj={
+                    "strength": 0.9, "temperature": 0, "budget": 10.0,
+                    "verbose": False, "language": "python", "extension": ".py"
+                }
+            )
             message, total_cost, model_name = change_main(
-                ctx=create_mock_context(
-                    params={"force": True},
-                    obj={
-                        "strength": 0.9, "temperature": 0, "budget": 10.0,
-                        "verbose": False, "language": "python", "extension": ".py"
-                    }
-                ),
+                ctx=ctx_instance,
                 change_prompt_file=env["batch_changes_csv"],
                 input_code=env["code_directory"],
                 input_prompt_file=None,
                 output=env["batch_output_file"],
-                use_csv=True
+                use_csv=True,
+                budget=ctx_instance.obj['budget']
             )
 
     # --- Assertions ---
@@ -289,7 +291,7 @@ def test_change_main_non_csv_success(
     mock_rprint,
 ):
     # Arrange
-    ctx = create_mock_context(
+    ctx_instance = create_mock_context(
         params={'force': False, 'quiet': False},
         obj={'strength': 0.8, 'temperature': 0.5, 'budget': 10.0}
     )
@@ -331,12 +333,13 @@ def test_change_main_non_csv_success(
     with patch.object(Path, 'resolve', return_value=output_path_obj) as mock_resolve, \
          patch.object(Path, 'mkdir') as mock_mkdir: # Mock Path.mkdir
             result = change_main(
-                ctx=ctx,
+                ctx=ctx_instance,
                 change_prompt_file=change_prompt_file,
                 input_code=input_code,
                 input_prompt_file=input_prompt_file,
                 output=output, # Pass the original string path
-                use_csv=use_csv
+                use_csv=use_csv,
+                budget=ctx_instance.obj['budget']
             )
             # Assert Path.mkdir was called correctly on the *parent* of the resolved path
             # Access the parent via the resolved path object
@@ -361,9 +364,9 @@ def test_change_main_non_csv_missing_input_prompt_file(
     mock_os_isdir,
     mock_rprint
 ):
-    ctx = create_mock_context(
+    ctx_instance = create_mock_context(
         params={'force': False, 'quiet': False},
-        obj={'strength': 0.8, 'temperature': 0.5}
+        obj={'strength': 0.8, 'temperature': 0.5, 'budget': 10.0} # budget added for consistency
     )
     change_prompt_file = "path/to/change_prompt.txt"
     input_code = "path/to/input_code.py"
@@ -374,12 +377,13 @@ def test_change_main_non_csv_missing_input_prompt_file(
     mock_os_isdir.return_value = False
 
     result = change_main(
-        ctx=ctx,
+        ctx=ctx_instance,
         change_prompt_file=change_prompt_file,
         input_code=input_code,
         input_prompt_file=input_prompt_file,
         output=output,
-        use_csv=use_csv
+        use_csv=use_csv,
+        budget=ctx_instance.obj['budget']
     )
 
     expected_error = "[bold red]Error:[/bold red] --input-prompt-file is required when not using --csv mode."
@@ -392,9 +396,9 @@ def test_change_main_non_csv_construct_paths_error(
     mock_construct_paths,
     mock_rprint,
 ):
-    ctx = create_mock_context(
+    ctx_instance = create_mock_context(
         params={'force': False, 'quiet': False},
-        obj={'strength': 0.8, 'temperature': 0.5}
+        obj={'strength': 0.8, 'temperature': 0.5, 'budget': 10.0} # budget added
     )
     change_prompt_file = "path/to/change_prompt.txt"
     input_code = "path/to/input_code.py"
@@ -407,12 +411,13 @@ def test_change_main_non_csv_construct_paths_error(
 
     # Act
     result = change_main(
-        ctx=ctx,
+        ctx=ctx_instance,
         change_prompt_file=change_prompt_file,
         input_code=input_code,
         input_prompt_file=input_prompt_file,
         output=output,
-        use_csv=use_csv
+        use_csv=use_csv,
+        budget=ctx_instance.obj['budget']
     )
 
     # Assert - Expect the specific error message from the code
@@ -428,9 +433,9 @@ def test_change_main_non_csv_change_func_error(
     mock_rprint,
 ):
     # Arrange
-    ctx = create_mock_context(
+    ctx_instance = create_mock_context(
         params={'force': False, 'quiet': False},
-        obj={'strength': 0.8, 'temperature': 0.5}
+        obj={'strength': 0.8, 'temperature': 0.5, 'budget': 10.0} # budget added
     )
     change_prompt_file = "path/to/change_prompt.txt"
     input_code = "path/to/input_code.py"
@@ -454,12 +459,13 @@ def test_change_main_non_csv_change_func_error(
 
     # Act
     result = change_main(
-        ctx=ctx,
+        ctx=ctx_instance,
         change_prompt_file=change_prompt_file,
         input_code=input_code,
         input_prompt_file=input_prompt_file,
         output=output,
-        use_csv=use_csv
+        use_csv=use_csv,
+        budget=ctx_instance.obj['budget']
     )
 
     # Assert - Expect the specific error message from the code
@@ -486,7 +492,7 @@ def test_change_main_csv_success(
     monkeypatch
 ):
     monkeypatch.chdir(tmp_path)
-    ctx = create_mock_context(
+    ctx_instance = create_mock_context(
         params={},
         obj={'force': False, 'quiet': False, 'strength': 0.7, 'temperature': 0.3, 'budget': 20.0, 'language': 'python', 'extension': '.py'}
     )
@@ -535,13 +541,13 @@ def test_change_main_csv_success(
     mock_csv_dictreader.return_value.fieldnames = ['prompt_name', 'change_instructions']
 
     # Mock return value for process_csv_change
-    total_cost = 0.10
-    model_name = "gpt-4"
+    total_cost_val = 0.10 # Renamed to avoid conflict with function return
+    model_name_val = "gpt-4" # Renamed
     modified_prompts_list = [
         {'file_name': prompt1_name, 'modified_prompt': 'Modified Prompt 1'},
         {'file_name': prompt2_name, 'modified_prompt': 'Modified Prompt 2'}
     ]
-    mock_process_csv.return_value = (True, modified_prompts_list, total_cost, model_name)
+    mock_process_csv.return_value = (True, modified_prompts_list, total_cost_val, model_name_val)
 
 
     # Mock file open operations: Only need to mock read for input CSV, write for output CSV
@@ -577,16 +583,17 @@ def test_change_main_csv_success(
 
         # Execute the function
         result = change_main(
-            ctx=ctx,
+            ctx=ctx_instance,
             change_prompt_file=str(change_prompt_file),
             input_code=str(code_directory),
             input_prompt_file=None,
             output=str(output_csv_file),
-            use_csv=use_csv
+            use_csv=use_csv,
+            budget=ctx_instance.obj['budget']
         )
 
     # Assert
-    assert result == ("Multiple prompts have been updated.", total_cost, model_name)
+    assert result == ("Multiple prompts have been updated.", total_cost_val, model_name_val)
 
     # Verify process_csv_change call
     mock_process_csv.assert_called_once_with(
@@ -613,8 +620,8 @@ def test_change_main_csv_success(
 
     # Verify rprint calls
     mock_rprint.assert_any_call("[bold green]Prompt modification completed successfully.[/bold green]")
-    mock_rprint.assert_any_call(f"[bold]Model used:[/bold] {model_name}")
-    mock_rprint.assert_any_call(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
+    mock_rprint.assert_any_call(f"[bold]Model used:[/bold] {model_name_val}")
+    mock_rprint.assert_any_call(f"[bold]Total cost:[/bold] ${total_cost_val:.6f}")
     mock_rprint.assert_any_call(f"[bold]Results saved to CSV:[/bold] {output_csv_file.resolve()}")
 
 
@@ -628,9 +635,9 @@ def test_change_main_csv_input_code_not_directory(
     mock_rprint,
     tmp_path
 ):
-    ctx = create_mock_context(
+    ctx_instance = create_mock_context(
         params={'force': False, 'quiet': False},
-        obj={'strength': 0.6, 'temperature': 0.4}
+        obj={'strength': 0.6, 'temperature': 0.4, 'budget': 10.0} # budget added
     )
     change_prompt_file = tmp_path / "change_prompts.csv"
     change_prompt_file.touch()
@@ -644,12 +651,13 @@ def test_change_main_csv_input_code_not_directory(
     mock_os_isdir.return_value = False # Input code is NOT a dir
 
     result = change_main(
-        ctx=ctx,
+        ctx=ctx_instance,
         change_prompt_file=str(change_prompt_file),
         input_code=str(input_code_file),
         input_prompt_file=None,
         output=str(output),
-        use_csv=use_csv
+        use_csv=use_csv,
+        budget=ctx_instance.obj['budget']
     )
 
     expected_error = f"[bold red]Error:[/bold red] In CSV mode, --input-code ('{input_code_file}') must be a valid directory."
@@ -669,9 +677,9 @@ def test_change_main_csv_missing_columns(
     mock_open_function, # Needs to return bad CSV for header check
     tmp_path
 ):
-    ctx = create_mock_context(
+    ctx_instance = create_mock_context(
         params={'force': False, 'quiet': False},
-        obj={'strength': 0.6, 'temperature': 0.4}
+        obj={'strength': 0.6, 'temperature': 0.4, 'budget': 10.0} # budget added
     )
     change_prompt_file = tmp_path / "change_prompts.csv"
     bad_csv_content = "invalid_column1,invalid_column2\nval1,val2"
@@ -698,12 +706,13 @@ def test_change_main_csv_missing_columns(
          patch('builtins.open', mock_open_function): # Patch builtins open
         # The header validation should fail now *before* construct_paths is called
         result = change_main(
-            ctx=ctx,
+            ctx=ctx_instance,
             change_prompt_file=str(change_prompt_file),
             input_code=str(code_directory),
             input_prompt_file=None,
             output=str(output),
-            use_csv=use_csv
+            use_csv=use_csv,
+            budget=ctx_instance.obj['budget']
         )
 
     # Assert the specific error message from the header validation
@@ -735,7 +744,7 @@ def test_change_main_csv_change_func_error(
     monkeypatch
 ):
     monkeypatch.chdir(tmp_path)
-    ctx = create_mock_context(
+    ctx_instance = create_mock_context(
         params={'force': False, 'quiet': False},
         obj={'strength': 0.7, 'temperature': 0.3, 'budget': 20.0, 'language':'python', 'extension': '.py'}
     )
@@ -796,12 +805,13 @@ def test_change_main_csv_change_func_error(
             'python'
         )
         result = change_main(
-            ctx=ctx,
+            ctx=ctx_instance,
             change_prompt_file=str(change_prompt_file),
             input_code=str(code_directory),
             input_prompt_file=None,
             output=str(output_csv_file),
-            use_csv=use_csv
+            use_csv=use_csv,
+            budget=ctx_instance.obj['budget']
         )
 
     # Assert
@@ -836,9 +846,9 @@ def test_change_main_unexpected_exception(
     mock_rprint,
 ):
     # Arrange
-    ctx = create_mock_context(
+    ctx_instance = create_mock_context(
         params={'force': False, 'quiet': False},
-        obj={'strength': 0.8, 'temperature': 0.5}
+        obj={'strength': 0.8, 'temperature': 0.5, 'budget': 10.0} # budget added
     )
     change_prompt_file = "path/to/change_prompt.txt"
     input_code = "path/to/input_code.py" # File path for non-csv
@@ -853,12 +863,13 @@ def test_change_main_unexpected_exception(
     with patch('os.path.isdir', return_value=False):
         # Act
         result = change_main(
-            ctx=ctx,
+            ctx=ctx_instance,
             change_prompt_file=change_prompt_file,
             input_code=input_code,
             input_prompt_file=input_prompt_file,
             output=output,
-            use_csv=use_csv
+            use_csv=use_csv,
+            budget=ctx_instance.obj['budget']
         )
 
     # Assert - Expect the specific error from the construct_paths block
@@ -908,9 +919,9 @@ def test_change_main_csv_output_directory_saves_individual_files(
     # Actual content files not needed if process_csv is mocked
 
     # 2. Setup context
-    mock_ctx = create_mock_context(
+    ctx_instance = create_mock_context(
         params={'force': False}, # Test without force first
-        obj={'quiet': True, 'language': 'python', 'extension': '.py'} # Keep quiet, provide lang/ext
+        obj={'quiet': True, 'language': 'python', 'extension': '.py', 'budget': 10.0} # budget added
     )
 
     # 3. Mock Path validation and os checks
@@ -971,12 +982,13 @@ def test_change_main_csv_output_directory_saves_individual_files(
             'python'
         )
         result_tuple = change_main(
-            ctx=mock_ctx,
+            ctx=ctx_instance,
             change_prompt_file=str(input_csv_path),
             input_code=str(code_dir),
             input_prompt_file=None,
             output=output_dir_path_str, # <<< Pass the directory path
-            use_csv=True
+            use_csv=True,
+            budget=ctx_instance.obj['budget']
         )
 
     # Assert
@@ -1044,9 +1056,9 @@ def test_change_main_csv_output_none_saves_individual_files(
     prompt2_name = "file2_python.prompt"
 
     # 2. Setup context - Set force=True as per fix report analysis
-    mock_ctx = create_mock_context(
+    ctx_instance = create_mock_context(
         params={'force': True}, # <<< Set force=True
-        obj={'quiet': True, 'language': 'python', 'extension': '.py'}
+        obj={'quiet': True, 'language': 'python', 'extension': '.py', 'budget': 10.0} # budget added
     )
 
     # 3. Mock Path validation
@@ -1098,12 +1110,13 @@ def test_change_main_csv_output_none_saves_individual_files(
             'python'
         )
         result_tuple = change_main(
-            ctx=mock_ctx,
+            ctx=ctx_instance,
             change_prompt_file=str(input_csv_path),
             input_code=str(code_dir),
             input_prompt_file=None,
             output=None, # <<< Output is None
-            use_csv=True
+            use_csv=True,
+            budget=ctx_instance.obj['budget']
         )
 
     # Assert
@@ -1171,9 +1184,9 @@ def test_change_main_csv_output_dir_slash_saves_individual_files(
     # Code file not needed for mock
 
     # 2. Setup context
-    ctx = create_mock_context(
+    ctx_instance = create_mock_context(
         params={'force': False},
-        obj={'quiet': True, 'language': 'python', 'extension': '.py'}
+        obj={'quiet': True, 'language': 'python', 'extension': '.py', 'budget': 10.0} # budget added
     )
 
     # 3. Mock Path validation and os checks
@@ -1232,12 +1245,13 @@ def test_change_main_csv_output_dir_slash_saves_individual_files(
         )
 
         result_message, result_cost, result_model = change_main(
-            ctx=ctx,
+            ctx=ctx_instance,
             change_prompt_file=str(input_csv_path),
             input_code=str(code_dir),
             input_prompt_file=None,
             output=output_dir_with_slash_str, # Pass original path with slash
-            use_csv=True
+            use_csv=True,
+            budget=ctx_instance.obj['budget']
         )
 
     # Assert Correct Behavior
