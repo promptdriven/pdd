@@ -453,7 +453,7 @@ def test_cli_change_command_csv_validation(mock_main, mock_construct, mock_auto_
     assert result.exception is None
     mock_main.assert_called_once_with(
         ctx=ANY, change_prompt_file=str(files["changes.csv"]), input_code=str(code_dir),
-        input_prompt_file=None, output=None, use_csv=True
+        input_prompt_file=None, output=None, use_csv=True, budget=5.0 # Added budget=5.0
     )
     # construct_paths should NOT have been called by change_main in CSV mode (usually)
     mock_construct.assert_not_called()
