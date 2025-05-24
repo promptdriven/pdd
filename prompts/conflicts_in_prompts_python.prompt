@@ -8,6 +8,7 @@
         'prompt2' - Second prompt in the pair of prompts we are comparing.
         'strength' - A float that is the strength of the LLM model to use. Default is 0.5. Range is between 0 and 1.
         'temperature' - A float that is the temperature of the LLM model to use. Default is 0. Range is between 0 and 1.
+        'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
         'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
     Outputs as a tuple:
         'changes_list' - A list of JSON objects, each containing the name of a prompt that needs to be changed and detailed instructions on how to change it.
@@ -29,12 +30,12 @@
 
 % This function will do the following:
     Step 1. Load the 'conflict_LLM' and 'extract_conflict_LLM' prompt templates.
-    Step 2. Run the prompts through the model using llm_invoke with the provided strength and temperature. 
+    Step 2. Run the prompts through the model using llm_invoke with the provided strength, temperature, and time. 
         2a. Pass the following string parameters to the prompt during invoke:
             - 'PROMPT1'
             - 'PROMPT2'
         2b. If verbose is True, pretty print the output which will be in Markdown format.
-    Step 3. Create a second llm_invoke call using a .89 strength that outputs a Pydantic object:
+    Step 3. Create a second llm_invoke call using a .89 strength, the provided temperature, and time that outputs a Pydantic object:
         3a. Pass the following string parameters to the prompt during invocation: 'llm_output' (this string is from Step 2).
         3b. If verbose is True, pretty print a message letting the user know it is running and how many tokens are in the prompt and the cost.
         3c. Extract 'changes_list' list values from the Pydantic output.

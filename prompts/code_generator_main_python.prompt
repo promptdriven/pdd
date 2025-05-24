@@ -4,7 +4,7 @@
 
 % Here are the inputs and outputs of the function:
    Inputs:
-      - `ctx` (`click.Context`): The Click context object containing CLI options(e.g. time, temperature, strength, etc.) and parameters.
+      - `ctx` (`click.Context`): The Click context object containing CLI options (e.g., temperature, strength, etc.) and parameters. The `time` parameter (e.g., a time budget in seconds) is retrieved from `ctx.obj.get('time', DEFAULT_TIME)`.
       - 'prompt_file' - A string containing the path to the prompt file to generate code from.
       - 'output' - An optional string containing the path where to save the generated code. If None, uses default naming convention.
       - 'original_prompt' - An optional string containing the path to the original prompt file used for incremental generation. If None, attempts to use git to find the last committed version.
@@ -34,12 +34,64 @@
 
       - Here is an example of how to use the `code_generator` function:
       <code_generator_example>
-      <include>context/code_generator_example.py</include>
+      ```python
+      from pdd.code_generator import code_generator # Assuming pdd.code_generator is the path
+      # from .code_generator import code_generator # Or relative if used within the same package context
+
+      prompt_content = "Create a Python function that adds two numbers and returns the sum."
+      language = "python"
+      strength = 0.5
+      temperature = 0.2
+      time_budget = 60  # Example time budget in seconds, e.g., DEFAULT_TIME
+      verbose = True
+
+      generated_code, cost, model_name = code_generator(
+          prompt=prompt_content,
+          language=language,
+          strength=strength,
+          temperature=temperature,
+          time=time_budget, # Pass the time budget
+          verbose=verbose
+      )
+
+      print(f"Generated Code:\n{generated_code}")
+      print(f"Cost: ${cost:.6f}, Model: {model_name}")
+      ```
       </code_generator_example>
       
       - Here is an example of how to use the `incremental_code_generator` function:
       <incremental_code_generator_example>
-      <include>context/incremental_code_generator_example.py</include>
+      ```python
+      from pdd.incremental_code_generator import incremental_code_generator # Assuming pdd.incremental_code_generator is the path
+      # from .incremental_code_generator import incremental_code_generator # Or relative
+
+      original_prompt_content = "def greet():\n    print('Hello World')"
+      new_prompt_content = "def greet(name):\n    print(f'Hello, {name}!')"
+      existing_code_content = "def greet():\n    print('Hello World')"
+      language = "python"
+      strength = 0.6
+      temperature = 0.1
+      time_budget = 120  # Example time budget in seconds
+      force_incremental_flag = False
+      verbose_flag = True
+      should_preprocess_prompt = True # Typically True for incremental
+
+      generated_code, was_incremental, cost, model_name = incremental_code_generator(
+          original_prompt=original_prompt_content,
+          new_prompt=new_prompt_content,
+          existing_code=existing_code_content,
+          language=language,
+          strength=strength,
+          temperature=temperature,
+          time=time_budget, # Pass the time budget
+          force_incremental=force_incremental_flag,
+          verbose=verbose_flag,
+          preprocess_prompt=should_preprocess_prompt
+      )
+
+      print(f"Generated Code:\n{generated_code}")
+      print(f"Was Incremental: {was_incremental}, Cost: ${cost:.6f}, Model: {model_name}")
+      ```
       </incremental_code_generator_example>
 
       - Here is an example of how to use the `get_jwt_token` function to get the JWT_TOKEN:
@@ -55,7 +107,10 @@
 
    </internal_example_modules>
 
-   % Here is how to call the cloud version of the code generator when not using the `--local` flag:
+   % Here is how to call the cloud version of the code generator when not using the `--local` flag.
+   % Note: The API documentation (represented by the included api-documentation.md) should reflect that
+   % the JSON request payload to the cloud service can include a 'timeBudget' (or similar 'time'/'effort')
+   % field if the API supports it, corresponding to the 'time' parameter from the CLI.
    <cloud_code_generator_example>
       <include>../docs/api-documentation.md</include>
    </cloud_code_generator_example>
@@ -72,7 +127,7 @@
       - Preprocess the prompt using the `preprocess` function
       - Use the JWT token for authentication
       - Set a reasonable timeout (e.g., 30 seconds) for the API request
-      - The `promptContent` field in JSON payload should contain the *processed* prompt
+      - The `promptContent` field in JSON payload should contain the *processed* prompt. If the cloud API supports a time/effort parameter (e.g., `timeBudget`, `effort`), the JSON payload should also include this field, using the `time` variable (retrieved from `ctx.obj.get('time', DEFAULT_TIME)`).
    3. If cloud execution fails (API errors, timeouts, authentication issues):
       - Log a warning message that cloud execution failed and is falling back to local
       - Automatically fall back to local execution
@@ -93,20 +148,21 @@
     4. Force incremental generation if the --incremental flag is set, but warn if no output file exists and do full generation
 
 % The function's implementation should include these key steps:
-    1. Process the prompt_file (read content and preprocess if needed)
-    2. Determine the language from the prompt file name
-    3. Determine whether to use incremental generation or full generation:
+    1. Retrieve `strength`, `temperature`, and `time` from `ctx.obj` using defaults (e.g., `time = ctx.obj.get('time', DEFAULT_TIME)`).
+    2. Process the prompt_file (read content and preprocess if needed)
+    3. Determine the language from the prompt file name
+    4. Determine whether to use incremental generation or full generation:
        - Check if output is specified and file exists
        - If original_prompt is specified, use it; otherwise try to get last committed version from git
        - If both conditions met, try incremental generation
-    4. For incremental generation:
+    5. For incremental generation:
        - Read the existing code from the output file
        - Read original prompt content (from specified file or git)
        - Stage prompt_file and output file with git (if they aren't already staged/committed)
-       - Call incremental_code_generator with appropriate parameters 
+       - Call incremental_code_generator with appropriate parameters (including `strength`, `temperature`, and `time` from `ctx.obj`)
        - If incremental_code_generator returns is_incremental=False, fall back to full generation
-    5. For full generation:
-       - Call code_generator with appropriate parameters, applying the cloud/local execution strategy
+    6. For full generation:
+       - Call code_generator (local version) with appropriate parameters (including `strength`, `temperature`, and `time` from `ctx.obj`). For cloud execution, ensure the `time` (or equivalent like `timeBudget`) is included in the API payload if supported.
        - If cloud execution fails, automatically fall back to local execution with appropriate warnings
-    6. Write the final code to the output location
-    7. Return the generated code, incremental flag, cost, and model name
+    7. Write the final code to the output location
+    8. Return the generated code, incremental flag, cost, and model name

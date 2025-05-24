@@ -75,6 +75,26 @@
                 "/Users/gregtanaka/Documents/pdd_cloud/pdd/context/conflicts_main_example.py"
             ],
             "cwd": "/Users/gregtanaka/Documents/pdd_cloud/pdd/staging/regression_20250505_130218"
+        },
+        {
+            "name": "PDD CLI: Change with CSV (from prompts)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pdd.cli",
+            "console": "integratedTerminal",
+            "args": [
+                "--force",
+                "change",
+                "--csv",
+                "../addition_of_time_param_detect.csv",
+                "../pdd"
+            ],
+            "cwd": "${workspaceFolder}/prompts",
+            "env": {
+                "CONDA_DEFAULT_ENV": "pdd",
+                "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/pdd:${env:PYTHONPATH}"
+            },
+            "justMyCode": false
         }
     ]
 }

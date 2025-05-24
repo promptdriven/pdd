@@ -31,7 +31,36 @@
 
       - Here is an example of how to use the `trace` function:
       <trace_example>
-      <include>context/trace_example.py</include>
+      ```python
+      from pdd.trace import trace # Assuming pdd.trace is the correct module path
+
+      # Example usage of the trace function
+      code_content = """
+      def hello_world():
+          print("Hello, PDD!") # Line 2
+      """
+      code_line_to_trace = 2
+      prompt_content = """
+      % Create a Python function that prints "Hello, PDD!".
+      """
+      strength = 0.5
+      temperature = 0.0
+      time_limit = 60.0 # Example time limit in seconds, e.g., DEFAULT_TIME
+
+      try:
+          # Assuming the trace function signature is now trace(code, code_line, prompt, strength, temperature, time)
+          prompt_line, total_cost, model_name = trace(
+              code_content, code_line_to_trace, prompt_content, strength, temperature, time_limit
+          )
+          if prompt_line:
+              print(f"The code on line {code_line_to_trace} corresponds to prompt line: {prompt_line}")
+              print(f"Total cost: ${total_cost:.6f}")
+              print(f"Model used: {model_name}")
+          else:
+              print("Could not trace the code line to the prompt.")
+      except Exception as e:
+          print(f"An error occurred: {e}")
+      ```
       </trace_example>
    </internal_example_modules>
 </examples>
@@ -46,11 +75,12 @@
       - Handle any file reading exceptions and provide informative error messages.
 
    3. **Perform Trace Analysis**:
-      - Call the `trace` function with the contents of the code and prompt files, along with the line number, and necessary parameters (e.g., `strength`, `temperature`).
+      - Retrieve `strength = ctx.obj.get('strength', DEFAULT_STRENGTH)`, `temperature = ctx.obj.get('temperature', DEFAULT_TEMPERATURE)`, and `time = ctx.obj.get('time', DEFAULT_TIME)`. (Assuming DEFAULT_STRENGTH, DEFAULT_TEMPERATURE, and DEFAULT_TIME are defined constants or will be handled by Click).
+      - Call the `trace` function with the contents of the code and prompt files, along with the `code_line`, `prompt_content`, `strength`, `temperature`, and `time`.
       - Capture the returned prompt line (`str`), total cost (`float`), and model name (`str`).
 
    4. **Save Results**:
-      - Write the trace analysis results to a file.
+      - Write the trace analysis results to a file if `output` is specified.
       - Include the total cost and model name in the output.
 
    5. **Provide User Feedback**:
@@ -62,4 +92,3 @@
       - Catch exceptions, display error messages using `rprint`, and exit gracefully using `ctx.exit(1)` if necessary.
 
 % Ensure that the function adheres to the existing codebase's coding style, including proper typing annotations, docstrings, and exception handling.
-

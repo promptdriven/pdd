@@ -4,7 +4,7 @@
 
 % Here are the inputs and outputs of the function:
     Inputs:
-        - `ctx` (`click.Context`): The Click context object containing CLI options and parameters.
+        - `ctx` (`click.Context`): The Click context object containing CLI options and parameters. This object is expected to potentially contain a 'time' key (e.g., from a global --time option).
         - `prompt_file` (str): Filename of the prompt file that generated the code.
         - `code_file` (str): Filename of the code file being tested.
         - `program_file` (str): Filename of the program used to run the code under test.
@@ -17,6 +17,9 @@
             - `str`: The generated unit test code
             - `float`: The total cost of the operation
             - `str`: The name of the model used
+
+% Implementation Note for `bug_main`:
+    The `bug_main` function should retrieve a `time` variable from the Click context using `time = ctx.obj.get('time', DEFAULT_TIME_VALUE)`, where `DEFAULT_TIME_VALUE` should be a sensible default (e.g., `None` or a string like `"latest"`). This `time` variable must then be passed as an argument to the `bug_to_unit_test` function.
 
 <examples>
    % Here is how to use the Python Click library to create a command line program:
@@ -31,9 +34,50 @@
         <include>context/construct_paths_example.py</include>
         </construct_paths_example>
 
-      - Here is an example of how to use the `bug_to_unit_test` function:
+      - Here is an example of how to use the `bug_to_unit_test` function. Note the inclusion of the `time_value` parameter:
         <bug_to_unit_test_example>
-        <include>context/bug_to_unit_test_example.py</include>
+        ```python
+# Assuming bug_to_unit_test is imported, e.g.:
+# from pdd.generate_test_from_bug import bug_to_unit_test
+from rich import print
+
+# Example inputs (replace with actual values or file reads in a real scenario)
+current_output_str = "Output from program: Error, value is 0"
+desired_output_str = "Output from program: Success, value is 10"
+prompt_str = "Create a function that increments a counter."
+code_str = "def increment_counter(c):\n  return c # Bug: should be c + 10"
+program_str = "counter = 0\nnew_counter = increment_counter(counter)\nprint(f'Output from program: Error, value is {new_counter}')" # Simplified
+strength_val = 0.8
+temperature_val = 0.0
+language_str = "Python"
+time_value = "2023-10-26T10:00:00Z" # Example time value, could also be None or other format
+
+try:
+    # Note: The actual bug_to_unit_test function should be imported and used.
+    # This is a placeholder for the function call structure.
+    # def bug_to_unit_test(current_output, desired_output, prompt, code, program, strength, temperature, language, time):
+    #     # ... implementation ...
+    #     return "Generated Test Code", 0.01, "gpt-4o-mini"
+
+    # Example call to bug_to_unit_test, now including time_value
+    unit_test_code, cost, model_name = bug_to_unit_test(
+        current_output_str,
+        desired_output_str,
+        prompt_str,
+        code_str,
+        program_str,
+        strength_val,
+        temperature_val,
+        language_str,
+        time_value  # Pass the time value here
+    )
+    print(f"[bold green]Generated Unit Test:[/bold green]\n{unit_test_code}")
+    print(f"Cost: ${cost:.6f}")
+    print(f"Model Used: {model_name}")
+
+except Exception as e:
+    print(f"[bold red]An error occurred: {e}[/bold red]")
+        ```
         </bug_to_unit_test_example>
    </internal_example_modules>
 </examples>

@@ -1,3 +1,16 @@
+## v0.0.32 (2025-05-23)
+
+### Feat
+
+- implement get_extension function for file type retrieval
+- add budget option to change command and update Makefile for execution
+- enhance handpaint functionality with gesture recognition and skeleton display
+- enhance Makefile with new commands for prompt detection and modification
+
+### Refactor
+
+- update handpaint prompt and separate three.js imports into a new file
+
 ## v0.0.31 (2025-05-17)
 
 ### Feat

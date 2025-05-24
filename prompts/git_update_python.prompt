@@ -8,6 +8,7 @@
         - 'modified_code_file' - A string of the filepath that contains the code that was modified by the user.
         - 'strength': A float value representing the strength parameter for the LLM model, used to influence the model's behavior.
         - 'temperature': A float value representing the temperature parameter for the LLM model, used to control the randomness of the model's output.
+        - 'time': A float between 0 and 1 that controls the thinking effort for the LLM model, passed to update_prompt. Default is DEFAULT_TIME.
         - 'verbose': A boolean value representing whether to print verbose output.
     Outputs:
         - 'modified_prompt' - A string that contains the updated prompt that will generate the modified code.
@@ -16,6 +17,5 @@
 
 % Here are examples of how to use internal modules:
 <internal_example_modules>
-    % Here is an example how to use the update_prompt function: <update_prompt_example><include>context/update_prompt_example.py</include></update_prompt_example>
+    % Here is an example how to use the update_prompt function (which now also accepts a 'time' parameter, and its example usage should reflect this): <update_prompt_example><include>context/update_prompt_example.py</include></update_prompt_example>
 </internal_example_modules>
-

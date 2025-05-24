@@ -10,6 +10,7 @@
         'verification_program' - A string containing the path to a Python program that verifies if the code still runs correctly.
         'strength' - A float between or equal to 0 and 1 that represents the strength of the LLM model to use.
         'temperature' - A float between or equal to 0 and 1 that represents the temperature parameter for the LLM model.
+        'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to underlying LLM calls. Default is DEFAULT_TIME.
         'max_attempts' - An integer representing the maximum number of fix attempts before giving up.
         'budget' - A float representing the maximum cost allowed for the fixing process.
         'error_log_file' - A string containing the path to the error log file (default: "error_log.txt").
@@ -54,7 +55,7 @@
            - Print the captured test output to the console and error log file, escaping square brackets for proper Rich console display.
            - Create backup copies of the unit_test_file and code_file in their respective directories, appending the current iteration number, the number of errors, fails, and warnings to the filenames like this "unit_test_filename_3_1_0_2.py" and "code_filename_3_1_0_2.py", it is the third iteration where there was one error, zero fails, and two warnings through the loop.
            - Read the contents of the unit_test_file and code_file.
-           - Call fix_errors_from_unit_tests with the file contents, error and warning messages from the error log file, the error log file, and the provided strength and temperature. Pass the verbose flag to enable detailed logging if specified.
+           - Call fix_errors_from_unit_tests with the file contents, error and warning messages from the error log file, the error log file, and the provided strength, temperature, and time. Pass the verbose flag to enable detailed logging if specified.
            - Add the returned total_cost to the total cost accumulator.
            - If the total cost exceeds the budget, break the loop.
            - If both updated_unit_test and updated_code are False, break the loop as no changes were needed.

@@ -4,7 +4,7 @@
 
 % Here are the inputs and outputs of the function:
     Inputs:
-    - `ctx` (`click.Context`): The Click context object containing CLI options and parameters.
+    - `ctx` (`click.Context`): The Click context object. This object is used to retrieve global CLI options, which include `strength`, `temperature`, and `time` (e.g., `ctx.obj.get('time', DEFAULT_TIME)` where `DEFAULT_TIME` is a predefined default value if `time` is not specified). It also provides access to other command parameters.
     - `prompt_file` (`str`): Path to the input prompt file.
     - `directory_path` (`str`): Path to the directory containing potential dependency files (can include glob patterns, e.g., "context/*_example.py").
     - `auto_deps_csv_path` (`Optional[str]`): Path to the CSV file containing auto-dependency information.
@@ -30,7 +30,8 @@
       <include>context/construct_paths_example.py</include>
       </construct_paths_example>
 
-      - Here is an example of how to use the `insert_includes` function:
+      - The `auto_deps_main` function should retrieve global options such as `strength`, `temperature`, and `time` from the `ctx` object (e.g., `time = ctx.obj.get('time', DEFAULT_TIME)` where `DEFAULT_TIME` is an appropriate default value if `time` is not specified). This `time` parameter, along with `strength` and `temperature`, must be passed to the `insert_includes` function.
+      - Here is an example of how the `insert_includes` function is generally used (note: `insert_includes` itself would need to be capable of accepting and utilizing the `time` parameter):
       <insert_includes_example>
       <include>context/insert_includes_example.py</include>
       </insert_includes_example>

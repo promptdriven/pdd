@@ -9,6 +9,7 @@
         - 'csv_filename': A string containing the name of the csv file that contains the dependencies. It may not exist yet, in which case it will be created.
         - 'strength': A float value representing the strength parameter for the LLM model, used to influence the model's behavior.
         - 'temperature': A float value representing the temperature parameter for the LLM model, used to control the randomness of the model's output.
+        - 'time': A float between 0 and 1 that controls the thinking effort for the LLM model, passed to underlying LLM calls. Default is DEFAULT_TIME.
         - 'verbose': A boolean that indicates whether to print out the details of the function. Default is False.
     Output:
         - 'output_prompt': A string containing the prompt with the dependencies inserted.
@@ -45,8 +46,8 @@
     1. Load the prompt template 'insert_includes_LLM.prompt'.
     2. Read the CSV file from the 'csv_filename' parameter using file.read().
     3. Preprocess the prompt template using the preprocess function from the preprocess module to double curly brackets and exclude the keys 'actual_prompt_to_update' and 'actual_dependencies_to_insert' but do not recurse.
-    4. Use auto_include to get the dependencies for the input prompt.
-    5. Run with llm_invoke with the insert includes prompt to insert the output of #4 prompt into current prompt:
+    4. Use auto_include to get the dependencies for the input prompt, passing the 'strength', 'temperature', and 'time' parameters.
+    5. Run with llm_invoke (passing the 'strength', 'temperature', and 'time' parameters) with the insert includes prompt to insert the output of #4 prompt into current prompt:
         - a. Pass the following string parameters to the prompt during invocation: 'actual_prompt_to_update' and 'actual_dependencies_to_insert'.
         - b. The Pydantic output will contain the 'output_prompt' key.
     6. Return the 'output_prompt', the complete csv_output from auto_include, the total_cost and the model_name of the LLM model used.

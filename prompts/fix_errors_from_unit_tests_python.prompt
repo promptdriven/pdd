@@ -10,6 +10,7 @@
         'error_file' - A string containing the path to the file where error logs will be appended. If the file does not exist, it should be created.
         'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
         'temperature' - A float between 0 and 1 that controls the randomness of the LLM's output.
+        'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
         'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
     Outputs as a tuple:
         'update_unit_test' - Boolean indicating whether the unit test needs to be updated.
@@ -57,6 +58,10 @@
                 - 'code'
                 - 'prompt' (the preprocessed input prompt from Step 3a)
                 - 'errors' (the input error string)
+            - 'strength' (the input strength)
+            - 'temperature' (the input temperature)
+            - 'time' (the input time)
+            - 'verbose' (the input verbose)
         3d. Store the full LLM response as analysis_results
         3e. Append the output to error_file with a clear separator and timestamp to distinguish it from previous content
     
@@ -69,9 +74,10 @@
         5a. Load the 'extract_unit_code_fix_LLM' prompt template.
         5b. Preprocess this second prompt template.
         5c. Run the second LLM prompt through llm_invoke:
-            - Pass the 'analysis_results' from Step 3b, the original 'unit_test', and 'code' as input.
-            - Use a fixed strength (e.g., 0.8) and the input 'temperature'.
+            - Pass the 'analysis_results' from Step 3d, the original 'unit_test', and 'code' as input_json.
+            - Use a fixed strength (e.g., 0.8), the input 'temperature', and the input 'time'.
             - Specify 'output_pydantic=CodeFix' to get structured output.
+            - Pass the input 'verbose'.
         5d. Store the resulting 'CodeFix' object which contains:
             - 'update_unit_test' (boolean)
             - 'update_code' (boolean)
@@ -84,7 +90,7 @@
             - update_code (from Step 5d)
             - fixed_unit_test (from Step 5d)
             - fixed_code (from Step 5d)
-            - analysis_results (the raw LLM output from Step 3b)
+            - analysis_results (the raw LLM output from Step 3d)
             - total_cost (sum of both LLM invocation costs)
             - model_name
 

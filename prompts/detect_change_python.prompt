@@ -8,6 +8,7 @@
         - 'change_description' - A string that describes the changes that need to be analyzed and potentially applied to the prompts.
         - 'strength': A float value representing the strength parameter for the LLM model, used to influence the model's behavior.
         - 'temperature': A float value representing the temperature parameter for the LLM model, used to control the randomness of the model's output.
+        - 'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
         - 'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
     Outputs:
         - 'changes_list' - A list of JSON objects, each containing the name of a prompt that needs to be changed and detailed instructions on how to change it.
@@ -50,13 +51,14 @@
         - a. Pass the following parameters to `llm_invoke`:
             * 'prompt_template': The preprocessed 'detect_change_LLM' prompt template.
             * 'strength': The provided strength parameter.
-            * 'temperature' The provided temperature parameter.
+            * 'temperature': The provided temperature parameter.
+            * 'time': The provided time parameter.
             * 'verbose': The provided verbose parameter.
             * 'input_data': A dictionary containing:
                 * 'PROMPT_LIST' (load the prompt files and create a list of JSON with these keys: 'PROMPT_NAME' and 'PROMPT_DESCRIPTION').
                 * 'CHANGE_DESCRIPTION' (preprocess this with double_curly_brackets set to false using the `preprocess` function).
         - b. If verbose is True, pretty print the output of 2a, including the token count and estimated cost.
-    Step 3. Run the output from Step 2 through the 'extract_detect_change_LLM' prompt using `llm_invoke` with a strength of .89 and temperature of 0.
+    Step 3. Run the output from Step 2 through the 'extract_detect_change_LLM' prompt using `llm_invoke` with a strength of .89, temperature of 0, and the provided `time` parameter.
         - a. Pass the following parameters to `llm_invoke`:
             * 'prompt_template': The loaded 'extract_detect_change_LLM' prompt template.
             * 'verbose': The provided verbose parameter.

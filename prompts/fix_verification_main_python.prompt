@@ -8,6 +8,7 @@
             Context parameters used:
             - strength (float): Model strength parameter, defaults to the global DEFAULT_STRENGTH
             - temperature (float): Model temperature parameter, defaults to 0
+            - time (str): Timestamp for the operation, defaults to the global DEFAULT_TIME
             - force (bool): Whether to force overwrite existing files
             - quiet (bool): Whether to suppress output messages
             - verbose (bool): Whether to enable verbose output for debugging purposes
@@ -31,9 +32,9 @@
             - `str`: Name of the model used
 
 % Important Implementation Notes:
-1. File Path Handling:
-   - When calling `fix_verification_errors_loop`, pass the *content* of the `prompt_file`, the *path* to the `code_file`, the *path* to the `program_file`, and the *path* to the `verification_program`. Also pass the path for the `verification_log_file` if provided.
-   - When calling `fix_verification_errors`, read the contents of the files first and pass them as strings (including the program output).
+1. File Path Handling and Parameter Passing:
+   - When calling `fix_verification_errors_loop`, pass the *content* of the `prompt_file`, the *path* to the `code_file`, the *path* to the `program_file`, the *path* to the `verification_program`, and the `time` variable (retrieved from `ctx.obj`). Also pass the path for the `verification_log_file` if provided.
+   - When calling `fix_verification_errors`, read the contents of the files first and pass them as strings (including the program output), and also pass the `time` variable (retrieved from `ctx.obj`).
    - Use `construct_paths` to generate default output paths when not explicitly provided. Include robust fallback logic to manually read input files and determine output paths if `construct_paths` does not recognize the `verify` command or fails. This should now handle `output_program` as well.
    - Ensure the final verified program content is written to the `output_program` path if specified, or to a default generated path.
 
@@ -47,11 +48,11 @@
 
 3. Verification Process:
    - For `loop=True`:
-     * Call `fix_verification_errors_loop` with all required parameters including `max_attempts`, `budget`, and the `verification_log_file` path.
+     * Call `fix_verification_errors_loop` with all required parameters including `max_attempts`, `budget`, `time`, and the `verification_log_file` path.
      * This handles the entire iterative verification and fixing process.
    - For `loop=False`:
      * Execute the `program_file` (e.g., using `subprocess`) to capture its standard output and standard error.
-     * Call `fix_verification_errors` once, passing the *content* of the prompt file, the *content* of the code file, the *content* of the program file, and the captured program output.
+     * Call `fix_verification_errors` once, passing the *content* of the prompt file, the *content* of the code file, the *content* of the program file, the captured program output, and `time`.
      * If issues are found, it will generate a single round of fixes.
 
 4. Verbose Output:
@@ -84,12 +85,263 @@
 
       - Here is an example of how to use the `fix_verification_errors` function:
       <fix_verification_errors_example>
-      <include>context/fix_verification_errors_example.py</include>
+      ```python
+import os
+from rich import print
+from fix_verification_errors import fix_verification_errors # Assuming this is in the same directory or installed
+
+# Define inputs for the function
+program_content = """
+def main():
+    # Intentionally incorrect output for demonstration
+    print("The quick brown fox jumps over the lazy cat.")
+
+if __name__ == "__main__":
+    main()
+"""
+
+prompt_content = """
+The program should output the classic pangram:
+"The quick brown fox jumps over the lazy dog."
+It should print this exact string to standard output.
+"""
+
+code_content = """
+# This is the related code module, if any.
+# For this example, let's assume the program_content is self-contained
+# or this module provides some helper functions (though not used by program_content here).
+def helper_function():
+    return "This is a helper."
+"""
+
+# Simulate program output (in a real scenario, this comes from running the program)
+program_output = "The quick brown fox jumps over the lazy cat.\n"
+
+strength = 0.7
+temperature = 0.0
+time_str = "2023-10-27T10:00:00Z" # Example timestamp
+# Optional: Define an error log file path
+# error_log_file = "verification_error_log.txt"
+
+# Create dummy files if your fix_verification_errors expects file paths for logging or context
+# For this example, we're passing content directly.
+
+print("[bold blue]Running fix_verification_errors example...[/bold blue]")
+
+try:
+    fix_results = fix_verification_errors(
+        program=program_content,
+        prompt=prompt_content,
+        code=code_content,
+        output=program_output,
+        strength=strength,
+        temperature=temperature,
+        time=time_str, # Added
+        # error_log_file=error_log_file, # Pass if your function uses it
+        verbose=True
+    )
+
+    print("\n[bold green]Verification Results:[/bold green]")
+    print(f"  Success: {fix_results['success']}")
+    print(f"  Verification Issues Count: {fix_results['verification_issues_count']}")
+    print(f"  Code Updated: {fix_results['fixed_code'] != code_content}")
+    print(f"  Program Updated: {fix_results['fixed_program'] != program_content}")
+    print(f"  Model Name: {fix_results['model_name']}")
+    print(f"  Total Cost: ${fix_results['total_cost']:.6f}")
+
+    if fix_results['verification_issues_count'] > 0:
+        print("\n[bold yellow]LLM Explanation:[/bold yellow]")
+        for line in fix_results['explanation']:
+            print(f"  - {line}")
+
+    if fix_results['fixed_program'] != program_content:
+        print("\n[bold cyan]Original Program:[/bold cyan]")
+        print(program_content)
+        print("\n[bold cyan]Fixed Program:[/bold cyan]")
+        print(fix_results['fixed_program'])
+
+    if fix_results['fixed_code'] != code_content:
+        print("\n[bold cyan]Original Code Module:[/bold cyan]")
+        print(code_content)
+        print("\n[bold cyan]Fixed Code Module:[/bold cyan]")
+        print(fix_results['fixed_code'])
+
+except FileNotFoundError as e:
+    print(f"[bold red]Error:[/bold red] A required file was not found: {e}")
+except KeyError as e:
+    print(f"[bold red]Error:[/bold red] Missing expected key in results: {e}")
+    print("Full results:", fix_results)
+except Exception as e:
+    print(f"[bold red]An unexpected error occurred:[/bold red] {e}")
+
+      ```
       </fix_verification_errors_example>
 
       - Here is an example of how to use the `fix_verification_errors_loop` function:
       <fix_verification_errors_loop_example>
-      <include>context/fix_verification_errors_loop_example.py</include>
+      ```python
+import os
+from rich import print
+from fix_verification_errors_loop import fix_verification_errors_loop # Assuming correct import path
+
+# --- Setup: Create dummy files for the example ---
+# It's crucial that these files exist for fix_verification_errors_loop to run.
+
+# 1. Dummy Prompt File
+prompt_content = """
+The program 'program_to_verify.py' should take a number as a command-line argument.
+If the number is even, it should print "Even".
+If the number is odd, it should print "Odd".
+The related code is in 'code_module.py'.
+"""
+# For the example, we'll pass prompt_content directly, but fix_verification_errors_loop
+# might expect a prompt file path in some implementations.
+# Let's assume our version of fix_verification_errors_loop takes prompt content.
+
+# 2. Dummy Program File (program_to_verify.py) - initially incorrect
+program_file_content_initial = """
+import sys
+# from code_module import is_even # Intentionally commented out to cause an error
+
+def check_number(n_str):
+    # This will cause an error if is_even is not defined
+    # or if code_module is not imported correctly.
+    # Let's start with a direct implementation that might be buggy.
+    num = int(n_str)
+    if num % 2 == 0: # Bug: Let's say it should use a helper
+        print("Parity: Even") # Bug: Output format mismatch
+    else:
+        print("Parity: Odd")  # Bug: Output format mismatch
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        check_number(sys.argv[1])
+    else:
+        print("Usage: python program_to_verify.py <number>")
+"""
+program_file_path = "program_to_verify.py"
+with open(program_file_path, "w") as f:
+    f.write(program_file_content_initial)
+
+# 3. Dummy Code Module (code_module.py) - might be fixed by the loop
+code_module_content_initial = """
+def is_even(number):
+    # Intentionally simple, could be more complex
+    return number % 2 == 0
+
+def is_odd(number):
+    return not is_even(number)
+"""
+code_module_path = "code_module.py"
+with open(code_module_path, "w") as f:
+    f.write(code_module_content_initial)
+
+# 4. Dummy Verification Script (verification_script.py)
+# This script will be called by fix_verification_errors_loop to check correctness.
+verification_script_content = """
+import subprocess
+import sys
+
+def verify(program_path, code_module_path, prompt_text):
+    # Test case 1: Even number
+    process_even = subprocess.run([sys.executable, program_path, "4"], capture_output=True, text=True)
+    # Test case 2: Odd number
+    process_odd = subprocess.run([sys.executable, program_path, "3"], capture_output=True, text=True)
+
+    expected_even_output = "Even"
+    expected_odd_output = "Odd"
+
+    # print(f"Debug: Even output: '{process_even.stdout.strip()}'") # For debugging
+    # print(f"Debug: Odd output: '{process_odd.stdout.strip()}'")   # For debugging
+
+    if process_even.stdout.strip() == expected_even_output and \
+       process_odd.stdout.strip() == expected_odd_output:
+        print("Verification PASSED")
+        sys.exit(0) # Success
+    else:
+        print(f"Verification FAILED. Expected 'Even' and 'Odd'. Got '{process_even.stdout.strip()}' and '{process_odd.stdout.strip()}'.")
+        # Provide more detailed error messages if possible
+        if process_even.stdout.strip() != expected_even_output:
+            print(f"Error for even test: Expected '{expected_even_output}', Got '{process_even.stdout.strip()}'")
+        if process_odd.stdout.strip() != expected_odd_output:
+            print(f"Error for odd test: Expected '{expected_odd_output}', Got '{process_odd.stdout.strip()}'")
+        sys.exit(1) # Failure
+
+if __name__ == "__main__":
+    # fix_verification_errors_loop will pass these arguments
+    # For direct testing of this script:
+    # python verification_script.py program_to_verify.py code_module.py "prompt text"
+    if len(sys.argv) == 4:
+         verify(sys.argv[1], sys.argv[2], sys.argv[3])
+    else: # For direct execution with fixed paths for testing this script itself
+        print("Running verification script with default paths for self-test.")
+        # verify("program_to_verify.py", "code_module.py", "dummy prompt")
+        print("Usage: python verification_script.py <program_path> <code_module_path> <prompt_text>")
+        sys.exit(2) # Indicate incorrect usage for self-test
+"""
+verification_script_path = "verification_script.py"
+with open(verification_script_path, "w") as f:
+    f.write(verification_script_content)
+
+# --- Run fix_verification_errors_loop ---
+print("[bold blue]Running fix_verification_errors_loop example...[/bold blue]")
+time_str = "2023-10-27T10:00:00Z" # Example timestamp
+
+try:
+    loop_results = fix_verification_errors_loop(
+        program_file=program_file_path,
+        code_file=code_module_path,
+        prompt=prompt_content, # Passing prompt content
+        verification_program=verification_script_path,
+        strength=0.7,
+        temperature=0.1,
+        max_attempts=3, # Keep low for example speed
+        budget=1.0,     # Keep low for example
+        verification_log_file="verification_loop_log.txt",
+        time=time_str, # Added
+        verbose=True,
+        program_args=[] # No specific args for program_to_verify.py in this setup
+    )
+
+    print("\n[bold green]Loop Iteration Results:[/bold green]")
+    print(f"  Success: {loop_results['success']}")
+    print(f"  Total Attempts: {loop_results['total_attempts']}")
+    print(f"  Total Cost: ${loop_results['total_cost']:.6f}")
+    print(f"  Model Name: {loop_results['model_name']}")
+    # print(f"  Final Program Content:\n{loop_results['final_program']}") # Can be long
+    # print(f"  Final Code Content:\n{loop_results['final_code']}")       # Can be long
+    print(f"  Log file should be at: verification_loop_log.txt")
+
+    if loop_results['success']:
+        print("\n[bold green]Final program_to_verify.py content after loop:[/bold green]")
+        with open(program_file_path, "r") as f:
+            print(f.read())
+        print("\n[bold green]Final code_module.py content after loop:[/bold green]")
+        with open(code_module_path, "r") as f:
+            print(f.read())
+    else:
+        print("\n[bold red]Loop did not achieve full success. Check logs and final files.[/bold red]")
+
+
+except FileNotFoundError as e:
+    print(f"[bold red]Error:[/bold red] A required file was not found: {e}")
+except KeyError as e:
+    print(f"[bold red]Error:[/bold red] Missing expected key in loop results: {e}")
+    print("Full results:", loop_results)
+except Exception as e:
+    print(f"[bold red]An unexpected error occurred during the loop example:[/bold red] {e}")
+finally:
+    # --- Cleanup: Remove dummy files ---
+    if os.path.exists(program_file_path):
+        os.remove(program_file_path)
+    if os.path.exists(code_module_path):
+        os.remove(code_module_path)
+    if os.path.exists(verification_script_path):
+        os.remove(verification_script_path)
+    if os.path.exists("verification_loop_log.txt"):
+        os.remove("verification_loop_log.txt")
+    print("\n[italic]Cleaned up dummy files.[/italic]")
+      ```
       </fix_verification_errors_loop_example>
 
       - Here is how to get the language:

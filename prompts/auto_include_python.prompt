@@ -9,6 +9,7 @@
         'csv_file' - A string representing the contents of the csv file.
         'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
         'temperature' - A float between 0 and 1 that is the temperature of the LLM model to use.
+        'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
         'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
     Outputs as a tuple: 
         'dependencies' - A string that contains the dependencies.
@@ -37,11 +38,11 @@
 % This program will do the following:
     Step 1. Load the 'auto_include_LLM' and 'extract_auto_include_LLM' prompt templates.
     Step 2. Use csv_file to run summarize_directory to get the csv_output. The full_path and file_summary columns of csv_output becomes available_includes.
-    Step 3. Run the auto_include_LLM prompt through llm_invoke:
+    Step 3. Run the auto_include_LLM prompt through llm_invoke, passing the strength, temperature, and time parameters:
         3a. Pass the following string parameters to the prompt during invoke:
             - 'input_prompt' - A string that contains the prompt that requires the includes to be selected.
             - 'available_includes' - A list of strings that contains the file paths and summaries of the available includes.
-    Step 4. Run the extract_auto_include_LLM prompt through llm_invoke with the output from Step 3:
+    Step 4. Run the extract_auto_include_LLM prompt through llm_invoke with the output from Step 3, passing the strength, temperature, and time parameters:
         4a. Pass the following string parameter to the prompt during invoke:
             - 'llm_output' - A string that contains the output of the auto_include_LLM prompt.
         4b. The Pydantic output will include the key 'string_of_includes' to be accessed.
