@@ -1,6 +1,19 @@
 %You are an expert ZSH engineer. Your goal is to create pdd_completion.zsh for the PDD CLI.
 
-% Here is the README for PDD CLI:
+% The PDD CLI's interface, including its global options and subcommands, is primarily defined in its README.md.
+% Your generated pdd_completion.zsh script should accurately reflect all functionalities described therein.
+
+% The README for PDD CLI is referenced as:
     <readme_pdd>
         <include>README.md</include>
     </readme_pdd>
+
+% When generating the pdd_completion.zsh, you must ensure that the Zsh completion logic correctly recognizes and handles all global options for the `pdd` command.
+% In particular, the PDD CLI now includes a new global option that must be supported:
+%   Global Option: --time
+%   Description: Controls LLM reasoning effort (0.0-1.0)
+%
+% The implementation in the Zsh completion script should typically involve:
+% - Adding an entry for `--time` to the array or list that stores global options (e.g., `_pdd_global_opts` as seen in example PDD Zsh scripts).
+% - The entry should follow the standard Zsh completion format, incorporating the description, for example: `'--time[Controls LLM reasoning effort (0.0-1.0)]'`.
+% - This `--time` option should be available for completion globally, meaning it can be used with the main `pdd` command and alongside any of its subcommands.

@@ -9,6 +9,7 @@
         'prompt_file' (str) - A string that contains the text of the .prompt file.
         'strength' - A float that is the strength of the LLM model to use. Default is 0.5. Range is between 0 and 1.
         'temperature' - A float that is the temperature of the LLM model to use. Default is 0. Range is between 0 and 1.
+        'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
         'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
     Outputs:
         'prompt_line' (int) - An integer that represents the equivalent line number in the prompt file that matches with the line number in the code file.
@@ -37,14 +38,14 @@
     Step 1. Find the substring of the code_file that matches the code_line.
     Step 2. Load the 'trace_LLM' prompt template using load_prompt_template.
     Step 3. Preprocess the loaded trace_LLM prompt using the preprocess function with parameters recursive=False and double_curly_brackets=False.
-    Step 4. Invoke the model using llm_invoke. 
+    Step 4. Invoke the model using llm_invoke, passing the 'strength', 'temperature', and 'time' parameters from the function's inputs.
         4a. Pass the following string parameters to the prompt during invoke:
             - 'CODE_FILE'
             - 'CODE_STR'
             - 'PROMPT_FILE'
         4b. If verbose is True, pretty print a message letting the user know it is running and how many tokens are in the prompt and the cost.
     Step 5. Load the 'extract_promptline_LLM' prompt template using load_prompt_template. Preprocess the loaded extract_promptline_LLM prompt using the preprocess function with parameters recursive=False and double_curly_brackets=False.
-    Step 6. Invoke the model using llm_invoke with a strength of 0.5.
+    Step 6. Invoke the model using llm_invoke with a strength of 0.5, and passing the 'temperature' and 'time' parameters from the function's inputs.
         6a. Pass the following string parameters to the prompt during invoke:
             - 'llm_output'
         6b. If verbose is True, pretty print a message letting the user know it is running and how many tokens are in the prompt and the cost.

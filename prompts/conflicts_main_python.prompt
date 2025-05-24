@@ -29,37 +29,51 @@
       </construct_paths_example>
 
       % Here is an example of how to use the `conflicts_in_prompts` function:
+      % The call to `conflicts_in_prompts` within this example should be understood
+      % to include the 'time' parameter as shown below.
       <conflicts_in_prompts_example>
       <include>context/conflicts_in_prompts_example.py</include>
+      % Example of updated call:
+      % conflicts, total_cost, model_name = conflicts_in_prompts(
+      %     prompt1_content,
+      %     prompt2_content,
+      %     strength,
+      %     temperature,
+      %     time,
+      %     verbose_flag  # Assuming verbose_flag is passed if applicable
+      % )
       </conflicts_in_prompts_example>
    </internal_example_modules>
 </examples>
 
 % The function should perform the following steps:
-   1. **Construct File Paths**:
+   1. **Retrieve Contextual Parameters**:
+      - Retrieve `time = ctx.obj.get('time', DEFAULT_TIME)`. (Ensure `DEFAULT_TIME` is appropriately defined or handled).
+
+   2. **Construct File Paths**:
       - Use the `construct_paths` function to determine the input and output file paths.
       - Ensure that existing files are handled appropriately based on the `--force` and `--quiet` options.
 
-   2. **Load Input Files**:
+   3. **Load Input Files**:
       - Read the contents of `prompt1` and `prompt2`.
 
-   3. **Analyze Conflicts**:
-      - Call the `conflicts_in_prompts` function with the contents of the prompt files, along with the necessary parameters (e.g., strength, temperature, verbose).
+   4. **Analyze Conflicts**:
+      - Call the `conflicts_in_prompts` function with the contents of the prompt files, along with the necessary parameters (e.g., strength, temperature, time, verbose).
       - Capture the returned conflicts list, total cost, and model name.
-      - Important: Use `ctx.obj.get('strength', 0.9)` and `ctx.obj.get('temperature', 0)` to get the strength and temperature values.
+      - Important: Use `ctx.obj.get('strength', 0.9)`, `ctx.obj.get('temperature', 0)`, and `ctx.obj.get('time', DEFAULT_TIME)` to get these values.
       - Pass the verbose parameter to control detailed output during analysis.
 
-   4. **Replace prompt1 and prompt2 with the actual file paths**:
+   5. **Replace prompt1 and prompt2 with the actual file paths**:
       - Replace the `prompt_1` and `prompt_2` strings with the actual file paths in the conflicts list for the 'prompt_name' column.
 
-   5. **Save Results**:
+   6. **Save Results**:
       - Write the conflicts list to a CSV file using the `csv` module.
       - Include headers and ensure proper formatting.
 
-   6. **Provide User Feedback**:
+   7. **Provide User Feedback**:
       - Use `rprint` from Rich to display messages to the user, indicating success or failure.
       - Respect the verbosity levels determined by the `--quiet` option.
 
-   7. **Error Handling**:
+   8. **Error Handling**:
       - Wrap the main logic in a `try-except` block.
       - Catch exceptions, display error messages, and exit gracefully using `sys.exit(1)` if necessary.

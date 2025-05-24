@@ -5,6 +5,7 @@
     - file_path (string): The path to the file to edit.
     - edit_instructions (string): A description of the changes to make to the file.
     - mcp_config_path (string, optional): Path to MCP configuration file. If None, defaults to 'mcp_config.json' in current directory.
+    - time (float, optional): Controls LLM reasoning effort (0.0-1.0). Defaults to DEFAULT_TIME.
 </function_inputs>
 
 <function_outputs>
@@ -71,14 +72,10 @@
     - Configure with proper tool binding
     - Format tools appropriately for Claude's understanding
     - Handle Claude's message/tool call output structure
+    - The 'time' parameter should be utilized when invoking the Claude model for planning edits, mapping it to appropriate model-specific parameters if necessary.
 
 % The LangGraph Agent will use the Langchain MCP adapter to access MCPs. Here are the relevant documentation links:
     <langgraph_docs><web>https://langchain-ai.github.io/langgraph/llms-full.txt</web></langgraph_docs>
     <mcp_adapter_docs><web>https://github.com/langchain-ai/langchain-mcp-adapters</web></mcp_adapter_docs>
 
 % This will read a JSON file to get the MCP service to use.
-
-
-
-
-

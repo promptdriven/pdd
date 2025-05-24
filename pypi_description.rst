@@ -1,4 +1,4 @@
-.. image:: https://img.shields.io/badge/pdd--cli-v0.0.31-blue
+.. image:: https://img.shields.io/badge/pdd--cli-v0.0.32-blue
    :alt: PDD-CLI Version
 
 PDD (Prompt-Driven Development) Command Line Interface
@@ -82,7 +82,7 @@ After installation, verify:
 
    pdd --version
 
-You'll see the current PDD version (e.g., 0.0.31).
+You'll see the current PDD version (e.g., 0.0.32).
 
 Advanced Installation Tips
 --------------------------

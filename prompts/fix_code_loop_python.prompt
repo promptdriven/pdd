@@ -1,3 +1,4 @@
+
 % You are an expert Python Software Engineer. Your goal is to write a Python function, "fix_code_loop", that will attempt to fix errors in a code module through multiple iterations, with an added verbose mode for detailed logging.
 
 <include>context/python_preamble.prompt</include>
@@ -9,6 +10,7 @@
     - `verification_program`: A string containing the path to a Python program that verifies if the code runs correctly.
     - `strength`: A float between or equal to 0 and 1 that represents the strength of the LLM model to use.
     - `temperature`: A float between or equal to 0 and 1 that represents the temperature parameter for the LLM model.
+    - `time`: A float between 0 and 1 that controls the thinking effort for the LLM model, passed to underlying LLM calls. Default is DEFAULT_TIME.
     - `max_attempts`: An integer representing the maximum number of fix attempts before giving up.
     - `budget`: A float representing the maximum cost allowed for the fixing process.
     - `error_log_file`: A string containing the path to the error log file (default: "error_code.log").
@@ -23,9 +25,44 @@
 
 % Here are examples of how to use internal modules:
 <internal_example_modules>
-  % Here is an example of the `fix_code_module_errors` function that will be used:
+  % Here is an example of the `fix_code_module_errors` function that will be used (note the `time` parameter):
   <fix_code_module_errors_example>
-  <include>context/fix_code_module_errors_example.py</include>
+  ```python
+  from fix_code_module_errors import fix_code_module_errors # Assuming this module is available
+  # Assuming DEFAULT_TIME is a defined constant, e.g., DEFAULT_TIME = 0.5
+
+  # Define dummy inputs for the example
+  program_content = "print('hello')"
+  prompt_text = "A simple hello world program"
+  code_content = "def main():\n  print('hello world')"
+  error_history = "<history><attempt number='1'><error><![CDATA[SyntaxError]]></error></attempt></history>"
+  strength_value = 0.7
+  temperature_value = 0.2
+  time_value = 0.5 # Example time value, could also use DEFAULT_TIME
+  is_verbose = True
+
+  # Example call
+  try:
+      update_program, update_code, fixed_program, fixed_code, analysis, cost, model_name = fix_code_module_errors(
+          program=program_content,
+          prompt=prompt_text,
+          code=code_content,
+          errors=error_history,
+          strength=strength_value,
+          temperature=temperature_value,
+          time=time_value, # Pass the time parameter
+          verbose=is_verbose
+      )
+      print(f"Update Program: {update_program}")
+      print(f"Update Code: {update_code}")
+      print(f"Fixed Program: {fixed_program}")
+      print(f"Fixed Code: {fixed_code}")
+      print(f"Analysis: {analysis}")
+      print(f"Cost: {cost}")
+      print(f"Model Name: {model_name}")
+  except Exception as e:
+      print(f"An error occurred: {e}")
+  ```
   </fix_code_module_errors_example>
 </internal_example_modules>
 
@@ -67,7 +104,7 @@
          * Pass the complete history log to `fix_code_module_errors` using the `errors` parameter for context on previous attempts
        - Create backup copies of the verification program and code file
        - Read the contents of both files
-       - Call `fix_code_module_errors` with the enriched history
+       - Call `fix_code_module_errors` with the enriched history, strength, temperature, and `time` parameter.
        - Update files based on the fix results
        - Track total cost and check against budget
     e. Increment the attempt counter.

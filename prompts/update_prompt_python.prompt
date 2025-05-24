@@ -9,6 +9,7 @@
         - 'modified_code' - A string that contains the code that was modified by the user.
         - 'strength': A float value representing the strength parameter for the LLM model, used to influence the model's behavior. Range is between 0 and 1.
         - 'temperature': A float value representing the temperature parameter for the LLM model, used to control the randomness of the model's output. Range is between 0 and 1.
+        - 'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
         - 'verbose': A boolean that indicates whether to print out the details of the function. Default is False.
     Outputs as a tuple:
         - 'modified_prompt' - A string that contains the updated prompt that will generate the modified code.
@@ -40,12 +41,12 @@
             * 'input_prompt'
             * 'input_code'
             * 'modified_code'
-        c. Use the provided strength and temperature.
+        c. Use the provided strength, temperature, and time.
         d. If verbose is True, pretty print the output, token count, and cost using rich.
     3. Run the second LLM invocation using llm_invoke:
         a. Use the extract_prompt_update_LLM template.
         b. Pass the result from step 2 as 'llm_output' parameter.
-        c. Use a fixed strength value of 0.5 and the provided temperature.
+        c. Use a fixed strength value of 0.5, the provided temperature, and time.
         d. If verbose is True, pretty print the running message with token count and cost.
         e. The Pydantic output will contain the 'modified_prompt' key.
     4. If verbose is True, pretty print the extracted modified_prompt using Rich Markdown function.

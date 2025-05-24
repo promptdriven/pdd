@@ -8,6 +8,7 @@
         - 'llm_output': A string containing the current output from the LLM that needs to be checked for completeness and will be appended with additional generations to create final_llm_output.
         - 'strength': A float value between 0 and 1 representing the strength parameter for the LLM model, used to influence the model's behavior.
         - 'temperature': A float value between 0 and 1 representing the temperature parameter for the LLM model, used to control the randomness of the model's output.
+        - 'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
         - 'verbose': A boolean that indicates whether to print out the details of the function. Default is False.
     Outputs:
         - 'final_llm_output': A string containing the complete output from the LLM after all necessary continuations.
@@ -35,12 +36,12 @@
     Step 2. Preprocess the prompts from Step 1 using the preprocess function (with recursive but no doubling of curly brackets) using the preprocess module.
     Step 3. Run the trim_results_start_LLM prompt through llm_invoke:
         - a. Pass the following string parameters: 'LLM_OUTPUT': llm_output
-        - b. Use strength=0.9 and temperature=0
+        - b. Use strength=0.9, temperature=0, and the input 'time' parameter
         - c. Extract the 'code_block' from the Pydantic output
     Step 3. Enter a loop for continuing generation:
         a. Run the continue_generation_LLM prompt through llm_invoke:
            - Pass 'FORMATTED_INPUT_PROMPT' and 'LLM_OUTPUT' (code_block) as parameters
-           - Use the provided strength and temperature
+           - Use the provided strength, temperature, and the input 'time' parameter
         b. Check if generation is complete using unfinished_prompt:
            - Pass the last 600 characters of the output
            - If incomplete, append the continue_result to code_block and loop
@@ -48,7 +49,7 @@
              * Run trim_results_LLM prompt through llm_invoke with:
                - 'CONTINUED_GENERATION': continue_result
                - 'GENERATED_RESULTS': last 200 chars of code_block
-               - strength=0.9 and temperature=0
+               - strength=0.9, temperature=0, and the input 'time' parameter
              * Extract 'trimmed_continued_generation' from Pydantic output
              * Append to code_block and break loop
         c. Print loop count if verbose is True

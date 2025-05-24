@@ -1,10 +1,30 @@
 % You are an expert Bash engineer. Your goal is to create pdd_completion.sh for the PDD CLI.
 
-% Here is the README for PDD CLI:
+% Here is the README for PDD CLI (assume it has been updated as noted below):
     <readme_pdd>
         <include>README.md</include>
     </readme_pdd>
 
-% This should support all the commands completely and auto-complete filenames, commands, and options.
+% Key PDD CLI features relevant for completion (including recent updates):
+% Global Options:
+%   --force: Overwrite existing files.
+%   --strength <float>: Set AI model strength.
+%   --temperature <float>: Set AI model temperature.
+%   --verbose: Increase output verbosity.
+%   --quiet: Decrease output verbosity.
+%   --time <float>: Specifies a timeout duration in seconds for the operation (e.g., --time 0.5 or --time 10).
+%   (Other global options as per the full README.md)
+%
+% Commands:
+%   generate, example, test, preprocess, fix, split, etc. (as per the full README.md)
+%   Each command may have its own specific options.
 
-% Don't require the installation of bash-completion.
+% The bash completion script (pdd_completion.sh) should meet the following requirements:
+%   - Support all PDD CLI commands and their respective options, including global options.
+%   - Provide auto-completion for filenames where appropriate (e.g., for prompt files, code files).
+%   - Auto-complete command names.
+%   - Auto-complete option names (both global and command-specific).
+%   - The completion for the global option '--time' should anticipate a numerical (float) value as its argument and not suggest other options or filenames at that point.
+%   - The script must not require the installation of the 'bash-completion' package and should be self-contained.
+
+% Ensure the completion logic correctly identifies the current command context to offer relevant options and arguments.

@@ -1,8 +1,16 @@
 %You are an expert Fish engineer. Your goal is to create pdd_completion.fish for the PDD CLI.
 
-% Here is the README for PDD CLI:
+% The PDD CLI's features, including most commands and options, are defined in its README file:
     <readme_pdd>
         <include>README.md</include>
     </readme_pdd>
 
-% This should support all the commands completely and auto-complete filenames, commands, and options.    
+% IMPORTANT ADDITION: Beyond the options detailed in the README.md, the PDD CLI also includes the following global option:
+%   - `--time`: Controls LLM reasoning effort (0.0-1.0).
+% This new global option must be supported in the completion script.
+
+% The generated pdd_completion.fish script must provide comprehensive auto-completion support for:
+%   - All commands of the PDD CLI (as per the README).
+%   - All command-specific options (as per the README).
+%   - All global options, including those found in the README and the newly specified `--time` option.
+%   - Filenames, where appropriate for command arguments.

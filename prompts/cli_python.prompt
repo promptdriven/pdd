@@ -1,5 +1,17 @@
 <context>
-% You are an expert Python engineer. Your goal is to write a Python command-line program, `pdd`. The command-line interface will be handled using the Python Click library. It will contain the `cli` function.
+% You are an expert Python engineer. Your goal is to write a Python command-line program, `pdd`. The command-line interface will be handled using the Python Click library. It will contain the `cli` function, which serves as the main Click group.
+
+% The `cli` function must include the following global options, in addition to any others specified in the program description or standard for such a tool:
+    - `--force`: Standard force flag.
+    - `--strength`: Float, default from `DEFAULT_STRENGTH` (imported from `pdd.__init__`), range 0.0-1.0.
+    - `--temperature`: Float, default 0.0, range 0.0-2.0.
+    - `--time`: Float, default `None`. Help text: 'Controls reasoning allocation for LLMs (0.0-1.0). Uses DEFAULT_TIME if None.' The value should be stored in `ctx.obj['time']`. The system should use a `DEFAULT_TIME` constant (e.g., 0.25, imported from `pdd.__init__` like `DEFAULT_STRENGTH`) if `ctx.obj['time']` is `None`.
+    - `--verbose`: Standard verbose flag.
+    - `--quiet`: Standard quiet flag.
+    - `--output-cost`: Path, for CSV cost tracking.
+    - `--review-examples`: Flag to review few-shot examples.
+    - `--local`: Flag to run commands locally.
+% All these global options should be passed to the `cli` function and stored in `ctx.obj`.
 </context>
 
 <include>context/python_preamble.prompt</include>

@@ -7,6 +7,7 @@
         'raw_prompt' - A string containing the prompt that needs XML tagging to improve its organization and clarity.
         'strength' - A float value representing the strength parameter for the LLM model. Range is between 0 and 1.
         'temperature' - A float value representing the temperature parameter for the LLM model. Range is between 0 and 1.
+        'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
         'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
     Outputs as a tuple: 
         'xml_tagged' - A string containing the prompt with properly added XML tags.
@@ -28,13 +29,13 @@
 
 % This program will do the following:
     Step 1. Load the 'xml_convertor_LLM' and 'extract_xml_LLM' prompt templates.
-    Step 2. Run the code through the model using llm_invoke with the provided strength and temperature. 
+    Step 2. Run the code through the model using llm_invoke with the provided strength, temperature, and time. 
         2a. Pass the following string parameters to the prompt during invoke:
             - 'raw_prompt'
         2b. If verbose is True, pretty print a message letting the user know it is running and how many tokens are in the prompt and the cost.
         2c. The string output will be 'xml_generated_analysis' that contains the tagged prompt.
         2d. If verbose is True, print the 'xml_generated_analysis' to provide visibility into the intermediate result.
-    Step 3. Run a second llm_invoke with the EXTRACTION_STRENGTH constant and the provided temperature to extract the XML.
+    Step 3. Run a second llm_invoke with the EXTRACTION_STRENGTH constant, the provided temperature, and time to extract the XML.
         3a. Pass the following string parameters to the prompt during invoke:
             - 'xml_generated_analysis'
         3b. If verbose is True, pretty print a message letting the user know it is running and how many tokens are in the prompt and the cost.

@@ -10,6 +10,7 @@
         'output' - A string containing the output logs from the program run.
         'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
         'temperature' - A float that is the temperature of the LLM model to use. Default is 0.
+        'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
         'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
     Outputs:
         'explanation': A string containing the verification details and the fix explanation, formatted with XML tags: `<verification_details>...</verification_details>\n<fix_explanation>...</fix_explanation>`, or an empty list/None if no issues were found.
@@ -42,7 +43,7 @@
         - `VerificationOutput` with fields: `issues_count: int` and `details: Optional[str]`.
         - `FixerOutput` with fields: `explanation: str`, `fixed_code: str`, and `fixed_program: str`.
     Step 1. Load the 'find_verification_errors_LLM' and 'fix_verification_errors_LLM' prompt templates.
-    Step 2. Run the code through the model using llm_invoke with the provided strength and temperature to identify issues.
+    Step 2. Run the code through the model using llm_invoke with the provided strength, temperature, and time to identify issues.
         2a. Pass the following string parameters to the 'find_verification_errors_LLM' prompt during invoke:
             - 'program'
             - 'prompt'
@@ -56,7 +57,7 @@
         4b. If `verification_issues_count` is 0, set issues_found to False and return with 'explanation' as None, fixed_program (original program), fixed_code (original code), and `verification_issues_count`.
         4c. If `verification_issues_count` is greater than 0, set issues_found to True. Get `verification_details` from the `details` field of the parsed `VerificationOutput` object. Proceed to Step 5, passing `verification_details` as the 'issues' parameter.
         4d. Handle cases where the `result` from `llm_invoke` is not a `VerificationOutput` instance (e.g., due to parsing failure by `llm_invoke`), print an error, and return default values.
-    Step 5. Only if issues_found, run a second llm_invoke with the 'fix_verification_errors_LLM' prompt to generate fixes.
+    Step 5. Only if issues_found, run a second llm_invoke with the 'fix_verification_errors_LLM' prompt, using the provided strength, temperature, and time, to generate fixes.
         5a. Pass the following string parameters to the prompt during invoke:
             - 'program': The original program
             - 'prompt': The original prompt

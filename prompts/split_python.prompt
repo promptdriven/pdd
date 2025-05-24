@@ -9,6 +9,7 @@
         - 'example_code': A string containing the code example of how the code generated from the sub_prompt would be used by the code generated from the modified_prompt.
         - 'strength': A float value representing the strength parameter for the LLM model, used to influence the model's behavior. Range is between 0 and 1.
         - 'temperature': A float value representing the temperature parameter for the LLM model, used to control the randomness of the model's output. Range is between 0 and 1.
+        - 'time': A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
         - 'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
     Outputs as a tuple matching the standardized order (result_data, cost, model_name):
         - 'result_tuple': A tuple containing two strings:
@@ -41,11 +42,11 @@
         a. Preprocess the split_LLM prompt using the preprocess function from the preprocess module and double the curly brackets but be sure to exclude 'input_prompt', 'input_code' and 'example_code' from doubling.
         b. Preprocess the extract_prompt_split_LLM prompt using the preprocess function from the preprocess module without doubling the curly brackets.
     3. Run the input through the model using llm_invoke with the processed split_LLM prompt:
-        - a. Pass the following string parameters to the prompt during invocation: 'input_prompt', 'input_code', 'example_code'.
+        - a. Pass the following string parameters to the prompt during invocation: 'input_prompt', 'input_code', 'example_code'. Also pass the 'time' parameter.
         - b. If verbose is True, pretty print the output of 3a, including the token count and estimated cost.
         - c.  Capture the 'model_name' from the result of this llm_invoke call.
     4. Run the output from Step 3 through llm_invoke with the preprocessed extract_prompt_split_LLM prompt:
-        - a. Use a separate llm_invoke call with the EXTRACTION_STRENGTH constant for the JSON extraction step.
+        - a. Use a separate llm_invoke call with the EXTRACTION_STRENGTH constant for the JSON extraction step. Also pass the 'time' parameter.
         - b. Pass the following string parameters to the prompt during invocation: 'llm_output' (this string is from Step 3).
         - c. If verbose is True, pretty print the running message with the token count and cost.
         - d. Extract 'extracted_functionality' and 'remaining_prompt' key values from the Pydantic output.

@@ -4,7 +4,7 @@
 
 % Here are the inputs and outputs of the function:
     Inputs:
-        - `ctx` (`click.Context`): The Click context object containing CLI options and parameters.
+        - `ctx` (`click.Context`): The Click context object containing CLI options and parameters. This object is expected to provide 'verbose', 'strength', 'temperature', and 'time' (with a default like "5m" if 'time' is not present) values via `ctx.obj`.
         - `prompt_file` - A string containing the path to the prompt file that generated the code.
         - `code_file` - A string containing the path to the code file to be tested.
         - `output` - An optional string containing the path where to save the generated test file. If None, uses default naming convention.
@@ -28,19 +28,131 @@
       <include>context/construct_paths_example.py</include>
       </construct_paths_example>
 
-      - Here is an example of how to use the `generate_test` function:
+      - Here is an example of how to use the `generate_test` function (now including a `time` parameter):
       <generate_test_example>
-      <include>context/generate_test_example.py</include>
+      ```python
+      from typing import Optional, Tuple
+
+      def generate_test(
+          prompt_content: str,
+          code_content: str,
+          strength: float,
+          temperature: float,
+          language: str,
+          time: str  # Added: Max duration for the LLM call, e.g., "5m"
+      ) -> Tuple[str, float, str]:
+          """
+          Generates unit tests based on a prompt and code.
+          
+          Args:
+              prompt_content (str): The content of the prompt file.
+              code_content (str): The content of the code file.
+              strength (float): Strength parameter for the LLM.
+              temperature (float): Temperature parameter for the LLM.
+              language (str): The programming language.
+              time (str): Maximum duration for the LLM generation process (e.g., "5m", "10s").
+          
+          Returns:
+              Tuple[str, float, str]: Generated test code, cost, and model name.
+          """
+          # Placeholder for actual implementation
+          # The 'time' parameter would be used to configure LLM call timeouts or execution limits.
+          print(f"Generating test for {language} with time limit: {time}...")
+          # Dummy return
+          return f"// Generated {language} test for {code_content[:20]}...
+// Time limit was {time}", 0.01, "gpt-4o-mini"
+
+      # Example usage:
+      prompt_text = "Create tests for a function that adds two numbers."
+      code_text = "def add(a, b): return a + b"
+      selected_strength = 0.5
+      selected_temperature = 0.0
+      programming_language = "python"
+      time_limit_str = "5m" # Example time limit
+
+      test_code, cost, model_name = generate_test(
+          prompt_text,
+          code_text,
+          selected_strength,
+          selected_temperature,
+          programming_language,
+          time_limit_str
+      )
+      print(f"Generated Test:\n{test_code}")
+      print(f"Cost: ${cost:.2f}, Model: {model_name}")
+      ```
       </generate_test_example>
 
-      - Here how to increase coverage for the `test --coverage_report` sub-command by using the `increase_tests` function. Here is an example of how to increase coverage for the unit tests:
+      - Here how to increase coverage for the `test --coverage_report` sub-command by using the `increase_tests` function (now including a `time` parameter). Here is an example of how to increase coverage for the unit tests:
         <increase_tests_example>
-        <include>context/increase_tests_example.py</include>
+        ```python
+        from typing import Optional, Tuple
+
+        def increase_tests(
+            existing_unit_tests: str,
+            coverage_report: str,
+            code: str,
+            prompt_that_generated_code: str,
+            language: str,
+            strength: float,
+            temperature: float,
+            time: str,  # Added: Max duration for the LLM call, e.g., "5m"
+            verbose: bool = False
+        ) -> Tuple[str, float, str]:
+            """
+            Increases test coverage based on an existing coverage report.
+
+            Args:
+                existing_unit_tests (str): Content of the existing unit test file.
+                coverage_report (str): Content of the coverage report.
+                code (str): Content of the code file being tested.
+                prompt_that_generated_code (str): The prompt used to generate the original code.
+                language (str): The programming language.
+                strength (float): Strength parameter for the LLM.
+                temperature (float): Temperature parameter for the LLM.
+                time (str): Maximum duration for the LLM generation process.
+                verbose (bool): If True, print verbose output.
+
+            Returns:
+                Tuple[str, float, str]: New/updated test code, cost, and model name.
+            """
+            # Placeholder for actual implementation
+            # The 'time' parameter would be used to configure LLM call timeouts or execution limits.
+            if verbose:
+                print(f"Increasing test coverage for {language} with time limit: {time}...")
+            # Dummy return
+            return f"{existing_unit_tests}\n// Added new tests to increase coverage based on report.\n// Time limit was {time}", 0.02, "gpt-4o-mini"
+
+        # Example usage:
+        current_tests = "def test_initial(): assert True"
+        report = "<coverage><lines-covered>5</lines-covered><lines-total>10</lines-total></coverage>"
+        code_to_test = "def complex_function():\n  # ...\n  pass"
+        original_prompt = "Prompt for complex_function"
+        lang = "python"
+        strength_val = 0.6
+        temp_val = 0.1
+        time_limit_val = "10m" # Example time limit
+        is_verbose = True
+
+        new_tests, cost_val, model_val = increase_tests(
+            current_tests,
+            report,
+            code_to_test,
+            original_prompt,
+            lang,
+            strength_val,
+            temp_val,
+            time_limit_val,
+            is_verbose
+        )
+        print(f"Updated Tests:\n{new_tests}")
+        print(f"Cost: ${cost_val:.2f}, Model: {model_val}")
+        ```
         </increase_tests_example>
    </internal_example_modules>
 </examples>
 
-% Here is the README for the cli command that has details of how the 'test' command works. Be sure to support the necessary global options like verbose and strength for the `generate_test` function.
+% Here is the README for the cli command that has details of how the 'test' command works. Be sure to support the necessary global options like verbose, strength, temperature, and time (retrieved from ctx.obj.get('time', DEFAULT_TIME_VALUE), where DEFAULT_TIME_VALUE is a suitable default like "5m") when calling the `generate_test` and `increase_tests` functions.
    <cli_command_readme>
    <include>./README.md</include>
    </cli_command_readme>

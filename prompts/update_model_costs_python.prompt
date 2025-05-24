@@ -10,10 +10,10 @@
     - **Convert** these per-token costs to per-million token costs (cost * 1,000,000) before updating the DataFrame.
     - For each model listed, check if the 'structured_output' column is missing (`pd.isna()`).
     - If needed, determine structured output support using `litellm.supports_response_schema` and update the DataFrame with True/False.
-    - Add any missing expected columns (like `max_reasoning_tokens`) with `pd.NA`.
-    - **Enforce Data Types:** After loading and adding columns, explicitly cast relevant columns (e.g., `coding_arena_elo`, `max_tokens`, `max_completion_tokens`, `max_reasoning_tokens`) to nullable integers (`'Int64'`).
+    - Add any missing expected columns (like `reasoning_type`, `max_reasoning_tokens`) with `pd.NA`.
+    - **Enforce Data Types:** After loading and adding columns, explicitly cast relevant columns (e.g., `coding_arena_elo`, `max_tokens`, `max_completion_tokens`, `max_reasoning_tokens`) to nullable integers (`'Int64'`) and `reasoning_type` to string/object.
     - Update the CSV file in place with the fetched/calculated costs and structured output support flags.
-    - **Note:** This script does *not* automatically populate the `max_reasoning_tokens` column's values, as this data is not reliably available via LiteLLM. This column needs manual maintenance.
+    - **Note:** This script does *not* automatically populate the `reasoning_type` or `max_reasoning_tokens` columns' values, as this data is not reliably available via LiteLLM. These columns need manual maintenance.
 
 % Inputs:
     - The script should accept the path to the `llm_model.csv` file as a command-line argument (e.g., using `argparse`). Default path should be 'data/llm_model.csv'.
@@ -21,9 +21,9 @@
     - **CSV Path Precedence:** The script first checks for the existence of `~/.pdd/llm_model.csv`. If this file exists, it will be used *instead* of the path provided by the `--csv-path` argument. If the user-specific file does not exist, the script proceeds to use the path from the `--csv-path` argument (or its default).
 
 % Core Logic:
-    1. Define expected columns including `max_reasoning_tokens`. Define columns intended to be nullable integers.
+    1. Define expected columns including `reasoning_type` and `max_reasoning_tokens`. Define columns intended to be nullable integers and string/object types.
     2. Load the CSV file into a Pandas DataFrame. Handle potential file not found errors. Check if all expected columns exist; add missing ones with `pd.NA`.
-    3. **Enforce Data Types:** Convert columns to their intended types (float, `'Int64'`, object for boolean/NA). Specifically handle `coding_arena_elo` and `max_reasoning_tokens` as `'Int64'`.
+    3. **Enforce Data Types:** Convert columns to their intended types (float, `'Int64'` for nullable integers like `coding_arena_elo` and `max_reasoning_tokens`, object/string for `reasoning_type`).
     4. **Pre-fetch Costs:** Get the `litellm.model_cost` dictionary. Handle potential errors during fetch.
     5. Iterate through each row of the DataFrame.
     6. Get the LiteLLM model identifier from the 'model' column.

@@ -8,6 +8,7 @@
         'language' - A string specifying the programming language of the code to be extracted.
         'strength' - A float between 0 and 1 that represents the strength of the LLM model to use. Default is 0.9.
         'temperature' - A float between 0 and 1 that represents the temperature parameter for the LLM model. Default is 0.
+        'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
         'verbose' - A boolean that indicates whether to print detailed processing information. Default is False.
     Outputs as a tuple:
         'extracted_code' - A string containing the extracted and processed code.
@@ -28,10 +29,10 @@
     </internal_modules>
 
 % This function will do the following:
-    Step 1. If strength is 0, use postprocess_0 function to extract code and return (extracted_code, 0.0).
+    Step 1. If strength is 0, use postprocess_0 function to extract code and return (extracted_code, 0.0, "simple_extraction").
     Step 2. Load the 'extract_code_LLM.prompt' template file.
-    Step 3. Process the text using llm_invoke:
-        3a. Pass the following parameters to the prompt:
+    Step 3. Process the text using llm_invoke, to which the function's input `strength`, `temperature`, and `time` parameters will be passed:
+        3a. Pass the following parameters to the prompt template (via `input_json` for `llm_invoke`):
             - 'llm_output'
             - 'language'
         3b. The Pydantic output will contain the 'extracted_code' key.

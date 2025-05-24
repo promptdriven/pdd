@@ -7,6 +7,7 @@
         'csv_file' - A string containing the path to the csv file.
         'strength' - A float between 0 and 1 that represents the strength of the LLM model to use.
         'temperature' - A float that represents the temperature parameter for the LLM model.
+        'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to the change function. Default is DEFAULT_TIME.
         'code_directory' - A string containing the path to the directory where the code files are stored.
         'language' - A string representing the default programming language of the code files if they don't have a language suffix. 
         'extension' - A string representing the file extension of the code files. Includes the '.' in front of the extension.
@@ -20,7 +21,62 @@
 % Here are examples of how to use internal modules:
 <internal_example_modules>
     % Here is an example of the change function that will be used: 
-        <change_example><include>context/change_example.py</include></change_example>
+        <change_example>
+        # Example usage of the change function
+        from .change import change  # Assuming change.py is in the same directory or package
+        from rich.console import Console
+        # from .. import DEFAULT_STRENGTH, DEFAULT_TEMPERATURE, DEFAULT_TIME # Assuming these are defined elsewhere
+
+        # Define DEFAULT_TIME for the example if not imported
+        DEFAULT_TIME = 0.5 # Example default time
+
+        console = Console()
+
+        # --- Mocked inputs for the example ---
+        input_prompt_content = """
+        % You are an expert Python developer.
+        % Your goal is to write a function called 'add'.
+        % Inputs: a (int), b (int)
+        % Output: sum (int)
+        % Function: Add two numbers.
+        """
+        input_code_content = """
+        def add(a, b):
+            return a + b
+        """
+        change_instructions_content = "Add a docstring to the function."
+        strength_value = 0.5  # Example strength
+        temperature_value = 0.0 # Example temperature
+        time_value = DEFAULT_TIME # Example time, using the default
+        # --- End Mocked inputs ---
+
+        try:
+            console.print(f"[cyan]Calling change function with:[/cyan]")
+            console.print(f"  [dim]Strength:[/dim] {strength_value}")
+            console.print(f"  [dim]Temperature:[/dim] {temperature_value}")
+            console.print(f"  [dim]Time:[/dim] {time_value}")
+
+            modified_prompt, cost, model_name = change(
+                input_prompt=input_prompt_content,
+                input_code=input_code_content,
+                change_prompt=change_instructions_content,
+                strength=strength_value,
+                temperature=temperature_value,
+                time=time_value
+            )
+
+            console.print(f"\n[green]Change function successful![/green]")
+            console.print(f"  [bold]Modified Prompt:[/bold]\n{modified_prompt}")
+            console.print(f"  [bold]Cost:[/bold] ${cost:.6f}")
+            console.print(f"  [bold]Model Name:[/bold] {model_name}")
+
+        except Exception as e:
+            console.print(f"[bold red]Error during change function call:[/bold red] {e}")
+
+        # To make this runnable standalone for testing, you might need a mock 'change' function
+        # if the real one has complex dependencies (like LLM calls).
+        # For this example, we assume 'change' is importable and works.
+        </change_example>
 
     % Here is how to use the `get_extension` function:
         <get_extension_example>
@@ -49,7 +105,7 @@
                 iv. change the directory to code_directory + path from prompt_name (Step i).
             - Read the input_code from the input_code_name as a string
             - Read the change_instructions from the change_instructions column
-        b. Call the change function with the input_prompt, input_code, and change_prompt.
+        b. Call the change function with the input_prompt, input_code, change_prompt, strength, temperature, and time.
         c. Add the returned total_cost to the total cost accumulator.
         d. If the total cost exceeds the budget, break the loop.
         e. If the change was successful, add the modified prompt to the list_of_jsons. Use the original prompt_name (full path) as the "file_name" in the output dictionary. When saving individual files to a directory, preserve the original filenames without adding any prefix.

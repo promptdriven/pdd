@@ -11,6 +11,7 @@
         'language' - A string that is the language of the code module. Default is "python".
         'strength' - A float that is the strength of the LLM model to use. Default is 0.5. Range is between 0 and 1.
         'temperature' - A float that is the temperature of the LLM model to use. Default is 0. Range is between 0 and 1.
+        'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
         'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
     Outputs as a tuple:
         'increase_test_function' - A string that is the unit tests that will increase code coverage.
@@ -37,7 +38,7 @@
 
 % This function will do the following:
     Step 1. Load the 'increase_tests_LLM' prompt template.
-    Step 2. Run the prompt through the model using llm_invoke and the input strength. 
+    Step 2. Run the prompt through the model using llm_invoke, passing the input strength and the time parameter. 
         2a. Pass the following string parameters to the prompt during invoke:
             - 'existing_unit_tests'
             - 'coverage_report'
