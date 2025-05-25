@@ -3,6 +3,7 @@ from rich import print
 from pydantic import BaseModel, Field
 from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
+from . import DEFAULT_TIME
 
 class ExtractedCode(BaseModel):
     """Pydantic model for the extracted code."""
@@ -18,12 +19,13 @@ def postprocess_0(text: str) -> str:
     in_code_block = False
     
     for line in lines:
-        if line.startswith('```'):
+        if '```' in line: # MODIFIED: Was line.startswith('```')
             if not in_code_block:
-                # Skip the language identifier line
+                # Skip the language identifier line / content on opening delimiter line
                 in_code_block = True
                 continue
             else:
+                # Content on closing delimiter line is skipped
                 in_code_block = False
                 continue
         if in_code_block:
@@ -36,6 +38,7 @@ def postprocess(
     language: str,
     strength: float = 0.9,
     temperature: float = 0,
+    time: float = DEFAULT_TIME,
     verbose: bool = False
 ) -> Tuple[str, float, str]:
     """
@@ -46,6 +49,7 @@ def postprocess(
         language (str): The programming language of the code to extract
         strength (float): The strength of the LLM model to use (0-1)
         temperature (float): The temperature parameter for the LLM (0-1)
+        time (float): The thinking effort for the LLM model (0-1)
         verbose (bool): Whether to print detailed processing information
     
     Returns:
@@ -87,6 +91,7 @@ def postprocess(
             input_json=input_json,
             strength=strength,
             temperature=temperature,
+            time=time,
             verbose=verbose,
             output_pydantic=ExtractedCode
         )
@@ -94,14 +99,14 @@ def postprocess(
         if not response or 'result' not in response:
             raise ValueError("Failed to get valid response from LLM")
 
-        extracted_code: ExtractedCode = response['result']
-        code_text = extracted_code.extracted_code
+        extracted_code_obj: ExtractedCode = response['result'] # Renamed for clarity
+        code_text = extracted_code_obj.extracted_code
 
         # Step 3c: Remove triple backticks and language identifier if present
         lines = code_text.split('\n')
         if lines and lines[0].startswith('```'):
             lines = lines[1:]
-        if lines and lines[-1].startswith('```'):
+        if lines and lines[-1].startswith('```'): # Check if lines is not empty again after potentially removing first line
             lines = lines[:-1]
         
         final_code = '\n'.join(lines)

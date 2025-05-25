@@ -59,8 +59,8 @@ def is_git_repository(path: Optional[str] = None) -> bool:
     return False
 
 
-def get_git_committed_content(file_path: str) -> Optional[str]:
-    """Gets the content of the file as it was in the last commit (HEAD)."""
+def get_git_content_at_ref(file_path: str, git_ref: str = "HEAD") -> Optional[str]:
+    """Gets the content of the file as it was at the specified git_ref."""
     abs_file_path = pathlib.Path(file_path).resolve()
     if not is_git_repository(str(abs_file_path.parent)):
         return None
@@ -77,13 +77,13 @@ def get_git_committed_content(file_path: str) -> Optional[str]:
         # console.print(f"[yellow]File {file_path} is not under git root {git_root}.[/yellow]")
         return None
 
-    returncode, stdout, stderr = _run_git_command(["git", "show", f"HEAD:{relative_path.as_posix()}"], cwd=str(git_root))
+    returncode, stdout, stderr = _run_git_command(["git", "show", f"{git_ref}:{relative_path.as_posix()}"], cwd=str(git_root))
     if returncode == 0:
         return stdout
     else:
-        # File might be new, or other git error. Not necessarily an error for this function's purpose.
-        # if "does not exist" not in stderr and "exists on disk, but not in 'HEAD'" not in stderr and console.is_terminal:
-        #     console.print(f"[yellow]Git (show) warning for {file_path}: {stderr}[/yellow]")
+        # File might not exist at that ref, or other git error.
+        # if "does not exist" not in stderr and "exists on disk, but not in" not in stderr and console.is_terminal: # Be less noisy for common cases
+        #     console.print(f"[yellow]Git (show) warning for {file_path} at {git_ref}: {stderr}[/yellow]")
         return None
 
 def get_file_git_status(file_path: str) -> str:
@@ -192,14 +192,38 @@ def code_generator_main(
                 if verbose:
                     console.print(f"Using specified original prompt: [cyan]{original_prompt_file_path}[/cyan]")
             elif is_git_repository(str(pathlib.Path(prompt_file).parent)):
-                original_prompt_git_content = get_git_committed_content(prompt_file)
-                if original_prompt_git_content is not None:
-                    original_prompt_content_for_incremental = original_prompt_git_content
-                    can_attempt_incremental = True
+                # prompt_content is the current on-disk version
+                head_prompt_content = get_git_content_at_ref(prompt_file, git_ref="HEAD")
+
+                if head_prompt_content is not None:
+                    # Compare on-disk content (prompt_content) with HEAD content
+                    if prompt_content.strip() != head_prompt_content.strip():
+                        # Uncommitted changes exist. Original is HEAD, new is on-disk.
+                        original_prompt_content_for_incremental = head_prompt_content
+                        can_attempt_incremental = True
+                        if verbose:
+                            console.print(f"On-disk [cyan]{prompt_file}[/cyan] has uncommitted changes. Using HEAD version as original prompt.")
+                    else:
+                        # On-disk is identical to HEAD. Try to use HEAD~1 as original.
+                        if verbose:
+                            console.print(f"On-disk [cyan]{prompt_file}[/cyan] matches HEAD. Attempting to use HEAD~1 as original prompt.")
+                        head_minus_one_prompt_content = get_git_content_at_ref(prompt_file, git_ref="HEAD~1")
+                        if head_minus_one_prompt_content is not None:
+                            original_prompt_content_for_incremental = head_minus_one_prompt_content
+                            # New prompt remains prompt_content (which is the HEAD version here)
+                            can_attempt_incremental = True
+                            if verbose:
+                                console.print(f"Successfully fetched HEAD~1 of [cyan]{prompt_file}[/cyan] as original prompt. Current HEAD version will be the new prompt.")
+                        else:
+                            # HEAD~1 not available, fall back to HEAD vs HEAD
+                            original_prompt_content_for_incremental = head_prompt_content
+                            can_attempt_incremental = True # Technically, but prompts will be identical
+                            if verbose:
+                                console.print(f"[yellow]Warning: Could not fetch HEAD~1 of {prompt_file}. Falling back to HEAD as original prompt (will compare HEAD vs HEAD).[/yellow]")
+                else:
+                    # File not in HEAD, cannot determine git-based original prompt.
                     if verbose:
-                        console.print(f"Using last committed version of [cyan]{prompt_file}[/cyan] as original prompt.")
-                elif verbose:
-                    console.print(f"[yellow]Warning: Could not find committed version of {prompt_file} in git for incremental generation.[/yellow]")
+                        console.print(f"[yellow]Warning: Could not find committed version of {prompt_file} in git (HEAD) for incremental generation.[/yellow]")
             
             if force_incremental_flag and existing_code_content:
                 if not (original_prompt_content_for_incremental or "original_prompt_file" in input_strings): # Check if original prompt is actually available
