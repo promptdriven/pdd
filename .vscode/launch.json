@@ -95,6 +95,64 @@
                 "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/pdd:${env:PYTHONPATH}"
             },
             "justMyCode": false
+        },
+        {
+            "name": "PDD CLI: Generate Code Generator",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pdd.cli",
+            "console": "integratedTerminal",
+            "args": [
+                "--verbose",
+                "--strength", ".83",
+                "--temperature", "1",
+                "generate",
+                "--output", "pdd",
+                "prompts/unfinished_prompt_python.prompt"
+            ],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "CONDA_DEFAULT_ENV": "pdd",
+                "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/pdd:${env:PYTHONPATH}"
+            },
+            "justMyCode": false
+        },
+        {
+            "name": "PDD CLI: Generate t_tsx.prompt",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pdd.cli",
+            "console": "integratedTerminal",
+            "args": [
+                "generate",
+                "t_tsx.prompt"
+            ],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "CONDA_DEFAULT_ENV": "pdd",
+                "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/pdd:${env:PYTHONPATH}"
+            },
+            "justMyCode": false
+        },
+        {
+            "name": "PDD CLI: Example Footer Story (Frontend)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pdd.cli",
+            "console": "integratedTerminal",
+            "args": [
+                "--strength", ".9",
+                "example",
+                "--output", "../../frontend/src/components/layout/Footer/Footer.stories.tsx",
+                "components/layout/Footer_TypescriptReact.prompt",
+                "../../frontend/src/components/layout/Footer/Footer.tsx"
+            ],
+            "cwd": "/Users/gregtanaka/Documents/pdd_cloud/prompts/frontend",
+            "env": {
+                "CONDA_DEFAULT_ENV": "pdd",
+                "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/pdd:${env:PYTHONPATH}"
+            },
+            "justMyCode": false
         }
     ]
 }
