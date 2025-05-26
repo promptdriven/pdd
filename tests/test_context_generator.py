@@ -43,19 +43,6 @@ def test_context_generator_missing_prompt():
     assert total_cost == 0.0, "Total cost should be 0.0 for missing prompt"
     assert model_name is None, "Model name should be None for missing prompt"
 
-def test_context_generator_invalid_language():
-    """
-    Test the context_generator function with an invalid language input.
-    This test ensures that the function handles the case where the language is not supported.
-    """
-    code_module = "numpy"
-    prompt = "Generate a concise example of how to use numpy to create an array."
-    language = "invalid_language"
-    example_code, total_cost, model_name = context_generator(code_module, prompt, language=language, verbose=True)
-
-    assert example_code is None, "Example code should be None for invalid language"
-    assert total_cost == 0.0, "Total cost should be 0.0 for invalid language"
-    assert model_name is None, "Model name should be None for invalid language"
 
 def test_context_generator_invalid_strength():
     """

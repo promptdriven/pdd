@@ -12,6 +12,7 @@ Go,//,.go
 Rust,//,.rs
 Kotlin,//,.kt
 TypeScript,//,.ts
+TypeScriptReact,//,.tsx
 C#,//,.cs
 SQL,--,.sql
 Shell,#,.sh
