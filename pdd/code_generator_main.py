@@ -27,7 +27,7 @@ PDD_APP_NAME = "PDD Code Generator"
 
 # Cloud function URL
 CLOUD_GENERATE_URL = "https://us-central1-prompt-driven-development.cloudfunctions.net/generateCode"
-CLOUD_REQUEST_TIMEOUT = 200  # seconds
+CLOUD_REQUEST_TIMEOUT = 400  # seconds
 
 console = Console()
 
@@ -204,22 +204,82 @@ def code_generator_main(
                         if verbose:
                             console.print(f"On-disk [cyan]{prompt_file}[/cyan] has uncommitted changes. Using HEAD version as original prompt.")
                     else:
-                        # On-disk is identical to HEAD. Try to use HEAD~1 as original.
+                        # On-disk is identical to HEAD. Search for a prior *different* version.
                         if verbose:
-                            console.print(f"On-disk [cyan]{prompt_file}[/cyan] matches HEAD. Attempting to use HEAD~1 as original prompt.")
-                        head_minus_one_prompt_content = get_git_content_at_ref(prompt_file, git_ref="HEAD~1")
-                        if head_minus_one_prompt_content is not None:
-                            original_prompt_content_for_incremental = head_minus_one_prompt_content
-                            # New prompt remains prompt_content (which is the HEAD version here)
-                            can_attempt_incremental = True
+                            console.print(f"On-disk [cyan]{prompt_file}[/cyan] matches HEAD. Searching for a prior *different* version as original prompt.")
+
+                        new_prompt_candidate = head_prompt_content # This is also prompt_content (on-disk)
+                        found_different_prior = False
+                        
+                        git_root_path_obj: Optional[pathlib.Path] = None
+                        prompt_file_rel_to_root_str: Optional[str] = None
+
+                        try:
+                            abs_prompt_file_path = pathlib.Path(prompt_file).resolve()
+                            temp_git_root_rc, temp_git_root_str, temp_git_root_stderr = _run_git_command(
+                                ["git", "rev-parse", "--show-toplevel"], 
+                                cwd=str(abs_prompt_file_path.parent)
+                            )
+                            if temp_git_root_rc == 0:
+                                git_root_path_obj = pathlib.Path(temp_git_root_str)
+                                prompt_file_rel_to_root_str = abs_prompt_file_path.relative_to(git_root_path_obj).as_posix()
+                            elif verbose:
+                                console.print(f"[yellow]Git (rev-parse) failed for {prompt_file}: {temp_git_root_stderr}. Cannot search history for prior different version.[/yellow]")
+                        
+                        except ValueError: # If file is not under git root
+                             if verbose:
+                                console.print(f"[yellow]File {prompt_file} not under a detected git root. Cannot search history.[/yellow]")
+                        except Exception as e_git_setup:
                             if verbose:
-                                console.print(f"Successfully fetched HEAD~1 of [cyan]{prompt_file}[/cyan] as original prompt. Current HEAD version will be the new prompt.")
-                        else:
-                            # HEAD~1 not available, fall back to HEAD vs HEAD
-                            original_prompt_content_for_incremental = head_prompt_content
-                            can_attempt_incremental = True # Technically, but prompts will be identical
+                                console.print(f"[yellow]Error setting up git info for {prompt_file}: {e_git_setup}. Cannot search history.[/yellow]")
+
+                        if git_root_path_obj and prompt_file_rel_to_root_str:
+                            MAX_COMMITS_TO_SEARCH = 10  # How far back to look
+                            log_cmd = ["git", "log", f"--pretty=format:%H", f"-n{MAX_COMMITS_TO_SEARCH}", "--", prompt_file_rel_to_root_str]
+                            
+                            log_rc, log_stdout, log_stderr = _run_git_command(log_cmd, cwd=str(git_root_path_obj))
+
+                            if log_rc == 0 and log_stdout.strip():
+                                shas = log_stdout.strip().split('\\n')
+                                if verbose:
+                                     console.print(f"Found {len(shas)} commits for [cyan]{prompt_file_rel_to_root_str}[/cyan] in recent history (up to {MAX_COMMITS_TO_SEARCH}).")
+
+                                if len(shas) > 1: # Need at least one commit before the one matching head_prompt_content
+                                    for prior_sha in shas[1:]: # Iterate starting from the commit *before* HEAD's version of the file
+                                        if verbose:
+                                            console.print(f"  Checking commit {prior_sha[:7]} for content of [cyan]{prompt_file}[/cyan]...")
+                                        
+                                        # get_git_content_at_ref uses the original prompt_file path, 
+                                        # which it resolves internally relative to the git root.
+                                        prior_content = get_git_content_at_ref(prompt_file, prior_sha) 
+                                        
+                                        if prior_content is not None:
+                                            if prior_content.strip() != new_prompt_candidate.strip():
+                                                original_prompt_content_for_incremental = prior_content
+                                                can_attempt_incremental = True
+                                                found_different_prior = True
+                                                if verbose:
+                                                    console.print(f"    [green]Found prior different version at commit {prior_sha[:7]}. Using as original prompt.[/green]")
+                                                break 
+                                            elif verbose:
+                                                 console.print(f"    Content at {prior_sha[:7]} is identical to current HEAD. Skipping.")
+                                        elif verbose:
+                                            console.print(f"    Could not retrieve content for [cyan]{prompt_file}[/cyan] at commit {prior_sha[:7]}.")
+                                else: 
+                                    if verbose:
+                                        console.print(f"  File [cyan]{prompt_file_rel_to_root_str}[/cyan] has less than 2 versions in recent history at this path.")
+                            elif verbose:
+                                console.print(f"[yellow]Git (log) failed for {prompt_file_rel_to_root_str} or no history found: {log_stderr}[/yellow]")
+                        
+                        if not found_different_prior:
+                            original_prompt_content_for_incremental = new_prompt_candidate 
+                            can_attempt_incremental = True 
                             if verbose:
-                                console.print(f"[yellow]Warning: Could not fetch HEAD~1 of {prompt_file}. Falling back to HEAD as original prompt (will compare HEAD vs HEAD).[/yellow]")
+                                console.print(
+                                    f"[yellow]Warning: Could not find a prior *different* version of {prompt_file} "
+                                    f"within the last {MAX_COMMITS_TO_SEARCH if git_root_path_obj else 'N/A'} relevant commits. "
+                                    f"Using current HEAD version as original (prompts will be identical).[/yellow]"
+                                )
                 else:
                     # File not in HEAD, cannot determine git-based original prompt.
                     if verbose:
