@@ -12,7 +12,13 @@
             min-height: 100vh;
             background: #1a1a1a;
         }
-        #canvas {
+        #drawingCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 2;
+        }
+        #landmarkCanvas {
             position: absolute;
             top: 0;
             left: 0;
@@ -36,14 +42,17 @@
 </head>
 <body>
     <div class="container">
-        <canvas id="canvas" width="640" height="480"></canvas>
+        <canvas id="drawingCanvas" width="640" height="480"></canvas>
+        <canvas id="landmarkCanvas" width="640" height="480"></canvas>
         <video id="video" width="640" height="480" autoplay></video>
     </div>
 
     <script>
         const video = document.getElementById('video');
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d');
+        const drawingCanvas = document.getElementById('drawingCanvas');
+        const landmarkCanvas = document.getElementById('landmarkCanvas');
+        const drawingCtx = drawingCanvas.getContext('2d');
+        const landmarkCtx = landmarkCanvas.getContext('2d');
 
         // Initialize MediaPipe Hands
         const hands = new Hands({
@@ -77,24 +86,24 @@
 
         // Function to draw a landmark point
         function drawLandmarkPoint(x, y, color, size = 5) {
-            ctx.beginPath();
-            ctx.arc(x, y, size, 0, Math.PI * 2);
-            ctx.fillStyle = color;
-            ctx.fill();
+            landmarkCtx.beginPath();
+            landmarkCtx.arc(x, y, size, 0, Math.PI * 2);
+            landmarkCtx.fillStyle = color;
+            landmarkCtx.fill();
         }
 
         // Process hand landmarks
         hands.onResults((results) => {
-            // Clear the canvas
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            // Clear only the landmark canvas
+            landmarkCtx.clearRect(0, 0, landmarkCanvas.width, landmarkCanvas.height);
 
             if (results.multiHandLandmarks) {
                 const landmarks = results.multiHandLandmarks[0];
                 if (landmarks) {
                     // Draw all landmarks
                     landmarks.forEach((landmark, index) => {
-                        const x = (1 - landmark.x) * canvas.width;
-                        const y = landmark.y * canvas.height;
+                        const x = (1 - landmark.x) * landmarkCanvas.width;
+                        const y = landmark.y * landmarkCanvas.height;
                         
                         // Draw regular landmarks in blue
                         drawLandmarkPoint(x, y, 'rgba(0, 0, 255, 0.5)', 3);
@@ -105,10 +114,10 @@
                     const palm = landmarks[0];
                     
                     // Convert normalized coordinates to canvas coordinates
-                    const x = (1 - indexFinger.x) * canvas.width;
-                    const y = indexFinger.y * canvas.height;
-                    const palmX = (1 - palm.x) * canvas.width;
-                    const palmY = palm.y * canvas.height;
+                    const x = (1 - indexFinger.x) * landmarkCanvas.width;
+                    const y = indexFinger.y * landmarkCanvas.height;
+                    const palmX = (1 - palm.x) * landmarkCanvas.width;
+                    const palmY = palm.y * landmarkCanvas.height;
 
                     // Draw index finger tip in red
                     drawLandmarkPoint(x, y, 'rgba(255, 0, 0, 0.8)', 8);
@@ -123,11 +132,11 @@
 
                     // If palm is close to index finger, treat as eraser
                     if (distance < 0.2) {
-                        ctx.beginPath();
-                        ctx.arc(x, y, eraserSize, 0, Math.PI * 2);
-                        ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-                        ctx.fill();
-                        ctx.clearRect(x - eraserSize, y - eraserSize, eraserSize * 2, eraserSize * 2);
+                        drawingCtx.beginPath();
+                        drawingCtx.arc(x, y, eraserSize, 0, Math.PI * 2);
+                        drawingCtx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+                        drawingCtx.fill();
+                        drawingCtx.clearRect(x - eraserSize, y - eraserSize, eraserSize * 2, eraserSize * 2);
                     } else {
                         // Draw with index finger
                         if (!isDrawing) {
@@ -136,13 +145,13 @@
                             lastY = y;
                         }
 
-                        ctx.beginPath();
-                        ctx.moveTo(lastX, lastY);
-                        ctx.lineTo(x, y);
-                        ctx.strokeStyle = '#00ff00';
-                        ctx.lineWidth = brushSize;
-                        ctx.lineCap = 'round';
-                        ctx.stroke();
+                        drawingCtx.beginPath();
+                        drawingCtx.moveTo(lastX, lastY);
+                        drawingCtx.lineTo(x, y);
+                        drawingCtx.strokeStyle = '#00ff00';
+                        drawingCtx.lineWidth = brushSize;
+                        drawingCtx.lineCap = 'round';
+                        drawingCtx.stroke();
 
                         lastX = x;
                         lastY = y;
