@@ -137,6 +137,53 @@
             return isIndexExtended && areOthersCurled;
         }
 
+        // Function to check if all fingers are extended (palm visible)
+        function isPalmVisible(landmarks) {
+            const palm = landmarks[0];
+            const indexTip = landmarks[8];
+            const middleTip = landmarks[12];
+            const ringTip = landmarks[16];
+            const pinkyTip = landmarks[20];
+            const thumbTip = landmarks[4];
+
+            // Calculate distances from palm to finger tips
+            const indexDist = Math.sqrt(
+                Math.pow(indexTip.x - palm.x, 2) + 
+                Math.pow(indexTip.y - palm.y, 2)
+            );
+            const middleDist = Math.sqrt(
+                Math.pow(middleTip.x - palm.x, 2) + 
+                Math.pow(middleTip.y - palm.y, 2)
+            );
+            const ringDist = Math.sqrt(
+                Math.pow(ringTip.x - palm.x, 2) + 
+                Math.pow(ringTip.y - palm.y, 2)
+            );
+            const pinkyDist = Math.sqrt(
+                Math.pow(pinkyTip.x - palm.x, 2) + 
+                Math.pow(pinkyTip.y - palm.y, 2)
+            );
+            const thumbDist = Math.sqrt(
+                Math.pow(thumbTip.x - palm.x, 2) + 
+                Math.pow(thumbTip.y - palm.y, 2)
+            );
+
+            // Calculate average distance for reference
+            const avgDist = (indexDist + middleDist + ringDist + pinkyDist) / 4;
+
+            // All fingers should be extended (similar distances from palm)
+            const areFingersExtended = 
+                Math.abs(indexDist - avgDist) < avgDist * 0.2 &&
+                Math.abs(middleDist - avgDist) < avgDist * 0.2 &&
+                Math.abs(ringDist - avgDist) < avgDist * 0.2 &&
+                Math.abs(pinkyDist - avgDist) < avgDist * 0.2;
+
+            // Thumb should be extended but can be at a different angle
+            const isThumbExtended = thumbDist > avgDist * 0.5;
+
+            return areFingersExtended && isThumbExtended;
+        }
+
         // Process hand landmarks
         hands.onResults((results) => {
             // Clear only the landmark canvas
@@ -154,7 +201,7 @@
                         drawLandmarkPoint(x, y, 'rgba(0, 0, 255, 0.5)', 3);
                     });
 
-                    // Get index finger tip position
+                    // Get index finger tip position and palm
                     const indexFinger = landmarks[8];
                     const palm = landmarks[0];
                     
@@ -170,8 +217,18 @@
                     // Draw palm in green
                     drawLandmarkPoint(palmX, palmY, 'rgba(0, 255, 0, 0.8)', 8);
 
-                    // Only draw if index finger is extended and others are curled
-                    if (isIndexFingerExtended(landmarks)) {
+                    // Check for palm visible (all fingers extended)
+                    if (isPalmVisible(landmarks)) {
+                        // Erase at palm center
+                        drawingCtx.beginPath();
+                        drawingCtx.arc(palmX, palmY, eraserSize, 0, Math.PI * 2);
+                        drawingCtx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+                        drawingCtx.fill();
+                        drawingCtx.clearRect(palmX - eraserSize, palmY - eraserSize, eraserSize * 2, eraserSize * 2);
+                        isDrawing = false;
+                    }
+                    // Check for index finger extended for drawing
+                    else if (isIndexFingerExtended(landmarks)) {
                         if (!isDrawing) {
                             isDrawing = true;
                             lastX = x;
