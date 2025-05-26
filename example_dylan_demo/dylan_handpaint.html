@@ -92,6 +92,48 @@
             landmarkCtx.fill();
         }
 
+        // Function to check if index finger is extended and others are curled
+        function isIndexFingerExtended(landmarks) {
+            const palm = landmarks[0];
+            const indexBase = landmarks[5];
+            const indexTip = landmarks[8];
+            const middleTip = landmarks[12];
+            const ringTip = landmarks[16];
+            const pinkyTip = landmarks[20];
+
+            // Calculate distances from palm to finger tips
+            const indexDist = Math.sqrt(
+                Math.pow(indexTip.x - palm.x, 2) + 
+                Math.pow(indexTip.y - palm.y, 2)
+            );
+            const middleDist = Math.sqrt(
+                Math.pow(middleTip.x - palm.x, 2) + 
+                Math.pow(middleTip.y - palm.y, 2)
+            );
+            const ringDist = Math.sqrt(
+                Math.pow(ringTip.x - palm.x, 2) + 
+                Math.pow(ringTip.y - palm.y, 2)
+            );
+            const pinkyDist = Math.sqrt(
+                Math.pow(pinkyTip.x - palm.x, 2) + 
+                Math.pow(pinkyTip.y - palm.y, 2)
+            );
+
+            // Index finger should be extended (further from palm than its base)
+            const indexBaseDist = Math.sqrt(
+                Math.pow(indexBase.x - palm.x, 2) + 
+                Math.pow(indexBase.y - palm.y, 2)
+            );
+            const isIndexExtended = indexDist > indexBaseDist * 1.2;
+
+            // Other fingers should be curled (closer to palm)
+            const areOthersCurled = middleDist < indexDist * 0.8 && 
+                                  ringDist < indexDist * 0.8 && 
+                                  pinkyDist < indexDist * 0.8;
+
+            return isIndexExtended && areOthersCurled;
+        }
+
         // Process hand landmarks
         hands.onResults((results) => {
             // Clear only the landmark canvas
@@ -125,20 +167,8 @@
                     // Draw palm in green
                     drawLandmarkPoint(palmX, palmY, 'rgba(0, 255, 0, 0.8)', 8);
 
-                    // Calculate distance between index finger and palm
-                    const distance = Math.sqrt(
-                        Math.pow(x - palmX, 2) + Math.pow(y - palmY, 2)
-                    );
-
-                    // If palm is close to index finger, treat as eraser
-                    if (distance < 0.2) {
-                        drawingCtx.beginPath();
-                        drawingCtx.arc(x, y, eraserSize, 0, Math.PI * 2);
-                        drawingCtx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-                        drawingCtx.fill();
-                        drawingCtx.clearRect(x - eraserSize, y - eraserSize, eraserSize * 2, eraserSize * 2);
-                    } else {
-                        // Draw with index finger
+                    // Only draw if index finger is extended and others are curled
+                    if (isIndexFingerExtended(landmarks)) {
                         if (!isDrawing) {
                             isDrawing = true;
                             lastX = x;
@@ -155,6 +185,8 @@
 
                         lastX = x;
                         lastY = y;
+                    } else {
+                        isDrawing = false;
                     }
                 }
             } else {
