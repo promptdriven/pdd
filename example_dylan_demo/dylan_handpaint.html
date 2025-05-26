@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Hand Paint</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: #1a1a1a;
+        }
+        #canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+        #video {
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 0;
+            transform: scaleX(-1);
+        }
+        .container {
+            position: relative;
+            width: 640px;
+            height: 480px;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils"></script>
+</head>
+<body>
+    <div class="container">
+        <canvas id="canvas" width="640" height="480"></canvas>
+        <video id="video" width="640" height="480" autoplay></video>
+    </div>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        // Initialize MediaPipe Hands
+        const hands = new Hands({
+            locateFile: (file) => {
+                return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+            }
+        });
+
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        // Set up camera
+        const camera = new Camera(video, {
+            onFrame: async () => {
+                await hands.send({image: video});
+            },
+            width: 640,
+            height: 480
+        });
+
+        // Drawing settings
+        let isDrawing = false;
+        let lastX = 0;
+        let lastY = 0;
+        const brushSize = 5;
+        const eraserSize = 30;
+
+        // Process hand landmarks
+        hands.onResults((results) => {
+            if (results.multiHandLandmarks) {
+                const landmarks = results.multiHandLandmarks[0];
+                if (landmarks) {
+                    // Get index finger tip position
+                    const indexFinger = landmarks[8];
+                    const palm = landmarks[0];
+                    
+                    // Convert normalized coordinates to canvas coordinates
+                    const x = indexFinger.x * canvas.width;
+                    const y = indexFinger.y * canvas.height;
+                    const palmX = palm.x * canvas.width;
+                    const palmY = palm.y * canvas.height;
+
+                    // Calculate distance between index finger and palm
+                    const distance = Math.sqrt(
+                        Math.pow(x - palmX, 2) + Math.pow(y - palmY, 2)
+                    );
+
+                    // If palm is close to index finger, treat as eraser
+                    if (distance < 0.2) {
+                        ctx.beginPath();
+                        ctx.arc(x, y, eraserSize, 0, Math.PI * 2);
+                        ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+                        ctx.fill();
+                        ctx.clearRect(x - eraserSize, y - eraserSize, eraserSize * 2, eraserSize * 2);
+                    } else {
+                        // Draw with index finger
+                        if (!isDrawing) {
+                            isDrawing = true;
+                            lastX = x;
+                            lastY = y;
+                        }
+
+                        ctx.beginPath();
+                        ctx.moveTo(lastX, lastY);
+                        ctx.lineTo(x, y);
+                        ctx.strokeStyle = '#00ff00';
+                        ctx.lineWidth = brushSize;
+                        ctx.lineCap = 'round';
+                        ctx.stroke();
+
+                        lastX = x;
+                        lastY = y;
+                    }
+                }
+            } else {
+                isDrawing = false;
+            }
+        });
+
+        // Start the camera
+        camera.start();
+    </script>
+</body>
+</html>
