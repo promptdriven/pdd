@@ -29,6 +29,7 @@
             top: 0;
             left: 0;
             z-index: 0;
+            transform: scaleX(-1); /* Unmirror the video feed */
         }
         .container {
             position: relative;
@@ -144,7 +145,7 @@
                 if (landmarks) {
                     // Draw all landmarks
                     landmarks.forEach((landmark, index) => {
-                        const x = (1 - landmark.x) * landmarkCanvas.width;
+                        const x = landmark.x * landmarkCanvas.width; // Removed the (1 - x) flip
                         const y = landmark.y * landmarkCanvas.height;
                         
                         // Draw regular landmarks in blue
@@ -156,9 +157,9 @@
                     const palm = landmarks[0];
                     
                     // Convert normalized coordinates to canvas coordinates
-                    const x = (1 - indexFinger.x) * landmarkCanvas.width;
+                    const x = indexFinger.x * landmarkCanvas.width; // Removed the (1 - x) flip
                     const y = indexFinger.y * landmarkCanvas.height;
-                    const palmX = (1 - palm.x) * landmarkCanvas.width;
+                    const palmX = palm.x * landmarkCanvas.width; // Removed the (1 - x) flip
                     const palmY = palm.y * landmarkCanvas.height;
 
                     // Draw index finger tip in red
