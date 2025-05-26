@@ -172,16 +172,37 @@
             const avgDist = (indexDist + middleDist + ringDist + pinkyDist) / 4;
 
             // All fingers should be extended (similar distances from palm)
+            // Made the threshold stricter (0.2 to 0.15) and require all fingers to be extended
             const areFingersExtended = 
-                Math.abs(indexDist - avgDist) < avgDist * 0.2 &&
-                Math.abs(middleDist - avgDist) < avgDist * 0.2 &&
-                Math.abs(ringDist - avgDist) < avgDist * 0.2 &&
-                Math.abs(pinkyDist - avgDist) < avgDist * 0.2;
+                indexDist > avgDist * 0.85 &&
+                middleDist > avgDist * 0.85 &&
+                ringDist > avgDist * 0.85 &&
+                pinkyDist > avgDist * 0.85 &&
+                Math.abs(indexDist - avgDist) < avgDist * 0.15 &&
+                Math.abs(middleDist - avgDist) < avgDist * 0.15 &&
+                Math.abs(ringDist - avgDist) < avgDist * 0.15 &&
+                Math.abs(pinkyDist - avgDist) < avgDist * 0.15;
 
             // Thumb should be extended but can be at a different angle
-            const isThumbExtended = thumbDist > avgDist * 0.5;
+            const isThumbExtended = thumbDist > avgDist * 0.7;
 
             return areFingersExtended && isThumbExtended;
+        }
+
+        // Function to calculate palm center
+        function calculatePalmCenter(landmarks) {
+            // Get the base points of all fingers
+            const indexBase = landmarks[5];
+            const middleBase = landmarks[9];
+            const ringBase = landmarks[13];
+            const pinkyBase = landmarks[17];
+            const thumbBase = landmarks[2];
+
+            // Calculate the center point
+            const centerX = (indexBase.x + middleBase.x + ringBase.x + pinkyBase.x + thumbBase.x) / 5;
+            const centerY = (indexBase.y + middleBase.y + ringBase.y + pinkyBase.y + thumbBase.y) / 5;
+
+            return { x: centerX, y: centerY };
         }
 
         // Process hand landmarks
@@ -219,12 +240,20 @@
 
                     // Check for palm visible (all fingers extended)
                     if (isPalmVisible(landmarks)) {
+                        // Calculate actual palm center
+                        const palmCenter = calculatePalmCenter(landmarks);
+                        const centerX = (1 - palmCenter.x) * landmarkCanvas.width;
+                        const centerY = palmCenter.y * landmarkCanvas.height;
+
+                        // Draw palm center in yellow for debugging
+                        drawLandmarkPoint(centerX, centerY, 'rgba(255, 255, 0, 0.8)', 8);
+
                         // Erase at palm center
                         drawingCtx.beginPath();
-                        drawingCtx.arc(palmX, palmY, eraserSize, 0, Math.PI * 2);
+                        drawingCtx.arc(centerX, centerY, eraserSize, 0, Math.PI * 2);
                         drawingCtx.fillStyle = 'rgba(255, 255, 255, 0.3)';
                         drawingCtx.fill();
-                        drawingCtx.clearRect(palmX - eraserSize, palmY - eraserSize, eraserSize * 2, eraserSize * 2);
+                        drawingCtx.clearRect(centerX - eraserSize, centerY - eraserSize, eraserSize * 2, eraserSize * 2);
                         isDrawing = false;
                     }
                     // Check for index finger extended for drawing
