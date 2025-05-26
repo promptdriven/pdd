@@ -145,7 +145,7 @@
                 if (landmarks) {
                     // Draw all landmarks
                     landmarks.forEach((landmark, index) => {
-                        const x = landmark.x * landmarkCanvas.width; // Removed the (1 - x) flip
+                        const x = (1 - landmark.x) * landmarkCanvas.width; // Flip x coordinate
                         const y = landmark.y * landmarkCanvas.height;
                         
                         // Draw regular landmarks in blue
@@ -157,9 +157,9 @@
                     const palm = landmarks[0];
                     
                     // Convert normalized coordinates to canvas coordinates
-                    const x = indexFinger.x * landmarkCanvas.width; // Removed the (1 - x) flip
+                    const x = (1 - indexFinger.x) * landmarkCanvas.width; // Flip x coordinate
                     const y = indexFinger.y * landmarkCanvas.height;
-                    const palmX = palm.x * landmarkCanvas.width; // Removed the (1 - x) flip
+                    const palmX = (1 - palm.x) * landmarkCanvas.width; // Flip x coordinate
                     const palmY = palm.y * landmarkCanvas.height;
 
                     // Draw index finger tip in red
