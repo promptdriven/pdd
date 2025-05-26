@@ -172,19 +172,19 @@
             const avgDist = (indexDist + middleDist + ringDist + pinkyDist) / 4;
 
             // All fingers should be extended (similar distances from palm)
-            // Made the threshold stricter (0.2 to 0.15) and require all fingers to be extended
+            // Made the thresholds more lenient for easier palm detection
             const areFingersExtended = 
-                indexDist > avgDist * 0.85 &&
-                middleDist > avgDist * 0.85 &&
-                ringDist > avgDist * 0.85 &&
-                pinkyDist > avgDist * 0.85 &&
-                Math.abs(indexDist - avgDist) < avgDist * 0.15 &&
-                Math.abs(middleDist - avgDist) < avgDist * 0.15 &&
-                Math.abs(ringDist - avgDist) < avgDist * 0.15 &&
-                Math.abs(pinkyDist - avgDist) < avgDist * 0.15;
+                indexDist > avgDist * 0.7 &&    // Reduced from 0.85
+                middleDist > avgDist * 0.7 &&   // Reduced from 0.85
+                ringDist > avgDist * 0.7 &&     // Reduced from 0.85
+                pinkyDist > avgDist * 0.7 &&    // Reduced from 0.85
+                Math.abs(indexDist - avgDist) < avgDist * 0.25 &&   // Increased from 0.15
+                Math.abs(middleDist - avgDist) < avgDist * 0.25 &&  // Increased from 0.15
+                Math.abs(ringDist - avgDist) < avgDist * 0.25 &&    // Increased from 0.15
+                Math.abs(pinkyDist - avgDist) < avgDist * 0.25;     // Increased from 0.15
 
             // Thumb should be extended but can be at a different angle
-            const isThumbExtended = thumbDist > avgDist * 0.7;
+            const isThumbExtended = thumbDist > avgDist * 0.5;  // Reduced from 0.7
 
             return areFingersExtended && isThumbExtended;
         }
