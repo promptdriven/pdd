@@ -23,7 +23,6 @@
             top: 0;
             left: 0;
             z-index: 0;
-            transform: scaleX(-1);
         }
         .container {
             position: relative;
@@ -86,9 +85,9 @@
                     const palm = landmarks[0];
                     
                     // Convert normalized coordinates to canvas coordinates
-                    const x = indexFinger.x * canvas.width;
+                    const x = (1 - indexFinger.x) * canvas.width;
                     const y = indexFinger.y * canvas.height;
-                    const palmX = palm.x * canvas.width;
+                    const palmX = (1 - palm.x) * canvas.width;
                     const palmY = palm.y * canvas.height;
 
                     // Calculate distance between index finger and palm
