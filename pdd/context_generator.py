@@ -33,11 +33,6 @@ def context_generator(code_module: str, prompt: str, language: str = "python", s
             print("[red]Error: prompt is missing.[/red]")
         return None, 0.0, None
 
-    supported_languages = ["python", "javascript", "java"]
-    if language not in supported_languages:
-        if verbose:
-            print(f"[red]Error: Unsupported language '{language}'.[/red]")
-        return None, 0.0, None
 
     if not (0 <= strength <= 1):
         if verbose:

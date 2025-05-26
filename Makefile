@@ -385,6 +385,7 @@ release:
 	@$(MAKE) build
 	@echo "Copying public README.md to project root"
 	@cp ./README.md staging/public/pdd/README.md
+	@cd staging/public/pdd/ && git add . && git commit -m "Bump version" && git push
 	
 analysis:
 	@echo "Running regression analysis"

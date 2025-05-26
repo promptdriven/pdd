@@ -25,7 +25,7 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
         command_options = {
             "output": output
         }
-        input_strings, output_file_paths, _ = construct_paths(
+        input_strings, output_file_paths, language = construct_paths(
             input_file_paths=input_file_paths,
             force=ctx.obj.get('force', False),
             quiet=ctx.obj.get('quiet', False),
@@ -41,6 +41,7 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
         strength = ctx.obj.get('strength', 0.5)
         temperature = ctx.obj.get('temperature', 0)
         example_code, total_cost, model_name = context_generator(
+            language=language,
             code_module=code_content,
             prompt=prompt_content,
             strength=strength,
