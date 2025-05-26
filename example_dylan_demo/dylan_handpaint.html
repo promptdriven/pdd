@@ -75,11 +75,31 @@
         const brushSize = 5;
         const eraserSize = 30;
 
+        // Function to draw a landmark point
+        function drawLandmarkPoint(x, y, color, size = 5) {
+            ctx.beginPath();
+            ctx.arc(x, y, size, 0, Math.PI * 2);
+            ctx.fillStyle = color;
+            ctx.fill();
+        }
+
         // Process hand landmarks
         hands.onResults((results) => {
+            // Clear the canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
             if (results.multiHandLandmarks) {
                 const landmarks = results.multiHandLandmarks[0];
                 if (landmarks) {
+                    // Draw all landmarks
+                    landmarks.forEach((landmark, index) => {
+                        const x = (1 - landmark.x) * canvas.width;
+                        const y = landmark.y * canvas.height;
+                        
+                        // Draw regular landmarks in blue
+                        drawLandmarkPoint(x, y, 'rgba(0, 0, 255, 0.5)', 3);
+                    });
+
                     // Get index finger tip position
                     const indexFinger = landmarks[8];
                     const palm = landmarks[0];
@@ -89,6 +109,12 @@
                     const y = indexFinger.y * canvas.height;
                     const palmX = (1 - palm.x) * canvas.width;
                     const palmY = palm.y * canvas.height;
+
+                    // Draw index finger tip in red
+                    drawLandmarkPoint(x, y, 'rgba(255, 0, 0, 0.8)', 8);
+                    
+                    // Draw palm in green
+                    drawLandmarkPoint(palmX, palmY, 'rgba(0, 255, 0, 0.8)', 8);
 
                     // Calculate distance between index finger and palm
                     const distance = Math.sqrt(
