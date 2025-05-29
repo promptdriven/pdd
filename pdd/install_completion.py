@@ -88,7 +88,7 @@ def get_completion_script_extension(shell: str) -> str:
     return mapping.get(shell, shell)
 
 
-def install_completion():
+def install_completion(quiet: bool = False):
     """
     Install shell completion for the PDD CLI by detecting the user's shell,
     copying the relevant completion script, and appending a source command
@@ -97,7 +97,8 @@ def install_completion():
     shell = get_current_shell()
     rc_file = get_shell_rc_path(shell)
     if not rc_file:
-        rprint(f"[red]Unsupported shell: {shell}[/red]")
+        if not quiet:
+            rprint(f"[red]Unsupported shell: {shell}[/red]")
         raise click.Abort()
 
     ext = get_completion_script_extension(shell)
@@ -107,7 +108,8 @@ def install_completion():
     completion_script_path = os.path.join(local_pdd_path, f"pdd_completion.{ext}")
 
     if not os.path.exists(completion_script_path):
-        rprint(f"[red]Completion script not found: {completion_script_path}[/red]")
+        if not quiet:
+            rprint(f"[red]Completion script not found: {completion_script_path}[/red]")
         raise click.Abort()
 
     source_command = f"source {completion_script_path}"
@@ -115,9 +117,12 @@ def install_completion():
     try:
         # Ensure the RC file exists (create if missing).
         if not os.path.exists(rc_file):
-            os.makedirs(os.path.dirname(rc_file), exist_ok=True)
+            # Create parent directories if they don't exist
+            rc_dir = os.path.dirname(rc_file)
+            if rc_dir: # Ensure rc_dir is not an empty string (e.g. if rc_file is in current dir)
+                 os.makedirs(rc_dir, exist_ok=True)
             with open(rc_file, "w", encoding="utf-8") as cf:
-                cf.write("")
+                cf.write("") # Create an empty file
 
         # Read existing content
         with open(rc_file, "r", encoding="utf-8") as cf:
@@ -126,11 +131,14 @@ def install_completion():
         if source_command not in content:
             with open(rc_file, "a", encoding="utf-8") as rf:
                 rf.write(f"\n# PDD CLI completion\n{source_command}\n")
-
-            rprint(f"[green]Shell completion installed for {shell}.[/green]")
-            rprint(f"Please restart your shell or run 'source {rc_file}' to enable completion.")
+            
+            if not quiet:
+                rprint(f"[green]Shell completion installed for {shell}.[/green]")
+                rprint(f"Please restart your shell or run 'source {rc_file}' to enable completion.")
         else:
-            rprint(f"[yellow]Shell completion already installed for {shell}.[/yellow]")
+            if not quiet:
+                rprint(f"[yellow]Shell completion already installed for {shell}.[/yellow]")
     except OSError as exc:
-        rprint(f"[red]Failed to install shell completion: {exc}[/red]")
+        if not quiet:
+            rprint(f"[red]Failed to install shell completion: {exc}[/red]")
         raise click.Abort()

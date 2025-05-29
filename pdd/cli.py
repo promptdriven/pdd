@@ -194,6 +194,9 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
                  # Check if it was install_completion (which normally returns None)
                  if command_name == "install_completion":
                      console.print(f"  [info]Step {i+1} ({command_name}):[/info] Command completed.")
+                 # If command name is unknown, and it might be install_completion which prints its own status
+                 elif command_name.startswith("Unknown Command"):
+                     console.print(f"  [info]Step {i+1} ({command_name}):[/info] Command executed (see output above for status details).")
                  # Check if it was preprocess (which returns a dummy tuple on success)
                  # This case handles actual failure for preprocess
                  elif command_name == "preprocess":
@@ -1070,17 +1073,21 @@ def verify(
 @click.pass_context
 # No @track_cost
 def install_completion_cmd(ctx: click.Context) -> None: # Return type remains None
-    """Install shell completion for PDD."""
-    quiet = ctx.obj.get("quiet", False)
-    command_name = "install_completion"
+    """Install shell completion for the PDD CLI."""
+    command_name = "install_completion" # For error handling
+    quiet_mode = ctx.obj.get("quiet", False) # Get quiet from context
+
     try:
-        install_completion(quiet=quiet)
-        # Return None on success (as intended)
-        return None
+        # The actual install_completion function is imported from .install_completion
+        install_completion(quiet=quiet_mode) # Pass quiet_mode
+        # Success messages are handled within install_completion based on quiet_mode
+        # No need to print additional messages here unless specifically required
+        # if not quiet_mode:
+        #     console.print(f"[success]'{command_name}' command completed successfully.[/success]")
     except Exception as e:
-        handle_error(e, command_name, quiet)
-        # Explicitly return None on failure as well, consistent with other commands
-        return None
+        # Use the centralized error handler
+        handle_error(e, command_name, quiet_mode)
+        # Do not return anything, as the callback expects None or a tuple
 
 
 # --- Entry Point ---
