@@ -3,11 +3,13 @@
 # Global options
 complete -c pdd -n "__fish_use_subcommand" -l force -d "Overwrite existing files without confirmation"
 complete -c pdd -n "__fish_use_subcommand" -l strength -x -d "Set AI model strength (0.0 to 1.0)"
+complete -c pdd -n "__fish_use_subcommand" -l time -x -d "Set AI model reasoning time (0.0 to 1.0)"
 complete -c pdd -n "__fish_use_subcommand" -l temperature -x -d "Set AI model temperature"
 complete -c pdd -n "__fish_use_subcommand" -l verbose -d "Increase output verbosity"
 complete -c pdd -n "__fish_use_subcommand" -l quiet -d "Decrease output verbosity"
 complete -c pdd -n "__fish_use_subcommand" -l output-cost -r -d "Enable cost tracking and output CSV file"
 complete -c pdd -n "__fish_use_subcommand" -l review-examples -d "Review few-shot examples before execution"
+complete -c pdd -n "__fish_use_subcommand" -l local -d "Run commands locally"
 complete -c pdd -n "__fish_use_subcommand" -l help -d "Show help message"
 complete -c pdd -n "__fish_use_subcommand" -l version -d "Show version information"
 
@@ -26,9 +28,12 @@ complete -c pdd -n "__fish_use_subcommand" -a crash -d "Fix code causing program
 complete -c pdd -n "__fish_use_subcommand" -a trace -d "Trace code line to prompt"
 complete -c pdd -n "__fish_use_subcommand" -a bug -d "Generate unit test from bug report"
 complete -c pdd -n "__fish_use_subcommand" -a auto-deps -d "Analyze and insert dependencies"
+complete -c pdd -n "__fish_use_subcommand" -a verify -d "Verify functional correctness using LLM judgment"
 
 # Command-specific completions
 complete -c pdd -n "__fish_seen_subcommand_from generate" -l output -r -d "Output location for generated code"
+complete -c pdd -n "__fish_seen_subcommand_from generate" -l original-prompt -r -d "Original prompt file for incremental generation"
+complete -c pdd -n "__fish_seen_subcommand_from generate" -l incremental -d "Force incremental patching"
 complete -c pdd -n "__fish_seen_subcommand_from generate" -a "(__fish_complete_suffix .prompt)"
 
 complete -c pdd -n "__fish_seen_subcommand_from example" -l output -r -d "Output location for example code"
@@ -63,10 +68,67 @@ complete -c pdd -n "__fish_seen_subcommand_from fix" -a "(__fish_complete_suffix
 complete -c pdd -n "__fish_seen_subcommand_from fix" -a "(__fish_complete_suffix .py .js .java .cpp .rb .go)"
 complete -c pdd -n "__fish_seen_subcommand_from fix" -a "(__fish_complete_suffix .log)"
 
+complete -c pdd -n "__fish_seen_subcommand_from split" -l output-sub -r -d "Output for sub-prompt file"
+complete -c pdd -n "__fish_seen_subcommand_from split" -l output-modified -r -d "Output for modified prompt file"
+complete -c pdd -n "__fish_seen_subcommand_from split" -a "(__fish_complete_suffix .prompt)"
+complete -c pdd -n "__fish_seen_subcommand_from split" -a "(__fish_complete_suffix .py .js .java .cpp .rb .go)" # For INPUT_CODE and EXAMPLE_CODE
+
+complete -c pdd -n "__fish_seen_subcommand_from change" -l output -r -d "Output location for modified prompt"
+complete -c pdd -n "__fish_seen_subcommand_from change" -l csv -d "Use CSV for batch changes"
+complete -c pdd -n "__fish_seen_subcommand_from change" -l budget -x -d "Maximum budget for change process"
+complete -c pdd -n "__fish_seen_subcommand_from change" -a "(__fish_complete_suffix .prompt)"
+complete -c pdd -n "__fish_seen_subcommand_from change" -a "(__fish_complete_suffix .csv)" # For the change prompt file if it's a CSV
+complete -c pdd -n "__fish_seen_subcommand_from change" -a "(__fish_complete_path)" # For INPUT_CODE directory or file
+
+complete -c pdd -n "__fish_seen_subcommand_from update" -l output -r -d "Output for updated prompt file"
+complete -c pdd -n "__fish_seen_subcommand_from update" -l git -d "Use git history for original code"
+complete -c pdd -n "__fish_seen_subcommand_from update" -a "(__fish_complete_suffix .prompt)"
+complete -c pdd -n "__fish_seen_subcommand_from update" -a "(__fish_complete_suffix .py .js .java .cpp .rb .go)" # For MODIFIED_CODE_FILE and INPUT_CODE_FILE
+
+complete -c pdd -n "__fish_seen_subcommand_from detect" -l output -r -d "Output CSV for analysis results"
+complete -c pdd -n "__fish_seen_subcommand_from detect" -a "(__fish_complete_suffix .prompt)" # For PROMPT_FILES and CHANGE_FILE
+
+complete -c pdd -n "__fish_seen_subcommand_from conflicts" -l output -r -d "Output CSV for conflict analysis"
+complete -c pdd -n "__fish_seen_subcommand_from conflicts" -a "(__fish_complete_suffix .prompt)" # For PROMPT1 and PROMPT2
+
+complete -c pdd -n "__fish_seen_subcommand_from crash" -l output -r -d "Output for fixed code file"
+complete -c pdd -n "__fish_seen_subcommand_from crash" -l output-program -r -d "Output for fixed program file"
+complete -c pdd -n "__fish_seen_subcommand_from crash" -l loop -d "Enable iterative fixing"
+complete -c pdd -n "__fish_seen_subcommand_from crash" -l max-attempts -x -d "Maximum fix attempts"
+complete -c pdd -n "__fish_seen_subcommand_from crash" -l budget -x -d "Maximum budget for fixing"
+complete -c pdd -n "__fish_seen_subcommand_from crash" -a "(__fish_complete_suffix .prompt)"
+complete -c pdd -n "__fish_seen_subcommand_from crash" -a "(__fish_complete_suffix .py .js .java .cpp .rb .go)" # For CODE_FILE and PROGRAM_FILE
+complete -c pdd -n "__fish_seen_subcommand_from crash" -a "(__fish_complete_suffix .log .txt)" # For ERROR_FILE
+
+complete -c pdd -n "__fish_seen_subcommand_from trace" -l output -r -d "Output for trace analysis results"
+complete -c pdd -n "__fish_seen_subcommand_from trace" -a "(__fish_complete_suffix .prompt)"
+complete -c pdd -n "__fish_seen_subcommand_from trace" -a "(__fish_complete_suffix .py .js .java .cpp .rb .go)" # For CODE_FILE
+# No specific completion for CODE_LINE, it's a number
+
+complete -c pdd -n "__fish_seen_subcommand_from bug" -l output -r -d "Output for generated unit test"
+complete -c pdd -n "__fish_seen_subcommand_from bug" -l language -x -d "Programming language for unit test"
+complete -c pdd -n "__fish_seen_subcommand_from bug" -a "(__fish_complete_suffix .prompt)"
+complete -c pdd -n "__fish_seen_subcommand_from bug" -a "(__fish_complete_suffix .py .js .java .cpp .rb .go)" # For CODE_FILE and PROGRAM_FILE
+complete -c pdd -n "__fish_seen_subcommand_from bug" -a "(__fish_complete_suffix .txt .log)" # For CURRENT_OUTPUT_FILE and DESIRED_OUTPUT_FILE
+
+complete -c pdd -n "__fish_seen_subcommand_from auto-deps" -l output -r -d "Output for modified prompt file"
+complete -c pdd -n "__fish_seen_subcommand_from auto-deps" -l csv -r -d "CSV file for dependency info"
+complete -c pdd -n "__fish_seen_subcommand_from auto-deps" -l force-scan -d "Force rescanning dependencies"
+complete -c pdd -n "__fish_seen_subcommand_from auto-deps" -a "(__fish_complete_suffix .prompt)"
+complete -c pdd -n "__fish_seen_subcommand_from auto-deps" -a "(__fish_complete_path)" # For DIRECTORY_PATH
+
+complete -c pdd -n "__fish_seen_subcommand_from verify" -l output-results -r -d "Output for verification results log"
+complete -c pdd -n "__fish_seen_subcommand_from verify" -l output-code -r -d "Output for verified code file"
+complete -c pdd -n "__fish_seen_subcommand_from verify" -l output-program -r -d "Output for verified program file"
+complete -c pdd -n "__fish_seen_subcommand_from verify" -l max-attempts -x -d "Max fix attempts in verification loop"
+complete -c pdd -n "__fish_seen_subcommand_from verify" -l budget -x -d "Max budget for verification and fixing"
+complete -c pdd -n "__fish_seen_subcommand_from verify" -a "(__fish_complete_suffix .prompt)"
+complete -c pdd -n "__fish_seen_subcommand_from verify" -a "(__fish_complete_suffix .py .js .java .cpp .rb .go)" # For CODE_FILE and PROGRAM_FILE
+
 # File completion for all commands
-complete -c pdd -n "__fish_seen_subcommand_from generate example test preprocess fix split change update detect conflicts crash trace bug auto-deps" -a "(__fish_complete_suffix .prompt)"
-complete -c pdd -n "__fish_seen_subcommand_from generate example test preprocess fix split change update detect conflicts crash trace bug auto-deps" -a "(__fish_complete_suffix .py .js .java .cpp .rb .go)"
-complete -c pdd -n "__fish_seen_subcommand_from generate example test preprocess fix split change update detect conflicts crash trace bug auto-deps" -a "(__fish_complete_suffix .log .txt .csv)"
+complete -c pdd -n "__fish_seen_subcommand_from generate example test preprocess fix split change update detect conflicts crash trace bug auto-deps verify" -a "(__fish_complete_suffix .prompt)"
+complete -c pdd -n "__fish_seen_subcommand_from generate example test preprocess fix split change update detect conflicts crash trace bug auto-deps verify" -a "(__fish_complete_suffix .py .js .java .cpp .rb .go)"
+complete -c pdd -n "__fish_seen_subcommand_from generate example test preprocess fix split change update detect conflicts crash trace bug auto-deps verify" -a "(__fish_complete_suffix .log .txt .csv)"
 
 # Help completion
-complete -c pdd -n "__fish_seen_subcommand_from help" -a "generate example test preprocess fix split change update detect conflicts crash trace bug auto-deps" -d "Show help for specific command"
+complete -c pdd -n "__fish_seen_subcommand_from help" -a "generate example test preprocess fix split change update detect conflicts crash trace bug auto-deps verify" -d "Show help for specific command"
