@@ -1,3 +1,9 @@
+## v0.0.34 (2025-05-29)
+
+### Feat
+
+- enhance CLI and documentation with new features
+
 ## v0.0.33 (2025-05-25)
 
 ### Feat
