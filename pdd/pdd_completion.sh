@@ -15,19 +15,19 @@ _pdd() {
     cword=$COMP_CWORD
 
     # Global options
-    local global_opts="--force --strength --temperature --verbose --quiet --output-cost --review-examples --help --version"
+    local global_opts="--force --strength --time --temperature --verbose --quiet --output-cost --review-examples --local --help --version"
 
     # Commands
-    local commands="generate example test preprocess fix split change update detect conflicts crash trace bug auto-deps"
+    local commands="generate example test preprocess fix split change update detect conflicts crash trace bug auto-deps verify"
 
     # Command-specific options
-    local generate_opts="--output"
+    local generate_opts="--output --original-prompt --incremental"
     local example_opts="--output"
     local test_opts="--output --language --coverage-report --existing-tests --target-coverage --merge"
     local preprocess_opts="--output --xml --recursive --double --exclude"
     local fix_opts="--output-test --output-code --output-results --loop --verification-program --max-attempts --budget --auto-submit"
     local split_opts="--output-sub --output-modified"
-    local change_opts="--output --csv"
+    local change_opts="--output --csv --budget"
     local update_opts="--output --git"
     local detect_opts="--output"
     local conflicts_opts="--output"
@@ -35,6 +35,7 @@ _pdd() {
     local trace_opts="--output"
     local bug_opts="--output --language"
     local auto_deps_opts="--output --csv --force-scan"
+    local verify_opts="--output-results --output-code --output-program --max-attempts --budget"
 
     # Complete global options before command
     if [[ $cword -eq 1 ]]; then
@@ -78,23 +79,26 @@ _pdd() {
         change)
             _complete_files ".prompt"
             _complete_files
-            _complete_files
+            if [[ $prev != "--csv" && ${COMP_WORDS[COMP_CWORD-2]} != "--csv" ]]; then
+                 _complete_files ".prompt"
+            fi
             COMPREPLY+=($(compgen -W "$change_opts" -- "$cur"))
             ;;
         update)
             _complete_files ".prompt"
             _complete_files
-            _complete_files
+            if [[ ! " ${words[@]} " =~ " --git " ]]; then
+                _complete_files
+            fi
             COMPREPLY+=($(compgen -W "$update_opts" -- "$cur"))
             ;;
         detect)
             _complete_files ".prompt"
-            _complete_files
             COMPREPLY+=($(compgen -W "$detect_opts" -- "$cur"))
             ;;
         conflicts)
             _complete_files ".prompt"
-            _complete_files
+            _complete_files ".prompt"
             COMPREPLY+=($(compgen -W "$conflicts_opts" -- "$cur"))
             ;;
         crash)
@@ -121,6 +125,12 @@ _pdd() {
             _complete_files ".prompt"
             COMPREPLY+=($(compgen -W "$auto_deps_opts" -- "$cur"))
             ;;
+        verify)
+            _complete_files ".prompt"
+            _complete_files
+            _complete_files
+            COMPREPLY+=($(compgen -W "$verify_opts" -- "$cur"))
+            ;;
         *)
             COMPREPLY=($(compgen -W "$global_opts" -- "$cur"))
             ;;
@@ -130,12 +140,21 @@ _pdd() {
 _complete_files() {
     local ext=$1
     local files
-    if [[ -n $ext ]]; then
-        files=$(compgen -f -X "!*$ext" -- "$cur")
-    else
-        files=$(compgen -f -- "$cur")
+    if [[ "$cur" == -* ]]; then
+        return
     fi
-    COMPREPLY+=($(compgen -W "$files" -- "$cur"))
+
+    if [[ -n $ext ]]; then
+        files=$(compgen -f -X "!*${ext}" -- "$cur")
+        COMPREPLY+=($(compgen -f -o plusdirs -X "!*${ext}" -- "$cur" | awk -v e="$ext" '$0 ~ e"$"{ COMPREPLY+=($0) }'))
+        files=$(echo "${files}" | awk '!seen[$0]++')
+
+    else
+        files=$(compgen -f -o plusdirs -- "$cur")
+    fi
+    if [[ -n "$files" ]]; then
+       COMPREPLY+=($(compgen -W "$files" -- "$cur"))
+    fi
 }
 
 complete -F _pdd pdd

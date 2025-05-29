@@ -50,11 +50,13 @@ local -a _pdd_global_opts
 _pdd_global_opts=(
   '--force[Overwrite existing files without asking for confirmation.]'
   '--strength[Set the strength of the AI model (0.0 to 1.0, default: 0.5)]:strength:(0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0)'
+  '--time[Controls the reasoning allocation for LLM models (0.0 to 1.0, default: 0.25)]:time:(0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0)'
   '--temperature[Set the temperature of the AI model (default: 0.0)]:temperature:(0.0 0.25 0.5 0.75 1.0)'
   '--verbose[Increase output verbosity for more detailed information.]'
   '--quiet[Decrease output verbosity (minimal information).]'
   '--output-cost[Enable cost tracking and output a CSV file with usage details.]:filename:_files'
   '--review-examples[Review and optionally exclude few-shot examples before command execution.]'
+  '--local[Run commands locally instead of in the cloud.]'
   '--help[Show help message and exit.]'
   '--version[Show version and exit.]'
 )
@@ -73,6 +75,8 @@ _pdd_generate() {
   _arguments -s \
     $_pdd_global_opts \
     '--output=[Specify where to save the generated code.]:filename:_files' \
+    '--original-prompt=[The original prompt file used to generate existing code.]:filename:_files' \
+    '--incremental[Force incremental patching even if changes are significant.]' \
     '1:prompt-file:_files' \
     '*:filename:_files'
 }
@@ -209,6 +213,7 @@ _pdd_change() {
     $_pdd_global_opts \
     '--output=[Where to save the modified prompt file.]:filename:_files' \
     '--csv[Use a CSV file for batch changes (columns: prompt_name, change_instructions).]' \
+    '--budget=[Maximum cost allowed for the change process (default 5.0)]:float' \
     '1:change-prompt-file:_files' \
     '2:input-code:_files' \
     '3:optional-prompt-file:_files' \
@@ -356,6 +361,32 @@ _pdd_auto_deps() {
     '*:filename:_files'
 }
 
+# verify
+# Usage: pdd [GLOBAL OPTIONS] verify [OPTIONS] PROMPT_FILE CODE_FILE PROGRAM_FILE
+# Options:
+#   --output-results [LOCATION]
+#   --output-code [LOCATION]
+#   --output-program [LOCATION]
+#   --max-attempts [INT]
+#   --budget [FLOAT]
+# Args:
+#   1: PROMPT_FILE
+#   2: CODE_FILE
+#   3: PROGRAM_FILE
+_pdd_verify() {
+  _arguments -s \
+    $_pdd_global_opts \
+    '--output-results=[Where to save verification and fixing results log.]:filename:_files' \
+    '--output-code=[Where to save the successfully verified code file.]:filename:_files' \
+    '--output-program=[Where to save the successfully verified program file.]:filename:_files' \
+    '--max-attempts=[Maximum fix attempts in verification loop (default 3)]:int' \
+    '--budget=[Maximum cost for verification and fixing (default 5.0)]:float' \
+    '1:prompt-file:_files' \
+    '2:code-file:_files' \
+    '3:program-file:_files' \
+    '*:filename:_files'
+}
+
 ##
 # Main PDD completion dispatcher
 ##
@@ -380,6 +411,7 @@ _pdd() {
     'trace:Find the prompt file line number associated with a code line'
     'bug:Generate a unit test based on incorrect vs desired outputs'
     'auto-deps:Analyze a prompt file and directory for needed dependencies'
+    'verify:Verify functional correctness using LLM judgment and iteratively fix'
   )
 
   # If there's no subcommand yet (i.e., user typed only "pdd " or "pdd -<Tab>"), offer global opts or subcommands.
@@ -435,6 +467,9 @@ _pdd() {
       ;;
     auto-deps)
       _pdd_auto_deps
+      ;;
+    verify)
+      _pdd_verify
       ;;
     # If the subcommand is unknown or not typed yet, fall back to showing the list of subcommands.
     *)

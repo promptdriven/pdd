@@ -1,6 +1,10 @@
 .. image:: https://img.shields.io/badge/pdd--cli-v0.0.33-blue
    :alt: PDD-CLI Version
 
+.. image:: https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white&link=https://discord.gg/Yp4RTh8bG7
+   :alt: Join us on Discord
+   :target: https://discord.gg/Yp4RTh8bG7
+
 PDD (Prompt-Driven Development) Command Line Interface
 ======================================================
 
