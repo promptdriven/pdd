@@ -55,6 +55,7 @@
 - [ ] Anywhere cache https://cloud.google.com/storage/docs/anywhere-cache?hl=en&_gl=1*hrk570*_ga*MTM4MzA4MjkzMy4xNjcwNTM0ODI5*_ga_WH2QY8WWF5*czE3NDYzNzYwNjUkbzE2NyRnMSR0MTc0NjM3NjExMiRqMTMkbDAkaDA.
 - [ ] fix the overlogging
 - [ ] have landing page that allows people to take their code and give their prompt
+- [ ] do a design compiler like strategy where you can retarget code to a different language
 
 ## Documentation
 - [ ] make readme accessible via cli/mcp server
