@@ -1,4 +1,4 @@
-__version__ = "0.0.35"
+__version__ = "0.0.36"
 
 # Strength parameter used for LLM extraction across the codebase
 # Used in postprocessing, XML tagging, code generation, and other extraction operations. The module should have a large context window and be affordable.

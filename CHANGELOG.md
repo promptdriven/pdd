@@ -1,3 +1,9 @@
+## v0.0.36 (2025-05-30)
+
+### Feat
+
+- enhance auto_update function with detailed version checking and user interaction
+
 ## v0.0.35 (2025-05-29)
 
 ### Feat
