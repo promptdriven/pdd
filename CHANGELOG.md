@@ -1,3 +1,9 @@
+## v0.0.38 (2025-05-30)
+
+### Fix
+
+- update upgrade command in auto_update function to use install with --force
+
 ## v0.0.37 (2025-05-30)
 
 ### Feat
