@@ -1,3 +1,9 @@
+## v0.0.37 (2025-05-30)
+
+### Feat
+
+- add new task for design compiler strategy in TODO list
+
 ## v0.0.36 (2025-05-30)
 
 ### Feat
