@@ -1,1 +1,30 @@
-write a function "auto_update" to automatically check to see if there is a new version of the pdd package, first parameter is package name, default to "pdd-cli", second parameter is the latest version, default to None, if there is new version, prompt the user to upgrade with the complete pip install command, if there is no new version, do not output anything, compare version using semantic versioning, be sure to ask for user's confirmation before upgrading
+Create a Python function named "auto_update" that automatically checks for new versions of a specified package and handles the upgrade process.
+
+Function Signature:
+- Parameters:
+    - package_name (str): The name of the package to check. Default: "pdd-cli".
+    - latest_version (str, optional): A known latest version to compare against. Default: None (fetch from PyPI).
+
+Core Logic:
+1. Determine the current installed version of the package.
+2. If `latest_version` is not provided, fetch it from PyPI for the specified `package_name`.
+3. Compare the current and latest versions using semantic versioning. If semantic versioning parsing fails, use direct string comparison.
+4. If no new version is available (current >= latest), the function should exit silently.
+5. If a new version is available:
+    a. Inform the user about the new version and the current version.
+    b. Ask for user confirmation before proceeding with the upgrade (e.g., "Would you like to upgrade? [y/N]:").
+    c. If the user confirms:
+        i. Detect the installation method of the package (e.g., UV or pip).
+        ii. Construct the appropriate upgrade command based on the detected method (e.g., `uv tool upgrade <package>` or `python -m pip install --upgrade <package>`).
+        iii. Execute the upgrade command.
+        iv. Provide feedback on the success or failure of the upgrade.
+        v. If the primary upgrade method (e.g., UV) fails, attempt a fallback to a standard method (e.g., pip) if applicable, and report its outcome.
+    d. If the user declines, print a cancellation message and exit.
+
+Error Handling:
+- Handle potential errors gracefully, such as:
+    - Failure to fetch the latest version from PyPI.
+    - The package not being installed.
+    - Errors during the execution of the upgrade command (including capturing and displaying stderr).
+    - Errors during fallback upgrade attempts.
+- Provide informative error messages to the user.
