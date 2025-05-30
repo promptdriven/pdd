@@ -37,10 +37,10 @@ def get_upgrade_command(package_name, installation_method):
         # For UV commands, we need the full path if available
         uv_path = shutil.which("uv")
         if uv_path:
-            return ([uv_path, "tool", "upgrade", package_name], False)
+            return ([uv_path, "tool", "install", package_name, "--force"], False)
         else:
             # If uv isn't in PATH, use shell=True
-            return (["uv", "tool", "upgrade", package_name], True)
+            return (["uv", "tool", "install", package_name, "--force"], True)
     else:
         # Default pip method
         return ([sys.executable, "-m", "pip", "install", "--upgrade", package_name], False)
