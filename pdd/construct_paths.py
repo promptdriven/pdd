@@ -16,6 +16,9 @@ from .generate_output_paths import generate_output_paths
 
 # Assume generate_output_paths raises ValueError on unknown command
 
+# Add csv import for the new helper function
+import csv
+
 console = Console(theme=Theme({"info": "cyan", "warning": "yellow", "error": "bold red"}))
 
 
@@ -65,6 +68,62 @@ def _candidate_prompt_path(input_files: Dict[str, Path]) -> Path | None:
     return None
 
 
+# New helper function to check if a language is known
+def _is_known_language(language_name: str) -> bool:
+    """Checks if a language name is present in the language_format.csv."""
+    pdd_path_str = os.getenv('PDD_PATH')
+    if not pdd_path_str:
+        # Consistent with get_extension, raise ValueError if PDD_PATH is not set.
+        # Or, for an internal helper, we might decide to log and return False,
+        # but raising an error for missing config is generally safer.
+        # However, _determine_language (the caller) already raises ValueError
+        # if language cannot be found, so this path might not be strictly necessary
+        # if we assume PDD_PATH is validated earlier or by other get_extension/get_language calls.
+        # For robustness here, let's keep a check but perhaps make it less severe if called internally.
+        # For now, align with how get_extension might handle it.
+        # console.print("[error]PDD_PATH environment variable is not set. Cannot validate language.", style="error")
+        # return False # Or raise error
+        # Given this is internal and other functions (get_extension) already depend on PDD_PATH,
+        # we can assume if those ran, PDD_PATH is set. If not, they'd fail first.
+        # So, we can simplify or rely on that pre-condition.
+        # Let's assume PDD_PATH will be set if other language functions are working.
+        # If it's critical, an explicit check and raise ValueError is better.
+        # For now, let's proceed assuming PDD_PATH is available if this point is reached.
+        pass # Assuming PDD_PATH is checked by get_extension/get_language if they are called
+
+    # If PDD_PATH is not set, this will likely fail earlier if get_extension/get_language are used.
+    # If we want this helper to be fully independent, it needs robust PDD_PATH handling.
+    # Let's assume for now, PDD_PATH is available if this point is reached through normal flow.
+    
+    # Re-evaluate: PDD_PATH is critical for this function. Let's keep the check.
+    if not pdd_path_str:
+        # This helper might be called before get_extension in some logic paths
+        # if _determine_language prioritizes suffix checking first.
+        # So, it needs its own PDD_PATH check.
+        # Raise ValueError to be consistent with get_extension's behavior.
+        raise ValueError("PDD_PATH environment variable is not set. Cannot validate language.")
+
+    csv_file_path = Path(pdd_path_str) / 'data' / 'language_format.csv'
+    
+    if not csv_file_path.is_file():
+        # Raise FileNotFoundError if CSV is missing, consistent with get_extension
+        raise FileNotFoundError(f"The language format CSV file does not exist: {csv_file_path}")
+            
+    language_name_lower = language_name.lower()
+    
+    try:
+        with open(csv_file_path, mode='r', encoding='utf-8', newline='') as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                if row.get('language', '').lower() == language_name_lower:
+                    return True
+    except csv.Error as e:
+        # Log and return False or raise a custom error
+        console.print(f"[error]CSV Error reading {csv_file_path}: {e}", style="error")
+        return False # Indicates language could not be confirmed due to CSV issue
+    return False
+
+
 def _strip_language_suffix(path_like: os.PathLike[str]) -> str:
     """
     Remove trailing '_<language>.prompt' or '_<language>' from a filename stem
@@ -84,7 +143,7 @@ def _strip_language_suffix(path_like: os.PathLike[str]) -> str:
     candidate_lang = parts[-1]
 
     # Check if the last part is a known language
-    if get_extension(candidate_lang) != "": # recognised language
+    if _is_known_language(candidate_lang):
         # If the last part is a language, strip it
         return "_".join(parts[:-1])
     else:
@@ -183,8 +242,8 @@ def _determine_language(
             parts = stem.split("_")
             if len(parts) >= 2:
                 token = parts[-1]
-                # Check if the token is a known language
-                if get_extension(token) != "":
+                # Check if the token is a known language using the new helper
+                if _is_known_language(token):
                     return token.lower()
 
     # 4 - Special handling for detect command - default to prompt for LLM prompts
