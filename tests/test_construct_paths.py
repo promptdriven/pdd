@@ -7,10 +7,6 @@ from unittest.mock import patch, MagicMock, ANY
 import sys
 import os
 
-# Add the parent directory to sys.path to import pdd modules
-# Ensure this path is correct relative to where pytest is run
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 # Mock generate_output_paths before importing construct_paths if it's needed globally
 # Or mock within each test as currently done.
 
@@ -1017,21 +1013,35 @@ def test_construct_paths_generate_command(setup_test_files):
     # Mock language detection helpers - expect language determination to fail
     # Mock get_extension to return '' for unknown languages
     def mock_get_extension_func_gen(lang):
+        if lang == "prompt":
+            return ".prompt" # As per language_format.csv
         return ''
-    # Mock get_language to return None (simulating failure to find lang)
+    # Mock get_language to return None (simulating failure to find lang initially, suffix logic takes over)
     def mock_get_language_func_gen(ext_or_name):
-        return None
+        return None # Ensures suffix logic in _determine_language is reached
 
     # Expect ValueError because language cannot be determined from 'main_gen_prompt.prompt'
-    with pytest.raises(ValueError) as excinfo:
-         with patch('pdd.construct_paths.get_extension', side_effect=mock_get_extension_func_gen), \
-              patch('pdd.construct_paths.get_language', side_effect=mock_get_language_func_gen), \
-              patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
-              construct_paths(
-                  input_file_paths=input_file_paths,
-                  force=True, quiet=True, command="generate", command_options=command_options
-              )
-    assert "Could not determine language" in str(excinfo.value)
+    # UPDATE: With _is_known_language, "prompt" will be determined.
+    # with pytest.raises(ValueError) as excinfo:
+    with patch('pdd.construct_paths._is_known_language', side_effect=lambda x: True if x == "prompt" else False) as mock_is_known, \
+         patch('pdd.construct_paths.get_extension', side_effect=mock_get_extension_func_gen) as mock_get_ext, \
+         patch('pdd.construct_paths.get_language', side_effect=mock_get_language_func_gen) as mock_get_lang, \
+         patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str) as mock_gen_ops:
+        # Correctly unpack the return tuple from construct_paths
+        actual_input_strings, actual_output_file_paths, actual_determined_language = construct_paths(
+            input_file_paths=input_file_paths,
+            force=True, quiet=True, command="generate", command_options=command_options
+        )
+    # assert "Could not determine language" in str(excinfo.value)
+    assert actual_determined_language == "prompt"
+    # Basename should be "main_gen" after stripping "_prompt"
+    mock_gen_ops.assert_called_once_with(
+        command='generate',
+        output_locations=command_options, # output_dir_abs is in command_options['output']
+        basename='main_gen',
+        language='prompt',
+        file_extension='.prompt'
+    )
 
 
 def test_construct_paths_bash_example(setup_test_files):
@@ -1436,3 +1446,58 @@ def test_construct_paths_verify_command_default_and_options(tmpdir):
         
         assert output_paths_user == mock_gen_paths_return_user_program
         assert output_paths_user["output_program"] == user_output_program_path
+
+def test_construct_paths_handles_makefile_suffix_correctly_or_fails_if_buggy(tmpdir):
+    """
+    Tests that language determination for 'makefile' from a prompt suffix
+    works correctly if the underlying CSV/logic is fixed.
+    If the current bug (where get_extension('makefile') yields an empty string
+    leading to ValueError) is present, this test will fail due to an unhandled exception.
+    """
+    tmp_path = Path(str(tmpdir))
+    prompt_file = tmp_path / "MyProject_makefile.prompt"
+    prompt_file.write_text("Test prompt for Makefile")
+
+    input_file_paths = {"prompt_file": str(prompt_file)}
+    command = "generate"
+    command_options = {} # No explicit language
+
+    # Dummy output path for mocking generate_output_paths
+    mock_output_path_str = str(tmp_path / "MyProject.out") # Could be .mk if that's the fix
+    mock_output_paths_dict_str = {"output": mock_output_path_str}
+
+    # Mock get_language to return None, ensuring that the logic proceeds to
+    # parse the language from the prompt file's suffix.
+    # Mock generate_output_paths as its internal logic is not under test here.
+    # We DO NOT mock get_extension for "makefile", allowing the actual (buggy or fixed)
+    # logic to run.
+    with patch('pdd.construct_paths.get_language', return_value=None) as mock_get_lang, \
+         patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str) as mock_gen_ops:
+
+        # If the bug (ValueError in _determine_language for "makefile") is present,
+        # this call will raise an unhandled ValueError, and the test will FAIL.
+        # If the bug is fixed, this call will succeed.
+        _, _, determined_language = construct_paths(
+            input_file_paths=input_file_paths,
+            force=True,
+            quiet=True,
+            command=command,
+            command_options=command_options
+        )
+
+        # These assertions are only reached if construct_paths does NOT raise an error.
+        assert determined_language == "makefile", \
+            "If the 'makefile' language bug is fixed, determined_language should be 'makefile'."
+
+        # This assertion verifies that generate_output_paths is called with the correct
+        # parameters, assuming a fix where 'makefile' is recognized and its extension
+        # might be '.mk' (or empty if the logic changes to support that).
+        # For this test, we'll assume the fix involves get_extension("makefile") returning ".mk".
+        # The basename should be "MyProject" after stripping "_makefile".
+        mock_gen_ops.assert_called_once_with(
+            command='generate',
+            output_locations={},
+            basename='MyProject',
+            language='makefile',
+            file_extension=''  # Makefiles have no extension
+        )
