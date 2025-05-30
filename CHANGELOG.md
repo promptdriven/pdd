@@ -1,3 +1,9 @@
+## v0.0.35 (2025-05-29)
+
+### Feat
+
+- enhance auto-update functionality with installation method detection
+
 ## v0.0.34 (2025-05-29)
 
 ### Feat

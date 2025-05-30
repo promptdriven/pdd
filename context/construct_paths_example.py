@@ -25,7 +25,7 @@ from pdd.construct_paths import construct_paths
 # ---------------------------------------------------------------------------
 # 1. Prepare a minimal prompt file so the function has something to read
 # ---------------------------------------------------------------------------
-prompt_path = Path("hello_world_python.prompt").resolve()
+prompt_path = Path("Makefile_makefile.prompt").resolve()
 prompt_path.write_text(
     "Prompt‑Driven Development example\n\n"
     "Task: Write a function `hello()` that returns the string 'Hello, world!'",
