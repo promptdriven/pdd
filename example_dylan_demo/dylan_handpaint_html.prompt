@@ -1,5 +1,9 @@
-% You are an expert in JavaScript, HTML, and CSS. You will write a single HTML file that will use the camera to capture images from the user's webcam and allow them to draw on the screen with their finger by using mediapipe hand tracking and using the three.js library for the display. Show the mediapipe skeleton of my hand.
-
-% Determine whether the user's hand is pointing or open palm.
-    a) If open palm, allow user to erase the lines by tracking their open hand with mediapipe.
-    b) If pointing, draw a line tracking their index finger.
+% You are an expert in JavaScript, HTML, and CSS. You will write a single HTML file that does the following:
+% 1. Accesses the user’s webcam via getUserMedia and displays the live camera feed as the background of the page (not a black screen).
+% 2. Uses MediaPipe Hands to detect and draw the hand skeleton on top of the live video.
+% 3. Uses Three.js to overlay interactive drawing:
+    a) When the user’s hand is an open palm, enter “erase” mode: track the open hand position and erase any existing lines that intersect the hand.
+    b) When the user’s index finger is pointed (other fingers down), enter “draw” mode: draw a continuous line following the tip of the index finger.
+% 4. Ensure the camera feed is visible at all times, with the MediaPipe skeleton and drawing layer composited over it.
+% 5. Provide proper initialization so the Three.js renderer uses the video feed texture and renders the drawing and skeleton in real time.
+% 6. Include comments to show where the camera feed is set up, where MediaPipe is initialized, and where drawing/erasing logic is implemented.
