@@ -1,10 +1,23 @@
-# To implement the `get_extension` function as described, we will follow the steps outlined in your request. We'll use the `pandas` library to read the CSV file, and we'll handle the environment variable for the file path. Here's how you can implement this function:
+"""Module to retrieve file extensions for programming languages."""
 
-# ```python
 import os
 import pandas as pd
 
-def get_extension(language):
+def get_extension(language: str) -> str:
+    """
+    Retrieves the file extension for a given programming language.
+
+    Args:
+        language: The name of the programming language.
+
+    Returns:
+        The file extension (e.g., ".py") or an empty string if not found
+        or if the extension is invalid.
+
+    Raises:
+        ValueError: If the PDD_PATH environment variable is not set.
+        FileNotFoundError: If the language_format.csv file is not found.
+    """
     # Step 1: Load the environment variable PDD_PATH
     pdd_path = os.getenv('PDD_PATH')
     if not pdd_path:
@@ -18,24 +31,25 @@ def get_extension(language):
     
     # Step 3: Load the CSV file and look up the file extension
     try:
-        df = pd.read_csv(csv_file_path)
-    except FileNotFoundError:
-        raise FileNotFoundError(f"The file {csv_file_path} does not exist.")
+        dataframe = pd.read_csv(csv_file_path)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"The file {csv_file_path} does not exist."
+        ) from exc
     
     # Check if the language exists in the DataFrame
-    row = df[df['language'].str.lower() == language_lower]
+    row = dataframe[dataframe['language'].str.lower() == language_lower]
     
     # Step 4: Return the file extension or an empty string if not found
     if not row.empty:
         extension = row['extension'].values[0]
         return extension if isinstance(extension, str) and extension else ''
-    
+
     return ''
 
 # Example usage:
 # Assuming the environment variable PDD_PATH is set correctly
 # print(get_extension('Python'))  # Output: .py
-# ```
 
 # ### Explanation of the Code:
 # 1. **Environment Variable**: We use `os.getenv` to retrieve the `PDD_PATH` environment variable. If it's not set, we raise a `ValueError`.

@@ -1,7 +1,9 @@
+"""Tests for the get_extension function."""
+
+from unittest.mock import patch
 import pytest
-from unittest.mock import patch, MagicMock
-from pdd.get_extension import get_extension
 import pandas as pd
+from pdd.get_extension import get_extension
 
 # Sample data to be used in tests
 SAMPLE_CSV_DATA = pd.DataFrame({
@@ -22,19 +24,19 @@ def mock_read_csv():
     with patch('pdd.get_extension.pd.read_csv', return_value=SAMPLE_CSV_DATA):
         yield
 
-def test_get_extension_normal_case(mock_env_pdd_path, mock_read_csv):
+def test_get_extension_normal_case(mock_env_pdd_path, mock_read_csv):  # pylint: disable=unused-argument, redefined-outer-name
     """Test that a valid language returns the correct extension."""
     assert get_extension('Python') == '.py'
 
-def test_get_extension_case_insensitivity(mock_env_pdd_path, mock_read_csv):
+def test_get_extension_case_insensitivity(mock_env_pdd_path, mock_read_csv):  # pylint: disable=unused-argument, redefined-outer-name
     """Test that the function is case-insensitive."""
     assert get_extension('JaVa') == '.java'
 
-def test_get_extension_language_not_found(mock_env_pdd_path, mock_read_csv):
+def test_get_extension_language_not_found(mock_env_pdd_path, mock_read_csv):  # pylint: disable=unused-argument, redefined-outer-name
     """Test that an unknown language returns an empty string."""
     assert get_extension('Ruby') == ''
 
-def test_get_extension_invalid_extension_empty_string(mock_env_pdd_path, mock_read_csv):
+def test_get_extension_invalid_extension_empty_string(mock_env_pdd_path, mock_read_csv):  # pylint: disable=unused-argument, redefined-outer-name
     """Test that a language with an empty extension returns an empty string."""
     assert get_extension('Makefile') == ''
 
@@ -44,20 +46,23 @@ def test_get_extension_pdd_path_not_set():
         with pytest.raises(ValueError, match="Environment variable PDD_PATH is not set."):
             get_extension('Python')
 
-def test_get_extension_csv_file_not_found(mock_env_pdd_path):
+def test_get_extension_csv_file_not_found(mock_env_pdd_path):  # pylint: disable=unused-argument, redefined-outer-name
     """Test that missing CSV file raises FileNotFoundError."""
     with patch('pdd.get_extension.pd.read_csv', side_effect=FileNotFoundError):
-        with pytest.raises(FileNotFoundError, match="The file /fake/pdd_path/data/language_format.csv does not exist."):
+        with pytest.raises(
+            FileNotFoundError,
+            match="The file /fake/pdd_path/data/language_format.csv does not exist."
+        ):
             get_extension('Python')
 
-def test_get_extension_csv_malformed(mock_env_pdd_path):
+def test_get_extension_csv_malformed(mock_env_pdd_path):  # pylint: disable=unused-argument, redefined-outer-name
     """Test that a malformed CSV (missing 'extension' column) raises KeyError."""
     malformed_df = SAMPLE_CSV_DATA.drop(columns=['extension'])
     with patch('pdd.get_extension.pd.read_csv', return_value=malformed_df):
         with pytest.raises(KeyError, match="'extension'"):
             get_extension('Python')
 
-def test_get_extension_extension_not_string(mock_env_pdd_path):
+def test_get_extension_extension_not_string(mock_env_pdd_path):  # pylint: disable=unused-argument, redefined-outer-name
     """Test that a non-string extension is treated as invalid."""
     invalid_df = SAMPLE_CSV_DATA.copy()
     invalid_df.loc[0, 'extension'] = 123
