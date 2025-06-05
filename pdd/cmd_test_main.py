@@ -98,10 +98,11 @@ def cmd_test_main(
             unit_test, total_cost, model_name = generate_test(
                 input_strings["prompt_file"],
                 input_strings["code_file"],
-                strength,
-                temperature,
-                language,
+                strength=strength,
+                temperature=temperature,
                 time=time,
+                language=language,
+                verbose=verbose
             )
         except Exception as e:
             print(f"[bold red]Error generating tests: {e}[/bold red]")

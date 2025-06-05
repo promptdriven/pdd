@@ -1,3 +1,10 @@
+## v0.0.40 (2025-06-05)
+
+### Feat
+
+- improve auto_deps_main function with enhanced error handling and encoding support
+- enhance get_extension function with detailed docstring and error handling
+
 ## v0.0.39 (2025-06-05)
 
 ### Feat

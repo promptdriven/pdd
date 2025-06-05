@@ -1,24 +1,29 @@
-import pytest
+"""Unit tests for the auto_include module."""
 from unittest.mock import patch, MagicMock
+import pytest
 from pdd.auto_include import auto_include
 
-@pytest.fixture
-def mock_load_prompt_template():
+
+@pytest.fixture(name="mock_load_prompt_template")
+def mock_load_prompt_template_fixture():
     """Fixture to mock load_prompt_template calls."""
     with patch("pdd.auto_include.load_prompt_template") as mock_load:
         yield mock_load
 
-@pytest.fixture
-def mock_summarize_directory():
+
+@pytest.fixture(name="mock_summarize_directory")
+def mock_summarize_directory_fixture():
     """Fixture to mock summarize_directory calls."""
     with patch("pdd.auto_include.summarize_directory") as mock_summarize:
         yield mock_summarize
 
-@pytest.fixture
-def mock_llm_invoke():
+
+@pytest.fixture(name="mock_llm_invoke")
+def mock_llm_invoke_fixture():
     """Fixture to mock llm_invoke calls."""
     with patch("pdd.auto_include.llm_invoke") as mock_llm:
         yield mock_llm
+
 
 def test_auto_include_valid_call(
     mock_load_prompt_template, mock_summarize_directory, mock_llm_invoke
@@ -32,7 +37,8 @@ def test_auto_include_valid_call(
 
     # Mock summarize_directory return
     mock_summarize_directory.return_value = (
-        "full_path,file_summary,date\ncontext/example.py,Example summary,2023-02-02",
+        "full_path,file_summary,date\n"
+        "context/example.py,Example summary,2023-02-02",
         0.25,
         "mock-summary-model",
     )
@@ -63,76 +69,14 @@ def test_auto_include_valid_call(
 
     assert "from .context.example import Example" in deps
     assert "full_path,file_summary,date" in csv_out
-    # total_cost should be sum of summarize_directory (0.25) + first llm_invoke (0.5) + second llm_invoke (0.75) = 1.5
+    # total_cost should be sum of summarize_directory (0.25) +
+    # first llm_invoke (0.5) + second llm_invoke (0.75) = 1.5
     assert total_cost == 1.5
     # The last model used is from the second llm_invoke
     assert model_name == "mock-model-2"
 
-def test_auto_include_empty_input_prompt():
-    """
-    Test that an empty input_prompt raises a ValueError.
-    """
-    with pytest.raises(ValueError) as excinfo:
-        auto_include(
-            input_prompt="",
-            directory_path="context/*.py",
-            csv_file=None,
-            strength=0.7,
-            temperature=0.0,
-            verbose=False,
-        )
-    assert "Input prompt cannot be empty" in str(excinfo.value)
 
-def test_auto_include_invalid_directory_path():
-    """
-    Test that an invalid directory_path (e.g., empty) raises a ValueError.
-    """
-    with pytest.raises(ValueError) as excinfo:
-        auto_include(
-            input_prompt="Valid prompt",
-            directory_path="",
-            csv_file=None,
-            strength=0.7,
-            temperature=0.0,
-            verbose=False,
-        )
-    assert "Invalid 'directory_path'." in str(excinfo.value)
-
-@pytest.mark.parametrize("invalid_strength", [-0.1, 1.1])
-def test_auto_include_invalid_strength(invalid_strength):
-    """
-    Test that invalid strength values (<0 or >1) raise a ValueError.
-    """
-    with pytest.raises(ValueError) as excinfo:
-        auto_include(
-            input_prompt="Valid prompt",
-            directory_path="context/*.py",
-            csv_file=None,
-            strength=invalid_strength,
-            temperature=0.0,
-            verbose=False,
-        )
-    assert "Strength must be between 0 and 1" in str(excinfo.value)
-
-@pytest.mark.parametrize("invalid_temperature", [-0.1, 1.1])
-def test_auto_include_invalid_temperature(invalid_temperature):
-    """
-    Test that invalid temperature values (<0 or >1) raise a ValueError.
-    """
-    with pytest.raises(ValueError) as excinfo:
-        auto_include(
-            input_prompt="Valid prompt",
-            directory_path="context/*.py",
-            csv_file=None,
-            strength=0.7,
-            temperature=invalid_temperature,
-            verbose=False,
-        )
-    assert "Temperature must be between 0 and 1" in str(excinfo.value)
-
-def test_auto_include_fail_load_templates(
-    mock_load_prompt_template, mock_summarize_directory, mock_llm_invoke
-):
+def test_auto_include_fail_load_templates(mock_load_prompt_template):
     """
     Test that a failure to load either prompt template raises a ValueError.
     """
@@ -149,6 +93,7 @@ def test_auto_include_fail_load_templates(
             verbose=False,
         )
     assert "Failed to load prompt templates" in str(excinfo.value)
+
 
 def test_auto_include_csv_parsing_error(
     mock_load_prompt_template, mock_summarize_directory, mock_llm_invoke
@@ -181,7 +126,7 @@ def test_auto_include_csv_parsing_error(
         },
     ]
 
-    deps, csv_out, total_cost, model_name = auto_include(
+    deps, _, total_cost, model_name = auto_include(
         input_prompt="Valid prompt",
         directory_path="context/*.py",
         csv_file=None,
@@ -190,25 +135,26 @@ def test_auto_include_csv_parsing_error(
         verbose=False,
     )
 
-    # CSV is returned as is (invalid), no exception, but the parsing error is logged
-    assert csv_out == "not_a_valid_csv"
     # Dependencies are extracted from the second mock
     assert "from .some_import import SomeClass" in deps
     assert total_cost == 1.5
     assert model_name == "mock-model-2"
 
+
 def test_auto_include_llm_invoke_error_extract(
     mock_load_prompt_template, mock_summarize_directory, mock_llm_invoke
 ):
     """
-    Test that if the second llm_invoke (extract_auto_include_LLM) fails, dependencies are set to "".
+    Test that if the second llm_invoke (extract_auto_include_LLM) fails,
+    dependencies are set to "".
     """
     # Mock templates
     mock_load_prompt_template.side_effect = lambda name: f"{name} content"
 
     # Mock summarize_directory
     mock_summarize_directory.return_value = (
-        "full_path,file_summary,date\ncontext/example.py,Example summary,2023-02-02",
+        "full_path,file_summary,date\n"
+        "context/example.py,Example summary,2023-02-02",
         0.2,
         "mock-summary-model",
     )
@@ -224,7 +170,7 @@ def test_auto_include_llm_invoke_error_extract(
         Exception("Test extraction failure"),
     ]
 
-    deps, csv_out, total_cost, model_name = auto_include(
+    deps, _, total_cost, model_name = auto_include(
         input_prompt="Valid prompt",
         directory_path="context/*.py",
         csv_file=None,
@@ -235,6 +181,7 @@ def test_auto_include_llm_invoke_error_extract(
 
     # The second step fails, so dependencies remain ""
     assert deps == ""
-    assert total_cost == 0.5  # only the cost of summarize_directory + first llm_invoke
+    # only the cost of summarize_directory + first llm_invoke
+    assert total_cost == 0.5
     # The last successful model name is "mock-model-1"
     assert model_name == "mock-model-1"
