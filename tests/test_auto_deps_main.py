@@ -1,6 +1,6 @@
+"""Tests for the auto_deps_main function."""
+from unittest.mock import patch, MagicMock
 import pytest
-from unittest.mock import patch, MagicMock, mock_open
-import sys
 import click
 
 # Import DEFAULT_STRENGTH
@@ -30,10 +30,10 @@ def mock_ctx():
 @patch("pdd.auto_deps_main.insert_includes")
 @patch("pdd.auto_deps_main.Path")
 def test_auto_deps_normal_operation(
-    mock_path,
+    mock_path,  # pylint: disable=unused-argument
     mock_insert_includes,
     mock_construct_paths,
-    mock_ctx,
+    mock_ctx,  # pylint: disable=redefined-outer-name
     csv_path_return
 ):
     """
@@ -100,10 +100,10 @@ def test_auto_deps_normal_operation(
 @patch("pdd.auto_deps_main.insert_includes")
 @patch("pdd.auto_deps_main.Path")
 def test_auto_deps_force_scan_operation(
-    mock_path,
+    mock_path,  # pylint: disable=unused-argument
     mock_insert_includes,
     mock_construct_paths,
-    mock_ctx
+    mock_ctx  # pylint: disable=redefined-outer-name
 ):
     """
     Test the operation of auto_deps_main when force-scan is True.
@@ -165,10 +165,10 @@ def test_auto_deps_force_scan_operation(
 @patch("pdd.auto_deps_main.sys")
 def test_auto_deps_handles_error_scenario(
     mock_sys,
-    mock_path,
+    mock_path,  # pylint: disable=unused-argument
     mock_insert_includes,
-    mock_construct_paths,
-    mock_ctx
+    mock_construct_paths,  # pylint: disable=unused-argument
+    mock_ctx  # pylint: disable=redefined-outer-name
 ):
     """
     Test that auto_deps_main calls sys.exit(1) if an exception is raised.
