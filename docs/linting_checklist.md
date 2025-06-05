@@ -29,11 +29,12 @@ The following steps are used to systematically improve code quality:
 - [x] `tests/__init__.py`
 - [x] `pdd/auto_include.py` (Note: `C0304: Final newline missing`, `W0703: Catching too general exception Exception`, `R0913: Too many arguments`, `R0914: Too many local variables` persist)
 - [x] `tests/test_auto_include.py` (Note: `C0304: Final newline missing` persists)
+- [x] `pdd/auto_update.py` (Note: `C0303: Trailing whitespace`, `C0304: Final newline missing`, `E0401: Unable to import 'semver'` persist)
+- [x] `tests/test_auto_update.py` (Note: `C0303: Trailing whitespace`, `C0304: Final newline missing` persist)
 
 ## To Do
 
 ### pdd/
-- [ ] `pdd/auto_update.py`
 - [ ] `pdd/bug_main.py`
 - [ ] `pdd/bug_to_unit_test.py`
 - [ ] `pdd/change.py`
@@ -95,7 +96,6 @@ The following steps are used to systematically improve code quality:
 ### tests/
 - [ ] `tests/isolated_verify.py`
 - [ ] `tests/prompt_tester.py`
-- [ ] `tests/test_auto_update.py`
 - [ ] `tests/test_bug_main.py`
 - [ ] `tests/test_bug_to_unit_test.py`
 - [ ] `tests/test_change.py`
