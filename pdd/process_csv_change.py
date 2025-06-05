@@ -10,6 +10,7 @@ from .get_extension import get_extension
 # Assuming EXTRACTION_STRENGTH and DEFAULT_STRENGTH might be needed later,
 # or just acknowledging their existence as per the prompt.
 # from .. import EXTRACTION_STRENGTH, DEFAULT_STRENGTH
+from . import DEFAULT_TIME # Added DEFAULT_TIME
 
 # No changes needed in the code_under_test based on these specific errors.
 
@@ -69,7 +70,8 @@ def process_csv_change(
     code_directory: str,
     language: str, # Default language if not specified in prompt filename
     extension: str, # Default extension (unused if language suffix found)
-    budget: float
+    budget: float,
+    time: float = DEFAULT_TIME # Added time parameter
 ) -> Tuple[bool, List[Dict[str, str]], float, Optional[str]]:
     """
     Reads a CSV file, processes each row to modify associated code files using an LLM,
@@ -86,6 +88,7 @@ def process_csv_change(
         extension: Default file extension (including '.') if language cannot be inferred.
                    Note: This is less likely to be used if `get_extension` covers the default language.
         budget: Maximum allowed cost for all LLM operations. Must be non-negative.
+        time: Time budget for each LLM operation.
 
     Returns:
         A tuple containing:
@@ -296,7 +299,10 @@ def process_csv_change(
                             input_code=input_code,
                             change_prompt=change_instructions,
                             strength=strength,
-                            temperature=temperature
+                            temperature=temperature,
+                            time=time, # Pass time
+                            budget=budget - total_cost, # Pass per-row budget
+                            quiet=True # Suppress individual change prints for CSV mode
                         )
                         console.print(f"    [dim]Change cost:[/dim] ${cost:.6f}")
                         console.print(f"    [dim]Model used:[/dim] {current_model_name}")

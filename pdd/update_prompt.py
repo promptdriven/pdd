@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
 from .llm_invoke import llm_invoke
-
+from . import DEFAULT_TIME
 class PromptUpdate(BaseModel):
     modified_prompt: str = Field(description="The updated prompt that will generate the modified code")
 
@@ -15,7 +15,8 @@ def update_prompt(
     modified_code: str,
     strength: float,
     temperature: float,
-    verbose: bool = False
+    verbose: bool = False,
+    time: float = DEFAULT_TIME
 ) -> Tuple[str, float, str]:
     """
     Update a prompt based on the original and modified code.
@@ -27,6 +28,7 @@ def update_prompt(
         strength (float): The strength parameter for the LLM model (0-1)
         temperature (float): The temperature parameter for the LLM model (0-1)
         verbose (bool, optional): Whether to print detailed output. Defaults to False.
+        time (float, optional): The time parameter for the LLM model. Defaults to 0.25.
 
     Returns:
         Tuple[str, float, str]: (modified_prompt, total_cost, model_name)
@@ -68,7 +70,8 @@ def update_prompt(
             },
             strength=strength,
             temperature=temperature,
-            verbose=verbose
+            verbose=verbose,
+            time=time
         )
 
         if not first_response or not isinstance(first_response, dict) or 'result' not in first_response:
@@ -84,7 +87,8 @@ def update_prompt(
             strength=0.5,
             temperature=temperature,
             output_pydantic=PromptUpdate,
-            verbose=verbose
+            verbose=verbose,
+            time=time
         )
 
         if not second_response or not isinstance(second_response, dict) or 'result' not in second_response:

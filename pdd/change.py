@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from .preprocess import preprocess
 from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
-from . import EXTRACTION_STRENGTH
+from . import EXTRACTION_STRENGTH, DEFAULT_STRENGTH, DEFAULT_TIME
 
 console = Console()
 
@@ -17,8 +17,10 @@ def change(
     input_prompt: str,
     input_code: str,
     change_prompt: str,
-    strength: float,
-    temperature: float,
+    strength: float = DEFAULT_STRENGTH,
+    temperature: float = 0.0,
+    time: float = DEFAULT_TIME,
+    budget: float = 5.0,  # Note: budget is in the spec but not used. Keeping for now.
     verbose: bool = False
 ) -> Tuple[str, float, str]:
     """
@@ -30,26 +32,28 @@ def change(
         change_prompt (str): Instructions for modifying the input prompt
         strength (float): The strength parameter for the LLM model (0-1)
         temperature (float): The temperature parameter for the LLM model
-        verbose (bool): Whether to print detailed information
+        time (float): The time budget for LLM calls.
+        budget (float): The budget for the operation (currently unused directly by llm_invoke).
+        verbose (bool): Whether to print out detailed information.
 
     Returns:
         Tuple[str, float, str]: (modified prompt, total cost, model name)
     """
     try:
         # Step 1: Load prompt templates
-        change_llm_prompt = load_prompt_template("change_LLM")
-        extract_prompt = load_prompt_template("extract_prompt_change_LLM")
+        change_llm_prompt_template = load_prompt_template("change_LLM")
+        extract_prompt_template = load_prompt_template("extract_prompt_change_LLM")
 
-        if not all([change_llm_prompt, extract_prompt]):
+        if not all([change_llm_prompt_template, extract_prompt_template]):
             raise ValueError("Failed to load prompt templates")
 
         # Step 2: Preprocess the change_LLM prompt
-        processed_change_llm = preprocess(change_llm_prompt, recursive=False, double_curly_brackets=False)
-        processed_change_prompt = preprocess(change_prompt, recursive=False, double_curly_brackets=False)
+        processed_change_llm_template = preprocess(change_llm_prompt_template, recursive=False, double_curly_brackets=False)
+        processed_change_prompt_content = preprocess(change_prompt, recursive=False, double_curly_brackets=False)
 
         # Input validation
-        if not all([input_prompt, input_code, change_prompt]):
-            raise ValueError("Missing required input parameters")
+        if not all([input_prompt, input_code, processed_change_prompt_content]):
+            raise ValueError("Missing required input parameters after preprocessing")
         if not (0 <= strength <= 1):
             raise ValueError("Strength must be between 0 and 1")
 
@@ -61,14 +65,15 @@ def change(
             console.print(Panel("Running change prompt through LLM...", style="blue"))
 
         change_response = llm_invoke(
-            prompt=processed_change_llm,
+            prompt=processed_change_llm_template,
             input_json={
                 "input_prompt": input_prompt,
                 "input_code": input_code,
-                "change_prompt": processed_change_prompt
+                "change_prompt": processed_change_prompt_content
             },
             strength=strength,
             temperature=temperature,
+            time=time,
             verbose=verbose
         )
 
@@ -85,10 +90,11 @@ def change(
             console.print(Panel("Extracting modified prompt...", style="blue"))
 
         extract_response = llm_invoke(
-            prompt=extract_prompt,
+            prompt=extract_prompt_template,
             input_json={"llm_output": change_response["result"]},
-            strength=EXTRACTION_STRENGTH,  # Fixed strength for extraction
+            strength=EXTRACTION_STRENGTH,
             temperature=temperature,
+            time=time,
             verbose=verbose,
             output_pydantic=ExtractedPrompt
         )
@@ -110,23 +116,27 @@ def change(
         return modified_prompt, total_cost, final_model_name
 
     except Exception as e:
-        console.print(f"[red]Error in change function: {str(e)}[/red]")
+        # Conditionally print error if verbose
+        if verbose: 
+            console.print(f"[red]Error in change function: {str(e)}[/red]")
         raise
 
 def main():
     """Example usage of the change function"""
     try:
         # Example inputs
-        input_prompt = "Write a function that adds two numbers"
-        input_code = "def add(a, b):\n    return a + b"
-        change_prompt = "Make the function handle negative numbers explicitly"
+        input_prompt_content = "Write a function that adds two numbers"
+        input_code_content = "def add(a, b):\n    return a + b"
+        change_prompt_content = "Make the function handle negative numbers explicitly"
         
         modified_prompt, cost, model = change(
-            input_prompt=input_prompt,
-            input_code=input_code,
-            change_prompt=change_prompt,
+            input_prompt=input_prompt_content,
+            input_code=input_code_content,
+            change_prompt=change_prompt_content,
             strength=0.7,
             temperature=0.7,
+            time=DEFAULT_TIME,
+            budget=10.0,
             verbose=True
         )
 

@@ -10,7 +10,7 @@
         'verification_program' - A string containing the path to a secondary Python program that verifies if the code_file still runs correctly after modifications (e.g., checks for syntax errors or basic functionality).
         'strength' - A float between or equal to 0 and 1 that represents the strength of the LLM model to use for fixing.
         'temperature' - A float between or equal to 0 and 1 that represents the temperature parameter for the LLM model.
-        'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to underlying LLM calls. Default is DEFAULT_TIME.
+        'llm_time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to underlying LLM calls. Default is DEFAULT_TIME.
         'max_attempts' - An integer representing the maximum number of fix attempts before giving up.
         'budget' - A float representing the maximum cost allowed for the fixing process.
         'verification_log_file' - A string containing the path where this loop function will write detailed XML-formatted logs for each attempt (default: "verification.log").
@@ -45,7 +45,7 @@
         a. Run the `program_file` using `subprocess`, passing the optional `program_args` if provided, to get initial output (capture stdout/stderr). Store this output.
         b. Append an XML entry to the `verification_log_file` tagged `<InitialState>` containing the timestamp and the captured output. Ensure the output is properly XML-escaped (replace `<`, `>`, `&`, `'`, `"` with `&lt;`, `&gt;`, `&amp;`, `&apos;`, `&quot;`).
         c. Read the initial contents of the `program_file` and `code_file`.
-        d. Call `fix_verification_errors` with the initial program/code contents, prompt, initial output, strength, temperature, and the time parameter. Store the result (`initial_fix_result`).
+        d. Call `fix_verification_errors` with the initial program/code contents, prompt, initial output, strength, temperature, and the llm_time parameter. Store the result (`initial_fix_result`).
         e. Add the cost (`initial_fix_result['total_cost']`) to the total cost accumulator.
         f. Extract the initial `verification_issues_count` from `initial_fix_result`. Store this in the statistics tracker.
         g. Initialize the `best_iteration` tracker with attempt 0, initial issue count, and paths to the original files (or temporary copies if modification is possible here). Log the initial issue count.
@@ -55,7 +55,7 @@
         b. Run the `program_file` using `subprocess`, passing the optional `program_args` if provided, capturing its standard output and standard error into `program_output`.
         c. Read the current contents of the `program_file` and `code_file` into `program_contents` and `code_contents` respectively.
         d. Create backup copies of the `program_file` and `code_file` in their respective directories, appending the current iteration number (e.g., `_iteration_{N}`) to the filenames. Store these backup paths.
-        e. Call `fix_verification_errors` with the `program_contents`, `code_contents`, `prompt`, `program_output`, strength, temperature, the time parameter, and verbose flag. Store the returned dictionary (containing 'explanation', 'fixed_program', 'fixed_code', 'total_cost', 'model_name', 'verification_issues_count'). Let's call this `fix_result`.
+        e. Call `fix_verification_errors` with the `program_contents`, `code_contents`, `prompt`, `program_output`, strength, temperature, the llm_time parameter, and verbose flag. Store the returned dictionary (containing 'explanation', 'fixed_program', 'fixed_code', 'total_cost', 'model_name', 'verification_issues_count'). Let's call this `fix_result`.
         f. Add the returned `cost` (`fix_result['total_cost']`) to the total cost accumulator.
         g. Prepare an XML block for the current iteration, tagged `<Iteration attempt="{attempt_number}" timestamp="{current_time}">`.
            - Inside, include tags like `<ProgramOutputBeforeFix>` (containing the XML-escaped `program_output`), `<InputsToFixer>` (containing XML-escaped `program_contents`, `code_contents`, `prompt`, `program_output`), and `<FixerResult>` (containing XML-escaped `explanation`, `fixed_program`, `fixed_code`, and other fields like `total_cost`, `model_name`, `verification_issues_count` as attributes or sub-tags). Remember to escape special XML characters in all embedded text content.

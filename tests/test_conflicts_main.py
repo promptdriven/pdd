@@ -80,7 +80,9 @@ def test_success_with_output(mock_file, mock_rprint, mock_construct_paths, mock_
         'Content of prompt1',
         'Content of prompt2',
         0.9,
-        0
+        0,
+        0.25,
+        False
     )
 
     # Ensure CSV file was opened correctly
@@ -173,7 +175,9 @@ def test_success_without_output(
         'Content of prompt1',
         'Content of prompt2',
         0.9,
-        0
+        0,
+        0.25,
+        False
     )
     
     # Ensure CSV file was opened correctly with the correct filename and mode
@@ -259,7 +263,7 @@ def test_conflicts_in_prompts_error(mock_rprint, mock_construct_paths, mock_conf
 def test_quiet_mode(mock_rprint, mock_construct_paths, mock_conflicts_in_prompts, mock_ctx):
     """Test conflicts_main in quiet mode."""
     # Modify context to be quiet
-    mock_ctx.params['quiet'] = True
+    mock_ctx.obj['quiet'] = True
     
     # Setup construct_paths
     mock_construct_paths.return_value = (
@@ -289,6 +293,16 @@ def test_quiet_mode(mock_rprint, mock_construct_paths, mock_conflicts_in_prompts
     assert conflicts == []
     assert total_cost == 0.0
     assert model_name == 'model_quiet'
+    
+    # Ensure conflicts_in_prompts was called correctly
+    mock_conflicts_in_prompts.assert_called_once_with(
+        'Content of prompt1',
+        'Content of prompt2',
+        0.9,
+        0,
+        0.25,
+        False
+    )
     
     # Ensure rprint was called only for conflict detection
     # Since conflicts are empty, it should indicate no conflicts detected
@@ -355,6 +369,16 @@ def test_force_option(mock_file, mock_rprint, mock_construct_paths, mock_conflic
         command_options={'output': 'output/output.csv'}
     )
     
+    # Ensure conflicts_in_prompts was called correctly
+    mock_conflicts_in_prompts.assert_called_once_with(
+        'Content of prompt1',
+        'Content of prompt2',
+        0.9,
+        0,
+        0.25,
+        False
+    )
+    
     # Ensure CSV file was opened correctly
     mock_file.assert_called_once_with('output/output.csv', 'w', newline='')
     
@@ -414,6 +438,16 @@ def test_replace_prompt_names(mock_rprint, mock_construct_paths, mock_conflicts_
     assert total_cost == 0.333333
     assert model_name == 'model_replace'
     
+    # Ensure conflicts_in_prompts was called correctly
+    mock_conflicts_in_prompts.assert_called_once_with(
+        'Content of prompt1',
+        'Content of prompt2',
+        0.9,
+        0,
+        0.25,
+        False
+    )
+    
     # Ensure rprint was called correctly
     mock_rprint.assert_any_call("[bold green]Conflict analysis completed successfully.[/bold green]")
     mock_rprint.assert_any_call("[bold]Model used:[/bold] model_replace")
@@ -425,3 +459,85 @@ def test_replace_prompt_names(mock_rprint, mock_construct_paths, mock_conflicts_
     mock_rprint.assert_any_call("[bold]Prompt:[/bold] path/to/prompt2")
     mock_rprint.assert_any_call("[bold]Instructions:[/bold] Change B")
     mock_rprint.assert_any_call("---")
+
+
+@patch('pdd.conflicts_main.conflicts_in_prompts')
+@patch('pdd.conflicts_main.construct_paths')
+@patch('pdd.conflicts_main.rprint')
+@patch('builtins.open', new_callable=mock_open)
+@patch('csv.DictWriter')
+def test_verbose_mode(mock_dict_writer, mock_file, mock_rprint, mock_construct_paths, mock_conflicts_in_prompts, mock_ctx):
+    """Test conflicts_main with verbose mode enabled."""
+    # Setup construct_paths
+    mock_construct_paths.return_value = (
+        {
+            'prompt1': 'Verbose prompt1 content',
+            'prompt2': 'Verbose prompt2 content'
+        },
+        {
+            'output': 'verbose_output.csv'
+        },
+        'python'
+    )
+
+    # Setup conflicts_in_prompts
+    sample_conflicts = [{'prompt_name': 'prompt_1', 'change_instructions': 'Verbose Change'}]
+    mock_conflicts_in_prompts.return_value = (sample_conflicts, 0.999, 'model_verbose')
+
+    # Create a mock writer instance for csv.DictWriter
+    mock_writer_instance = MagicMock()
+    mock_dict_writer.return_value = mock_writer_instance
+
+    # Call the function under test with verbose=True
+    conflicts, total_cost, model_name = conflicts_main(
+        ctx=mock_ctx,
+        prompt1='path/to/verbose_prompt1',
+        prompt2='path/to/verbose_prompt2',
+        output=None,
+        verbose=True
+    )
+
+    # Assertions
+    assert conflicts == [
+        {'prompt_name': 'path/to/verbose_prompt1', 'change_instructions': 'Verbose Change'}
+    ]
+    assert total_cost == 0.999
+    assert model_name == 'model_verbose'
+
+    # Ensure conflicts_in_prompts was called correctly with verbose=True
+    mock_conflicts_in_prompts.assert_called_once_with(
+        'Verbose prompt1 content',
+        'Verbose prompt2 content',
+        0.9,
+        0,
+        0.25,
+        True
+    )
+
+    # Ensure construct_paths was called (optional, but good for completeness)
+    mock_construct_paths.assert_called_once_with(
+        input_file_paths={
+            'prompt1': 'path/to/verbose_prompt1',
+            'prompt2': 'path/to/verbose_prompt2'
+        },
+        force=False,
+        quiet=False,
+        command='conflicts',
+        command_options={'output': None}
+    )
+
+    # Check that CSV writing happens (even if output is None, it defaults)
+    mock_file.assert_called_once_with('verbose_output.csv', 'w', newline='')
+    mock_dict_writer.assert_called_once_with(mock_file.return_value, fieldnames=['prompt_name', 'change_instructions'])
+    mock_writer_instance.writeheader.assert_called_once()
+    mock_writer_instance.writerow.assert_called_once_with({'prompt_name': 'path/to/verbose_prompt1', 'change_instructions': 'Verbose Change'})
+
+    # Check rprint calls for verbose output (if any specific to verbose=True, otherwise general success messages)
+    # If quiet is False (default in mock_ctx), success messages should be printed.
+    # The spec for conflicts_main doesn't specify different rprint output for verbose=True itself,
+    # rather that verbose is passed to conflicts_in_prompts for *its* detailed output.
+    # So, we just check the standard non-quiet prints.
+    if not mock_ctx.obj.get('quiet', False):
+        mock_rprint.assert_any_call("[bold green]Conflict analysis completed successfully.[/bold green]")
+        mock_rprint.assert_any_call("[bold]Model used:[/bold] model_verbose")
+        mock_rprint.assert_any_call("[bold]Total cost:[/bold] $0.999000")

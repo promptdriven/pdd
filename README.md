@@ -4,6 +4,8 @@
 
 PDD (Prompt-Driven Development) is a versatile tool for generating code, creating examples, running unit tests, and managing prompt files. It leverages AI models to streamline the development process, allowing developers to work more efficiently with prompt-driven code generation.
 
+The primary command is **`sync`**, which automatically executes the complete PDD workflow loop - from dependency injection through code generation, testing, and verification. For most use cases, `sync` is the recommended starting point, as it intelligently determines what steps are needed and executes them in the correct order.
+
 ## Installation
 
 ### Recommended Method: uv
@@ -312,21 +314,22 @@ pdd [GLOBAL OPTIONS] COMMAND [OPTIONS] [ARGS]...
 
 Here is a brief overview of the main commands provided by PDD. Click the command name to jump to its detailed section:
 
-- **[`generate`](#1-generate)**: Creates runnable code from a prompt file.
-- **[`example`](#2-example)**: Generates a compact example showing how to use functionality defined in a prompt.
-- **[`test`](#3-test)**: Generates or enhances unit tests for a code file and its prompt.
-- **[`preprocess`](#4-preprocess)**: Preprocesses prompt files, handling includes, comments, and other directives.
-- **[`fix`](#5-fix)**: Fixes errors in code and unit tests based on error messages and the original prompt.
-- **[`split`](#6-split)**: Splits large prompt files into smaller, more manageable ones.
-- **[`change`](#7-change)**: Modifies a prompt file based on instructions in a change prompt.
-- **[`update`](#8-update)**: Updates the original prompt file based on modified code.
-- **[`detect`](#9-detect)**: Analyzes prompts to determine which ones need changes based on a description.
-- **[`conflicts`](#10-conflicts)**: Finds and suggests resolutions for conflicts between two prompt files.
-- **[`crash`](#11-crash)**: Fixes errors in a code module and its calling program that caused a crash.
-- **[`trace`](#12-trace)**: Finds the corresponding line number in a prompt file for a given code line.
-- **[`bug`](#13-bug)**: Generates a unit test based on observed vs. desired program outputs.
-- **[`auto-deps`](#14-auto-deps)**: Analyzes and inserts needed dependencies into a prompt file.
-- **[`verify`](#15-verify)**: Verifies functional correctness by running a program and judging its output against the prompt's intent using an LLM.
+- **[`sync`](#1-sync)**: **[PRIMARY COMMAND]** Automatically executes the complete PDD workflow loop for a given basename - from dependency injection through code generation, testing, and verification.
+- **[`generate`](#2-generate)**: Creates runnable code from a prompt file.
+- **[`example`](#3-example)**: Generates a compact example showing how to use functionality defined in a prompt.
+- **[`test`](#4-test)**: Generates or enhances unit tests for a code file and its prompt.
+- **[`preprocess`](#5-preprocess)**: Preprocesses prompt files, handling includes, comments, and other directives.
+- **[`fix`](#6-fix)**: Fixes errors in code and unit tests based on error messages and the original prompt.
+- **[`split`](#7-split)**: Splits large prompt files into smaller, more manageable ones.
+- **[`change`](#8-change)**: Modifies a prompt file based on instructions in a change prompt.
+- **[`update`](#9-update)**: Updates the original prompt file based on modified code.
+- **[`detect`](#10-detect)**: Analyzes prompts to determine which ones need changes based on a description.
+- **[`conflicts`](#11-conflicts)**: Finds and suggests resolutions for conflicts between two prompt files.
+- **[`crash`](#12-crash)**: Fixes errors in a code module and its calling program that caused a crash.
+- **[`trace`](#13-trace)**: Finds the corresponding line number in a prompt file for a given code line.
+- **[`bug`](#14-bug)**: Generates a unit test based on observed vs. desired program outputs.
+- **[`auto-deps`](#15-auto-deps)**: Analyzes and inserts needed dependencies into a prompt file.
+- **[`verify`](#16-verify)**: Verifies functional correctness by running a program and judging its output against the prompt's intent using an LLM.
 
 ## Global Options
 
@@ -347,6 +350,8 @@ These options can be used with any command:
 - `--output-cost PATH_TO_CSV_FILE`: Enable cost tracking and output a CSV file with usage details.
 - `--review-examples`: Review and optionally exclude few-shot examples before command execution.
 - `--local`: Run commands locally instead of in the cloud.
+- `--context CONTEXT_NAME`: Override automatic context detection and use the specified context from `.pddrc`.
+- `--list-contexts`: List all available contexts defined in `.pddrc` and exit.
 
 ## Auto-Update Control
 
@@ -440,7 +445,81 @@ This sets a maximum budget of $5.00 for the fix operation.
 
 Here are the main commands provided by PDD:
 
-### 1. generate
+### 1. sync
+
+**[PRIMARY COMMAND]** Automatically execute the complete PDD workflow loop for a given basename. This command implements the entire synchronized cycle from the whitepaper, intelligently determining what steps are needed and executing them in the correct order.
+
+```bash
+pdd [GLOBAL OPTIONS] sync [OPTIONS] BASENAME
+```
+
+Arguments:
+- `BASENAME`: The base name for the prompt file (e.g., "factorial_calculator" for "factorial_calculator_python.prompt")
+
+Options:
+- `--max-attempts INT`: Maximum number of fix attempts in any iterative loop (default is 3)
+- `--budget FLOAT`: Maximum total cost allowed for the entire sync process (default is $10.0)
+- `--skip-verify`: Skip the functional verification step
+- `--skip-tests`: Skip unit test generation and fixing
+- `--target-coverage FLOAT`: Desired code coverage percentage (default is 90.0)
+
+**Language Detection**:
+The sync command automatically detects the programming language by scanning for existing prompt files matching the pattern `{basename}_{language}.prompt` in the prompts directory. For example:
+- `factorial_calculator_python.prompt` → generates `factorial_calculator.py`
+- `factorial_calculator_typescript.prompt` → generates `factorial_calculator.ts`
+- `factorial_calculator_javascript.prompt` → generates `factorial_calculator.js`
+
+If multiple language prompt files exist for the same basename, sync will process all of them.
+
+**Context Integration**:
+When a `.pddrc` file is present, the sync command automatically detects the appropriate context based on the current working directory and applies context-specific settings like output paths, default language, and model parameters. This eliminates the need to specify these options manually for each command.
+
+**Workflow Logic**:
+
+The sync command automatically detects what files exist and executes the appropriate workflow:
+
+1. **auto-deps**: Find and inject relevant dependencies into the prompt if needed
+2. **generate**: Create or update the code module from the prompt
+3. **example**: Generate usage example if it doesn't exist or is outdated
+4. **crash**: Fix any runtime errors to make code executable
+5. **verify**: Run functional verification against prompt intent (unless --skip-verify)
+6. **test**: Generate comprehensive unit tests if they don't exist (unless --skip-tests)
+7. **fix**: Resolve any bugs found by unit tests
+8. **update**: Back-propagate any learnings to the prompt file
+
+**Intelligence**:
+- Detects which files already exist and are up-to-date
+- Skips unnecessary steps (e.g., won't regenerate code if prompt hasn't changed)
+- Uses git integration to detect changes and determine incremental vs full regeneration
+- Accumulates tests over time rather than replacing them
+- Automatically handles dependencies between steps
+
+**Environment Variables**:
+All existing PDD output path environment variables are respected, allowing the sync command to save files in the appropriate locations for your project structure.
+
+**When to use**: This is the recommended starting point for most PDD workflows. Use sync when you want to ensure all artifacts (code, examples, tests) are up-to-date and synchronized with your prompt files. The command embodies the PDD philosophy by treating the workflow as a batch process that developers can launch and return to later, freeing them from constant supervision.
+
+Examples:
+```bash
+# Complete workflow for a new feature
+pdd sync factorial_calculator
+
+# Sync with higher budget and coverage target
+pdd sync --budget 15.0 --target-coverage 95.0 data_processor
+
+# Quick sync skipping verification for rapid iteration
+pdd sync --skip-verify --budget 5.0 web_scraper
+
+# Sync all detected languages for a basename
+pdd sync multi_language_module
+
+# Context-aware examples (with .pddrc)
+cd backend && pdd sync calculator     # Uses backend context settings
+cd frontend && pdd sync dashboard     # Uses frontend context settings
+pdd --context backend sync calculator # Explicit context override
+```
+
+### 2. generate
 
 Create runnable code from a prompt file. This command produces the full implementation code that fulfills all requirements in the prompt. When changes are detected between the current prompt and its last committed version, it can automatically perform incremental updates rather than full regeneration.
 
@@ -481,7 +560,7 @@ pdd [GLOBAL OPTIONS] generate --output src/calculator.py calculator_python.promp
 pdd [GLOBAL OPTIONS] generate --output src/calculator.py  --original-prompt old_calculator_python.prompt calculator_python.prompt
 ```
 
-### 2. example
+### 3. example
 
 Create a compact example demonstrating how to use functionality defined in a prompt. Similar to a header file or API documentation, this produces minimal, token-efficient code that shows the interface without implementation details.
 
@@ -503,7 +582,7 @@ Example:
 pdd [GLOBAL OPTIONS] example --output examples/factorial_calculator_example.py factorial_calculator_python.prompt src/factorial_calculator.py
 ```
 
-### 3. test
+### 4. test
 
 Generate or enhance unit tests for a given code file and its corresponding prompt file.
 
@@ -577,7 +656,7 @@ When coverage options are provided, the test command will:
    - Project's testing conventions
    - Original prompt's intentions
 
-### 4. preprocess
+### 5. preprocess
 
 Preprocess prompt files and save the results.
 
@@ -656,7 +735,7 @@ Example command usage:
 pdd [GLOBAL OPTIONS] preprocess --output preprocessed/factorial_calculator_python_preprocessed.prompt --recursive --double --exclude model,temperature factorial_calculator_python.prompt
 ```
 
-### 5. fix
+### 6. fix
 
 Fix errors in code and unit tests based on error messages and the original prompt file.
 
@@ -698,7 +777,7 @@ pdd [GLOBAL OPTIONS] fix --output-test tests/test_factorial_calculator_fixed.py 
 ```
 In this example, `factorial_calculator_python.prompt` is the prompt file that originally generated the code under test.
 
-### 6. split
+### 7. split
 
 Split large complex prompt files into smaller, more manageable prompt files.
 
@@ -720,7 +799,7 @@ Example:
 pdd [GLOBAL OPTIONS] split --output-sub prompts/sub_data_processing.prompt --output-modified prompts/modified_main_pipeline.prompt data_processing_pipeline_python.prompt src/data_pipeline.py examples/pipeline_interface.py 
 ```
 
-### 7. change
+### 8. change
 
 Modify an input prompt file based on a change prompt and the corresponding input code.
 
@@ -748,7 +827,7 @@ Example (batch change using CSV):
 pdd [GLOBAL OPTIONS] change --csv --output modified_prompts/ changes_batch.csv src/
 ```
 
-### 8. update
+### 9. update
 
 Update the original prompt file based on the modified code and optionally the original code.
 
@@ -775,7 +854,7 @@ Example using the `--git` option:
 pdd [GLOBAL OPTIONS] update --git --output updated_factorial_calculator_python.prompt factorial_calculator_python.prompt src/modified_factorial_calculator.py
 ```
 
-### 9. detect
+### 10. detect
 
 Analyze a list of prompt files and a change description to determine which prompts need to be changed.
 
@@ -795,7 +874,7 @@ Example:
 pdd [GLOBAL OPTIONS] detect --output detect_results.csv factorial_calculator_python.prompt data_processing_python.prompt web_scraper_python.prompt changes_description.prompt
 ```
 
-### 10. conflicts
+### 11. conflicts
 
 Analyze two prompt files to find conflicts between them and suggest how to resolve those conflicts.
 
@@ -817,7 +896,7 @@ pdd [GLOBAL OPTIONS] conflicts --output conflicts_analysis.csv data_processing_m
 
 Both the `detect` and `conflicts` commands generate a csv file with the following columns: `prompt_name` and `change_instructions`. This csv file can be used as input for the `change --csv` command.
 
-### 11. crash
+### 12. crash
 
 Fix errors in a code module and its calling program that caused a program to crash.
 
@@ -850,7 +929,7 @@ Example with loop option:
 pdd [GLOBAL OPTIONS] crash --loop --max-attempts 5 --budget 10.0 --output fixed_data_processor.py --output-program fixed_main_pipeline.py data_processing_module_python.prompt crashed_data_processor.py main_pipeline.py crash_errors.log
 ```
 
-### 12. trace
+### 13. trace
 
 Fine the associated line number between a prompt file and the generated code.
 
@@ -873,7 +952,7 @@ pdd [GLOBAL OPTIONS] trace --output trace_results.log factorial_calculator_pytho
 
 This will print out the line number in the prompt file for the associated the code line.
 
-### 13. bug
+### 14. bug
 
 Generate a unit test based on observed and desired outputs, given the original prompt and code.
 
@@ -897,7 +976,7 @@ Example:
 pdd [GLOBAL OPTIONS] bug --output tests/test_factorial_calculator_bug.py factorial_calculator_python.prompt src/factorial_calculator.py main_program.py current_output.txt desired_output.txt
 ```
 
-### 14. auto-deps
+### 15. auto-deps
 
 Analyze a prompt file and a directory of potential dependencies to determine and insert needed dependencies into the prompt.
 
@@ -924,7 +1003,7 @@ Example:
 pdd [GLOBAL OPTIONS] auto-deps --output prompts/data_pipeline_with_deps.prompt --csv project_deps.csv data_processing_pipeline_python.prompt "context/*_example.py"
 ```
 
-### 15. verify
+### 16. verify
 
 Verifies the functional correctness of generated code by executing a specified program (often the output of the `example` command) and using an LLM to judge the program's output against the original prompt's intent. No separate expected output file is needed; the LLM determines if the behavior aligns with the prompt requirements. If verification fails, it iteratively attempts to fix the code based on the judged discrepancy, similar to how `fix` and `crash` operate with their respective error signals.
 
@@ -1022,16 +1101,104 @@ PDD provides comprehensive help features:
 - **Colorized Output**: PDD provides colorized output for better readability in compatible terminals.
 
 
-## Environment Variables
+## Configuration
+
+PDD supports multiple configuration methods to customize its behavior for different project structures and contexts.
+
+### Project Configuration File (.pddrc)
+
+**Recommended for multi-context projects** (e.g., monorepos with backend/frontend)
+
+Create a `.pddrc` file in your project root to define different contexts with their own settings:
+
+```yaml
+# .pddrc - committed to version control
+version: "1.0"
+contexts:
+  backend:
+    paths: ["backend/**", "api/**", "server/**"]
+    defaults:
+      generate_output_path: "backend/src/"
+      test_output_path: "backend/tests/"
+      example_output_path: "backend/examples/"
+      default_language: "python"
+      target_coverage: 90.0
+      strength: 0.8
+  
+  frontend:
+    paths: ["frontend/**", "web/**", "ui/**"]
+    defaults:
+      generate_output_path: "frontend/src/"
+      test_output_path: "frontend/__tests__/"
+      example_output_path: "frontend/examples/"
+      default_language: "typescript"
+      target_coverage: 85.0
+      strength: 0.7
+  
+  shared:
+    paths: ["shared/**", "common/**", "lib/**"]
+    defaults:
+      generate_output_path: "shared/lib/"
+      test_output_path: "shared/tests/"
+      default_language: "python"
+      target_coverage: 95.0
+  
+  # Fallback for unmatched paths
+  default:
+    defaults:
+      generate_output_path: "src/"
+      test_output_path: "tests/"
+      default_language: "python"
+      target_coverage: 90.0
+      strength: 0.5
+```
+
+**Context Detection**:
+PDD automatically detects the appropriate context based on:
+1. **Current directory path**: Matches against the `paths` patterns in each context
+2. **Manual override**: Use `--context CONTEXT_NAME` to specify explicitly
+3. **Fallback**: Uses `default` context if no path matches
+
+**Available Context Settings**:
+- `generate_output_path`: Where generated code files are saved
+- `test_output_path`: Where test files are saved
+- `example_output_path`: Where example files are saved
+- `default_language`: Default programming language for the context
+- `target_coverage`: Default test coverage target
+- `strength`: Default AI model strength (0.0-1.0)
+- `temperature`: Default AI model temperature
+- `budget`: Default budget for iterative commands
+- `max_attempts`: Default maximum attempts for fixing operations
+
+**Usage Examples**:
+```bash
+# Auto-detect context from current directory
+cd backend && pdd sync calculator     # Uses backend context
+cd frontend && pdd sync dashboard     # Uses frontend context
+
+# Explicit context override
+pdd --context backend sync calculator
+pdd --context frontend sync dashboard
+
+# List available contexts
+pdd --list-contexts
+```
+
+### Environment Variables
 
 PDD uses several environment variables to customize its behavior:
 
-### Core Environment Variables
+#### Core Environment Variables
 
 - **`PDD_PATH`**: Points to the root directory of PDD. This is automatically set during pip installation to the directory where PDD is installed. You typically don't need to set this manually.
 - **`PDD_AUTO_UPDATE`**: Controls whether PDD automatically updates itself (default: true).
+- **`PDD_CONFIG_PATH`**: Override the default `.pddrc` file location (default: searches upward from current directory).
+- **`PDD_DEFAULT_CONTEXT`**: Default context to use when no context is detected (default: "default").
+- **`PDD_DEFAULT_LANGUAGE`**: Global default programming language when not specified in context (default: "python").
 
-### Output Path Variables
+#### Output Path Variables
+
+**Note**: When using `.pddrc` configuration, context-specific settings take precedence over these global environment variables.
 
 - **`PDD_GENERATE_OUTPUT_PATH`**: Default path for the `generate` command.
 - **`PDD_EXAMPLE_OUTPUT_PATH`**: Default path for the `example` command.
@@ -1057,6 +1224,36 @@ PDD uses several environment variables to customize its behavior:
 - **`PDD_VERIFY_RESULTS_OUTPUT_PATH`**: Default path for the results log file generated by the `verify` command.
 - **`PDD_VERIFY_CODE_OUTPUT_PATH`**: Default path for the verified code file generated by the `verify` command upon success.
 - **`PDD_VERIFY_PROGRAM_OUTPUT_PATH`**: Default path for the verified program file generated by the `verify` command upon success.
+
+### Configuration Priority
+
+PDD resolves configuration settings in the following order (highest to lowest priority):
+
+1. **Command-line options** (e.g., `--output`, `--strength`)
+2. **Context-specific settings** (from `.pddrc` file)
+3. **Global environment variables** (e.g., `PDD_GENERATE_OUTPUT_PATH`)
+4. **Built-in defaults**
+
+### Migration from Environment Variables
+
+If you're currently using environment variables, you can migrate to `.pddrc` configuration:
+
+```bash
+# Before: Environment variables
+export PDD_GENERATE_OUTPUT_PATH=backend/src/
+export PDD_TEST_OUTPUT_PATH=backend/tests/
+export PDD_DEFAULT_LANGUAGE=python
+
+# After: .pddrc file
+contexts:
+  default:
+    defaults:
+      generate_output_path: "backend/src/"
+      test_output_path: "backend/tests/" 
+      default_language: "python"
+```
+
+The `.pddrc` approach is recommended for team projects as it ensures consistent configuration across all team members and can be version controlled.
 
 
 ### Model Configuration (`llm_model.csv`)

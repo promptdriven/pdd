@@ -7,6 +7,7 @@ from .llm_invoke import llm_invoke
 from .load_prompt_template import load_prompt_template
 from .auto_include import auto_include
 from .preprocess import preprocess
+from . import DEFAULT_TIME, DEFAULT_STRENGTH
 
 class InsertIncludesOutput(BaseModel):
     output_prompt: str = Field(description="The prompt with dependencies inserted")
@@ -15,8 +16,9 @@ def insert_includes(
     input_prompt: str,
     directory_path: str,
     csv_filename: str,
-    strength: float,
-    temperature: float,
+    strength: float = DEFAULT_STRENGTH,
+    temperature: float = 0.0,
+    time: float = DEFAULT_TIME,
     verbose: bool = False
 ) -> Tuple[str, str, float, str]:
     """
@@ -28,6 +30,7 @@ def insert_includes(
         csv_filename (str): Name of the CSV file containing dependencies
         strength (float): Strength parameter for the LLM model
         temperature (float): Temperature parameter for the LLM model
+        time (float): Time budget for the LLM model
         verbose (bool, optional): Whether to print detailed information. Defaults to False.
 
     Returns:
@@ -74,6 +77,7 @@ def insert_includes(
             csv_file=csv_content,
             strength=strength,
             temperature=temperature,
+            time=time,
             verbose=verbose
         )
 
@@ -90,6 +94,7 @@ def insert_includes(
             },
             strength=strength,
             temperature=temperature,
+            time=time,
             verbose=verbose,
             output_pydantic=InsertIncludesOutput
         )
@@ -135,6 +140,7 @@ def main():
             csv_filename=csv_filename,
             strength=strength,
             temperature=temperature,
+            time=0.25,
             verbose=True
         )
 

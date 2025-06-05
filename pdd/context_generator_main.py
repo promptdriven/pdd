@@ -40,12 +40,14 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
         # Generate example code
         strength = ctx.obj.get('strength', 0.5)
         temperature = ctx.obj.get('temperature', 0)
+        time = ctx.obj.get('time')
         example_code, total_cost, model_name = context_generator(
             language=language,
             code_module=code_content,
             prompt=prompt_content,
             strength=strength,
             temperature=temperature,
+            time=time,
             verbose=ctx.obj.get('verbose', False)
         )
 

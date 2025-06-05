@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 from rich import print as rprint
 from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
+from . import DEFAULT_STRENGTH, DEFAULT_TIME
 
 class PromptAnalysis(BaseModel):
     reasoning: str = Field(description="Structured reasoning for the completeness assessment")
@@ -10,8 +11,9 @@ class PromptAnalysis(BaseModel):
 
 def unfinished_prompt(
     prompt_text: str,
-    strength: float = 0.5,
+    strength: float = DEFAULT_STRENGTH,
     temperature: float = 0,
+    time: float = DEFAULT_TIME,
     verbose: bool = False
 ) -> Tuple[str, bool, float, str]:
     """
@@ -21,6 +23,7 @@ def unfinished_prompt(
         prompt_text (str): The prompt text to analyze
         strength (float, optional): Strength of the LLM model. Defaults to 0.5.
         temperature (float, optional): Temperature of the LLM model. Defaults to 0.
+        time (float, optional): Time budget for LLM calls. Defaults to DEFAULT_TIME.
         verbose (bool, optional): Whether to print detailed information. Defaults to False.
 
     Returns:
@@ -70,6 +73,7 @@ def unfinished_prompt(
             input_json=input_json,
             strength=strength,
             temperature=temperature,
+            time=time,
             verbose=verbose,
             output_pydantic=PromptAnalysis
         )
@@ -103,6 +107,7 @@ if __name__ == "__main__":
     try:
         reasoning, is_finished, cost, model = unfinished_prompt(
             prompt_text=sample_prompt,
+            time=DEFAULT_TIME,
             verbose=True
         )
         rprint("\n[blue]Results:[/blue]")

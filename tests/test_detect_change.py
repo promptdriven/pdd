@@ -2,7 +2,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch, mock_open, MagicMock
 from pdd.detect_change import detect_change, ChangesList, ChangeInstruction
-
+from pdd import DEFAULT_STRENGTH, EXTRACTION_STRENGTH
 # Test data
 MOCK_PROMPT_FILES = ["test1.prompt", "test2.prompt"]
 MOCK_CHANGE_DESCRIPTION = "Update error handling in prompts"
@@ -59,6 +59,7 @@ def test_successful_detection(mock_llm_responses, mock_templates):
             MOCK_CHANGE_DESCRIPTION,
             strength=0.7,
             temperature=0.0,
+            time=None,
             verbose=False
         )
         
@@ -69,6 +70,25 @@ def test_successful_detection(mock_llm_responses, mock_templates):
         assert total_cost == 0.08  # 0.05 + 0.03
         assert model_name == "gpt-3.5-turbo"
 
+        # Verify arguments for the calls to llm_invoke
+        assert mock_llm_invoke.call_count == 2
+
+        # First call (detection)
+        detection_call_kwargs = mock_llm_invoke.call_args_list[0].kwargs
+        assert detection_call_kwargs['strength'] == 0.7 # Matches the input strength to detect_change
+        assert detection_call_kwargs['temperature'] == 0.0 # Matches the input temperature to detect_change
+        assert detection_call_kwargs['time'] is None # Check time parameter
+        assert detection_call_kwargs['prompt'] == "Processed template" # Mocked preprocessed detect_template
+
+        # Second call (extraction)
+        extraction_call_kwargs = mock_llm_invoke.call_args_list[1].kwargs
+        assert extraction_call_kwargs['strength'] == EXTRACTION_STRENGTH
+        assert extraction_call_kwargs['temperature'] == 0.0
+        assert extraction_call_kwargs['time'] is None # Check time parameter
+        assert extraction_call_kwargs['prompt'] == mock_templates[1] # extract_template
+        assert 'llm_output' in extraction_call_kwargs['input_json']
+        assert extraction_call_kwargs['output_pydantic'] == ChangesList
+
 def test_missing_prompt_template():
     """Test handling of missing prompt template."""
     with patch('pdd.detect_change.load_prompt_template', return_value=None):
@@ -77,7 +97,8 @@ def test_missing_prompt_template():
                 MOCK_PROMPT_FILES,
                 MOCK_CHANGE_DESCRIPTION,
                 strength=0.7,
-                temperature=0.0
+                temperature=0.0,
+                time=None
             )
 
 def test_missing_prompt_files(mock_llm_responses, mock_templates):
@@ -101,6 +122,7 @@ def test_missing_prompt_files(mock_llm_responses, mock_templates):
             MOCK_CHANGE_DESCRIPTION,
             strength=0.7,
             temperature=0.0,
+            time=None,
             verbose=True
         )
         
@@ -128,6 +150,7 @@ def test_verbose_output(mock_llm_responses, mock_templates, capsys):
             MOCK_CHANGE_DESCRIPTION,
             strength=0.7,
             temperature=0.0,
+            time=None,
             verbose=True
         )
         
@@ -145,5 +168,6 @@ def test_general_exception_handling():
                 MOCK_PROMPT_FILES,
                 MOCK_CHANGE_DESCRIPTION,
                 strength=0.7,
-                temperature=0.0
+                temperature=0.0,
+                time=None
             )

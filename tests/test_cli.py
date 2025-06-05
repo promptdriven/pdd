@@ -10,7 +10,7 @@ import click # Import click for UsageError
 
 # Assuming 'pdd' package is installed or in PYTHONPATH
 # Adjust import if necessary based on project structure
-from pdd import cli, __version__, DEFAULT_STRENGTH
+from pdd import cli, __version__, DEFAULT_STRENGTH, DEFAULT_TIME
 
 # Import fix_verification_main to mock
 # NOTE: fix_verification_main is imported in cli.py, so mocking pdd.cli.fix_verification_main is correct
@@ -93,6 +93,7 @@ def test_cli_global_options_defaults(mock_construct, mock_main, mock_auto_update
     assert ctx.obj['output_cost'] is None
     assert ctx.obj['local'] is False
     assert ctx.obj['review_examples'] is False # Check default for review_examples
+    assert ctx.obj['time'] == DEFAULT_TIME # Check default for time
     mock_auto_update.assert_called_once_with() # Check auto_update was called
 
 @patch('pdd.cli.auto_update') # Patch auto_update here as well
@@ -112,6 +113,7 @@ def test_cli_global_options_explicit(mock_construct, mock_main, mock_auto_update
         "--output-cost", "./output/costs.csv",
         "--local",
         "--review-examples",
+        "--time", "0.7", # Added --time to explicit options test
         "generate", str(files["test.prompt"])
     ])
 
@@ -134,6 +136,7 @@ def test_cli_global_options_explicit(mock_construct, mock_main, mock_auto_update
     assert ctx.obj['output_cost'] == "./output/costs.csv"
     assert ctx.obj['local'] is True
     assert ctx.obj['review_examples'] is True # Check review_examples override
+    assert ctx.obj['time'] == 0.7 # Check time override
     mock_auto_update.assert_called_once_with() # Check auto_update was called
 
 @patch('pdd.cli.auto_update') # Patch auto_update here as well
@@ -652,6 +655,7 @@ def add(a, b):
         'local': True,  # Use local execution to avoid API calls
         'output_cost': None, # Ensure cost tracking is off for this test
         'review_examples': False,
+        'time': DEFAULT_TIME, # Added time to context
     }
 
     try:
@@ -864,6 +868,7 @@ sys.exit(0 if test_result.wasSuccessful() else 1)
         'local': True,  # Use local execution to avoid API calls
         'output_cost': None,
         'review_examples': False,
+        'time': DEFAULT_TIME, # Added time to context
     }
 
     # Change working directory to tmp_path so imports work correctly
@@ -1000,6 +1005,7 @@ def test_cli_verify_command_calls_fix_verification_main(mock_fix_verification, m
         'output_cost': None,
         'review_examples': False,
         'local': False,
+        'time': DEFAULT_TIME, # Added time to context
     }
     
     # Create a minimal ctx-like object with obj attribute
@@ -1234,6 +1240,7 @@ if __name__ == "__main__":
         'local': True,  # Use local execution to avoid API calls
         'output_cost': None,
         'review_examples': False,
+        'time': DEFAULT_TIME, # Added time to context
     }
 
     # Change working directory to tmp_path so imports work correctly

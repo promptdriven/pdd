@@ -216,7 +216,8 @@ def test_change_main_batch_mode(mock_process_csv, setup_environment, caplog, mon
         code_directory=env["code_directory"],
         language='python',
         extension='.py',
-        budget=10.0#, verbose=False # Removed verbose
+        budget=10.0,
+        time=0.25 # Added time, assuming DEFAULT_TIME = 0.25
     )
 
     # Verify logs show correct CSV processing (header check)
@@ -603,7 +604,8 @@ def test_change_main_csv_success(
         code_directory=str(code_directory),
         language='python',
         extension='.py',
-        budget=20.0#, verbose=False # Removed verbose
+        budget=20.0,
+        time=0.25 # Added time, assuming DEFAULT_TIME = 0.25
     )
 
     # Verify output CSV write call

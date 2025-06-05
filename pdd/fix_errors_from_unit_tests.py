@@ -10,6 +10,7 @@ from rich.panel import Panel
 from tempfile import NamedTemporaryFile
 
 from . import DEFAULT_STRENGTH
+from . import DEFAULT_TIME, EXTRACTION_STRENGTH
 from .preprocess import preprocess
 from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
@@ -104,9 +105,10 @@ def fix_errors_from_unit_tests(
     prompt: str,
     error: str,
     error_file: str,
-    strength: float,
-    temperature: float,
-    verbose: bool = False
+    strength: float = DEFAULT_STRENGTH,
+    temperature: float = 0.0,
+    verbose: bool = False,
+    time: float = DEFAULT_TIME
 ) -> Tuple[bool, bool, str, str, str, float, str]:
     """
     Fix errors in unit tests using LLM models and log the process.
@@ -120,6 +122,7 @@ def fix_errors_from_unit_tests(
         strength (float): LLM model strength (0-1)
         temperature (float): LLM temperature (0-1)
         verbose (bool): Whether to print detailed output
+        time (float): Time parameter for llm_invoke
 
     Returns:
         Tuple containing update flags, fixed code/tests, total cost, and model name
@@ -178,7 +181,8 @@ def fix_errors_from_unit_tests(
             },
             strength=strength,
             temperature=temperature,
-            verbose=verbose
+            verbose=verbose,
+            time=time
         )
 
         total_cost += response1['cost']
@@ -211,10 +215,11 @@ def fix_errors_from_unit_tests(
                 "unit_test": unit_test,
                 "code": code
             },
-            strength=DEFAULT_STRENGTH,  # Fixed strength as per requirements
+            strength=EXTRACTION_STRENGTH,  # Fixed strength as per requirements
             temperature=temperature,
             output_pydantic=CodeFix,
-            verbose=verbose
+            verbose=verbose,
+            time=time
         )
 
         total_cost += response2['cost']

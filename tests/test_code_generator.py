@@ -72,12 +72,14 @@ def test_code_generator_valid_input_complete(
         input_json={},
         strength=0.8,
         temperature=0.5,
+        time=None,
         verbose=True
     )
     mock_unfinished_prompt.assert_called_once_with(
         prompt_text=MOCK_INITIAL_RESPONSE['result'][-600:],
         strength=0.5,
         temperature=0.0,
+        time=None,
         verbose=True
     )
     mock_continue_generation.assert_not_called()
@@ -86,6 +88,7 @@ def test_code_generator_valid_input_complete(
         language="python",
         strength=EXTRACTION_STRENGTH,
         temperature=0.0,
+        time=None,
         verbose=True
     )
     assert runnable_code == "runnable_code_here"
@@ -120,12 +123,14 @@ def test_code_generator_valid_input_incomplete(
         input_json={},
         strength=0.9,
         temperature=0.7,
+        time=None,
         verbose=False
     )
     mock_unfinished_prompt.assert_called_once_with(
         prompt_text=MOCK_INITIAL_RESPONSE['result'][-600:],
         strength=0.5,
         temperature=0.0,
+        time=None,
         verbose=False
     )
     mock_continue_generation.assert_called_once_with(
@@ -133,6 +138,7 @@ def test_code_generator_valid_input_incomplete(
         llm_output=MOCK_INITIAL_RESPONSE['result'],
         strength=0.9,
         temperature=0.7,
+        time=None,
         verbose=False
     )
     mock_postprocess.assert_called_once_with(
@@ -140,6 +146,7 @@ def test_code_generator_valid_input_incomplete(
         language="python",
         strength=EXTRACTION_STRENGTH,
         temperature=0.0,
+        time=None,
         verbose=False
     )
     assert runnable_code == "runnable_code_here"
@@ -284,6 +291,7 @@ def test_code_generator_edge_case_exact_600_chars(
         prompt_text='a' * 600,
         strength=0.5,
         temperature=0.0,
+        time=None,
         verbose=False
     )
     mock_continue_generation.assert_not_called()
@@ -292,6 +300,7 @@ def test_code_generator_edge_case_exact_600_chars(
         language="python",
         strength=EXTRACTION_STRENGTH,
         temperature=0.0,
+        time=None,
         verbose=False
     )
     assert runnable_code == "runnable_code_here"

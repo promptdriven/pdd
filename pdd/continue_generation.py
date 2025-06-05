@@ -6,7 +6,7 @@ from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
 from .llm_invoke import llm_invoke
 from .unfinished_prompt import unfinished_prompt
-from . import EXTRACTION_STRENGTH
+from . import EXTRACTION_STRENGTH, DEFAULT_TIME
 
 console = Console()
 
@@ -23,6 +23,7 @@ def continue_generation(
     llm_output: str,
     strength: float,
     temperature: float,
+    time: float = DEFAULT_TIME,
     verbose: bool = False
 ) -> Tuple[str, float, str]:
     """
@@ -33,6 +34,7 @@ def continue_generation(
         llm_output (str): Current output from the LLM to be checked and continued.
         strength (float): Strength parameter for the LLM model (0-1).
         temperature (float): Temperature parameter for the LLM model (0-1).
+        time (float): Time budget for LLM calls.
         verbose (bool): Whether to print detailed information.
         
     Returns:
@@ -72,8 +74,9 @@ def continue_generation(
         trim_start_response = llm_invoke(
             prompt=processed_prompts['trim_start'],
             input_json={"LLM_OUTPUT": llm_output},
-            strength=0.75,
+            strength=EXTRACTION_STRENGTH,
             temperature=0,
+            time=time,
             output_pydantic=TrimResultsStartOutput,
             verbose=verbose
         )
@@ -95,6 +98,7 @@ def continue_generation(
                 },
                 strength=strength,
                 temperature=temperature,
+                time=time,
                 verbose=verbose
             )
             
@@ -108,6 +112,7 @@ def continue_generation(
                 prompt_text=last_chunk,
                 strength=0.5,
                 temperature=0,
+                time=time,
                 verbose=verbose
             )
             total_cost += check_cost
@@ -124,6 +129,7 @@ def continue_generation(
                     },
                     strength=EXTRACTION_STRENGTH,
                     temperature=0,
+                    time=time,
                     output_pydantic=TrimResultsOutput,
                     verbose=verbose
                 )

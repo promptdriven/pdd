@@ -6,7 +6,7 @@ import difflib
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
 from .llm_invoke import llm_invoke
-
+from . import DEFAULT_TIME, DEFAULT_STRENGTH
 console = Console()
 
 class PromptLineOutput(BaseModel):
@@ -16,9 +16,10 @@ def trace(
     code_file: str,
     code_line: int,
     prompt_file: str,
-    strength: float = 0.5,
+    strength: float = DEFAULT_STRENGTH,
     temperature: float = 0,
-    verbose: bool = False
+    verbose: bool = False,
+    time: float = DEFAULT_TIME
 ) -> Tuple[Optional[int], float, str]:
     """
     Trace a line of code back to its corresponding line in the prompt file.
@@ -30,6 +31,7 @@ def trace(
         strength (float, optional): Model strength. Defaults to 0.5
         temperature (float, optional): Model temperature. Defaults to 0
         verbose (bool, optional): Whether to print detailed information. Defaults to False
+        time (float, optional): Time parameter for LLM calls. Defaults to 0.25
 
     Returns:
         Tuple[Optional[int], float, str]: (prompt line number, total cost, model name)
@@ -67,7 +69,8 @@ def trace(
             },
             strength=strength,
             temperature=temperature,
-            verbose=verbose
+            verbose=verbose,
+            time=time
         )
 
         total_cost += trace_response['cost']
@@ -89,7 +92,8 @@ def trace(
             strength=strength,
             temperature=temperature,
             verbose=verbose,
-            output_pydantic=PromptLineOutput
+            output_pydantic=PromptLineOutput,
+            time=time
         )
 
         total_cost += extract_response['cost']
