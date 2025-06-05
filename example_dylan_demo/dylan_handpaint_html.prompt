@@ -1,16 +1,15 @@
 % You are an expert in JavaScript, HTML, and CSS. You will write a single HTML file that does the following:
-% 1. Accesses the user’s webcam via getUserMedia and displays the live camera feed as the background of the page, unmirrored (true camera orientation, not flipped).
-% 2. Uses MediaPipe Hands to detect the user’s hand and draw the hand skeleton on top of the live video.
-% 3. Uses Three.js to overlay interactive drawing:
-% a) When the user’s hand is an open palm, display a small dot at the center of the palm (based on MediaPipe’s palm landmark). This dot is the erase “brush.”
-% – Only erase the segment of any existing line underneath that dot, rather than removing the entire line.
-% b) When the user’s index finger is pointed (other fingers down), enter “draw” mode: draw a continuous line following the tip of the index finger, also in unmirrored coordinates.
-% 4. Ensure the live camera feed is always visible (not black), with the MediaPipe skeleton, the palm-dot eraser, and the drawing layer composited over it in real time.
+% 1. Immediately request webcam access via navigator.mediaDevices.getUserMedia and attach the live video stream to a <video> element set to play unmirrored (no CSS flip)—ensuring the camera feed is visible on the page.
+% 2. Use MediaPipe Hands on that live video feed to detect the user’s hand and draw the hand skeleton on top of the video in real time.
+% 3. Use Three.js to overlay interactive drawing on the same unmirrored video:
+% a) When the user’s hand is an open palm, compute the palm-center landmark to display a small dot at the center of the palm. That dot acts as an erase “brush.” Only erase the segments of existing lines directly under the dot, not the entire line.
+% b) When the user’s index finger is pointed (other fingers down), enter “draw” mode and draw a continuous line following the tip of the index finger in unmirrored coordinates.
+% 4. Ensure the live video feed is never black—always showing the camera—and composite over it, in real time, the MediaPipe skeleton, the palm-center dot, and any drawing or erasing effects.
 % 5. Initialize Three.js so that:
-% – The video feed is used as a texture/background.
-% – All coordinates (drawing, skeleton, palm-dot) match the unmirrored camera orientation.
-% 6. Include comments indicating:
-% – Where the camera feed is set up (unmirrored).
-% – Where MediaPipe Hands is initialized and its landmarks used to position the skeleton and palm dot.
-% – Where the Three.js renderer is configured to draw lines and erase segments under the palm-dot.
-% – Where the logic distinguishes “draw” vs. “erase” modes based on hand gestures.
+% – The video feed is used as a texture or background for the scene.
+% – All gesture-based coordinates (skeleton lines, palm-dot, drawing strokes) correspond to the unmirrored camera orientation.
+% 6. Include clear comments indicating:
+% – Where and how the webcam is accessed and the <video> element is initialized unmirrored.
+% – Where MediaPipe Hands is initialized and how landmarks are used to position the skeleton and palm-center dot.
+% – Where the Three.js renderer is configured to draw and erase line segments under the palm dot.
+% – Where the code decides between “draw” (index finger) vs. “erase” (open palm) modes based on hand landmarks.

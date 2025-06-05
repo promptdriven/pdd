@@ -1,442 +1,397 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Hand Tracking Drawing</title>
-    <meta charset="utf-g">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Hand Tracking Drawing App</title>
+    <meta charset="utf-8">
     <style>
-        body {
-            margin: 0;
-            overflow: hidden;
-            background-color: #000;
-            font-family: Arial, sans-serif;
-        }
-        #container {
-            position: relative;
-            width: 100vw;
-            height: 100vh;
-        }
-        /* Video element is not directly visible, used as Three.js texture source */
-        #webcam {
-            display: none; /* Hidden as it's used as a texture */
-        }
-        #outputCanvas, #threeCanvas {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-        }
-        #threeCanvas {
-            z-index: 1; /* Three.js canvas for drawing and video background */
+        body { margin: 0; overflow: hidden; background-color: #000; display: flex; justify-content: center; align-items: center; height: 100vh; }
+        #videoElement {
+            display: none; /* Hidden as it's rendered onto the canvas via Three.js */
         }
         #outputCanvas {
-            z-index: 2; /* MediaPipe canvas for skeleton, on top */
+            width: 640px; /* Default, will be adjusted */
+            height: 480px; /* Default, will be adjusted */
+            border: 1px solid white;
         }
-        .controls-info {
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            background-color: rgba(0,0,0,0.5);
-            color: white;
-            padding: 10px;
-            border-radius: 5px;
-            z-index: 10;
+        /* Ensure video is unmirrored if directly visible (not strictly needed here as it's a texture) */
+        .unmirrored {
+            transform: scaleX(1);
         }
     </style>
-    <!-- MediaPipe CDN imports -->
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
-
-    <!-- Three.js CDN import -->
-    <script async src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"></script>
-    <script type="importmap">
-    {
-        "imports": {
-            "three": "https://unpkg.com/three@0.158.0/build/three.module.js",
-            "three/addons/": "https://unpkg.com/three@0.158.0/examples/jsm/"
-        }
-    }
-    </script>
 </head>
 <body>
-    <div id="container">
-        <video id="webcam" autoplay playsinline></video>
-        <canvas id="threeCanvas"></canvas> <!-- For Three.js rendering (video background + drawings) -->
-        <canvas id="outputCanvas"></canvas> <!-- For MediaPipe skeleton -->
-    </div>
-    <div class="controls-info">
-        Point Index Finger: Draw<br>
-        Open Palm: Erase
-    </div>
+    <video id="videoElement" class="unmirrored" playsinline style="display: none;"></video>
+    <canvas id="outputCanvas"></canvas>
+
+    <!-- MediaPipe Hands -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+
+    <!-- Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js" crossorigin="anonymous"></script>
 
     <script type="module">
-        import * as THREE from 'three';
-        import { Hands } from 'https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js';
-        import { drawConnectors, drawLandmarks } from 'https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js';
-        import { HAND_CONNECTIONS } from 'https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js';
-
-        const videoElement = document.getElementById('webcam');
-        const outputCanvas = document.getElementById('outputCanvas'); // For MediaPipe skeleton
-        const outputCtx = outputCanvas.getContext('2d');
-        const threeCanvas = document.getElementById('threeCanvas'); // For Three.js scene
-
+        // --- Global Variables ---
+        const videoElement = document.getElementById('videoElement');
+        const outputCanvas = document.getElementById('outputCanvas');
         let videoWidth, videoHeight;
 
-        // --- Three.js Setup ---
-        // Where the Three.js renderer is configured
-        let scene, camera, renderer;
-        let drawnLines = []; // Stores { points: Vector3[], threeLine: THREE.Line }
-        let currentLinePoints = [];
-        let currentThreeLine = null;
-        const lineMaterial = new THREE.LineBasicMaterial({ color: 0x00ff00, linewidth: 3 }); // Green lines
-        
-        let eraserMesh;
-        const eraserRadius = 20; // pixels for eraser dot visual and logic
-        const palmCenterLandmarkIndex = 9; // MIDDLE_FINGER_MCP
-        const indexFingerTipLandmarkIndex = 8;
+        let scene, camera, renderer, videoTexture;
+        let hands;
 
-        function initThreeJS() {
-            scene = new THREE.Scene();
-            
-            // Orthographic camera to match video dimensions
-            // (0,0) will be top-left after transformations
-            camera = new THREE.OrthographicCamera(0, videoWidth, 0, videoHeight, -100, 100);
-            camera.position.set(videoWidth / 2, videoHeight / 2, 50); // Centered
-            camera.lookAt(videoWidth / 2, videoHeight / 2, 0);
-            // Adjust camera to make (0,0) top-left and y increasing downwards
-            camera.left = 0;
-            camera.right = videoWidth;
-            camera.top = 0; // Y will be flipped by scaling projection matrix
-            camera.bottom = videoHeight;
-            camera.updateProjectionMatrix();
-            // Flip Y axis for camera to match 2D canvas coordinates (0,0 at top-left)
-            camera.projectionMatrix.scale(new THREE.Vector3(1, -1, 1));
+        // Drawing states
+        let currentMode = 'none'; // 'draw', 'erase', 'none'
+        let currentStrokePoints = [];
+        let allStrokes = []; // Stores THREE.Line objects
+        let handSkeletonLines = new THREE.Group(); // Group to hold skeleton lines
+        let palmCenterDot;
+        const ERASE_RADIUS = 15; // Pixel radius for erasing
+        const DRAW_COLOR = 0xff0000; // Red
+        const SKELETON_COLOR = 0x00ff00; // Green
+        const PALM_DOT_COLOR = 0x0000ff; // Blue
 
-
-            renderer = new THREE.WebGLRenderer({ canvas: threeCanvas, alpha: true }); // alpha:true for transparency if not using video texture
-            renderer.setSize(videoWidth, videoHeight);
-            renderer.setPixelRatio(window.devicePixelRatio);
-            
-            // Where the camera feed is set up (unmirrored) using VideoTexture
-            // Use video element as a texture for the scene background
-            const videoTexture = new THREE.VideoTexture(videoElement);
-            // The following lines unmirror the video texture if the source is mirrored
-            videoTexture.wrapS = THREE.RepeatWrapping; // or ClampToEdgeWrapping if supported and preferred
-            videoTexture.repeat.x = -1; // Flips the texture horizontally
-
-            scene.background = videoTexture;
-
-            // Eraser dot (initially hidden)
-            // Where MediaPipe Hands landmarks used to position the palm dot
-            const eraserGeometry = new THREE.CircleGeometry(eraserRadius / 2, 32); // Visual radius
-            const eraserMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.7 });
-            eraserMesh = new THREE.Mesh(eraserGeometry, eraserMaterial);
-            eraserMesh.visible = false;
-            eraserMesh.position.z = 1; // Ensure it's on top of lines
-            scene.add(eraserMesh);
-        }
-
-        // --- MediaPipe Hands Setup ---
-        // Where MediaPipe Hands is initialized
-        const hands = new Hands({
-            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
-        });
-        hands.setOptions({
-            maxNumHands: 1,
-            modelComplexity: 1,
-            minDetectionConfidence: 0.7,
-            minTrackingConfidence: 0.7
-        });
-        hands.onResults(onResults);
-
-        // --- Webcam Setup ---
-        // Where the camera feed is set up
-        const cameraHelper = new CameraUtils.Camera(videoElement, {
-            onFrame: async () => {
-                if (!videoWidth) { // First frame, setup canvases and Three.js
+        // --- Initialization ---
+        async function main() {
+            // 1. Webcam Access and Video Initialization (unmirrored)
+            // Where and how the webcam is accessed and the <video> element is initialized unmirrored.
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'user' }
+                });
+                videoElement.srcObject = stream;
+                videoElement.onloadedmetadata = () => {
+                    videoElement.play();
                     videoWidth = videoElement.videoWidth;
                     videoHeight = videoElement.videoHeight;
-                    
                     outputCanvas.width = videoWidth;
                     outputCanvas.height = videoHeight;
-                    threeCanvas.width = videoWidth;
-                    threeCanvas.height = videoHeight;
+                    
+                    // Initialize MediaPipe and Three.js after video dimensions are known
+                    setupMediaPipe();
+                    setupThreeJS();
+                    
+                    requestAnimationFrame(renderLoop);
+                };
+            } catch (err) {
+                console.error("Error accessing webcam:", err);
+                alert("Could not access webcam. Please ensure permissions are granted.");
+            }
+        }
 
-                    initThreeJS();
-                }
-                await hands.send({ image: videoElement });
-            },
-            width: 640, // Request a common resolution
-            height: 480
-        });
-        cameraHelper.start();
+        // 2. MediaPipe Hands Initialization
+        // Where MediaPipe Hands is initialized and how landmarks are used.
+        function setupMediaPipe() {
+            hands = new Hands({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+            });
+            hands.setOptions({
+                maxNumHands: 1,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.7,
+                minTrackingConfidence: 0.7
+            });
+            hands.onResults(onHandResults);
+        }
+
+        // 5. Three.js Initialization
+        // Where the Three.js renderer is configured.
+        function setupThreeJS() {
+            scene = new THREE.Scene();
+
+            // Use video dimensions for orthographic camera to map 1:1 with video pixels
+            // (0,0) will be top-left
+            camera = new THREE.OrthographicCamera(0, videoWidth, 0, videoHeight, -1000, 1000);
+            camera.position.set(videoWidth / 2, videoHeight / 2, 500); // Centered
+            camera.lookAt(videoWidth / 2, videoHeight / 2, 0);
+            // Adjust camera to make (0,0) top-left and Y-axis point downwards
+            camera.left = 0;
+            camera.right = videoWidth;
+            camera.top = 0;
+            camera.bottom = videoHeight;
+            camera.updateProjectionMatrix();
 
 
-        let currentMode = 'none'; // 'draw', 'erase', 'none'
+            renderer = new THREE.WebGLRenderer({ canvas: outputCanvas, alpha: true });
+            renderer.setSize(videoWidth, videoHeight);
+            renderer.setClearColor(0x000000, 0); // Transparent background
 
-        function onResults(results) {
-            if (!videoWidth || !renderer) return; // Ensure Three.js is initialized
+            // Use video as texture for the scene background
+            videoTexture = new THREE.VideoTexture(videoElement);
+            scene.background = videoTexture;
 
-            // Clear MediaPipe overlay canvas
-            outputCtx.save();
-            outputCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
+            // Palm center dot (eraser indicator)
+            const dotGeometry = new THREE.CircleGeometry(ERASE_RADIUS / 2, 32);
+            const dotMaterial = new THREE.MeshBasicMaterial({ color: PALM_DOT_COLOR });
+            palmCenterDot = new THREE.Mesh(dotGeometry, dotMaterial);
+            palmCenterDot.visible = false;
+            scene.add(palmCenterDot);
 
-            // Process hand landmarks
+            scene.add(handSkeletonLines);
+        }
+
+        // --- Real-time Processing Loop ---
+        function renderLoop() {
+            if (videoElement.readyState >= videoElement.HAVE_METADATA && !videoElement.paused) {
+                hands.send({ image: videoElement });
+            }
+            // Update video texture
+            if (videoTexture) videoTexture.needsUpdate = true;
+            
+            renderer.render(scene, camera);
+            requestAnimationFrame(renderLoop);
+        }
+
+        // --- MediaPipe Hand Results Callback ---
+        function onHandResults(results) {
+            // Clear previous skeleton
+            while(handSkeletonLines.children.length > 0){ 
+                const obj = handSkeletonLines.children[0];
+                handSkeletonLines.remove(obj);
+                if(obj.geometry) obj.geometry.dispose();
+                if(obj.material) obj.material.dispose();
+            }
+
+            palmCenterDot.visible = false;
+
             if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
                 const landmarks = results.multiHandLandmarks[0]; // Assuming one hand
-
-                // Draw skeleton on MediaPipe canvas
-                // Coordinates need to be unmirrored for display
-                // lm.x is from original (mirrored) stream. (1.0 - lm.x) maps to unmirrored view.
-                const unmirroredLandmarks = landmarks.map(lm => ({
-                    ...lm,
-                    x: (1.0 - lm.x) * outputCanvas.width,
-                    y: lm.y * outputCanvas.height,
-                    // z is not directly used for 2D drawing here but good to keep
-                }));
-
-                // Where MediaPipe Hands landmarks used to position the skeleton
-                drawConnectors(outputCtx, unmirroredLandmarks, HAND_CONNECTIONS, { color: '#00FF00', lineWidth: 2 });
-                drawLandmarks(outputCtx, unmirroredLandmarks, { color: '#FF0000', lineWidth: 1, radius: 3 });
                 
-                // Get specific landmarks for gestures and drawing (in original mirrored normalized coords)
-                const palmCenter = landmarks[palmCenterLandmarkIndex];
-                const indexTip = landmarks[indexFingerTipLandmarkIndex];
+                // Convert landmarks to Three.js coordinates
+                // All gesture-based coordinates (skeleton lines, palm-dot, drawing strokes) 
+                // correspond to the unmirrored camera orientation.
+                const worldLandmarks = landmarks.map(lm => {
+                    return new THREE.Vector3(
+                        lm.x * videoWidth,
+                        lm.y * videoHeight, // Y is already top-down from MediaPipe
+                        (lm.z + 0.5) * -videoWidth * 0.5 // Approximate Z, make it negative to be in front
+                    );
+                });
 
-                // Convert to unmirrored pixel coordinates for Three.js
-                const palmCenterCoords = {
-                    x: (1.0 - palmCenter.x) * videoWidth,
-                    y: palmCenter.y * videoHeight
-                };
-                const indexTipCoords = {
-                    x: (1.0 - indexTip.x) * videoWidth,
-                    y: indexTip.y * videoHeight
-                };
+                // Draw hand skeleton
+                drawHandSkeleton(worldLandmarks, HAND_CONNECTIONS);
 
-                // --- Gesture Detection ---
-                // Where the logic distinguishes “draw” vs. “erase” modes
-                const isPointing = checkIndexFingerPointing(landmarks);
-                const isOpenPalm = checkOpenPalm(landmarks);
+                // Where the code decides between “draw” (index finger) vs. “erase” (open palm) modes
+                const newMode = getGestureMode(landmarks); // Use normalized for gesture logic
 
-                let newMode = 'none';
-                if (isPointing) {
-                    newMode = 'draw';
-                } else if (isOpenPalm) {
-                    newMode = 'erase';
-                }
-
-                if (currentMode === 'draw' && newMode !== 'draw') { // Exiting draw mode
-                    if (currentThreeLine) {
-                        if (currentLinePoints.length < 2) { // Not enough points for a line
-                           scene.remove(currentThreeLine);
-                        } else {
-                           // Finalize line geometry
-                           const finalGeometry = new THREE.BufferGeometry().setFromPoints(currentLinePoints);
-                           currentThreeLine.geometry.dispose(); // Dispose old geometry
-                           currentThreeLine.geometry = finalGeometry;
-                           drawnLines.push({ points: [...currentLinePoints], threeLine: currentThreeLine });
-                        }
-                        currentThreeLine = null;
-                    }
-                    currentLinePoints = [];
+                if (currentMode === 'draw' && newMode !== 'draw') {
+                    finishCurrentStroke();
                 }
                 currentMode = newMode;
 
-                // --- Handle Drawing/Erasing in Three.js ---
-                // Where the Three.js renderer is configured to draw lines and erase segments
+                const palmCenterLandmark = worldLandmarks[9]; // Using middle finger MCP as palm center proxy
+
                 if (currentMode === 'draw') {
-                    eraserMesh.visible = false;
-                    const pointVec = new THREE.Vector3(indexTipCoords.x, indexTipCoords.y, 0);
-                    
-                    if (!currentThreeLine) { // Start of a new line segment
-                        currentLinePoints.push(pointVec); // Add first point
-                        // Create a line with minimal points, will be updated
-                        const geometry = new THREE.BufferGeometry().setFromPoints([pointVec, pointVec.clone()]);
-                        currentThreeLine = new THREE.Line(geometry, lineMaterial);
-                        scene.add(currentThreeLine);
-                    } else {
-                        currentLinePoints.push(pointVec);
-                        // Update existing line geometry
-                        currentThreeLine.geometry.dispose(); // Important to dispose old geometry
-                        currentThreeLine.geometry = new THREE.BufferGeometry().setFromPoints(currentLinePoints);
+                    palmCenterDot.visible = false;
+                    const indexFingerTip = worldLandmarks[8];
+                    if (currentStrokePoints.length === 0 || 
+                        currentStrokePoints[currentStrokePoints.length - 1].distanceTo(indexFingerTip) > 2) { // Add point if moved enough
+                        currentStrokePoints.push(indexFingerTip.clone());
+                        updateLiveStroke();
                     }
                 } else if (currentMode === 'erase') {
-                    eraserMesh.position.set(palmCenterCoords.x, palmCenterCoords.y, 1);
-                    eraserMesh.visible = true;
-                    eraseSegments(palmCenterCoords, eraserRadius);
-                } else { // 'none' mode
-                    eraserMesh.visible = false;
+                    palmCenterDot.position.copy(palmCenterLandmark);
+                    palmCenterDot.position.z = 10; // Ensure dot is visible
+                    palmCenterDot.visible = true;
+                    // Where the Three.js renderer is configured to draw and erase line segments under the palm dot.
+                    eraseSegmentsNear(palmCenterLandmark);
+                } else { // 'none'
+                    palmCenterDot.visible = false;
                 }
-
             } else { // No hand detected
-                if (currentMode === 'draw' && currentThreeLine) { // Finalize line if hand disappears
-                     if (currentLinePoints.length < 2) {
-                        scene.remove(currentThreeLine);
-                     } else {
-                        const finalGeometry = new THREE.BufferGeometry().setFromPoints(currentLinePoints);
-                        currentThreeLine.geometry.dispose();
-                        currentThreeLine.geometry = finalGeometry;
-                        drawnLines.push({ points: [...currentLinePoints], threeLine: currentThreeLine });
-                     }
+                if (currentMode === 'draw') {
+                    finishCurrentStroke();
                 }
-                currentLinePoints = [];
-                currentThreeLine = null;
                 currentMode = 'none';
-                eraserMesh.visible = false;
+                palmCenterDot.visible = false;
+            }
+        }
+
+        // --- Gesture Detection ---
+        // Where MediaPipe Hands landmarks are used to position the skeleton and palm-center dot.
+        // And where the code decides between “draw” (index finger) vs. “erase” (open palm) modes.
+        function getGestureMode(landmarks) {
+            // Simple gesture detection (normalized landmarks 0-1)
+            // Index finger extended: tip (8) is further "up" (smaller y) than knuckle (5)
+            const indexTipY = landmarks[8].y;
+            const indexKnuckleY = landmarks[5].y;
+            const indexPipY = landmarks[6].y;
+
+            // Other fingers curled: tips (12, 16, 20) are "down" (larger y) than their PIP joints (10, 14, 18)
+            const middleTipY = landmarks[12].y;
+            const middlePipY = landmarks[10].y;
+            const ringTipY = landmarks[16].y;
+            const ringPipY = landmarks[14].y;
+            const pinkyTipY = landmarks[20].y;
+            const pinkyPipY = landmarks[18].y;
+
+            const isIndexPointing = indexTipY < indexPipY && indexPipY < indexKnuckleY &&
+                                    middleTipY > middlePipY &&
+                                    ringTipY > ringPipY &&
+                                    pinkyTipY > pinkyPipY;
+
+            if (isIndexPointing) return 'draw';
+
+            // Open palm: all fingertips (8,12,16,20) are extended
+            const isIndexExtended = indexTipY < indexPipY;
+            const isMiddleExtended = middleTipY < middlePipY;
+            const isRingExtended = ringTipY < ringPipY;
+            const isPinkyExtended = pinkyTipY < pinkyPipY;
+            
+            // Check thumb is somewhat out (landmark 4.x vs 2.x for right hand, reverse for left)
+            // This is a rough check and might need adjustment based on hand orientation
+            const thumbTipX = landmarks[4].x;
+            const thumbBaseX = landmarks[2].x; // A point near thumb base
+            // Assuming right hand for now, if thumbTipX is less than thumbBaseX, it's likely open
+            // A more robust check would involve handedness or more complex relations
+            const isThumbOpen = Math.abs(landmarks[4].y - landmarks[17].y) > Math.abs(landmarks[4].x - landmarks[17].x) * 0.3; // Thumb is somewhat away from pinky base
+
+            if (isIndexExtended && isMiddleExtended && isRingExtended && isPinkyExtended && isThumbOpen) {
+                return 'erase';
             }
             
-            renderer.render(scene, camera);
-            outputCtx.restore();
+            return 'none';
         }
 
-        function checkIndexFingerPointing(landmarks) {
-            const tip = landmarks[8];    // INDEX_FINGER_TIP
-            const pip = landmarks[6];    // INDEX_FINGER_PIP
-            const mcp = landmarks[5];    // INDEX_FINGER_MCP
-
-            const middleTip = landmarks[12]; // MIDDLE_FINGER_TIP
-            const middlePip = landmarks[10]; // MIDDLE_FINGER_PIP
-            
-            const ringTip = landmarks[16];   // RING_FINGER_TIP
-            const ringPip = landmarks[14];   // RING_FINGER_PIP
-
-            const pinkyTip = landmarks[20];  // PINKY_FINGER_TIP
-            const pinkyPip = landmarks[18];  // PINKY_FINGER_PIP
-
-            // Index finger extended (tip is "above" PIP, MCP in normalized image coords)
-            const indexExtended = tip.y < pip.y && pip.y < mcp.y;
-            // Other fingers curled (tips are "below" PIPs)
-            const middleCurled = middleTip.y > middlePip.y;
-            const ringCurled = ringTip.y > ringPip.y;
-            const pinkyCurled = pinkyTip.y > pinkyPip.y;
-            
-            return indexExtended && middleCurled && ringCurled && pinkyCurled;
-        }
-
-        function checkOpenPalm(landmarks) {
-            // Check if all fingertips are extended (further from wrist or "above" their PIP joints)
-            const wrist = landmarks[0];
-            const fingerTips = [landmarks[4], landmarks[8], landmarks[12], landmarks[16], landmarks[20]];
-            const fingerPips = [landmarks[2], landmarks[6], landmarks[10], landmarks[14], landmarks[18]]; // Using PIPs
-
-            let extendedFingers = 0;
-            for (let i = 0; i < fingerTips.length; i++) {
-                // Finger is extended if tip.y < pip.y (in normalized image coordinates where y decreases upwards)
-                if (fingerTips[i].y < fingerPips[i].y) {
-                    extendedFingers++;
-                }
+        // --- Drawing and Erasing Logic ---
+        let liveStrokeLine = null;
+        function updateLiveStroke() {
+            if (liveStrokeLine) {
+                scene.remove(liveStrokeLine);
+                liveStrokeLine.geometry.dispose();
+                liveStrokeLine.material.dispose();
+                liveStrokeLine = null;
             }
-            return extendedFingers >= 4; // Allow for some flexibility, e.g. thumb might not be perfectly "up"
+            if (currentStrokePoints.length > 1) {
+                const geometry = new THREE.BufferGeometry().setFromPoints(currentStrokePoints);
+                const material = new THREE.LineBasicMaterial({ color: DRAW_COLOR, linewidth: 3 }); // Linewidth might not be respected on all systems
+                liveStrokeLine = new THREE.Line(geometry, material);
+                liveStrokeLine.position.z = 5; // Ensure drawing is visible
+                scene.add(liveStrokeLine);
+            }
         }
 
-        function eraseSegments(eraserPosVec2, radius) {
-            const eraserCenter = new THREE.Vector2(eraserPosVec2.x, eraserPosVec2.y);
+        function finishCurrentStroke() {
+            if (liveStrokeLine) { // Add the finalized live stroke
+                 allStrokes.push(liveStrokeLine);
+                 liveStrokeLine = null; // It's now part of allStrokes
+            }
+            currentStrokePoints = [];
+        }
         
-            for (let i = drawnLines.length - 1; i >= 0; i--) {
-                const lineObj = drawnLines[i];
-                const originalPoints = lineObj.points; // These are Vector3
-                let needsUpdate = false;
-                
-                const newPointGroups = [];
-                let currentGroup = [];
+        // Where the code erases line segments under the palm dot.
+        function eraseSegmentsNear(eraseCenter) {
+            const newAllStrokes = [];
+            for (let i = allStrokes.length - 1; i >= 0; i--) {
+                const stroke = allStrokes[i];
+                const originalPoints = Array.from(stroke.geometry.attributes.position.array)
+                    .reduce((acc, val, idx, arr) => {
+                        if (idx % 3 === 0) acc.push(new THREE.Vector3(arr[idx], arr[idx+1], arr[idx+2]));
+                        return acc;
+                    }, []);
 
                 if (originalPoints.length < 2) {
-                    scene.remove(lineObj.threeLine);
-                    lineObj.threeLine.geometry.dispose();
-                    drawnLines.splice(i, 1);
-                    continue;
+                    scene.remove(stroke);
+                    stroke.geometry.dispose();
+                    stroke.material.dispose();
+                    continue; 
                 }
 
-                for (let j = 0; j < originalPoints.length; j++) {
+                let currentSegmentCollection = [];
+                const survivingStrokeParts = []; // Stores arrays of points for new strokes
+
+                // Start with the first point, assuming it's not erased initially
+                // This simplifies logic for the first segment.
+                if (originalPoints[0].distanceTo(eraseCenter) > ERASE_RADIUS) {
+                     currentSegmentCollection.push(originalPoints[0].clone());
+                }
+
+
+                for (let j = 0; j < originalPoints.length - 1; j++) {
                     const p1 = originalPoints[j];
-                    let p2 = (j + 1 < originalPoints.length) ? originalPoints[j+1] : null;
+                    const p2 = originalPoints[j+1];
+                    
+                    // Check if segment (p1,p2) intersects the erase circle
+                    const segmentHit = isSegmentIntersectingCircle(p1, p2, eraseCenter, ERASE_RADIUS);
 
-                    if (currentGroup.length === 0) {
-                        currentGroup.push(p1.clone());
-                    }
-
-                    if (p2) {
-                        const segStart = new THREE.Vector2(p1.x, p1.y);
-                        const segEnd = new THREE.Vector2(p2.x, p2.y);
-                        
-                        if (distancePointToSegment(eraserCenter, segStart, segEnd) < radius) {
-                            // Segment is hit by eraser
-                            needsUpdate = true;
-                            if (currentGroup.length >= 2) { // Finalize current group before break
-                                newPointGroups.push(currentGroup);
-                            }
-                            currentGroup = []; // Start a new group after the erased segment
-                        } else {
-                            // Segment not hit, continue current group
-                            currentGroup.push(p2.clone());
+                    if (segmentHit) {
+                        if (currentSegmentCollection.length > 1) {
+                            survivingStrokeParts.push(currentSegmentCollection);
                         }
+                        currentSegmentCollection = []; // Start a new collection for points after the erased segment
+                    } else { // Segment not hit
+                        // If currentSegmentCollection is empty, it means the previous segment was hit.
+                        // So, p1 is the start of a new un-erased segment.
+                        if (currentSegmentCollection.length === 0) {
+                            currentSegmentCollection.push(p1.clone());
+                        }
+                        currentSegmentCollection.push(p2.clone());
                     }
                 }
-                // Add the last group if it has points
-                if (currentGroup.length >= 2) {
-                    newPointGroups.push(currentGroup);
+                
+                if (currentSegmentCollection.length > 1) {
+                    survivingStrokeParts.push(currentSegmentCollection);
                 }
 
+                // Remove old stroke and add new ones
+                scene.remove(stroke);
+                stroke.geometry.dispose();
+                stroke.material.dispose();
 
-                if (needsUpdate) {
-                    scene.remove(lineObj.threeLine);
-                    lineObj.threeLine.geometry.dispose();
-                    drawnLines.splice(i, 1); // Remove original line
-
-                    newPointGroups.forEach(groupPoints => {
-                        if (groupPoints.length >= 2) {
-                            const newGeometry = new THREE.BufferGeometry().setFromPoints(groupPoints);
-                            const newLine = new THREE.Line(newGeometry, lineMaterial);
-                            scene.add(newLine);
-                            drawnLines.push({ points: groupPoints, threeLine: newLine });
-                        }
-                    });
-                }
+                survivingStrokeParts.forEach(points => {
+                    if (points.length > 1) {
+                        const geometry = new THREE.BufferGeometry().setFromPoints(points);
+                        const material = new THREE.LineBasicMaterial({ color: DRAW_COLOR, linewidth: 3 });
+                        const newStroke = new THREE.Line(geometry, material);
+                        newStroke.position.z = 5;
+                        scene.add(newStroke);
+                        newAllStrokes.push(newStroke);
+                    }
+                });
             }
+            allStrokes = newAllStrokes;
+        }
+
+        function isSegmentIntersectingCircle(p1, p2, C, R) {
+            // Check if endpoints are inside
+            if (p1.distanceTo(C) < R || p2.distanceTo(C) < R) return true;
+
+            // Check distance from C to line segment p1-p2
+            const p1_p2 = new THREE.Vector3().subVectors(p2, p1);
+            const C_p1 = new THREE.Vector3().subVectors(C, p1);
+            
+            const lenSq_p1_p2 = p1_p2.lengthSq();
+            if (lenSq_p1_p2 === 0) return p1.distanceTo(C) < R; // p1 and p2 are same point
+
+            // Project C_p1 onto p1_p2
+            // t = dot(C_p1, p1_p2) / |p1_p2|^2
+            let t = C_p1.dot(p1_p2) / lenSq_p1_p2;
+            t = Math.max(0, Math.min(1, t)); // Clamp t to [0,1] for segment
+
+            const closestPointOnSegment = new THREE.Vector3().copy(p1).addScaledVector(p1_p2, t);
+            return closestPointOnSegment.distanceTo(C) < R;
+        }
+
+
+        // --- Helper to draw skeleton ---
+        // Where MediaPipe Hands landmarks are used to position the skeleton.
+        function drawHandSkeleton(worldLandmarks, connections) {
+            if (!worldLandmarks || worldLandmarks.length === 0) return;
+
+            connections.forEach(conn => {
+                const start = worldLandmarks[conn[0]];
+                const end = worldLandmarks[conn[1]];
+                if (start && end) {
+                    const points = [start, end];
+                    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+                    const material = new THREE.LineBasicMaterial({ color: SKELETON_COLOR, linewidth: 2 });
+                    const line = new THREE.Line(geometry, material);
+                    line.position.z = 1; // Ensure skeleton is visible
+                    handSkeletonLines.add(line);
+                }
+            });
         }
         
-        // Helper function: distance from a point to a line segment
-        function distancePointToSegment(point, segA, segB) {
-            const l2 = segA.distanceToSquared(segB);
-            if (l2 === 0) return point.distanceTo(segA);
-            
-            let t = ((point.x - segA.x) * (segB.x - segA.x) + (point.y - segA.y) * (segB.y - segA.y)) / l2;
-            t = Math.max(0, Math.min(1, t)); // Clamp t to the segment
-
-            const projection = new THREE.Vector2(
-                segA.x + t * (segB.x - segA.x),
-                segA.y + t * (segB.y - segA.y)
-            );
-            return point.distanceTo(projection);
-        }
-
-        // Handle window resize
-        window.addEventListener('resize', () => {
-            if (videoElement.readyState === videoElement.HAVE_ENOUGH_DATA) { // Check if video is loaded
-                videoWidth = videoElement.videoWidth; // Use actual video dimensions
-                videoHeight = videoElement.videoHeight;
-
-                // Update canvas sizes
-                outputCanvas.width = videoWidth;
-                outputCanvas.height = videoHeight;
-                threeCanvas.width = videoWidth;
-                threeCanvas.height = videoHeight;
-
-                if (renderer && camera) {
-                    // Update Three.js camera and renderer
-                    camera.right = videoWidth;
-                    camera.bottom = videoHeight;
-                    camera.updateProjectionMatrix();
-                    // Flip Y axis for camera
-                    camera.projectionMatrix.scale(new THREE.Vector3(1, -1, 1));
-
-                    renderer.setSize(videoWidth, videoHeight);
-                }
-            }
-        });
+        main();
 
     </script>
 </body>
