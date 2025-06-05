@@ -1,9 +1,9 @@
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 from pathlib import Path
 from rich.console import Console
 from rich.markdown import Markdown
 from pydantic import BaseModel, Field
-from . import EXTRACTION_STRENGTH
+from . import EXTRACTION_STRENGTH, DEFAULT_STRENGTH, DEFAULT_TIME
 
 from .preprocess import preprocess
 from .load_prompt_template import load_prompt_template
@@ -21,8 +21,9 @@ class ChangesList(BaseModel):
 def detect_change(
     prompt_files: List[str],
     change_description: str,
-    strength: float,
-    temperature: float,
+    strength: float=DEFAULT_STRENGTH,
+    temperature: float=0.0,
+    time: Optional[float] = DEFAULT_TIME,
     verbose: bool = False
 ) -> Tuple[List[Dict[str, str]], float, str]:
     """
@@ -33,6 +34,7 @@ def detect_change(
         change_description (str): Description of the changes to analyze
         strength (float): Strength parameter for the LLM model
         temperature (float): Temperature parameter for the LLM model
+        time (float): Time budget for LLM calls.
         verbose (bool): Whether to print detailed information
 
     Returns:
@@ -87,6 +89,7 @@ def detect_change(
             },
             strength=strength,
             temperature=temperature,
+            time=time,
             verbose=verbose
         )
 
@@ -104,6 +107,7 @@ def detect_change(
             input_json={"llm_output": detect_response['result']},
             strength=EXTRACTION_STRENGTH,
             temperature=0.0,
+            time=time,
             verbose=verbose,
             output_pydantic=ChangesList
         )

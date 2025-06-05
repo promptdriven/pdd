@@ -4,6 +4,7 @@ from typing import Tuple, Optional
 import click
 from rich import print as rprint
 
+from . import DEFAULT_STRENGTH, DEFAULT_TIME
 from .construct_paths import construct_paths
 from .insert_includes import insert_includes
 
@@ -60,8 +61,9 @@ def auto_deps_main(
             Path(csv_path).unlink()
 
         # Get strength and temperature from context
-        strength = ctx.obj.get('strength', 0.9)
+        strength = ctx.obj.get('strength', DEFAULT_STRENGTH)
         temperature = ctx.obj.get('temperature', 0)
+        time_budget = ctx.obj.get('time', DEFAULT_TIME)
 
         # Call insert_includes with the prompt content and directory path
         modified_prompt, csv_output, total_cost, model_name = insert_includes(
@@ -70,6 +72,7 @@ def auto_deps_main(
             csv_filename=csv_path,
             strength=strength,
             temperature=temperature,
+            time=time_budget,
             verbose=not ctx.obj.get('quiet', False)
         )
 

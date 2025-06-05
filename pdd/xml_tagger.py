@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
 from . import EXTRACTION_STRENGTH
-
+from . import DEFAULT_TIME
 class XMLOutput(BaseModel):
     xml_tagged: str = Field(description="The XML-tagged version of the prompt")
 
@@ -13,7 +13,8 @@ def xml_tagger(
     raw_prompt: str,
     strength: float,
     temperature: float,
-    verbose: bool = False
+    verbose: bool = False,
+    time: float = DEFAULT_TIME
 ) -> Tuple[str, float, str]:
     """
     Enhance a given LLM prompt by adding XML tags to improve its structure and readability.
@@ -23,6 +24,7 @@ def xml_tagger(
         strength (float): The strength parameter for the LLM model (0-1)
         temperature (float): The temperature parameter for the LLM model (0-1)
         verbose (bool): Whether to print detailed information
+        time (float): The time allocation for the LLM calls
 
     Returns:
         Tuple[str, float, str]: (xml_tagged, total_cost, model_name)
@@ -55,7 +57,8 @@ def xml_tagger(
             input_json={"raw_prompt": raw_prompt},
             strength=strength,
             temperature=temperature,
-            verbose=verbose
+            verbose=verbose,
+            time=time
         )
 
         xml_generated_analysis = conversion_response.get('result', '')
@@ -76,7 +79,8 @@ def xml_tagger(
             strength=EXTRACTION_STRENGTH,  # Fixed strength for extraction
             temperature=temperature,
             verbose=verbose,
-            output_pydantic=XMLOutput
+            output_pydantic=XMLOutput,
+            time=time
         )
 
         result: XMLOutput = extraction_response.get('result')
@@ -109,7 +113,8 @@ def main():
             raw_prompt=sample_prompt,
             strength=0.7,
             temperature=0.8,
-            verbose=True
+            verbose=True,
+            time=0.5
         )
 
         rprint("[blue]XML Tagging Complete[/blue]")

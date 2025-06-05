@@ -1,6 +1,6 @@
-from typing import Tuple
+from typing import Tuple, Optional
 from rich.console import Console
-from . import EXTRACTION_STRENGTH
+from . import EXTRACTION_STRENGTH, DEFAULT_TIME
 from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
 from .postprocess import postprocess
@@ -13,6 +13,7 @@ def increase_tests(
     language: str = "python",
     strength: float = 0.5,
     temperature: float = 0.0,
+    time: Optional[float] = DEFAULT_TIME,
     verbose: bool = False
 ) -> Tuple[str, float, str]:
     """
@@ -26,6 +27,7 @@ def increase_tests(
         language (str, optional): Programming language. Defaults to "python".
         strength (float, optional): LLM model strength. Defaults to 0.5.
         temperature (float, optional): LLM model temperature. Defaults to 0.0.
+        time (Optional[float]): Time allocation for the LLM. Defaults to DEFAULT_TIME.
         verbose (bool, optional): Verbose output flag. Defaults to False.
 
     Returns:
@@ -73,6 +75,7 @@ def increase_tests(
             input_json=input_json,
             strength=strength,
             temperature=temperature,
+            time=time,
             verbose=verbose
         )
 

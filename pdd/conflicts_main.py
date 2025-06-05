@@ -6,6 +6,7 @@ from rich import print as rprint
 
 from .construct_paths import construct_paths
 from .conflicts_in_prompts import conflicts_in_prompts
+from . import DEFAULT_TIME, DEFAULT_STRENGTH
 
 def conflicts_main(ctx: click.Context, prompt1: str, prompt2: str, output: Optional[str], verbose: bool = False) -> Tuple[List[Dict], float, str]:
     """
@@ -40,13 +41,16 @@ def conflicts_main(ctx: click.Context, prompt1: str, prompt2: str, output: Optio
         prompt2_content = input_strings["prompt2"]
 
         # Analyze conflicts
-        strength = ctx.obj.get('strength', 0.9)
+        strength = ctx.obj.get('strength', DEFAULT_STRENGTH)
         temperature = ctx.obj.get('temperature', 0)
+        time_budget = ctx.obj.get('time', DEFAULT_TIME)
         conflicts, total_cost, model_name = conflicts_in_prompts(
             prompt1_content,
             prompt2_content,
             strength,
-            temperature
+            temperature,
+            time_budget,
+            verbose
         )
 
         # Replace prompt1 and prompt2 with actual file paths

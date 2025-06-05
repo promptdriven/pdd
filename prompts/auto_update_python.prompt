@@ -15,7 +15,7 @@ Core Logic:
     b. Ask for user confirmation before proceeding with the upgrade (e.g., "Would you like to upgrade? [y/N]:").
     c. If the user confirms:
         i. Detect the installation method of the package (e.g., UV or pip).
-        ii. Construct the appropriate upgrade command based on the detected method (e.g., `uv tool upgrade <package>` or `python -m pip install --upgrade <package>`).
+        ii. Construct the appropriate upgrade command based on the detected method (e.g., `uv tool install <package> --force` or `python -m pip install --upgrade <package>`).
         iii. Execute the upgrade command.
         iv. Provide feedback on the success or failure of the upgrade.
         v. If the primary upgrade method (e.g., UV) fails, attempt a fallback to a standard method (e.g., pip) if applicable, and report its outcome.

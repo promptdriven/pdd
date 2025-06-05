@@ -173,7 +173,8 @@ def test_get_upgrade_command():
     # Test UV command generation
     uv_cmd, uv_shell = get_upgrade_command("pdd-cli", "uv")
     assert "tool" in uv_cmd
-    assert "upgrade" in uv_cmd
+    assert "install" in uv_cmd
+    assert "--force" in uv_cmd
     assert "pdd-cli" in uv_cmd
     assert isinstance(uv_shell, bool)
     

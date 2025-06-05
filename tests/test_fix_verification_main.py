@@ -5,11 +5,11 @@ import os
 from unittest.mock import patch, MagicMock, mock_open, ANY
 
 # Import DEFAULT_STRENGTH
-from pdd import DEFAULT_STRENGTH
+from pdd import DEFAULT_STRENGTH, DEFAULT_TIME
 
 # Assuming the structure is tests/test_fix_verification_main.py
 # and the code is pdd/fix_verification_main.py
-from pdd.fix_verification_main import fix_verification_main, DEFAULT_TEMPERATURE # Import DEFAULT_TEMPERATURE if needed
+from pdd.fix_verification_main import fix_verification_main, DEFAULT_TEMPERATURE, DEFAULT_MAX_ATTEMPTS, DEFAULT_BUDGET # Import DEFAULT_TEMPERATURE if needed
 
 # --- Fixtures ---
 
@@ -21,6 +21,7 @@ def mock_context(tmp_path):
     ctx.obj = {
         'strength': DEFAULT_STRENGTH,
         'temperature': DEFAULT_TEMPERATURE, # Use imported default
+        'time': DEFAULT_TIME,
         'force': False,
         'quiet': False,
         'verbose': False,
@@ -119,7 +120,8 @@ def test_single_pass_success_no_issues(
         output='Program ran ok',
         strength=DEFAULT_STRENGTH,
         temperature=DEFAULT_TEMPERATURE,
-        verbose=False
+        verbose=False,
+        time=DEFAULT_TIME
     )
     mock_fix_loop.assert_not_called()
 
@@ -171,7 +173,16 @@ def test_single_pass_success_with_fixes(
 
     mock_construct.assert_called_once()
     mock_run_prog.assert_called_once()
-    mock_fix_errors.assert_called_once()
+    mock_fix_errors.assert_called_once_with(
+        program=mock_construct_paths_response[0]["program_file"],
+        prompt=mock_construct_paths_response[0]["prompt_file"],
+        code=mock_construct_paths_response[0]["code_file"],
+        output="Program output with issue",
+        strength=DEFAULT_STRENGTH,
+        temperature=DEFAULT_TEMPERATURE,
+        verbose=False,
+        time=DEFAULT_TIME
+    )
     mock_fix_loop.assert_not_called()
 
     assert result == (True, 'Fixed program content', 'Fixed code content', 1, 0.2, 'model-b')
@@ -224,7 +235,16 @@ def test_single_pass_failure_no_fixes(
 
     mock_construct.assert_called_once()
     mock_run_prog.assert_called_once()
-    mock_fix_errors.assert_called_once()
+    mock_fix_errors.assert_called_once_with(
+        program=mock_construct_paths_response[0]["program_file"],
+        prompt=mock_construct_paths_response[0]["prompt_file"],
+        code=mock_construct_paths_response[0]["code_file"],
+        output="Program output with issue",
+        strength=DEFAULT_STRENGTH,
+        temperature=DEFAULT_TEMPERATURE,
+        verbose=False,
+        time=DEFAULT_TIME
+    )
     mock_fix_loop.assert_not_called()
 
     assert result == (False, 'Original program content', 'Original code content', 1, 0.15, 'model-c')
@@ -278,7 +298,8 @@ def test_single_pass_program_run_fails(
         output='Partial output\n--- STDERR ---\nTraceback error',
         strength=DEFAULT_STRENGTH,
         temperature=DEFAULT_TEMPERATURE,
-        verbose=False
+        verbose=False,
+        time=DEFAULT_TIME
     )
     mock_fix_loop.assert_not_called()
     assert result[0] is False
@@ -335,7 +356,8 @@ def test_loop_mode_success(
         budget=5.0,
         verification_log_file=output_results_path,
         verbose=False,
-        program_args=[]
+        program_args=[],
+        llm_time=DEFAULT_TIME
     )
     mock_fix_errors.assert_not_called()
     mock_run_prog.assert_not_called()
@@ -382,7 +404,20 @@ def test_loop_mode_failure(
     )
 
     mock_construct.assert_called_once()
-    mock_fix_loop.assert_called_once()
+    mock_fix_loop.assert_called_once_with(
+        program_file=setup_files["program"],
+        code_file=setup_files["code"],
+        prompt='Original prompt content',
+        verification_program=setup_files["verifier"],
+        strength=DEFAULT_STRENGTH,
+        temperature=DEFAULT_TEMPERATURE,
+        max_attempts=5,
+        budget=5.0,
+        verification_log_file=mock_construct_paths_response[1]["output_results"],
+        verbose=False,
+        program_args=[],
+        llm_time=DEFAULT_TIME
+    )
     assert mock_fix_loop.call_args[1]['max_attempts'] == 5
     mock_fix_errors.assert_not_called()
     mock_run_prog.assert_not_called()
@@ -521,7 +556,7 @@ def test_verbose_flag_propagation(
     )
     mock_fix_errors.assert_called_once_with(
         program=ANY, prompt=ANY, code=ANY, output=ANY,
-        strength=ANY, temperature=ANY, verbose=True
+        strength=ANY, temperature=ANY, verbose=True, time=DEFAULT_TIME
     )
 
     mock_fix_errors.reset_mock() 
@@ -537,7 +572,7 @@ def test_verbose_flag_propagation(
     mock_fix_loop.assert_called_once_with(
         program_file=ANY, code_file=ANY, prompt=ANY, verification_program=ANY,
         strength=ANY, temperature=ANY, max_attempts=ANY, budget=ANY,
-        verification_log_file=ANY, verbose=True, program_args=ANY
+        verification_log_file=ANY, verbose=True, program_args=ANY, llm_time=DEFAULT_TIME
     )
 
 
@@ -590,7 +625,16 @@ def test_force_flag_retrieved_from_ctx_obj(
     # Accessing call_args directly can be (call_args, call_kwargs) or just call_args if no kwargs
     # call_args[1] is safer for kwargs
     assert mock_construct.call_args[1].get('force') is True, "construct_paths should have been called with force=True in single pass"
-    mock_fix_errors.assert_called_once() 
+    mock_fix_errors.assert_called_once_with(
+        program=mock_construct_paths_response[0]["program_file"],
+        prompt=mock_construct_paths_response[0]["prompt_file"],
+        code=mock_construct_paths_response[0]["code_file"],
+        output="Program output",
+        strength=DEFAULT_STRENGTH,
+        temperature=DEFAULT_TEMPERATURE,
+        verbose=False, # mock_context.obj['verbose'] is False here
+        time=DEFAULT_TIME
+    )
     mock_fix_loop.assert_not_called()
 
     mock_construct.reset_mock()
@@ -614,4 +658,17 @@ def test_force_flag_retrieved_from_ctx_obj(
 
     mock_run_prog.assert_not_called() 
     mock_fix_errors.assert_not_called() 
-    mock_fix_loop.assert_called_once()
+    mock_fix_loop.assert_called_once_with(
+        program_file=setup_files["program"],
+        code_file=setup_files["code"],
+        prompt=mock_construct_paths_response[0]["prompt_file"],
+        verification_program=setup_files["verifier"],
+        strength=DEFAULT_STRENGTH,
+        temperature=DEFAULT_TEMPERATURE,
+        max_attempts=DEFAULT_MAX_ATTEMPTS,
+        budget=DEFAULT_BUDGET,
+        verification_log_file=mock_construct_paths_response[1]["output_results"],
+        verbose=False, # mock_context.obj['verbose'] is False here
+        program_args=[],
+        llm_time=DEFAULT_TIME
+    )

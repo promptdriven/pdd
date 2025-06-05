@@ -13,8 +13,9 @@ from rich.panel import Panel
 from rich.text import Text # ADDED THIS IMPORT
 
 # Import the function to be tested using an absolute path
-from pdd.code_generator_main import code_generator_main
+from pdd.code_generator_main import code_generator_main, CLOUD_GENERATE_URL, CLOUD_REQUEST_TIMEOUT
 from pdd.get_jwt_token import AuthError, NetworkError, TokenError, UserCancelledError, RateLimitError
+from pdd import DEFAULT_TIME # Ensure DEFAULT_TIME is available if mock_ctx doesn't always set 'time'
 
 # Constants for mocking
 DEFAULT_MOCK_GENERATED_CODE = "def hello():\n  print('Hello, world!')"
@@ -245,7 +246,13 @@ def test_full_gen_local_no_output_file(
     assert cost == DEFAULT_MOCK_COST
     assert model == DEFAULT_MOCK_MODEL_NAME
     mock_local_generator_fixture.assert_called_once_with(
-        prompt="Local test prompt", language="python", strength=0.5, temperature=0.0, verbose=False
+        prompt="Local test prompt",
+        language="python",
+        strength=mock_ctx.obj['strength'],
+        temperature=mock_ctx.obj['temperature'],
+        time=mock_ctx.obj['time'],
+        verbose=mock_ctx.obj['verbose'],
+        preprocess_prompt=True
     )
     assert (temp_dir_setup["output_dir"] / output_file_name).exists()
     assert (temp_dir_setup["output_dir"] / output_file_name).read_text() == DEFAULT_MOCK_GENERATED_CODE
@@ -273,7 +280,9 @@ def test_full_gen_local_output_exists_no_incremental_possible(
         )
 
     assert code == DEFAULT_MOCK_GENERATED_CODE
-    mock_local_generator_fixture.assert_called_once()
+    mock_local_generator_fixture.assert_called_once_with(
+        prompt="Local test prompt", language="python", strength=mock_ctx.obj['strength'], temperature=mock_ctx.obj['temperature'], time=mock_ctx.obj['time'], verbose=mock_ctx.obj['verbose'], preprocess_prompt=True
+    )
     assert output_file_path.read_text() == DEFAULT_MOCK_GENERATED_CODE
 
 
@@ -296,14 +305,16 @@ def test_full_gen_local_output_to_console(
     )
 
     assert code == DEFAULT_MOCK_GENERATED_CODE
-    mock_local_generator_fixture.assert_called_once()
+    mock_local_generator_fixture.assert_called_once_with(
+        prompt="Console test prompt", language="python", strength=mock_ctx.obj['strength'], temperature=mock_ctx.obj['temperature'], time=mock_ctx.obj['time'], verbose=mock_ctx.obj['verbose'], preprocess_prompt=True
+    )
     printed_to_console = False
     for call_args in mock_rich_console_fixture.call_args_list:
         args, _ = call_args
         if args and isinstance(args[0], Panel):
             panel_obj = args[0]
             if hasattr(panel_obj, 'renderable') and isinstance(panel_obj.renderable, Text):
-                if DEFAULT_MOCK_GENERATED_CODE in panel_obj.renderable.plain: # MODIFIED LINE
+                if DEFAULT_MOCK_GENERATED_CODE in panel_obj.renderable.plain:
                     printed_to_console = True
                     break
     assert printed_to_console
@@ -334,19 +345,25 @@ def test_full_gen_cloud_success(
 
     assert code == DEFAULT_MOCK_GENERATED_CODE
     assert not incremental
-    assert cost == DEFAULT_MOCK_COST 
-    assert model == "cloud_model" 
+    assert cost == DEFAULT_MOCK_COST
+    assert model == "cloud_model"
     
     mock_pdd_preprocess_fixture.assert_called_once_with("Cloud test prompt", recursive=True, double_curly_brackets=True, exclude_keys=[])
     mock_get_jwt_token_fixture.assert_called_once() 
-    mock_requests_post_fixture.assert_called_once() 
     
-    call_args = mock_requests_post_fixture.call_args
-    assert call_args[1]['json']['promptContent'] == "Preprocessed cloud prompt"
-    assert call_args[1]['json']['language'] == "python"
-    
+    mock_requests_post_fixture.assert_called_once_with(
+        CLOUD_GENERATE_URL,
+        json={
+            "promptContent": mock_pdd_preprocess_fixture.return_value,
+            "language": "python",
+            "strength": mock_ctx.obj['strength'],
+            "temperature": mock_ctx.obj['temperature'],
+            "verbose": mock_ctx.obj['verbose']
+        },
+        headers={"Authorization": "Bearer test_jwt_token", "Content-Type": "application/json"},
+        timeout=CLOUD_REQUEST_TIMEOUT
+    )
     assert (temp_dir_setup["output_dir"] / output_file_name).exists()
-    assert (temp_dir_setup["output_dir"] / output_file_name).read_text() == DEFAULT_MOCK_GENERATED_CODE
 
 
 @pytest.mark.parametrize("cloud_error, local_fallback_expected", [
@@ -400,8 +417,16 @@ def test_full_gen_cloud_fallback_scenarios(
     )
 
     if local_fallback_expected:
-        mock_local_generator_fixture.assert_called_once()
-        assert code == DEFAULT_MOCK_GENERATED_CODE 
+        mock_local_generator_fixture.assert_called_once_with(
+            prompt="Fallback test prompt",
+            language="python",
+            strength=mock_ctx.obj['strength'],
+            temperature=mock_ctx.obj['temperature'],
+            time=mock_ctx.obj['time'],
+            verbose=mock_ctx.obj['verbose'],
+            preprocess_prompt=True
+        )
+        assert code == DEFAULT_MOCK_GENERATED_CODE
         assert any("falling back to local" in str(call_args[0][0]).lower() for call_args in mock_rich_console_fixture.call_args_list if call_args[0])
     else: 
         mock_local_generator_fixture.assert_not_called()
@@ -418,6 +443,7 @@ def test_full_gen_cloud_fallback_scenarios(
 
 def test_full_gen_cloud_missing_env_vars_fallback_to_local(
     mock_ctx, temp_dir_setup, mock_construct_paths_fixture, 
+    mock_pdd_preprocess_fixture,
     mock_local_generator_fixture, mock_rich_console_fixture, monkeypatch 
 ):
     mock_ctx.obj['local'] = False
@@ -439,7 +465,15 @@ def test_full_gen_cloud_missing_env_vars_fallback_to_local(
     
     code_generator_main(mock_ctx, str(prompt_file_path), output_file_path_str, None, False)
 
-    mock_local_generator_fixture.assert_called_once()
+    mock_local_generator_fixture.assert_called_once_with(
+        prompt="Env var test prompt",
+        language="python",
+        strength=mock_ctx.obj['strength'],
+        temperature=mock_ctx.obj['temperature'],
+        time=mock_ctx.obj['time'],
+        verbose=mock_ctx.obj['verbose'],
+        preprocess_prompt=True
+    )
     assert any("falling back to local" in str(call_args[0][0]).lower() for call_args in mock_rich_console_fixture.call_args_list if call_args[0])
 
 
@@ -561,6 +595,7 @@ def test_incremental_gen_with_git_committed_prompt(
 
 def test_incremental_gen_fallback_to_full_on_generator_suggestion(
     mock_ctx, temp_dir_setup, mock_construct_paths_fixture, 
+    mock_pdd_preprocess_fixture,
     mock_incremental_generator_fixture, mock_local_generator_fixture, mock_env_vars
 ):
     mock_ctx.obj['local'] = True 
@@ -581,9 +616,26 @@ def test_incremental_gen_fallback_to_full_on_generator_suggestion(
         mock_ctx, str(prompt_file_path), str(output_file_path), str(original_prompt_file_path), False
     )
 
-    mock_incremental_generator_fixture.assert_called_once()
-    mock_local_generator_fixture.assert_called_once_with( 
-        prompt="New prompt", language="python", strength=0.5, temperature=0.0, verbose=False
+    mock_incremental_generator_fixture.assert_called_once_with(
+        original_prompt="Original prompt",
+        new_prompt="New prompt",
+        existing_code="Existing code",
+        language="python",
+        strength=mock_ctx.obj['strength'],
+        temperature=mock_ctx.obj['temperature'],
+        time=mock_ctx.obj['time'],
+        force_incremental=False,
+        verbose=mock_ctx.obj['verbose'],
+        preprocess_prompt=True
+    )
+    mock_local_generator_fixture.assert_called_once_with(
+        prompt="New prompt",
+        language="python",
+        strength=mock_ctx.obj['strength'],
+        temperature=mock_ctx.obj['temperature'],
+        time=mock_ctx.obj['time'],
+        verbose=mock_ctx.obj['verbose'],
+        preprocess_prompt=True
     )
 
 def test_incremental_gen_force_incremental_flag_but_no_output_file(

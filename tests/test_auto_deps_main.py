@@ -4,7 +4,7 @@ import sys
 import click
 
 # Import DEFAULT_STRENGTH
-from pdd import DEFAULT_STRENGTH
+from pdd import DEFAULT_STRENGTH, DEFAULT_TIME
 from pdd.auto_deps_main import auto_deps_main
 
 @pytest.fixture
@@ -20,7 +20,8 @@ def mock_ctx():
     }
     ctx.obj = {
         'strength': DEFAULT_STRENGTH,
-        'temperature': 0
+        'temperature': 0,
+        'time': DEFAULT_TIME
     }
     return ctx
 
@@ -83,6 +84,7 @@ def test_auto_deps_normal_operation(
         csv_filename=mock_construct_paths.return_value[1]["csv"],
         strength=mock_ctx.obj["strength"],
         temperature=mock_ctx.obj["temperature"],
+        time=mock_ctx.obj["time"],
         verbose=not mock_ctx.params["quiet"]
     )
     assert modified_prompt == "Modified prompt with includes"
@@ -150,6 +152,7 @@ def test_auto_deps_force_scan_operation(
         csv_filename="forced_scan_deps.csv",
         strength=mock_ctx.obj["strength"],
         temperature=mock_ctx.obj["temperature"],
+        time=mock_ctx.obj["time"],
         verbose=not mock_ctx.params["quiet"]
     )
     assert modified_prompt == "Modified prompt after force scan"

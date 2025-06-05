@@ -71,7 +71,8 @@ def test_trace_main_success(mock_rprint, mock_trace, mock_construct_paths, mock_
         code_line,
         "Prompt content here.",
         0.5,
-        0.0
+        0.0,
+        time=0.25
     )
     mock_rprint.assert_any_call("[bold green]Trace Analysis Complete[/bold green]")
     mock_rprint.assert_any_call(f"Corresponding prompt line: [cyan]{expected_return[0]}[/cyan]")
@@ -135,7 +136,8 @@ def test_trace_main_value_error(mock_rprint, mock_trace, mock_construct_paths, m
         code_line,
         "Valid prompt content.",
         0.5,
-        0.0
+        0.0,
+        time=0.25
     )
     mock_rprint.assert_called_once_with("[bold red]Invalid input: Invalid code line[/bold red]")
 
@@ -175,7 +177,8 @@ def test_trace_main_unexpected_exception(mock_rprint, mock_trace, mock_construct
         code_line,
         "Another prompt content.",
         0.5,
-        0.0
+        0.0,
+        time=0.25
     )
     mock_rprint.assert_called_once_with("[bold red]An unexpected error occurred: Unexpected error[/bold red]")
 
@@ -224,7 +227,8 @@ def test_trace_main_no_output(mock_rprint, mock_trace, mock_construct_paths, moc
         code_line,
         "Prompt content without output.",
         0.5,
-        0.0
+        0.0,
+        time=0.25
     )
     mock_rprint.assert_any_call("[bold green]Trace Analysis Complete[/bold green]")
     mock_rprint.assert_any_call(f"Corresponding prompt line: [cyan]{'25'}[/cyan]")
@@ -281,7 +285,8 @@ def test_trace_main_quiet_mode(mock_rprint, mock_trace, mock_construct_paths, mo
         code_line,
         "Quiet prompt content.",
         0.5,
-        0.0
+        0.0,
+        time=0.25
     )
     mock_rprint.assert_not_called()
 
@@ -335,7 +340,8 @@ def test_trace_main_force_overwrite(mock_rprint, mock_trace, mock_construct_path
         code_line,
         "Force prompt content.",
         0.5,
-        0.0
+        0.0,
+        time=0.25
     )
     mock_rprint.assert_any_call("[bold green]Trace Analysis Complete[/bold green]")
     mock_rprint.assert_any_call(f"Corresponding prompt line: [cyan]{'40'}[/cyan]")
@@ -389,7 +395,8 @@ def test_trace_main_zero_cost(mock_rprint, mock_trace, mock_construct_paths, moc
         code_line,
         "Zero cost prompt content.",
         0.5,
-        0.0
+        0.0,
+        time=0.25
     )
     mock_rprint.assert_any_call("[bold green]Trace Analysis Complete[/bold green]")
     mock_rprint.assert_any_call(f"Corresponding prompt line: [cyan]{'35'}[/cyan]")
@@ -446,8 +453,9 @@ def test_trace_main_missing_strength_temperature(mock_rprint, mock_trace, mock_c
         "Missing params code content.",
         code_line,
         "Missing params prompt content.",
-        0.5,  # Default strength
-        0.0   # Default temperature
+        0.9,  # Default strength from mock_ctx
+        0.0,   # Default temperature from mock_ctx
+        time=0.25
     )
     mock_rprint.assert_any_call("[bold green]Trace Analysis Complete[/bold green]")
     mock_rprint.assert_any_call(f"Corresponding prompt line: [cyan]{'50'}[/cyan]")
@@ -493,9 +501,10 @@ def test_trace_main_output_file_write_failure(mock_rprint, mock_trace, mock_cons
         code_line,
         "Prompt content for write failure.",
         0.5,
-        0.0
+        0.0,
+        time=0.25
     )
-    mock_rprint.assert_called_once_with("[bold red]An unexpected error occurred: Cannot write to file[/bold red]")
+    mock_rprint.assert_called_with("[bold red]Error saving trace results: Cannot write to file[/bold red]")
 
 
 @patch('pdd.trace_main.construct_paths')
@@ -534,7 +543,8 @@ def test_trace_main_empty_files(mock_rprint, mock_trace, mock_construct_paths, m
         code_line,
         "",
         0.5,
-        0.0
+        0.0,
+        time=0.25
     )
     mock_rprint.assert_any_call("[bold green]Trace Analysis Complete[/bold green]")
     mock_rprint.assert_any_call(f"Corresponding prompt line: [cyan]{'0'}[/cyan]")
@@ -580,6 +590,7 @@ def test_trace_main_large_code_line_number(mock_rprint, mock_trace, mock_constru
         code_line,
         "Prompt content for large code line.",
         0.5,
-        0.0
+        0.0,
+        time=0.25
     )
     mock_rprint.assert_called_once_with("[bold red]Invalid input: Code line number out of range[/bold red]")

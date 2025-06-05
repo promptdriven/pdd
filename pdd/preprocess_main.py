@@ -7,7 +7,7 @@ from rich import print as rprint
 from .construct_paths import construct_paths
 from .preprocess import preprocess
 from .xml_tagger import xml_tagger
-
+from . import DEFAULT_TIME, DEFAULT_STRENGTH
 def preprocess_main(
     ctx: click.Context, prompt_file: str, output: Optional[str], xml: bool, recursive: bool, double: bool, exclude: list
 ) -> Tuple[str, float, str]:
@@ -40,10 +40,17 @@ def preprocess_main(
 
         if xml:
             # Use xml_tagger to add XML delimiters
-            strength = ctx.obj.get("strength", 0.5)
+            strength = ctx.obj.get("strength", DEFAULT_STRENGTH)
             temperature = ctx.obj.get("temperature", 0.0)
             verbose = ctx.obj.get("verbose", False)
-            xml_tagged, total_cost, model_name = xml_tagger(prompt, strength, temperature, verbose)
+            time = ctx.obj.get("time", DEFAULT_TIME)
+            xml_tagged, total_cost, model_name = xml_tagger(
+                prompt,
+                strength,
+                temperature,
+                verbose,
+                time=time
+            )
             processed_prompt = xml_tagged
         else:
             # Preprocess the prompt

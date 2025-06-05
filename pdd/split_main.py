@@ -59,6 +59,7 @@ def split_main(
         # Get parameters from context
         strength = ctx.obj.get('strength', 0.5)
         temperature = ctx.obj.get('temperature', 0)
+        time = ctx.obj.get('time')
 
         # Call the split function with the standardized return pattern (result_data, cost, model_name)
         result_tuple, total_cost, model_name = split(
@@ -67,6 +68,7 @@ def split_main(
             example_code=input_strings["example_code"],
             strength=strength,
             temperature=temperature,
+            time=time,
             verbose=not ctx.obj.get('quiet', False)
         )
         

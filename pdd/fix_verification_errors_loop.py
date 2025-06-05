@@ -2,10 +2,10 @@ import os
 import shutil
 import subprocess
 import datetime
-import time
 from pathlib import Path
 from typing import Dict, Tuple, Any, Optional
 from xml.sax.saxutils import escape
+import time
 
 from rich.console import Console
 
@@ -23,6 +23,8 @@ except ImportError:
             "Could not import 'fix_verification_errors'. "
             "Ensure it's available via relative import or in the 'pdd' package."
         )
+
+from . import DEFAULT_TIME # Import DEFAULT_TIME
 
 # Initialize Rich Console for pretty printing
 console = Console()
@@ -90,6 +92,7 @@ def fix_verification_errors_loop(
     output_program_path: Optional[str] = None,
     verbose: bool = False,
     program_args: Optional[list[str]] = None,
+    llm_time: float = DEFAULT_TIME # Add time parameter
 ) -> Dict[str, Any]:
     """
     Attempts to fix errors in a code file based on program execution output
@@ -109,6 +112,7 @@ def fix_verification_errors_loop(
         output_program_path: Optional path to save fixed program (default: None).
         verbose: Enable verbose logging (default: False).
         program_args: Optional list of command-line arguments for the program_file.
+        llm_time: Time parameter for fix_verification_errors calls (default: DEFAULT_TIME).
 
     Returns:
         A dictionary containing:
@@ -227,7 +231,8 @@ def fix_verification_errors_loop(
             output=initial_output,
             strength=strength,
             temperature=temperature,
-            verbose=verbose
+            verbose=verbose,
+            time=llm_time # Pass time
         )
         # 3e: Add cost
         initial_cost = initial_fix_result.get('total_cost', 0.0)
@@ -427,7 +432,8 @@ def fix_verification_errors_loop(
                 output=program_output,
                 strength=strength,
                 temperature=temperature,
-                verbose=verbose
+                verbose=verbose,
+                time=llm_time # Pass time
             )
 
             # 4f: Add cost

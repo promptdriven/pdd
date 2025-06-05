@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, Optional
 from rich.console import Console
 from . import EXTRACTION_STRENGTH
 from .preprocess import preprocess
@@ -14,6 +14,7 @@ def code_generator(
     language: str,
     strength: float,
     temperature: float = 0.0,
+    time: Optional[float] = None,
     verbose: bool = False,
     preprocess_prompt: bool = True,
 ) -> Tuple[str, float, str]:
@@ -25,6 +26,7 @@ def code_generator(
         language (str): The target programming language
         strength (float): The strength of the LLM model (0 to 1)
         temperature (float, optional): The temperature for the LLM model. Defaults to 0.0
+        time (Optional[float], optional): The time for the LLM model. Defaults to None
         verbose (bool, optional): Whether to print detailed information. Defaults to False
 
     Returns:
@@ -65,6 +67,7 @@ def code_generator(
             input_json={},
             strength=strength,
             temperature=temperature,
+            time=time,
             verbose=verbose
         )
         initial_output = response['result']
@@ -79,6 +82,7 @@ def code_generator(
             prompt_text=last_chunk,
             strength=0.5,
             temperature=0.0,
+            time=time,
             verbose=verbose
         )
         total_cost += check_cost
@@ -92,6 +96,7 @@ def code_generator(
                 llm_output=initial_output,
                 strength=strength,
                 temperature=temperature,
+                time=time,
                 verbose=verbose
             )
             total_cost += continue_cost
@@ -107,6 +112,7 @@ def code_generator(
             language=language,
             strength=EXTRACTION_STRENGTH,
             temperature=0.0,
+            time=time,
             verbose=verbose
         )
         total_cost += postprocess_cost

@@ -5,6 +5,7 @@ from rich.markdown import Markdown
 from pydantic import BaseModel, Field
 from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
+from . import DEFAULT_TIME, DEFAULT_STRENGTH # Import defaults
 
 # Define Pydantic model for structured LLM output for VERIFICATION
 class VerificationOutput(BaseModel):
@@ -22,9 +23,10 @@ def fix_verification_errors(
     prompt: str,
     code: str,
     output: str,
-    strength: float,
+    strength: float = DEFAULT_STRENGTH,
     temperature: float = 0.0,
     verbose: bool = False,
+    time: float = DEFAULT_TIME
 ) -> Dict[str, Any]:
     """
     Identifies and fixes issues in a code module based on verification output.
@@ -37,6 +39,7 @@ def fix_verification_errors(
         strength: The strength (0-1) for the LLM model selection.
         temperature: The temperature for the LLM model. Defaults to 0.
         verbose: If True, prints detailed execution information. Defaults to False.
+        time: The time for the LLM model. Defaults to DEFAULT_TIME.
 
     Returns:
         A dictionary containing:
@@ -116,7 +119,8 @@ def fix_verification_errors(
             strength=strength,
             temperature=temperature,
             verbose=False,
-            output_pydantic=VerificationOutput
+            output_pydantic=VerificationOutput,
+            time=time
         )
         total_cost += verification_response.get('cost', 0.0)
         model_name = verification_response.get('model_name', model_name)
@@ -246,7 +250,8 @@ def fix_verification_errors(
                 strength=strength,
                 temperature=temperature,
                 verbose=False,
-                output_pydantic=FixerOutput
+                output_pydantic=FixerOutput,
+                time=time
             )
             total_cost += fix_response.get('cost', 0.0)
             model_name = fix_response.get('model_name', model_name)

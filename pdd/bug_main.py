@@ -5,6 +5,7 @@ import click
 from rich import print as rprint
 from pathlib import Path
 
+from . import DEFAULT_STRENGTH, DEFAULT_TIME
 from .construct_paths import construct_paths
 from .bug_to_unit_test import bug_to_unit_test
 
@@ -64,8 +65,9 @@ def bug_main(
         desired_output_content = input_strings["desired_output"]
 
         # Generate unit test
-        strength = ctx.obj.get('strength', 0.9)
+        strength = ctx.obj.get('strength', DEFAULT_STRENGTH)
         temperature = ctx.obj.get('temperature', 0)
+        time_budget = ctx.obj.get('time', DEFAULT_TIME)
         unit_test, total_cost, model_name = bug_to_unit_test(
             current_output_content,
             desired_output_content,
@@ -74,7 +76,8 @@ def bug_main(
             program_content,
             strength,
             temperature,
-            language
+            language,
+            time_budget
         )
 
         # Save results if output path is provided

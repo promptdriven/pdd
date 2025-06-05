@@ -4,7 +4,7 @@ from rich import print as rprint
 from rich.markdown import Markdown
 from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
-from . import EXTRACTION_STRENGTH
+from . import EXTRACTION_STRENGTH, DEFAULT_STRENGTH, DEFAULT_TIME
 
 class ConflictChange(BaseModel):
     prompt_name: str = Field(description="Name of the prompt that needs to be changed")
@@ -16,8 +16,9 @@ class ConflictResponse(BaseModel):
 def conflicts_in_prompts(
     prompt1: str,
     prompt2: str,
-    strength: float = 0.5,
+    strength: float = DEFAULT_STRENGTH,
     temperature: float = 0,
+    time: float = DEFAULT_TIME,
     verbose: bool = False
 ) -> Tuple[List[dict], float, str]:
     """
@@ -28,6 +29,7 @@ def conflicts_in_prompts(
         prompt2 (str): Second prompt to compare
         strength (float): Model strength (0-1)
         temperature (float): Model temperature (0-1)
+        time (float): Time budget for LLM calls.
         verbose (bool): Whether to print detailed information
 
     Returns:
@@ -66,6 +68,7 @@ def conflicts_in_prompts(
             input_json=input_json,
             strength=strength,
             temperature=temperature,
+            time=time,
             verbose=verbose
         )
 
@@ -88,6 +91,7 @@ def conflicts_in_prompts(
             input_json=extract_input,
             strength=EXTRACTION_STRENGTH,
             temperature=temperature,
+            time=time,
             output_pydantic=ConflictResponse,
             verbose=verbose
         )
@@ -125,6 +129,7 @@ def main():
             prompt2=prompt2,
             strength=0.7,
             temperature=0,
+            time=DEFAULT_TIME,
             verbose=True
         )
 

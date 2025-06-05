@@ -58,7 +58,7 @@
                 * 'PROMPT_LIST' (load the prompt files and create a list of JSON with these keys: 'PROMPT_NAME' and 'PROMPT_DESCRIPTION').
                 * 'CHANGE_DESCRIPTION' (preprocess this with double_curly_brackets set to false using the `preprocess` function).
         - b. If verbose is True, pretty print the output of 2a, including the token count and estimated cost.
-    Step 3. Run the output from Step 2 through the 'extract_detect_change_LLM' prompt using `llm_invoke` with a strength of .89, temperature of 0, and the provided `time` parameter.
+    Step 3. Run the output from Step 2 through the 'extract_detect_change_LLM' prompt using `llm_invoke` with a strength of EXTRACTION_STRENGTH, temperature of 0, and the provided `time` parameter.
         - a. Pass the following parameters to `llm_invoke`:
             * 'prompt_template': The loaded 'extract_detect_change_LLM' prompt template.
             * 'verbose': The provided verbose parameter.

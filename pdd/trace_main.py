@@ -5,7 +5,7 @@ import os
 import logging
 from .construct_paths import construct_paths
 from .trace import trace
-
+from . import DEFAULT_TIME, DEFAULT_STRENGTH
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
@@ -49,11 +49,12 @@ def trace_main(ctx: click.Context, prompt_file: str, code_file: str, code_line: 
         logger.debug("Input files loaded")
 
         # Perform trace analysis
-        strength = ctx.obj.get('strength', 0.5)
+        strength = ctx.obj.get('strength', DEFAULT_STRENGTH)
         temperature = ctx.obj.get('temperature', 0.0)
+        time = ctx.obj.get('time', DEFAULT_TIME)
         try:
             prompt_line, total_cost, model_name = trace(
-                code_content, code_line, prompt_content, strength, temperature
+                code_content, code_line, prompt_content, strength, temperature, time=time
             )
             logger.debug(f"Trace analysis completed: prompt_line={prompt_line}, total_cost={total_cost}, model_name={model_name}")
             
@@ -90,7 +91,7 @@ def trace_main(ctx: click.Context, prompt_file: str, code_file: str, code_line: 
                 logger.debug(f"Results saved to {output_path}")
             except IOError as e:
                 if not quiet:
-                    rprint(f"[bold red]An unexpected error occurred: {e}[/bold red]")
+                    rprint(f"[bold red]Error saving trace results: {e}[/bold red]")
                 logger.error(f"IOError while saving results: {e}")
                 ctx.exit(1)
 

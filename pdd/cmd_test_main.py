@@ -49,6 +49,7 @@ def cmd_test_main(
     verbose = ctx.obj["verbose"]
     strength = ctx.obj["strength"]
     temperature = ctx.obj["temperature"]
+    time = ctx.obj.get("time")
 
     if verbose:
         print(f"[bold blue]Prompt file:[/bold blue] {prompt_file}")
@@ -100,6 +101,7 @@ def cmd_test_main(
                 strength,
                 temperature,
                 language,
+                time=time,
             )
         except Exception as e:
             print(f"[bold red]Error generating tests: {e}[/bold red]")
@@ -121,6 +123,7 @@ def cmd_test_main(
                 language=language,
                 strength=strength,
                 temperature=temperature,
+                time=time,
                 verbose=verbose,
             )
         except Exception as e:

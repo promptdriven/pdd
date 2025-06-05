@@ -167,7 +167,7 @@ def main_example():
     os.environ[GITHUB_CLIENT_ID_ENV_VAR] = "dummy_github_client_id"
 
     s3_prompt_content = "Generate a C# snippet to read a file."
-    s3_prompt_file = base_output_dir / "s3_readfile_csharp.prompt"
+    s3_prompt_file = base_output_dir / "s3_readfile_c#.prompt"
     s3_prompt_file.write_text(s3_prompt_content)
     s3_output_file = base_output_dir / "s3_FileReader.cs"
 

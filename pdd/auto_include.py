@@ -8,6 +8,7 @@ from .llm_invoke import llm_invoke
 from .summarize_directory import summarize_directory
 import pandas as pd
 from io import StringIO
+from . import DEFAULT_TIME, DEFAULT_STRENGTH
 
 console = Console()
 
@@ -18,8 +19,9 @@ def auto_include(
     input_prompt: str,
     directory_path: str,
     csv_file: Optional[str] = None,
-    strength: float = 0.7,
+    strength: float = DEFAULT_STRENGTH,
     temperature: float = 0.0,
+    time: float = DEFAULT_TIME,
     verbose: bool = False
 ) -> Tuple[str, str, float, str]:
     """
@@ -31,6 +33,7 @@ def auto_include(
         csv_file (Optional[str]): Contents of existing CSV file
         strength (float): Strength of LLM model (0-1)
         temperature (float): Temperature of LLM model (0-1)
+        time (float): Time budget for LLM calls
         verbose (bool): Whether to print detailed information
 
     Returns:
@@ -68,6 +71,7 @@ def auto_include(
             directory_path=directory_path,
             strength=strength,
             temperature=temperature,
+            time=time,
             verbose=verbose,
             csv_file=csv_file
         )
@@ -100,6 +104,7 @@ def auto_include(
             },
             strength=strength,
             temperature=temperature,
+            time=time,
             verbose=verbose
         )
         total_cost += auto_include_response["cost"]
@@ -115,6 +120,7 @@ def auto_include(
                 input_json={"llm_output": auto_include_response["result"]},
                 strength=strength,
                 temperature=temperature,
+                time=time,
                 verbose=verbose,
                 output_pydantic=AutoIncludeOutput
             )
@@ -160,6 +166,7 @@ context/image_utils.py,"Image processing utilities",2023-01-01T10:00:00"""
             csv_file=csv_file,
             strength=0.7,
             temperature=0.0,
+            time=DEFAULT_TIME,
             verbose=True
         )
 

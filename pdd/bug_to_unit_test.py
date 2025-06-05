@@ -2,7 +2,7 @@ from typing import Tuple, Optional
 from rich import print
 from rich.markdown import Markdown
 from rich.console import Console
-from . import EXTRACTION_STRENGTH, DEFAULT_STRENGTH
+from . import EXTRACTION_STRENGTH, DEFAULT_STRENGTH, DEFAULT_TIME
 from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
 from .unfinished_prompt import unfinished_prompt
@@ -20,6 +20,7 @@ def bug_to_unit_test(
     program_used_to_run_code_under_test: str,
     strength: float = DEFAULT_STRENGTH,
     temperature: float = 0.0,
+    time: float = DEFAULT_TIME,
     language: str = "python"
 ) -> Tuple[str, float, str]:
     """
@@ -33,6 +34,7 @@ def bug_to_unit_test(
         program_used_to_run_code_under_test (str): Program used to run the code
         strength (float, optional): Strength of the LLM model. Must be between 0 and 1. Defaults to DEFAULT_STRENGTH.
         temperature (float, optional): Temperature of the LLM model. Defaults to 0.0.
+        time (float, optional): Time budget for LLM calls. Defaults to DEFAULT_TIME.
         language (str, optional): Programming language. Defaults to "python".
 
     Returns:
@@ -77,6 +79,7 @@ def bug_to_unit_test(
             input_json=input_json,
             strength=strength,
             temperature=temperature,
+            time=time,
             verbose=True
         )
 
@@ -93,6 +96,7 @@ def bug_to_unit_test(
             prompt_text=last_600_chars,
             strength=0.75,
             temperature=temperature,
+            time=time,
             verbose=False
         )
         
@@ -105,6 +109,7 @@ def bug_to_unit_test(
                 llm_output=response['result'],
                 strength=strength,
                 temperature=temperature,
+                time=time,
                 verbose=True
             )
             total_cost += continued_cost
@@ -124,6 +129,7 @@ def bug_to_unit_test(
             language,
             strength=EXTRACTION_STRENGTH,
             temperature=temperature,
+            time=time,
             verbose=True
         )
         total_cost += postprocess_cost
@@ -154,7 +160,8 @@ def add_numbers(a, b):
             desired_output=desired_output,
             prompt_used_to_generate_the_code=prompt,
             code_under_test=code,
-            program_used_to_run_code_under_test=program
+            program_used_to_run_code_under_test=program,
+            time=DEFAULT_TIME
         )
 
         if unit_test:

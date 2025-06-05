@@ -5,9 +5,18 @@ from .llm_invoke import llm_invoke
 from .unfinished_prompt import unfinished_prompt
 from .continue_generation import continue_generation
 from .postprocess import postprocess
-from . import EXTRACTION_STRENGTH
+from . import EXTRACTION_STRENGTH, DEFAULT_TIME
+from typing import Optional
 
-def context_generator(code_module: str, prompt: str, language: str = "python", strength: float = 0.5, temperature: float = 0, verbose: bool = False) -> tuple:
+def context_generator(
+    code_module: str,
+    prompt: str,
+    language: str = "python",
+    strength: float = 0.5,
+    temperature: float = 0,
+    time: Optional[float] = DEFAULT_TIME,
+    verbose: bool = False,
+) -> tuple:
     """
     Generates a concise example on how to use a given code module properly.
 
@@ -17,6 +26,7 @@ def context_generator(code_module: str, prompt: str, language: str = "python", s
         language (str): The language of the code module. Default is "python".
         strength (float): The strength of the LLM model to use. Default is 0.5. Range is between 0 and 1.
         temperature (float): The temperature of the LLM model to use. Default is 0. Range is between 0 and 1.
+        time (Optional[float], optional): Time allocation for the LLM. Defaults to DEFAULT_TIME.
         verbose (bool): Whether to print out the details of the function. Default is False.
 
     Returns:
@@ -45,6 +55,9 @@ def context_generator(code_module: str, prompt: str, language: str = "python", s
         return None, 0.0, None
 
     try:
+        if verbose:
+            print(f"[bold blue]Generating example for language: {language}[/bold blue]")
+
         # Step 1: Load and preprocess the 'example_generator_LLM' prompt template
         prompt_template = load_prompt_template("example_generator_LLM")
         if not prompt_template:
@@ -70,6 +83,7 @@ def context_generator(code_module: str, prompt: str, language: str = "python", s
             },
             strength=strength,
             temperature=temperature,
+            time=time,
             verbose=verbose
         )
 
@@ -80,6 +94,7 @@ def context_generator(code_module: str, prompt: str, language: str = "python", s
                 prompt_text=last_600_chars,
                 strength=0.5,
                 temperature=temperature,
+                time=time,
                 verbose=verbose
             )
         except Exception as e:
@@ -96,6 +111,7 @@ def context_generator(code_module: str, prompt: str, language: str = "python", s
                 llm_output=llm_response['result'],
                 strength=strength,
                 temperature=temperature,
+                time=time,
                 verbose=verbose
             )
             total_cost = llm_response['cost'] + unfinished_cost + continue_cost
@@ -113,6 +129,7 @@ def context_generator(code_module: str, prompt: str, language: str = "python", s
             language=language,
             strength=EXTRACTION_STRENGTH,
             temperature=temperature,
+            time=time,
             verbose=verbose
         )
         total_cost += postprocess_cost

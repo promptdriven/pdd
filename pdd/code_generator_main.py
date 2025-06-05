@@ -410,11 +410,17 @@ def code_generator_main(
             if current_execution_is_local:
                 if verbose: console.print("Executing code generator locally...")
                 generated_code_content, total_cost, model_name = local_code_generator_func(
-                    prompt=prompt_content, language=language, strength=strength,
-                    temperature=temperature, verbose=verbose
+                    prompt=prompt_content,
+                    language=language,
+                    strength=strength,
+                    temperature=temperature,
+                    time=time_budget,
+                    verbose=verbose,
+                    preprocess_prompt=True
                 )
+                was_incremental_operation = False
                 if verbose:
-                    console.print(Panel(f"Local generation successful. Model: {model_name}, Cost: ${total_cost:.6f}", title="[green]Local Success[/green]", expand=False))
+                    console.print(Panel(f"Full generation successful. Model: {model_name}, Cost: ${total_cost:.6f}", title="[green]Local Success[/green]", expand=False))
         
         if generated_code_content is not None:
             if output_path:

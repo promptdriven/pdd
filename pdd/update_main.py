@@ -6,7 +6,7 @@ from rich import print as rprint
 from .construct_paths import construct_paths
 from .update_prompt import update_prompt
 from .git_update import git_update
-
+from . import DEFAULT_TIME
 def update_main(
     ctx: click.Context,
     input_prompt_file: str,
@@ -49,6 +49,7 @@ def update_main(
         input_prompt = input_strings["input_prompt_file"]
         modified_code = input_strings["modified_code_file"]
         input_code = input_strings.get("input_code_file")
+        time = ctx.obj.get('time', DEFAULT_TIME)
 
         # Update prompt using appropriate method
         if git:
@@ -59,7 +60,8 @@ def update_main(
                 modified_code_file=modified_code_file,
                 strength=ctx.obj.get("strength", 0.5),
                 temperature=ctx.obj.get("temperature", 0),
-                verbose=ctx.obj.get("verbose", False)
+                verbose=ctx.obj.get("verbose", False),
+                time=time
             )
         else:
             if input_code is None:
@@ -70,7 +72,8 @@ def update_main(
                 modified_code=modified_code,
                 strength=ctx.obj.get("strength", 0.5),
                 temperature=ctx.obj.get("temperature", 0),
-                verbose=ctx.obj.get("verbose", False)
+                verbose=ctx.obj.get("verbose", False),
+                time=time
             )
 
         # Save the modified prompt

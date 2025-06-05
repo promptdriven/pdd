@@ -6,6 +6,7 @@ from rich import print as rprint
 
 from .construct_paths import construct_paths
 from .detect_change import detect_change
+from . import DEFAULT_TIME
 
 def detect_change_main(
     ctx: click.Context,
@@ -55,6 +56,7 @@ def detect_change_main(
         # Get model parameters from context
         strength = ctx.obj.get('strength', 0.9)
         temperature = ctx.obj.get('temperature', 0)
+        time_budget = ctx.obj.get('time', DEFAULT_TIME)
 
         # Analyze which prompts need changes
         changes_list, total_cost, model_name = detect_change(
@@ -62,6 +64,7 @@ def detect_change_main(
             change_description,
             strength,
             temperature,
+            time_budget,
             verbose=not ctx.obj.get('quiet', False)
         )
 

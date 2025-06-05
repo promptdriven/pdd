@@ -5,7 +5,7 @@ from rich.console import Console
 from rich.panel import Panel
 from .update_prompt import update_prompt
 import git
-
+from . import DEFAULT_TIME
 console = Console()
 
 def git_update(
@@ -13,7 +13,8 @@ def git_update(
     modified_code_file: str,
     strength: float,
     temperature: float,
-    verbose: bool = False
+    verbose: bool = False,
+    time: float = DEFAULT_TIME
 ) -> Tuple[Optional[str], float, str]:
     """
     Read in modified code, restore the prior checked-in version from GitHub,
@@ -61,7 +62,8 @@ def git_update(
             modified_code=modified_code,
             strength=strength,
             temperature=temperature,
-            verbose=verbose
+            verbose=verbose,
+            time=time
         )
 
         # Write back the modified code

@@ -10,7 +10,7 @@ from .construct_paths import construct_paths
 from .change import change as change_func
 from .process_csv_change import process_csv_change
 from .get_extension import get_extension
-from . import DEFAULT_STRENGTH  # Assuming DEFAULT_STRENGTH is defined in __init__.py
+from . import DEFAULT_STRENGTH, DEFAULT_TIME  # Added DEFAULT_TIME
 
 # Import Rich for pretty printing
 from rich import print as rprint
@@ -66,6 +66,7 @@ def change_main(
     quiet: bool = ctx.obj.get("quiet", False)
     strength: float = ctx.obj.get("strength", DEFAULT_STRENGTH)
     temperature: float = ctx.obj.get("temperature", 0.0)
+    time_budget: float = ctx.obj.get("time", DEFAULT_TIME) # Added time_budget
     # --- Get language and extension from context --- 
     # These are crucial for knowing the target code file types, especially in CSV mode
     target_language: str = ctx.obj.get("language", "") # Get from context
@@ -215,6 +216,7 @@ def change_main(
                     csv_file=change_prompt_file,
                     strength=strength,
                     temperature=temperature,
+                    time=time_budget, # Pass time_budget
                     code_directory=input_code, # Pass the directory path
                     language=csv_target_language,
                     extension=extension,
@@ -254,16 +256,18 @@ def change_main(
                  return msg, 0.0, ""
 
             try:
-                modified_prompt, total_cost, model_name = change_func(
-                    input_prompt=input_prompt_content,
-                    input_code=input_code_content,
-                    change_prompt=change_prompt_content,
-                    strength=strength,
-                    temperature=temperature,
-                    verbose=ctx.obj.get("verbose", False),
+                # Call the imported change function
+                result_message, total_cost, model_name = change_func(
+                    change_prompt_content,
+                    input_code_content,
+                    input_prompt_content,
+                    strength,
+                    temperature,
+                    time_budget, # Pass time_budget
+                    budget=budget,
+                    quiet=quiet
                 )
-                result_message = modified_prompt # Store the content for saving
-                success = True # Assume success if no exception
+                success = True  # Assume success if no exception
                 logger.info("Single prompt change successful.")
             except Exception as e:
                 msg = f"Error during prompt modification: {e}"

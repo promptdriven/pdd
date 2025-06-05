@@ -104,6 +104,8 @@ def fix_main(
         strength = ctx.obj.get('strength', DEFAULT_STRENGTH)
         temperature = ctx.obj.get('temperature', 0)
         verbose = ctx.obj.get('verbose', False)
+        time = ctx.obj.get('time') # Get time from context
+
         if loop:
             # Use fix_error_loop for iterative fixing
             success, fixed_unit_test, fixed_code, attempts, total_cost, model_name = fix_error_loop(
@@ -113,6 +115,7 @@ def fix_main(
                 verification_program=verification_program,
                 strength=strength,
                 temperature=temperature,
+                time=time, # Pass time to fix_error_loop
                 max_attempts=max_attempts,
                 budget=budget,
                 error_log_file=output_file_paths.get("output_results"),
@@ -128,6 +131,7 @@ def fix_main(
                 error_file=output_file_paths.get("output_results"),
                 strength=strength,
                 temperature=temperature,
+                time=time, # Pass time to fix_errors_from_unit_tests
                 verbose=verbose
             )
             success = update_unit_test or update_code

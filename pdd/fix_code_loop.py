@@ -4,6 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Tuple
+from . import DEFAULT_TIME # Added DEFAULT_TIME
 
 # Use Rich for pretty printing to the console
 from rich.console import Console
@@ -25,6 +26,7 @@ except ImportError:
     # sys.path.append(str(Path(__file__).parent.parent)) # Adjust based on structure
     from fix_code_module_errors import fix_code_module_errors
 
+
 def fix_code_loop(
     code_file: str,
     prompt: str,
@@ -33,8 +35,9 @@ def fix_code_loop(
     temperature: float,
     max_attempts: int,
     budget: float,
-    error_log_file: str = "error_code.log",
+    error_log_file: str,
     verbose: bool = False,
+    time: float = DEFAULT_TIME,
 ) -> Tuple[bool, str, str, int, float, str | None]:
     """
     Attempts to fix errors in a code module through multiple iterations.
@@ -47,8 +50,9 @@ def fix_code_loop(
         temperature: LLM temperature (0.0 to 1.0).
         max_attempts: Maximum number of fix attempts.
         budget: Maximum cost allowed for the fixing process.
-        error_log_file: Path to the error log file (default: "error_code.log").
+        error_log_file: Path to the error log file.
         verbose: Enable detailed logging (default: False).
+        time: Time limit for the LLM calls (default: DEFAULT_TIME).
 
     Returns:
         Tuple containing the following in order:
@@ -219,6 +223,7 @@ def fix_code_loop(
                 errors=error_context_for_llm, # Pass the structured history
                 strength=strength,
                 temperature=temperature,
+                time=time, # Pass time
                 verbose=verbose,
             )
             if model_name_iter:

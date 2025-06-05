@@ -2,7 +2,7 @@ import sys
 from typing import Tuple, Optional, Dict, Any
 import click
 from rich import print as rprint
-from . import DEFAULT_STRENGTH
+from . import DEFAULT_STRENGTH, DEFAULT_TIME
 from pathlib import Path
 
 from .construct_paths import construct_paths
@@ -54,6 +54,11 @@ def crash_main(
     quiet = ctx.params.get("quiet", ctx.obj.get("quiet", False))
     verbose = ctx.params.get("verbose", ctx.obj.get("verbose", False)) # Get verbose flag
 
+    # Get model parameters from context early, including time
+    strength = ctx.obj.get("strength", DEFAULT_STRENGTH)
+    temperature = ctx.obj.get("temperature", 0)
+    time_param = ctx.obj.get("time", DEFAULT_TIME) # Renamed from time_budget for clarity
+
     try:
         # Construct file paths
         input_file_paths = {
@@ -84,71 +89,86 @@ def crash_main(
         program_content = input_strings["program_file"]
         error_content = input_strings["error_file"]
 
-        # Get model parameters from context
-        strength = ctx.obj.get("strength", DEFAULT_STRENGTH)
-        temperature = ctx.obj.get("temperature", 0)
+        # Store original content for comparison later
+        original_code_content = code_content
+        original_program_content = program_content
+
+        # Get model parameters from context (strength, temperature, time already fetched)
+        # strength = ctx.obj.get("strength", DEFAULT_STRENGTH) # Moved up
+        # temperature = ctx.obj.get("temperature", 0) # Moved up
+        # time_budget = ctx.obj.get("time", DEFAULT_TIME) # Moved up and renamed
 
         # verbose = ctx.params.get("verbose", ctx.obj.get("verbose", False)) # Already defined above
 
+        code_updated: bool = False
+        program_updated: bool = False
+
         if loop:
             # Use iterative fixing process
+            # Corrected parameter order for fix_code_loop, adding time_param
             success, final_program, final_code, attempts, cost, model = fix_code_loop(
-                code_file, prompt_content, program_file, strength, temperature, max_attempts or 3, budget or 5.0, error_file, verbose
+                code_file, prompt_content, program_file, strength, temperature,
+                max_attempts or 3, budget or 5.0, error_file, verbose, time_param
             )
+            # Determine if content was updated by fix_code_loop
+            if success: # Only consider updates if the loop reported success
+                code_updated = bool(final_code and final_code != original_code_content)
+                program_updated = bool(final_program and final_program != original_program_content)
         else:
             # Use single fix attempt
             if fix_code_module_errors is None:
                  raise ImportError("fix_code_module_errors is required but not available.")
-            # Note: fix_code_module_errors returns 7 values according to example
-            # update_program, update_code, fixed_program, fixed_code, program_code_fix, cost, model
-            # The current code unpacks 7 values, which matches the example.
-            update_program, update_code, final_program, final_code, program_code_fix, cost, model = fix_code_module_errors(
-                program_content, prompt_content, code_content, error_content, strength, temperature, verbose
+            # Corrected parameter order for fix_code_module_errors, adding time_param
+            fm_update_program, fm_update_code, final_program, final_code, program_code_fix, cost, model = fix_code_module_errors(
+                program_content, prompt_content, code_content, error_content, strength, temperature, verbose, time_param
             )
             success = True # Assume success after one attempt if no exception
             attempts = 1
+            # Use boolean flags from fix_code_module_errors and ensure content is not empty
+            code_updated = fm_update_code and bool(final_code)
+            program_updated = fm_update_program and bool(final_program)
 
-        # Ensure we have content to write, falling back to original content if needed
-        if final_program == "":
-            final_program = program_content
+        # Removed fallback to original content if final_code/final_program are empty
+        # An empty string from a fix function means no valid update.
 
-        if final_code == "":
-            final_code = code_content
-
-        # Determine whether to write the files based on whether paths are provided
+        # Determine whether to write the files based on whether paths are provided AND content was updated
         output_code_path_str = output_file_paths.get("output")
         output_program_path_str = output_file_paths.get("output_program")
 
-        should_write_code = output_code_path_str is not None
-        should_write_program = output_program_path_str is not None
-
-        # Write output files
-        if should_write_code:
+        # Write output files only if updated and path provided
+        if output_code_path_str and code_updated:
             output_code_path = Path(output_code_path_str)
             output_code_path.parent.mkdir(parents=True, exist_ok=True) # Ensure directory exists
             with open(output_code_path, "w") as f:
                 f.write(final_code)
 
-        if should_write_program:
+        if output_program_path_str and program_updated:
             output_program_path = Path(output_program_path_str)
             output_program_path.parent.mkdir(parents=True, exist_ok=True) # Ensure directory exists
             with open(output_program_path, "w") as f:
                 f.write(final_program)
 
-        # Provide user feedback (using quiet flag as per current implementation)
-        # To strictly follow the prompt's last note, change 'if not quiet:' to 'if verbose:'
+        # Provide user feedback
         if not quiet:
             if success:
-                rprint("[bold green]Crash fix completed successfully.[/bold green]")
+                rprint("[bold green]Crash fix attempt completed.[/bold green]") # Changed message slightly
             else:
-                rprint("[bold yellow]Crash fix completed with issues.[/bold yellow]")
+                rprint("[bold yellow]Crash fix attempt completed with issues or no changes made.[/bold yellow]") # Changed message
             rprint(f"[bold]Model used:[/bold] {model}")
             rprint(f"[bold]Total attempts:[/bold] {attempts}")
             rprint(f"[bold]Total cost:[/bold] ${cost:.2f}")
-            if should_write_code:
-                rprint(f"[bold]Fixed code saved to:[/bold] {output_code_path_str}")
-            if should_write_program:
-                rprint(f"[bold]Fixed program saved to:[/bold] {output_program_path_str}")
+
+            if output_code_path_str:
+                if code_updated:
+                    rprint(f"[bold]Fixed code saved to:[/bold] {output_code_path_str}")
+                else:
+                    rprint(f"[info]Code file {Path(code_file).name} was not modified. Output file {output_code_path_str} not written.[/info]")
+            
+            if output_program_path_str:
+                if program_updated:
+                    rprint(f"[bold]Fixed program saved to:[/bold] {output_program_path_str}")
+                else:
+                    rprint(f"[info]Program file {Path(program_file).name} was not modified. Output file {output_program_path_str} not written.[/info]")
 
         return success, final_code, final_program, attempts, cost, model
     

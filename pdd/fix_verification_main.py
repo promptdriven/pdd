@@ -16,7 +16,7 @@ from .construct_paths import construct_paths
 from .fix_verification_errors import fix_verification_errors
 from .fix_verification_errors_loop import fix_verification_errors_loop
 # Import DEFAULT_STRENGTH from the main package
-from . import DEFAULT_STRENGTH
+from . import DEFAULT_STRENGTH, DEFAULT_TIME
 
 # Default values from the README
 DEFAULT_TEMPERATURE = 0.0
@@ -135,6 +135,7 @@ def fix_verification_main(
     force: bool = ctx.obj.get('force', False)
     quiet: bool = ctx.obj.get('quiet', False)
     verbose: bool = ctx.obj.get('verbose', False)
+    time: float = ctx.obj.get('time', DEFAULT_TIME) # Get time from context, default 0.25
 
     # --- Input Validation ---
     if loop and not verification_program:
@@ -250,35 +251,39 @@ def fix_verification_main(
     try:
         if loop:
             if not quiet:
-                rich_print("\n[bold blue]Running Iterative Verification (fix_verification_errors_loop)...[/bold blue]")
-
-            # fix_verification_errors_loop handles file I/O internally
-            # Pass file paths directly
-            # TODO: How are program_args passed? Assuming empty list for now. Needs CLI option.
-            program_args: List[str] = []
-
-            loop_results = fix_verification_errors_loop(
-                program_file=program_file,
-                code_file=code_file,
-                prompt=input_strings["prompt_file"],
-                verification_program=verification_program,
-                strength=strength,
-                temperature=temperature,
-                max_attempts=max_attempts,
-                budget=budget,
-                verification_log_file=output_results_path,
-                verbose=verbose,
-                program_args=program_args
-            )
-            success = loop_results['success']
-            final_program = loop_results['final_program']
-            final_code = loop_results['final_code']
-            attempts = loop_results['total_attempts']
-            total_cost = loop_results['total_cost']
-            model_name = loop_results['model_name']
-            # The loop function writes its own detailed log, so we don't need to build one here.
-            # We just need to ensure the path was passed correctly.
-
+                rich_print("[dim]Running Iterative Verification (fix_verification_errors_loop)...[/dim]")
+            try:
+                # Call fix_verification_errors_loop for iterative fixing
+                loop_results = fix_verification_errors_loop(
+                    program_file=program_file,                  # Changed to pass the program_file path
+                    code_file=code_file,                        # Changed to pass the code_file path
+                    prompt=input_strings["prompt_file"],        # Correctly passing prompt content
+                    verification_program=verification_program,      # Path to the verifier program
+                    strength=strength,
+                    temperature=temperature,
+                    llm_time=time, # Changed 'time' to 'llm_time'
+                    max_attempts=max_attempts,
+                    budget=budget,
+                    verification_log_file=output_results_path, # Use resolved output_results_path
+                    # output_code_path should not be passed here
+                    # output_program_path should not be passed here
+                    verbose=verbose,
+                    program_args=[] # Pass an empty list for program_args
+                )
+                success = loop_results.get('success', False)
+                final_program = loop_results.get('final_program', "") # Use .get for safety
+                final_code = loop_results.get('final_code', "")       # Use .get for safety
+                attempts = loop_results.get('total_attempts', 0)    # Use .get for safety
+                total_cost = loop_results.get('total_cost', 0.0)    # Use .get for safety
+                model_name = loop_results.get('model_name', "N/A")  # Use .get for safety
+                # Capture full statistics if available
+                # statistics = loop_results.get('statistics', {})
+            except Exception as e:
+                rich_print(f"[bold red]Error during loop execution:[/bold red] {e}")
+                if verbose:
+                    import traceback
+                    rich_print(Panel(traceback.format_exc(), title="Traceback", border_style="red"))
+                success = False
         else: # Single pass verification
             if not quiet:
                 rich_print("\n[bold blue]Running Single Pass Verification (fix_verification_errors)...[/bold blue]")
@@ -309,7 +314,8 @@ def fix_verification_main(
                 output=program_output,
                 strength=strength,
                 temperature=temperature,
-                verbose=verbose
+                verbose=verbose,
+                time=time # Pass time to single pass function
             )
 
             # Determine success: If no issues were found OR if fixes were applied
