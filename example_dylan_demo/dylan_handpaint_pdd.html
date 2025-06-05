@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Hand Tracking Drawing with MediaPipe and Three.js</title>
+    <meta charset="utf-8">
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; }
+        canvas { display: block; }
+        #webcam_video {
+            display: none; /* Can be 'none' if not directly visible or for debugging */
+            /* transform: scaleX(-1); /* Mirror video if needed, but MediaPipe handles it */
+        }
+    </style>
+</head>
+<body>
+    <video id="webcam_video" playsinline style="visibility: hidden;"></video>
+    <canvas id="output_canvas"></canvas>
+
+    <!-- MediaPipe and Three.js libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <script>
+        const videoElement = document.getElementById('webcam_video');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d'); // Fallback, not used by Three.js directly
+
+        let scene, camera, renderer;
+        let handSkeletonGroup, drawnLinesGroup;
+        let lastKnownIndexTipPosition = null;
+        let isPointing = false;
+        let isOpenPalm = false;
+
+        const DRAWING_COLOR = 0xff00ff; // Magenta for drawing
+        const SKELETON_COLOR = 0xffffff; // White for skeleton
+        const JOINT_COLOR = 0x00ff00;   // Green for joints
+        const ERASER_RADIUS = 30;       // Radius for erasing
+        const SKELETON_Z_SCALE = 300;   // Scale for hand landmark Z depth
+
+        let drawingMaterial, skeletonMaterial, jointMaterial;
+        let videoTexture, videoBackgroundPlane;
+
+        function initThree() {
+            scene = new THREE.Scene();
+
+            const aspectRatio = window.innerWidth / window.innerHeight;
+            // Orthographic camera for 2D-like projection of landmarks
+            camera = new THREE.OrthographicCamera(
+                window.innerWidth / -2, window.innerWidth / 2,
+                window.innerHeight / 2, window.innerHeight / -2,
+                1, 2000 // Near and far clipping planes
+            );
+            camera.position.z = 500; // Position camera to see the scene
+            scene.add(camera);
+
+            renderer = new THREE.WebGLRenderer({ canvas: canvasElement, antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6);
+            directionalLight.position.set(0, 0, 100);
+            scene.add(directionalLight);
+
+            // Groups for objects
+            handSkeletonGroup = new THREE.Group();
+            scene.add(handSkeletonGroup);
+            drawnLinesGroup = new THREE.Group();
+            scene.add(drawnLinesGroup);
+
+            // Materials
+            drawingMaterial = new THREE.LineBasicMaterial({ color: DRAWING_COLOR, linewidth: 5 }); // Linewidth > 1 might not work on all platforms
+            skeletonMaterial = new THREE.LineBasicMaterial({ color: SKELETON_COLOR, linewidth: 2 });
+            jointMaterial = new THREE.MeshBasicMaterial({ color: JOINT_COLOR });
+
+            // Video background
+            videoTexture = new THREE.VideoTexture(videoElement);
+            const videoMaterial = new THREE.MeshBasicMaterial({ map: videoTexture });
+            const videoPlaneGeometry = new THREE.PlaneGeometry(window.innerWidth, window.innerHeight);
+            videoBackgroundPlane = new THREE.Mesh(videoPlaneGeometry, videoMaterial);
+            videoBackgroundPlane.position.z = -100; // Place it behind other elements
+            scene.add(videoBackgroundPlane);
+
+
+            window.addEventListener('resize', onWindowResize, false);
+            animate();
+        }
+
+        function onWindowResize() {
+            camera.left = window.innerWidth / -2;
+            camera.right = window.innerWidth / 2;
+            camera.top = window.innerHeight / 2;
+            camera.bottom = window.innerHeight / -2;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+
+            if (videoBackgroundPlane) {
+                scene.remove(videoBackgroundPlane);
+                const videoPlaneGeometry = new THREE.PlaneGeometry(window.innerWidth, window.innerHeight);
+                videoBackgroundPlane = new THREE.Mesh(videoPlaneGeometry, videoBackgroundPlane.material);
+                videoBackgroundPlane.position.z = -100;
+                scene.add(videoBackgroundPlane);
+            }
+        }
+
+        function mapLandmarkTo3D(landmark, forSkeleton = false) {
+            // MediaPipe landmarks are normalized (0-1). Map to canvas/world space.
+            // X: 0 (left) to 1 (right) -> -width/2 to width/2
+            // Y: 0 (top) to 1 (bottom) -> height/2 to -height/2 (inverted)
+            // Z: MediaPipe's Z is relative to wrist, smaller value = closer to camera.
+            //    We scale it and invert for Three.js (positive Z towards camera with this ortho setup).
+            const x = (landmark.x - 0.5) * window.innerWidth;
+            const y = -(landmark.y - 0.5) * window.innerHeight;
+            let z = 0;
+
+            if (forSkeleton) {
+                // landmark.z is typically small, negative for points closer to camera than wrist.
+                // We want positive Z to be closer to an orthographic camera at positive Z.
+                z = -landmark.z * SKELETON_Z_SCALE;
+            }
+            return new THREE.Vector3(x, y, z);
+        }
+
+        function draw3DSkeleton(landmarks3D) {
+            // Clear previous skeleton
+            while (handSkeletonGroup.children.length > 0) {
+                const obj = handSkeletonGroup.children[0];
+                handSkeletonGroup.remove(obj);
+                if (obj.geometry) obj.geometry.dispose();
+                // Material is shared, no need to dispose here unless it's unique per object
+            }
+
+            // Draw joints (spheres)
+            landmarks3D.forEach(point => {
+                const sphereGeo = new THREE.SphereGeometry(5, 8, 8); // Radius 5
+                const joint = new THREE.Mesh(sphereGeo, jointMaterial);
+                joint.position.copy(point);
+                handSkeletonGroup.add(joint);
+            });
+
+            // Draw bones (lines)
+            if (window.Hands && window.Hands.HAND_CONNECTIONS) {
+                window.Hands.HAND_CONNECTIONS.forEach(connection => {
+                    const startPoint = landmarks3D[connection[0]];
+                    const endPoint = landmarks3D[connection[1]];
+                    
+                    const geometry = new THREE.BufferGeometry().setFromPoints([startPoint, endPoint]);
+                    const line = new THREE.Line(geometry, skeletonMaterial);
+                    handSkeletonGroup.add(line);
+                });
+            }
+        }
+
+        function addDrawingSegment(p1, p2) {
+            const geometry = new THREE.BufferGeometry().setFromPoints([p1, p2]);
+            const line = new THREE.Line(geometry, drawingMaterial);
+            drawnLinesGroup.add(line);
+        }
+
+        function eraseNear(palmCenter3D) {
+            for (let i = drawnLinesGroup.children.length - 1; i >= 0; i--) {
+                const segment = drawnLinesGroup.children[i];
+                if (segment.geometry && segment.geometry.attributes.position) {
+                    const positions = segment.geometry.attributes.position;
+                    const p1 = new THREE.Vector3().fromBufferAttribute(positions, 0);
+                    const p2 = new THREE.Vector3().fromBufferAttribute(positions, 1);
+
+                    // Simple check: if palm is close to either endpoint of the segment
+                    if (palmCenter3D.distanceTo(p1) < ERASER_RADIUS || palmCenter3D.distanceTo(p2) < ERASER_RADIUS) {
+                        drawnLinesGroup.remove(segment);
+                        segment.geometry.dispose();
+                        // segment.material.dispose(); // Material is shared
+                    }
+                }
+            }
+        }
+
+        function detectPointing(landmarks) {
+            // Index finger: tip (8) is above PIP (6)
+            const indexFingerStraight = landmarks[8].y < landmarks[6].y;
+            // Middle finger: tip (12) is below PIP (10)
+            const middleFingerCurled = landmarks[12].y > landmarks[10].y;
+            // Ring finger: tip (16) is below PIP (14)
+            const ringFingerCurled = landmarks[16].y > landmarks[14].y;
+            // Pinky finger: tip (20) is below PIP (18)
+            const pinkyFingerCurled = landmarks[20].y > landmarks[18].y;
+
+            return indexFingerStraight && middleFingerCurled && ringFingerCurled && pinkyFingerCurled;
+        }
+
+        function detectOpenPalm(landmarks) {
+            // All fingers extended: tip is above PIP
+            const indexFingerStraight = landmarks[8].y < landmarks[6].y;
+            const middleFingerStraight = landmarks[12].y < landmarks[10].y;
+            const ringFingerStraight = landmarks[16].y < landmarks[14].y;
+            const pinkyFingerStraight = landmarks[20].y < landmarks[18].y;
+            // Optional: Thumb straight (tip 4 above IP 3)
+            // const thumbStraight = landmarks[4].y < landmarks[3].y;
+
+            return indexFingerStraight && middleFingerStraight && ringFingerStraight && pinkyFingerStraight;
+        }
+
+
+        function onResults(results) {
+            // Clear skeleton from previous frame
+            while (handSkeletonGroup.children.length > 0) {
+                const obj = handSkeletonGroup.children[0];
+                handSkeletonGroup.remove(obj);
+                if(obj.geometry) obj.geometry.dispose();
+            }
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const handLandmarks = results.multiHandLandmarks[0]; // Use the first detected hand
+
+                // Map landmarks to 3D space for skeleton
+                const mappedSkeletonLandmarks = handLandmarks.map(lm => mapLandmarkTo3D(lm, true));
+                draw3DSkeleton(mappedSkeletonLandmarks);
+
+                // Map landmarks to 2D drawing plane (Z=0)
+                const mappedDrawingLandmarks = handLandmarks.map(lm => mapLandmarkTo3D(lm, false));
+
+                // Gesture detection
+                isPointing = detectPointing(handLandmarks);
+                isOpenPalm = detectOpenPalm(handLandmarks);
+
+                if (isPointing && isOpenPalm) { // Prioritize pointing if ambiguous
+                    isOpenPalm = false;
+                }
+                
+                const currentIndexTipPos = mappedDrawingLandmarks[8]; // INDEX_FINGER_TIP
+                const palmCenterPos = mappedDrawingLandmarks[9];    // MIDDLE_FINGER_MCP (proxy for palm center)
+
+                if (isPointing) {
+                    if (lastKnownIndexTipPosition) {
+                        addDrawingSegment(lastKnownIndexTipPosition, currentIndexTipPos);
+                    }
+                    lastKnownIndexTipPosition = currentIndexTipPos.clone();
+                } else {
+                    lastKnownIndexTipPosition = null; // Stop drawing if not pointing
+                    if (isOpenPalm) {
+                        eraseNear(palmCenterPos);
+                    }
+                }
+            } else {
+                // No hand detected
+                isPointing = false;
+                isOpenPalm = false;
+                lastKnownIndexTipPosition = null;
+            }
+        }
+
+        const hands = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/${file}`
+        });
+
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1, // 0 or 1. 1 is more accurate but slower.
+            minDetectionConfidence: 0.7,
+            minTrackingConfidence: 0.7
+        });
+        hands.onResults(onResults);
+
+        const cameraUtil = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({ image: videoElement });
+            },
+            width: 640, // Lower resolution for performance
+            height: 480
+        });
+        cameraUtil.start();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            if (videoTexture) videoTexture.needsUpdate = true; // Ensure video texture updates
+            renderer.render(scene, camera);
+        }
+
+        // Start everything
+        initThree();
+    </script>
+</body>
+</html>
