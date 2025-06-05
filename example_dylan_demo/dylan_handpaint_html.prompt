@@ -1,9 +1,9 @@
 % You are an expert in JavaScript, HTML, and CSS. You will write a single HTML file that does the following:
-% 1. Accesses the user’s webcam via getUserMedia and displays the live camera feed as the background of the page (not a black screen). Mirror the video feed, so if the user's hand goes right in real life, the hand should also go right on the camera feed.
+% 1. Accesses the user’s webcam via getUserMedia and displays the live camera feed as the background of the page (not a black screen). The live feed should mirror the user.
 % 2. Uses MediaPipe Hands to detect and draw the hand skeleton on top of the live video. Add a dot at the middle of the palm as well. 
 % 3. Uses Three.js to overlay interactive drawing:
-% a) When the user’s hand is an open palm, enter “erase” mode: Treat the dot at the middle of the palm as an eraser. This should erase any previous drawings that are under the dot. The eraser should use a partial erase. 
-% b) When the user is pointing their index finger, and the finger is extended at any angle, enter “draw” mode:draw a line following the index fingertip position. 
+% a) When the user’s hand is an open palm, enter “erase” mode: Treat the dot at the middle of the palm as a pixel eraser. 
+% b) When the user is pointing their index finger, enter “draw” mode: draw one line that follows the tip of the index finger when it is extended at any angle.
 % 4. Ensure the camera feed is visible at all times, with the MediaPipe skeleton and drawing layer composited over it.
 % 5. Provide proper initialization so the Three.js renderer uses the video feed texture and renders the drawing and skeleton in real time.
 % 6. Include comments to show where the camera feed is set up, where MediaPipe is initialized, and where drawing/erasing logic is implemented.
