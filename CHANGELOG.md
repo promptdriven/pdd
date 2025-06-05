@@ -1,3 +1,9 @@
+## v0.0.39 (2025-06-05)
+
+### Feat
+
+- add global `--time` option support across CLI commands
+
 ## v0.0.38 (2025-05-30)
 
 ### Fix

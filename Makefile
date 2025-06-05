@@ -23,6 +23,7 @@ help:
 	@echo "  make regression              - Run regression tests"
 	@echo "  make analysis                - Run regression analysis"
 	@echo "  make verify MODULE=name      - Verify code functionality against prompt intent"
+	@echo "  make lint                    - Run pylint for static code analysis"
 	@echo ""
 	@echo "Fixing & Maintenance:"
 	@echo "  make fix [MODULE=name]       - Fix prompts command"
@@ -62,7 +63,7 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory
 EXAMPLE_FILES := $(wildcard $(CONTEXT_DIR)/*_example.py)
 
-.PHONY: all clean test requirements production coverage staging regression install build analysis fix crash update-extension generate run-examples verify detect change
+.PHONY: all clean test requirements production coverage staging regression install build analysis fix crash update-extension generate run-examples verify detect change lint
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -145,6 +146,11 @@ coverage:
 	@echo "Running tests with coverage"
 	@cd $(STAGING_DIR)
 	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python -m pytest --cov=$(PDD_DIR) --cov-report=term-missing --cov-report=html $(TESTS_DIR)
+
+# Run pylint
+lint:
+	@echo "Running pylint"
+	@conda run -n pdd --no-capture-output pylint pdd tests
 
 # Fix crashes in code
 crash:
@@ -299,24 +305,24 @@ endif
 fix:
 ifdef MODULE
 	@echo "Attempting to fix module: $(MODULE)"
-	@name=$(MODULE); \
-	prompt="$(PROMPTS_DIR)/$${name}_python.prompt"; \
-	echo "Fixing $$name"; \
-	if [ -f "$(CONTEXT_DIR)/$${name}_example.py" ]; then \
-		pdd --strength .9 --temperature 0 --verbose --force fix --loop --auto-submit --max-attempts 5 --output-test output/ --output-code output/ --verification-program $(CONTEXT_DIR)/$${name}_example.py $$prompt $(PDD_DIR)/$${name}.py $(TESTS_DIR)/test_$${name}.py $${name}.log; \
-	else \
-		echo "Warning: No verification program found for $$name"; \
+	@name=$(MODULE); \\
+	prompt="$(PROMPTS_DIR)/$${name}_python.prompt"; \\
+	echo "Fixing $$name"; \\
+	if [ -f "$(CONTEXT_DIR)/$${name}_example.py" ]; then \\
+		conda run -n pdd --no-capture-output python -m pdd --time 1 --strength .9 --temperature 0 --verbose --force fix --loop --auto-submit --max-attempts 5 --output-test output/ --output-code output/ --verification-program $(CONTEXT_DIR)/$${name}_example.py $$prompt $(PDD_DIR)/$${name}.py $(TESTS_DIR)/test_$${name}.py $${name}.log; \\
+	else \\
+		echo "Warning: No verification program found for $$name"; \\
 	fi;
 else
 	@echo "Attempting to fix all prompts"
-	@for prompt in $(wildcard $(PROMPTS_DIR)/*_python.prompt); do \
-		name=$$(basename $$prompt _python.prompt); \
-		echo "Fixing $$name"; \
-		if [ -f "$(CONTEXT_DIR)/$${name}_example.py" ]; then \
-			pdd --strength .9 --temperature 0 --verbose --force fix --loop --auto-submit --max-attempts 5 --output-test output/ --output-code output/ --verification-program $(CONTEXT_DIR)/$${name}_example.py $$prompt $(PDD_DIR)/$${name}.py $(TESTS_DIR)/test_$${name}.py $${name}.log; \
-		else \
-			echo "Warning: No verification program found for $$name"; \
-		fi; \
+	@for prompt in $(wildcard $(PROMPTS_DIR)/*_python.prompt); do \\
+		name=$$(basename $$prompt _python.prompt); \\
+		echo "Fixing $$name"; \\
+		if [ -f "$(CONTEXT_DIR)/$${name}_example.py" ]; then \\
+			conda run -n pdd --no-capture-output python -m pdd --strength .9 --temperature 0 --verbose --force fix --loop --auto-submit --max-attempts 5 --output-test output/ --output-code output/ --verification-program $(CONTEXT_DIR)/$${name}_example.py $$prompt $(PDD_DIR)/$${name}.py $(TESTS_DIR)/test_$${name}.py $${name}.log; \\
+		else \\
+			echo "Warning: No verification program found for $$name"; \\
+		fi; \\
 	done
 endif
 
