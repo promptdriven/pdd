@@ -1,3 +1,4 @@
+"""Main function for the auto-deps command."""
 import sys
 from pathlib import Path
 from typing import Tuple, Optional
@@ -8,7 +9,7 @@ from . import DEFAULT_STRENGTH, DEFAULT_TIME
 from .construct_paths import construct_paths
 from .insert_includes import insert_includes
 
-def auto_deps_main(
+def auto_deps_main(  # pylint: disable=too-many-arguments, too-many-locals
     ctx: click.Context,
     prompt_file: str,
     directory_path: str,
@@ -57,7 +58,10 @@ def auto_deps_main(
         # Handle force_scan option
         if force_scan and Path(csv_path).exists():
             if not ctx.obj.get('quiet', False):
-                rprint(f"[yellow]Removing existing CSV file due to --force-scan option: {csv_path}[/yellow]")
+                rprint(
+                    "[yellow]Removing existing CSV file due to "
+                    f"--force-scan option: {csv_path}[/yellow]"
+                )
             Path(csv_path).unlink()
 
         # Get strength and temperature from context
@@ -78,11 +82,11 @@ def auto_deps_main(
 
         # Save the modified prompt to the output file
         output_path = output_file_paths["output"]
-        Path(output_path).write_text(modified_prompt)
+        Path(output_path).write_text(modified_prompt, encoding="utf-8")
 
         # Save the CSV output if it was generated
         if csv_output:
-            Path(csv_path).write_text(csv_output)
+            Path(csv_path).write_text(csv_output, encoding="utf-8")
 
         # Provide user feedback
         if not ctx.obj.get('quiet', False):
@@ -94,7 +98,7 @@ def auto_deps_main(
 
         return modified_prompt, total_cost, model_name
 
-    except Exception as e:
+    except Exception as exc:
         if not ctx.obj.get('quiet', False):
-            rprint(f"[bold red]Error:[/bold red] {str(e)}")
+            rprint(f"[bold red]Error:[/bold red] {str(exc)}")
         sys.exit(1)
