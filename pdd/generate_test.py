@@ -2,7 +2,7 @@ from typing import Tuple, Optional
 from rich import print
 from rich.markdown import Markdown
 from rich.console import Console
-from . import EXTRACTION_STRENGTH
+from . import EXTRACTION_STRENGTH, DEFAULT_STRENGTH, DEFAULT_TIME
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
 from .llm_invoke import llm_invoke
@@ -15,9 +15,10 @@ console = Console()
 def generate_test(
     prompt: str,
     code: str,
-    strength: float,
-    temperature: float,
-    language: str,
+    strength: float=DEFAULT_STRENGTH,
+    temperature: float=0.0,
+    time: float = DEFAULT_TIME,
+    language: str = "python",
     verbose: bool = False
 ) -> Tuple[str, float, str]:
     """
@@ -29,6 +30,7 @@ def generate_test(
         strength (float): The strength of the LLM model (0-1).
         temperature (float): The temperature of the LLM model.
         language (str): The programming language for the unit test.
+        time (float, optional): Time budget for LLM calls. Defaults to DEFAULT_TIME.
         verbose (bool): Whether to print detailed information.
 
     Returns:
@@ -62,6 +64,7 @@ def generate_test(
             input_json=input_json,
             strength=strength,
             temperature=temperature,
+            time=time,
             verbose=verbose
         )
 
@@ -79,6 +82,7 @@ def generate_test(
             prompt_text=last_600_chars,
             strength=strength,
             temperature=temperature,
+            time=time,
             verbose=verbose
         )
         total_cost += check_cost
@@ -92,6 +96,7 @@ def generate_test(
                 llm_output=result,
                 strength=strength,
                 temperature=temperature,
+                time=time,
                 verbose=verbose
             )
             total_cost += continue_cost
@@ -104,6 +109,7 @@ def generate_test(
             language=language,
             strength=EXTRACTION_STRENGTH,
             temperature=temperature,
+            time=time,
             verbose=verbose
         )
         total_cost += post_cost

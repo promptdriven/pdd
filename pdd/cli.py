@@ -11,7 +11,7 @@ from rich.theme import Theme
 from rich.markup import MarkupError, escape
 
 # --- Relative Imports for Internal Modules ---
-from . import DEFAULT_STRENGTH, __version__
+from . import DEFAULT_STRENGTH, __version__, DEFAULT_TIME
 from .auto_deps_main import auto_deps_main
 from .auto_update import auto_update
 from .bug_main import bug_main
@@ -90,6 +90,13 @@ def handle_error(e: Exception, command_name: str, quiet: bool):
     help="Set the temperature of the AI model.",
 )
 @click.option(
+    "--time",
+    type=click.FloatRange(0.0, 1.0),
+    default=None,
+    show_default=True,
+    help="Controls reasoning allocation for LLMs (0.0-1.0). Uses DEFAULT_TIME if None.",
+)
+@click.option(
     "--verbose",
     is_flag=True,
     default=False,
@@ -131,6 +138,7 @@ def cli(
     output_cost: Optional[str],
     review_examples: bool,
     local: bool,
+    time: Optional[float], # Type hint is Optional[float]
 ):
     """
     Main entry point for the PDD CLI. Handles global options and initializes context.
@@ -148,6 +156,8 @@ def cli(
     ctx.obj["output_cost"] = output_cost
     ctx.obj["review_examples"] = review_examples
     ctx.obj["local"] = local
+    # Use DEFAULT_TIME if time is not provided
+    ctx.obj["time"] = time if time is not None else DEFAULT_TIME
 
     # Suppress verbose if quiet is enabled
     if quiet:

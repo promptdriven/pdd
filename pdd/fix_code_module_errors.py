@@ -4,7 +4,7 @@ from rich import print
 from rich.markdown import Markdown
 from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
-from . import EXTRACTION_STRENGTH
+from . import EXTRACTION_STRENGTH, DEFAULT_TIME, DEFAULT_STRENGTH
 import json
 
 class CodeFix(BaseModel):
@@ -35,8 +35,9 @@ def fix_code_module_errors(
     prompt: str,
     code: str,
     errors: str,
-    strength: float,
+    strength: float = DEFAULT_STRENGTH,
     temperature: float = 0,
+    time: float = DEFAULT_TIME,
     verbose: bool = False
 ) -> Tuple[bool, bool, str, str, str, float, str]:
     """
@@ -72,6 +73,7 @@ def fix_code_module_errors(
             input_json=input_json,
             strength=strength,
             temperature=temperature,
+            time=time,
             verbose=verbose
         )
 
@@ -99,6 +101,7 @@ def fix_code_module_errors(
             input_json=extract_input,
             strength=EXTRACTION_STRENGTH,  # Fixed strength for extraction
             temperature=temperature,
+            time=time,
             verbose=verbose,
             output_pydantic=CodeFix
         )

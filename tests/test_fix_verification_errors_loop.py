@@ -88,6 +88,7 @@ sys.exit(0)
         "verification_log_file": str(log_file),
         "verbose": False,
         "program_args": ["test_arg"],
+        "llm_time": 0.25, # Use DEFAULT_TIME value
     }
 
     return {
@@ -709,7 +710,8 @@ def test_loop_handles_missing_output_in_initial_assessment(setup_test_environmen
         output="", # <<< Key check
         strength=env["default_args"]["strength"],
         temperature=env["default_args"]["temperature"],
-        verbose=env["default_args"]["verbose"]
+        verbose=env["default_args"]["verbose"],
+        time=env["default_args"]["llm_time"] # Expect 'time' keyword
     )
 
 
@@ -775,7 +777,8 @@ def test_loop_misinterprets_zero_issues_on_empty_output_error(setup_test_environ
         output="", # <<< Key check
         strength=env["default_args"]["strength"],
         temperature=env["default_args"]["temperature"],
-        verbose=env["default_args"]["verbose"]
+        verbose=env["default_args"]["verbose"],
+        time=env["default_args"]["llm_time"] # Expect 'time' keyword
     )
 
 

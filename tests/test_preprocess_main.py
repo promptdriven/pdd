@@ -11,6 +11,7 @@ from unittest.mock import patch, MagicMock, mock_open
 
 # Import the function under test from the corresponding module.
 from pdd.preprocess_main import preprocess_main
+from pdd import DEFAULT_TIME
 
 @pytest.fixture
 def basic_click_context():
@@ -141,7 +142,8 @@ def test_preprocess_main_with_xml(basic_click_context):
             "fake prompt content for xml",
             0.9,     # strength
             0.6,     # temperature
-            True     # verbose
+            True,    # verbose
+            time=DEFAULT_TIME
         )
 
         # Ensure a file write occurred

@@ -1,11 +1,12 @@
-from typing import Tuple
+from typing import Tuple, Optional
 from rich import print as rprint
 from rich.markdown import Markdown
 from pydantic import BaseModel, Field
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
 from .llm_invoke import llm_invoke
-from . import EXTRACTION_STRENGTH
+
+from . import EXTRACTION_STRENGTH, DEFAULT_STRENGTH, DEFAULT_TEMPERATURE, DEFAULT_TIME
 
 class PromptSplit(BaseModel):
     extracted_functionality: str = Field(description="The extracted functionality as a sub-module prompt")
@@ -15,10 +16,11 @@ def split(
     input_prompt: str,
     input_code: str,
     example_code: str,
-    strength: float,
-    temperature: float,
+    strength: float = DEFAULT_STRENGTH,
+    temperature: float = DEFAULT_TEMPERATURE,
+    time: Optional[float] = DEFAULT_TIME,
     verbose: bool = False
-) -> Tuple[str, str, float, str]:
+) -> Tuple[Tuple[str, str], float, str]:
     """
     Split a prompt into extracted functionality and remaining prompt.
 
@@ -28,14 +30,18 @@ def split(
         example_code (str): Example code showing usage.
         strength (float): LLM strength parameter (0-1).
         temperature (float): LLM temperature parameter (0-1).
+        time (Optional[float]): Time allocation for the LLM.
         verbose (bool): Whether to print detailed information.
 
     Returns:
-        Tuple[str, str, float, str]: (extracted_functionality, remaining_prompt, model_name, total_cost)
+        Tuple[Tuple[str, str], float, str]: 
+            ((extracted_functionality, remaining_prompt), total_cost, model_name)
             where model_name is the name of the model used (returned as the second to last tuple element)
             and total_cost is the aggregated cost from all LLM invocations.
     """
     total_cost = 0.0
+    model_name = ""
+
 
     # Input validation
     if not all([input_prompt, input_code, example_code]):
@@ -79,6 +85,7 @@ def split(
             },
             strength=strength,
             temperature=temperature,
+            time=time,
             verbose=verbose
         )
         total_cost += split_response["cost"]
@@ -95,7 +102,8 @@ def split(
             strength=EXTRACTION_STRENGTH,  # Fixed strength for extraction
             temperature=temperature,
             output_pydantic=PromptSplit,
-            verbose=verbose
+            verbose=verbose,
+            time=time  # Pass time to the second llm_invoke call
         )
         total_cost += extract_response["cost"]
 

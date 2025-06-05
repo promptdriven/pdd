@@ -11,6 +11,7 @@ from rich.console import Console
 
 # Relative import from an internal module.
 from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
+from . import DEFAULT_TIME # Import DEFAULT_TIME
 
 console = Console()
 
@@ -104,7 +105,8 @@ def fix_error_loop(unit_test_file: str,
                    max_attempts: int,
                    budget: float,
                    error_log_file: str = "error_log.txt",
-                   verbose: bool = False):
+                   verbose: bool = False,
+                   time: float = DEFAULT_TIME):
     """
     Attempt to fix errors in a unit test and corresponding code using repeated iterations, 
     counting only the number of times we actually call the LLM fix function. 
@@ -124,6 +126,7 @@ def fix_error_loop(unit_test_file: str,
         budget: Maximum cost allowed for the fixing process.
         error_log_file: Path to file to log errors (default: "error_log.txt").
         verbose: Enable verbose logging (default: False).
+        time: Time parameter for the fix_errors_from_unit_tests call.
 
     Outputs:
         success: Boolean indicating if the overall process succeeded.
@@ -331,7 +334,8 @@ def fix_error_loop(unit_test_file: str,
                 error_log_file,
                 strength,
                 temperature,
-                verbose=verbose
+                verbose=verbose,
+                time=time # Pass time parameter
             )
             
             # Update the fix attempt in the structured log

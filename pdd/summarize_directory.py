@@ -11,6 +11,7 @@ from rich.progress import track
 
 from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
+from . import DEFAULT_TIME
 
 class FileSummary(BaseModel):
     file_summary: str = Field(description="The summary of the file")
@@ -80,6 +81,7 @@ def summarize_directory(
     strength: float,
     temperature: float,
     verbose: bool,
+    time: float = DEFAULT_TIME,
     csv_file: Optional[str] = None
 ) -> Tuple[str, float, str]:
     """
@@ -90,6 +92,7 @@ def summarize_directory(
         strength (float): Between 0 and 1 that is the strength of the LLM model to use.
         temperature (float): Controls the randomness of the LLM's output.
         verbose (bool): Whether to print out the details of the function.
+        time (float): Time budget for LLM calls.
         csv_file (Optional[str]): Current CSV file contents if it already exists.
 
     Returns:
@@ -184,6 +187,7 @@ def summarize_directory(
                         input_json=input_params,
                         strength=strength,
                         temperature=temperature,
+                        time=time,
                         verbose=verbose,
                         output_pydantic=FileSummary
                     )

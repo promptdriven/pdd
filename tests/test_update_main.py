@@ -119,7 +119,8 @@ def test_update_main_with_input_code_and_no_git(
         modified_code="def modified_code(): pass",
         strength=0.5,
         temperature=0.0,
-        verbose=False
+        verbose=False,
+        time=0.25
     )
     # git_update should NOT be called
     mock_git_update.assert_not_called()
@@ -174,7 +175,8 @@ def test_update_main_with_git_no_input_code(
         modified_code_file="modified_code.py",
         strength=0.5,
         temperature=0.0,
-        verbose=False
+        verbose=False,
+        time=0.25
     )
     mock_update_prompt.assert_not_called()  # update_prompt should NOT be called
 
