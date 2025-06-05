@@ -1,3 +1,9 @@
+"""XML tagging module for improving prompt structure with XML tags.
+
+This module provides functionality to enhance LLM prompts by adding XML tags,
+making them more structured and readable for better processing.
+"""
+
 from typing import Tuple
 from rich import print as rprint
 from rich.markdown import Markdown
@@ -6,7 +12,9 @@ from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
 from . import EXTRACTION_STRENGTH
 from . import DEFAULT_TIME
+
 class XMLOutput(BaseModel):
+    """Pydantic model for XML-tagged prompt output."""
     xml_tagged: str = Field(description="The XML-tagged version of the prompt")
 
 def xml_tagger(
@@ -96,8 +104,8 @@ def xml_tagger(
         # Step 5 & 6: Return results
         return result.xml_tagged, total_cost, model_name
 
-    except Exception as e:
-        rprint(f"[red]Error in xml_tagger: {str(e)}[/red]")
+    except Exception as error:
+        rprint(f"[red]Error in xml_tagger: {str(error)}[/red]")
         raise
 
 def main():
@@ -109,7 +117,7 @@ def main():
         Include examples of usage and error cases.
         """
 
-        xml_tagged, cost, model = xml_tagger(
+        tagged_result, cost, model = xml_tagger(
             raw_prompt=sample_prompt,
             strength=0.7,
             temperature=0.8,
@@ -120,9 +128,10 @@ def main():
         rprint("[blue]XML Tagging Complete[/blue]")
         rprint(f"Total Cost: ${cost:.6f}")
         rprint(f"Model Used: {model}")
+        rprint(f"Result length: {len(tagged_result)}")
 
-    except Exception as e:
-        rprint(f"[red]Error in main: {str(e)}[/red]")
+    except Exception as error:
+        rprint(f"[red]Error in main: {str(error)}[/red]")
 
 if __name__ == "__main__":
     main()
