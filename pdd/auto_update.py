@@ -1,3 +1,4 @@
+"""This module provides a function to automatically update the package."""
 import importlib.metadata
 import requests
 import semver
@@ -63,11 +64,11 @@ def auto_update(package_name: str = "pdd-cli", latest_version: str = None) -> No
         if latest_version is None:
             try:
                 pypi_url = f"https://pypi.org/pypi/{package_name}/json"
-                response = requests.get(pypi_url)
+                response = requests.get(pypi_url, timeout=10)
                 response.raise_for_status()
                 latest_version = response.json()['info']['version']
-            except Exception as e:
-                print(f"Failed to fetch latest version from PyPI: {str(e)}")
+            except Exception as ex:
+                print(f"Failed to fetch latest version from PyPI: {str(ex)}")
                 return
 
         # Compare versions using semantic versioning
@@ -99,7 +100,13 @@ def auto_update(package_name: str = "pdd-cli", latest_version: str = None) -> No
                 print(f"Upgrading with command: {cmd_str}")
                 
                 try:
-                    result = subprocess.run(cmd, shell=use_shell, capture_output=True, text=True)
+                    result = subprocess.run(
+                        cmd,
+                        shell=use_shell,
+                        capture_output=True,
+                        text=True,
+                        check=False
+                    )
                     
                     if result.returncode == 0:
                         print(f"\nSuccessfully upgraded {package_name} to version {latest_version}")
@@ -114,15 +121,21 @@ def auto_update(package_name: str = "pdd-cli", latest_version: str = None) -> No
                             print(f"Fallback command: {fallback_str}")
                             
                             try:
-                                fallback_result = subprocess.run(fallback_cmd, shell=fallback_shell, capture_output=True, text=True)
+                                fallback_result = subprocess.run(
+                                    fallback_cmd,
+                                    shell=fallback_shell,
+                                    capture_output=True,
+                                    text=True,
+                                    check=False
+                                )
                                 if fallback_result.returncode == 0:
                                     print(f"\nSuccessfully upgraded {package_name} using fallback method")
                                 else:
                                     print(f"\nFallback upgrade failed: {fallback_result.stderr}")
-                            except Exception as fallback_err:
-                                print(f"\nError during fallback upgrade: {str(fallback_err)}")
-                except Exception as e:
-                    print(f"\nError during upgrade: {str(e)}")
+                            except Exception as fallback_ex:
+                                print(f"\nError during fallback upgrade: {str(fallback_ex)}")
+                except Exception as ex:
+                    print(f"\nError during upgrade: {str(ex)}")
                 break
             elif response in ['n', 'no', '']:
                 print("\nUpgrade cancelled")
@@ -132,8 +145,8 @@ def auto_update(package_name: str = "pdd-cli", latest_version: str = None) -> No
 
     except importlib.metadata.PackageNotFoundError:
         print(f"Package {package_name} is not installed")
-    except Exception as e:
-        print(f"Error checking for updates: {str(e)}")
+    except Exception as ex:
+        print(f"Error checking for updates: {str(ex)}")
 
 
 if __name__ == "__main__":
