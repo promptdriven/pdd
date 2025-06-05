@@ -35,7 +35,7 @@ The following steps are used to systematically improve code quality:
 ## To Do
 
 ### pdd/
-- [ ] `pdd/bug_main.py`
+- [x] `pdd/bug_main.py`
 - [ ] `pdd/bug_to_unit_test.py`
 - [ ] `pdd/change.py`
 - [ ] `pdd/change_main.py`
@@ -91,12 +91,12 @@ The following steps are used to systematically improve code quality:
 - [ ] `pdd/update_main.py`
 - [ ] `pdd/update_model_costs.py`
 - [ ] `pdd/update_prompt.py`
-- [ ] `pdd/xml_tagger.py`
+- [x] `pdd/xml_tagger.py` (Note: `W0703: Catching too general exception Exception` remains as it's a top-level error handler)
 
 ### tests/
 - [ ] `tests/isolated_verify.py`
 - [ ] `tests/prompt_tester.py`
-- [ ] `tests/test_bug_main.py`
+- [x] `tests/test_bug_main.py`
 - [ ] `tests/test_bug_to_unit_test.py`
 - [ ] `tests/test_change.py`
 - [ ] `tests/test_change_main.py`
@@ -151,4 +151,4 @@ The following steps are used to systematically improve code quality:
 - [ ] `tests/test_update_main.py`
 - [ ] `tests/test_update_model_costs.py`
 - [ ] `tests/test_update_prompt.py`
-- [ ] `tests/test_xml_tagger.py` 
+- [x] `tests/test_xml_tagger.py` (Note: `R0903: Too few public methods`, `W0621: Redefining name`, and `W0613: Unused argument` warnings remain due to pytest fixture pattern) 
