@@ -1,10 +1,12 @@
 """This module provides a function to automatically update the package."""
 import importlib.metadata
-import requests
-import semver
+import shutil
 import subprocess
 import sys
-import shutil
+from typing import Optional
+import requests
+import semver
+
 
 def detect_installation_method(sys_executable):
     """
@@ -39,12 +41,59 @@ def get_upgrade_command(package_name, installation_method):
         uv_path = shutil.which("uv")
         if uv_path:
             return ([uv_path, "tool", "install", package_name, "--force"], False)
-        else:
-            # If uv isn't in PATH, use shell=True
-            return (["uv", "tool", "install", package_name, "--force"], True)
-    else:
-        # Default pip method
-        return ([sys.executable, "-m", "pip", "install", "--upgrade", package_name], False)
+        # If uv isn't in PATH, use shell=True
+        return (["uv", "tool", "install", package_name, "--force"], True)
+    # Default pip method
+    return ([sys.executable, "-m", "pip", "install", "--upgrade", package_name], False)
+
+
+def _get_latest_version(package_name: str) -> Optional[str]:
+    """Fetch the latest version of a package from PyPI."""
+    # pylint: disable=broad-except
+    try:
+        pypi_url = f"https://pypi.org/pypi/{package_name}/json"
+        response = requests.get(pypi_url, timeout=10)
+        response.raise_for_status()
+        return response.json()['info']['version']
+    except Exception as ex:
+        print(f"Failed to fetch latest version from PyPI: {str(ex)}")
+        return None
+
+
+def _upgrade_package(package_name: str, installation_method: str):
+    """Upgrade a package using the specified installation method."""
+    cmd, use_shell = get_upgrade_command(package_name, installation_method)
+    cmd_str = " ".join(cmd)
+    print(f"\nDetected installation method: {installation_method}")
+    print(f"Upgrading with command: {cmd_str}")
+
+    # pylint: disable=broad-except
+    try:
+        result = subprocess.run(
+            cmd,
+            shell=use_shell,
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        if result.returncode == 0:
+            print(f"\nSuccessfully upgraded {package_name}")
+            return True
+        print(f"\nUpgrade command failed: {result.stderr}")
+        return False
+    except Exception as ex:
+        print(f"\nError during upgrade: {str(ex)}")
+        return False
+
+
+def _is_new_version_available(current_version: str, latest_version: str) -> bool:
+    """Check if a new version is available."""
+    try:
+        current_semver = semver.VersionInfo.parse(current_version)
+        latest_semver = semver.VersionInfo.parse(latest_version)
+        return latest_semver > current_semver
+    except ValueError:
+        return latest_version != current_version
 
 
 def auto_update(package_name: str = "pdd-cli", latest_version: str = None) -> None:
@@ -56,92 +105,38 @@ def auto_update(package_name: str = "pdd-cli", latest_version: str = None) -> No
         latest_version (str): Known latest version (default: None)
         package_name (str): Name of the package to check (default: "pdd-cli")
     """
+    # pylint: disable=broad-except
     try:
-        # Get current installed version
         current_version = importlib.metadata.version(package_name)
 
-        # If latest_version is not provided, fetch from PyPI
         if latest_version is None:
-            try:
-                pypi_url = f"https://pypi.org/pypi/{package_name}/json"
-                response = requests.get(pypi_url, timeout=10)
-                response.raise_for_status()
-                latest_version = response.json()['info']['version']
-            except Exception as ex:
-                print(f"Failed to fetch latest version from PyPI: {str(ex)}")
+            latest_version = _get_latest_version(package_name)
+            if latest_version is None:
                 return
 
-        # Compare versions using semantic versioning
-        try:
-            current_semver = semver.VersionInfo.parse(current_version)
-            latest_semver = semver.VersionInfo.parse(latest_version)
-        except ValueError:
-            # If versions don't follow semantic versioning, fall back to string comparison
-            if current_version == latest_version:
-                return
-        else:
-            # If versions follow semantic versioning, compare properly
-            if current_semver >= latest_semver:
-                return
+        if not _is_new_version_available(current_version, latest_version):
+            return
 
-        # If we get here, there's a new version available
-        print(f"\nNew version of {package_name} available: {latest_version} (current: {current_version})")
+        print(f"\nNew version of {package_name} available: "
+              f"{latest_version} (current: {current_version})")
         
-        # Ask for user confirmation
         while True:
             response = input("Would you like to upgrade? [y/N]: ").lower().strip()
             if response in ['y', 'yes']:
-                # Detect installation method
                 installation_method = detect_installation_method(sys.executable)
-                cmd, use_shell = get_upgrade_command(package_name, installation_method)
+                if _upgrade_package(package_name, installation_method):
+                    break
                 
-                cmd_str = " ".join(cmd)
-                print(f"\nDetected installation method: {installation_method}")
-                print(f"Upgrading with command: {cmd_str}")
+                if installation_method == "uv":
+                    print("\nAttempting fallback to pip...")
+                    if _upgrade_package(package_name, "pip"):
+                        break
                 
-                try:
-                    result = subprocess.run(
-                        cmd,
-                        shell=use_shell,
-                        capture_output=True,
-                        text=True,
-                        check=False
-                    )
-                    
-                    if result.returncode == 0:
-                        print(f"\nSuccessfully upgraded {package_name} to version {latest_version}")
-                    else:
-                        print(f"\nUpgrade command failed: {result.stderr}")
-                        
-                        # If UV failed and we're not already in fallback mode, try pip as fallback
-                        if installation_method == "uv":
-                            print("\nAttempting fallback to pip...")
-                            fallback_cmd, fallback_shell = get_upgrade_command(package_name, "pip")
-                            fallback_str = " ".join(fallback_cmd)
-                            print(f"Fallback command: {fallback_str}")
-                            
-                            try:
-                                fallback_result = subprocess.run(
-                                    fallback_cmd,
-                                    shell=fallback_shell,
-                                    capture_output=True,
-                                    text=True,
-                                    check=False
-                                )
-                                if fallback_result.returncode == 0:
-                                    print(f"\nSuccessfully upgraded {package_name} using fallback method")
-                                else:
-                                    print(f"\nFallback upgrade failed: {fallback_result.stderr}")
-                            except Exception as fallback_ex:
-                                print(f"\nError during fallback upgrade: {str(fallback_ex)}")
-                except Exception as ex:
-                    print(f"\nError during upgrade: {str(ex)}")
                 break
-            elif response in ['n', 'no', '']:
+            if response in ['n', 'no', '']:
                 print("\nUpgrade cancelled")
                 break
-            else:
-                print("Please answer 'y' or 'n'")
+            print("Please answer 'y' or 'n'")
 
     except importlib.metadata.PackageNotFoundError:
         print(f"Package {package_name} is not installed")
