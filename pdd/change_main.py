@@ -295,9 +295,8 @@ def change_main(
                     input_prompt_content,
                     strength,
                     temperature,
-                    time_budget,  # Pass time_budget
+                    time=time_budget,
                     budget=budget
-                    # Removed quiet parameter as it's causing an error
                 )
                 success = True  # Assume success if no exception
                 logger.info("Single prompt change successful.")

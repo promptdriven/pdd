@@ -1,24 +1,28 @@
-from typing import Optional, Tuple
+"""
+Main entry point for the 'test' command.
+"""
+from __future__ import annotations
 import click
+# pylint: disable=redefined-builtin
 from rich import print
-from rich.progress import track
-import os
 
 from .construct_paths import construct_paths
 from .generate_test import generate_test
 from .increase_tests import increase_tests
 
+
+# pylint: disable=too-many-arguments, too-many-locals, too-many-return-statements, too-many-branches, too-many-statements, broad-except
 def cmd_test_main(
     ctx: click.Context,
     prompt_file: str,
     code_file: str,
-    output: Optional[str],
-    language: Optional[str],
-    coverage_report: Optional[str],
-    existing_tests: Optional[str],
-    target_coverage: Optional[float],
-    merge: Optional[bool],
-) -> Tuple[str, float, str]:
+    output: str | None,
+    language: str | None,
+    coverage_report: str | None,
+    existing_tests: str | None,
+    target_coverage: float | None,
+    merge: bool | None,
+) -> tuple[str, float, str]:
     """
     CLI wrapper for generating or enhancing unit tests.
 
@@ -29,15 +33,15 @@ def cmd_test_main(
         ctx (click.Context): The Click context object.
         prompt_file (str): Path to the prompt file.
         code_file (str): Path to the code file.
-        output (Optional[str]): Path to save the generated test file.
-        language (Optional[str]): Programming language.
-        coverage_report (Optional[str]): Path to the coverage report file.
-        existing_tests (Optional[str]): Path to the existing unit test file.
-        target_coverage (Optional[float]): Desired code coverage percentage.
-        merge (Optional[bool]): Whether to merge new tests with existing tests.
+        output (str | None): Path to save the generated test file.
+        language (str | None): Programming language.
+        coverage_report (str | None): Path to the coverage report file.
+        existing_tests (str | None): Path to the existing unit test file.
+        target_coverage (float | None): Desired code coverage percentage.
+        merge (bool | None): Whether to merge new tests with existing tests.
 
     Returns:
-        Tuple[str, float, str]: Generated unit test code, total cost, and model name.
+        tuple[str, float, str]: Generated unit test code, total cost, and model name.
     """
     # Initialize variables
     unit_test = ""
@@ -84,8 +88,11 @@ def cmd_test_main(
             command="test",
             command_options=command_options,
         )
-    except Exception as e:
-        print(f"[bold red]Error constructing paths: {e}[/bold red]")
+    except Exception as exception:
+        # Catching a general exception is necessary here to handle a wide range of
+        # potential errors during file I/O and path construction, ensuring the
+        # CLI remains robust.
+        print(f"[bold red]Error constructing paths: {exception}[/bold red]")
         ctx.exit(1)
         return "", 0.0, ""
 
@@ -102,16 +109,20 @@ def cmd_test_main(
                 temperature=temperature,
                 time=time,
                 language=language,
-                verbose=verbose
+                verbose=verbose,
             )
-        except Exception as e:
-            print(f"[bold red]Error generating tests: {e}[/bold red]")
+        except Exception as exception:
+            # A general exception is caught to handle various errors that can occur
+            # during the test generation process, which involves external model
+            # interactions and complex logic.
+            print(f"[bold red]Error generating tests: {exception}[/bold red]")
             ctx.exit(1)
             return "", 0.0, ""
     else:
         if not existing_tests:
             print(
-                "[bold red]Error: --existing-tests is required when using --coverage-report[/bold red]"
+                "[bold red]Error: --existing-tests is required "
+                "when using --coverage-report[/bold red]"
             )
             ctx.exit(1)
             return "", 0.0, ""
@@ -127,8 +138,11 @@ def cmd_test_main(
                 time=time,
                 verbose=verbose,
             )
-        except Exception as e:
-            print(f"[bold red]Error increasing test coverage: {e}[/bold red]")
+        except Exception as exception:
+            # This broad exception is used to catch any issue that might arise
+            # while increasing test coverage, including problems with parsing
+            # reports or interacting with the language model.
+            print(f"[bold red]Error increasing test coverage: {exception}[/bold red]")
             ctx.exit(1)
             return "", 0.0, ""
 
@@ -142,13 +156,14 @@ def cmd_test_main(
         ctx.exit(1)
         return "", 0.0, ""
     try:
-        with open(output_file, "w") as f:
-            f.write(unit_test)
-        print(
-            f"[bold green]Unit tests saved to:[/bold green] {output_file}"
-        )
-    except Exception as e:
-        print(f"[bold red]Error saving tests to file: {e}[/bold red]")
+        with open(output_file, "w", encoding="utf-8") as file_handle:
+            file_handle.write(unit_test)
+        print(f"[bold green]Unit tests saved to:[/bold green] {output_file}")
+    except Exception as exception:
+        # A broad exception is caught here to handle potential file system errors
+        # (e.g., permissions, disk space) that can occur when writing the
+        # output file, preventing the program from crashing unexpectedly.
+        print(f"[bold red]Error saving tests to file: {exception}[/bold red]")
         ctx.exit(1)
         return "", 0.0, ""
 
