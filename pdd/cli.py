@@ -448,7 +448,7 @@ def preprocess(
     try:
         # Since preprocess is a local operation, we don't track cost
         # But we need to return a tuple in the expected format for result callback
-        processed_prompt, total_cost, model_name = preprocess_main(
+        result = preprocess_main(
             ctx=ctx,
             prompt_file=prompt_file,
             output=output,
@@ -457,7 +457,15 @@ def preprocess(
             double=double,
             exclude=list(exclude) if exclude else [],
         )
-        return processed_prompt, total_cost, model_name
+        
+        # Handle the result from preprocess_main
+        if result is None:
+            # If preprocess_main returns None, still return a dummy tuple for the callback
+            return "", 0.0, "local"
+        else:
+            # Unpack the return value from preprocess_main
+            processed_prompt, total_cost, model_name = result
+            return processed_prompt, total_cost, model_name
     except Exception as exception:
         handle_error(exception, "preprocess", ctx.obj.get("quiet", False))
         return None
