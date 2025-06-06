@@ -40,7 +40,7 @@ The following steps are used to systematically improve code quality:
 - [x] `pdd/change.py` (Note: `R0913: Too many arguments` and `R0914: Too many local variables` warnings suppressed with pylint directives)
 - [x] `pdd/change_main.py` (Note: `W0703: Catching too general exception Exception`, `R0913: Too many arguments`, `R0914: Too many local variables`, `R0911: Too many return statements`, `R0912: Too many branches`, `R0915: Too many statements`, and `C0301: Line too long` warnings remain due to the complex file handling and error management)
 - [ ] `pdd/cli.py`
-- [ ] `pdd/cmd_test_main.py`
+- [x] `pdd/cmd_test_main.py`
 - [ ] `pdd/code_generator.py`
 - [ ] `pdd/code_generator_main.py`
 - [ ] `pdd/comment_line.py`
@@ -101,7 +101,7 @@ The following steps are used to systematically improve code quality:
 - [x] `tests/test_change.py` (Note: `W0621: Redefining name` warnings suppressed with pylint directives for pytest fixtures)
 - [x] `tests/test_change_main.py` (Note: `C0302: Too many lines in module`, `R0913: Too many arguments`, `R0914: Too many local variables`, `W0621: Redefining name`, `W0613: Unused argument`, and `C0301: Line too long` warnings remain due to test complexity and pytest fixture patterns. Renamed fixture functions to have '_fixture' suffix but some unit tests are still failing.)
 - [ ] `tests/test_cli.py`
-- [ ] `tests/test_cmd_test_main.py`
+- [x] `tests/test_cmd_test_main.py`
 - [ ] `tests/test_code_generator.py`
 - [ ] `tests/test_code_generator_main.py`
 - [ ] `tests/test_comment_line.py`
