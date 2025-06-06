@@ -1,3 +1,7 @@
+"""
+This module provides functionality to modify a prompt according to specified changes.
+It takes an input prompt, input code, and change instructions to generate a modified prompt.
+"""
 from typing import Tuple
 from rich.console import Console
 from rich.markdown import Markdown
@@ -11,16 +15,17 @@ from . import EXTRACTION_STRENGTH, DEFAULT_STRENGTH, DEFAULT_TIME
 console = Console()
 
 class ExtractedPrompt(BaseModel):
+    """Pydantic model for extracting the modified prompt from LLM output."""
     modified_prompt: str = Field(description="The extracted modified prompt")
 
-def change(
+def change(  # pylint: disable=too-many-arguments, too-many-locals
     input_prompt: str,
     input_code: str,
     change_prompt: str,
     strength: float = DEFAULT_STRENGTH,
     temperature: float = 0.0,
     time: float = DEFAULT_TIME,
-    budget: float = 5.0,  # Note: budget is in the spec but not used. Keeping for now.
+    budget: float = 5.0,  # pylint: disable=unused-argument
     verbose: bool = False
 ) -> Tuple[str, float, str]:
     """
@@ -33,7 +38,7 @@ def change(
         strength (float): The strength parameter for the LLM model (0-1)
         temperature (float): The temperature parameter for the LLM model
         time (float): The time budget for LLM calls.
-        budget (float): The budget for the operation (currently unused directly by llm_invoke).
+        budget (float): The budget for the operation (not used, but kept for API compatibility).
         verbose (bool): Whether to print out detailed information.
 
     Returns:
@@ -48,13 +53,15 @@ def change(
             raise ValueError("Failed to load prompt templates")
 
         # Step 2: Preprocess the change_LLM prompt
-        processed_change_llm_template = preprocess(change_llm_prompt_template, recursive=False, double_curly_brackets=False)
-        processed_change_prompt_content = preprocess(change_prompt, recursive=False, double_curly_brackets=False)
+        processed_change_llm_template = preprocess(change_llm_prompt_template,
+                                                  recursive=False, double_curly_brackets=False)
+        processed_change_prompt_content = preprocess(change_prompt,
+                                                    recursive=False, double_curly_brackets=False)
 
         # Input validation
         if not all([input_prompt, input_code, processed_change_prompt_content]):
             raise ValueError("Missing required input parameters after preprocessing")
-        if not (0 <= strength <= 1):
+        if not 0 <= strength <= 1:
             raise ValueError("Strength must be between 0 and 1")
 
         total_cost = 0.0
@@ -115,10 +122,10 @@ def change(
         # Step 7: Return results
         return modified_prompt, total_cost, final_model_name
 
-    except Exception as e:
+    except Exception as error:
         # Conditionally print error if verbose
-        if verbose: 
-            console.print(f"[red]Error in change function: {str(e)}[/red]")
+        if verbose:
+            console.print(f"[red]Error in change function: {str(error)}[/red]")
         raise
 
 def main():
@@ -128,7 +135,7 @@ def main():
         input_prompt_content = "Write a function that adds two numbers"
         input_code_content = "def add(a, b):\n    return a + b"
         change_prompt_content = "Make the function handle negative numbers explicitly"
-        
+
         modified_prompt, cost, model = change(
             input_prompt=input_prompt_content,
             input_code=input_code_content,
@@ -145,8 +152,8 @@ def main():
         console.print(f"Total Cost: ${cost:.6f}")
         console.print(f"Model Used: {model}")
 
-    except Exception as e:
-        console.print(f"[red]Error in main: {str(e)}[/red]")
+    except Exception as error:  # pylint: disable=broad-except
+        console.print(f"[red]Error in main: {str(error)}[/red]")
 
 if __name__ == "__main__":
     main()

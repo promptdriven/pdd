@@ -36,8 +36,8 @@ The following steps are used to systematically improve code quality:
 
 ### pdd/
 - [x] `pdd/bug_main.py`
-- [ ] `pdd/bug_to_unit_test.py`
-- [ ] `pdd/change.py`
+- [x] `pdd/bug_to_unit_test.py`
+- [x] `pdd/change.py` (Note: `R0913: Too many arguments` and `R0914: Too many local variables` warnings suppressed with pylint directives)
 - [ ] `pdd/change_main.py`
 - [ ] `pdd/cli.py`
 - [ ] `pdd/cmd_test_main.py`
@@ -97,8 +97,8 @@ The following steps are used to systematically improve code quality:
 - [ ] `tests/isolated_verify.py`
 - [ ] `tests/prompt_tester.py`
 - [x] `tests/test_bug_main.py`
-- [ ] `tests/test_bug_to_unit_test.py`
-- [ ] `tests/test_change.py`
+- [x] `tests/test_bug_to_unit_test.py`
+- [x] `tests/test_change.py` (Note: `W0621: Redefining name` warnings suppressed with pylint directives for pytest fixtures)
 - [ ] `tests/test_change_main.py`
 - [ ] `tests/test_cli.py`
 - [ ] `tests/test_cmd_test_main.py`
