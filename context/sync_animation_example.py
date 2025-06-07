@@ -39,7 +39,7 @@ current_cost_ref = [0.0]
 #   - Hold strings representing paths to relevant files (prompt, code, example, tests).
 #   - The animation displays these paths, shortening them if they are too long.
 #   - For this example, paths point to a hypothetical './output/' directory.
-initial_prompt_path = "./output/project_alpha/"
+initial_prompt_path = "./project_alpha/"
 prompt_path_ref = [initial_prompt_path + "prompts/"]
 code_path_ref = [initial_prompt_path + "src/"]
 example_path_ref = [initial_prompt_path + "examples/"]
@@ -89,15 +89,15 @@ def mock_pdd_main_workflow():
     try:
         # Initial "checking" state
         update_animation_state("checking", 0.0)
-        time.sleep(2) # Show "checking" for 2 seconds
-
-        # Simulate 'auto-deps' command
-        update_animation_state("auto-deps", 0.25)
-        time.sleep(3)
+        time.sleep(3) # Show "checking" for 2 seconds
 
         # Simulate 'generate' command
-        update_animation_state("generate", 1.50)
-        time.sleep(3)
+        update_animation_state("generate", .50)
+        time.sleep(10)
+
+        # # Simulate 'auto-deps' command
+        # update_animation_state("auto-deps", 0.25)
+        # time.sleep(3)
 
         # Simulate 'example' command
         update_animation_state("example", 0.75)
@@ -105,7 +105,7 @@ def mock_pdd_main_workflow():
         
         # Simulate 'crash' command
         # Note: The animation for 'crash' involves bi-directional arrows.
-        update_animation_state("crash", 1.20)
+        update_animation_state("crash", 0.20)
         time.sleep(3)
 
         # Simulate 'verify' command
@@ -113,17 +113,17 @@ def mock_pdd_main_workflow():
         time.sleep(3)
 
         # Simulate 'test' command
-        update_animation_state("test", 1.10)
+        update_animation_state("test", 0.10)
         time.sleep(3)
 
         # Simulate 'fix' command
         # Note: The animation for 'fix' involves bi-directional arrows.
-        update_animation_state("fix", 2.30)
+        update_animation_state("fix", 0.30)
         time.sleep(3)
         
         # Simulate 'update' command (updating the prompt)
-        update_animation_state("update", 0.60)
-        time.sleep(3)
+        update_animation_state("update", 0.30)
+        time.sleep(10)
 
         print("Main App Log: Workflow simulation complete.")
 

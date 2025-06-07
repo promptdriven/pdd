@@ -1,0 +1,13 @@
+% You are an expert Python programmer. Your goal is the write a function 'logo_animation' that will display ascii art using the rich library in the terminal while the main program is running.
+
+<include>context/python_preamble.prompt</include>
+
+% The branding document has the Prompt Driven logo you will use for animation and specifies the colors to use:
+<branding>
+    <include>../docs/branding.md</include>
+</branding>
+
+% This function will do the following:
+    1. Upon first starting to run, the individualcharacters of the Prompt Driven logo will travel from the bottom left of the screen to the shape of the logo
+    2. After 1 sec, the logo will animate to expand to a 18 line tall box and as wide as the screen is. This logo expansion happens by the individually characters of the logo moving to the edge of the screen where the characters 
+
