@@ -1,0 +1,55 @@
+% You are an expert Python programmer. Your goal is the write a function 'sync_animation' that will display informative ascii art using the rich library in the terminal while the main program is running.
+
+<include>context/python_preamble.prompt</include>
+
+% Here are the inputs of the function:
+   * Inputs:
+        - 'function' - the function that is running on the prompt
+        - 'stop_event' - boolean (True) that indicates when the animation should stop
+        - 'basename' - the basename of the prompt that is running
+        - 'cost' - the cost of the function calls
+        - 'budget' - the budget of the sync run
+        - 'prompt_color' - the color of the prompt box
+        - 'code_color' - the color of the code box
+        - 'example_color' - the color of the example box
+        - 'tests_color' - the color of the tests box
+
+% Here is the information on all the commands of pdd that you are animating for the sync command:
+<README>
+    <include>README.md</include>
+</README>
+
+% The branding document has the Prompt Driven logo you will use for animation and specifies the colors to use:
+<branding>
+    <include>../docs/branding.md</include>
+</branding>
+
+% This function will do the following:
+    1. Upon first starting to run, the Prompt Driven logo will expand up to the logo show like a chat bubble
+    2. After 1 sec, the logo will animate to expand to a 20 line tall box
+    3. The animation will display the command that is running in the box
+    4. The function might get additional function calls and the animation will update to display the new function
+    5. When the stop_event is set to True, the animation will shrink back to the logo and then stop
+
+% This is the basic layout of the animation:
+    * Top left corner: Prompt Driven Development
+    * Top right corner: The basename of the prompt that is running
+    * Bottom left corner: The command that is running
+    * Bottom right corner: The cost of the function calls vs. the budget of the sync run
+    * Bottom center: The time elapsed since the sync run started
+    * Center of the box will be the "Prompt" box on the right hand side with three lines that go to "Code", "Example" and "Tests" boxes on the left hand side. 
+        - The relative directory path name of the respective boxes being worked on will be displayed in the center of the box (e.g. "Prompt: ./directory/path").
+
+% The animation will implement the following pdd commands:
+    * generate- This animation will have a ">" going continuously along the line from the "Prompt" to "Code" with hammer emoji in front of the word "Code".
+    * example- This animation will have a ">" going continuously along the line from the "Prompt" towards the "Example" box with the seedling emoji in front of the word "Example".
+    * crash- This animation will have a skull emoji in front of the "Code" and "Example". A ">" character will go along the lines between the "Code" and "Example" boxes back and forth continuously.
+    * verify- This animation a magnifying glass emoji in front of the "Example" and "Code" words. A ">" character will go along the lines between the "Example" and "Code" boxes back and forth.
+    * test- This animation will have a test tube emoji in front of the "Tests" word. A ">" character will go along the lines from the "Code" and "Prompt" to the "Tests" box continuously.
+    * fix- This animation will have a wrench emoji in front of the "Code" and "Tests" words. A ">" character will go along the lines between the "Code" and "Tests" boxes back and forth continuously.
+    * update- This animation will have a up arrow emoji in front of the "Prompt" word. A ">" character will go along the line from the "Code" to the "Prompt" continuously. 
+
+% There will also be animations for the following:
+    * checking- This is when the sync command is trying to determine which command to run. A magnifying glass emoji will be in front of "Prompt", "Code", "Example" and "Tests" words boxes.
+
+% The above emojis will be blinking
