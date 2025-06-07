@@ -13,6 +13,10 @@
         - 'code_color' - the color of the code box
         - 'example_color' - the color of the example box
         - 'tests_color' - the color of the tests box
+        - 'prompt_path' - the path to the prompt file
+        - 'code_path' - the path to the code file
+        - 'example_path' - the path to the example file
+        - 'tests_path' - the path to the tests file
 
 % Here is the information on all the commands of pdd that you are animating for the sync command:
 <README>
@@ -25,7 +29,7 @@
 </branding>
 
 % This function will do the following:
-    1. Upon first starting to run, the Prompt Driven logo will expand up to the logo show like a chat bubble
+    1. Upon first starting to run, the Prompt Driven logo will expand up from the bottom of the screen to the logo show like a chat bubble
     2. After 1 sec, the logo will animate to expand to a 20 line tall box
     3. The animation will display the command that is running in the box
     4. The function might get additional function calls and the animation will update to display the new function
@@ -37,8 +41,8 @@
     * Bottom left corner: The command that is running
     * Bottom right corner: The cost of the function calls vs. the budget of the sync run
     * Bottom center: The time elapsed since the sync run started
-    * Center of the box will be the "Prompt" box on the right hand side with three lines that go to "Code", "Example" and "Tests" boxes on the left hand side. 
-        - The relative directory path name of the respective boxes being worked on will be displayed in the center of the box (e.g. "Prompt: ./directory/path").
+    * Center of the box will be and org chart like diagram with the "Prompt" box on the top with three lines that go to "Code", "Example" and "Tests" boxes on the bottom. 
+        - The relative directory path name of the respective boxes being worked on will be displayed in the center of the box (e.g. "Prompt: ./directory/path") and if the path is too long, it will scroll continuously like a stock ticker.
 
 % The animation will implement the following pdd commands:
     * generate- This animation will have a ">" going continuously along the line from the "Prompt" to "Code" with hammer emoji in front of the word "Code".
@@ -52,4 +56,6 @@
 % There will also be animations for the following:
     * checking- This is when the sync command is trying to determine which command to run. A magnifying glass emoji will be in front of "Prompt", "Code", "Example" and "Tests" words boxes.
 
-% The above emojis will be blinking
+% Rules to follow:
+    * The above emojis will be blinking. Be sure the blinking emoji doesn't cause the top of the box to shift with the extra character.
+    * The ">" will always point to the direction it is going (e.g. it might be "<" if going backwards or "^" if going up)
