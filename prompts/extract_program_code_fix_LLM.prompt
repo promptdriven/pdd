@@ -4,7 +4,8 @@
 
 % Here is the original code module: <code_module>{code}</code_module>
 
-% Here is the program/code module bug fix report: ```{program_code_fix}```
+% Here is the program/code module bug fix report: <program_code_fix>
+{program_code_fix}</program_code_fix>
 
 % Sometimes the fix may only contain partial code. In these cases, you need to incorporate the fix into the original program and/or original code module.
 

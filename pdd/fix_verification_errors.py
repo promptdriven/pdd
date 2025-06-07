@@ -268,6 +268,13 @@ def fix_verification_errors(
                 fixed_program = fix_result_obj.fixed_program
                 fixed_code = fix_result_obj.fixed_code
                 fix_explanation = fix_result_obj.explanation
+                
+                # Unescape literal \n strings to actual newlines
+                if fixed_program:
+                    fixed_program = fixed_program.replace('\\n', '\n')
+                if fixed_code:
+                    fixed_code = fixed_code.replace('\\n', '\n')
+                
                 parsed_fix_successfully = True
                 if verbose:
                     rprint("[green]Successfully parsed structured output for fix.[/green]")
@@ -281,6 +288,12 @@ def fix_verification_errors(
                     fixed_program_candidate = program_match.group(1).strip() if (program_match and program_match.group(1)) else None
                     fixed_code_candidate = code_match.group(1).strip() if (code_match and code_match.group(1)) else None
                     fix_explanation_candidate = explanation_match.group(1).strip() if (explanation_match and explanation_match.group(1)) else None
+
+                    # Unescape literal \n strings to actual newlines
+                    if fixed_program_candidate:
+                        fixed_program_candidate = fixed_program_candidate.replace('\\n', '\n')
+                    if fixed_code_candidate:
+                        fixed_code_candidate = fixed_code_candidate.replace('\\n', '\n')
 
                     fixed_program = fixed_program_candidate if fixed_program_candidate else program
                     fixed_code = fixed_code_candidate if fixed_code_candidate else code

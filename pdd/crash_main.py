@@ -131,22 +131,23 @@ def crash_main(
         # Removed fallback to original content if final_code/final_program are empty
         # An empty string from a fix function means no valid update.
 
-        # Determine whether to write the files based on whether paths are provided AND content was updated
+        # Determine whether to write the files based on whether paths are provided
         output_code_path_str = output_file_paths.get("output")
         output_program_path_str = output_file_paths.get("output_program")
 
-        # Write output files only if updated and path provided
-        if output_code_path_str and code_updated:
+        # Write output files if path provided (always write for regression compatibility)
+        # Use fixed content if available, otherwise use original content
+        if output_code_path_str:
             output_code_path = Path(output_code_path_str)
             output_code_path.parent.mkdir(parents=True, exist_ok=True) # Ensure directory exists
             with open(output_code_path, "w") as f:
-                f.write(final_code)
+                f.write(final_code if final_code else original_code_content)
 
-        if output_program_path_str and program_updated:
+        if output_program_path_str:
             output_program_path = Path(output_program_path_str)
             output_program_path.parent.mkdir(parents=True, exist_ok=True) # Ensure directory exists
             with open(output_program_path, "w") as f:
-                f.write(final_program)
+                f.write(final_program if final_program else original_program_content)
 
         # Provide user feedback
         if not quiet:
@@ -162,13 +163,13 @@ def crash_main(
                 if code_updated:
                     rprint(f"[bold]Fixed code saved to:[/bold] {output_code_path_str}")
                 else:
-                    rprint(f"[info]Code file {Path(code_file).name} was not modified. Output file {output_code_path_str} not written.[/info]")
+                    rprint(f"[info]Code file {Path(code_file).name} was not modified. Original content saved to {output_code_path_str}.[/info]")
             
             if output_program_path_str:
                 if program_updated:
                     rprint(f"[bold]Fixed program saved to:[/bold] {output_program_path_str}")
                 else:
-                    rprint(f"[info]Program file {Path(program_file).name} was not modified. Output file {output_program_path_str} not written.[/info]")
+                    rprint(f"[info]Program file {Path(program_file).name} was not modified. Original content saved to {output_program_path_str}.[/info]")
 
         return success, final_code, final_program, attempts, cost, model
     
