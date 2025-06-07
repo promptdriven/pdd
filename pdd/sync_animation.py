@@ -193,7 +193,6 @@ def _draw_connecting_lines_and_arrows(state: AnimationState, console_width: int)
     lines = []
     cmd = state.current_function_name
     frame = state.frame_count
-    blink_on = (frame // 5) % 2 == 0 # Blink rate for arrow character
 
     # Dynamic positioning based on actual console width and auto-sized boxes
     # Calculate dynamic box width (same as in main render function)
@@ -222,13 +221,13 @@ def _draw_connecting_lines_and_arrows(state: AnimationState, console_width: int)
     # Line 1: First vertical connector from Prompt
     line1_parts = [" "] * console_width
     if prompt_x >= 0 and prompt_x < console_width:
-        if cmd == "example" and blink_on:
+        if cmd == "example":
             # Animate arrow traveling down from Prompt to Example
             if current_pos_factor < 0.2:  # Arrow in first vertical segment
                 line1_parts[prompt_x] = "v"
             else:
                 line1_parts[prompt_x] = "│"
-        elif cmd == "update" and blink_on:
+        elif cmd == "update":
             # Show upward flow from Code back to Prompt
             line1_parts[prompt_x] = "^" if current_pos_factor > 0.8 else "│"
         else:
@@ -239,12 +238,12 @@ def _draw_connecting_lines_and_arrows(state: AnimationState, console_width: int)
     # Line 2: Second vertical connector
     line2_parts = [" "] * console_width
     if prompt_x >= 0 and prompt_x < console_width:
-        if cmd == "example" and blink_on:
+        if cmd == "example":
             if 0.2 <= current_pos_factor < 0.4:
                 line2_parts[prompt_x] = "v"
             else:
                 line2_parts[prompt_x] = "│"
-        elif cmd == "update" and blink_on:
+        elif cmd == "update":
             line2_parts[prompt_x] = "^" if 0.6 < current_pos_factor <= 0.8 else "│"
         else:
             line2_parts[prompt_x] = "│"
@@ -300,7 +299,7 @@ def _draw_connecting_lines_and_arrows(state: AnimationState, console_width: int)
         # Only place arrow if it won't overwrite junction points
         if (0 <= arrow_pos < console_width and 
             arrow_pos not in [code_x, example_x, tests_x, prompt_x] and
-            line3_parts[arrow_pos] == "─" and blink_on):
+            line3_parts[arrow_pos] == "─"):
             line3_parts[arrow_pos] = arrow_char
 
     # Apply command-specific animations
@@ -308,7 +307,7 @@ def _draw_connecting_lines_and_arrows(state: AnimationState, console_width: int)
         place_horizontal_arrow(prompt_x, code_x, current_pos_factor)
     elif cmd == "example":
         # Vertical animation handled above, mark junction
-        if prompt_x >= 0 and prompt_x < console_width and blink_on:
+        if prompt_x >= 0 and prompt_x < console_width:
             if 0.4 <= current_pos_factor < 0.6:
                 line3_parts[prompt_x] = "v" if line3_parts[prompt_x] == "┼" else line3_parts[prompt_x]
     elif cmd == "update": # Code -> Prompt  
@@ -331,12 +330,12 @@ def _draw_connecting_lines_and_arrows(state: AnimationState, console_width: int)
     line4_parts = [" "] * console_width
     # Add vertical line for Example box 
     if example_x >= 0 and example_x < console_width:
-        if cmd == "example" and blink_on:
+        if cmd == "example":
             if 0.6 <= current_pos_factor < 0.8:
                 line4_parts[example_x] = "v"
             else:
                 line4_parts[example_x] = "│"
-        elif cmd == "update" and blink_on:
+        elif cmd == "update":
             # For update command, show upward arrow from Code area
             line4_parts[example_x] = "^" if 0.4 < current_pos_factor <= 0.6 else "│"
         else:
@@ -354,12 +353,12 @@ def _draw_connecting_lines_and_arrows(state: AnimationState, console_width: int)
     line5_parts = [" "] * console_width
     # Add vertical line for Example box
     if example_x >= 0 and example_x < console_width:
-        if cmd == "example" and blink_on:
+        if cmd == "example":
             if current_pos_factor >= 0.8:
                 line5_parts[example_x] = "v"
             else:
                 line5_parts[example_x] = "│"
-        elif cmd == "update" and blink_on:
+        elif cmd == "update":
             # For update command, show upward arrow from Code area
             line5_parts[example_x] = "^" if current_pos_factor <= 0.4 else "│"
         else:
@@ -450,11 +449,16 @@ def _render_animation_frame(state: AnimationState, console_width: int) -> Panel:
 
     # Use full console width since we're no longer centering the lines
     connecting_lines = _draw_connecting_lines_and_arrows(state, console_width)
-    if len(connecting_lines) > 0: org_chart_layout["lines_row_1"].update(connecting_lines[0])
-    if len(connecting_lines) > 1: org_chart_layout["lines_row_2"].update(connecting_lines[1])
-    if len(connecting_lines) > 2: org_chart_layout["lines_row_3"].update(connecting_lines[2])
-    if len(connecting_lines) > 3: org_chart_layout["lines_row_4"].update(connecting_lines[3])
-    if len(connecting_lines) > 4: org_chart_layout["lines_row_5"].update(connecting_lines[4])
+    if len(connecting_lines) > 0:
+        org_chart_layout["lines_row_1"].update(connecting_lines[0])
+    if len(connecting_lines) > 1:
+        org_chart_layout["lines_row_2"].update(connecting_lines[1])
+    if len(connecting_lines) > 2:
+        org_chart_layout["lines_row_3"].update(connecting_lines[2])
+    if len(connecting_lines) > 3:
+        org_chart_layout["lines_row_4"].update(connecting_lines[3])
+    if len(connecting_lines) > 4:
+        org_chart_layout["lines_row_5"].update(connecting_lines[4])
 
 
     bottom_boxes_table = Table.grid(expand=True)
