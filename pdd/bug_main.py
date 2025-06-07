@@ -76,8 +76,8 @@ def bug_main(
             program_content,
             strength,
             temperature,
-            language,
-            time_budget
+            time_budget,
+            language
         )
 
         # Save results if output path is provided

@@ -383,7 +383,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "1" ]; then
   # 1a. Generate with different strength/temp
   log "1a. Testing 'generate' with different strength/temp"
   # Pass global options FIRST, then the command and its specific options/args
-  run_pdd_command --local --strength 0.1 --temperature 0.0 generate --output "gen_low_str.py" "$PROMPTS_PATH/$MATH_PROMPT"
+  run_pdd_command --local --strength 0.5 --temperature 0.0 generate --output "gen_low_str.py" "$PROMPTS_PATH/$MATH_PROMPT"
   check_exists "gen_low_str.py" "'generate' low strength output"
   run_pdd_command --local --strength $STRENGTH --temperature 1.5 generate --output "gen_high_temp.py" "$PROMPTS_PATH/$MATH_PROMPT"
   check_exists "gen_high_temp.py" "'generate' high temp output"
@@ -815,8 +815,17 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "8" ]; then
   # 8b. Test with merge
   log "8b. Testing 'test' with merge"
   MERGED_TEST_SCRIPT="merged_$MATH_TEST_SCRIPT"
-  # Rerun coverage generation on original tests
-  "${TEST_CMD[@]}" > /dev/null 2>&1 || true
+  # Backup coverage.xml before rerunning coverage
+  if [ -f "$COVERAGE_REPORT" ]; then
+    cp "$COVERAGE_REPORT" "${COVERAGE_REPORT}.backup"
+  fi
+  # Rerun coverage generation on original tests, preserving coverage.xml
+  "${TEST_CMD[@]}" > "$PYTEST_LOG.merge" 2>&1 || true
+  # Restore coverage.xml if it was lost
+  if [ ! -f "$COVERAGE_REPORT" ] && [ -f "${COVERAGE_REPORT}.backup" ]; then
+    log "Restoring coverage.xml from backup..."
+    cp "${COVERAGE_REPORT}.backup" "$COVERAGE_REPORT"
+  fi
   # Run test with merge - output overwrites existing test file
   run_pdd_command test --output "$MATH_TEST_SCRIPT" \
                        --coverage-report "$COVERAGE_REPORT" \
