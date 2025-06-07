@@ -14,6 +14,7 @@ def mock_ctx():
     """Fixture to create a mock context object."""
     ctx = MagicMock()
     ctx.obj = {'force': False, 'quiet': False, 'strength': 0.9, 'temperature': 0}
+    # Note: 'time' is not in ctx.obj, so bug_main will use DEFAULT_TIME for time_budget
     return ctx
 
 @pytest.fixture
@@ -56,7 +57,7 @@ def test_bug_main_success(mock_ctx, mock_input_files, tmpdir):
                 "desired_output": "Desired output content"
             },
             {"output": output_file},
-            None
+            None # detected_language, not used in this test path as language is provided
         )
         
         # Mock bug_to_unit_test
@@ -71,6 +72,7 @@ def test_bug_main_success(mock_ctx, mock_input_files, tmpdir):
             mock_input_files["current_output"],
             mock_input_files["desired_output"],
             output=output_file
+            # language defaults to "Python" in bug_main
         )
         
         # Assertions
@@ -93,8 +95,8 @@ def test_bug_main_no_output(mock_ctx, mock_input_files):
                 "current_output": "Current output content",
                 "desired_output": "Desired output content"
             },
-            {"output": None},
-            None
+            {"output": None}, # No output file path
+            None # detected_language
         )
         
         # Mock bug_to_unit_test
@@ -108,6 +110,8 @@ def test_bug_main_no_output(mock_ctx, mock_input_files):
             mock_input_files["program_file"],
             mock_input_files["current_output"],
             mock_input_files["desired_output"]
+            # output is None by default
+            # language defaults to "Python"
         )
         
         # Assertions
@@ -181,7 +185,7 @@ def test_bug_main_different_language(mock_ctx, mock_input_files):
                 "desired_output": "Desired output content"
             },
             {"output": None},
-            "JavaScript"
+            "JavaScript" # detected_language from construct_paths if it were to detect
         )
         
         # Mock bug_to_unit_test
@@ -195,11 +199,15 @@ def test_bug_main_different_language(mock_ctx, mock_input_files):
             mock_input_files["program_file"],
             mock_input_files["current_output"],
             mock_input_files["desired_output"],
-            language="JavaScript"
+            language="JavaScript" # Explicitly passing "JavaScript"
         )
         
         # Assertions
         assert result == ("Generated unit test", 0.001, "gpt-4")
+        # Verify bug_to_unit_test was called with "JavaScript"
+        mock_bug_to_unit_test.assert_called_once()
+        args, kwargs = mock_bug_to_unit_test.call_args
+        assert args[8] == "JavaScript" # language is the 9th argument (index 8)
 
 def test_bug_main_language_from_construct_paths(mock_ctx, mock_input_files):
     """Test case for bug_main using the language detected by construct_paths when language is None."""
@@ -230,13 +238,14 @@ def test_bug_main_language_from_construct_paths(mock_ctx, mock_input_files):
             mock_input_files["program_file"],
             mock_input_files["current_output"],
             mock_input_files["desired_output"],
-            language=None  # Explicitly passing None to test our fix
+            language=None  # Explicitly passing None to test this logic
         )
         
         # Verify bug_to_unit_test was called with the language from construct_paths
         mock_bug_to_unit_test.assert_called_once()
         args, kwargs = mock_bug_to_unit_test.call_args
-        assert args[7] == "python", "The language parameter should be 'python' from construct_paths, not None"
+        # Corrected assertion: language is the 9th argument (index 8)
+        assert args[8] == "python", "The language parameter should be 'python' from construct_paths, not None"
         
         # Assertions on the result
         assert result == ("Generated unit test", 0.001, "gpt-4")

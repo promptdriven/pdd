@@ -543,9 +543,10 @@ def fix(
     budget: float,
     auto_submit: bool,
 ) -> Optional[Tuple[Dict[str, Any], float, str]]:
-    """Fix code errors based on unit test failures."""
+    """Fix code based on a prompt and unit test errors."""
     try:
-        fixed_test, fixed_code, result_dict, cost, model = fix_main(
+        # The actual logic is in fix_main
+        success, fixed_unit_test, fixed_code, attempts, total_cost, model_name = fix_main(
             ctx=ctx,
             prompt_file=prompt_file,
             code_file=code_file,
@@ -560,8 +561,13 @@ def fix(
             budget=budget,
             auto_submit=auto_submit,
         )
-        # Return the dictionary of results, not the files themselves
-        return result_dict, cost, model
+        result = {
+            "success": success,
+            "fixed_unit_test": fixed_unit_test,
+            "fixed_code": fixed_code,
+            "attempts": attempts,
+        }
+        return result, total_cost, model_name
     except Exception as exception:
         handle_error(exception, "fix", ctx.obj.get("quiet", False))
         return None

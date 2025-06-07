@@ -305,24 +305,24 @@ endif
 fix:
 ifdef MODULE
 	@echo "Attempting to fix module: $(MODULE)"
-	@name=$(MODULE); \\
-	prompt="$(PROMPTS_DIR)/$${name}_python.prompt"; \\
-	echo "Fixing $$name"; \\
-	if [ -f "$(CONTEXT_DIR)/$${name}_example.py" ]; then \\
-		conda run -n pdd --no-capture-output python -m pdd --time 1 --strength .9 --temperature 0 --verbose --force fix --loop --auto-submit --max-attempts 5 --output-test output/ --output-code output/ --verification-program $(CONTEXT_DIR)/$${name}_example.py $$prompt $(PDD_DIR)/$${name}.py $(TESTS_DIR)/test_$${name}.py $${name}.log; \\
-	else \\
-		echo "Warning: No verification program found for $$name"; \\
+	@name=$(MODULE); \
+	prompt="$(PROMPTS_DIR)/$${name}_python.prompt"; \
+	echo "Fixing $$name"; \
+	if [ -f "$(CONTEXT_DIR)/$${name}_example.py" ]; then \
+		conda run -n pdd --no-capture-output python -m pdd.cli --time 1 --strength .9 --temperature 0 --verbose --force fix --loop --auto-submit --max-attempts 5 --output-test output/ --output-code output/ --verification-program $(CONTEXT_DIR)/$${name}_example.py $$prompt $(PDD_DIR)/$${name}.py $(TESTS_DIR)/test_$${name}.py $${name}.log; \
+	else \
+		echo "Warning: No verification program found for $$name"; \
 	fi;
 else
 	@echo "Attempting to fix all prompts"
-	@for prompt in $(wildcard $(PROMPTS_DIR)/*_python.prompt); do \\
-		name=$$(basename $$prompt _python.prompt); \\
-		echo "Fixing $$name"; \\
-		if [ -f "$(CONTEXT_DIR)/$${name}_example.py" ]; then \\
-			conda run -n pdd --no-capture-output python -m pdd --strength .9 --temperature 0 --verbose --force fix --loop --auto-submit --max-attempts 5 --output-test output/ --output-code output/ --verification-program $(CONTEXT_DIR)/$${name}_example.py $$prompt $(PDD_DIR)/$${name}.py $(TESTS_DIR)/test_$${name}.py $${name}.log; \\
-		else \\
-			echo "Warning: No verification program found for $$name"; \\
-		fi; \\
+	@for prompt in $(wildcard $(PROMPTS_DIR)/*_python.prompt); do \
+		name=$$(basename $$prompt _python.prompt); \
+		echo "Fixing $$name"; \
+		if [ -f "$(CONTEXT_DIR)/$${name}_example.py" ]; then \
+			conda run -n pdd --no-capture-output python -m pdd.cli --strength .9 --temperature 0 --verbose --force fix --loop --auto-submit --max-attempts 5 --output-test output/ --output-code output/ --verification-program $(CONTEXT_DIR)/$${name}_example.py $$prompt $(PDD_DIR)/$${name}.py $(TESTS_DIR)/test_$${name}.py $${name}.log; \
+		else \
+			echo "Warning: No verification program found for $$name"; \
+		fi; \
 	done
 endif
 
