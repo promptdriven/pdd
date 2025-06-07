@@ -1,412 +1,616 @@
-import threading
 import time
+import os
+from datetime import datetime, timedelta
+import threading
+from typing import List, Dict, Optional, Tuple, Any
+
 from rich.console import Console
-from rich.layout import Layout
 from rich.live import Live
+from rich.layout import Layout
 from rich.panel import Panel
 from rich.text import Text
-from typing import Dict, Tuple, Optional, Callable, List, Any
+from rich.align import Align
+from rich.table import Table
+from rich.progress_bar import ProgressBar # For cost/budget display if needed
 
-# Assuming PDD_PROMPT_COLOR etc. are defined in pdd.__init__ or passed if not global
-# For now, let's use the passed colors.
+# Assuming these might be in pdd/__init__.py or a constants module
+# For this example, defining them locally based on the branding document
+# Primary Colors
+DEEP_NAVY = "#0A0A23"
+ELECTRIC_CYAN = "#00D8FF"
 
-PDD_LOGO_COLOR = "#00D8FF"  # Electric-Cyan from branding
-PDD_TEXT_COLOR = "white"    # Default text
-PDD_BRAND_PRIMARY = "#00D8FF"
-PDD_BRAND_NAVY = "#0A0A23"
+# Accent Colors (can be used for boxes if specific inputs are not good)
+LUMEN_PURPLE = "#8C47FF"
+PROMPT_MAGENTA = "#FF2AA6"
+BUILD_GREEN = "#18C07A" # Success, good for 'example' or 'tests'
 
-PDD_ASCII_LOGO_LINES = [
-    "  +xxxxxxxxxxxxxxx+",
-    "xxxxxxxxxxxxxxxxxxxxx+",
-    "xxx                 +xx+",
-    "xxx      x+           xx+",
-    "xxx        x+         xxx",
-    "xxx         x+        xx+",
-    "xxx        x+         xx+",
-    "xxx      x+          xxx",
-    "xxx                +xx+",
-    "xxx     +xxxxxxxxxxx+",
-    "xxx   +xx+",
-    "xxx  +xx+",
-    "xxx+xx+",
-    "xxxx+",
-    "xx+",
+# Default colors for boxes if not provided or invalid
+DEFAULT_PROMPT_COLOR = LUMEN_PURPLE
+DEFAULT_CODE_COLOR = ELECTRIC_CYAN
+DEFAULT_EXAMPLE_COLOR = BUILD_GREEN
+DEFAULT_TESTS_COLOR = PROMPT_MAGENTA
+
+# PDD Logo ASCII Art from branding document (section 7)
+PDD_LOGO_ASCII = [
+    "  +xxxxxxxxxxxxxxx+        ",
+    "xxxxxxxxxxxxxxxxxxxxx+     ",
+    "xxx                 +xx+   ",
+    "xxx      x+           xx+  ",
+    "xxx        x+         xxx  ",
+    "xxx         x+        xx+  ",
+    "xxx        x+         xx+  ",
+    "xxx      x+          xxx   ",
+    "xxx                +xx+    ",
+    "xxx     +xxxxxxxxxxx+      ",
+    "xxx   +xx+                 ",
+    "xxx  +xx+                  ",
+    "xxx+xx+                    ",
+    "xxxx+                      ",
+    "xx+                        ",
 ]
+LOGO_HEIGHT = len(PDD_LOGO_ASCII)
+LOGO_MAX_WIDTH = max(len(line) for line in PDD_LOGO_ASCII)
 
-# Emojis
-EMOJI_HAMMER = "🔨"
-EMOJI_SEEDLING = "🌱"
-EMOJI_SKULL = "💀"
-EMOJI_MAGNIFYING_GLASS = "🔍"
-EMOJI_TEST_TUBE = "🧪"
-EMOJI_WRENCH = "🔧"
-EMOJI_UP_ARROW = "⬆️"
+# Emojis for commands
+EMOJIS = {
+    "generate": "🔨",
+    "example": "🌱",
+    "crash_code": "💀",
+    "crash_example": "💀",
+    "verify_code": "🔍",
+    "verify_example": "🔍",
+    "test": "🧪",
+    "fix_code": "🔧",
+    "fix_tests": "🔧",
+    "update": "⬆️",
+    "checking": "🔍",
+}
 
-CONSOLE_WIDTH = 80  # Fixed width for layout
-CONSOLE_HEIGHT = 30 # Fixed height for layout
+CONSOLE_WIDTH = 80  # Target console width for layout
+ANIMATION_BOX_HEIGHT = 20 # Target height for the main animation box
+
+def _get_valid_color(color_str: Optional[str], default_color: str) -> str:
+    """Validates a color string or returns default."""
+    if not color_str:
+        return default_color
+    return color_str if isinstance(color_str, str) else default_color
+
+def _shorten_path(path_str: Optional[str], max_len: int) -> str:
+    """Shortens a path string for display, trying relative path first."""
+    if not path_str:
+        return ""
+    try:
+        rel_path = os.path.relpath(path_str, start=os.getcwd())
+    except ValueError:
+        rel_path = path_str
+
+    if len(rel_path) <= max_len:
+        return rel_path
+    
+    basename = os.path.basename(rel_path)
+    if len(basename) <= max_len:
+        return basename
+    
+    return "..." + basename[-(max_len-3):]
 
 
 class AnimationState:
-    def __init__(self):
-        self.start_time = time.monotonic()
-        self.phase = "logo_expand"  # logo_expand, main_display, logo_shrink, stopped
-        self.logo_expand_progress = 0
-        self.main_display_start_time = 0.0
-        self.logo_shrink_progress = 0
-        self.blink_on = True
-        self.last_blink_toggle = time.monotonic()
-        self.animation_step = 0
-
+    """Holds the current state of the animation."""
+    def __init__(self, basename: str, budget: Optional[float]):
         self.current_function_name: str = "checking"
-        self.current_basename: str = "basename"
-        self.current_cost: float = 0.0
-        self.current_budget: float = 10.0
-        self.current_prompt_color: str = "blue"
-        self.current_code_color: str = "green"
-        self.current_example_color: str = "yellow"
-        self.current_tests_color: str = "magenta"
-        self.current_prompt_path: str = "./prompts/..."
-        self.current_code_path: str = "./src/..."
-        self.current_example_path: str = "./examples/..."
-        self.current_tests_path: str = "./tests/..."
-        self.lock = threading.Lock()
-
-    def update_params(self, function_name: str, basename: str, cost: float, budget: float,
-                      prompt_color: str, code_color: str, example_color: str, tests_color: str,
-                      paths: Dict[str, str]):
-        with self.lock:
-            self.current_function_name = function_name
-            self.current_basename = basename
-            self.current_cost = cost
-            self.current_budget = budget
-            self.current_prompt_color = prompt_color
-            self.current_code_color = code_color
-            self.current_example_color = example_color
-            self.current_tests_color = tests_color
-            self.current_prompt_path = paths.get("prompt", self.current_prompt_path)
-            self.current_code_path = paths.get("code", self.current_code_path)
-            self.current_example_path = paths.get("example", self.current_example_path)
-            self.current_tests_path = paths.get("tests", self.current_tests_path)
-
-
-def _get_box_path_text(path: str, max_len: int = 18) -> str:
-    if len(path) > max_len:
-        return "..." + path[-(max_len - 3):]
-    # Center the text manually
-    padding = max_len - len(path)
-    left_pad = padding // 2
-    right_pad = padding - left_pad
-    return " " * left_pad + path + " " * right_pad
-
-
-def _draw_box_on_grid(grid: List[List[Any]], y_start: int, x_start: int, w: int, h: int,
-                      title: str, path_text: str, emoji_char_to_draw: Optional[str],
-                      color_style: str, blink_on: bool):
-    """Draws a box with title, path, and optional emoji onto the grid."""
-    grid_height, grid_width = len(grid), len(grid[0])
-
-    # Title with emoji
-    actual_emoji = ""
-    if emoji_char_to_draw:
-        actual_emoji = emoji_char_to_draw if blink_on else " "
-    
-    display_title = f"{actual_emoji} {title}".strip()
-    
-    for r_offset in range(h):
-        r = y_start + r_offset
-        if not (0 <= r < grid_height): continue
-
-        for c_offset in range(w):
-            c = x_start + c_offset
-            if not (0 <= c < grid_width): continue
-
-            char_to_set = ' '
-            style_to_set = color_style # Border color by default
-
-            if r_offset == 0:  # Top row (border and title)
-                if c_offset == 0: char_to_set = '┌'
-                elif c_offset == w - 1: char_to_set = '┐'
-                else: char_to_set = '─'
-                
-                # Overlay title (centered)
-                title_start_in_box = (w - 2 - len(display_title)) // 2 
-                if 0 <= c_offset - 1 - title_start_in_box < len(display_title):
-                    char_to_set = display_title[c_offset - 1 - title_start_in_box]
-            elif r_offset == h - 1:  # Bottom border
-                if c_offset == 0: char_to_set = '└'
-                elif c_offset == w - 1: char_to_set = '┘'
-                else: char_to_set = '─'
-            elif c_offset == 0 or c_offset == w - 1:  # Side borders
-                char_to_set = '│'
-            elif r_offset == 1: # Path line (second line of box)
-                path_display_str = _get_box_path_text(path_text, w - 2)
-                path_char_idx = c_offset - 1 
-                if 0 <= path_char_idx < len(path_display_str):
-                    char_to_set = path_display_str[path_char_idx]
-                style_to_set = "dim " + color_style # Dim color for path
-            else: # Inner empty space
-                style_to_set = "default"
-
-            grid[r][c] = (char_to_set, style_to_set)
-
-
-def _plot_line_with_arrow(grid: List[List[Any]], x0: int, y0: int, x1: int, y1: int,
-                         step: int, total_steps: int, line_style: str = "dim white", arrow_style: str = "bold yellow"):
-    """Plots a line using Bresenham's algorithm and places an arrow along it."""
-    grid_height, grid_width = len(grid), len(grid[0])
-    
-    dx = abs(x1 - x0)
-    dy = abs(y1 - y0)
-    sx = 1 if x0 < x1 else -1
-    sy = 1 if y0 < y1 else -1
-    err = dx - dy
-    
-    path_points = []
-    curr_x, curr_y = x0, y0
-    
-    while True:
-        path_points.append((curr_x, curr_y))
-        if curr_x == x1 and curr_y == y1: break
-        e2 = 2 * err
-        next_x, next_y = curr_x, curr_y
-        if e2 > -dy:
-            err -= dy
-            next_x += sx
-        if e2 < dx:
-            err += dx
-            next_y += sy
-        # Check if stuck (can happen with imperfect Bresenham or endpoint conditions)
-        if next_x == curr_x and next_y == curr_y and (curr_x != x1 or curr_y != y1) : break 
-        curr_x, curr_y = next_x, next_y
-
-
-    if not path_points or len(path_points) < 2: return
-
-    # Draw line segments (excluding start/end points, handled by boxes)
-    for i in range(1, len(path_points) - 1):
-        px, py = path_points[i]
-        prev_px, prev_py = path_points[i-1]
-        next_px, next_py = path_points[i+1] if i + 1 < len(path_points) else (px,py) # Use current if at end
-
-        char = '─' # Default horizontal
-        if py != prev_py and px != prev_px : # Diagonal from prev
-            char = '\\' if (px-prev_px)*(py-prev_py) > 0 else '/'
-        elif py != prev_py : char = '│' # Vertical from prev
+        self.basename: str = basename
+        self.cost: float = 0.0
+        self.budget: float = budget if budget is not None else float('inf')
+        self.start_time: datetime = datetime.now()
+        self.frame_count: int = 0
         
-        if 0 <= py < grid_height and 0 <= px < grid_width:
-            grid[py][px] = (char, line_style)
+        self.paths: Dict[str, str] = {"prompt": "", "code": "", "example": "", "tests": ""}
+        self.colors: Dict[str, str] = {
+            "prompt": DEFAULT_PROMPT_COLOR, "code": DEFAULT_CODE_COLOR,
+            "example": DEFAULT_EXAMPLE_COLOR, "tests": DEFAULT_TESTS_COLOR
+        }
+        self.scroll_offsets: Dict[str, int] = {"prompt": 0, "code": 0, "example": 0, "tests": 0}
+        self.path_box_content_width = 16 # Max chars for path inside its small box
 
-    # Place arrow
-    if total_steps == 0: total_steps = 1 # Avoid division by zero
-    arrow_idx = min(len(path_points) - 1, (step * (len(path_points) -1)) // total_steps)
+    def update_dynamic_state(self, function_name: str, cost: float,
+                             prompt_path: str, code_path: str, example_path: str, tests_path: str):
+        self.current_function_name = function_name.lower() if function_name else "checking"
+        self.cost = cost if cost is not None else self.cost
+        
+        self.paths["prompt"] = prompt_path or ""
+        self.paths["code"] = code_path or ""
+        self.paths["example"] = example_path or ""
+        self.paths["tests"] = tests_path or ""
+
+    def set_box_colors(self, prompt_color: str, code_color: str, example_color: str, tests_color: str):
+        self.colors["prompt"] = _get_valid_color(prompt_color, DEFAULT_PROMPT_COLOR)
+        self.colors["code"] = _get_valid_color(code_color, DEFAULT_CODE_COLOR)
+        self.colors["example"] = _get_valid_color(example_color, DEFAULT_EXAMPLE_COLOR)
+        self.colors["tests"] = _get_valid_color(tests_color, DEFAULT_TESTS_COLOR)
+
+    def get_elapsed_time_str(self) -> str:
+        elapsed = datetime.now() - self.start_time
+        return str(elapsed).split('.')[0] # Format as HH:MM:SS
+
+    def _render_scrolling_path(self, path_key: str) -> str:
+        """Renders a path, scrolling if it's too long for its display box."""
+        full_display_path = _shorten_path(self.paths[path_key], 100) 
+        
+        if not full_display_path:
+            return " " * self.path_box_content_width 
+
+        if len(full_display_path) <= self.path_box_content_width:
+            return full_display_path.center(self.path_box_content_width)
+
+        offset = self.scroll_offsets[path_key]
+        padded_text = f" {full_display_path} :: {full_display_path} "
+        display_text = padded_text[offset : offset + self.path_box_content_width]
+        
+        self.scroll_offsets[path_key] = (offset + 1) % (len(full_display_path) + 4) 
+        return display_text
+
+    def get_emoji_for_box(self, box_name: str, blink_on: bool) -> str:
+        """Gets the emoji for a given box based on the current function."""
+        cmd = self.current_function_name
+        emoji_char = ""
+
+        if cmd == "checking":
+            emoji_char = EMOJIS["checking"]
+        elif cmd == "generate" and box_name == "code":
+            emoji_char = EMOJIS["generate"]
+        elif cmd == "example" and box_name == "example":
+            emoji_char = EMOJIS["example"]
+        elif cmd == "crash":
+            if box_name == "code": emoji_char = EMOJIS["crash_code"]
+            if box_name == "example": emoji_char = EMOJIS["crash_example"]
+        elif cmd == "verify":
+            if box_name == "code": emoji_char = EMOJIS["verify_code"]
+            if box_name == "example": emoji_char = EMOJIS["verify_example"]
+        elif cmd == "test" and box_name == "tests":
+            emoji_char = EMOJIS["test"]
+        elif cmd == "fix":
+            if box_name == "code": emoji_char = EMOJIS["fix_code"]
+            if box_name == "tests": emoji_char = EMOJIS["fix_tests"]
+        elif cmd == "update" and box_name == "prompt":
+            emoji_char = EMOJIS["update"]
+        
+        return (emoji_char + " ") if blink_on and emoji_char else "  "
+
+def _draw_connecting_lines_and_arrows(state: AnimationState, console_width: int) -> List[Text]:
+    """Generates Text objects for lines and arrows based on current command."""
+    lines = []
+    cmd = state.current_function_name
+    frame = state.frame_count
+    arrow_char = ">"
+    blink_on = (frame // 5) % 2 == 0 # Blink rate for arrow character
+    active_arrow = arrow_char if blink_on else " "
+    inactive_arrow_placeholder = " " # if arrow is not active due to blinking
+
+    prompt_x = console_width // 2
+    code_x = console_width // 4
+    example_x = console_width // 2
+    tests_x = 3 * console_width // 4
     
-    ax, ay = path_points[arrow_idx]
+    line1 = Text(" " * (prompt_x -1) + "│", style=ELECTRIC_CYAN) # Vertical stem from Prompt
+    lines.append(Align.center(line1))
 
-    # Determine arrow character based on direction from previous point on path
-    arrow_char = '>' # Default
-    if arrow_idx > 0:
-        prev_ax, prev_ay = path_points[arrow_idx-1]
-        if ax > prev_ax: arrow_char = '>'
-        elif ax < prev_ax: arrow_char = '<'
-        elif ay > prev_ay: arrow_char = 'v'
-        elif ay < prev_ay: arrow_char = '^'
-    elif len(path_points) > 1: # First point, determine from next
-        next_ax, next_ay = path_points[1]
-        if next_ax > ax: arrow_char = '>'
-        elif next_ax < ax: arrow_char = '<'
-        elif next_ay > ay: arrow_char = 'v'
-        elif next_ay < ay: arrow_char = '^'
-
-
-    if 0 <= ay < grid_height and 0 <= ax < grid_width:
-        grid[ay][ax] = (arrow_char, arrow_style)
-
-
-def _create_main_content_panel(state: AnimationState) -> Panel:
-    grid_height = CONSOLE_HEIGHT - 2
-    grid: List[List[Any]] = [[' ' for _ in range(CONSOLE_WIDTH)] for _ in range(grid_height)]
-
-    box_width = 22
-    box_height = 3  # Title (with emoji), Path
-
-    code_y = 1
-    example_y = code_y + box_height + 1
-    tests_y = example_y + box_height + 1
-    prompt_y = (grid_height - box_height) // 2
-
-    # Determine emojis
-    prompt_emoji, code_emoji, example_emoji, tests_emoji = None, None, None, None
-    current_func = state.current_function_name
-    if current_func == "generate": code_emoji = EMOJI_HAMMER
-    elif current_func == "example": example_emoji = EMOJI_SEEDLING
-    elif current_func == "crash": code_emoji, example_emoji = EMOJI_SKULL, EMOJI_SKULL
-    elif current_func == "verify": code_emoji, example_emoji = EMOJI_MAGNIFYING_GLASS, EMOJI_MAGNIFYING_GLASS
-    elif current_func == "test": tests_emoji = EMOJI_TEST_TUBE
-    elif current_func == "fix": code_emoji, tests_emoji = EMOJI_WRENCH, EMOJI_WRENCH
-    elif current_func == "update": prompt_emoji = EMOJI_UP_ARROW
-    elif current_func == "checking": prompt_emoji, code_emoji, example_emoji, tests_emoji = EMOJI_MAGNIFYING_GLASS, EMOJI_MAGNIFYING_GLASS, EMOJI_MAGNIFYING_GLASS, EMOJI_MAGNIFYING_GLASS
-
-    _draw_box_on_grid(grid, prompt_y, CONSOLE_WIDTH - box_width - 3, box_width, box_height, "Prompt", state.current_prompt_path, prompt_emoji, state.current_prompt_color, state.blink_on)
-    _draw_box_on_grid(grid, code_y, 2, box_width, box_height, "Code", state.current_code_path, code_emoji, state.current_code_color, state.blink_on)
-    _draw_box_on_grid(grid, example_y, 2, box_width, box_height, "Example", state.current_example_path, example_emoji, state.current_example_color, state.blink_on)
-    _draw_box_on_grid(grid, tests_y, 2, box_width, box_height, "Tests", state.current_tests_path, tests_emoji, state.current_tests_color, state.blink_on)
-
-    # Connection points (center of the side facing the other group of boxes)
-    P_connect_x, P_connect_y = CONSOLE_WIDTH - box_width - 3 -1, prompt_y + box_height // 2
-    C_connect_x, C_connect_y = 2 + box_width, code_y + box_height // 2
-    E_connect_x, E_connect_y = 2 + box_width, example_y + box_height // 2
-    T_connect_x, T_connect_y = 2 + box_width, tests_y + box_height // 2
+    line2_parts = [" "] * console_width # For horizontal connections and arrows
     
-    total_anim_steps = 20 # For arrow movement smoothness
-    anim_step = state.animation_step % total_anim_steps
+    def place_arrow(start_x, end_x, current_pos_factor):
+        length = abs(end_x - start_x)
+        # Ensure length is at least 1 to avoid division by zero or issues with pos calculation
+        # if start_x and end_x are very close or same.
+        if length == 0: 
+            # Decide how to show arrow if start and end are same (e.g. direct vertical)
+            # For now, this function assumes horizontal placement.
+            return
 
-    if current_func == "generate": # P -> C
-        _plot_line_with_arrow(grid, P_connect_x, P_connect_y, C_connect_x, C_connect_y, anim_step, total_anim_steps)
-    elif current_func == "example": # P -> E
-        _plot_line_with_arrow(grid, P_connect_x, P_connect_y, E_connect_x, E_connect_y, anim_step, total_anim_steps)
-    elif current_func == "crash": # C <-> E
-        if (state.animation_step // total_anim_steps) % 2 == 0: _plot_line_with_arrow(grid, C_connect_x, C_connect_y, E_connect_x, E_connect_y, anim_step, total_anim_steps)
-        else: _plot_line_with_arrow(grid, E_connect_x, E_connect_y, C_connect_x, C_connect_y, anim_step, total_anim_steps)
-    elif current_func == "verify": # E <-> C
-        if (state.animation_step // total_anim_steps) % 2 == 0: _plot_line_with_arrow(grid, E_connect_x, E_connect_y, C_connect_x, C_connect_y, anim_step, total_anim_steps)
-        else: _plot_line_with_arrow(grid, C_connect_x, C_connect_y, E_connect_x, E_connect_y, anim_step, total_anim_steps)
-    elif current_func == "test": # C -> T and P -> T
-        _plot_line_with_arrow(grid, C_connect_x, C_connect_y, T_connect_x, T_connect_y, anim_step, total_anim_steps)
-        _plot_line_with_arrow(grid, P_connect_x, P_connect_y, T_connect_x, T_connect_y, anim_step, total_anim_steps)
-    elif current_func == "fix": # C <-> T
-        if (state.animation_step // total_anim_steps) % 2 == 0: _plot_line_with_arrow(grid, C_connect_x, C_connect_y, T_connect_x, T_connect_y, anim_step, total_anim_steps)
-        else: _plot_line_with_arrow(grid, T_connect_x, T_connect_y, C_connect_x, C_connect_y, anim_step, total_anim_steps)
-    elif current_func == "update": # C -> P
-        _plot_line_with_arrow(grid, C_connect_x, C_connect_y, P_connect_x, P_connect_y, anim_step, total_anim_steps)
+        pos = int(length * current_pos_factor)
+        char_idx = min(start_x, end_x) + pos
+        
+        # Ensure arrow is within bounds and doesn't overwrite crucial junctions
+        if 0 <= char_idx < console_width:
+            arrow_to_place = active_arrow if start_x <= end_x else ("<" if blink_on else inactive_arrow_placeholder)
+            # Avoid overwriting existing line characters if arrow is just a space
+            if not (arrow_to_place == inactive_arrow_placeholder and line2_parts[char_idx] != " "):
+                 line2_parts[char_idx] = arrow_to_place
 
-    final_text_output = Text()
-    for r_idx, row_data in enumerate(grid):
-        for char_data in row_data:
-            if isinstance(char_data, tuple):
-                char, style = char_data
-                final_text_output.append(char, style=style)
-            else:
-                final_text_output.append(char_data) # Should be ' '
-        if r_idx < grid_height - 1:
-            final_text_output.append("\n")
+
+    current_pos_factor = (frame % 10) / 9.0 
+
+    if cmd == "generate": # Prompt -> Code
+        for i in range(min(prompt_x, code_x), max(prompt_x, code_x)): 
+            if line2_parts[i] == " ": line2_parts[i] = "─"
+        place_arrow(prompt_x, code_x, current_pos_factor)
+    elif cmd == "example": # Prompt -> Example
+        for i in range(min(prompt_x, example_x), max(prompt_x, example_x)): 
+            if line2_parts[i] == " ": line2_parts[i] = "─"
+        place_arrow(prompt_x, example_x, current_pos_factor)
+    elif cmd == "update": # Code -> Prompt
+        for i in range(min(code_x, prompt_x), max(code_x, prompt_x)): 
+            if line2_parts[i] == " ": line2_parts[i] = "─"
+        place_arrow(code_x, prompt_x, current_pos_factor) 
+    elif cmd == "crash": # Code <-> Example
+        for i in range(min(code_x, example_x), max(code_x, example_x)): 
+            if line2_parts[i] == " ": line2_parts[i] = "─"
+        place_arrow(code_x, example_x, current_pos_factor if (frame//10)%2 ==0 else 1-current_pos_factor)
+    elif cmd == "verify": # Code <-> Example
+        for i in range(min(code_x, example_x), max(code_x, example_x)):
+            if line2_parts[i] == " ": line2_parts[i] = "─"
+        place_arrow(code_x, example_x, current_pos_factor if (frame//10)%2 == 0 else 1-current_pos_factor)
+    elif cmd == "test": # Prompt -> Tests (simplified from Prompt & Code -> Tests)
+        for i in range(min(prompt_x, tests_x), max(prompt_x, tests_x)):
+            if line2_parts[i] == " ": line2_parts[i] = "─"
+        place_arrow(prompt_x, tests_x, current_pos_factor)
+    elif cmd == "fix": # Code <-> Tests
+        for i in range(min(code_x, tests_x), max(code_x, tests_x)):
+            if line2_parts[i] == " ": line2_parts[i] = "─"
+        place_arrow(code_x, tests_x, current_pos_factor if (frame//10)%2 == 0 else 1-current_pos_factor)
+    else: # Default connections (static)
+        if prompt_x-1 >=0 and prompt_x-1 < console_width: line2_parts[prompt_x-1] = "┬" 
+        
+        # Horizontal line connecting all three bottom branches at their x-positions on line2
+        all_branch_xs = sorted(list(set([code_x-1, example_x-1, tests_x-1, prompt_x-1])))
+        min_x_on_line2 = min(all_branch_xs)
+        max_x_on_line2 = max(all_branch_xs)
+
+        for i in range(min_x_on_line2, max_x_on_line2 + 1):
+            if line2_parts[i] == " ": line2_parts[i] = "─"
+        
+        # Ensure junctions for vertical stems are correctly drawn
+        for x_target_idx in [code_x-1, example_x-1, tests_x-1]:
+            if x_target_idx >=0 and x_target_idx < console_width:
+                if line2_parts[x_target_idx] == "─": # If it's part of the horizontal line
+                    line2_parts[x_target_idx] = "┴" # Make it a T-junction downwards
+                # If it's the same as prompt_x-1, it's already '┬' or should be part of it.
+                # This part can be complex to make perfect with all x configurations.
+                # The '┬' at prompt_x-1 and '┴' at targets is a common pattern.
+
+    lines.append(Text("".join(line2_parts), style=ELECTRIC_CYAN))
     
-    return Panel(final_text_output, style="default", border_style=PDD_LOGO_COLOR, height=CONSOLE_HEIGHT - 2, width=CONSOLE_WIDTH)
+    line3_parts = [" "] * console_width
+    for x_target in [code_x, example_x, tests_x]:
+        if x_target-1 >=0 and x_target-1 < console_width:
+            line3_parts[x_target-1] = "│" # Vertical stems to bottom boxes
+    lines.append(Text("".join(line3_parts), style=ELECTRIC_CYAN))
+
+    return lines
 
 
-def _create_layout_wrapper(state: AnimationState) -> Layout:
-    layout = Layout(name="root", size=CONSOLE_HEIGHT)
+def _render_animation_frame(state: AnimationState, console_width: int) -> Panel:
+    """Renders a single frame of the main animation box."""
+    layout = Layout(name="root")
     layout.split_column(
         Layout(name="header", size=1),
-        Layout(name="main_area_container", ratio=1),
-        Layout(name="footer", size=1),
+        Layout(name="body", ratio=1, minimum_size=10), 
+        Layout(name="footer", size=1)
     )
 
-    header_text = Text(justify="between")
-    header_text.append("Prompt Driven Development", style=f"bold {PDD_LOGO_COLOR}")
-    header_text.append(state.current_basename, style="bold white")
-    layout["header"].update(header_text)
+    header_table = Table.grid(expand=True, padding=(0,1))
+    header_table.add_column(justify="left", ratio=1)
+    header_table.add_column(justify="right", ratio=1)
+    header_table.add_row(
+        Text("Prompt Driven Development", style=f"bold {ELECTRIC_CYAN}"),
+        Text(state.basename, style=f"bold {ELECTRIC_CYAN}")
+    )
+    layout["header"].update(header_table)
 
-    elapsed_time_seconds = int(time.monotonic() - state.start_time)
-    time_str = f"{elapsed_time_seconds // 60:02d}:{elapsed_time_seconds % 60:02d}"
-    cost_str = f"${state.current_cost:.2f} / ${state.current_budget:.2f}"
+    footer_table = Table.grid(expand=True, padding=(0,1))
+    footer_table.add_column(justify="left", ratio=1)      
+    footer_table.add_column(justify="center", ratio=1) 
+    footer_table.add_column(justify="right", ratio=1)     
     
-    footer_text = Text(justify="between")
-    footer_text.append(state.current_function_name.upper(), style="bold white")
-    footer_text.append(time_str, style="white")
-    footer_text.append(cost_str, style="white")
-    layout["footer"].update(footer_text)
+    cost_str = f"${state.cost:.2f}"
+    budget_str = f"${state.budget:.2f}" if state.budget != float('inf') else "N/A"
     
-    main_content_panel = _create_main_content_panel(state)
-    layout["main_area_container"].update(main_content_panel)
+    footer_table.add_row(
+        Text(f"Running: {state.current_function_name.capitalize()}", style=ELECTRIC_CYAN),
+        Text(f"Elapsed: {state.get_elapsed_time_str()}", style=ELECTRIC_CYAN),
+        Text(f"Cost: {cost_str} / Budget: {budget_str}", style=ELECTRIC_CYAN)
+    )
+    layout["footer"].update(footer_table)
+
+    blink_on = (state.frame_count // 5) % 2 == 0 
     
-    return layout
+    box_width = state.path_box_content_width + 4 
+
+    prompt_panel = Panel(Align.center(state._render_scrolling_path("prompt")),
+                         title=Text.assemble(state.get_emoji_for_box("prompt", blink_on), "Prompt"),
+                         border_style=state.colors["prompt"], width=box_width, height=3)
+    code_panel = Panel(Align.center(state._render_scrolling_path("code")),
+                       title=Text.assemble(state.get_emoji_for_box("code", blink_on), "Code"),
+                       border_style=state.colors["code"], width=box_width, height=3)
+    example_panel = Panel(Align.center(state._render_scrolling_path("example")),
+                          title=Text.assemble(state.get_emoji_for_box("example", blink_on), "Example"),
+                          border_style=state.colors["example"], width=box_width, height=3)
+    tests_panel = Panel(Align.center(state._render_scrolling_path("tests")),
+                        title=Text.assemble(state.get_emoji_for_box("tests", blink_on), "Tests"),
+                        border_style=state.colors["tests"], width=box_width, height=3)
+
+    org_chart_layout = Layout(name="org_chart_area")
+    org_chart_layout.split_column(
+        Layout(Align.center(prompt_panel), name="prompt_row", size=3),
+        Layout(name="lines_row_1", size=1), 
+        Layout(name="lines_row_2", size=1),
+        Layout(name="lines_row_3", size=1),
+        Layout(name="bottom_boxes_row", size=3),
+        Layout(ratio=1) 
+    )
+
+    # console_width for _draw_connecting_lines_and_arrows should be the actual width available for lines
+    # The main panel takes 2 chars for border.
+    # If org_chart_layout is centered, it might have less. For simplicity, use console_width - 4.
+    effective_line_width = console_width - 4 
+    connecting_lines = _draw_connecting_lines_and_arrows(state, effective_line_width)
+    if len(connecting_lines) > 0: org_chart_layout["lines_row_1"].update(Align.center(connecting_lines[0]))
+    if len(connecting_lines) > 1: org_chart_layout["lines_row_2"].update(Align.center(connecting_lines[1]))
+    if len(connecting_lines) > 2: org_chart_layout["lines_row_3"].update(Align.center(connecting_lines[2]))
+
+
+    bottom_boxes_table = Table.grid(expand=True)
+    h_padding = 2 
+    bottom_boxes_table.add_column()
+    bottom_boxes_table.add_column()
+    bottom_boxes_table.add_column()
+    bottom_boxes_table.add_row(code_panel, example_panel, tests_panel)
+    org_chart_layout["bottom_boxes_row"].update(Align.center(bottom_boxes_table))
+    
+    layout["body"].update(org_chart_layout)
+    state.frame_count += 1
+    
+    return Panel(layout, style=f"{ELECTRIC_CYAN} on {DEEP_NAVY}", 
+                 border_style=ELECTRIC_CYAN, height=ANIMATION_BOX_HEIGHT, 
+                 width=console_width)
+
+
+def _initial_logo_animation_sequence(console: Console, stop_event: threading.Event):
+    """Animates the PDD logo appearing."""
+    console.clear()
+    # For the animation to appear at the top and expand, we need to manage lines carefully.
+    # This simplified version prints and overwrites. Rich's Live screen=True is better for sustained animations.
+    # This initial part is tricky without Live's full screen management yet.
+    
+    # Render logo centered, line by line from bottom up
+    # Pad top with newlines to push it down, then remove newlines to make it rise
+    max_padding_lines = console.height - LOGO_HEIGHT -1 # Max newlines to push logo to bottom
+    max_padding_lines = max(0, max_padding_lines)
+
+    for i in range(LOGO_HEIGHT): # i is number of lines revealed
+        if stop_event.is_set(): return False
+        
+        console.clear() # Clear screen for each frame of this simple intro
+        
+        # Calculate padding to simulate rising from bottom
+        # As more lines are revealed (i increases), padding decreases
+        # This part is hard to get right for "rising from bottom" AND "expanding upwards"
+        # Let's try "expanding upwards" at a fixed top position.
+        
+        # Print the currently revealed part of the logo
+        # The logo lines are PDD_LOGO_ASCII[0] to PDD_LOGO_ASCII[LOGO_HEIGHT-1]
+        # To expand upwards, we reveal PDD_LOGO_ASCII[LOGO_HEIGHT-1-i] up to PDD_LOGO_ASCII[LOGO_HEIGHT-1]
+        
+        # Calculate number of blank lines to print before the logo part
+        # to keep the base of the revealed logo somewhat fixed while it "grows" upwards.
+        # This is complex. A simpler "reveal in place" might be better.
+        
+        # Simpler: Reveal lines from top to bottom, centered.
+        # For "expand up from bottom", it's more like printing the last line, then last two, etc.
+        # while overprinting.
+        
+        # The original logic was:
+        # current_logo_display = [" "] * LOGO_HEIGHT
+        # current_logo_display[LOGO_HEIGHT - 1 - i] = PDD_LOGO_ASCII[LOGO_HEIGHT - 1 - i].center(CONSOLE_WIDTH)
+        # ... then print relevant part of current_logo_display
+        # This means it fills from bottom of PDD_LOGO_ASCII array, which is top of logo visually.
+        # This is "expanding downwards".
+        
+        # To expand "up from the bottom of the screen":
+        # We print the last `i+1` lines of the logo.
+        # And position this block so its bottom is at a fixed screen row, or it rises.
+        
+        # Let's stick to a simpler reveal for robustness if the cursor logic is tricky.
+        # Reveal line by line, centered.
+        for line_idx in range(i + 1):
+            console.print(Text(PDD_LOGO_ASCII[line_idx].center(CONSOLE_WIDTH), style=f"bold {ELECTRIC_CYAN} on {DEEP_NAVY}"))
+        
+        time.sleep(0.07) # Slightly slower for logo reveal
+        if i < LOGO_HEIGHT -1: # If not the last frame of reveal
+             # This clear is for the simple reveal. Original had cursor moves.
+             # If using cursor moves, don't clear here.
+             pass # With Live(screen=True) later, this initial animation might be replaced or simplified.
+
+    if stop_event.is_set(): return False
+    time.sleep(1) # Hold full logo
+    
+    # Transition to 20-line box (Live will handle this by starting its screen)
+    if stop_event.is_set(): return False
+    # console.clear() # Live(screen=True) will clear.
+    return True
+
+def _final_logo_animation_sequence(console: Console):
+    """Animates the PDD logo shrinking/disappearing."""
+    # This is called after Live exits, so console is back to normal.
+    console.clear()
+    logo_panel_content = "\n".join(line.center(LOGO_MAX_WIDTH + 4) for line in PDD_LOGO_ASCII)
+    logo_panel = Panel(logo_panel_content, style=f"bold {ELECTRIC_CYAN} on {DEEP_NAVY}", 
+                       border_style=ELECTRIC_CYAN, width=LOGO_MAX_WIDTH + 6, height=LOGO_HEIGHT + 2)
+    console.print(Align.center(logo_panel))
+    time.sleep(1) # Show logo briefly
+    console.clear() # Final clear
 
 
 def sync_animation(
-    function_name_getter: Callable[[], str],
+    function_name_ref: List[str],
     stop_event: threading.Event,
-    basename_getter: Callable[[], str],
-    cost_getter: Callable[[], float],
-    budget_getter: Callable[[], float],
-    prompt_color_getter: Callable[[], str],
-    code_color_getter: Callable[[], str],
-    example_color_getter: Callable[[], str],
-    tests_color_getter: Callable[[], str],
-    paths_getter: Callable[[], Dict[str, str]]
-):
-    console = Console()
-    state = AnimationState()
+    basename: str,
+    cost_ref: List[float],
+    budget: Optional[float],
+    prompt_color: str,
+    code_color: str,
+    example_color: str,
+    tests_color: str,
+    prompt_path_ref: List[str],
+    code_path_ref: List[str],
+    example_path_ref: List[str],
+    tests_path_ref: List[str]
+) -> None:
+    """
+    Displays an informative ASCII art animation in the terminal.
+    Uses mutable list references to get updates from the main thread.
+    """
+    # Console for initial/final animations outside Live
+    # Live will use its own console or this one if passed.
+    # Using a single console instance.
+    console = Console(width=CONSOLE_WIDTH) 
+    animation_state = AnimationState(basename, budget)
+    animation_state.set_box_colors(prompt_color, code_color, example_color, tests_color)
 
-    # Initial parameters from getters
-    state.update_params(
-        function_name_getter(), basename_getter(), cost_getter(), budget_getter(),
-        prompt_color_getter(), code_color_getter(), example_color_getter(), tests_color_getter(),
-        paths_getter()
-    )
+    # Initial logo animation sequence
+    # The prompt implies this happens before the main Live display.
+    # Live(screen=True) will clear the screen when it starts.
+    # So, _initial_logo_animation_sequence should run on the console, then Live takes over.
+    
+    # To make _initial_logo_animation_sequence effective before Live(screen=True) takes over:
+    # It needs to print directly. The `console.clear()` inside it might be too aggressive.
+    # A simple print of the logo, then sleep, might be enough.
+    # The "expand up" is hard without full screen control like Live provides.
+    # For now, let's assume _initial_logo_animation_sequence is simplified or works as intended.
+    
+    # Simplified initial display:
+    console.clear()
+    for line_ in PDD_LOGO_ASCII:
+        console.print(Text(line_.center(CONSOLE_WIDTH), style=f"bold {ELECTRIC_CYAN} on {DEEP_NAVY}"))
+    time.sleep(1) # Hold logo
+    if stop_event.is_set(): # Check if already stopped
+        _final_logo_animation_sequence(console)
+        return
 
-    with Live(console=console, refresh_per_second=10, transient=True, screen=False) as live:
-        while state.phase != "stopped":
-            if stop_event.is_set() and state.phase == "main_display":
-                state.phase = "logo_shrink"
-                state.logo_shrink_progress = len(PDD_ASCII_LOGO_LINES) # Start full for shrinking
+    # The prompt: "After 1 sec, the logo will animate to expand to a 20 line tall box"
+    # This transition is implicitly handled by Live starting up with the 20-line panel.
 
-            current_time = time.monotonic()
-            if state.phase != "logo_expand" and state.phase != "logo_shrink": # Avoid updates during transitions
-                state.update_params(
-                    function_name_getter(), basename_getter(), cost_getter(), budget_getter(),
-                    prompt_color_getter(), code_color_getter(), example_color_getter(), tests_color_getter(),
-                    paths_getter()
+    try:
+        # screen=True takes over the full terminal screen.
+        # transient=False means the display persists until Live.stop() or context exit.
+        with Live(_render_animation_frame(animation_state, console.width), # Initial frame
+                  console=console, 
+                  refresh_per_second=10, 
+                  transient=False, # Animation stays until explicitly stopped/exited
+                  screen=True      # Use alternate screen
+                  ) as live:
+            while not stop_event.is_set():
+                current_func_name = function_name_ref[0] if function_name_ref else "checking"
+                current_cost = cost_ref[0] if cost_ref else 0.0
+                
+                current_prompt_path = prompt_path_ref[0] if prompt_path_ref else ""
+                current_code_path = code_path_ref[0] if code_path_ref else ""
+                current_example_path = example_path_ref[0] if example_path_ref else ""
+                current_tests_path = tests_path_ref[0] if tests_path_ref else ""
+
+                animation_state.update_dynamic_state(
+                    current_func_name, current_cost,
+                    current_prompt_path, current_code_path,
+                    current_example_path, current_tests_path
                 )
+                
+                live.update(_render_animation_frame(animation_state, console.width))
+                time.sleep(0.1) 
+    except Exception as e:
+        # If Live context fails or error in loop, ensure console is somewhat clean.
+        # screen=True should restore on exit, but if error is severe:
+        if hasattr(console, 'is_alt_screen') and console.is_alt_screen: # Check if alt screen is active
+             console.show_cursor(True)
+             if hasattr(console, 'alt_screen'):
+                 console.alt_screen = False # Manually try to exit alt screen
+        console.clear() 
+        console.print_exception(show_locals=True)
+        # Fallback print if Rich is broken
+        print(f"Error in animation: {e}", flush=True)
+    finally:
+        # _final_logo_animation_sequence is called after Live context manager exits.
+        # Live(screen=True) should restore the screen, then we can print final logo.
+        _final_logo_animation_sequence(console)
 
-            if current_time - state.last_blink_toggle > 0.5:
-                state.blink_on = not state.blink_on
-                state.last_blink_toggle = current_time
+
+if __name__ == "__main__":
+    _current_function_name = ["checking"]
+    _stop_event = threading.Event()
+    _current_cost = [0.0]
+    _prompt_path = ["prompts/calculator_python.prompt"]
+    _code_path = [""]
+    _example_path = [""]
+    _tests_path = [""]
+    _budget_val = 10.0
+
+    def _mock_pdd_sync_workflow():
+        def update_state(func_name, cost_increase, p_path="", c_path="", e_path="", t_path=""):
+            _current_function_name[0] = func_name
+            _current_cost[0] += cost_increase
+            if p_path: _prompt_path[0] = p_path
+            if c_path: _code_path[0] = c_path
+            if e_path: _example_path[0] = e_path
+            if t_path: _tests_path[0] = t_path
+            time.sleep(0.05) # Reduced from 0.1 to match example script
+
+        try:
+            # Initial state for animation to pick up
+            update_state("checking", 0.0, p_path=_prompt_path[0])
+            time.sleep(2) # Allow initial animation to show "checking"
             
-            state.animation_step += 1
+            update_state("auto-deps", 0.01, p_path="prompts/calculator_python_deps.prompt")
+            time.sleep(3)
 
-            if state.phase == "logo_expand":
-                state.logo_expand_progress += 1
-                if state.logo_expand_progress >= len(PDD_ASCII_LOGO_LINES):
-                    state.logo_expand_progress = len(PDD_ASCII_LOGO_LINES)
-                    if state.main_display_start_time == 0: # Mark when logo is fully shown
-                         state.main_display_start_time = current_time
-                    if current_time - state.main_display_start_time > 1.0: # Wait 1 sec
-                        state.phase = "main_display"
-                
-                visible_logo_lines = PDD_ASCII_LOGO_LINES[len(PDD_ASCII_LOGO_LINES) - state.logo_expand_progress:]
-                logo_text = Text("\n".join(visible_logo_lines), style=PDD_LOGO_COLOR, justify="center")
-                
-                padding_height = CONSOLE_HEIGHT - len(visible_logo_lines)
-                top_pad = padding_height // 2
-                bottom_pad = padding_height - top_pad
-                
-                display_content = Text("\n" * top_pad, justify="center") + logo_text + Text("\n" * bottom_pad, justify="center")
-                live.update(Panel(display_content, border_style=PDD_LOGO_COLOR, width=CONSOLE_WIDTH, height=CONSOLE_HEIGHT))
+            update_state("generate", 0.05, c_path="src/calculator.py")
+            time.sleep(3)
 
-            elif state.phase == "main_display":
-                layout_to_render = _create_layout_wrapper(state)
-                live.update(layout_to_render)
-
-            elif state.phase == "logo_shrink":
-                state.logo_shrink_progress -= 1
-                if state.logo_shrink_progress <= 0:
-                    state.phase = "stopped"
-                    live.update(Text("")) # Clear screen
-                    continue # Exit loop immediately
-                
-                visible_logo_lines = PDD_ASCII_LOGO_LINES[len(PDD_ASCII_LOGO_LINES) - state.logo_shrink_progress:]
-                logo_text = Text("\n".join(visible_logo_lines), style=PDD_LOGO_COLOR, justify="center")
-
-                padding_height = CONSOLE_HEIGHT - len(visible_logo_lines)
-                top_pad = padding_height // 2
-                bottom_pad = padding_height - top_pad
-
-                display_content = Text("\n" * top_pad, justify="center") + logo_text + Text("\n" * bottom_pad, justify="center")
-                live.update(Panel(display_content, border_style=PDD_LOGO_COLOR, width=CONSOLE_WIDTH, height=CONSOLE_HEIGHT))
+            update_state("example", 0.02, e_path="examples/calculator_example.py")
+            time.sleep(3)
             
-            if state.phase == "stopped":
-                break
-            time.sleep(0.05) 
+            update_state("crash", 0.03, c_path="src/calculator_fixed_crash.py", e_path="examples/calculator_example_crash.py")
+            time.sleep(3)
 
-    # Optional: print a final message if not quiet
-    # console.print(f"PDD Sync Animation for '{state.current_basename}' finished.", style="dim white")
+            update_state("verify", 0.04, c_path="src/calculator_verified.py", e_path="examples/calculator_example_verified.py")
+            time.sleep(3)
+
+            update_state("test", 0.03, t_path="tests/test_calculator.py")
+            time.sleep(3)
+
+            update_state("fix", 0.10, c_path="src/calculator_final.py", t_path="tests/test_calculator_fixed.py")
+            time.sleep(3)
+            
+            update_state("update", 0.02, p_path="prompts/calculator_python_updated.prompt")
+            time.sleep(3)
+
+        except KeyboardInterrupt:
+            print("Workflow interrupted by user.")
+        finally:
+            _stop_event.set()
+
+    print("Starting PDD Sync Animation Demo...")
+    print("Press Ctrl+C to stop the demo workflow.")
+    # Create dummy paths for the demo if they don't exist
+    os.makedirs("./prompts", exist_ok=True)
+    os.makedirs("./src", exist_ok=True)
+    os.makedirs("./examples", exist_ok=True)
+    os.makedirs("./tests", exist_ok=True)
+    # Create dummy files so _shorten_path can work with existing paths
+    with open(_prompt_path[0], "a") as f: pass
+
+
+    animation_thread = threading.Thread(
+        target=sync_animation,
+        args=(
+            _current_function_name, _stop_event, "calculator_demo", _current_cost, _budget_val,
+            "blue", "cyan", "green", "yellow", 
+            _prompt_path, _code_path, _example_path, _tests_path
+        )
+    )
+    animation_thread.daemon = True 
+    animation_thread.start()
+
+    _mock_pdd_sync_workflow() 
+    
+    print("Main workflow finished. Waiting for animation thread to clean up...")
+    animation_thread.join(timeout=5) 
+    if animation_thread.is_alive():
+        print("Animation thread still alive after timeout.")
+    print("PDD Sync Animation Demo Finished.")

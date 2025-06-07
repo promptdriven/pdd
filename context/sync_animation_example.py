@@ -1,173 +1,194 @@
-# run_animation_example.py
+"""
+Example of how to use the sync_animation module.
+
+This script demonstrates:
+1. Setting up shared state variables (mutable lists and a threading.Event)
+   that the main application (simulated here) can update.
+2. Starting the `sync_animation` in a separate thread, passing these shared variables.
+3. Simulating a main application workflow that changes the shared state,
+   which in turn updates the animation.
+4. Signaling the animation to stop and cleaning up the thread.
+"""
 import threading
 import time
-import sys
 import os
 
-# Ensure the 'pdd' directory is in the Python path for the import
-# This is usually handled if 'pdd' is an installed package or if this script
-# is run from the directory containing 'pdd'.
-# For a direct script run, you might need to adjust sys.path:
-# current_dir = os.path.dirname(os.path.abspath(__file__))
-# pdd_package_dir = os.path.join(current_dir, "..") # If pdd is one level up
-# sys.path.insert(0, pdd_package_dir)
-
-
-# Assuming 'pdd' is an installed package or in PYTHONPATH
+# Assuming the sync_animation module is in a 'pdd' directory
+# relative to this example script, and the file is named 'sync_animation.py'.
 from pdd.sync_animation import sync_animation
 
-# --- Shared state for the animation ---
-# This dictionary will be updated by the main "PDD process" simulation
-# and read by the getter functions passed to sync_animation.
-shared_pdd_state: dict[str, any] = {
-    "function_name": "checking",
-    "basename": "example_feature",
-    "cost": 0.0,
-    "budget": 10.0,  # Budget in dollars
-    "prompt_color": "cyan",
-    "code_color": "green",
-    "example_color": "yellow",
-    "tests_color": "magenta",
-    "paths": {
-        "prompt": "./prompts/feature_x.prompt",
-        "code": "./src/feature_x.py",
-        "example": "./examples/ex_feature_x.py",
-        "tests": "./tests/test_feature_x.py",
-    },
-    "stop_event": threading.Event(),
-}
+# --- 1. Define Shared State Variables ---
+# These variables are updated by the main application logic and read by the
+# animation thread. They must be mutable (e.g., lists of length 1).
 
-# --- Getter functions for sync_animation ---
-# These functions provide the current state to the animation.
-# They access the shared_pdd_state dictionary.
+# current_function_name_ref: List[str]
+#   - Holds the name of the PDD command currently being simulated (e.g., "generate", "test").
+#   - The animation displays this name.
+current_function_name_ref = ["checking"]
 
-def get_current_function_name() -> str:
-    """Returns the current function name from shared state."""
-    return shared_pdd_state["function_name"]
+# stop_event: threading.Event
+#   - Used to signal the animation thread that it should terminate gracefully.
+stop_event = threading.Event()
 
-def get_stop_event() -> threading.Event: # This is not a getter, but the event itself
-    """Returns the stop event object from shared state."""
-    return shared_pdd_state["stop_event"]
+# current_cost_ref: List[float]
+#   - Holds the accumulated cost of operations, typically in dollars.
+#   - The animation displays this cost.
+current_cost_ref = [0.0]
 
-def get_basename() -> str:
-    """Returns the basename from shared state."""
-    return shared_pdd_state["basename"]
+# Path references: List[str] for each
+#   - Hold strings representing paths to relevant files (prompt, code, example, tests).
+#   - The animation displays these paths, shortening them if they are too long.
+#   - For this example, paths point to a hypothetical './output/' directory.
+initial_prompt_path = "./output/project_alpha/main.prompt"
+prompt_path_ref = [initial_prompt_path]
+code_path_ref = [""]
+example_path_ref = [""]
+tests_path_ref = [""]
 
-def get_cost() -> float:
-    """Returns the current cost in dollars from shared state."""
-    # Cost in dollars
-    return shared_pdd_state["cost"]
+# --- 2. Define Static Parameters for the Animation ---
+# These are set once when the animation starts.
 
-def get_budget() -> float:
-    """Returns the budget in dollars from shared state."""
-    # Budget in dollars
-    return shared_pdd_state["budget"]
+# basename: str
+#   - The base name of the project or prompt being processed (e.g., "calculator_app").
+basename = "project_alpha"
 
-def get_prompt_color() -> str:
-    """Returns the prompt color from shared state."""
-    return shared_pdd_state["prompt_color"]
+# budget_val: Optional[float]
+#   - The total budget for the operation, typically in dollars.
+#   - Set to None or float('inf') for no budget.
+budget_val = 15.00
 
-def get_code_color() -> str:
-    """Returns the code color from shared state."""
-    return shared_pdd_state["code_color"]
+# Box colors: str
+#   - Rich-compatible color strings (e.g., "blue", "magenta", "#FF0000")
+#     for the 'Prompt', 'Code', 'Example', and 'Tests' boxes in the animation.
+prompt_box_color = "blue"
+code_box_color = "cyan"
+example_box_color = "green"
+tests_box_color = "yellow"
 
-def get_example_color() -> str:
-    """Returns the example color from shared state."""
-    return shared_pdd_state["example_color"]
 
-def get_tests_color() -> str:
-    """Returns the tests color from shared state."""
-    return shared_pdd_state["tests_color"]
+# --- 3. Mock Main Application Workflow ---
+# This function simulates a PDD workflow, updating the shared state
+# variables at different stages to demonstrate the animation's responsiveness.
+def mock_pdd_main_workflow():
+    """
+    Simulates a PDD workflow, updating shared state for the animation.
+    """
+    def update_animation_state(func_name, cost_increase, p_path=None, c_path=None, e_path=None, t_path=None):
+        """Helper to update shared state and print a log from the main app."""
+        print(f"Main App Log: Transitioning to '{func_name}', cost increment: ${cost_increase:.2f}")
+        current_function_name_ref[0] = func_name
+        current_cost_ref[0] += cost_increase
+        if p_path is not None: prompt_path_ref[0] = p_path
+        if c_path is not None: code_path_ref[0] = c_path
+        if e_path is not None: example_path_ref[0] = e_path
+        if t_path is not None: tests_path_ref[0] = t_path
+        # A small delay can sometimes help ensure the animation thread
+        # picks up rapid state changes, though Rich's Live is generally efficient.
+        time.sleep(0.05)
 
-def get_paths() -> dict[str, str]:
-    """Returns the paths dictionary from shared state."""
-    return shared_pdd_state["paths"]
+    try:
+        # Initial "checking" state
+        update_animation_state("checking", 0.0)
+        time.sleep(2) # Show "checking" for 2 seconds
 
+        # Simulate 'auto-deps' command
+        update_animation_state("auto-deps", 0.25, p_path="./output/project_alpha/main_with_deps.prompt")
+        time.sleep(3)
+
+        # Simulate 'generate' command
+        update_animation_state("generate", 1.50, c_path="./output/project_alpha/src/module.py")
+        time.sleep(3)
+
+        # Simulate 'example' command
+        update_animation_state("example", 0.75, e_path="./output/project_alpha/examples/run_module.py")
+        time.sleep(3)
+        
+        # Simulate 'crash' command
+        # Note: The animation for 'crash' involves bi-directional arrows.
+        update_animation_state("crash", 1.20,
+                               c_path="./output/project_alpha/src/module_crash_fix.py",
+                               e_path="./output/project_alpha/examples/run_module_crash_fix.py")
+        time.sleep(3)
+
+        # Simulate 'verify' command
+        update_animation_state("verify", 0.90,
+                               c_path="./output/project_alpha/src/module_verified.py",
+                               e_path="./output/project_alpha/examples/run_module_verified.py")
+        time.sleep(3)
+
+        # Simulate 'test' command
+        update_animation_state("test", 1.10, t_path="./output/project_alpha/tests/test_module.py")
+        time.sleep(3)
+
+        # Simulate 'fix' command
+        # Note: The animation for 'fix' involves bi-directional arrows.
+        update_animation_state("fix", 2.30,
+                               c_path="./output/project_alpha/src/module_final.py",
+                               t_path="./output/project_alpha/tests/test_module_passing.py")
+        time.sleep(3)
+        
+        # Simulate 'update' command (updating the prompt)
+        update_animation_state("update", 0.60, p_path="./output/project_alpha/main_updated.prompt")
+        time.sleep(3)
+
+        print("Main App Log: Workflow simulation complete.")
+
+    except KeyboardInterrupt:
+        print("Main App Log: Workflow interrupted by user (Ctrl+C).")
+    finally:
+        # --- 5. Signal Animation to Stop ---
+        print("Main App Log: Signaling animation thread to stop.")
+        stop_event.set()
 
 if __name__ == "__main__":
-    print("Starting PDD process simulation with sync_animation.")
-    print("The animation will run for a few cycles and then stop.")
-    print("Look for the Rich TUI rendering below this message.")
-    time.sleep(1) # Give a moment for the user to see the message
+    print("Starting PDD Sync Animation Example...")
+    print("The animation will run in the terminal. Press Ctrl+C to stop the simulation early.")
+    print("Ensure your terminal window is wide enough (at least 80 columns) for best results.")
+    time.sleep(1) # Give user a moment to read
 
-    # Create and start the animation thread
+    # Create dummy ./output directory if it doesn't exist, for path shortening tests
+    # The _shorten_path function in the module can handle non-existent paths,
+    # but creating them makes the relative path logic more robustly testable.
+    os.makedirs("./output/project_alpha/src", exist_ok=True)
+    os.makedirs("./output/project_alpha/examples", exist_ok=True)
+    os.makedirs("./output/project_alpha/tests", exist_ok=True)
+
+
+    # --- 4. Start the Animation in a Separate Thread ---
+    # The `sync_animation` function is designed to be run in its own thread
+    # so it doesn't block the main application logic.
     animation_thread = threading.Thread(
         target=sync_animation,
         args=(
-            get_current_function_name,
-            get_stop_event(), # Pass the event object directly
-            get_basename,
-            get_cost,
-            get_budget,
-            get_prompt_color,
-            get_code_color,
-            get_example_color,
-            get_tests_color,
-            get_paths,
+            current_function_name_ref,
+            stop_event,
+            basename,
+            current_cost_ref,
+            budget_val,
+            prompt_box_color,
+            code_box_color,
+            example_box_color,
+            tests_box_color,
+            prompt_path_ref,
+            code_path_ref,
+            example_path_ref,
+            tests_path_ref
         ),
-        daemon=True, # Allows main program to exit even if thread is still running
+        daemon=True # Set as daemon so it exits when the main program exits
     )
     animation_thread.start()
 
-    # Simulate a PDD process updating its state
-    try:
-        # Initial "checking" phase (already set in shared_pdd_state)
-        time.sleep(2.5) # Let logo expand and show "checking"
+    # Run the mock PDD workflow in the main thread
+    mock_pdd_main_workflow()
 
-        # Simulate "generate"
-        shared_pdd_state["function_name"] = "generate"
-        shared_pdd_state["cost"] += 0.50
-        shared_pdd_state["paths"]["code"] = "./src/feature_x_v1.py"
-        time.sleep(3)
+    # --- 6. Wait for Animation Thread to Clean Up and Exit ---
+    # It's good practice to join threads to ensure they complete their cleanup.
+    print("Main App Log: Waiting for animation thread to finish...")
+    animation_thread.join(timeout=10) # Wait for up to 10 seconds
 
-        # Simulate "example"
-        shared_pdd_state["function_name"] = "example"
-        shared_pdd_state["cost"] += 0.20
-        shared_pdd_state["paths"]["example"] = "./examples/ex_feature_x_v1.py"
-        time.sleep(3)
+    if animation_thread.is_alive():
+        print("Main App Log: Animation thread did not stop in the allocated time.")
 
-        # Simulate "test"
-        shared_pdd_state["function_name"] = "test"
-        shared_pdd_state["cost"] += 0.75
-        shared_pdd_state["paths"]["tests"] = "./tests/test_feature_x_v1.py"
-        time.sleep(3)
-
-        # Simulate "fix"
-        shared_pdd_state["function_name"] = "fix"
-        shared_pdd_state["cost"] += 1.25
-        shared_pdd_state["code_color"] = "bright_red" # Show color change
-        shared_pdd_state["paths"]["code"] = "./src/feature_x_v2_fixed.py"
-        time.sleep(3)
-        
-        # Simulate "update"
-        shared_pdd_state["function_name"] = "update"
-        shared_pdd_state["cost"] += 0.30
-        shared_pdd_state["prompt_color"] = "bright_blue"
-        shared_pdd_state["paths"]["prompt"] = "./prompts/feature_x_updated.prompt"
-        time.sleep(3)
-
-        # Simulate "crash"
-        shared_pdd_state["function_name"] = "crash"
-        shared_pdd_state["cost"] += 0.60
-        time.sleep(3)
-
-        # Simulate "verify"
-        shared_pdd_state["function_name"] = "verify"
-        shared_pdd_state["cost"] += 0.40
-        time.sleep(3)
-
-    except KeyboardInterrupt:
-        print("\nSimulation interrupted by user.")
-    finally:
-        # Signal the animation to stop
-        print("\nSignaling animation to stop...")
-        shared_pdd_state["stop_event"].set()
-
-        # Wait for the animation thread to finish
-        animation_thread.join(timeout=5) # Wait up to 5 seconds
-        if animation_thread.is_alive():
-            print("Animation thread did not stop in time.")
-        else:
-            print("Animation thread finished.")
-        
-        print(f"PDD process simulation finished. Total cost: ${shared_pdd_state['cost']:.2f}")
+    print("PDD Sync Animation Example Finished.")
+    # The animation uses Rich's Live(screen=True), which should restore the terminal.
+    # If not, a manual clear might be needed (e.g., 'clear' on Linux/macOS, 'cls' on Windows).
