@@ -302,7 +302,7 @@ def process_csv_change(
                             temperature=temperature,
                             time=time, # Pass time
                             budget=budget - total_cost, # Pass per-row budget
-                            quiet=True # Suppress individual change prints for CSV mode
+                            # verbose=verbose Suppress individual change prints for CSV mode
                         )
                         console.print(f"    [dim]Change cost:[/dim] ${cost:.6f}")
                         console.print(f"    [dim]Model used:[/dim] {current_model_name}")
