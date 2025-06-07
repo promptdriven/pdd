@@ -67,7 +67,7 @@ EMOJIS = {
 }
 
 CONSOLE_WIDTH = 80  # Target console width for layout
-ANIMATION_BOX_HEIGHT = 20 # Target height for the main animation box
+ANIMATION_BOX_HEIGHT = 18 # Target height for the main animation box
 
 def _get_valid_color(color_str: Optional[str], default_color: str) -> str:
     """Validates a color string or returns default."""
@@ -186,15 +186,38 @@ def _draw_connecting_lines_and_arrows(state: AnimationState, console_width: int)
     active_arrow = arrow_char if blink_on else " "
     inactive_arrow_placeholder = " " # if arrow is not active due to blinking
 
-    prompt_x = console_width // 2
-    code_x = console_width // 4
-    example_x = console_width // 2
-    tests_x = 3 * console_width // 4
+    # Positioning for org chart to match Rich's Table.grid 3-column layout
+    # Prompt position should align with Example position for proper connection
+    prompt_x = console_width // 2 - 2  # Move left 2 chars to align with Example
     
-    line1 = Text(" " * (prompt_x -1) + "│", style=ELECTRIC_CYAN) # Vertical stem from Prompt
-    lines.append(Align.center(line1))
+    # Fine-tune positioning to center vertical connectors over specific letters in box titles
+    # Adjust based on visual feedback: Code left 4 chars, Example left 2 chars
+    code_x = console_width * 22 // 80 - 4  # Position over "o" in "Code" (moved left 4)
+    example_x = console_width // 2 - 2  # Position over "m" in "Example" (moved left 2)
+    tests_x = console_width * 58 // 80  # Position over "e" in "Tests" (unchanged)
+    
+    # Handle vertical arrow from Prompt down for certain commands
+    vertical_arrow = " "
+    if cmd in ["generate", "example", "test"] and blink_on:
+        vertical_arrow = "v"  # Down arrow for commands going from Prompt to bottom boxes
+    elif cmd == "update" and blink_on:
+        vertical_arrow = "^"  # Up arrow for commands going from bottom to Prompt
+    
+    # Line 1: First vertical connector from Prompt
+    line1_parts = [" "] * console_width
+    if prompt_x >= 0 and prompt_x < console_width:
+        line1_parts[prompt_x] = vertical_arrow if vertical_arrow != " " else "│"
+    line1 = Text("".join(line1_parts), style=ELECTRIC_CYAN) # Vertical stem from Prompt
+    lines.append(line1)
 
-    line2_parts = [" "] * console_width # For horizontal connections and arrows
+    # Line 2: Second vertical connector (extra spacing above horizontal line)
+    line2_parts = [" "] * console_width
+    if prompt_x >= 0 and prompt_x < console_width:
+        line2_parts[prompt_x] = "│"
+    lines.append(Text("".join(line2_parts), style=ELECTRIC_CYAN))
+
+    # Line 3: Horizontal connections and arrows (centered)
+    line3_parts = [" "] * console_width # For horizontal connections and arrows
     
     def place_arrow(start_x, end_x, current_pos_factor):
         length = abs(end_x - start_x)
@@ -210,69 +233,76 @@ def _draw_connecting_lines_and_arrows(state: AnimationState, console_width: int)
         
         # Ensure arrow is within bounds and doesn't overwrite crucial junctions
         if 0 <= char_idx < console_width:
-            arrow_to_place = active_arrow if start_x <= end_x else ("<" if blink_on else inactive_arrow_placeholder)
+            # Determine arrow direction based on movement direction
+            if start_x < end_x:
+                arrow_to_place = ">" if blink_on else inactive_arrow_placeholder
+            elif start_x > end_x:
+                arrow_to_place = "<" if blink_on else inactive_arrow_placeholder
+            else:
+                arrow_to_place = active_arrow  # Fallback for same positions
+            
             # Avoid overwriting existing line characters if arrow is just a space
-            if not (arrow_to_place == inactive_arrow_placeholder and line2_parts[char_idx] != " "):
-                 line2_parts[char_idx] = arrow_to_place
+            if not (arrow_to_place == inactive_arrow_placeholder and line3_parts[char_idx] != " "):
+                 line3_parts[char_idx] = arrow_to_place
 
 
+    # ALWAYS draw the basic org chart structure first
+    if prompt_x >=0 and prompt_x < console_width: line3_parts[prompt_x] = "┼"  # 4-way connector 
+    
+    # Horizontal line connecting all three bottom branches at their x-positions on line3
+    all_branch_xs = sorted(list(set([code_x, example_x, tests_x, prompt_x])))
+    min_x_on_line3 = min(all_branch_xs)
+    max_x_on_line3 = max(all_branch_xs)
+
+    for i in range(min_x_on_line3, max_x_on_line3 + 1):
+        if line3_parts[i] == " ": line3_parts[i] = "─"
+    
+    # Ensure junctions for vertical stems are correctly drawn with appropriate connectors
+    if code_x >=0 and code_x < console_width and line3_parts[code_x] == "─":
+        line3_parts[code_x] = "┌"  # Top-left corner for Code (leftmost)
+    if example_x >=0 and example_x < console_width and line3_parts[example_x] == "─":
+        line3_parts[example_x] = "┴"  # T-junction for Example (center)
+    if tests_x >=0 and tests_x < console_width and line3_parts[tests_x] == "─":
+        line3_parts[tests_x] = "┐"  # Top-right corner for Tests (rightmost)
+
+    # Now add animated arrows on top of the basic structure
     current_pos_factor = (frame % 10) / 9.0 
 
     if cmd == "generate": # Prompt -> Code
-        for i in range(min(prompt_x, code_x), max(prompt_x, code_x)): 
-            if line2_parts[i] == " ": line2_parts[i] = "─"
         place_arrow(prompt_x, code_x, current_pos_factor)
     elif cmd == "example": # Prompt -> Example
-        for i in range(min(prompt_x, example_x), max(prompt_x, example_x)): 
-            if line2_parts[i] == " ": line2_parts[i] = "─"
         place_arrow(prompt_x, example_x, current_pos_factor)
     elif cmd == "update": # Code -> Prompt
-        for i in range(min(code_x, prompt_x), max(code_x, prompt_x)): 
-            if line2_parts[i] == " ": line2_parts[i] = "─"
         place_arrow(code_x, prompt_x, current_pos_factor) 
     elif cmd == "crash": # Code <-> Example
-        for i in range(min(code_x, example_x), max(code_x, example_x)): 
-            if line2_parts[i] == " ": line2_parts[i] = "─"
         place_arrow(code_x, example_x, current_pos_factor if (frame//10)%2 ==0 else 1-current_pos_factor)
     elif cmd == "verify": # Code <-> Example
-        for i in range(min(code_x, example_x), max(code_x, example_x)):
-            if line2_parts[i] == " ": line2_parts[i] = "─"
         place_arrow(code_x, example_x, current_pos_factor if (frame//10)%2 == 0 else 1-current_pos_factor)
-    elif cmd == "test": # Prompt -> Tests (simplified from Prompt & Code -> Tests)
-        for i in range(min(prompt_x, tests_x), max(prompt_x, tests_x)):
-            if line2_parts[i] == " ": line2_parts[i] = "─"
+    elif cmd == "test": # Prompt -> Tests
         place_arrow(prompt_x, tests_x, current_pos_factor)
     elif cmd == "fix": # Code <-> Tests
-        for i in range(min(code_x, tests_x), max(code_x, tests_x)):
-            if line2_parts[i] == " ": line2_parts[i] = "─"
         place_arrow(code_x, tests_x, current_pos_factor if (frame//10)%2 == 0 else 1-current_pos_factor)
-    else: # Default connections (static)
-        if prompt_x-1 >=0 and prompt_x-1 < console_width: line2_parts[prompt_x-1] = "┬" 
-        
-        # Horizontal line connecting all three bottom branches at their x-positions on line2
-        all_branch_xs = sorted(list(set([code_x-1, example_x-1, tests_x-1, prompt_x-1])))
-        min_x_on_line2 = min(all_branch_xs)
-        max_x_on_line2 = max(all_branch_xs)
 
-        for i in range(min_x_on_line2, max_x_on_line2 + 1):
-            if line2_parts[i] == " ": line2_parts[i] = "─"
-        
-        # Ensure junctions for vertical stems are correctly drawn
-        for x_target_idx in [code_x-1, example_x-1, tests_x-1]:
-            if x_target_idx >=0 and x_target_idx < console_width:
-                if line2_parts[x_target_idx] == "─": # If it's part of the horizontal line
-                    line2_parts[x_target_idx] = "┴" # Make it a T-junction downwards
-                # If it's the same as prompt_x-1, it's already '┬' or should be part of it.
-                # This part can be complex to make perfect with all x configurations.
-                # The '┬' at prompt_x-1 and '┴' at targets is a common pattern.
-
-    lines.append(Text("".join(line2_parts), style=ELECTRIC_CYAN))
-    
-    line3_parts = [" "] * console_width
-    for x_target in [code_x, example_x, tests_x]:
-        if x_target-1 >=0 and x_target-1 < console_width:
-            line3_parts[x_target-1] = "│" # Vertical stems to bottom boxes
     lines.append(Text("".join(line3_parts), style=ELECTRIC_CYAN))
+    
+    # Line 4: Third vertical connector (extra spacing below horizontal line) 
+    line4_parts = [" "] * console_width
+    for x_target in [code_x, example_x, tests_x]:
+        if x_target >=0 and x_target < console_width:
+            line4_parts[x_target] = "│" # Vertical stems to bottom boxes
+    lines.append(Text("".join(line4_parts), style=ELECTRIC_CYAN))
+    
+    # Line 5: Final vertical connector (connects to bottom boxes)
+    line5_parts = [" "] * console_width
+    for x_target in [code_x, example_x, tests_x]:
+        if x_target >=0 and x_target < console_width:
+            # Add upward arrows for update command from specific boxes
+            vertical_stem_char = "│"
+            if cmd == "update" and x_target == code_x and blink_on:
+                vertical_stem_char = "^"  # Up arrow from Code to Prompt
+            
+            line5_parts[x_target] = vertical_stem_char # Vertical stems to bottom boxes
+    lines.append(Text("".join(line5_parts), style=ELECTRIC_CYAN))
 
     return lines
 
@@ -333,18 +363,18 @@ def _render_animation_frame(state: AnimationState, console_width: int) -> Panel:
         Layout(name="lines_row_1", size=1), 
         Layout(name="lines_row_2", size=1),
         Layout(name="lines_row_3", size=1),
-        Layout(name="bottom_boxes_row", size=3),
-        Layout(ratio=1) 
+        Layout(name="lines_row_4", size=1),
+        Layout(name="lines_row_5", size=1),
+        Layout(name="bottom_boxes_row", size=3) 
     )
 
-    # console_width for _draw_connecting_lines_and_arrows should be the actual width available for lines
-    # The main panel takes 2 chars for border.
-    # If org_chart_layout is centered, it might have less. For simplicity, use console_width - 4.
-    effective_line_width = console_width - 4 
-    connecting_lines = _draw_connecting_lines_and_arrows(state, effective_line_width)
-    if len(connecting_lines) > 0: org_chart_layout["lines_row_1"].update(Align.center(connecting_lines[0]))
-    if len(connecting_lines) > 1: org_chart_layout["lines_row_2"].update(Align.center(connecting_lines[1]))
-    if len(connecting_lines) > 2: org_chart_layout["lines_row_3"].update(Align.center(connecting_lines[2]))
+    # Use full console width since we're no longer centering the lines
+    connecting_lines = _draw_connecting_lines_and_arrows(state, console_width)
+    if len(connecting_lines) > 0: org_chart_layout["lines_row_1"].update(connecting_lines[0])
+    if len(connecting_lines) > 1: org_chart_layout["lines_row_2"].update(connecting_lines[1])
+    if len(connecting_lines) > 2: org_chart_layout["lines_row_3"].update(connecting_lines[2])
+    if len(connecting_lines) > 3: org_chart_layout["lines_row_4"].update(connecting_lines[3])
+    if len(connecting_lines) > 4: org_chart_layout["lines_row_5"].update(connecting_lines[4])
 
 
     bottom_boxes_table = Table.grid(expand=True)
@@ -422,7 +452,7 @@ def _initial_logo_animation_sequence(console: Console, stop_event: threading.Eve
     if stop_event.is_set(): return False
     time.sleep(1) # Hold full logo
     
-    # Transition to 20-line box (Live will handle this by starting its screen)
+    # Transition to 18-line box (Live will handle this by starting its screen)
     if stop_event.is_set(): return False
     # console.clear() # Live(screen=True) will clear.
     return True
@@ -485,8 +515,8 @@ def sync_animation(
         _final_logo_animation_sequence(console)
         return
 
-    # The prompt: "After 1 sec, the logo will animate to expand to a 20 line tall box"
-    # This transition is implicitly handled by Live starting up with the 20-line panel.
+    # The prompt: "After 1 sec, the logo will animate to expand to a 18 line tall box"
+    # This transition is implicitly handled by Live starting up with the 18-line panel.
 
     try:
         # screen=True takes over the full terminal screen.

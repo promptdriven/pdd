@@ -30,15 +30,15 @@
 
 % This function will do the following:
     1. Upon first starting to run, the Prompt Driven logo will expand up from the bottom of the screen to the logo show like a chat bubble
-    2. After 1 sec, the logo will animate to expand to a 20 line tall box
+    2. After 1 sec, the logo will animate to expand to a 18 line tall box
     3. The animation will display the command that is running in the box
     4. The function might get additional function calls and the animation will update to display the new function
     5. When the stop_event is set to True, the animation will shrink back to the logo and then stop
 
 % This is the basic layout of the animation:
     * Top left corner: Prompt Driven Development
-    * Top right corner: The basename of the prompt that is running
-    * Bottom left corner: The command that is running
+    * Bottom left corner: The basename of the prompt that is running
+    * Top right corner: The command that is running
     * Bottom right corner: The cost of the function calls vs. the budget of the sync run
     * Bottom center: The time elapsed since the sync run started
     * Center of the box will be and org chart like diagram with the "Prompt" box on the top with three lines that go to "Code", "Example" and "Tests" boxes on the bottom. 
@@ -59,3 +59,4 @@
 % Rules to follow:
     * The above emojis will be blinking. Be sure the blinking emoji doesn't cause the top of the box to shift with the extra character.
     * The ">" will always point to the direction it is going (e.g. it might be "<" if going backwards or "^" if going up)
+    * The org chart diagram will be centered in the box and the lines will be drawn from the "Prompt" box to the "Code", "Example" and "Tests" boxes should always be shown and fully connected. The connecting lines will be centered for the boxes. 

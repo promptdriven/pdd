@@ -39,18 +39,18 @@ current_cost_ref = [0.0]
 #   - Hold strings representing paths to relevant files (prompt, code, example, tests).
 #   - The animation displays these paths, shortening them if they are too long.
 #   - For this example, paths point to a hypothetical './output/' directory.
-initial_prompt_path = "./output/project_alpha/main.prompt"
-prompt_path_ref = [initial_prompt_path]
-code_path_ref = [""]
-example_path_ref = [""]
-tests_path_ref = [""]
+initial_prompt_path = "./output/project_alpha/"
+prompt_path_ref = [initial_prompt_path + "prompts/"]
+code_path_ref = [initial_prompt_path + "src/"]
+example_path_ref = [initial_prompt_path + "examples/"]
+tests_path_ref = [initial_prompt_path + "tests/"]
 
 # --- 2. Define Static Parameters for the Animation ---
 # These are set once when the animation starts.
 
 # basename: str
 #   - The base name of the project or prompt being processed (e.g., "calculator_app").
-basename = "project_alpha"
+basename = "prompt_is_source_of_truth"
 
 # budget_val: Optional[float]
 #   - The total budget for the operation, typically in dollars.
@@ -92,43 +92,37 @@ def mock_pdd_main_workflow():
         time.sleep(2) # Show "checking" for 2 seconds
 
         # Simulate 'auto-deps' command
-        update_animation_state("auto-deps", 0.25, p_path="./output/project_alpha/main_with_deps.prompt")
+        update_animation_state("auto-deps", 0.25)
         time.sleep(3)
 
         # Simulate 'generate' command
-        update_animation_state("generate", 1.50, c_path="./output/project_alpha/src/module.py")
+        update_animation_state("generate", 1.50)
         time.sleep(3)
 
         # Simulate 'example' command
-        update_animation_state("example", 0.75, e_path="./output/project_alpha/examples/run_module.py")
+        update_animation_state("example", 0.75)
         time.sleep(3)
         
         # Simulate 'crash' command
         # Note: The animation for 'crash' involves bi-directional arrows.
-        update_animation_state("crash", 1.20,
-                               c_path="./output/project_alpha/src/module_crash_fix.py",
-                               e_path="./output/project_alpha/examples/run_module_crash_fix.py")
+        update_animation_state("crash", 1.20)
         time.sleep(3)
 
         # Simulate 'verify' command
-        update_animation_state("verify", 0.90,
-                               c_path="./output/project_alpha/src/module_verified.py",
-                               e_path="./output/project_alpha/examples/run_module_verified.py")
+        update_animation_state("verify", 0.90)
         time.sleep(3)
 
         # Simulate 'test' command
-        update_animation_state("test", 1.10, t_path="./output/project_alpha/tests/test_module.py")
+        update_animation_state("test", 1.10)
         time.sleep(3)
 
         # Simulate 'fix' command
         # Note: The animation for 'fix' involves bi-directional arrows.
-        update_animation_state("fix", 2.30,
-                               c_path="./output/project_alpha/src/module_final.py",
-                               t_path="./output/project_alpha/tests/test_module_passing.py")
+        update_animation_state("fix", 2.30)
         time.sleep(3)
         
         # Simulate 'update' command (updating the prompt)
-        update_animation_state("update", 0.60, p_path="./output/project_alpha/main_updated.prompt")
+        update_animation_state("update", 0.60)
         time.sleep(3)
 
         print("Main App Log: Workflow simulation complete.")
@@ -149,9 +143,9 @@ if __name__ == "__main__":
     # Create dummy ./output directory if it doesn't exist, for path shortening tests
     # The _shorten_path function in the module can handle non-existent paths,
     # but creating them makes the relative path logic more robustly testable.
-    os.makedirs("./output/project_alpha/src", exist_ok=True)
-    os.makedirs("./output/project_alpha/examples", exist_ok=True)
-    os.makedirs("./output/project_alpha/tests", exist_ok=True)
+    # os.makedirs("./output/project_alpha/src", exist_ok=True)
+    # os.makedirs("./output/project_alpha/examples", exist_ok=True)
+    # os.makedirs("./output/project_alpha/tests", exist_ok=True)
 
 
     # --- 4. Start the Animation in a Separate Thread ---
