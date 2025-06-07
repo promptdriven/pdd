@@ -13,6 +13,8 @@ from rich.align import Align
 from rich.table import Table
 from rich.progress_bar import ProgressBar # For cost/budget display if needed
 
+from . import logo_animation
+
 # Assuming these might be in pdd/__init__.py or a constants module
 # For this example, defining them locally based on the branding document
 # Primary Colors
@@ -110,7 +112,7 @@ class AnimationState:
             "example": DEFAULT_EXAMPLE_COLOR, "tests": DEFAULT_TESTS_COLOR
         }
         self.scroll_offsets: Dict[str, int] = {"prompt": 0, "code": 0, "example": 0, "tests": 0}
-        self.path_box_content_width = 16 # Max chars for path inside its small box
+        self.path_box_content_width = 16 # Base chars for path inside its small box (will be dynamic)
 
     def update_dynamic_state(self, function_name: str, cost: float,
                              prompt_path: str, code_path: str, example_path: str, tests_path: str):
@@ -132,19 +134,19 @@ class AnimationState:
         elapsed = datetime.now() - self.start_time
         return str(elapsed).split('.')[0] # Format as HH:MM:SS
 
-    def _render_scrolling_path(self, path_key: str) -> str:
+    def _render_scrolling_path(self, path_key: str, content_width: int) -> str:
         """Renders a path, scrolling if it's too long for its display box."""
         full_display_path = _shorten_path(self.paths[path_key], 100) 
         
         if not full_display_path:
-            return " " * self.path_box_content_width 
+            return " " * content_width 
 
-        if len(full_display_path) <= self.path_box_content_width:
-            return full_display_path.center(self.path_box_content_width)
+        if len(full_display_path) <= content_width:
+            return full_display_path.center(content_width)
 
         offset = self.scroll_offsets[path_key]
         padded_text = f" {full_display_path} :: {full_display_path} "
-        display_text = padded_text[offset : offset + self.path_box_content_width]
+        display_text = padded_text[offset : offset + content_width]
         
         self.scroll_offsets[path_key] = (offset + 1) % (len(full_display_path) + 4) 
         return display_text
@@ -161,147 +163,214 @@ class AnimationState:
         elif cmd == "example" and box_name == "example":
             emoji_char = EMOJIS["example"]
         elif cmd == "crash":
-            if box_name == "code": emoji_char = EMOJIS["crash_code"]
-            if box_name == "example": emoji_char = EMOJIS["crash_example"]
+            if box_name == "code":
+                emoji_char = EMOJIS["crash_code"]
+            elif box_name == "example":
+                emoji_char = EMOJIS["crash_example"]
         elif cmd == "verify":
-            if box_name == "code": emoji_char = EMOJIS["verify_code"]
-            if box_name == "example": emoji_char = EMOJIS["verify_example"]
+            if box_name == "code":
+                emoji_char = EMOJIS["verify_code"]
+            elif box_name == "example":
+                emoji_char = EMOJIS["verify_example"]
         elif cmd == "test" and box_name == "tests":
             emoji_char = EMOJIS["test"]
         elif cmd == "fix":
-            if box_name == "code": emoji_char = EMOJIS["fix_code"]
-            if box_name == "tests": emoji_char = EMOJIS["fix_tests"]
+            if box_name == "code":
+                emoji_char = EMOJIS["fix_code"]
+            elif box_name == "tests":
+                emoji_char = EMOJIS["fix_tests"]
         elif cmd == "update" and box_name == "prompt":
             emoji_char = EMOJIS["update"]
         
-        return (emoji_char + " ") if blink_on and emoji_char else "  "
+        # Always return 2 chars to prevent shifting, with space after emoji
+        if blink_on and emoji_char:
+            return emoji_char + " "
+        else:
+            return "  "
 
 def _draw_connecting_lines_and_arrows(state: AnimationState, console_width: int) -> List[Text]:
     """Generates Text objects for lines and arrows based on current command."""
     lines = []
     cmd = state.current_function_name
     frame = state.frame_count
-    arrow_char = ">"
     blink_on = (frame // 5) % 2 == 0 # Blink rate for arrow character
-    active_arrow = arrow_char if blink_on else " "
-    inactive_arrow_placeholder = " " # if arrow is not active due to blinking
 
-    # Positioning for org chart to match Rich's Table.grid 3-column layout
-    # Prompt position should align with Example position for proper connection
-    prompt_x = console_width // 2 - 2  # Move left 2 chars to align with Example
+    # Dynamic positioning based on actual console width and auto-sized boxes
+    # Calculate dynamic box width (same as in main render function)
+    margin_space = 8  # Total margin space
+    inter_box_space = 4  # Space between boxes (2 spaces each side)
+    available_width = console_width - margin_space - inter_box_space
+    box_width = max(state.path_box_content_width + 4, available_width // 3)
     
-    # Fine-tune positioning to center vertical connectors over specific letters in box titles
-    # Adjust based on visual feedback: Code left 4 chars, Example left 2 chars
-    code_x = console_width * 22 // 80 - 4  # Position over "o" in "Code" (moved left 4)
-    example_x = console_width // 2 - 2  # Position over "m" in "Example" (moved left 2)
-    tests_x = console_width * 58 // 80  # Position over "e" in "Tests" (unchanged)
+    # Calculate actual positions based on Rich's table layout
+    # Rich centers the table automatically, so we need to account for that
+    total_table_width = 3 * box_width + inter_box_space
+    table_start = (console_width - total_table_width) // 2
     
-    # Handle vertical arrow from Prompt down for certain commands
-    vertical_arrow = " "
-    if cmd in ["generate", "example", "test"] and blink_on:
-        vertical_arrow = "v"  # Down arrow for commands going from Prompt to bottom boxes
-    elif cmd == "update" and blink_on:
-        vertical_arrow = "^"  # Up arrow for commands going from bottom to Prompt
+    # Position connectors at the center of each box
+    code_x = table_start + box_width // 2
+    example_x = table_start + box_width + (inter_box_space // 2) + box_width // 2  
+    tests_x = table_start + 2 * box_width + inter_box_space + box_width // 2
+    
+    # Prompt should align with the center box (Example)
+    prompt_x = example_x
+    
+    # Calculate animated arrow position - smoother character-by-character movement
+    animation_cycle = 40  # Longer cycle for smoother animation
+    current_pos_factor = (frame % animation_cycle) / (animation_cycle - 1)
     
     # Line 1: First vertical connector from Prompt
     line1_parts = [" "] * console_width
     if prompt_x >= 0 and prompt_x < console_width:
-        line1_parts[prompt_x] = vertical_arrow if vertical_arrow != " " else "│"
-    line1 = Text("".join(line1_parts), style=ELECTRIC_CYAN) # Vertical stem from Prompt
-    lines.append(line1)
+        if cmd == "example" and blink_on:
+            # Animate arrow traveling down from Prompt to Example
+            if current_pos_factor < 0.2:  # Arrow in first vertical segment
+                line1_parts[prompt_x] = "v"
+            else:
+                line1_parts[prompt_x] = "│"
+        elif cmd == "update" and blink_on:
+            # Show upward flow from Code back to Prompt
+            line1_parts[prompt_x] = "^" if current_pos_factor > 0.8 else "│"
+        else:
+            line1_parts[prompt_x] = "│"
+    
+    lines.append(Text("".join(line1_parts), style=ELECTRIC_CYAN))
 
-    # Line 2: Second vertical connector (extra spacing above horizontal line)
+    # Line 2: Second vertical connector
     line2_parts = [" "] * console_width
     if prompt_x >= 0 and prompt_x < console_width:
-        line2_parts[prompt_x] = "│"
+        if cmd == "example" and blink_on:
+            if 0.2 <= current_pos_factor < 0.4:
+                line2_parts[prompt_x] = "v"
+            else:
+                line2_parts[prompt_x] = "│"
+        elif cmd == "update" and blink_on:
+            line2_parts[prompt_x] = "^" if 0.6 < current_pos_factor <= 0.8 else "│"
+        else:
+            line2_parts[prompt_x] = "│"
+    
     lines.append(Text("".join(line2_parts), style=ELECTRIC_CYAN))
 
-    # Line 3: Horizontal connections and arrows (centered)
-    line3_parts = [" "] * console_width # For horizontal connections and arrows
+    # Line 3: Horizontal connections and arrows (main horizontal line)
+    line3_parts = [" "] * console_width
     
-    def place_arrow(start_x, end_x, current_pos_factor):
-        length = abs(end_x - start_x)
-        # Ensure length is at least 1 to avoid division by zero or issues with pos calculation
-        # if start_x and end_x are very close or same.
-        if length == 0: 
-            # Decide how to show arrow if start and end are same (e.g. direct vertical)
-            # For now, this function assumes horizontal placement.
-            return
-
-        pos = int(length * current_pos_factor)
-        char_idx = min(start_x, end_x) + pos
-        
-        # Ensure arrow is within bounds and doesn't overwrite crucial junctions
-        if 0 <= char_idx < console_width:
-            # Determine arrow direction based on movement direction
-            if start_x < end_x:
-                arrow_to_place = ">" if blink_on else inactive_arrow_placeholder
-            elif start_x > end_x:
-                arrow_to_place = "<" if blink_on else inactive_arrow_placeholder
-            else:
-                arrow_to_place = active_arrow  # Fallback for same positions
-            
-            # Avoid overwriting existing line characters if arrow is just a space
-            if not (arrow_to_place == inactive_arrow_placeholder and line3_parts[char_idx] != " "):
-                 line3_parts[char_idx] = arrow_to_place
-
-
     # ALWAYS draw the basic org chart structure first
-    if prompt_x >=0 and prompt_x < console_width: line3_parts[prompt_x] = "┼"  # 4-way connector 
+    if prompt_x >= 0 and prompt_x < console_width: 
+        line3_parts[prompt_x] = "┼"  # 4-way connector 
     
-    # Horizontal line connecting all three bottom branches at their x-positions on line3
-    all_branch_xs = sorted(list(set([code_x, example_x, tests_x, prompt_x])))
-    min_x_on_line3 = min(all_branch_xs)
-    max_x_on_line3 = max(all_branch_xs)
+    # Horizontal line connecting all branches
+    all_branch_xs = sorted([code_x, example_x, tests_x, prompt_x])
+    min_x = min(all_branch_xs)
+    max_x = max(all_branch_xs)
 
-    for i in range(min_x_on_line3, max_x_on_line3 + 1):
-        if line3_parts[i] == " ": line3_parts[i] = "─"
+    for i in range(min_x, max_x + 1):
+        if line3_parts[i] == " ": 
+            line3_parts[i] = "─"
     
-    # Ensure junctions for vertical stems are correctly drawn with appropriate connectors
-    if code_x >=0 and code_x < console_width and line3_parts[code_x] == "─":
-        line3_parts[code_x] = "┌"  # Top-left corner for Code (leftmost)
-    if example_x >=0 and example_x < console_width and line3_parts[example_x] == "─":
-        line3_parts[example_x] = "┴"  # T-junction for Example (center)
-    if tests_x >=0 and tests_x < console_width and line3_parts[tests_x] == "─":
-        line3_parts[tests_x] = "┐"  # Top-right corner for Tests (rightmost)
+    # Set junction points
+    if code_x >= 0 and code_x < console_width:
+        line3_parts[code_x] = "┌"  # Top-left corner (no stub above)
+    if example_x >= 0 and example_x < console_width:
+        line3_parts[example_x] = "┼" if example_x == prompt_x else "┴"  # 4-way or T-up
+    if tests_x >= 0 and tests_x < console_width:
+        line3_parts[tests_x] = "┐"  # Top-right corner (no stub above)
 
-    # Now add animated arrows on top of the basic structure
-    current_pos_factor = (frame % 10) / 9.0 
+    # Add animated arrows for horizontal movements
+    def place_horizontal_arrow(start_x, end_x, pos_factor, reverse=False):
+        if start_x == end_x:  # No horizontal movement
+            return
+        
+        if reverse:
+            pos_factor = 1.0 - pos_factor
+            
+        distance = abs(end_x - start_x)
+        if distance <= 1:
+            return
+            
+        # Calculate arrow position character by character for smooth animation
+        if start_x < end_x:
+            # Move from left to right, one character at a time
+            arrow_pos = start_x + 1 + int((distance - 1) * pos_factor)
+            arrow_char = ">"
+        else:
+            # Move from right to left, one character at a time
+            arrow_pos = start_x - 1 - int((distance - 1) * pos_factor)
+            arrow_char = "<"
+        
+        # Only place arrow if it won't overwrite junction points
+        if (0 <= arrow_pos < console_width and 
+            arrow_pos not in [code_x, example_x, tests_x, prompt_x] and
+            line3_parts[arrow_pos] == "─" and blink_on):
+            line3_parts[arrow_pos] = arrow_char
 
+    # Apply command-specific animations
     if cmd == "generate": # Prompt -> Code
-        place_arrow(prompt_x, code_x, current_pos_factor)
-    elif cmd == "example": # Prompt -> Example
-        place_arrow(prompt_x, example_x, current_pos_factor)
-    elif cmd == "update": # Code -> Prompt
-        place_arrow(code_x, prompt_x, current_pos_factor) 
-    elif cmd == "crash": # Code <-> Example
-        place_arrow(code_x, example_x, current_pos_factor if (frame//10)%2 ==0 else 1-current_pos_factor)
-    elif cmd == "verify": # Code <-> Example
-        place_arrow(code_x, example_x, current_pos_factor if (frame//10)%2 == 0 else 1-current_pos_factor)
+        place_horizontal_arrow(prompt_x, code_x, current_pos_factor)
+    elif cmd == "example":
+        # Vertical animation handled above, mark junction
+        if prompt_x >= 0 and prompt_x < console_width and blink_on:
+            if 0.4 <= current_pos_factor < 0.6:
+                line3_parts[prompt_x] = "v" if line3_parts[prompt_x] == "┼" else line3_parts[prompt_x]
+    elif cmd == "update": # Code -> Prompt  
+        place_horizontal_arrow(code_x, prompt_x, current_pos_factor)
+    elif cmd == "crash": # Code <-> Example (bidirectional)
+        reverse_cycle = (frame // animation_cycle) % 2 == 1
+        place_horizontal_arrow(code_x, example_x, current_pos_factor, reverse_cycle)
+    elif cmd == "verify": # Code <-> Example (bidirectional)
+        reverse_cycle = (frame // animation_cycle) % 2 == 1
+        place_horizontal_arrow(code_x, example_x, current_pos_factor, reverse_cycle)
     elif cmd == "test": # Prompt -> Tests
-        place_arrow(prompt_x, tests_x, current_pos_factor)
-    elif cmd == "fix": # Code <-> Tests
-        place_arrow(code_x, tests_x, current_pos_factor if (frame//10)%2 == 0 else 1-current_pos_factor)
+        place_horizontal_arrow(prompt_x, tests_x, current_pos_factor)
+    elif cmd == "fix": # Code <-> Tests (bidirectional)
+        reverse_cycle = (frame // animation_cycle) % 2 == 1
+        place_horizontal_arrow(code_x, tests_x, current_pos_factor, reverse_cycle)
 
     lines.append(Text("".join(line3_parts), style=ELECTRIC_CYAN))
     
-    # Line 4: Third vertical connector (extra spacing below horizontal line) 
+    # Line 4: Third vertical connector for all boxes
     line4_parts = [" "] * console_width
-    for x_target in [code_x, example_x, tests_x]:
-        if x_target >=0 and x_target < console_width:
-            line4_parts[x_target] = "│" # Vertical stems to bottom boxes
+    # Add vertical line for Example box 
+    if example_x >= 0 and example_x < console_width:
+        if cmd == "example" and blink_on:
+            if 0.6 <= current_pos_factor < 0.8:
+                line4_parts[example_x] = "v"
+            else:
+                line4_parts[example_x] = "│"
+        elif cmd == "update" and blink_on:
+            # For update command, show upward arrow from Code area
+            line4_parts[example_x] = "^" if 0.4 < current_pos_factor <= 0.6 else "│"
+        else:
+            line4_parts[example_x] = "│"
+    
+    # Add vertical connectors for Code and Tests boxes
+    if code_x >= 0 and code_x < console_width:
+        line4_parts[code_x] = "│"
+    if tests_x >= 0 and tests_x < console_width:
+        line4_parts[tests_x] = "│"
+    
     lines.append(Text("".join(line4_parts), style=ELECTRIC_CYAN))
     
-    # Line 5: Final vertical connector (connects to bottom boxes)
+    # Line 5: Final vertical connector for all boxes
     line5_parts = [" "] * console_width
-    for x_target in [code_x, example_x, tests_x]:
-        if x_target >=0 and x_target < console_width:
-            # Add upward arrows for update command from specific boxes
-            vertical_stem_char = "│"
-            if cmd == "update" and x_target == code_x and blink_on:
-                vertical_stem_char = "^"  # Up arrow from Code to Prompt
-            
-            line5_parts[x_target] = vertical_stem_char # Vertical stems to bottom boxes
+    # Add vertical line for Example box
+    if example_x >= 0 and example_x < console_width:
+        if cmd == "example" and blink_on:
+            if current_pos_factor >= 0.8:
+                line5_parts[example_x] = "v"
+            else:
+                line5_parts[example_x] = "│"
+        elif cmd == "update" and blink_on:
+            # For update command, show upward arrow from Code area
+            line5_parts[example_x] = "^" if current_pos_factor <= 0.4 else "│"
+        else:
+            line5_parts[example_x] = "│"
+    
+    # Add vertical connectors for Code and Tests boxes
+    if code_x >= 0 and code_x < console_width:
+        line5_parts[code_x] = "│"
+    if tests_x >= 0 and tests_x < console_width:
+        line5_parts[tests_x] = "│"
+    
     lines.append(Text("".join(line5_parts), style=ELECTRIC_CYAN))
 
     return lines
@@ -316,12 +385,16 @@ def _render_animation_frame(state: AnimationState, console_width: int) -> Panel:
         Layout(name="footer", size=1)
     )
 
+    blink_on = (state.frame_count // 5) % 2 == 0
+
     header_table = Table.grid(expand=True, padding=(0,1))
     header_table.add_column(justify="left", ratio=1)
     header_table.add_column(justify="right", ratio=1)
+    # Make command blink in top right corner
+    command_text = state.current_function_name.capitalize() if blink_on else ""
     header_table.add_row(
         Text("Prompt Driven Development", style=f"bold {ELECTRIC_CYAN}"),
-        Text(state.basename, style=f"bold {ELECTRIC_CYAN}")
+        Text(command_text, style=f"bold {ELECTRIC_CYAN}")
     )
     layout["header"].update(header_table)
 
@@ -334,31 +407,38 @@ def _render_animation_frame(state: AnimationState, console_width: int) -> Panel:
     budget_str = f"${state.budget:.2f}" if state.budget != float('inf') else "N/A"
     
     footer_table.add_row(
-        Text(f"Running: {state.current_function_name.capitalize()}", style=ELECTRIC_CYAN),
+        Text(state.basename, style=ELECTRIC_CYAN),
         Text(f"Elapsed: {state.get_elapsed_time_str()}", style=ELECTRIC_CYAN),
-        Text(f"Cost: {cost_str} / Budget: {budget_str}", style=ELECTRIC_CYAN)
+        Text(f"{cost_str} / {budget_str}", style=ELECTRIC_CYAN)
     )
-    layout["footer"].update(footer_table)
-
-    blink_on = (state.frame_count // 5) % 2 == 0 
+    layout["footer"].update(footer_table) 
     
-    box_width = state.path_box_content_width + 4 
+    # Calculate dynamic box width based on console width
+    # Leave space for margins and spacing between boxes
+    margin_space = 8  # Total margin space
+    inter_box_space = 4  # Space between boxes (2 spaces each side)
+    available_width = console_width - margin_space - inter_box_space
+    box_width = max(state.path_box_content_width + 4, available_width // 3)
+    
+    # Calculate the actual content width inside each panel (excluding borders)
+    panel_content_width = box_width - 4  # Account for panel borders (2 chars each side)
 
-    prompt_panel = Panel(Align.center(state._render_scrolling_path("prompt")),
+    prompt_panel = Panel(Align.center(state._render_scrolling_path("prompt", panel_content_width)),
                          title=Text.assemble(state.get_emoji_for_box("prompt", blink_on), "Prompt"),
                          border_style=state.colors["prompt"], width=box_width, height=3)
-    code_panel = Panel(Align.center(state._render_scrolling_path("code")),
+    code_panel = Panel(Align.center(state._render_scrolling_path("code", panel_content_width)),
                        title=Text.assemble(state.get_emoji_for_box("code", blink_on), "Code"),
                        border_style=state.colors["code"], width=box_width, height=3)
-    example_panel = Panel(Align.center(state._render_scrolling_path("example")),
+    example_panel = Panel(Align.center(state._render_scrolling_path("example", panel_content_width)),
                           title=Text.assemble(state.get_emoji_for_box("example", blink_on), "Example"),
                           border_style=state.colors["example"], width=box_width, height=3)
-    tests_panel = Panel(Align.center(state._render_scrolling_path("tests")),
+    tests_panel = Panel(Align.center(state._render_scrolling_path("tests", panel_content_width)),
                         title=Text.assemble(state.get_emoji_for_box("tests", blink_on), "Tests"),
                         border_style=state.colors["tests"], width=box_width, height=3)
 
     org_chart_layout = Layout(name="org_chart_area")
     org_chart_layout.split_column(
+        Layout(Text(" "), size=1),
         Layout(Align.center(prompt_panel), name="prompt_row", size=3),
         Layout(name="lines_row_1", size=1), 
         Layout(name="lines_row_2", size=1),
@@ -378,7 +458,6 @@ def _render_animation_frame(state: AnimationState, console_width: int) -> Panel:
 
 
     bottom_boxes_table = Table.grid(expand=True)
-    h_padding = 2 
     bottom_boxes_table.add_column()
     bottom_boxes_table.add_column()
     bottom_boxes_table.add_column()
@@ -393,69 +472,6 @@ def _render_animation_frame(state: AnimationState, console_width: int) -> Panel:
                  width=console_width)
 
 
-def _initial_logo_animation_sequence(console: Console, stop_event: threading.Event):
-    """Animates the PDD logo appearing."""
-    console.clear()
-    # For the animation to appear at the top and expand, we need to manage lines carefully.
-    # This simplified version prints and overwrites. Rich's Live screen=True is better for sustained animations.
-    # This initial part is tricky without Live's full screen management yet.
-    
-    # Render logo centered, line by line from bottom up
-    # Pad top with newlines to push it down, then remove newlines to make it rise
-    max_padding_lines = console.height - LOGO_HEIGHT -1 # Max newlines to push logo to bottom
-    max_padding_lines = max(0, max_padding_lines)
-
-    for i in range(LOGO_HEIGHT): # i is number of lines revealed
-        if stop_event.is_set(): return False
-        
-        console.clear() # Clear screen for each frame of this simple intro
-        
-        # Calculate padding to simulate rising from bottom
-        # As more lines are revealed (i increases), padding decreases
-        # This part is hard to get right for "rising from bottom" AND "expanding upwards"
-        # Let's try "expanding upwards" at a fixed top position.
-        
-        # Print the currently revealed part of the logo
-        # The logo lines are PDD_LOGO_ASCII[0] to PDD_LOGO_ASCII[LOGO_HEIGHT-1]
-        # To expand upwards, we reveal PDD_LOGO_ASCII[LOGO_HEIGHT-1-i] up to PDD_LOGO_ASCII[LOGO_HEIGHT-1]
-        
-        # Calculate number of blank lines to print before the logo part
-        # to keep the base of the revealed logo somewhat fixed while it "grows" upwards.
-        # This is complex. A simpler "reveal in place" might be better.
-        
-        # Simpler: Reveal lines from top to bottom, centered.
-        # For "expand up from bottom", it's more like printing the last line, then last two, etc.
-        # while overprinting.
-        
-        # The original logic was:
-        # current_logo_display = [" "] * LOGO_HEIGHT
-        # current_logo_display[LOGO_HEIGHT - 1 - i] = PDD_LOGO_ASCII[LOGO_HEIGHT - 1 - i].center(CONSOLE_WIDTH)
-        # ... then print relevant part of current_logo_display
-        # This means it fills from bottom of PDD_LOGO_ASCII array, which is top of logo visually.
-        # This is "expanding downwards".
-        
-        # To expand "up from the bottom of the screen":
-        # We print the last `i+1` lines of the logo.
-        # And position this block so its bottom is at a fixed screen row, or it rises.
-        
-        # Let's stick to a simpler reveal for robustness if the cursor logic is tricky.
-        # Reveal line by line, centered.
-        for line_idx in range(i + 1):
-            console.print(Text(PDD_LOGO_ASCII[line_idx].center(CONSOLE_WIDTH), style=f"bold {ELECTRIC_CYAN} on {DEEP_NAVY}"))
-        
-        time.sleep(0.07) # Slightly slower for logo reveal
-        if i < LOGO_HEIGHT -1: # If not the last frame of reveal
-             # This clear is for the simple reveal. Original had cursor moves.
-             # If using cursor moves, don't clear here.
-             pass # With Live(screen=True) later, this initial animation might be replaced or simplified.
-
-    if stop_event.is_set(): return False
-    time.sleep(1) # Hold full logo
-    
-    # Transition to 18-line box (Live will handle this by starting its screen)
-    if stop_event.is_set(): return False
-    # console.clear() # Live(screen=True) will clear.
-    return True
 
 def _final_logo_animation_sequence(console: Console):
     """Animates the PDD logo shrinking/disappearing."""
@@ -491,27 +507,15 @@ def sync_animation(
     # Console for initial/final animations outside Live
     # Live will use its own console or this one if passed.
     # Using a single console instance.
-    console = Console(width=CONSOLE_WIDTH) 
+    console = Console(legacy_windows=False) 
     animation_state = AnimationState(basename, budget)
     animation_state.set_box_colors(prompt_color, code_color, example_color, tests_color)
 
-    # Initial logo animation sequence
-    # The prompt implies this happens before the main Live display.
-    # Live(screen=True) will clear the screen when it starts.
-    # So, _initial_logo_animation_sequence should run on the console, then Live takes over.
+    # Run logo animation directly without separate screen context
+    # This avoids screen buffer conflicts with sync_animation's Live context
+    logo_animation.run_logo_animation_inline(console, stop_event)
     
-    # To make _initial_logo_animation_sequence effective before Live(screen=True) takes over:
-    # It needs to print directly. The `console.clear()` inside it might be too aggressive.
-    # A simple print of the logo, then sleep, might be enough.
-    # The "expand up" is hard without full screen control like Live provides.
-    # For now, let's assume _initial_logo_animation_sequence is simplified or works as intended.
-    
-    # Simplified initial display:
-    console.clear()
-    for line_ in PDD_LOGO_ASCII:
-        console.print(Text(line_.center(CONSOLE_WIDTH), style=f"bold {ELECTRIC_CYAN} on {DEEP_NAVY}"))
-    time.sleep(1) # Hold logo
-    if stop_event.is_set(): # Check if already stopped
+    if stop_event.is_set():
         _final_logo_animation_sequence(console)
         return
 
@@ -525,7 +529,8 @@ def sync_animation(
                   console=console, 
                   refresh_per_second=10, 
                   transient=False, # Animation stays until explicitly stopped/exited
-                  screen=True      # Use alternate screen
+                  screen=True,      # Use alternate screen
+                  auto_refresh=True
                   ) as live:
             while not stop_event.is_set():
                 current_func_name = function_name_ref[0] if function_name_ref else "checking"
@@ -560,87 +565,3 @@ def sync_animation(
         # Live(screen=True) should restore the screen, then we can print final logo.
         _final_logo_animation_sequence(console)
 
-
-if __name__ == "__main__":
-    _current_function_name = ["checking"]
-    _stop_event = threading.Event()
-    _current_cost = [0.0]
-    _prompt_path = ["prompts/calculator_python.prompt"]
-    _code_path = [""]
-    _example_path = [""]
-    _tests_path = [""]
-    _budget_val = 10.0
-
-    def _mock_pdd_sync_workflow():
-        def update_state(func_name, cost_increase, p_path="", c_path="", e_path="", t_path=""):
-            _current_function_name[0] = func_name
-            _current_cost[0] += cost_increase
-            if p_path: _prompt_path[0] = p_path
-            if c_path: _code_path[0] = c_path
-            if e_path: _example_path[0] = e_path
-            if t_path: _tests_path[0] = t_path
-            time.sleep(0.05) # Reduced from 0.1 to match example script
-
-        try:
-            # Initial state for animation to pick up
-            update_state("checking", 0.0, p_path=_prompt_path[0])
-            time.sleep(2) # Allow initial animation to show "checking"
-            
-            update_state("auto-deps", 0.01, p_path="prompts/calculator_python_deps.prompt")
-            time.sleep(3)
-
-            update_state("generate", 0.05, c_path="src/calculator.py")
-            time.sleep(3)
-
-            update_state("example", 0.02, e_path="examples/calculator_example.py")
-            time.sleep(3)
-            
-            update_state("crash", 0.03, c_path="src/calculator_fixed_crash.py", e_path="examples/calculator_example_crash.py")
-            time.sleep(3)
-
-            update_state("verify", 0.04, c_path="src/calculator_verified.py", e_path="examples/calculator_example_verified.py")
-            time.sleep(3)
-
-            update_state("test", 0.03, t_path="tests/test_calculator.py")
-            time.sleep(3)
-
-            update_state("fix", 0.10, c_path="src/calculator_final.py", t_path="tests/test_calculator_fixed.py")
-            time.sleep(3)
-            
-            update_state("update", 0.02, p_path="prompts/calculator_python_updated.prompt")
-            time.sleep(3)
-
-        except KeyboardInterrupt:
-            print("Workflow interrupted by user.")
-        finally:
-            _stop_event.set()
-
-    print("Starting PDD Sync Animation Demo...")
-    print("Press Ctrl+C to stop the demo workflow.")
-    # Create dummy paths for the demo if they don't exist
-    os.makedirs("./prompts", exist_ok=True)
-    os.makedirs("./src", exist_ok=True)
-    os.makedirs("./examples", exist_ok=True)
-    os.makedirs("./tests", exist_ok=True)
-    # Create dummy files so _shorten_path can work with existing paths
-    with open(_prompt_path[0], "a") as f: pass
-
-
-    animation_thread = threading.Thread(
-        target=sync_animation,
-        args=(
-            _current_function_name, _stop_event, "calculator_demo", _current_cost, _budget_val,
-            "blue", "cyan", "green", "yellow", 
-            _prompt_path, _code_path, _example_path, _tests_path
-        )
-    )
-    animation_thread.daemon = True 
-    animation_thread.start()
-
-    _mock_pdd_sync_workflow() 
-    
-    print("Main workflow finished. Waiting for animation thread to clean up...")
-    animation_thread.join(timeout=5) 
-    if animation_thread.is_alive():
-        print("Animation thread still alive after timeout.")
-    print("PDD Sync Animation Demo Finished.")
