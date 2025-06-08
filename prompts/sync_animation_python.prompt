@@ -45,6 +45,7 @@
         - The relative directory path name of the respective boxes being worked on will be displayed in the center of the box (e.g. "Prompt: ./directory/path") and if the path is too long, it will scroll continuously like a stock ticker.
 
 % The animation will implement the following pdd commands:
+    * auto-deps- This animation will progressively thicken the box border of the "Prompt" box.
     * generate- This animation will have a ">" going continuously along the line from the "Prompt" to "Code" with hammer emoji in front of the word "Code".
     * example- This animation will have a ">" going continuously along the line from the "Prompt" towards the "Example" box with the seedling emoji in front of the word "Example".
     * crash- This animation will have a skull emoji in front of the "Code" and "Example". A ">" character will go along the lines between the "Code" and "Example" boxes back and forth continuously.
