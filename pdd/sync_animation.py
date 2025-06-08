@@ -227,6 +227,12 @@ def _draw_connecting_lines_and_arrows(state: AnimationState, console_width: int)
                 line1_parts[prompt_x] = "v"
             else:
                 line1_parts[prompt_x] = "│"
+        elif cmd == "generate":
+            # Animate arrow traveling down from Prompt (first segment)
+            if current_pos_factor < 0.2:  # Arrow in first vertical segment
+                line1_parts[prompt_x] = "v"
+            else:
+                line1_parts[prompt_x] = "│"
         elif cmd == "update":
             # Show upward flow from Code back to Prompt
             line1_parts[prompt_x] = "^" if current_pos_factor > 0.8 else "│"
@@ -239,6 +245,12 @@ def _draw_connecting_lines_and_arrows(state: AnimationState, console_width: int)
     line2_parts = [" "] * console_width
     if prompt_x >= 0 and prompt_x < console_width:
         if cmd == "example":
+            if 0.2 <= current_pos_factor < 0.4:
+                line2_parts[prompt_x] = "v"
+            else:
+                line2_parts[prompt_x] = "│"
+        elif cmd == "generate":
+            # Animate arrow traveling down from Prompt (second segment)
             if 0.2 <= current_pos_factor < 0.4:
                 line2_parts[prompt_x] = "v"
             else:
@@ -303,8 +315,15 @@ def _draw_connecting_lines_and_arrows(state: AnimationState, console_width: int)
             line3_parts[arrow_pos] = arrow_char
 
     # Apply command-specific animations
-    if cmd == "generate": # Prompt -> Code
-        place_horizontal_arrow(prompt_x, code_x, current_pos_factor)
+    if cmd == "generate": # Prompt -> Code (vertical then horizontal then vertical)
+        if current_pos_factor < 0.4:
+            # Still in vertical phase, show downward arrow at junction
+            if prompt_x >= 0 and prompt_x < console_width:
+                line3_parts[prompt_x] = "v" if line3_parts[prompt_x] == "┼" else line3_parts[prompt_x]
+        elif current_pos_factor < 0.7:
+            # Horizontal phase: arrow travels from prompt to code
+            horizontal_pos_factor = (current_pos_factor - 0.4) / 0.3  # Remap to 0-1 for horizontal movement
+            place_horizontal_arrow(prompt_x, code_x, horizontal_pos_factor)
     elif cmd == "example":
         # Vertical animation handled above, mark junction
         if prompt_x >= 0 and prompt_x < console_width:
@@ -343,7 +362,14 @@ def _draw_connecting_lines_and_arrows(state: AnimationState, console_width: int)
     
     # Add vertical connectors for Code and Tests boxes
     if code_x >= 0 and code_x < console_width:
-        line4_parts[code_x] = "│"
+        if cmd == "generate":
+            # Animate arrow traveling down to Code box (first vertical segment after horizontal)
+            if 0.7 <= current_pos_factor < 0.85:
+                line4_parts[code_x] = "v"
+            else:
+                line4_parts[code_x] = "│"
+        else:
+            line4_parts[code_x] = "│"
     if tests_x >= 0 and tests_x < console_width:
         line4_parts[tests_x] = "│"
     
@@ -366,7 +392,14 @@ def _draw_connecting_lines_and_arrows(state: AnimationState, console_width: int)
     
     # Add vertical connectors for Code and Tests boxes
     if code_x >= 0 and code_x < console_width:
-        line5_parts[code_x] = "│"
+        if cmd == "generate":
+            # Animate arrow traveling down to Code box (final vertical segment)
+            if current_pos_factor >= 0.85:
+                line5_parts[code_x] = "v"
+            else:
+                line5_parts[code_x] = "│"
+        else:
+            line5_parts[code_x] = "│"
     if tests_x >= 0 and tests_x < console_width:
         line5_parts[tests_x] = "│"
     
