@@ -89,37 +89,37 @@ def mock_pdd_main_workflow():
     try:
         # Initial "checking" state
         update_animation_state("checking", 0.0)
-        time.sleep(3) # Show "checking" for 2 seconds
+        time.sleep(10) # Show "checking" for 2 seconds
+
+        # Simulate 'auto-deps' command
+        update_animation_state("auto-deps", 0.25)
+        time.sleep(30)
 
         # Simulate 'generate' command
         update_animation_state("generate", .50)
-        time.sleep(10)
-
-        # # Simulate 'auto-deps' command
-        # update_animation_state("auto-deps", 0.25)
-        # time.sleep(3)
+        time.sleep(30)
 
         # Simulate 'example' command
         update_animation_state("example", 0.75)
-        time.sleep(3)
+        time.sleep(10)
         
         # Simulate 'crash' command
         # Note: The animation for 'crash' involves bi-directional arrows.
         update_animation_state("crash", 0.20)
-        time.sleep(3)
+        time.sleep(10)
 
         # Simulate 'verify' command
         update_animation_state("verify", 0.90)
-        time.sleep(3)
+        time.sleep(1)
 
         # Simulate 'test' command
         update_animation_state("test", 0.10)
-        time.sleep(3)
+        time.sleep(30)
 
         # Simulate 'fix' command
         # Note: The animation for 'fix' involves bi-directional arrows.
         update_animation_state("fix", 0.30)
-        time.sleep(3)
+        time.sleep(10)
         
         # Simulate 'update' command (updating the prompt)
         update_animation_state("update", 0.30)
