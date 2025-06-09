@@ -1,0 +1,9 @@
+#!/opt/homebrew/bin/bash
+mkdir prompts
+sleep 17 && cp ../handpaint_assets/prompts/handpaint_html.prompt prompts/ &
+cd ../..
+python context/sync_animation_example.py  
+cd demos/handpaint_demo_pdd
+cp -r ../handpaint_assets/* .
+rm pdd
+mv prompts/pdd_handpaint_html.prompt prompts/handpaint_html.prompt

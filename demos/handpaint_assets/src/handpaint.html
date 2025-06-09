@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hand Gesture Drawing</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Arial', sans-serif;
+            background: #1a1a1a;
+            overflow: hidden;
+            height: 100vh;
+            color: white;
+        }
+
+        .container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+        }
+
+        #videoElement {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1);
+            z-index: 1;
+        }
+
+        #canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 2;
+            cursor: crosshair;
+        }
+
+        .color-palette {
+            position: fixed;
+            right: 20px;
+            top: 50%;
+            transform: translateY(-50%);
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            z-index: 3;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 20px;
+            border-radius: 15px;
+            backdrop-filter: blur(10px);
+        }
+
+        .color-option {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            cursor: pointer;
+            border: 3px solid transparent;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+        }
+
+        .color-option:hover {
+            transform: scale(1.1);
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.5);
+        }
+
+        .color-option.active {
+            border-color: white;
+            transform: scale(1.2);
+            box-shadow: 0 0 20px rgba(255, 255, 255, 0.5);
+        }
+
+        .color-option.hovering {
+            border-color: #ffff00;
+            transform: scale(1.15);
+            box-shadow: 0 0 25px rgba(255, 255, 0, 0.8);
+            animation: pulse 0.5s ease-in-out infinite alternate;
+        }
+
+        @keyframes pulse {
+            from { box-shadow: 0 0 25px rgba(255, 255, 0, 0.8); }
+            to { box-shadow: 0 0 35px rgba(255, 255, 0, 1); }
+        }
+
+        .status-panel {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 20px;
+            border-radius: 10px;
+            z-index: 3;
+            min-width: 250px;
+            backdrop-filter: blur(10px);
+        }
+
+        .status-item {
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+
+        .status-value {
+            font-weight: bold;
+            color: #4CAF50;
+        }
+
+        .instructions {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 10px;
+            z-index: 3;
+            max-width: 300px;
+            backdrop-filter: blur(10px);
+        }
+
+        .instructions h3 {
+            margin-bottom: 10px;
+            color: #4CAF50;
+            font-size: 16px;
+        }
+
+        .instruction-item {
+            margin-bottom: 8px;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+        }
+
+        .gesture-icon {
+            margin-right: 8px;
+            font-size: 16px;
+        }
+
+        .eraser-zone {
+            position: fixed;
+            pointer-events: none;
+            border: 3px dashed #ff6b6b;
+            border-radius: 50%;
+            background: rgba(255, 107, 107, 0.1);
+            z-index: 2;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .eraser-zone.active {
+            opacity: 1;
+        }
+
+        .color-selector-indicator {
+            position: fixed;
+            pointer-events: none;
+            width: 80px;
+            height: 80px;
+            border: 3px solid #ffff00;
+            border-radius: 50%;
+            background: rgba(255, 255, 0, 0.1);
+            z-index: 2;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .color-selector-indicator.active {
+            opacity: 1;
+            animation: colorSelectorPulse 1s ease-in-out infinite alternate;
+        }
+
+        .selector-dot {
+            width: 12px;
+            height: 12px;
+            background: #ffff00;
+            border-radius: 50%;
+            box-shadow: 0 0 10px rgba(255, 255, 0, 0.8);
+        }
+
+        @keyframes colorSelectorPulse {
+            from { transform: scale(1); }
+            to { transform: scale(1.1); }
+        }
+
+        .error-message {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(255, 0, 0, 0.9);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            z-index: 4;
+            text-align: center;
+            display: none;
+        }
+
+        @media (max-width: 768px) {
+            .color-palette {
+                right: 10px;
+                padding: 10px;
+                gap: 10px;
+            }
+            
+            .color-option {
+                width: 40px;
+                height: 40px;
+            }
+            
+            .status-panel {
+                top: 10px;
+                left: 10px;
+                padding: 15px;
+                min-width: 200px;
+            }
+            
+            .instructions {
+                bottom: 10px;
+                left: 10px;
+                max-width: 250px;
+                padding: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <video id="videoElement" autoplay muted playsinline></video>
+        <canvas id="canvas"></canvas>
+        
+        <div class="color-palette">
+            <div class="color-option active" data-color="white" style="background-color: white;"></div>
+            <div class="color-option" data-color="red" style="background-color: #ff4444;"></div>
+            <div class="color-option" data-color="blue" style="background-color: #4444ff;"></div>
+            <div class="color-option" data-color="green" style="background-color: #44ff44;"></div>
+            <div class="color-option" data-color="yellow" style="background-color: #ffff00;"></div>
+            <div class="color-option" data-color="purple" style="background-color: #ff44ff;"></div>
+            <div class="color-option" data-color="orange" style="background-color: #ff8800;"></div>
+            <div class="color-option" data-color="cyan" style="background-color: #00ffff;"></div>
+        </div>
+
+        <div class="status-panel">
+            <div class="status-item">Mode: <span class="status-value" id="currentMode">Idle</span></div>
+            <div class="status-item">Gesture: <span class="status-value" id="currentGesture">None</span></div>
+            <div class="status-item">Color: <span class="status-value" id="currentColor">White</span></div>
+            <div class="status-item">Hands: <span class="status-value" id="handsDetected">0</span></div>
+        </div>
+
+        <div class="instructions">
+            <h3>Gesture Controls</h3>
+            <div class="instruction-item">
+                <span class="gesture-icon">👆</span>
+                <span>Point to draw</span>
+            </div>
+            <div class="instruction-item">
+                <span class="gesture-icon">✌️</span>
+                <span>Peace sign to select colors</span>
+            </div>
+            <div class="instruction-item">
+                <span class="gesture-icon">🖐️</span>
+                <span>Open palm to erase</span>
+            </div>
+            <div class="instruction-item">
+                <span class="gesture-icon">✊</span>
+                <span>Closed fist to stop</span>
+            </div>
+        </div>
+
+        <div class="eraser-zone" id="eraserZone"></div>
+        <div class="color-selector-indicator" id="colorSelector">
+            <div class="selector-dot"></div>
+        </div>
+        <div class="error-message" id="errorMessage"></div>
+    </div>
+
+    <script>
+        class HandGestureDrawing {
+            constructor() {
+                this.video = document.getElementById('videoElement');
+                this.canvas = document.getElementById('canvas');
+                this.ctx = this.canvas.getContext('2d');
+                this.hands = null;
+                this.camera = null;
+                
+                this.currentColor = 'white';
+                this.currentMode = 'idle';
+                this.currentGesture = 'none';
+                this.isDrawing = false;
+                this.lastDrawPoint = null;
+                this.eraserSize = 30;
+                this.hoveredColorIndex = -1;
+                this.colorSelectCooldown = 0;
+                
+                this.colors = {
+                    white: '#ffffff',
+                    red: '#ff4444',
+                    blue: '#4444ff',
+                    green: '#44ff44',
+                    yellow: '#ffff00',
+                    purple: '#ff44ff',
+                    orange: '#ff8800',
+                    cyan: '#00ffff'
+                };
+
+                this.init();
+            }
+
+            async init() {
+                try {
+                    await this.setupCamera();
+                    this.setupCanvas();
+                    this.setupMediaPipe();
+                    this.setupEventListeners();
+                } catch (error) {
+                    this.showError('Failed to initialize camera: ' + error.message);
+                }
+            }
+
+            async setupCamera() {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { 
+                        width: 1280, 
+                        height: 720,
+                        facingMode: 'user'
+                    }
+                });
+                this.video.srcObject = stream;
+                
+                return new Promise((resolve) => {
+                    this.video.onloadedmetadata = () => {
+                        resolve();
+                    };
+                });
+            }
+
+            setupCanvas() {
+                const resizeCanvas = () => {
+                    this.canvas.width = window.innerWidth;
+                    this.canvas.height = window.innerHeight;
+                    this.ctx.lineCap = 'round';
+                    this.ctx.lineJoin = 'round';
+                    this.ctx.lineWidth = 3;
+                };
+                
+                resizeCanvas();
+                window.addEventListener('resize', resizeCanvas);
+            }
+
+            setupMediaPipe() {
+                this.hands = new Hands({
+                    locateFile: (file) => {
+                        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+                    }
+                });
+
+                this.hands.setOptions({
+                    maxNumHands: 2,
+                    modelComplexity: 1,
+                    minDetectionConfidence: 0.7,
+                    minTrackingConfidence: 0.5
+                });
+
+                this.hands.onResults((results) => {
+                    this.processResults(results);
+                });
+
+                this.camera = new Camera(this.video, {
+                    onFrame: async () => {
+                        await this.hands.send({ image: this.video });
+                    },
+                    width: 1280,
+                    height: 720
+                });
+
+                this.camera.start();
+            }
+
+            setupEventListeners() {
+                document.querySelectorAll('.color-option').forEach(option => {
+                    option.addEventListener('click', (e) => {
+                        this.selectColor(e.target.dataset.color);
+                    });
+                });
+            }
+
+            processResults(results) {
+                document.getElementById('handsDetected').textContent = results.multiHandLandmarks.length;
+
+                if (results.multiHandLandmarks.length > 0) {
+                    const landmarks = results.multiHandLandmarks[0];
+                    const gesture = this.recognizeGesture(landmarks);
+                    this.handleGesture(gesture, landmarks);
+                } else {
+                    this.currentGesture = 'none';
+                    this.currentMode = 'idle';
+                    this.isDrawing = false;
+                    this.hideColorSelector();
+                    this.hoveredColorIndex = -1;
+                    this.colorSelectCooldown = 0;
+                    document.querySelectorAll('.color-option').forEach(option => {
+                        option.classList.remove('hovering');
+                    });
+                    this.updateUI();
+                }
+            }
+
+            recognizeGesture(landmarks) {
+                const fingerTips = [4, 8, 12, 16, 20];
+                const fingerPips = [3, 6, 10, 14, 18];
+                
+                const extendedFingers = [];
+                
+                if (landmarks[4].x > landmarks[3].x) {
+                    extendedFingers.push(0);
+                }
+                
+                for (let i = 1; i < 5; i++) {
+                    if (landmarks[fingerTips[i]].y < landmarks[fingerPips[i]].y) {
+                        extendedFingers.push(i);
+                    }
+                }
+
+                const numExtended = extendedFingers.length;
+
+                if (numExtended === 0) {
+                    return 'fist';
+                } else if (numExtended === 1 && extendedFingers.includes(1)) {
+                    return 'point';
+                } else if (numExtended === 2 && extendedFingers.includes(1) && extendedFingers.includes(2)) {
+                    return 'peace';
+                } else if (numExtended >= 4) {
+                    return 'palm';
+                } else {
+                    return 'unknown';
+                }
+            }
+
+            handleGesture(gesture, landmarks) {
+                this.currentGesture = gesture;
+                
+                const indexTip = landmarks[8];
+                const canvasX = (1 - indexTip.x) * this.canvas.width;
+                const canvasY = indexTip.y * this.canvas.height;
+
+                switch (gesture) {
+                    case 'point':
+                        this.currentMode = 'drawing';
+                        this.draw(canvasX, canvasY);
+                        break;
+                    
+                    case 'peace':
+                        this.currentMode = 'color_select';
+                        this.handleColorSelection(canvasX, canvasY);
+                        break;
+                    
+                    case 'palm':
+                        this.currentMode = 'erasing';
+                        this.erase(canvasX, canvasY);
+                        this.showEraserZone(canvasX, canvasY);
+                        break;
+                    
+                    case 'fist':
+                        this.currentMode = 'stopped';
+                        this.isDrawing = false;
+                        this.hideEraserZone();
+                        break;
+                    
+                    default:
+                        this.currentMode = 'idle';
+                        this.isDrawing = false;
+                        this.hideEraserZone();
+                        this.hideColorSelector();
+                        break;
+                }
+
+                this.updateUI();
+            }
+
+            draw(x, y) {
+                this.ctx.globalCompositeOperation = 'source-over';
+                this.ctx.strokeStyle = this.colors[this.currentColor];
+                this.ctx.lineWidth = 3;
+
+                if (this.isDrawing && this.lastDrawPoint) {
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(this.lastDrawPoint.x, this.lastDrawPoint.y);
+                    this.ctx.lineTo(x, y);
+                    this.ctx.stroke();
+                } else {
+                    this.ctx.beginPath();
+                    this.ctx.arc(x, y, 1.5, 0, 2 * Math.PI);
+                    this.ctx.fill();
+                }
+
+                this.isDrawing = true;
+                this.lastDrawPoint = { x, y };
+            }
+
+            erase(x, y) {
+                this.ctx.globalCompositeOperation = 'destination-out';
+                this.ctx.beginPath();
+                this.ctx.arc(x, y, this.eraserSize, 0, 2 * Math.PI);
+                this.ctx.fill();
+            }
+
+            handleColorSelection(x, y) {
+                const paletteRect = document.querySelector('.color-palette').getBoundingClientRect();
+                const colors = ['white', 'red', 'blue', 'green', 'yellow', 'purple', 'orange', 'cyan'];
+                
+                let targetColorIndex = -1;
+                let minDistance = Infinity;
+                
+                colors.forEach((color, index) => {
+                    const colorElement = document.querySelector(`[data-color="${color}"]`);
+                    const colorRect = colorElement.getBoundingClientRect();
+                    const colorCenterX = colorRect.left + colorRect.width / 2;
+                    const colorCenterY = colorRect.top + colorRect.height / 2;
+                    
+                    const distance = Math.sqrt(
+                        Math.pow(x - colorCenterX, 2) + Math.pow(y - colorCenterY, 2)
+                    );
+                    
+                    if (distance < 80 && distance < minDistance) {
+                        minDistance = distance;
+                        targetColorIndex = index;
+                    }
+                });
+                
+                this.updateColorHover(targetColorIndex, x, y);
+                
+                if (targetColorIndex >= 0 && targetColorIndex === this.hoveredColorIndex) {
+                    this.colorSelectCooldown++;
+                    if (this.colorSelectCooldown > 15) {
+                        this.selectColor(colors[targetColorIndex]);
+                        this.colorSelectCooldown = 0;
+                        this.hideColorSelector();
+                    }
+                } else {
+                    this.colorSelectCooldown = 0;
+                }
+            }
+            
+            updateColorHover(colorIndex, x, y) {
+                document.querySelectorAll('.color-option').forEach(option => {
+                    option.classList.remove('hovering');
+                });
+                
+                if (colorIndex >= 0) {
+                    const colors = ['white', 'red', 'blue', 'green', 'yellow', 'purple', 'orange', 'cyan'];
+                    const colorElement = document.querySelector(`[data-color="${colors[colorIndex]}"]`);
+                    if (colorElement) {
+                        colorElement.classList.add('hovering');
+                    }
+                    this.showColorSelector(x, y);
+                    this.hoveredColorIndex = colorIndex;
+                } else {
+                    this.hideColorSelector();
+                    this.hoveredColorIndex = -1;
+                }
+            }
+
+            selectColor(color) {
+                this.currentColor = color;
+                
+                document.querySelectorAll('.color-option').forEach(option => {
+                    option.classList.remove('active');
+                });
+                
+                document.querySelector(`[data-color="${color}"]`).classList.add('active');
+                this.updateUI();
+            }
+
+            showEraserZone(x, y) {
+                const eraserZone = document.getElementById('eraserZone');
+                eraserZone.style.left = (x - this.eraserSize) + 'px';
+                eraserZone.style.top = (y - this.eraserSize) + 'px';
+                eraserZone.style.width = (this.eraserSize * 2) + 'px';
+                eraserZone.style.height = (this.eraserSize * 2) + 'px';
+                eraserZone.classList.add('active');
+            }
+
+            hideEraserZone() {
+                document.getElementById('eraserZone').classList.remove('active');
+            }
+            
+            showColorSelector(x, y) {
+                const colorSelector = document.getElementById('colorSelector');
+                colorSelector.style.left = (x - 40) + 'px';
+                colorSelector.style.top = (y - 40) + 'px';
+                colorSelector.classList.add('active');
+            }
+            
+            hideColorSelector() {
+                document.getElementById('colorSelector').classList.remove('active');
+            }
+
+            updateUI() {
+                document.getElementById('currentMode').textContent = this.currentMode.replace('_', ' ').toUpperCase();
+                document.getElementById('currentGesture').textContent = this.currentGesture.toUpperCase();
+                document.getElementById('currentColor').textContent = this.currentColor.toUpperCase();
+            }
+
+            showError(message) {
+                const errorDiv = document.getElementById('errorMessage');
+                errorDiv.textContent = message;
+                errorDiv.style.display = 'block';
+                
+                setTimeout(() => {
+                    errorDiv.style.display = 'none';
+                }, 5000);
+            }
+        }
+
+        window.addEventListener('load', () => {
+            new HandGestureDrawing();
+        });
+    </script>
+</body>
+</html>

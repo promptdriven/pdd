@@ -14,7 +14,7 @@ from pdd.sync_animation import (
     _shorten_path,
     _render_animation_frame,
     _draw_connecting_lines_and_arrows,
-    _initial_logo_animation_sequence,
+    _get_path_waypoints,
     _final_logo_animation_sequence,
     DEEP_NAVY, ELECTRIC_CYAN,
     DEFAULT_PROMPT_COLOR, DEFAULT_CODE_COLOR, DEFAULT_EXAMPLE_COLOR, DEFAULT_TESTS_COLOR,
@@ -121,28 +121,28 @@ def test_animation_state_render_scrolling_path():
 
     # Empty path
     state.paths["prompt"] = ""
-    assert state._render_scrolling_path("prompt") == "          " # Centered empty
+    assert state._render_scrolling_path("prompt", 10) == "          " # Centered empty
 
     # Short path
     state.paths["prompt"] = "short.py"
-    assert state._render_scrolling_path("prompt") == " short.py " # Centered
+    assert state._render_scrolling_path("prompt", 10) == " short.py " # Centered
 
     # Long path - scrolling
     state.paths["prompt"] = "this_is_a_very_long_path_name.py"
     expected_len = len("this_is_a_very_long_path_name.py")
     
-    first_scroll = state._render_scrolling_path("prompt")
+    first_scroll = state._render_scrolling_path("prompt", 10)
     assert len(first_scroll) == 10
     assert first_scroll == " this_is_a_"
     assert state.scroll_offsets["prompt"] == 1
 
-    second_scroll = state._render_scrolling_path("prompt")
+    second_scroll = state._render_scrolling_path("prompt", 10)
     assert second_scroll == "this_is_a_v"
     assert state.scroll_offsets["prompt"] == 2
     
     # Scroll to wrap around
     for _ in range(expected_len + 4): # +4 for " :: "
-        state._render_scrolling_path("prompt")
+        state._render_scrolling_path("prompt", 10)
     
     final_offset = state.scroll_offsets["prompt"]
     # Check if it wrapped around to a small number
@@ -218,7 +218,7 @@ def test_shorten_path(mock_getcwd, mock_relpath):
 def test_draw_connecting_lines_and_arrows_structure():
     state = AnimationState("test", 5.0)
     lines = _draw_connecting_lines_and_arrows(state, CONSOLE_WIDTH)
-    assert len(lines) == 3
+    assert len(lines) == 5
     for line_text_obj in lines:
         assert isinstance(line_text_obj, MagicMock) # Rich Text objects are complex, Align returns a renderable
                                                     # Actually, the code returns Text directly, or Align(Text)
@@ -347,47 +347,47 @@ def test_render_animation_frame_structure_and_content(
 
 # --- Animation Sequence Tests ---
 
-@patch("pdd.sync_animation.time.sleep")
-def test_initial_logo_animation_sequence_success(mock_sleep, mock_console_obj):
-    stop_event = threading.Event()
-    
-    # Simulate console height being just enough for the logo
-    mock_console_obj.height = LOGO_HEIGHT 
-    
-    result = _initial_logo_animation_sequence(mock_console_obj, stop_event)
-    assert result is True
-    mock_console_obj.clear.assert_any_call() # Called at start and end
-    
-    # Check print calls for logo lines
-    expected_print_calls = LOGO_HEIGHT # for each line reveal
-    # Each reveal prints multiple lines, plus cursor movements
-    # This is complex to assert precisely. Let's check key parts.
-    assert mock_console_obj.print.call_count > LOGO_HEIGHT 
-    
-    # Check that logo lines were printed (simplified check)
-    printed_text_combined = "".join(
-        str(arg[0]) for call_args in mock_console_obj.print.call_args_list for arg in call_args.args if isinstance(arg[0], MagicMock) # Rich Text
-    )
-    # This check is too fragile. Better to check for specific logo lines.
-    # Example: Check if the first line of the logo was part of any print call
-    # This requires inspecting the `Text` objects passed to print.
+# @patch("pdd.sync_animation.time.sleep")
+# def test_initial_logo_animation_sequence_success(mock_sleep, mock_console_obj):
+#     stop_event = threading.Event()
+#     
+#     # Simulate console height being just enough for the logo
+#     mock_console_obj.height = LOGO_HEIGHT 
+#     
+#     result = _initial_logo_animation_sequence(mock_console_obj, stop_event)
+#     assert result is True
+#     mock_console_obj.clear.assert_any_call() # Called at start and end
+#     
+#     # Check print calls for logo lines
+#     expected_print_calls = LOGO_HEIGHT # for each line reveal
+#     # Each reveal prints multiple lines, plus cursor movements
+#     # This is complex to assert precisely. Let's check key parts.
+#     assert mock_console_obj.print.call_count > LOGO_HEIGHT 
+#     
+#     # Check that logo lines were printed (simplified check)
+#     printed_text_combined = "".join(
+#         str(arg[0]) for call_args in mock_console_obj.print.call_args_list for arg in call_args.args if isinstance(arg[0], MagicMock) # Rich Text
+#     )
+#     # This check is too fragile. Better to check for specific logo lines.
+#     # Example: Check if the first line of the logo was part of any print call
+#     # This requires inspecting the `Text` objects passed to print.
+# 
+#     # Check sleeps
+#     assert mock_sleep.call_count == LOGO_HEIGHT + 1 # N in loop, 1 after
+#     mock_sleep.assert_any_call(0.05)
+#     mock_sleep.assert_any_call(1)
 
-    # Check sleeps
-    assert mock_sleep.call_count == LOGO_HEIGHT + 1 # N in loop, 1 after
-    mock_sleep.assert_any_call(0.05)
-    mock_sleep.assert_any_call(1)
 
-
-@patch("pdd.sync_animation.time.sleep")
-def test_initial_logo_animation_sequence_stop_early(mock_sleep, mock_console_obj):
-    stop_event = threading.Event()
-    stop_event.set() # Stop immediately
-    
-    result = _initial_logo_animation_sequence(mock_console_obj, stop_event)
-    assert result is False
-    mock_console_obj.clear.assert_called_once() # Only at the start
-    # No long sleep, minimal prints
-    assert mock_sleep.call_count == 0
+# @patch("pdd.sync_animation.time.sleep")
+# def test_initial_logo_animation_sequence_stop_early(mock_sleep, mock_console_obj):
+#     stop_event = threading.Event()
+#     stop_event.set() # Stop immediately
+#     
+#     result = _initial_logo_animation_sequence(mock_console_obj, stop_event)
+#     assert result is False
+#     mock_console_obj.clear.assert_called_once() # Only at the start
+#     # No long sleep, minimal prints
+#     assert mock_sleep.call_count == 0
 
 
 @patch("pdd.sync_animation.time.sleep")
