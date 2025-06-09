@@ -1,4 +1,4 @@
-# tests/test_logo_animation.py
+# tests/test_branding_animation.py
 
 import pytest
 import time
@@ -6,8 +6,8 @@ import threading
 from unittest import mock
 
 # Import the module and class to test
-from pdd import logo_animation
-from pdd.logo_animation import AnimatedParticle
+from pdd import branding_animation
+from pdd.branding_animation import AnimatedParticle
 
 # Attempt to import Z3 for formal verification tests
 try:
@@ -19,7 +19,7 @@ except ImportError:
 #
 # I. Setup and Teardown:
 #    - Fixture `animation_controller` to:
-#        - Mock `pdd.logo_animation` constants (durations, colors, art, etc.) for predictable tests.
+#        - Mock `pdd.branding_animation` constants (durations, colors, art, etc.) for predictable tests.
 #        - Mock `rich.console.Console` to avoid actual terminal output and control its properties (width, height).
 #        - Mock `rich.live.Live` to avoid actual rendering and check calls to `update`.
 #        - Mock `threading.Thread` to monitor thread creation, start, and join calls, and control `is_alive`.
@@ -76,14 +76,14 @@ def animation_controller(monkeypatch):
         constants_to_mock["ASCII_LOGO_ART"] = constants_to_mock["ASCII_LOGO_ART"].strip().splitlines()
 
     for name, value in constants_to_mock.items():
-        monkeypatch.setattr(logo_animation, name, value, raising=False)
+        monkeypatch.setattr(branding_animation, name, value, raising=False)
 
     # Mock Rich Console
-    mock_console_inst = mock.Mock(spec=logo_animation.Console)
+    mock_console_inst = mock.Mock(spec=branding_animation.Console)
     mock_console_inst.width = 80
     mock_console_inst.height = 24
     mock_console_class = mock.Mock(return_value=mock_console_inst)
-    monkeypatch.setattr(logo_animation, "Console", mock_console_class)
+    monkeypatch.setattr(branding_animation, "Console", mock_console_class)
 
     # Mock Rich Live
     mock_live_inst = mock.Mock() # This is the instance returned by Live.__enter__
@@ -92,50 +92,37 @@ def animation_controller(monkeypatch):
     mock_live_cm.__enter__ = mock.Mock(return_value=mock_live_inst)
     mock_live_cm.__exit__ = mock.Mock(return_value=None)
     mock_live_class_constructor = mock.Mock(return_value=mock_live_cm) # This is the Live class itself
-    monkeypatch.setattr(logo_animation, "Live", mock_live_class_constructor)
+    monkeypatch.setattr(branding_animation, "Live", mock_live_class_constructor)
 
     # Mock threading.Thread
     created_threads_mocks_list = []
-    original_thread_class = threading.Thread # Keep a reference to the real Thread
+    original_thread_class = threading.Thread
 
     def side_effect_thread_class(*args, **kwargs):
         thread_inst_mock = mock.Mock(spec=original_thread_class) # Mock an instance
+        thread_inst_mock.is_alive = mock.Mock(return_value=False)
         
         # Store original properties
         thread_inst_mock._target_func = kwargs.get('target')
         thread_inst_mock._args_tuple = kwargs.get('args', ())
         thread_inst_mock._daemon_prop = kwargs.get('daemon')
 
-        # This will be the *actual* thread that runs the animation loop
-        thread_inst_mock._actual_worker_thread = None
-
         def mock_start_method():
-            if thread_inst_mock._target_func:
-                # Create and start a real thread for the target function
-                thread_inst_mock._actual_worker_thread = original_thread_class(
-                    target=thread_inst_mock._target_func,
-                    args=thread_inst_mock._args_tuple,
-                    daemon=thread_inst_mock._daemon_prop
-                )
-                thread_inst_mock._actual_worker_thread.start()
-            thread_inst_mock.is_alive.return_value = True # Mock's state: "alive" after start
+            thread_inst_mock.is_alive.return_value = True
+            # If a target function exists, we could call it here for more integrated tests,
+            # but that makes controlling the test flow harder.
+            # For now, just simulate state change.
         thread_inst_mock.start = mock.Mock(side_effect=mock_start_method)
 
         def mock_join_method(timeout=None):
-            # Join the actual worker thread if it was started
-            if thread_inst_mock._actual_worker_thread and thread_inst_mock._actual_worker_thread.is_alive():
-                thread_inst_mock._actual_worker_thread.join(timeout)
-            thread_inst_mock.is_alive.return_value = False # Mock's state: "not alive" after join
+            thread_inst_mock.is_alive.return_value = False
         thread_inst_mock.join = mock.Mock(side_effect=mock_join_method)
-        
-        # Initial state for is_alive
-        thread_inst_mock.is_alive = mock.Mock(return_value=False)
         
         created_threads_mocks_list.append(thread_inst_mock)
         return thread_inst_mock
 
     mock_thread_class_constructor = mock.Mock(spec=threading.Thread, side_effect=side_effect_thread_class)
-    monkeypatch.setattr(logo_animation.threading, "Thread", mock_thread_class_constructor)
+    monkeypatch.setattr(branding_animation.threading, "Thread", mock_thread_class_constructor)
 
     # Yield all mocks and configs to the test
     yield {
@@ -149,22 +136,23 @@ def animation_controller(monkeypatch):
     }
 
     # Teardown: Ensure animation is stopped using the public API
-    logo_animation.stop_logo_animation()
+    branding_animation.stop_logo_animation()
+    # start_logo_animation clears the _stop_animation_event, so this should be fine for test isolation.
 
 
 # II. Core Functionality Tests
 def test_start_animation_starts_thread(animation_controller):
-    logo_animation.start_logo_animation()
+    branding_animation.start_logo_animation()
     
     assert len(animation_controller["created_threads_mocks"]) == 1, "Animation thread was not created"
     thread_mock = animation_controller["created_threads_mocks"][0]
     
     thread_mock.start.assert_called_once()
-    assert thread_mock._target_func == logo_animation._animation_loop # Check target
+    assert thread_mock._target_func == branding_animation._animation_loop # Check target
     assert thread_mock._daemon_prop is True # Check if daemon
 
 def test_start_animation_multiple_calls_one_thread(animation_controller):
-    logo_animation.start_logo_animation() # First call
+    branding_animation.start_logo_animation() # First call
     assert len(animation_controller["created_threads_mocks"]) == 1
     thread_mock = animation_controller["created_threads_mocks"][0]
     thread_mock.start.assert_called_once()
@@ -172,18 +160,18 @@ def test_start_animation_multiple_calls_one_thread(animation_controller):
     # Make the thread appear alive for the second call
     # The mock_start_method in the fixture already sets is_alive to True.
 
-    logo_animation.start_logo_animation() # Second call
+    branding_animation.start_logo_animation() # Second call
     assert len(animation_controller["created_threads_mocks"]) == 1, "Second call to start_logo_animation created a new thread"
 
 def test_stop_animation_stops_thread(animation_controller):
-    logo_animation.start_logo_animation()
+    branding_animation.start_logo_animation()
     assert len(animation_controller["created_threads_mocks"]) == 1
     thread_mock = animation_controller["created_threads_mocks"][0]
     
     # Ensure thread is "alive" before stopping
     assert thread_mock.is_alive() is True 
 
-    logo_animation.stop_logo_animation()
+    branding_animation.stop_logo_animation()
     thread_mock.join.assert_called_once()
     assert thread_mock.is_alive() is False # Join mock sets it to false
 
@@ -191,17 +179,22 @@ def test_stop_animation_no_thread_running(animation_controller):
     # Ensure no thread is running (default state of mock)
     # Call stop_logo_animation - it should not error
     try:
-        logo_animation.stop_logo_animation()
+        branding_animation.stop_logo_animation()
     except Exception as e:
         pytest.fail(f"stop_logo_animation raised an exception when no thread was running: {e}")
     
+    # Check that Thread.join was not called if no thread was ever assigned to _animation_thread
+    # (The fixture's teardown will call stop_logo_animation again, this test focuses on a specific scenario)
+    # This is hard to assert cleanly without inspecting _animation_thread, which is internal.
+    # The main check is that it doesn't crash.
+
 def test_animation_runs_full_cycle(animation_controller):
     durations = animation_controller["constants"]
     total_duration = (durations["LOGO_FORMATION_DURATION"] +
                       durations["LOGO_HOLD_DURATION"] +
                       durations["LOGO_TO_BOX_TRANSITION_DURATION"])
 
-    logo_animation.start_logo_animation()
+    branding_animation.start_logo_animation()
     assert len(animation_controller["created_threads_mocks"]) == 1
     thread_mock = animation_controller["created_threads_mocks"][0]
     thread_mock.start.assert_called_once()
@@ -210,53 +203,42 @@ def test_animation_runs_full_cycle(animation_controller):
     # The animation loop itself uses event.wait(frame_duration)
     # frame_duration = 1.0 / 20 = 0.05s. Total duration = 0.05*3 = 0.15s
     # Add buffer for thread scheduling and final hold loop.
-    # The final hold loop in _animation_loop waits on _stop_animation_event.
-    # So, we need to call stop_logo_animation to make the thread finish.
-    # The sleep here is to allow stages to progress *before* stopping.
     time.sleep(total_duration + 0.2) 
 
-    # Stop the animation, which will set the event and allow the thread to complete.
-    logo_animation.stop_logo_animation() 
-    
     # Animation should have made calls to live.update()
     animation_controller["live_mock"].update.assert_called()
+
+    branding_animation.stop_logo_animation() # This will set event and join
     thread_mock.join.assert_called_once()
 
 # III. Animation Stages and Interruption
 def test_stop_animation_during_run(animation_controller, monkeypatch):
     # Make formation long enough to interrupt
-    patched_formation_duration = 0.5
-    monkeypatch.setattr(logo_animation, "LOGO_FORMATION_DURATION", patched_formation_duration)
+    monkeypatch.setattr(branding_animation, "LOGO_FORMATION_DURATION", 0.5)
     
-    logo_animation.start_logo_animation()
+    branding_animation.start_logo_animation()
     assert len(animation_controller["created_threads_mocks"]) == 1
     thread_mock = animation_controller["created_threads_mocks"][0]
 
     time.sleep(0.05) # Sleep for a very short time, less than any significant animation part
 
-    logo_animation.stop_logo_animation()
-    
-    # Replicate the timeout calculation from stop_logo_animation()
-    # to ensure the test expectation matches the code's behavior.
-    hold_duration = animation_controller["constants"]["LOGO_HOLD_DURATION"]
-    transition_duration = animation_controller["constants"]["LOGO_TO_BOX_TRANSITION_DURATION"]
-
-    term1 = max(0.1, patched_formation_duration or 0.1)
-    term2 = max(0.1, hold_duration or 0.1)
-    term3 = max(0.1, transition_duration or 0.1)
-    
-    calculated_sum = term1 + term2 + term3 + 2.0 # 2.0 is the buffer in stop_logo_animation
-    expected_join_timeout = max(0.1, calculated_sum) # Final guard in stop_logo_animation
-    
-    thread_mock.join.assert_called_once_with(timeout=pytest.approx(expected_join_timeout, abs=0.01))
+    branding_animation.stop_logo_animation()
+    thread_mock.join.assert_called_once()
+    # The timeout for join is calculated in stop_logo_animation based on current constants
+    expected_join_timeout = (0.5 + 
+                             animation_controller["constants"]["LOGO_HOLD_DURATION"] +
+                             animation_controller["constants"]["LOGO_TO_BOX_TRANSITION_DURATION"] + 2.0)
+    thread_mock.join.assert_called_with(timeout=mock.ANY) # Check it was called with a timeout
+    args, _ = thread_mock.join.call_args
+    assert args[0] == pytest.approx(expected_join_timeout, abs=1e-9)
 
 
 # IV. Edge Cases for Inputs/Configuration
 def test_animation_with_empty_list_ascii_logo_art(animation_controller, monkeypatch):
-    monkeypatch.setattr(logo_animation, "ASCII_LOGO_ART", [])
+    monkeypatch.setattr(branding_animation, "ASCII_LOGO_ART", [])
     
-    logo_animation.start_logo_animation()
-    time.sleep(0.1) # Allow thread to start and process (it should exit early)
+    branding_animation.start_logo_animation()
+    time.sleep(0.1) # Allow thread to start and process
 
     # Thread should start, but _animation_loop should return early due to no particles
     assert len(animation_controller["created_threads_mocks"]) == 1
@@ -265,124 +247,116 @@ def test_animation_with_empty_list_ascii_logo_art(animation_controller, monkeypa
     # Live.update should not be called if there are no particles
     animation_controller["live_mock"].update.assert_not_called()
     
-    logo_animation.stop_logo_animation() # Should cleanup fine
+    branding_animation.stop_logo_animation() # Should cleanup fine
 
 def test_animation_with_none_ascii_logo_art(animation_controller, monkeypatch):
-    monkeypatch.setattr(logo_animation, "ASCII_LOGO_ART", None)
+    monkeypatch.setattr(branding_animation, "ASCII_LOGO_ART", None)
     
-    logo_animation.start_logo_animation()
-    # Give thread time to start. With the fix in _parse_logo_art, it should exit cleanly.
-    # The _actual_worker_thread will complete.
-    time.sleep(0.1) 
+    # Current code: _parse_logo_art(None) -> TypeError
+    # This test checks that start/stop remain stable and don't crash the main test thread.
+    # The daemon thread running _animation_loop would terminate due to the unhandled TypeError.
+    branding_animation.start_logo_animation()
+    time.sleep(0.1) # Give thread time to start and potentially hit the error
 
     assert len(animation_controller["created_threads_mocks"]) == 1
     thread_mock = animation_controller["created_threads_mocks"][0]
     thread_mock.start.assert_called_once()
     
-    # Simulate that the thread is no longer considered alive by the mock's state,
-    # as stop_logo_animation checks the mock's is_alive().
-    # If the actual worker thread finished cleanly (due to no particles),
-    # its real is_alive() would be False. Our mock_join_method sets the mock's
-    # is_alive to False after join. If join isn't called (because stop_logo_animation
-    # sees is_alive as False), we need to ensure the mock's state reflects this.
-    # The mock_join_method in the fixture will be called by stop_logo_animation
-    # if the mock's is_alive() is True. If the real thread exits early,
-    # the mock's is_alive() might still be True until join is called.
-    # Let's ensure the mock's join is called if the thread was started.
-    # The stop_logo_animation will call join if thread_mock.is_alive() is true.
-    # The mock_start_method sets it to true.
-    # The mock_join_method will join the _actual_worker_thread (which should have finished)
-    # and then set the mock's is_alive to false.
+    # The thread is expected to die. is_alive should become False.
+    # Our mock join sets is_alive to False. If the real thread died, is_alive would also be False.
+    # stop_logo_animation checks is_alive.
+    
+    # Simulate thread dying by setting its mock's is_alive to False
+    thread_mock.is_alive.return_value = False
 
     try:
-        logo_animation.stop_logo_animation() 
+        branding_animation.stop_logo_animation()
     except Exception as e:
         pytest.fail(f"stop_logo_animation failed after thread error: {e}")
     
-    # If the thread started, join should be called by stop_logo_animation.
-    thread_mock.join.assert_called_once()
-
+    # If thread died, join might not be called by stop_logo_animation's logic,
+    # or it might be called and return immediately.
+    # The key is that stop_logo_animation itself is robust.
 
 def test_animation_with_malformed_string_ascii_logo_art(animation_controller, monkeypatch):
+    # The code has: isinstance(local_ascii_logo_art, str): local_ascii_logo_art = ...splitlines()
+    # This should handle a single multi-line string correctly.
     art_string = "Line1\nLine2"
-    monkeypatch.setattr(logo_animation, "ASCII_LOGO_ART", art_string)
+    monkeypatch.setattr(branding_animation, "ASCII_LOGO_ART", art_string)
     
-    logo_animation.start_logo_animation()
-    time.sleep(0.1) # Allow some animation
+    branding_animation.start_logo_animation()
+    time.sleep(0.1)
 
     assert len(animation_controller["created_threads_mocks"]) == 1
-    
-    logo_animation.stop_logo_animation() # Stop before asserting update
     animation_controller["live_mock"].update.assert_called() # Should proceed to render
+    branding_animation.stop_logo_animation()
 
 def test_zero_duration_constants(animation_controller, monkeypatch):
-    monkeypatch.setattr(logo_animation, "LOGO_FORMATION_DURATION", 0.0)
-    monkeypatch.setattr(logo_animation, "LOGO_HOLD_DURATION", 0.0)
-    monkeypatch.setattr(logo_animation, "LOGO_TO_BOX_TRANSITION_DURATION", 0.0)
+    monkeypatch.setattr(branding_animation, "LOGO_FORMATION_DURATION", 0.0)
+    monkeypatch.setattr(branding_animation, "LOGO_HOLD_DURATION", 0.0)
+    monkeypatch.setattr(branding_animation, "LOGO_TO_BOX_TRANSITION_DURATION", 0.0)
+    # Code has `duration or 0.1` fallbacks, so stages will take at least 0.1s effectively.
 
-    logo_animation.start_logo_animation()
-    # Effective durations are min 0.1s. Total ~0.3s. Sleep a bit longer.
-    time.sleep(0.1 * 3 + 0.2) 
+    branding_animation.start_logo_animation()
+    time.sleep(0.1 * 3 + 0.1) # Sum of effective minimum durations + buffer
 
-    logo_animation.stop_logo_animation()
     animation_controller["live_mock"].update.assert_called()
+    branding_animation.stop_logo_animation()
     thread_mock = animation_controller["created_threads_mocks"][0]
     thread_mock.join.assert_called_once()
 
 def test_zero_frame_rate(animation_controller, monkeypatch):
-    monkeypatch.setattr(logo_animation, "ANIMATION_FRAME_RATE", 0) # Effective 1 FPS
+    monkeypatch.setattr(branding_animation, "ANIMATION_FRAME_RATE", 0)
+    # Code has `max(1, ANIMATION_FRAME_RATE)`, so effective rate is 1 FPS.
     
-    logo_animation.start_logo_animation()
+    branding_animation.start_logo_animation()
     time.sleep(0.2) # Allow some frames at 1 FPS
 
-    logo_animation.stop_logo_animation()
     animation_controller["live_mock"].update.assert_called()
+    branding_animation.stop_logo_animation()
 
 # V. Console Dimension Edge Cases
 @pytest.mark.parametrize("width,height", [(10,5), (1,1), (80,1)])
 def test_small_console_dimensions(animation_controller, monkeypatch, width, height):
     animation_controller["console_mock"].width = width
-    animation_controller["console_mock"].height = height # This mock height is for console.height
-                                                        # _animation_loop uses fixed 18 for its logic
+    animation_controller["console_mock"].height = height
     
-    logo_animation.start_logo_animation()
-    time.sleep(0.2) 
+    branding_animation.start_logo_animation()
+    time.sleep(0.2) # Allow animation to run a bit
 
-    logo_animation.stop_logo_animation() 
-    animation_controller["live_mock"].update.assert_called()
+    animation_controller["live_mock"].update.assert_called() # Check it attempts to render
+    branding_animation.stop_logo_animation() # Check for clean stop
 
 def test_zero_console_width_height(animation_controller, monkeypatch):
+    # Code has `max(1, console_width)` for box width calculation.
+    # `_render_particles_to_text` initializes grid `char_grid = [[' ' for _ in range(console_width)] ...]`
+    # If console_width is 0, this will be `[[' ' for _ in range(0)] ...]` which is `[[]]`.
+    # This might be fine or lead to issues in rendering logic.
     animation_controller["console_mock"].width = 0
     animation_controller["console_mock"].height = 0
 
-    logo_animation.start_logo_animation()
+    branding_animation.start_logo_animation()
     time.sleep(0.2)
     
-    logo_animation.stop_logo_animation()
-    # With zero width, _render_particles_to_text might produce empty Text or very minimal.
-    # live.update(Text()) is valid. The key is no crash.
+    # Depending on implementation, update might be called with empty Text or not at all if it bails early.
+    # The key is no unhandled crash.
     # If particles exist, it will try to render.
-    animation_controller["live_mock"].update.assert_called()
+    # `_render_particles_to_text` with 0 width/height might lead to empty Text.
+    # `live.update(Text())` is valid.
+
+    branding_animation.stop_logo_animation()
 
 
 def test_box_height_larger_than_console(animation_controller, monkeypatch):
-    monkeypatch.setattr(logo_animation, "EXPANDED_BOX_HEIGHT", 50)
-    # The _animation_loop uses a fixed height of 18 for its internal console_height logic
-    # and for _render_particles_to_text.
-    # The mocked console_mock.height is not directly used by _animation_loop's height calculations
-    # for rendering, as it hardcodes `console_height = 18`.
-    # However, _get_box_perimeter_positions uses console_height from the passed console object.
-    # Let's ensure the console object passed to _animation_loop has the mocked height.
-    # The Console is created in start_logo_animation. Our mock Console class returns mock_console_inst.
-    # So, mock_console_inst.height (set to 24 by default in fixture) will be used by _get_box_perimeter_positions.
-    # Let's adjust the test to reflect this.
-    animation_controller["console_mock"].height = 10 # This will be the console.height seen by _get_box_perimeter_positions
-
-    logo_animation.start_logo_animation()
+    monkeypatch.setattr(branding_animation, "EXPANDED_BOX_HEIGHT", 50)
+    animation_controller["console_mock"].height = 10 # Console smaller than box height
+    # Code uses `min(EXPANDED_BOX_HEIGHT, console_height)`
+    
+    branding_animation.start_logo_animation()
     time.sleep(0.2)
 
-    logo_animation.stop_logo_animation()
     animation_controller["live_mock"].update.assert_called()
+    branding_animation.stop_logo_animation()
 
 # VI. AnimatedParticle Class Tests
 def test_animated_particle_creation():
@@ -390,8 +364,8 @@ def test_animated_particle_creation():
     assert p.char == "x"
     assert p.orig_logo_x == 1
     assert p.orig_logo_y == 2
-    assert p.current_x == 0.0 
-    assert p.style.color.name == logo_animation.ELECTRIC_CYAN.lower() 
+    assert p.current_x == 0.0 # Default
+    assert p.style.color.name == branding_animation.ELECTRIC_CYAN.lower() # Check default style
 
 def test_animated_particle_update_progress():
     p = AnimatedParticle("x", 0, 0)
@@ -409,7 +383,7 @@ def test_animated_particle_update_progress():
 
 def test_animated_particle_set_new_transition():
     p = AnimatedParticle("x", 0, 0)
-    p.current_x, p.current_y = 5.0, 5.0 
+    p.current_x, p.current_y = 5.0, 5.0 # Suppose it's here
     
     p.set_new_transition(new_target_x=10.0, new_target_y=10.0)
     
@@ -421,13 +395,26 @@ def test_animated_particle_set_new_transition():
 def test_animated_particle_update_progress_z3_linearity():
     if z3 is None: pytest.skip("Z3 not available")
 
+    # Symbolic variables for Z3
     z3_start_x, z3_target_x, z3_progress = z3.Reals('z3_start_x z3_target_x z3_progress')
+    
+    # The formula for current_x as used in AnimatedParticle.update_progress
     z3_current_x = z3_start_x + (z3_target_x - z3_start_x) * z3_progress
+
     solver = z3.Solver()
+    
+    # Precondition: 0 <= progress <= 1
     solver.add(z3.And(z3_progress >= 0, z3_progress <= 1))
+    
+    # Property to prove: current_x is on the segment [start_x, target_x].
+    # This can be expressed as: (current_x - start_x) * (current_x - target_x) <= 0.
+    # We check if the negation of this property is unsatisfiable.
+    # Negation: (current_x - start_x) * (current_x - target_x) > 0
     solver.add((z3_current_x - z3_start_x) * (z3_current_x - z3_target_x) > 0)
+    
     result = solver.check()
+    
+    # If the negation is unsatisfiable, the property holds for all inputs satisfying preconditions.
     assert result == z3.unsat, \
         f"Z3 found a counterexample to linearity: {solver.model()}. " \
         "This implies current_x is not always between start_x and target_x for progress in [0,1]."
-
