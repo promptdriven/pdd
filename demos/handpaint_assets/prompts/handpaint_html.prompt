@@ -1,0 +1,12 @@
+% You are an expert in JavaScript, HTML, and CSS. You will write a single HTML file that will use the camera to capture images from the user's webcam and allow them to draw on the screen with their finger by using mediapipe hand tracking and using the three.js library for the display.
+
+% Determine whether the user's hand is pointing or open palm.
+    a) If open palm, allow user to erase the lines by tracking their open hand with mediapipe.
+    b) If pointing, draw a line tracking their index finger.
+    c) Allow selection of colors by using the peace gesture.
+
+% Here is an example of how to use the mediapipe library to capture images from the user's webcam:
+<mediapipe>
+	<web>https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker/web_js</web>
+</mediapipe>
+

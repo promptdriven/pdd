@@ -572,10 +572,10 @@ def sync_animation(
     basename: str,
     cost_ref: List[float],
     budget: Optional[float],
-    prompt_color: str,
-    code_color: str,
-    example_color: str,
-    tests_color: str,
+    prompt_color: List[str],
+    code_color: List[str],
+    example_color: List[str],
+    tests_color: List[str],
     prompt_path_ref: List[str],
     code_path_ref: List[str],
     example_path_ref: List[str],
@@ -584,33 +584,25 @@ def sync_animation(
     """
     Displays an informative ASCII art animation in the terminal.
     Uses mutable list references to get updates from the main thread.
+    The color arguments (prompt_color, code_color, example_color, tests_color) are expected to be List[str] references.
     """
-    # Console for initial/final animations outside Live
-    # Live will use its own console or this one if passed.
-    # Using a single console instance.
     console = Console(legacy_windows=False) 
     animation_state = AnimationState(basename, budget)
-    animation_state.set_box_colors(prompt_color, code_color, example_color, tests_color)
+    # Set initial box colors
+    animation_state.set_box_colors(prompt_color[0], code_color[0], example_color[0], tests_color[0])
 
-    # Run logo animation directly without separate screen context
-    # This avoids screen buffer conflicts with sync_animation's Live context
     logo_animation.run_logo_animation_inline(console, stop_event)
     
     if stop_event.is_set():
         _final_logo_animation_sequence(console)
         return
 
-    # The prompt: "After 1 sec, the logo will animate to expand to a 18 line tall box"
-    # This transition is implicitly handled by Live starting up with the 18-line panel.
-
     try:
-        # screen=True takes over the full terminal screen.
-        # transient=False means the display persists until Live.stop() or context exit.
-        with Live(_render_animation_frame(animation_state, console.width), # Initial frame
+        with Live(_render_animation_frame(animation_state, console.width),
                   console=console, 
                   refresh_per_second=10, 
-                  transient=False, # Animation stays until explicitly stopped/exited
-                  screen=True,      # Use alternate screen
+                  transient=False,
+                  screen=True,
                   auto_refresh=True
                   ) as live:
             while not stop_event.is_set():
@@ -622,6 +614,14 @@ def sync_animation(
                 current_example_path = example_path_ref[0] if example_path_ref else ""
                 current_tests_path = tests_path_ref[0] if tests_path_ref else ""
 
+                # Update box colors from refs
+                animation_state.set_box_colors(
+                    prompt_color[0],
+                    code_color[0],
+                    example_color[0],
+                    tests_color[0]
+                )
+
                 animation_state.update_dynamic_state(
                     current_func_name, current_cost,
                     current_prompt_path, current_code_path,
@@ -631,18 +631,13 @@ def sync_animation(
                 live.update(_render_animation_frame(animation_state, console.width))
                 time.sleep(0.1) 
     except Exception as e:
-        # If Live context fails or error in loop, ensure console is somewhat clean.
-        # screen=True should restore on exit, but if error is severe:
-        if hasattr(console, 'is_alt_screen') and console.is_alt_screen: # Check if alt screen is active
+        if hasattr(console, 'is_alt_screen') and console.is_alt_screen:
              console.show_cursor(True)
              if hasattr(console, 'alt_screen'):
-                 console.alt_screen = False # Manually try to exit alt screen
+                 console.alt_screen = False
         console.clear() 
         console.print_exception(show_locals=True)
-        # Fallback print if Rich is broken
         print(f"Error in animation: {e}", flush=True)
     finally:
-        # _final_logo_animation_sequence is called after Live context manager exits.
-        # Live(screen=True) should restore the screen, then we can print final logo.
         _final_logo_animation_sequence(console)
 

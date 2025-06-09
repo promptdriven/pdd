@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Handpaint.html Automated & Manual Tests</title>
+    <style>
+        body { font-family: sans-serif; background: #f8f9fa; color: #222; padding: 2em; }
+        .test-result { margin-bottom: 1em; }
+        .pass { color: green; font-weight: bold; }
+        .fail { color: red; font-weight: bold; }
+        .manual { margin-top: 2em; background: #fff3cd; border-left: 5px solid #ffc107; padding: 1em; border-radius: 4px; }
+        ul { margin-top: 0.5em; }
+    </style>
+</head>
+<body>
+    <h1>Tests for handpaint.html</h1>
+    <div id="test-results"></div>
+
+    <div class="manual">
+        <h2>Manual Feature Checklist</h2>
+        <ol>
+            <li>Open <a href="../src/handpaint.html" target="_blank">handpaint.html</a> in your browser.</li>
+            <li>Allow camera access when prompted.</li>
+            <li>Try the following gestures and check if they work:
+                <ul>
+                    <li><strong>Draw:</strong> Extend your index finger and move your hand. A green line should follow your finger.</li>
+                    <li><strong>Erase:</strong> Show your open palm. The drawing should be erased at your palm's position.</li>
+                    <li><strong>Landmarks:</strong> Blue, red, green, and yellow dots should appear on your hand in the video feed.</li>
+                </ul>
+            </li>
+            <li>If all features work as described, mark the test as passed.</li>
+        </ol>
+    </div>
+
+    <script>
+    function test(description, fn) {
+        const div = document.createElement('div');
+        div.className = 'test-result';
+        try {
+            if (fn()) {
+                div.innerHTML = `✅ <span class="pass">PASS</span>: ${description}`;
+            } else {
+                div.innerHTML = `❌ <span class="fail">FAIL</span>: ${description}`;
+            }
+        } catch (e) {
+            div.innerHTML = `❌ <span class="fail">ERROR</span>: ${description} <br><code>${e}</code>`;
+        }
+        document.getElementById('test-results').appendChild(div);
+    }
+
+    // 1. DOM Elements
+    test('Canvas with id="drawingCanvas" exists', () => {
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        iframe.src = '../src/handpaint.html';
+        document.body.appendChild(iframe);
+        return new Promise(resolve => {
+            iframe.onload = () => {
+                const doc = iframe.contentDocument || iframe.contentWindow.document;
+                resolve(!!doc.getElementById('drawingCanvas'));
+                document.body.removeChild(iframe);
+            };
+        });
+    });
+
+    test('Canvas with id="landmarkCanvas" exists', () => {
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        iframe.src = '../src/handpaint.html';
+        document.body.appendChild(iframe);
+        return new Promise(resolve => {
+            iframe.onload = () => {
+                const doc = iframe.contentDocument || iframe.contentWindow.document;
+                resolve(!!doc.getElementById('landmarkCanvas'));
+                document.body.removeChild(iframe);
+            };
+        });
+    });
+
+    test('Video with id="video" exists', () => {
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        iframe.src = '../src/handpaint.html';
+        document.body.appendChild(iframe);
+        return new Promise(resolve => {
+            iframe.onload = () => {
+                const doc = iframe.contentDocument || iframe.contentWindow.document;
+                resolve(!!doc.getElementById('video'));
+                document.body.removeChild(iframe);
+            };
+        });
+    });
+
+    // 2. Script loading
+    test('MediaPipe Hands script is referenced', () => {
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        iframe.src = '../src/handpaint.html';
+        document.body.appendChild(iframe);
+        return new Promise(resolve => {
+            iframe.onload = () => {
+                const doc = iframe.contentDocument || iframe.contentWindow.document;
+                const scripts = Array.from(doc.getElementsByTagName('script'));
+                resolve(scripts.some(s => s.src.includes('@mediapipe/hands')));
+                document.body.removeChild(iframe);
+            };
+        });
+    });
+
+    // 3. Main JS objects
+    test('window.Hands is defined (from MediaPipe)', () => typeof window.Hands === 'function');
+    test('window.Camera is defined (from MediaPipe)', () => typeof window.Camera === 'function');
+
+    // 4. Main canvas size
+    test('drawingCanvas is 640x480', () => {
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        iframe.src = '../src/handpaint.html';
+        document.body.appendChild(iframe);
+        return new Promise(resolve => {
+            iframe.onload = () => {
+                const doc = iframe.contentDocument || iframe.contentWindow.document;
+                const canvas = doc.getElementById('drawingCanvas');
+                resolve(canvas && canvas.width == 640 && canvas.height == 480);
+                document.body.removeChild(iframe);
+            };
+        });
+    });
+    </script>
+</body>
+</html> 

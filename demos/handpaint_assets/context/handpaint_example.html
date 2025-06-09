@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How to run Hand Paint</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+            line-height: 1.6;
+            margin: 0;
+            padding: 2em;
+            background: #f8f9fa;
+            color: #212529;
+        }
+        .container {
+            max-width: 800px;
+            margin: auto;
+            background: #fff;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        h1, h2 {
+            color: #343a40;
+        }
+        code {
+            background: #e9ecef;
+            padding: 0.2em 0.4em;
+            margin: 0;
+            font-size: 85%;
+            border-radius: 3px;
+        }
+        pre {
+            background: #212529;
+            color: #f8f9fa;
+            padding: 1em;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+        pre code {
+            background: none;
+            padding: 0;
+            margin: 0;
+            font-size: 100%;
+        }
+        .instructions ol {
+            padding-left: 20px;
+        }
+        .instructions li {
+            margin-bottom: 1em;
+        }
+        .link a {
+            color: #007bff;
+            text-decoration: none;
+            font-weight: bold;
+        }
+        .link a:hover {
+            text-decoration: underline;
+        }
+        .note {
+            background-color: #fff3cd;
+            border-left: 5px solid #ffc107;
+            padding: 1rem;
+            margin-top: 1rem;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Running the Hand Paint Demo</h1>
+        <p>The <code>handpaint.html</code> file is a web application that uses your webcam to let you draw in the air with your hand. Because it needs camera access, you must run it from a local web server for it to work correctly in your browser.</p>
+
+        <h2>Instructions</h2>
+        <div class="instructions">
+            <ol>
+                <li>
+                    <strong>Open your terminal:</strong>
+                    <p>Navigate to the root directory of this project (<code>pdd</code>).</p>
+                </li>
+                <li>
+                    <strong>Start a local web server:</strong>
+                    <p>Run the following command in your terminal. This command uses Python to start a simple web server. If you have a `pdd` conda environment, it's best to use it.</p>
+                    <pre><code>conda run -n pdd python -m http.server 8080</code></pre>
+                     <p class="note">If you don't have Conda, and you have Python 3 installed, you can use: <br><code>python3 -m http.server 8080</code></p>
+                </li>
+                <li>
+                    <strong>Open the demo:</strong>
+                    <p>Once the server is running, click the link below or copy-paste it into your browser's address bar. Your browser will ask for permission to use your camera.</p>
+                    <p class="link"><a href="./demo/src/handpaint.html" target="_blank">./demo/src/handpaint.html</a></p>
+                </li>
+            </ol>
+        </div>
+        
+        <h2>How to Use the Hand Paint Demo</h2>
+        <ul>
+            <li><strong>To Draw:</strong> Extend your index finger and move your hand.</li>
+            <li><strong>To Erase:</strong> Open your hand to show your full palm.</li>
+        </ul>
+
+    </div>
+</body>
+</html>

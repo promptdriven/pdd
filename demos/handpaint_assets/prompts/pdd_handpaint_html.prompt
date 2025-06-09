@@ -1,0 +1,103 @@
+% You are an expert in HTML, CSS, and JavaScript. Create a single HTML file that implements a real-time hand gesture drawing application using MediaPipe
+  Hands. The application should have the following specifications:
+
+  ## Core Architecture
+  - Single HTML file with embedded CSS and JavaScript
+  - Use MediaPipe Hands library via CDN for hand tracking
+  - HTML5 Canvas overlay on live camera feed
+  - Responsive design with mobile support
+
+  ## Camera and Canvas Setup
+  - Access user's camera with 1280x720 resolution, front-facing
+  - Display horizontally mirrored video feed as background
+  - Full-screen canvas overlay for drawing
+  - Handle camera permission errors gracefully
+  - Auto-resize canvas on window resize
+
+  ## Hand Gesture Recognition
+  Implement precise finger detection using MediaPipe landmarks:
+  - Use finger tip landmarks [4,8,12,16,20] and PIP joint landmarks [3,6,10,14,18]
+  - Detect extended fingers by comparing tip Y-coordinates to PIP Y-coordinates
+  - Special thumb detection: compare X-coordinates (landmarks[4].x > landmarks[3].x)
+  - Recognize these specific gestures:
+    - **Point**: Only index finger extended (1 finger)
+    - **Peace**: Index and middle fingers extended (2 fingers)
+    - **Palm**: 4 or more fingers extended
+    - **Fist**: No fingers extended
+
+  ## Drawing Functionality
+  - **Point gesture**: Draw continuous lines on canvas
+  - Use `source-over` composite operation for drawing
+  - 3px line width with round line caps and joins
+  - Smooth line drawing between gesture positions
+  - Track drawing state to create continuous strokes
+
+  ## Erasing Functionality
+  - **Palm gesture**: Erase with circular brush
+  - Use `destination-out` composite operation for erasing
+  - 30px radius eraser size
+  - Show visual eraser zone indicator (dashed red circle)
+  - Position indicator at gesture location in real-time
+
+  ## Color Selection System
+  - **Peace gesture**: Advanced color targeting system
+  - 8-color palette: white, red, blue, green, yellow, purple, orange, cyan
+  - Distance-based color detection (80px radius from gesture)
+  - Visual feedback system:
+    - Yellow targeting circle follows peace sign gesture
+    - Targeted color gets yellow pulsing border animation
+    - Require 15-frame hold time to confirm selection (prevents accidents)
+  - Color palette positioned on right side with vertical layout
+
+  ## User Interface Design
+  **Status Panel (top-left):**
+  - Current mode, gesture, color, and hands detected count
+  - Dark semi-transparent background with backdrop blur
+
+  **Color Palette (right side):**
+  - 8 circular color options (50px diameter)
+  - Semi-transparent dark container
+  - Active color has white border and scale animation
+  - Hovering color has yellow border and pulse animation
+
+  **Instructions Panel (bottom-left):**
+  - Gesture guide with emoji icons
+  - Concise explanations for each gesture
+
+  **Visual Indicators:**
+  - Eraser zone: Red dashed circle when palm detected
+  - Color selector: Yellow circle with center dot when peace sign active
+  - Smooth opacity transitions for all indicators
+
+  ## Styling Requirements
+  - Dark theme (#1a1a1a background)
+  - Semi-transparent overlays (rgba with backdrop-filter blur)
+  - Smooth CSS transitions (0.3s ease)
+  - Responsive breakpoints for mobile devices
+  - Professional, clean interface design
+  - Yellow (#ffff00) for selection indicators
+  - Red (#ff6b6b) for eraser indicators
+
+  ## Error Handling
+  - Camera access failure detection
+  - Display error messages in centered modal
+  - Auto-hide error messages after 5 seconds
+  - Graceful degradation if MediaPipe fails to load
+
+  ## Performance Optimizations
+  - Efficient gesture recognition (avoid unnecessary calculations)
+  - Proper canvas composite operations
+  - Smooth 60fps hand tracking
+  - Minimal DOM manipulations during real-time updates
+
+  ## Technical Implementation Details
+  - Use `Camera` class from MediaPipe camera_utils
+  - Configure MediaPipe Hands with: maxNumHands=2, modelComplexity=1, minDetectionConfidence=0.7
+  - Implement coordinate transformation from MediaPipe normalized coordinates to canvas pixels
+  - Account for horizontally mirrored video feed in coordinate calculations
+  - Use requestAnimationFrame-style updates through MediaPipe's onFrame callback
+
+# Here is an example of how to use the mediapipe library to capture images from the user's webcam:
+<mediapipe>
+        <web>https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker/web_js</web>
+</mediapipe>
