@@ -1,0 +1,236 @@
+# sync_main_python.prompt
+
+% You are an expert Python engineer. Your goal is to write a Python function, 'sync_main', that will be the CLI wrapper for the sync command. This function will handle the interface logic (e.g. grabbing environment variables, parameter validation, path construction) and then call the sync_orchestrate function to perform the actual sync workflow.
+
+<include>context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        - `ctx` (`click.Context`): The Click context object containing CLI options and parameters.
+            Context parameters used:
+            - strength (float): Model strength parameter, defaults to DEFAULT_STRENGTH
+            - temperature (float): Model temperature parameter, defaults to 0.0
+            - time (float): Model time parameter, defaults to DEFAULT_TIME
+            - force (bool): Whether to force overwrite existing files
+            - quiet (bool): Whether to suppress output messages
+            - verbose (bool): Whether to enable verbose output for debugging purposes
+            - output_cost (Optional[str]): Path to CSV file for cost tracking
+            - review_examples (bool): Whether to review few-shot examples
+            - local (bool): Whether to run commands locally instead of in cloud
+        - `basename` (str): The base name for the prompt file (e.g., "factorial_calculator" for "factorial_calculator_python.prompt")
+        - `max_attempts` (int): Maximum number of fix attempts in any iterative loop (default is 3)
+        - `budget` (float): Maximum total cost allowed for the entire sync process (default is $10.0)
+        - `skip_verify` (bool): Skip the functional verification step
+        - `skip_tests` (bool): Skip unit test generation and fixing
+        - `target_coverage` (float): Desired code coverage percentage (default is 90.0)
+
+    Outputs:
+        - Returns a tuple containing:
+            - `Dict[str, Any]`: Comprehensive results dictionary from sync_orchestrate
+            - `float`: Total cost of the sync operation
+            - `str`: Primary model name used during sync
+
+% Important Implementation Notes:
+
+1. **Parameter Retrieval**:
+    - Retrieve `strength = ctx.obj.get('strength', DEFAULT_STRENGTH)`.
+    - Retrieve `temperature = ctx.obj.get('temperature', 0.0)`.
+    - Retrieve `time = ctx.obj.get('time', DEFAULT_TIME)`. (DEFAULT_TIME is imported from the package root)
+    - Retrieve `verbose = ctx.obj.get('verbose', False)`.
+    - Retrieve `force = ctx.obj.get('force', False)`.
+    - Retrieve `quiet = ctx.obj.get('quiet', False)`.
+    - Retrieve `output_cost = ctx.obj.get('output_cost', None)`.
+    - Retrieve `review_examples = ctx.obj.get('review_examples', False)`.
+    - Retrieve `local = ctx.obj.get('local', False)`.
+
+2. **Configuration and Path Handling**:
+    - Handle `.pddrc` configuration file for context-aware settings
+    - Use automatic context detection based on current working directory paths
+    - Support manual context override via `--context` CLI option
+    - Extract context-specific settings like:
+        * `generate_output_path`, `test_output_path`, `example_output_path`
+        * `default_language`, `target_coverage`, `strength`, `temperature`
+        * `budget`, `max_attempts` for the sync operation
+    - Use the existing `construct_paths` function for final path construction
+    - Fall back to environment variables and defaults when no `.pddrc` context matches
+
+3. **Language Detection**:
+    - Scan for existing prompt files matching the pattern `{basename}_{language}.prompt` in the prompts directory
+    - If multiple language prompt files exist for the same basename, process all of them
+    - If no prompt files found, raise `click.UsageError` with helpful message
+    - Use `default_language` from `.pddrc` context, falling back to environment variable `PDD_DEFAULT_LANGUAGE` or "python"
+
+4. **File Path Validation**:
+    - Validate that required prompt files exist for the given basename
+    - Ensure output directories are accessible
+    - Let `construct_paths` handle directory creation and path resolution
+
+5. **Error Handling Requirements**:
+    - Validate basename parameter:
+        * Raise `click.UsageError` if basename is empty or contains invalid characters
+        * Check that at least one prompt file exists for the basename
+    - Handle budget and attempts validation:
+        * Ensure budget > 0 and max_attempts > 0
+        * Warn if budget seems too low for typical sync operations
+    - Use `try/except` blocks for file operations
+    - Provide formatted error messages using `rich.print`
+    - Exit with appropriate error codes on critical failures
+
+6. **User Feedback**:
+    - Use `rich.print` for formatted output (unless `quiet` is True)
+    - Show sync progress summary before starting
+    - Display final results including:
+        * Total operations completed
+        * Total cost and time elapsed
+        * Files created/updated
+        * Any errors or warnings
+    - Provide helpful suggestions for common issues
+
+7. **Integration with sync_orchestrate**:
+    - Import and call `sync_orchestrate` function from the sync orchestration module
+    - Pass all parameters properly mapped to sync_orchestrate's interface, ensuring directory parameters match the expected names (prompts_dir, code_dir, examples_dir, tests_dir)
+    - Handle return values and format them for CLI output
+
+<examples>
+   % Here is how to use the Python Click library to create a command line program:
+   <click_example>
+   <include>context/click_example.py</include>
+   </click_example>
+
+   % Here are examples of how to use internal modules:
+   <internal_example_modules>
+      - Here is an example of how to use the `construct_paths` function:
+      <construct_paths_example>
+      <include>context/construct_paths_example.py</include>
+      </construct_paths_example>
+
+      - Here is an example of how to get the language:
+      <get_language_example>
+      <include>context/get_language_example.py</include>
+      </get_language_example>
+
+
+      - Here is an example of `.pddrc` configuration handling:
+      <pddrc_config_example>
+      ```python
+      import os
+      import yaml
+      from pathlib import Path
+
+      def load_pddrc_config(context_override: str = None):
+          """Load .pddrc configuration with context detection"""
+          # Find .pddrc file (search upward from current directory)
+          config_path = Path(os.getenv('PDD_CONFIG_PATH', '.pddrc'))
+          if not config_path.is_absolute():
+              current_dir = Path.cwd()
+              for parent in [current_dir] + list(current_dir.parents):
+                  potential_config = parent / config_path
+                  if potential_config.exists():
+                      config_path = potential_config
+                      break
+          
+          if not config_path.exists():
+              return {}
+          
+          with open(config_path, 'r') as f:
+              config = yaml.safe_load(f)
+          
+          # Determine context
+          if context_override:
+              context_name = context_override
+          else:
+              context_name = detect_context_from_path(config, Path.cwd())
+          
+          # Get context-specific defaults
+          contexts = config.get('contexts', {})
+          if context_name in contexts:
+              return contexts[context_name].get('defaults', {})
+          elif 'default' in contexts:
+              return contexts['default'].get('defaults', {})
+          
+          return {}
+
+      def detect_context_from_path(config: dict, current_path: Path) -> str:
+          """Detect context based on current working directory path"""
+          import fnmatch
+          contexts = config.get('contexts', {})
+          current_str = str(current_path)
+          
+          for context_name, context_config in contexts.items():
+              if context_name == 'default':
+                  continue
+              paths = context_config.get('paths', [])
+              for path_pattern in paths:
+                  if fnmatch.fnmatch(current_str, path_pattern) or path_pattern in current_str:
+                      return context_name
+          
+          return 'default'
+      ```
+      </pddrc_config_example>
+
+      - Here is how to use the `sync_orchestrate` function:
+      <sync_orchestrate_example>
+        <include>context/sync_orchestrate_example.py</include>
+      </sync_orchestrate_example>
+
+      - Here is an example of language detection for sync:
+      <language_detection_example>
+      ```python
+      import glob
+      from pathlib import Path
+
+      def detect_languages_for_basename(basename: str, prompts_dir: str = "prompts") -> list:
+          """Detect all languages that have prompt files for a given basename"""
+          prompts_path = Path(prompts_dir)
+          pattern = f"{basename}_*.prompt"
+          
+          prompt_files = list(prompts_path.glob(pattern))
+          languages = []
+          
+          for prompt_file in prompt_files:
+              # Extract language from filename: basename_language.prompt
+              stem = prompt_file.stem  # removes .prompt
+              if '_' in stem:
+                  language = stem.split('_', 1)[1]  # Get everything after first underscore
+                  languages.append(language)
+          
+          return languages
+      ```
+      </language_detection_example>
+   </internal_example_modules>
+</examples>
+
+% Here is the PDD README for the 'sync' command that describes how it should work:
+<cli_command_readme>
+   <include>README.md</include>
+</cli_command_readme>
+
+% Implementation Requirements:
+
+1. **Main Function Structure**:
+   - Follow the same pattern as other PDD main functions (like fix_main)
+   - Handle all CLI interface logic in sync_main
+   - Delegate actual sync workflow to sync_orchestrate
+   - Return appropriate tuple for CLI result callback
+
+2. **Multiple Language Support**:
+   - If multiple language prompt files exist for the same basename, process all of them
+   - Run sync_orchestrate separately for each detected language
+   - Combine results and costs from all language syncs
+
+3. **Path Management**:
+   - Use `construct_paths` function for all file path construction
+   - Let `construct_paths` handle environment variables and directory creation
+   - Focus on parameter validation rather than path manipulation
+
+4. **Progress Reporting**:
+   - Show which language(s) are being processed
+   - Display progress for each major step
+   - Provide clear success/failure indicators
+
+5. **State Management**:
+   - Let sync_orchestrate handle git integration and state tracking
+   - Don't duplicate state management logic in sync_main
+   - Pass through all necessary parameters for state handling
+
+The sync_main function should act as a clean interface layer that handles CLI parameter extraction and validation while delegating path construction to `construct_paths` and the actual sync workflow intelligence to sync_orchestrate. Cost tracking is automatically handled by the `@track_cost` decorator at the CLI level.

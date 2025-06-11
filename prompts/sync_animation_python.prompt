@@ -2,21 +2,21 @@
 
 <include>context/python_preamble.prompt</include>
 
-% Here are the inputs of the function:
+% Here are the inputs of the function (all mutable list references for real-time updates):
    * Inputs:
-        - 'function' - the function that is running on the prompt
-        - 'stop_event' - boolean (True) that indicates when the animation should stop
+        - 'function_name_ref' - List[str] reference to the function that is running on the prompt
+        - 'stop_event' - threading.Event that indicates when the animation should stop
         - 'basename' - the basename of the prompt that is running
-        - 'cost' - the cost of the function calls
-        - 'budget' - the budget of the sync run
-        - 'prompt_color' - the color of the prompt box
-        - 'code_color' - the color of the code box
-        - 'example_color' - the color of the example box
-        - 'tests_color' - the color of the tests box
-        - 'prompt_path' - the path to the prompt file
-        - 'code_path' - the path to the code file
-        - 'example_path' - the path to the example file
-        - 'tests_path' - the path to the tests file
+        - 'cost_ref' - List[float] reference to the cost of the function calls
+        - 'budget' - the budget of the sync run (Optional[float])
+        - 'prompt_color' - List[str] reference to the color of the prompt box
+        - 'code_color' - List[str] reference to the color of the code box
+        - 'example_color' - List[str] reference to the color of the example box
+        - 'tests_color' - List[str] reference to the color of the tests box
+        - 'prompt_path_ref' - List[str] reference to the path to the prompt file
+        - 'code_path_ref' - List[str] reference to the path to the code file
+        - 'example_path_ref' - List[str] reference to the path to the example file
+        - 'tests_path_ref' - List[str] reference to the path to the tests file
 
 % Here is the information on all the commands of pdd that you are animating for the sync command:
 <README>
@@ -29,35 +29,53 @@
 </branding>
 
 % This function will do the following:
-    1. Upon first starting to run, the Prompt Driven logo will expand up from the bottom of the screen to the logo show like a chat bubble
-    2. After 1 sec, the logo will animate to expand to a 18 line tall box
-    3. The animation will display the command that is running in the box
-    4. The function might get additional function calls and the animation will update to display the new function
-    5. When the stop_event is set to True, the animation will shrink back to the logo and then stop
+    1. Upon first starting to run, call logo_animation.run_logo_animation_inline() for the initial logo sequence
+    2. Transition to the main animation box (18 lines tall, responsive width)
+    3. The animation will display the command that is running in the box with real-time updates
+    4. The function receives updates through mutable list references and updates the animation accordingly
+    5. When the stop_event is set, show a final logo sequence and then stop
 
 % This is the basic layout of the animation:
-    * Top left corner: Prompt Driven Development
+    * Top left corner: "Prompt Driven Development"
     * Bottom left corner: The basename of the prompt that is running
     * Top right corner: The command that is running and should be blinking
-    * Bottom right corner: The cost of the function calls vs. the budget of the sync run
-    * Bottom center: The time elapsed since the sync run started
-    * Center of the box will be and org chart like diagram with the "Prompt" box on the top with three lines that go to "Code", "Example" and "Tests" boxes on the bottom. 
-        - The relative directory path name of the respective boxes being worked on will be displayed in the center of the box (e.g. "Prompt: ./directory/path") and if the path is too long, it will scroll continuously like a stock ticker.
+    * Bottom right corner: The cost of the function calls vs. the budget of the sync run (format: "$X.XX / $Y.YY")
+    * Bottom center: The time elapsed since the sync run started (format: "Elapsed: HH:MM:SS")
+    * Center of the box will be an org chart diagram with the "Prompt" box on the top center, connected through a junction system to "Code", "Example" and "Tests" boxes on the bottom row.
+        - The relative directory path of each file will be displayed in the center of each box, intelligently shortened and scrolling like a stock ticker if too long
+        - The layout should be responsive to console width with dynamic box sizing
 
-% The animation will implement the following pdd commands:
-    * auto-deps- This animation will progressively thicken the box border of the "Prompt" box.
-    * generate- This animation will have a ">" going continuously along the line from the "Prompt" to "Code" with hammer emoji in front of the word "Code".
-    * example- This animation will have a ">" going continuously along the line from the "Prompt" towards the "Example" box with the seedling emoji in front of the word "Example".
-    * crash- This animation will have a skull emoji in front of the "Code" and "Example". A ">" character will go along the lines between the "Code" and "Example" boxes back and forth continuously.
-    * verify- This animation a magnifying glass emoji in front of the "Example" and "Code" words. A ">" character will go along the lines between the "Example" and "Code" boxes back and forth.
-    * test- This animation will have a test tube emoji in front of the "Tests" word. A ">" character will go along the lines from the "Code" and "Prompt" to the "Tests" box continuously.
-    * fix- This animation will have a wrench emoji in front of the "Code" and "Tests" words. A ">" character will go along the lines between the "Code" and "Tests" boxes back and forth continuously.
-    * update- This animation will have a up arrow emoji in front of the "Prompt" word. A ">" character will go along the line from the "Code" to the "Prompt" continuously. 
+% The animation will implement the following pdd commands with sophisticated waypoint-based arrow routing:
+    * auto-deps - This animation will progressively thicken the box border of the "Prompt" box through 4 levels of thickness
+    * generate - This animation will have a single arrow traveling along the path from "Prompt" to "Code" with hammer emoji in front of the word "Code"
+    * example - This animation will have a single arrow traveling along the path from "Prompt" to "Example" with seedling emoji in front of the word "Example"
+    * crash - This animation will have skull emojis in front of both "Code" and "Example". A single arrow will travel bidirectionally between the "Code" and "Example" boxes
+    * verify - This animation will have magnifying glass emojis in front of both "Example" and "Code" words. A single arrow will travel bidirectionally between the "Example" and "Code" boxes
+    * test - This animation will have a test tube emoji in front of the "Tests" word. A single arrow will travel along the path from "Prompt" to "Tests"
+    * fix - This animation will have wrench emojis in front of both "Code" and "Tests" words. A single arrow will travel bidirectionally between the "Code" and "Tests" boxes
+    * update - This animation will have an up arrow emoji in front of the "Prompt" word. A single arrow will travel along the path from "Code" to "Prompt"
 
 % There will also be animations for the following:
-    * checking- This is when the sync command is trying to determine which command to run. A magnifying glass emoji will be in front of "Prompt", "Code", "Example" and "Tests" words boxes.
+    * checking - This is when the sync command is trying to determine which command to run. A magnifying glass emoji will be in front of all "Prompt", "Code", "Example" and "Tests" boxes
+
+% Technical implementation requirements:
+    * Use Rich library's Layout, Panel, Table, Text, and Live components
+    * Implement an AnimationState class to manage state and frame counting
+    * The emojis will be blinking (5-frame cycle). Ensure blinking doesn't cause layout shifts by always reserving 2 characters (emoji + space)
+    * Arrow animation uses distance-based timing for consistent speed across different path lengths
+    * Bidirectional commands (crash, verify, fix) alternate direction every 60 frames
+    * The org chart uses Unicode box drawing characters (─│┌┐┼) for professional appearance
+    * Connecting lines are drawn with a central junction system where all paths meet at line 2
+    * Path scrolling uses intelligent shortening (relative paths preferred, basename fallback) and smooth ticker-style animation
+    * Console width detection and responsive layout with dynamic box sizing
+    * Proper exception handling and cleanup for Rich's Live display mode
 
 % Rules to follow:
-    * The above emojis will be blinking. Be sure the blinking emoji doesn't cause the top of the box to shift with the extra character.
-    * The ">" will always point to the direction it is going (e.g. it might be "<" if going to the left or "^" if going up). Only should a single arrow character at a time and this will be traveling along org lines to other boxes character by character for a smooth animation.
-    * The org chart diagram will be centered in the box and the lines will be drawn from the "Prompt" box to the "Code", "Example" and "Tests" boxes should always be shown and fully connected. The connecting lines will be centered for the boxes. 
+    * All emojis will be blinking with consistent 2-character spacing to prevent layout shifts
+    * Only one arrow character should be visible at a time, traveling smoothly along the connection lines
+    * Arrow direction should match movement direction (">" right, "<" left, "^" up, "v" down)
+    * The org chart diagram should be centered and all connecting lines must be fully drawn and connected
+    * Use waypoint-based animation system for smooth arrow movement along complex paths
+    * Handle bidirectional animations by reversing waypoint order on alternate cycles
+    * Implement progressive border thickening for auto-deps using style variations
+    * All paths should be displayed as shortened relative paths, scrolling if necessary

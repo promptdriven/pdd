@@ -1,0 +1,235 @@
+# sync_orchestration_python.prompt
+
+Create a Python module that orchestrates the complete PDD (Prompt-Driven Development) sync workflow by coordinating operations and animations in parallel.
+
+## Context
+
+<readme>
+    <include>README.md</include>
+</readme>
+
+<whitepaper>
+    <include>../docs/whitepaper.md</include>
+</whitepaper>
+
+The sync command is the primary command in PDD that automatically executes the complete workflow loop from dependency injection through code generation, testing, and verification. This orchestration module coordinates the execution while providing real-time feedback to users.
+
+## Requirements
+
+Create a module with the following main function:
+
+```python
+def sync_orchestrate(
+    basename: str,
+    language: str = "python",
+    prompts_dir: str = "prompts",
+    code_dir: str = "src", 
+    examples_dir: str = "examples",
+    tests_dir: str = "tests",
+    max_attempts: int = 3,
+    budget: float = 10.0,
+    skip_verify: bool = False,
+    skip_tests: bool = False,
+    target_coverage: float = 90.0,
+    force: bool = False,
+    strength: float = 0.5,
+    temperature: float = 0.0,
+    time: float = 0.25,
+    verbose: bool = False,
+    quiet: bool = False,
+    output_cost: Optional[str] = None,
+    review_examples: bool = False,
+    local: bool = False,
+) -> Dict[str, Any]:
+    """
+    Orchestrate the complete PDD sync workflow with parallel animation.
+    
+    Returns a dictionary with:
+    - 'success': bool indicating overall success
+    - 'operations_completed': List of completed operations
+    - 'total_cost': float total cost of all operations
+    - 'total_time': float total time elapsed
+    - 'final_state': Dict with final file states
+    - 'errors': List of any errors encountered
+    """
+```
+
+Here are examples of how to use the internal functions:
+<examples>
+    - Here is how to use the `sync_animation` function:
+      <sync_animation_example>
+        <include>context/sync_animation_example.py</include>
+      </sync_animation_example>
+      
+    - Here is how to use the `sync_determine_operation` function:
+      <sync_determine_operation_example>
+        <include>context/sync_determine_operation_example.py</include>
+      </sync_determine_operation_example>
+</examples>
+
+## Workflow Orchestration
+
+The module should implement the PDD workflow as described in the whitepaper:
+
+1. **Initial Analysis**: Use `sync_determine_operation` to analyze current state
+2. **Operation Loop**: Execute operations in sequence until synchronized
+3. **Parallel Animation**: Run `sync_animation` in a separate thread throughout
+4. **State Management**: Track progress and update animation references
+5. **Error Handling**: Handle failures and retry logic within budget constraints
+6. **Final Reporting**: Summarize results and costs
+
+### Core Workflow Steps
+
+The orchestrator should execute these operations in order as determined by `sync_determine_operation`:
+
+1. **auto-deps**: Find and inject relevant dependencies into the prompt
+2. **generate**: Create or update the code module from the prompt  
+3. **example**: Generate usage example if it doesn't exist or is outdated
+4. **crash**: Fix any runtime errors to make code executable
+5. **verify**: Run functional verification against prompt intent (unless --skip-verify)
+6. **test**: Generate comprehensive unit tests (unless --skip-tests)
+7. **fix**: Resolve any bugs found by unit tests
+8. **update**: Back-propagate any learnings to the prompt file
+
+### Parallel Animation System
+
+The module should:
+
+1. **Start Animation Thread**: Launch `sync_animation` before beginning operations
+2. **Update Animation State**: Use mutable list references to update animation in real-time:
+   - `function_name_ref`: Current operation being executed
+   - `cost_ref`: Running total of costs
+   - `prompt_color/code_color/example_color/tests_color`: Visual status indicators
+   - `prompt_path_ref/code_path_ref/example_path_ref/tests_path_ref`: File paths
+3. **Stop Animation**: Set stop_event when workflow completes
+
+### Operation Execution
+
+For each operation:
+
+1. **Determine Next Step**: Call `sync_determine_operation` to get recommendation
+2. **Update Animation**: Set function_name_ref to current operation
+3. **Execute Command**: Run the appropriate PDD command with proper arguments
+4. **Track Results**: Update cost, file paths, and status colors
+5. **Handle Errors**: Implement retry logic within max_attempts and budget
+6. **Update State**: Save progress for next iteration
+
+### State and Path Management
+
+The orchestrator should:
+
+- **Construct File Paths**: Use the directory parameters to build full paths
+- **Track File States**: Monitor which files exist and their modification times
+- **Update Animation Colors**: Set colors based on file status:
+  - Green: File exists and up-to-date
+  - Yellow: File being processed
+  - Red: File has errors or missing
+  - Blue: File analysis in progress
+- **Manage Git Integration**: Handle git operations for state persistence
+
+### Error Handling and Recovery
+
+Implement robust error handling:
+
+- **Budget Constraints**: Stop if total cost exceeds budget
+- **Max Attempts**: Limit retry attempts for failed operations
+- **Graceful Degradation**: Continue workflow even if non-critical steps fail
+- **User Feedback**: Provide clear error messages through animation
+- **State Recovery**: Save progress to allow resuming from failures
+
+### Integration with Main Components
+
+The orchestrator should import and use:
+
+```python
+from .sync_determine_operation import sync_determine_operation
+from .sync_animation import sync_animation
+from .auto_deps_main import auto_deps_main
+from .code_generator_main import code_generator_main
+from .context_generator_main import context_generator_main
+from .crash_main import crash_main
+from .fix_verification_main import fix_verification_main
+from .cmd_test_main import cmd_test_main
+from .fix_main import fix_main
+from .update_main import update_main
+```
+
+### Command Execution Pattern
+
+For each PDD operation, construct appropriate arguments:
+
+```python
+# Example for generate operation
+result = code_generator_main(
+    ctx=mock_context,  # Construct from parameters
+    prompt_file=prompt_path,
+    output=code_path,
+    original_prompt_file_path=None,
+    force_incremental_flag=False,
+)
+```
+
+### Output Format
+
+Return comprehensive results:
+
+```python
+{
+    'success': True,
+    'operations_completed': ['auto-deps', 'generate', 'example', 'verify', 'test'],
+    'total_cost': 2.45,
+    'total_time': 120.5,
+    'final_state': {
+        'prompt': {'exists': True, 'path': '...', 'status': 'current'},
+        'code': {'exists': True, 'path': '...', 'status': 'generated'},
+        'example': {'exists': True, 'path': '...', 'status': 'current'},
+        'test': {'exists': True, 'path': '...', 'status': 'passing'}
+    },
+    'errors': [],
+    'skipped_operations': ['verify'] if skip_verify else [],
+    'git_commits_created': 3,
+    'test_coverage_achieved': 92.5
+}
+```
+
+## Implementation Requirements
+
+1. **Threading**: Use threading.Thread for animation, threading.Event for coordination
+2. **Context Management**: Create Click context objects for command execution
+3. **Path Resolution**: Handle relative and absolute paths correctly
+4. **File Operations**: Use pathlib.Path for cross-platform compatibility
+5. **Git Integration**: Execute git commands for state management
+6. **Cost Tracking**: Accumulate costs from all operations
+7. **Time Tracking**: Monitor elapsed time for each operation
+8. **Exception Handling**: Catch and handle all operation failures gracefully
+
+## Dependencies
+
+- Standard library modules (threading, time, pathlib, subprocess, json)
+- Click for context management
+- All PDD command modules for operation execution
+- sync_determine_operation for workflow intelligence
+- sync_animation for user feedback
+
+## Usage Example
+
+```python
+# Basic sync execution
+result = sync_orchestrate(
+    basename="calculator",
+    language="python"
+)
+
+# Advanced sync with custom settings  
+result = sync_orchestrate(
+    basename="data_processor",
+    language="python",
+    code_dir="backend/src",
+    tests_dir="backend/tests",
+    budget=15.0,
+    target_coverage=95.0,
+    skip_verify=False
+)
+```
+
+The module should be the central coordinator that brings together all PDD components into a seamless, animated workflow that embodies the prompt-driven development philosophy described in the whitepaper.

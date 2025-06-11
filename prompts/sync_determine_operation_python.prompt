@@ -1,0 +1,301 @@
+# sync_determine_operation_python.prompt
+
+Create a Python module that analyzes the state of PDD (Prompt-Driven Development) unit files and determines the next operation to run in the workflow.
+
+## Context
+
+In PDD, a "unit" consists of four related files:
+1. **Prompt file**: `{basename}_{language}.prompt` - The source of truth defining the module's behavior
+2. **Code file**: `{basename}.{extension}` - The generated implementation
+3. **Example file**: `{basename}_example.{extension}` - Minimal usage example/interface
+4. **Test file**: `test_{basename}.{extension}` - Unit tests for the code
+
+The PDD workflow follows this conceptual flow:
+`auto-deps → generate → example → crash → verify → test → fix → update`
+
+## Requirements
+
+Create a module with the following functionality:
+
+### Main Function
+```python
+def sync_determine_operation(
+    basename: str,
+    language: str = "python",
+    prompts_dir: str = "prompts",
+    code_dir: str = "src",
+    examples_dir: str = "examples",
+    tests_dir: str = "tests",
+    skip_verify: bool = False,
+    skip_tests: bool = False,
+) -> Dict[str, Any]:
+    """
+    Analyze PDD unit files and determine the next operation to run.
+    
+    Returns a dictionary with:
+    - 'file_states': Dict mapping file types to their state info
+    - 'next_operation': The recommended PDD command to run next
+    - 'reason': Explanation for the recommendation
+    - 'confidence': float (0.0-1.0) indicating confidence in the recommendation
+    """
+```
+
+### File State Analysis
+
+For each file type, determine:
+1. **Existence**: Does the file exist?
+2. **Timestamps**: Creation and modification times
+3. **Git status**: Is it tracked, modified, staged, or untracked?
+4. **Content hash**: For change detection
+5. **Relationships**: How it relates to other files in the unit
+
+### State Detection Logic
+
+The module should reconstruct state using a hybrid git-and-file approach:
+
+1. **Check Git Status**: Determine if the working directory is "clean" or "dirty" for the relevant unit files.
+2. **State Retrieval Strategy**:
+    - **If clean**: Read the last sync state from the most recent relevant `git note`.
+    - **If dirty**: Read from a temporary state file (`.pdd/sync_pending.json`) first. If it doesn't exist, read the last state from `git notes` as a baseline.
+3. **Analyze Working Directory**: Always analyze the current files in the working directory.
+4. **State Determination**: Compare current file hashes against the retrieved state (from git or temp file) to detect changes and determine the next operation.
+5. **Handle Missing State**: If no state can be found in git or temp files, perform a fresh analysis based on which files exist.
+
+### State Persistence Strategy
+
+- **After Operation (Clean Directory)**: The `sync` command should commit the resulting changes and attach a new `git note` with the updated state.
+- **After Operation (Dirty Directory)**: Save the resulting state to a temporary, gitignored file (`.pdd/sync_pending.json`).
+- **State Finalization**: On a subsequent run, if a pending state file is found and the git HEAD has advanced, the module should transfer the pending state to a `git note` on the new HEAD and delete the temp file.
+
+### Git Integration
+
+Use git to detect:
+- Which files have uncommitted changes
+- When files were last modified relative to each other
+- Whether incremental generation is appropriate
+
+### Smart Recommendations
+
+Consider these factors:
+- File modification times and dependencies
+- Git history and staging status
+- Previous operation results (if available)
+- User preferences (skip_verify, skip_tests)
+- Workflow stage progression
+
+### Output Format
+
+Return structured data that includes:
+```python
+{
+    'file_states': {
+        'prompt': {
+            'exists': True,
+            'path': 'prompts/calculator_python.prompt',
+            'modified': '2024-01-15T10:30:00',
+            'git_status': 'modified',
+            'hash': 'abc123...'
+        },
+        'code': {...},
+        'example': {...},
+        'test': {...}
+    },
+    'next_operation': 'update',  # or 'generate', 'test', 'fix', etc.
+    'reason': 'Code file has been modified after generation. Sync changes back to prompt.',
+    'confidence': 0.95,
+    'additional_info': {
+        'incremental_possible': True,
+        'files_out_of_sync': ['code', 'prompt'],
+        'workflow_stage': 'synchronization',
+        'last_operation': 'generate',
+        'last_operation_status': 'success',
+        'git_tracked': True,
+        'fix_attempts': 0,
+        'state_source': 'git_notes'  # or 'file_inference'
+    }
+}
+```
+
+### Error Handling
+
+Handle these cases gracefully:
+- Missing directories
+- Permission errors
+- Git not initialized
+- Corrupted files
+- Multiple language files for same basename
+
+### Dependencies
+
+You may use:
+- Standard library modules (os, pathlib, datetime, hashlib, json)
+- subprocess for git commands
+- No external dependencies beyond Python standard library
+
+## Implementation Notes
+
+1. Prioritize robustness - handle edge cases gracefully
+2. Make the logic transparent - clear reasons for recommendations
+3. Consider the full PDD workflow when making decisions
+4. Use file hashes for reliable change detection
+5. Respect user preferences (skip flags)
+6. Provide actionable recommendations
+
+## Example Usage
+
+```python
+# Analyze a calculator module
+result = sync_determine_operation("calculator", "python")
+print(f"Next operation: {result['next_operation']}")
+print(f"Reason: {result['reason']}")
+
+# With custom directories
+result = sync_determine_operation(
+    "data_processor",
+    language="python",
+    code_dir="backend/src",
+    tests_dir="backend/tests"
+)
+```
+
+The module should be self-contained, well-documented, and follow Python best practices.
+
+## State Tracking
+
+### Git-Based State Management
+
+To properly determine the next operation, the module uses git as the source of truth for tracking sync state. This approach requires no additional files or user configuration.
+
+### State Tracking Strategy
+
+Use git notes to attach sync metadata to commits:
+
+```python
+# Git note format (attached to HEAD after each operation)
+{
+    "pdd_sync": {
+        "basename": "calculator",
+        "language": "python",
+        "operation": "generate",
+        "status": "success",
+        "timestamp": "2024-01-15T10:30:00",
+        "file_hashes": {
+            "prompt": "abc123...",
+            "code": "def456..."
+        },
+        "stage": "example",  # Next stage in workflow
+        "fix_attempts": 0
+    }
+}
+```
+
+### Git Integration Approach
+
+1. **Git Notes**: Store sync state as git notes in the `refs/notes/pdd-sync` namespace
+2. **Fallback for Non-Git**: If not in a git repository, use in-memory state only (warn user)
+3. **State Recovery**: Scan recent commits to reconstruct current state
+4. **Atomic Updates**: State changes are tied to code changes
+
+Example git commands used internally:
+```bash
+# Save state after operation
+git notes --ref=pdd-sync add -f -m '{"pdd_sync": {...}}'
+
+# Read state for a basename  
+git log --notes=pdd-sync --grep="basename.*calculator" --pretty=format:"%N" -n 20
+
+# Check if operation was completed
+git log --notes=pdd-sync --grep='"operation":"generate".*"status":"success"' -n 1
+```
+
+### State Detection Logic
+
+The module should reconstruct state by scanning git notes:
+
+1. **Find Last Sync State**: Search git log for most recent pdd-sync note for the basename
+2. **Verify File Integrity**: Compare current file hashes with those in git note
+3. **Detect Manual Changes**: If hashes differ, infer manual intervention
+4. **Determine Next Stage**: Based on last successful operation and workflow progression
+5. **Handle Missing State**: If no git notes found, analyze files to infer current state
+
+### Key Decisions Based on State
+
+- **Prioritize Working Directory**: The current state of files in the working directory is the primary driver for determining the next action.
+- **Use Git for Baseline**: Git notes provide the historical baseline to detect changes against.
+- **Handle Pending State**: If a pending state file exists, it overrides the git baseline, as it represents a more recent operation.
+- **Atomic Operations**: Encourage committing changes after each sync operation to keep the git history clean and state up-to-date.
+- **Handle Non-Git Projects**: Warn user that state tracking is limited to in-memory for the current run and will not persist.
+
+### Helper Functions
+
+```python
+def get_git_status(basename: str) -> Dict[str, str]:
+    """Check git status for all files related to a basename. Returns 'clean', 'dirty', or 'untracked'."""
+
+def save_pending_state(state: Dict[str, Any]) -> None:
+    """Save the current sync state to a temporary gitignored file."""
+
+def load_pending_state() -> Optional[Dict[str, Any]]:
+    """Load sync state from the temporary file, if it exists."""
+
+def clear_pending_state() -> None:
+    """Remove the temporary state file."""
+
+def promote_pending_state_to_git_note() -> bool:
+    """If a pending state file exists and HEAD has changed, move state to a git note."""
+
+def save_state_as_git_note(state: Dict[str, Any]) -> bool:
+    """Save sync state as a git note on a new commit (to be created by the sync command)."""
+
+def get_state_from_git_note(basename: str) -> Optional[Dict[str, Any]]:
+    """Retrieve the most recent sync state for a basename from git notes."""
+
+def infer_state_from_files(basename: str, ...) -> Dict[str, Any]:
+    """Analyze files to infer current state when no history is available."""
+```
+
+### Integration with Main Function
+
+The `sync_determine_operation` function should:
+1. **Promote Pending State**: Attempt to move any pending state from a temp file to a git note.
+2. **Check Git Status**: Determine if the working directory is clean or dirty.
+3. **Retrieve State**: Load state from a pending file or the last git note.
+4. **Analyze Files**: Calculate current file hashes and compare with the retrieved state.
+5. **Apply Decision Logic**: Use the file analysis and state to determine the single next operation.
+6. **Return Recommendation**: Provide the next operation, reason, and confidence.
+
+This approach enables the sync command to:
+- Work seamlessly with existing git workflows
+- Maintain zero user-facing configuration
+- Handle uncommitted changes gracefully
+- Keep state synchronized with code changes via commits
+
+**Note**: This module provides the intelligence for state detection. The main `sync` command is responsible for:
+1. Creating commits with a standardized message (e.g., `[pdd-sync] Completed 'generate' for calculator`) after successful operations.
+2. Calling the state-saving functions (`save_pending_state` or `save_state_as_git_note`) after each step.
+3. Warning the user when operating in a dirty directory or non-git project.
+
+### Decision Logic
+
+The core logic for determining the next operation follows this decision tree, after retrieving the current state (from git or a pending file) and analyzing the working directory files:
+
+1.  **Check for Manual Changes**: Compare current file hashes against the hashes in the last known state. This check has the highest priority.
+    *   If `prompt` file was modified -> Recommend `auto-deps`.
+    *   If `code` file was modified -> Recommend `update`.
+    *   If `test` file was modified -> Recommend `fix`.
+
+2.  **Follow Workflow Progression**: If no manual changes, determine the next step based on the `last_operation` status in the state.
+    *   If `last_operation` was `auto-deps` and `success` -> Recommend `generate`.
+    *   If `last_operation` was `generate` and `success` -> Recommend `example`.
+    *   If `last_operation` was `example` and `success` -> Recommend `crash`.
+    *   If `last_operation` was `crash` and `success` -> Recommend `verify` (unless `--skip-verify`).
+    *   If `last_operation` was `verify` and `success` -> Recommend `test` (unless `--skip-tests`).
+    *   If `last_operation` was `test` and `success` -> Recommend `fix`.
+    *   If `last_operation` was `fix` and `success` -> The unit is synchronized. Recommend `None`.
+
+3.  **Handle Initial State**: If no previous state is found:
+    *   If only a `prompt` file exists -> Recommend `auto-deps`.
+    *   If no files exist -> Recommend `None` with a reason prompting the user to create a prompt file.
+
+4.  **Retry Failed Operations**: If the last recorded operation `status` was `failed`:
+    *   Recommend re-running the same operation. The `sync` command can use the `fix_attempts` count from the state to manage retries.
