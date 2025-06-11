@@ -1,13 +1,25 @@
-% You are an expert Python programmer. Your goal is the write a function 'logo_animation' that will display ascii art using the rich library in the terminal while the main program is running.
+% You are an expert Python programmer. Your goal is to write a Python module that displays a sophisticated, multi-stage ASCII art animation in the terminal using the 'rich' library.
 
 <include>context/python_preamble.prompt</include>
 
-% The branding document has the Prompt Driven logo you will use for animation and specifies the colors to use:
+% The branding document provides the Prompt Driven logo and specifies the colors to use.
 <branding>
     <include>../docs/branding.md</include>
 </branding>
 
-% This function will do the following:
-    1. Upon first starting to run, the individualcharacters of the Prompt Driven logo will travel from the bottom left of the screen to the shape of the logo
-    2. After 1 sec, the logo will animate to expand to a 18 line tall box and as wide as the screen is. This logo expansion happens by the individually characters of the logo moving to the edge of the screen where the characters 
+% The module should be designed to run the animation in the background without blocking the main program. It should expose two primary functions:
+- `start_logo_animation()`: Starts the animation in a non-blocking daemon thread.
+- `stop_logo_animation()`: Gracefully stops the animation and cleans up the thread.
+
+% The animation sequence should proceed as follows:
+1.  **Formation**: Upon starting, the individual characters of the logo travel from the bottom-left of the screen to form the centered ASCII art logo.
+2.  **Hold**: After forming, the logo holds its position for a brief period (e.g., 1 second).
+3.  **Expansion**: The particles of the logo then animate outwards to form the perimeter of a large box. This box should be 18 lines tall and span the full width of the terminal.
+4.  **Final State**: The expanded box remains on screen, creating a frame for other content, until `stop_logo_animation()` is called.
+
+% Implementation Details:
+- The animation should be smooth, using linear interpolation for particle movement and a consistent frame rate.
+- Use the `rich.live.Live` feature for efficient and flicker-free rendering.
+- The module should include a standalone test block (`if __name__ == "__main__":`) that demonstrates the full animation sequence when the file is run directly.
+- The code should be well-structured, using helper functions and a dataclass for managing animation particles.
 
