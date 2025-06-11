@@ -1,6 +1,6 @@
 import time
 # Assuming the 'pdd' package is in your PYTHONPATH or current working directory's parent.
-from pdd.branding_animation import start_logo_animation, stop_logo_animation
+from pdd.logo_animation import start_logo_animation, stop_logo_animation
 
 def main() -> None:
     """
