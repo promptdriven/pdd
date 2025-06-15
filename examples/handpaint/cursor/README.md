@@ -4,31 +4,15 @@ This is a hand-tracking drawing application implemented using Cursor IDE. The ap
 
 ## Features
 
-- Basic canvas for drawing
-- Drawing with your finger
-- Erasing with your palm
-
-## Test this application out
-
-- Download/clone the PDD repository
-- Copy the path to handpaint.html
-- Paste this into your browser search bar
-- Allow the site to use your camera
-- Start drawing!
-
-## Usage
-
-1. To draw:
-   - Extend your index finger
-   - Keep other fingers curled
-   - Move your finger to draw
-2. To erase:
-   - Extend all fingers to show your palm
-   - Move your hand over the area you want to erase
+- Real-time hand tracking using MediaPipe Hands
+- Drawing with extended index finger
+- Erasing with open palm
+- Visual feedback for hand landmarks
+- Non-mirrored camera feed with correct drawing coordinates
 
 ## Development Process
 
-This application was developed through an interactive conversation with Cursor's AI assistant. To replicate this demo, first install Cursor IDE from [Cursor's website](https://cursor.sh) and log in. Once installed, and open a new .html file, and link add it as context to the Cursor agent. You can then begin to replicate the development process by using the same prompts listed in the conversation below. Please be aware that AI model responses can vary, so you may need to slightly adjust your follow-up prompts to achieve the desired outcome. Below is the conversation was used to build and refine the current application in handpaint.html:
+This application was developed through an interactive conversation with Cursor's AI assistant. Below is the conversation that shows how the application was built and refined:
 
 ```
 User: Write code for the following application:
@@ -91,6 +75,18 @@ The application uses:
 - Two-layer canvas system for persistent drawing and landmark visualization
 - Custom palm center calculation for accurate erasing
 - Configurable thresholds for finger extension and palm detection
+
+## Usage
+
+1. Open the HTML file in a modern web browser
+2. Allow camera access when prompted
+3. To draw:
+   - Extend your index finger
+   - Keep other fingers curled
+   - Move your finger to draw
+4. To erase:
+   - Extend all fingers to show your palm
+   - Move your hand over the area you want to erase
 
 ## Dependencies
 

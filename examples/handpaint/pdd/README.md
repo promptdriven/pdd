@@ -1,6 +1,6 @@
-# Handpaint with Prompt-Driven Development (PDD)
+# Handpaint with PDD (Program-Driven Development)
 
-This is a basic implementation of a handpaint application using PDD. Note that this implementation represents a naive usage of PDD and does not utilize its full capabilities.
+This is a basic implementation of a handpaint application using Program-Driven Development (PDD). Note that this implementation represents a naive usage of PDD and does not utilize its full capabilities.
 
 ## Overview
 
@@ -9,62 +9,35 @@ This project demonstrates a simple approach to creating a handpaint application 
 ## Features
 
 - Basic canvas for drawing
-- Drawing with your finger
-- Erasing with your palm
-
-## Test this application out
-
-- Download/clone the PDD repository
-- Copy the path to handpaint_pdd.html
-- Paste this into your browser search bar
-- Allow the site to use your camera
-- Start drawing!
-
-## Working with this PDD Example
-
-**If you want to test this example using PDD, use `pdd sync`:**
-
-1. Install PDD by following the instructions in the main [README.md](https://github.com/gltanaka/pdd/blob/main/README.md)
-2. Navigate to this directory (`examples/handpaint/pdd/`)
-3. Run: `pdd sync handpaint`
-
-This will automatically handle the complete PDD workflow including code generation, testing, verification, and any necessary error fixing based on the `handpaint_html.prompt` file.
-
-## Usage
-
-1. To draw:
-   - Extend your index finger
-   - Keep other fingers curled
-   - Move your finger to draw
-2. To erase:
-   - Extend all fingers to show your palm
-   - Move your hand over the area you want to erase
+- Simple brush tools
+- Color selection
+- Basic stroke controls
 
 ## Limitations
 
-This is a learning example that shows a basic implementation of PDD concepts. For production use, consider exploring PDD's full capabilities including but not limited to:
+This implementation intentionally uses a simplified version of PDD to demonstrate basic concepts. A full PDD implementation would include:
+- More sophisticated program synthesis
+- Advanced pattern recognition
+- Complex state management
+- Enhanced error handling
+- More robust program generation capabilities
 
-- **Using `pdd sync`** - The primary command that automatically handles the complete development workflow (dependency injection, code generation, testing, verification, and error fixing)
-- A more robust prompt that handles edge cases and errors
-- For advanced users who need granular control, individual commands are available:
-  - Using `pdd test` to generate comprehensive unit tests
-  - Using `pdd fix` and `pdd crash` to debug and resolve issues automatically
-  - Using `pdd update` to keep the prompt synchronized with any manual code changes
+## Getting Started
+
+1. Clone the repository
+2. Install dependencies
+3. Run the application
+
+## Note
+
+This is a learning example that shows a basic implementation of PDD concepts. For production use, consider exploring PDD's full capabilities including:
+- Advanced program synthesis
+- Complex pattern matching
+- Sophisticated state management
+- Enhanced error recovery
+- More comprehensive program generation features
 
 ## PDD Prompt Evolution
-
-The final iteration of the prompt can be found in [`handpaint_html.prompt`](./handpaint_html.prompt). This prompt was used to generate the code in [`handpaint_pdd.html`](./handpaint_pdd.html).
-
-To replicate this generation process:
-1.  Install PDD by following the instructions in the main [README.md](https://github.com/gltanaka/pdd/blob/main/README.md).
-2.  Create a new file named `handpaint_html.prompt`.
-3.  Paste the desired iteration of the prompt into that file.
-4.  **Recommended**: Run `pdd sync handpaint` to automatically handle the complete workflow (code generation, testing, verification, and error fixing).
-5.  **Alternative** (for manual control): Run `pdd generate --output handpaint_pdd.html handpaint_html.prompt` to generate only the code.
-
-The `sync` command is the primary PDD interface that intelligently determines what steps are needed and executes them automatically. Individual commands like `generate`, `test`, and `fix` are still available for users who prefer manual control over specific parts of the workflow.
-
-The evolution of the prompt through various iterations demonstrates how PDD can be refined to achieve better results.
 
 ```
 % You are an expert in JavaScript, HTML, and CSS. You will write a single HTML file that will use the camera to capture images from the user's webcam and allow them to draw on the screen with their finger by using mediapipe hand tracking and using the three.js library for the display. Show the mediapipe skeleton of my hand.
@@ -150,8 +123,6 @@ The evolution of the prompt through various iterations demonstrates how PDD can 
 % 5. Provide proper initialization so the Three.js renderer uses the video feed texture and renders the drawing and skeleton in real time.
 % 6. Include comments to show where the camera feed is set up, where MediaPipe is initialized, and where drawing/erasing logic is implemented.
 ```
-
-Below is the final iteration of the prompt.
 ```
 % You are an expert in JavaScript, HTML, and CSS. You will write a single HTML file that does the following:
 % 1. Accesses the user’s webcam via getUserMedia and displays the live camera feed as the background of the page (not a black screen). The live feed should mirror the user.
@@ -163,3 +134,8 @@ Below is the final iteration of the prompt.
 % 5. Provide proper initialization so the Three.js renderer uses the video feed texture and renders the drawing and skeleton in real time.
 % 6. Include comments to show where the camera feed is set up, where MediaPipe is initialized, and where drawing/erasing logic is implemented.
 ```
+
+
+Note: Each iteration represents a step in the PDD development process, though still maintaining a simplified approach to program synthesis and generation.
+
+
