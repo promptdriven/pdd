@@ -39,6 +39,8 @@ This is a learning example that shows a basic implementation of PDD concepts. Fo
 
 ## PDD Prompt Evolution
 
+The final iteration of the prompt can be found in [`handpaint_html.prompt`](./handpaint_html.prompt). This prompt was used to generate the code in [`handpaint_pdd.html`](./handpaint_pdd.html). The evolution of the prompt through various iterations demonstrates how PDD can be refined to achieve better results.
+
 ```
 % You are an expert in JavaScript, HTML, and CSS. You will write a single HTML file that will use the camera to capture images from the user's webcam and allow them to draw on the screen with their finger by using mediapipe hand tracking and using the three.js library for the display. Show the mediapipe skeleton of my hand.
 
@@ -123,6 +125,8 @@ This is a learning example that shows a basic implementation of PDD concepts. Fo
 % 5. Provide proper initialization so the Three.js renderer uses the video feed texture and renders the drawing and skeleton in real time.
 % 6. Include comments to show where the camera feed is set up, where MediaPipe is initialized, and where drawing/erasing logic is implemented.
 ```
+
+Below is the final iteration of the prompt.
 ```
 % You are an expert in JavaScript, HTML, and CSS. You will write a single HTML file that does the following:
 % 1. Accesses the user’s webcam via getUserMedia and displays the live camera feed as the background of the page (not a black screen). The live feed should mirror the user.
@@ -134,8 +138,3 @@ This is a learning example that shows a basic implementation of PDD concepts. Fo
 % 5. Provide proper initialization so the Three.js renderer uses the video feed texture and renders the drawing and skeleton in real time.
 % 6. Include comments to show where the camera feed is set up, where MediaPipe is initialized, and where drawing/erasing logic is implemented.
 ```
-
-
-Note: Each iteration represents a step in the PDD development process, though still maintaining a simplified approach to program synthesis and generation.
-
-
