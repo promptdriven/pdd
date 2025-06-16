@@ -11,12 +11,12 @@ HandPaint is an interactive drawing application that uses computer vision to ena
 ## Comparison with Vibecoding
 
 ### Time & Interaction
-- **Vibecoding**
+- [**Vibecoding**](./cursor/README.md)
   - Active work: 38 minutes (100% user attention required)
   - Total prompts: 11
   - Model: Claude 3.5 Sonnet
 
-- **PDD (This Implementation)**
+- [**PDD**](./pdd/README.md)
   - Total session: 41 minutes
   - Background processing: ~24 minutes (automated, user can multitask)
   - Active user time: ~17 minutes (58% less active time required)
