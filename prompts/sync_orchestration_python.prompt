@@ -19,7 +19,7 @@ The sync command is the primary command in PDD that automatically executes the c
 Create a module with the following main function:
 
 ```python
-def sync_orchestrate(
+def sync_orchestration(
     basename: str,
     language: str = "python",
     prompts_dir: str = "prompts",
@@ -31,6 +31,7 @@ def sync_orchestrate(
     skip_verify: bool = False,
     skip_tests: bool = False,
     target_coverage: float = 90.0,
+    log: bool = False,
     force: bool = False,
     strength: float = 0.5,
     temperature: float = 0.0,
@@ -44,6 +45,9 @@ def sync_orchestrate(
     """
     Orchestrate the complete PDD sync workflow with parallel animation.
     
+    If log=True, display sync log for this basename instead of running sync.
+    The verbose flag (global option) controls detail level of log output.
+    
     Returns a dictionary with:
     - 'success': bool indicating overall success
     - 'operations_completed': List of completed operations
@@ -51,6 +55,7 @@ def sync_orchestrate(
     - 'total_time': float total time elapsed
     - 'final_state': Dict with final file states
     - 'errors': List of any errors encountered
+    - 'log_entries': List of log entries (when log=True)
     """
 ```
 
@@ -71,12 +76,14 @@ Here are examples of how to use the internal functions:
 
 The module should implement the PDD workflow as described in the whitepaper:
 
-1. **Initial Analysis**: Use `sync_determine_operation` to analyze current state
-2. **Operation Loop**: Execute operations in sequence until synchronized
-3. **Parallel Animation**: Run `sync_animation` in a separate thread throughout
-4. **State Management**: Track progress and update animation references
-5. **Error Handling**: Handle failures and retry logic within budget constraints
-6. **Final Reporting**: Summarize results and costs
+1. **Log Mode Check**: If `--log` flag is set, display sync log and return
+2. **Single Instance Enforcement**: Use `sync_determine_operation` to acquire lock and prevent concurrent runs
+3. **Initial Analysis**: Analyze current file state to determine starting point
+4. **Operation Loop**: Execute operations in sequence until synchronized
+5. **Parallel Animation**: Run `sync_animation` in a separate thread throughout
+6. **Lock Management**: Ensure lock is released on completion or failure
+7. **Error Handling**: Handle failures and retry logic within budget constraints
+8. **Final Reporting**: Summarize results and costs
 
 ### Core Workflow Steps
 
@@ -107,12 +114,12 @@ The module should:
 
 For each operation:
 
-1. **Determine Next Step**: Call `sync_determine_operation` to get recommendation
+1. **Determine Next Step**: Call `sync_determine_operation` to get recommendation (lock already acquired)
 2. **Update Animation**: Set function_name_ref to current operation
 3. **Execute Command**: Run the appropriate PDD command with proper arguments
 4. **Track Results**: Update cost, file paths, and status colors
 5. **Handle Errors**: Implement retry logic within max_attempts and budget
-6. **Update State**: Save progress for next iteration
+6. **Continue Analysis**: Re-analyze files to determine next operation (no persistent state needed)
 
 ### State and Path Management
 
@@ -125,17 +132,19 @@ The orchestrator should:
   - Yellow: File being processed
   - Red: File has errors or missing
   - Blue: File analysis in progress
-- **Manage Git Integration**: Handle git operations for state persistence
+- **Manage Lock Lifecycle**: Ensure sync lock is properly acquired at start and released at end
+- **Handle Lock Failures**: Exit gracefully if another sync is already running
 
 ### Error Handling and Recovery
 
 Implement robust error handling:
 
+- **Lock Acquisition Failure**: Exit immediately with clear message if another sync is running
 - **Budget Constraints**: Stop if total cost exceeds budget
 - **Max Attempts**: Limit retry attempts for failed operations
 - **Graceful Degradation**: Continue workflow even if non-critical steps fail
 - **User Feedback**: Provide clear error messages through animation
-- **State Recovery**: Save progress to allow resuming from failures
+- **Lock Cleanup**: Always release lock, even on exceptions or early exits
 
 ### Integration with Main Components
 
@@ -194,14 +203,14 @@ Return comprehensive results:
 
 ## Implementation Requirements
 
-1. **Threading**: Use threading.Thread for animation, threading.Event for coordination
-2. **Context Management**: Create Click context objects for command execution
-3. **Path Resolution**: Handle relative and absolute paths correctly
-4. **File Operations**: Use pathlib.Path for cross-platform compatibility
-5. **Git Integration**: Execute git commands for state management
+1. **Lock Management**: Use context managers or try/finally for reliable lock cleanup
+2. **Threading**: Use threading.Thread for animation, threading.Event for coordination
+3. **Context Management**: Create Click context objects for command execution
+4. **Path Resolution**: Handle relative and absolute paths correctly
+5. **File Operations**: Use pathlib.Path for cross-platform compatibility
 6. **Cost Tracking**: Accumulate costs from all operations
 7. **Time Tracking**: Monitor elapsed time for each operation
-8. **Exception Handling**: Catch and handle all operation failures gracefully
+8. **Exception Handling**: Catch and handle all operation failures gracefully, always releasing locks
 
 ## Dependencies
 
@@ -211,17 +220,38 @@ Return comprehensive results:
 - sync_determine_operation for workflow intelligence
 - sync_animation for user feedback
 
-## Usage Example
+## Usage Examples
 
 ```python
 # Basic sync execution
-result = sync_orchestrate(
+result = sync_orchestration(
     basename="calculator",
     language="python"
 )
 
+# View sync log
+result = sync_orchestration(
+    basename="calculator",
+    language="python",
+    log=True
+)
+
+# View detailed sync log (with verbose flag)
+result = sync_orchestration(
+    basename="calculator", 
+    language="python",
+    log=True,
+    verbose=True
+)
+
+# Result handling
+if not result['success']:
+    if 'lock_conflict' in result.get('errors', []):
+        print("Another sync is already running for this module")
+        exit(1)
+
 # Advanced sync with custom settings  
-result = sync_orchestrate(
+result = sync_orchestration(
     basename="data_processor",
     language="python",
     code_dir="backend/src",
@@ -230,6 +260,45 @@ result = sync_orchestrate(
     target_coverage=95.0,
     skip_verify=False
 )
+```
+
+## Lock Integration Pattern
+
+The orchestration module should use this pattern:
+
+```python
+def sync_orchestration(..., log=False, verbose=False):
+    # Handle log mode first
+    if log:
+        return display_sync_log(basename, language, verbose=verbose)
+    
+    # Attempt to acquire lock for sync execution
+    lock_result = sync_determine_operation(basename, language, ...)
+    
+    if 'lock_failed' in lock_result:
+        return {
+            'success': False,
+            'errors': ['Another sync process is already running'],
+            'lock_conflict': True
+        }
+    
+    try:
+        # Main workflow loop using lock_result recommendations
+        # ...
+    finally:
+        # Always release lock
+        release_sync_lock(basename, language)
+
+def display_sync_log(basename: str, language: str, verbose: bool = False) -> Dict[str, Any]:
+    """Display sync log for the given basename and language."""
+    log_entries = load_sync_log(basename, language)
+    
+    if verbose:
+        # Show detailed log with LLM reasoning
+        return format_detailed_log(log_entries)
+    else:
+        # Show summary log
+        return format_summary_log(log_entries)
 ```
 
 The module should be the central coordinator that brings together all PDD components into a seamless, animated workflow that embodies the prompt-driven development philosophy described in the whitepaper.
