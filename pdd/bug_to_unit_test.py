@@ -51,11 +51,12 @@ def bug_to_unit_test(  # pylint: disable=too-many-arguments, too-many-locals
     if not 0 <= strength <= 1:
         raise ValueError("Strength parameter must be between 0 and 1")
 
-    # Ensure language parameter is not None or empty
+    # Ensure language parameter is not None or empty, defaulting to "python" if it is.
+    # This single check is sufficient for the whole function.
     if not language or not isinstance(language, str):
-        language = "python"  # Default fallback
+        language = "python"
         console.print(
-            "[yellow]Warning: Invalid language parameter, defaulting to 'python'[/yellow]"
+            "[yellow]Warning: Invalid or missing language parameter, defaulting to 'python'[/yellow]"
         )
 
     total_cost = 0.0
@@ -76,7 +77,7 @@ def bug_to_unit_test(  # pylint: disable=too-many-arguments, too-many-locals
             "desired_output": desired_output,
             "code_under_test": code_under_test,
             "program_used_to_run_code_under_test": program_used_to_run_code_under_test,
-            "language": language if language and isinstance(language, str) else "python",
+            "language": language,  # Simplified: language is guaranteed to be a valid string
         }
 
         console.print("[bold blue]Generating unit test...[/bold blue]")
@@ -129,14 +130,6 @@ def bug_to_unit_test(  # pylint: disable=too-many-arguments, too-many-locals
             result = response["result"]
 
         # Post-process the result
-        # Double-check language is valid before passing to postprocess
-        if not language or not isinstance(language, str):
-            language = "python"  # Ensure language is valid
-            console.print(
-                "[yellow]Warning: Language value became invalid during processing, "
-                "defaulting to 'python'[/yellow]"
-            )
-
         final_code, postprocess_cost, _postprocess_model = postprocess(
             result,
             language,
