@@ -42,28 +42,31 @@
     - Retrieve `output_cost = ctx.obj.get('output_cost', None)`.
     - Retrieve `review_examples = ctx.obj.get('review_examples', False)`.
     - Retrieve `local = ctx.obj.get('local', False)`.
+    - Retrieve `context = ctx.obj.get('context', None)`.
 
 2. **Configuration and Path Handling**:
-    - Handle `.pddrc` configuration file for context-aware settings
-    - Use automatic context detection based on current working directory paths
-    - Support manual context override via `--context` CLI option
-    - Extract context-specific settings like:
-        * `generate_output_path`, `test_output_path`, `example_output_path`
-        * `default_language`, `target_coverage`, `strength`, `temperature`
-        * `budget`, `max_attempts` for the sync operation
-    - Use the existing `construct_paths` function for final path construction
-    - Fall back to environment variables and defaults when no `.pddrc` context matches
+    - The `construct_paths` function handles `.pddrc` configuration files and context-aware settings
+    - Pass `context_override=context` parameter to `construct_paths` when `--context` CLI option is used
+    - `construct_paths` automatically handles:
+        * Loading `.pddrc` configuration with upward directory search
+        * Context detection based on current working directory paths  
+        * Configuration hierarchy: CLI options > .pddrc context > environment variables > defaults
+        * Path resolution for generate_output_path, test_output_path, example_output_path
+        * Extracting context-specific settings like default_language, target_coverage, strength, temperature, budget, max_attempts
+    - After calling `construct_paths`, extract resolved configuration settings and override CLI parameters if context provides them
+    - Apply configuration hierarchy: prefer CLI-provided values, then context values, then original defaults
 
 3. **Language Detection**:
     - Scan for existing prompt files matching the pattern `{basename}_{language}.prompt` in the prompts directory
-    - If multiple language prompt files exist for the same basename, process all of them
+    - If multiple language prompt files exist for the same basename, process all of them sequentially
     - If no prompt files found, raise `click.UsageError` with helpful message
-    - Use `default_language` from `.pddrc` context, falling back to environment variable `PDD_DEFAULT_LANGUAGE` or "python"
+    - For each found prompt file, run the complete sync workflow (calling sync_orchestrate)
+    - Each sync_orchestrate call will use construct_paths normally with that specific prompt file
 
 4. **File Path Validation**:
     - Validate that required prompt files exist for the given basename
-    - Ensure output directories are accessible
-    - Let `construct_paths` handle directory creation and path resolution
+    - Ensure output directories are accessible  
+    - `construct_paths` handles directory creation and path resolution automatically
 
 5. **Error Handling Requirements**:
     - Validate basename parameter:
@@ -72,13 +75,20 @@
     - Handle budget and attempts validation:
         * Ensure budget > 0 and max_attempts > 0
         * Warn if budget seems too low for typical sync operations
+    - Handle configuration errors:
+        * Catch `.pddrc` YAML syntax errors and provide helpful messages
+        * Validate unknown context names when using `--context`
+        * Handle missing or inaccessible configuration files gracefully
     - Use `try/except` blocks for file operations
     - Provide formatted error messages using `rich.print`
     - Exit with appropriate error codes on critical failures
 
 6. **User Feedback**:
     - Use `rich.print` for formatted output (unless `quiet` is True)
-    - Show sync progress summary before starting
+    - Show sync progress summary before starting, including:
+        * Detected context (if using .pddrc)
+        * Languages being processed
+        * Configuration settings being applied
     - Display final results including:
         * Total operations completed
         * Total cost and time elapsed
@@ -109,75 +119,17 @@
       <include>context/get_language_example.py</include>
       </get_language_example>
 
-
-      - Here is an example of `.pddrc` configuration handling:
-      <pddrc_config_example>
-      ```python
-      import os
-      import yaml
-      from pathlib import Path
-
-      def load_pddrc_config(context_override: str = None):
-          """Load .pddrc configuration with context detection"""
-          # Find .pddrc file (search upward from current directory)
-          config_path = Path(os.getenv('PDD_CONFIG_PATH', '.pddrc'))
-          if not config_path.is_absolute():
-              current_dir = Path.cwd()
-              for parent in [current_dir] + list(current_dir.parents):
-                  potential_config = parent / config_path
-                  if potential_config.exists():
-                      config_path = potential_config
-                      break
-          
-          if not config_path.exists():
-              return {}
-          
-          with open(config_path, 'r') as f:
-              config = yaml.safe_load(f)
-          
-          # Determine context
-          if context_override:
-              context_name = context_override
-          else:
-              context_name = detect_context_from_path(config, Path.cwd())
-          
-          # Get context-specific defaults
-          contexts = config.get('contexts', {})
-          if context_name in contexts:
-              return contexts[context_name].get('defaults', {})
-          elif 'default' in contexts:
-              return contexts['default'].get('defaults', {})
-          
-          return {}
-
-      def detect_context_from_path(config: dict, current_path: Path) -> str:
-          """Detect context based on current working directory path"""
-          import fnmatch
-          contexts = config.get('contexts', {})
-          current_str = str(current_path)
-          
-          for context_name, context_config in contexts.items():
-              if context_name == 'default':
-                  continue
-              paths = context_config.get('paths', [])
-              for path_pattern in paths:
-                  if fnmatch.fnmatch(current_str, path_pattern) or path_pattern in current_str:
-                      return context_name
-          
-          return 'default'
-      ```
-      </pddrc_config_example>
-
       - Here is how to use the `sync_orchestrate` function:
       <sync_orchestrate_example>
         <include>context/sync_orchestrate_example.py</include>
       </sync_orchestrate_example>
 
-      - Here is an example of language detection for sync:
+      - Here is an example of language detection for sync using existing PDD functions:
       <language_detection_example>
       ```python
       import glob
       from pathlib import Path
+      from pdd.construct_paths import _is_known_language
 
       def detect_languages_for_basename(basename: str, prompts_dir: str = "prompts") -> list:
           """Detect all languages that have prompt files for a given basename"""
@@ -191,8 +143,10 @@
               # Extract language from filename: basename_language.prompt
               stem = prompt_file.stem  # removes .prompt
               if '_' in stem:
-                  language = stem.split('_', 1)[1]  # Get everything after first underscore
-                  languages.append(language)
+                  potential_language = stem.split('_', 1)[1]  # Get everything after first underscore
+                  # Validate using existing PDD function
+                  if _is_known_language(potential_language):
+                      languages.append(potential_language)
           
           return languages
       ```
@@ -219,9 +173,9 @@
    - Combine results and costs from all language syncs
 
 3. **Path Management**:
-   - Use `construct_paths` function for all file path construction
-   - Let `construct_paths` handle environment variables and directory creation
-   - Focus on parameter validation rather than path manipulation
+   - Use `construct_paths` function for all file path construction and configuration resolution
+   - `construct_paths` handles environment variables, .pddrc configuration, and directory creation
+   - Focus on parameter validation and configuration hierarchy rather than path manipulation
 
 4. **Progress Reporting**:
    - Show which language(s) are being processed

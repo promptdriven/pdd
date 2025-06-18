@@ -462,6 +462,7 @@ Options:
 - `--skip-verify`: Skip the functional verification step
 - `--skip-tests`: Skip unit test generation and fixing
 - `--target-coverage FLOAT`: Desired code coverage percentage (default is 90.0)
+- `--log`: Display sync log for this basename instead of running sync operations
 
 **Language Detection**:
 The sync command automatically detects the programming language by scanning for existing prompt files matching the pattern `{basename}_{language}.prompt` in the prompts directory. For example:
@@ -497,6 +498,16 @@ The sync command automatically detects what files exist and executes the appropr
 **Environment Variables**:
 All existing PDD output path environment variables are respected, allowing the sync command to save files in the appropriate locations for your project structure.
 
+**Sync Logging**:
+The sync command maintains a detailed log of its decision-making process, which you can view using the `--log` option. This transparency helps you understand:
+- What files were detected as changed
+- Which analysis method was used (simple heuristics vs LLM analysis)
+- The reasoning behind operation recommendations
+- Cost and time information for each sync session
+- Success/failure status of operations
+
+Use `--verbose` with `--log` to see detailed LLM reasoning for complex multi-file change scenarios.
+
 **When to use**: This is the recommended starting point for most PDD workflows. Use sync when you want to ensure all artifacts (code, examples, tests) are up-to-date and synchronized with your prompt files. The command embodies the PDD philosophy by treating the workflow as a batch process that developers can launch and return to later, freeing them from constant supervision.
 
 Examples:
@@ -512,6 +523,12 @@ pdd sync --skip-verify --budget 5.0 web_scraper
 
 # Sync all detected languages for a basename
 pdd sync multi_language_module
+
+# View sync log to see previous operations and decisions
+pdd sync --log factorial_calculator
+
+# View detailed sync log with LLM reasoning (combine with --verbose global option)
+pdd --verbose sync --log factorial_calculator
 
 # Context-aware examples (with .pddrc)
 cd backend && pdd sync calculator     # Uses backend context settings

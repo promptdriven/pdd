@@ -1,6 +1,136 @@
 # sync_determine_operation_python.prompt
 
-Create a Python module that analyzes the state of PDD (Prompt-Driven Development) unit files and determines the next operation to run in the workflow.
+You are an expert Python developer. Your task is to implement the core decision-making logic for the `pdd sync` command. The goal is to create a deterministic, reliable, and safe function that analyzes the state of a PDD unit (identified by a `basename` and `language`) and decides which PDD operation to run next.
+
+This implementation must replace any previous complex state management with a more robust system based on file "fingerprints" and robust locking, as described below.
+
+### Core Principles:
+
+1.  **Authoritative Fingerprints**: The system's state is not tracked in a complex state machine. Instead, it's derived by comparing the current state of files against a version-controlled "fingerprint" file that contains hashes of the last known good state from a PDD operation.
+2.  **Robust Locking**: Use file-descriptor based locking (`fcntl` or `msvcrt`) to ensure that only one `pdd sync` process can operate on a given unit at a time, preventing race conditions. The lock must be re-entrant and handle stale lock files from crashed processes.
+3.  **Deterministic Logic First**: Decisions must be made based on a clear, deterministic algorithm. An LLM should only be invoked for complex conflict resolution (e.g., when both the prompt and the code have changed), and its use must be made deterministic through caching.
+4.  **Runtime Signal Integration**: The decision logic must be aware of the results from previous test runs. A failing test suite or a crashing program is a high-priority signal that should be addressed before proceeding with other operations.
+
+### File and Directory Structure:
+
+-   **Lock Files**: `.pdd/locks/{basename}_{language}.lock`
+-   **Fingerprint Files**: `.pdd/meta/{basename}_{language}.json` (This file should be version controlled)
+-   **Run Report Files**: `.pdd/meta/{basename}_{language}_run.json` (This file should be in `.gitignore`)
+
+### Detailed Implementation Requirements:
+
+#### 1. Data Structures
+
+Create the following `dataclasses` to structure the data:
+
+-   `Fingerprint`:
+    -   `pdd_version: str`
+    -   `timestamp: str` (ISO 8601 format)
+    -   `command: str` (e.g., "generate", "fix")
+    -   `prompt_hash: Optional[str]`
+    -   `code_hash: Optional[str]`
+    -   `example_hash: Optional[str]`
+    -   `test_hash: Optional[str]`
+-   `RunReport`:
+    -   `timestamp: str`
+    -   `exit_code: int`
+    -   `tests_passed: int`
+    -   `tests_failed: int`
+    -   `coverage: float`
+-   `SyncDecision`:
+    -   `operation: str` (e.g., 'generate', 'fix', 'update', 'test', 'crash', 'analyze_conflict', 'nothing')
+    -   `reason: str` (A human-readable explanation for the decision)
+    -   `details: Dict[str, Any]` (Optional extra info for the orchestrator)
+
+#### 2. Locking Mechanism
+
+Implement a `SyncLock` context manager:
+
+-   `__init__(self, basename: str, language: str)`: Sets up the lock file path.
+-   `acquire(self)`:
+    -   Checks if the lock is already held by the current process (re-entrancy).
+    -   If the lock file exists, read the PID.
+    -   Use `psutil.pid_exists()` to check if the PID corresponds to a running process. If not, the lock is stale and should be removed.
+    -   If the lock is held by another running process, raise a `TimeoutError`.
+    -   Use `fcntl.flock` (POSIX) or `msvcrt.locking` (Windows) to acquire an exclusive, non-blocking lock on the file descriptor.
+    -   Write the current PID to the lock file.
+-   `release(self)`: Release the lock and delete the lock file.
+-   The class should be usable as a context manager (`with SyncLock(...) as lock:`).
+
+#### 3. State Analysis Functions
+
+Implement the following helper functions:
+
+-   `get_pdd_file_paths(basename: str, language: str) -> Dict[str, Path]`: Returns a dictionary mapping file types ('prompt', 'code', 'example', 'test') to their expected `pathlib.Path` objects.
+-   `calculate_sha256(file_path: Path) -> Optional[str]`: Calculates the SHA256 hash of a file if it exists, otherwise returns `None`.
+-   `read_fingerprint(basename: str, language: str) -> Optional[Fingerprint]`: Reads and validates the JSON fingerprint file. Returns `None` if it doesn't exist or is invalid.
+-   `read_run_report(basename: str, language: str) -> Optional[RunReport]`: Reads and validates the JSON run report file.
+-   `calculate_current_hashes(paths: Dict[str, Path]) -> Dict[str, Optional[str]]`: Computes the hashes for all current files on disk.
+
+#### 4. The Main `determine_sync_operation` Function
+
+This is the core function that orchestrates the decision-making process.
+
+`determine_sync_operation(basename: str, language: str, target_coverage: float) -> SyncDecision:`
+
+**Logic Flow:**
+
+1.  **Acquire Lock**: Start by acquiring the `SyncLock` for the given unit. The entire function should operate within the `with` block of the lock.
+2.  **Check Runtime Signals First**:
+    -   Read the latest `RunReport`.
+    -   If the report exists and `exit_code != 0`, return a decision to run `crash`.
+    -   If `tests_failed > 0`, return a decision to run `fix`.
+    -   If `coverage < target_coverage`, return a decision to run `test` to improve coverage.
+    -   If any of these conditions are met, the analysis stops here, as fixing a broken state is the highest priority.
+3.  **Analyze File State**:
+    -   Read the last saved `Fingerprint`.
+    -   Calculate the hashes of the current files.
+    -   Compare the current hashes with the hashes in the fingerprint.
+4.  **Implement the Decision Tree**:
+    -   **No Fingerprint**: If no fingerprint file exists, this is a new or untracked unit. The decision should be to run `generate`.
+    -   **No Changes**: If the current hashes exactly match the fingerprint, everything is synchronized. The decision is `nothing`.
+    -   **Simple Changes (Single File Modified)**:
+        -   If only the `prompt_hash` differs -> `generate`.
+        -   If only the `code_hash` differs -> `update`.
+        -   If only the `test_hash` differs -> `test` (to run the new tests).
+        -   If only the `example_hash` differs -> `verify` (to run the new example).
+    -   **Complex Changes (Multiple Files Modified / Conflicts)**:
+        -   This indicates a potential conflict (e.g., user edited code, and also changed the prompt).
+        -   Return a decision to run `analyze_conflict`. It is the responsibility of the calling orchestrator to handle this, for example by invoking a deterministic, cached LLM to get a resolution strategy.
+5.  **Return the Decision**: The function must always return a `SyncDecision` object with the recommended operation and a clear reason.
+
+#### 5. LLM-based Conflict Analysis
+
+% Here is how to use the internal modules:
+    <internal_modules>
+        For loading prompt templates:
+        <load_prompt_template_example>
+            <include>context/load_prompt_template_example.py</include>
+        </load_prompt_template_example>
+
+        For running prompts with llm_invoke:
+        <llm_invoke_example>
+            <include>context/llm_invoke_example.py</include>
+        </llm_invoke_example>
+    
+
+Implement a second function `analyze_conflict_with_llm` to resolve complex sync conflicts using an LLM.
+
+`analyze_conflict_with_llm(basename: str, language: str, fingerprint: Fingerprint, changed_files: List[str]) -> SyncDecision:`
+
+**Logic Flow:**
+
+1.  **Load LLM Prompt**: Use `load_prompt_template("sync_analysis_LLM.prompt")` to get the analysis prompt content.
+2.  **Gather Diffs**: For each file type in `changed_files` ('prompt', 'code', 'test', 'example'), generate a `git diff` of the current file against its last committed version (`HEAD`). You will need a helper function for this (e.g., `get_git_diff(file_path)`). If a diff cannot be generated (e.g., file is not in git), use an empty string.
+3.  **Format the Prompt**: Replace the placeholders in the loaded prompt template (`{fingerprint}`, `{changed_files_list}`, `{prompt_diff}`, etc.) with the actual data. The fingerprint should be formatted as a JSON string.
+4.  **Invoke LLM**: Call `llm_invoke` with the fully formatted prompt.
+5.  **Parse Response**: The LLM will respond with a JSON object. Parse this string into a dictionary.
+6.  **Validate and Return**:
+    -   Validate the JSON response to ensure it contains the required keys (`next_operation`, `reason`, etc.).
+    -   If the JSON is valid, construct and return a `SyncDecision` object based on the LLM's recommendation.
+    -   If the LLM response is not valid JSON or if the confidence is low (e.g., < 0.75), return a default `fail_and_request_manual_merge` decision as a safety measure.
+
+The final Python script should be well-structured with clear functions, type hints, and docstrings, containing all the logic described above.
 
 ## Context
 
@@ -49,39 +179,96 @@ For each file type, determine:
 4. **Content hash**: For change detection
 5. **Relationships**: How it relates to other files in the unit
 
+### Single Instance Enforcement
+
+The module should prevent race conditions by ensuring only one sync process runs for a given basename+language combination:
+
+1. **Acquire Lock**: Before analyzing files, attempt to acquire a PID-based lock
+2. **Lock File Location**: `.pdd/sync_{basename}_{language}.pid`
+3. **Lock Content**: Process ID of the running sync process
+4. **Stale Lock Cleanup**: Check if PID in lock file is still running, clean up if not
+5. **Lock Release**: Remove lock file when sync completes or fails
+
 ### State Detection Logic
 
-The module should reconstruct state using a hybrid git-and-file approach:
+The module uses a simplified file-based analysis approach:
 
-1. **Check Git Status**: Determine if the working directory is "clean" or "dirty" for the relevant unit files.
-2. **State Retrieval Strategy**:
-    - **If clean**: Read the last sync state from the most recent relevant `git note`.
-    - **If dirty**: Read from a temporary state file (`.pdd/sync_pending.json`) first. If it doesn't exist, read the last state from `git notes` as a baseline.
-3. **Analyze Working Directory**: Always analyze the current files in the working directory.
-4. **State Determination**: Compare current file hashes against the retrieved state (from git or temp file) to detect changes and determine the next operation.
-5. **Handle Missing State**: If no state can be found in git or temp files, perform a fresh analysis based on which files exist.
+1. **Check Lock**: Ensure no other sync process is running for this basename+language
+2. **Analyze Working Directory Files**: Examine current state of all unit files
+3. **File Timestamp Analysis**: Compare modification times to infer workflow state
+4. **Hash Comparison**: Use content hashes to detect changes since last known state
+5. **Git Integration**: Use git status for additional context (optional, not required)
 
-### State Persistence Strategy
+### State Management Strategy
 
-- **After Operation (Clean Directory)**: The `sync` command should commit the resulting changes and attach a new `git note` with the updated state.
-- **After Operation (Dirty Directory)**: Save the resulting state to a temporary, gitignored file (`.pdd/sync_pending.json`).
-- **State Finalization**: On a subsequent run, if a pending state file is found and the git HEAD has advanced, the module should transfer the pending state to a `git note` on the new HEAD and delete the temp file.
+Simplified approach focused on current file analysis rather than persistent state:
 
-### Git Integration
+- **In-Memory State**: Keep workflow state in memory during sync execution
+- **File Analysis**: Determine next operation based on current file states and timestamps
+- **No Persistent State**: Avoid complex state files that can cause race conditions
+- **Idempotent Operations**: Design sync to be safely re-runnable
 
-Use git to detect:
-- Which files have uncommitted changes
-- When files were last modified relative to each other
-- Whether incremental generation is appropriate
+### Git Integration for Change Detection
+
+Git operations are essential for detecting what actually changed:
+
+#### Core Git Operations Needed:
+1. **Change Detection**: Compare current files with their last committed versions
+2. **File Status**: Determine which files are modified, staged, or untracked  
+3. **Manual Code Detection**: Identify if code was manually modified since last sync
+4. **Incremental Decisions**: Determine scope of changes for incremental vs full regeneration
+
+#### Essential Git Functions:
+```python
+def get_committed_file_content(file_path: str) -> Optional[str]:
+    """Get the last committed version of a file from git"""
+    try:
+        result = subprocess.run(['git', 'show', f'HEAD:{file_path}'], 
+                              capture_output=True, text=True, check=True)
+        return result.stdout
+    except subprocess.CalledProcessError:
+        return None  # File not in git or not committed
+
+def detect_manual_code_changes(basename: str, language: str) -> bool:
+    """Detect if code was manually modified since last PDD generation"""
+    # Look for recent commits with PDD sync messages for this basename
+    try:
+        result = subprocess.run([
+            'git', 'log', '--oneline', '--grep=f"pdd-sync.*{basename}"', '-1'
+        ], capture_output=True, text=True, check=True)
+        
+        if result.stdout.strip():
+            # Found a PDD sync commit, compare current code with that version
+            # Implementation details...
+            pass
+    except subprocess.CalledProcessError:
+        # No git or no PDD history, use file timestamp heuristics
+        return False
+
+def get_git_file_status(file_paths: List[str]) -> Dict[str, str]:
+    """Get git status for specific files"""
+    try:
+        result = subprocess.run(['git', 'status', '--porcelain'] + file_paths,
+                              capture_output=True, text=True, check=True)
+        # Parse output: 'M', 'A', '??', etc.
+        return parse_git_status(result.stdout)
+    except subprocess.CalledProcessError:
+        return {}  # Not a git repo
+```
+
+#### Fallback for Non-Git Environments:
+- Use file modification timestamps for basic change detection
+- Compare file content hashes when git history is unavailable
+- Warn user that change detection is limited without git
 
 ### Smart Recommendations
 
 Consider these factors:
 - File modification times and dependencies
-- Git history and staging status
-- Previous operation results (if available)
+- File existence and relationships
+- Content hashes for change detection
 - User preferences (skip_verify, skip_tests)
-- Workflow stage progression
+- Workflow stage progression based on file analysis
 
 ### Output Format
 
@@ -107,11 +294,10 @@ Return structured data that includes:
         'incremental_possible': True,
         'files_out_of_sync': ['code', 'prompt'],
         'workflow_stage': 'synchronization',
-        'last_operation': 'generate',
-        'last_operation_status': 'success',
+        'inferred_last_operation': 'generate',
         'git_tracked': True,
-        'fix_attempts': 0,
-        'state_source': 'git_notes'  # or 'file_inference'
+        'fix_attempts_detected': 0,
+        'analysis_method': 'file_timestamps'  # or 'git_history', 'fresh_analysis'
     }
 }
 ```
@@ -121,9 +307,11 @@ Return structured data that includes:
 Handle these cases gracefully:
 - Missing directories
 - Permission errors
-- Git not initialized
+- Lock file creation/removal failures
 - Corrupted files
 - Multiple language files for same basename
+- Non-git directories
+- Concurrent sync attempts (return clear error message)
 
 ### Dependencies
 
@@ -160,142 +348,157 @@ result = sync_determine_operation(
 
 The module should be self-contained, well-documented, and follow Python best practices.
 
-## State Tracking
+## Single Instance Enforcement and File Analysis
 
-### Git-Based State Management
+### PID-Based Locking
 
-To properly determine the next operation, the module uses git as the source of truth for tracking sync state. This approach requires no additional files or user configuration.
-
-### State Tracking Strategy
-
-Use git notes to attach sync metadata to commits:
+To prevent race conditions, the module implements single instance enforcement using PID files:
 
 ```python
-# Git note format (attached to HEAD after each operation)
-{
-    "pdd_sync": {
-        "basename": "calculator",
-        "language": "python",
-        "operation": "generate",
-        "status": "success",
-        "timestamp": "2024-01-15T10:30:00",
-        "file_hashes": {
-            "prompt": "abc123...",
-            "code": "def456..."
-        },
-        "stage": "example",  # Next stage in workflow
-        "fix_attempts": 0
-    }
-}
+# Lock file format: .pdd/sync_{basename}_{language}.pid
+# Content: just the process ID as a string
 ```
 
-### Git Integration Approach
+### Locking Strategy
 
-1. **Git Notes**: Store sync state as git notes in the `refs/notes/pdd-sync` namespace
-2. **Fallback for Non-Git**: If not in a git repository, use in-memory state only (warn user)
-3. **State Recovery**: Scan recent commits to reconstruct current state
-4. **Atomic Updates**: State changes are tied to code changes
+1. **Lock Acquisition**: Before any analysis, attempt to create a lock file
+2. **Stale Lock Detection**: Check if PID in existing lock file is still running
+3. **Lock Cleanup**: Remove stale locks automatically
+4. **Lock Release**: Always remove lock file on completion or failure
 
-Example git commands used internally:
-```bash
-# Save state after operation
-git notes --ref=pdd-sync add -f -m '{"pdd_sync": {...}}'
+### File-Based State Analysis
 
-# Read state for a basename  
-git log --notes=pdd-sync --grep="basename.*calculator" --pretty=format:"%N" -n 20
+Instead of complex persistent state, analyze current file relationships:
 
-# Check if operation was completed
-git log --notes=pdd-sync --grep='"operation":"generate".*"status":"success"' -n 1
-```
+1. **File Existence Check**: Which files in the unit currently exist
+2. **Timestamp Analysis**: Compare modification times to infer workflow order
+3. **Content Hashing**: Detect changes since files were created
+4. **Dependency Analysis**: Understand relationships between files
+5. **Git Context**: Use git status for additional insights (when available)
 
-### State Detection Logic
-
-The module should reconstruct state by scanning git notes:
-
-1. **Find Last Sync State**: Search git log for most recent pdd-sync note for the basename
-2. **Verify File Integrity**: Compare current file hashes with those in git note
-3. **Detect Manual Changes**: If hashes differ, infer manual intervention
-4. **Determine Next Stage**: Based on last successful operation and workflow progression
-5. **Handle Missing State**: If no git notes found, analyze files to infer current state
-
-### Key Decisions Based on State
-
-- **Prioritize Working Directory**: The current state of files in the working directory is the primary driver for determining the next action.
-- **Use Git for Baseline**: Git notes provide the historical baseline to detect changes against.
-- **Handle Pending State**: If a pending state file exists, it overrides the git baseline, as it represents a more recent operation.
-- **Atomic Operations**: Encourage committing changes after each sync operation to keep the git history clean and state up-to-date.
-- **Handle Non-Git Projects**: Warn user that state tracking is limited to in-memory for the current run and will not persist.
-
-### Helper Functions
+### Core Helper Functions
 
 ```python
-def get_git_status(basename: str) -> Dict[str, str]:
-    """Check git status for all files related to a basename. Returns 'clean', 'dirty', or 'untracked'."""
+def acquire_sync_lock(basename: str, language: str) -> bool:
+    """
+    Acquire PID-based lock for sync operation.
+    Returns True if lock acquired, False if another sync is running.
+    """
 
-def save_pending_state(state: Dict[str, Any]) -> None:
-    """Save the current sync state to a temporary gitignored file."""
+def release_sync_lock(basename: str, language: str) -> None:
+    """Remove the sync lock file."""
 
-def load_pending_state() -> Optional[Dict[str, Any]]:
-    """Load sync state from the temporary file, if it exists."""
+def is_process_running(pid: int) -> bool:
+    """Check if a process with given PID is still running."""
 
-def clear_pending_state() -> None:
-    """Remove the temporary state file."""
+def analyze_file_relationships(
+    prompt_path: Path, 
+    code_path: Path, 
+    example_path: Path, 
+    test_path: Path
+) -> Dict[str, Any]:
+    """
+    Analyze file timestamps, content, and git history to infer current workflow state.
+    Returns information about what operations appear to have been completed.
+    """
 
-def promote_pending_state_to_git_note() -> bool:
-    """If a pending state file exists and HEAD has changed, move state to a git note."""
+def calculate_file_hash(file_path: Path) -> str:
+    """Calculate SHA-256 hash of file content for change detection."""
 
-def save_state_as_git_note(state: Dict[str, Any]) -> bool:
-    """Save sync state as a git note on a new commit (to be created by the sync command)."""
+def infer_workflow_stage(file_states: Dict[str, Any]) -> str:
+    """
+    Based on file analysis, infer what stage of the workflow we're in.
+    Returns: 'initial', 'generated', 'tested', 'synchronized', etc.
+    """
+```
 
-def get_state_from_git_note(basename: str) -> Optional[Dict[str, Any]]:
-    """Retrieve the most recent sync state for a basename from git notes."""
+### LLM Integration for Complex Analysis
 
-def infer_state_from_files(basename: str, ...) -> Dict[str, Any]:
-    """Analyze files to infer current state when no history is available."""
+For complex multi-file change scenarios, use external LLM analysis:
+
+```python
+def llm_analyze_sync_state(current_state, last_sync_state):
+    """Use LLM to analyze complex sync scenarios"""
+    # Load the external LLM prompt template
+    sync_analysis_prompt = load_prompt_template("sync_analysis_LLM.prompt")
+    
+    # Format the prompt with current state data
+    formatted_prompt = sync_analysis_prompt.format(
+        current_state=format_file_state(current_state),
+        last_sync_state=format_last_state(last_sync_state)
+    )
+    
+    # Invoke LLM with the formatted prompt
+    response = llm_invoke(formatted_prompt)
+    return parse_llm_strategy(response)
+
+def needs_llm_analysis(current_state, last_sync_state):
+    """Determine if situation is complex enough to need LLM analysis"""
+    # Use LLM for complex scenarios with multiple file changes
+    multiple_files_changed = sum([
+        current_state.get('prompt_changed', False),
+        current_state.get('code_changed', False), 
+        current_state.get('test_changed', False),
+        current_state.get('example_changed', False)
+    ]) > 1
+    
+    has_previous_state = last_sync_state is not None
+    potential_conflicts = multiple_files_changed and has_previous_state
+    
+    return potential_conflicts
 ```
 
 ### Integration with Main Function
 
 The `sync_determine_operation` function should:
-1. **Promote Pending State**: Attempt to move any pending state from a temp file to a git note.
-2. **Check Git Status**: Determine if the working directory is clean or dirty.
-3. **Retrieve State**: Load state from a pending file or the last git note.
-4. **Analyze Files**: Calculate current file hashes and compare with the retrieved state.
-5. **Apply Decision Logic**: Use the file analysis and state to determine the single next operation.
-6. **Return Recommendation**: Provide the next operation, reason, and confidence.
+1. **Acquire Lock**: Attempt to get exclusive access for this basename+language
+2. **Analyze Files**: Examine current state of all unit files
+3. **Determine Analysis Method**: Use LLM for complex scenarios, heuristics for simple ones
+4. **LLM Analysis**: For complex cases, use `sync_analysis_LLM.prompt` for intelligent recommendations
+5. **Apply Decision Logic**: Choose next operation based on analysis
+6. **Log Decision**: Record the analysis method and reasoning for user review
+7. **Return Recommendation**: Provide next operation and reasoning
+8. **Release Lock**: Handled by sync orchestration (not this function)
 
-This approach enables the sync command to:
-- Work seamlessly with existing git workflows
-- Maintain zero user-facing configuration
-- Handle uncommitted changes gracefully
-- Keep state synchronized with code changes via commits
-
-**Note**: This module provides the intelligence for state detection. The main `sync` command is responsible for:
-1. Creating commits with a standardized message (e.g., `[pdd-sync] Completed 'generate' for calculator`) after successful operations.
-2. Calling the state-saving functions (`save_pending_state` or `save_state_as_git_note`) after each step.
-3. Warning the user when operating in a dirty directory or non-git project.
+This simplified approach:
+- Eliminates race conditions through single instance enforcement
+- Avoids complex state persistence that can become corrupted
+- Works in both git and non-git environments
+- Provides clear, deterministic recommendations based on current file state
+- Is much easier to debug and understand
 
 ### Decision Logic
 
-The core logic for determining the next operation follows this decision tree, after retrieving the current state (from git or a pending file) and analyzing the working directory files:
+The core logic for determining the next operation follows this decision tree, based on current file analysis:
 
-1.  **Check for Manual Changes**: Compare current file hashes against the hashes in the last known state. This check has the highest priority.
-    *   If `prompt` file was modified -> Recommend `auto-deps`.
-    *   If `code` file was modified -> Recommend `update`.
-    *   If `test` file was modified -> Recommend `fix`.
+1. **Initial State Check**: If no files exist, recommend user create a prompt file first.
 
-2.  **Follow Workflow Progression**: If no manual changes, determine the next step based on the `last_operation` status in the state.
-    *   If `last_operation` was `auto-deps` and `success` -> Recommend `generate`.
-    *   If `last_operation` was `generate` and `success` -> Recommend `example`.
-    *   If `last_operation` was `example` and `success` -> Recommend `crash`.
-    *   If `last_operation` was `crash` and `success` -> Recommend `verify` (unless `--skip-verify`).
-    *   If `last_operation` was `verify` and `success` -> Recommend `test` (unless `--skip-tests`).
-    *   If `last_operation` was `test` and `success` -> Recommend `fix`.
-    *   If `last_operation` was `fix` and `success` -> The unit is synchronized. Recommend `None`.
+2. **File Existence Analysis**: Based on which files currently exist:
+   - **Only prompt exists** → Recommend `auto-deps`
+   - **Prompt + code exist, no example** → Recommend `example`
+   - **Prompt + code + example exist, no tests** → Recommend `test` (unless `--skip-tests`)
+   - **All files exist** → Check for synchronization issues
 
-3.  **Handle Initial State**: If no previous state is found:
-    *   If only a `prompt` file exists -> Recommend `auto-deps`.
-    *   If no files exist -> Recommend `None` with a reason prompting the user to create a prompt file.
+3. **File Relationship Analysis**: Compare timestamps and content to detect:
+   - **Prompt newer than code** → Recommend `generate` (prompt was updated)
+   - **Code manually modified** → Recommend `update` (sync changes back to prompt)
+   - **Test failures detected** → Recommend `fix`
+   - **Files out of sync** → Recommend appropriate sync operation
 
-4.  **Retry Failed Operations**: If the last recorded operation `status` was `failed`:
-    *   Recommend re-running the same operation. The `sync` command can use the `fix_attempts` count from the state to manage retries.
+4. **Workflow Progression**: When files are synchronized, determine next step:
+   - **Code needs runtime verification** → Recommend `crash` then `verify` (unless `--skip-verify`)
+   - **Missing comprehensive tests** → Recommend `test` (unless `--skip-tests`)
+   - **Test failures present** → Recommend `fix`
+   - **All synchronized and working** → Recommend `None` (complete)
+
+5. **Error Recovery**: Detect common issues:
+   - **Compilation/runtime errors** → Recommend `crash`
+   - **Test failures** → Recommend `fix`
+   - **Missing dependencies** → Recommend `auto-deps`
+
+This logic prioritizes:
+- **Git-based change detection** when available, file analysis when not
+- **Current file state analysis** combined with git history
+- **Content-based comparison** over timestamp heuristics
+- **Clear, deterministic recommendations** with confidence levels
+- **Safe, idempotent operations** that preserve manual work
