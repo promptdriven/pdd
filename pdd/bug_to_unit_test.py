@@ -68,7 +68,7 @@ def bug_to_unit_test(  # pylint: disable=too-many-arguments, too-many-locals
             raise ValueError("Failed to load prompt template")
 
         # Step 2: Prepare input and run through LLM
-        preprocessed_prompt = preprocess(prompt_used_to_generate_the_code)
+        preprocessed_prompt = preprocess(prompt_used_to_generate_the_code, double_curly_brackets=False)
 
         input_json = {
             "prompt_that_generated_code": preprocessed_prompt,
@@ -104,7 +104,7 @@ def bug_to_unit_test(  # pylint: disable=too-many-arguments, too-many-locals
 
         _reasoning, is_finished, unfinished_cost, _unfinished_model = unfinished_prompt(
             prompt_text=last_600_chars,
-            strength=0.75,
+            strength=0.89,
             temperature=temperature,
             time=time,
             verbose=False,

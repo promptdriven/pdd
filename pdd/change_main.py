@@ -296,7 +296,8 @@ def change_main(
                     strength,
                     temperature,
                     time=time_budget,
-                    budget=budget
+                    budget=budget,
+                    verbose=not quiet
                 )
                 success = True  # Assume success if no exception
                 logger.info("Single prompt change successful.")
