@@ -5,22 +5,22 @@ import datetime
 from pathlib import Path
 import time # For SyncLock demonstration
 
-# Assume the provided module is saved as 'pdd_sync_logic.py'
+# Assume the provided module is saved as 'pdd_sync_determine_operation.py'
 # in a directory 'pdd' which is part of PYTHONPATH.
 # e.g., your project structure might be:
 # your_project/
 #   pdd/
 #     __init__.py
-#     pdd_sync_logic.py
+#     pdd_sync_determine_operation.py
 #     load_prompt_template.py (placeholder or actual)
 #     llm_invoke.py (placeholder or actual)
 #   examples/
-#     run_sync_logic_example.py (this file)
+#     run_sync_determine_operation_example.py (this file)
 #
 # To run this example, ensure 'your_project' directory is in PYTHONPATH,
 # or run from 'your_project' directory.
 
-from pdd.pdd_sync_logic import (
+from pdd.sync_determine_operation import (
     determine_sync_operation,
     analyze_conflict_with_llm,
     Fingerprint,
@@ -113,9 +113,9 @@ def print_decision(decision: SyncDecision):
         print(f"  Details: {decision.details}")
 
 # --- Main example function ---
-def run_pdd_sync_logic_example():
+def run_pdd_sync_determine_operation_example():
     """
-    Demonstrates various scenarios using the pdd_sync_logic module.
+    Demonstrates various scenarios using the pdd_sync_determine_operation module.
     """
     print(f"\n--- Running PDD Sync Logic Example for unit: {TEST_BASENAME} ({TEST_LANGUAGE}) ---")
 
@@ -140,19 +140,22 @@ def run_pdd_sync_logic_example():
 
     # --- Scenario 2: Prompt changed after initial generation (fingerprint exists) ---
     print("\nScenario 2: Prompt changed - Fingerprint exists")
-    # Create a dummy fingerprint as if 'generate' was run
+    # Create code file first, then fingerprint with correct hashes
+    _create_dummy_file(pdd_files['code'], "print('Initial code')") # Dummy code file
+    
+    # Create a dummy fingerprint as if 'generate' was run with current file states
     prompt_hash_s1 = calculate_sha256(pdd_files['prompt'])
+    code_hash_s1 = calculate_sha256(pdd_files['code'])
     fp_s1 = Fingerprint(
         pdd_version="0.1.0",
         timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
         command="generate",
         prompt_hash=prompt_hash_s1,
-        code_hash="dummy_code_hash_s1", # Assume code was generated
+        code_hash=code_hash_s1, # Use actual code hash
         example_hash=None,
         test_hash=None
     )
     _write_json_dataclass(fingerprint_file_path, fp_s1)
-    _create_dummy_file(pdd_files['code'], "print('Initial code')") # Dummy code file
 
     # Now, modify the prompt
     _create_dummy_file(pdd_files['prompt'], f"# Prompt for {TEST_BASENAME}\n# Updated content")
@@ -247,6 +250,7 @@ def run_pdd_sync_logic_example():
             # Try acquiring again (re-entrancy by same SyncLock instance)
             lock_instance.acquire() 
             print("  Successfully re-acquired lock (re-entrant, same instance).")
+            lock_instance.release()  # Must release the extra acquire
 
             # Try acquiring with a new SyncLock instance (re-entrancy by same process)
             with SyncLock(lock_basename, TEST_LANGUAGE) as inner_lock:
@@ -273,6 +277,6 @@ def run_pdd_sync_logic_example():
 if __name__ == "__main__":
     try:
         setup_example_environment()
-        run_pdd_sync_logic_example()
+        run_pdd_sync_determine_operation_example()
     finally:
         cleanup_example_environment()
