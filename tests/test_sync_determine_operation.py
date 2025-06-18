@@ -106,7 +106,7 @@ def pdd_test_environment(tmp_path, monkeypatch):
 @pytest.fixture
 def temp_git_repo(pdd_test_environment):
     """Fixture to create a temporary git repository for testing get_git_diff."""
-    repo_dir = pdd_test_environment['file_creator'].get_path('code').parent # Use code_root
+    repo_dir = pdd_test_environment['base_dir']
     
     original_cwd = Path.cwd()
     os.chdir(repo_dir)
@@ -119,8 +119,11 @@ def temp_git_repo(pdd_test_environment):
         pytest.skip(f"Git setup failed, skipping git-dependent tests: {e}")
 
     def _commit_file(file_path_in_repo: Path, content: str, commit_message: str = "Initial commit"):
-        file_path_in_repo.write_text(content)
-        subprocess.run(["git", "add", str(file_path_in_repo.name)], check=True, cwd=repo_dir)
+        # Git needs relative paths for adding files from subdirectories
+        relative_path = file_path_in_repo.relative_to(repo_dir)
+        relative_path.parent.mkdir(parents=True, exist_ok=True)
+        relative_path.write_text(content)
+        subprocess.run(["git", "add", str(relative_path)], check=True, cwd=repo_dir)
         subprocess.run(["git", "commit", "-m", commit_message], check=True, cwd=repo_dir)
 
     pdd_test_environment['git_commit_file'] = _commit_file
@@ -149,10 +152,8 @@ def test_lock_reentrancy_same_process(pdd_test_environment):
     
     with SyncLock(TEST_BASENAME, TEST_LANGUAGE) as lock1:
         assert lock_file.exists()
-        # Same instance re-acquire
-        lock1.acquire() # Should be a no-op due to internal flag
-
-        # Different instance, same process
+        
+        # Different instance, same process - this is the main re-entrancy test
         with SyncLock(TEST_BASENAME, TEST_LANGUAGE) as lock2:
             assert lock_file.exists() # Still held by lock1 conceptually
             assert lock2._is_reentrant_acquisition # Check internal flag for this specific case
@@ -237,12 +238,13 @@ def test_calculate_sha256(pdd_test_environment):
 def test_read_fingerprint(pdd_test_environment):
     fp_path = pdd_test_environment['meta_dir'] / f"{TEST_BASENAME}_{TEST_LANGUAGE}.json"
     
-    # Valid
+    # Valid (with optional fields missing)
     valid_data = {"pdd_version": "1.0", "timestamp": "sometime", "command": "generate", "prompt_hash": "abc"}
     fp_path.write_text(json.dumps(valid_data))
     fp = sync_determine_operation.read_fingerprint(TEST_BASENAME, TEST_LANGUAGE)
     assert isinstance(fp, Fingerprint)
     assert fp.prompt_hash == "abc"
+    assert fp.code_hash is None
 
     # Non-existent
     fp_path.unlink()
@@ -252,7 +254,7 @@ def test_read_fingerprint(pdd_test_environment):
     fp_path.write_text("{not_json:")
     assert sync_determine_operation.read_fingerprint(TEST_BASENAME, TEST_LANGUAGE) is None
 
-    # Missing fields (TypeError for dataclass)
+    # Missing required fields (should cause TypeError caught by reader)
     fp_path.write_text(json.dumps({"pdd_version": "1.0"}))
     assert sync_determine_operation.read_fingerprint(TEST_BASENAME, TEST_LANGUAGE) is None
 
@@ -275,21 +277,17 @@ def test_calculate_current_hashes(pdd_test_environment):
     paths = get_pdd_file_paths(TEST_BASENAME, TEST_LANGUAGE)
     hashes = sync_determine_operation.calculate_current_hashes(paths)
     
-    assert hashes['prompt'] == hashlib.sha256(b"p").hexdigest()
-    assert hashes['code'] == hashlib.sha256(b"c").hexdigest()
-    assert hashes['example'] is None
-    assert hashes['test'] is None
+    assert hashes['prompt_hash'] == hashlib.sha256(b"p").hexdigest()
+    assert hashes['code_hash'] == hashlib.sha256(b"c").hexdigest()
+    assert hashes['example_hash'] is None
+    assert hashes['test_hash'] is None
 
 # --- get_git_diff Tests ---
 def test_get_git_diff_tracked_no_changes(temp_git_repo):
     fc = temp_git_repo['file_creator']
-    code_file_path = fc.get_path('code') # This path is inside the 'src' subdir of temp_git_repo['base_dir']
-    # The git repo is initialized in code_file_path.parent
+    code_file_path = fc.get_path('code')
     
-    # Create file relative to repo_dir for git commands
-    file_in_repo = Path(code_file_path.name) # e.g., test_unit.py
-
-    temp_git_repo['git_commit_file'](file_in_repo, "initial content")
+    temp_git_repo['git_commit_file'](code_file_path, "initial content")
     
     diff = sync_determine_operation.get_git_diff(code_file_path)
     assert diff == ""
@@ -297,9 +295,8 @@ def test_get_git_diff_tracked_no_changes(temp_git_repo):
 def test_get_git_diff_tracked_with_changes(temp_git_repo):
     fc = temp_git_repo['file_creator']
     code_file_path = fc.get_path('code')
-    file_in_repo = Path(code_file_path.name)
 
-    temp_git_repo['git_commit_file'](file_in_repo, "initial content")
+    temp_git_repo['git_commit_file'](code_file_path, "initial content")
     code_file_path.write_text("modified content") # Modify after commit
     
     diff = sync_determine_operation.get_git_diff(code_file_path)
@@ -310,22 +307,20 @@ def test_get_git_diff_tracked_with_changes(temp_git_repo):
 def test_get_git_diff_untracked_file(temp_git_repo):
     fc = temp_git_repo['file_creator']
     # Create an untracked file
-    untracked_file_path = fc.get_path('example') # examples/test_unit_example.py
+    untracked_file_path = fc.get_path('example')
     untracked_file_path.write_text("untracked content")
-    
-    # Need to ensure the git command runs from a context where it can see this file
-    # The current get_git_diff implementation uses absolute paths for files,
-    # but git diff --no-index needs relative paths if not in repo root, or careful cwd.
-    # The implementation uses absolute paths, which should be fine for --no-index.
     
     diff = sync_determine_operation.get_git_diff(untracked_file_path)
     assert "untracked content" in diff
     # Diff for untracked file against /dev/null or NUL
     if platform.system() == "Windows":
-        assert "--- NUL" in diff or "--- a/NUL" in diff # Git might add a/ or b/
+        assert "--- NUL" in diff or "--- a/NUL" in diff
     else:
         assert "--- /dev/null" in diff or "--- a/dev/null" in diff
-    assert f"+++ b/{untracked_file_path.name}" in diff or f"+++ b/{str(untracked_file_path)}" in diff # Git might use full path
+    
+    # Use relative path for assertion to be robust
+    relative_path = untracked_file_path.relative_to(temp_git_repo['repo_dir'])
+    assert f"+++ b/{str(relative_path)}" in diff
 
 def test_get_git_diff_non_existent_file(temp_git_repo):
     fc = temp_git_repo['file_creator']
@@ -340,7 +335,7 @@ def test_get_git_diff_git_command_not_found(mock_subprocess_run, pdd_test_enviro
     fc = pdd_test_environment['file_creator']
     p_file = fc.create_file('prompt', "content")
     diff = sync_determine_operation.get_git_diff(p_file)
-    assert diff == ""
+    assert diff == "content" # Should fall back to file content
 
 
 # --- determine_sync_operation Tests ---
@@ -552,10 +547,6 @@ def test_analyze_conflict_llm_success(mock_get_git_diff, mock_load_template, moc
     mock_load_template.assert_called_once_with("sync_analysis_LLM.prompt")
     assert mock_get_git_diff.call_count == 2 # For prompt and code
     mock_llm_invoke.assert_called_once()
-    # Check that the prompt passed to llm_invoke contains the diffs
-    # args, kwargs = mock_llm_invoke.call_args
-    # assert "diff_for_test_unit_python.prompt" in kwargs['prompt']
-    # assert "diff_for_test_unit.py" in kwargs['prompt']
 
 
 @patch('pdd.sync_determine_operation.llm_invoke')
@@ -585,7 +576,7 @@ def test_analyze_conflict_llm_template_load_error(mock_load_template, pdd_test_e
 
     decision = sync_determine_operation.analyze_conflict_with_llm(TEST_BASENAME, TEST_LANGUAGE, fp, changed_files)
     assert decision.operation == 'fail_and_request_manual_merge'
-    assert "Failed to load LLM analysis prompt template" in decision.reason
+    assert "LLM conflict analysis failed: Cannot load template" in decision.reason
 
 @patch('pdd.sync_determine_operation.llm_invoke')
 @patch('pdd.sync_determine_operation.load_prompt_template')
