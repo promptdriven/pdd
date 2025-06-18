@@ -110,7 +110,7 @@ ifdef MODULE
 	@# Generate Python file
 	@echo "Generating $(PY_FILE)"
 	@mkdir -p $(PDD_DIR)
-	-@PYTHONPATH=$(PROD_DIR) pdd --strength .9 generate --output $(PY_FILE) $(PY_PROMPT)
+	-@PYTHONPATH=$(PROD_DIR) pdd --strength .9 --time 1 --temperature .7 --local generate --output $(PY_FILE) $(PY_PROMPT)
 
 	@# Generate example file
 	@echo "Generating example for $(PY_FILE)"

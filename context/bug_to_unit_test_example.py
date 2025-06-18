@@ -16,7 +16,7 @@ def main() -> None:
     "prompt_line": "Write a function that prints \"Hello, World!\" and returns 42."
 }
 ```
-DEBUG:pdd.trace:Prompt lines: ['# This is a prompt file', 'Write a function that prints "Hello, World!" and returns 42.', 'The function should be named hello_world.', 'Print the result of calling the function.']
+DEBUG:pdd.trace:Prompt lines: ['# This is a prompt file', 'Write a function that prints \"Hello, World!\" and returns 42.', 'The function should be named hello_world.', 'Print the result of calling the function.']
 DEBUG:pdd.trace:No match found
 Error: Could not find a matching line in the prompt file
 Value error: Could not find a matching line in the prompt file"""
@@ -26,8 +26,8 @@ Value error: Could not find a matching line in the prompt file"""
   "prompt_line": "Write a function that prints \"Hello, World!\" and returns 42."
 }
 ```
-DEBUG:pdd.trace:Prompt lines: ['', '# This is a prompt file', 'Write a function that prints "Hello, World!" and returns 42.', 'The function should be named hello_world.', 'Print the result of calling the function.', '    ']
-DEBUG:pdd.trace:Matched line: Write a function that prints "Hello, World!" and returns 42., score: 87, index: 3
+DEBUG:pdd.trace:Prompt lines: ['', '# This is a prompt file', 'Write a function that prints \"Hello, World!\" and returns 42.', 'The function should be named hello_world.', 'Print the result of calling the function.', '    ']
+DEBUG:pdd.trace:Matched line: Write a function that prints \"Hello, World!\" and returns 42., score: 87, index: 3
 Total cost: $0.000975
 Results:
 Corresponding prompt line: 3
@@ -56,14 +56,14 @@ Model used: gpt-4o-2024-08-06"""
     try:
         # Call the bug_to_unit_test function
         unit_test, total_cost, model_name = bug_to_unit_test(
-            current_output,
-            desired_output,
-            prompt_used_to_generate_the_code,
-            code_under_test,
-            program_used_to_run_code_under_test,
-            strength,
-            temperature,
-            language
+            current_output=current_output,
+            desired_output=desired_output,
+            prompt_used_to_generate_the_code=prompt_used_to_generate_the_code,
+            code_under_test=code_under_test,
+            program_used_to_run_code_under_test=program_used_to_run_code_under_test,
+            strength=strength,
+            temperature=temperature,
+            language=language
         )
 
         # Print the results
