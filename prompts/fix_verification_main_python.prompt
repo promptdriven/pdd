@@ -16,8 +16,8 @@
         - `code_file` (str): The filename of the code file to be verified and potentially fixed.
         - `program_file` (str): The filename of the executable program to run for verification.
         - `output_results` (Optional[str]): Path where to save the verification and fixing results log.
-        - `output_code` (Optional[str]): Path where to save the successfully verified code file.
-        - `output_program` (Optional[str]): Path where to save the successfully verified program file.
+        - `output_code` (Optional[str]): Path where to save the final code file after verification attempts.
+        - `output_program` (Optional[str]): Path where to save the final program file after verification attempts.
         - `loop` (bool): If True, perform iterative verification with error fixing.
         - `verification_program` (Optional[str]): Path to a Python program that verifies if the code still runs correctly after modifications. Required if --loop is used.
         - `max_attempts` (int): Maximum number of verification attempts before giving up. Default is 3.
@@ -36,7 +36,7 @@
    - When calling `fix_verification_errors_loop`, pass the *content* of the `prompt_file`, the *path* to the `code_file`, the *path* to the `program_file`, the *path* to the `verification_program`, and the `time` variable (retrieved from `ctx.obj`). Also pass the path for the `verification_log_file` if provided.
    - When calling `fix_verification_errors`, read the contents of the files first and pass them as strings (including the program output), and also pass the `time` variable (retrieved from `ctx.obj`).
    - Use `construct_paths` to generate default output paths when not explicitly provided. Include robust fallback logic to manually read input files and determine output paths if `construct_paths` does not recognize the `verify` command or fails. This should now handle `output_program` as well.
-   - Ensure the final verified program content is written to the `output_program` path if specified, or to a default generated path.
+   - Ensure the final program content is written to the `output_program` path if specified, or to a default generated path.
 
 2. Error Handling Requirements:
    - Validate verification program:
@@ -66,6 +66,7 @@
    - Show model name used
    - List saved file paths (including `output_code`, `output_results`, and `output_program`)
    - Summarize verification results and any improvements made
+   - Note: Output files are always written when specified, regardless of verification success, to allow inspection of the final state
 
 6. Return Values:
    - Return a tuple with (success_status, final_program, final_code, attempts, total_cost, model_name)
