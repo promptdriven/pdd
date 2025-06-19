@@ -9,7 +9,7 @@ Create a Python module that orchestrates the complete PDD (Prompt-Driven Develop
 </readme>
 
 <whitepaper>
-    <include>../docs/whitepaper.md</include>
+    <include>./docs/whitepaper.md</include>
 </whitepaper>
 
 The sync command is the primary command in PDD that automatically executes the complete workflow loop from dependency injection through code generation, testing, and verification. This orchestration module coordinates the execution while providing real-time feedback to users.

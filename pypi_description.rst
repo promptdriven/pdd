@@ -10,6 +10,10 @@ PDD (Prompt-Driven Development) Command Line Interface
 
 PDD (Prompt-Driven Development) is a command-line interface that harnesses AI models to generate and maintain code from prompt files. Whether you want to create new features, fix bugs, enhance unit tests, or manage complex prompt structures, pdd-cli streamlines your workflow through an intuitive interface and powerful automation.
 
+.. image:: https://img.youtube.com/vi/5lBxpTSnjqo/0.jpg
+   :alt: Watch a video demonstration of PDD
+   :target: https://www.youtube.com/watch?v=5lBxpTSnjqo
+
 Key Features
 ------------
 
