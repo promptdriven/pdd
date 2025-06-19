@@ -248,8 +248,11 @@ def test_single_pass_failure_no_fixes(
     mock_fix_loop.assert_not_called()
 
     assert result == (False, 'Original program content', 'Original code content', 1, 0.15, 'model-c')
-    assert not os.path.exists(output_code_path)
-    assert not os.path.exists(output_program_path)
+    # Files should now be written even on failure to allow inspection
+    assert os.path.exists(output_code_path)
+    assert open(output_code_path).read() == 'Original code content'
+    assert os.path.exists(output_program_path)
+    assert open(output_program_path).read() == 'Original program content'
     assert os.path.exists(output_results_path)
     assert "Success: False" in open(output_results_path).read()
     assert "Issues Found Count: 1" in open(output_results_path).read()
@@ -423,8 +426,60 @@ def test_loop_mode_failure(
     mock_run_prog.assert_not_called()
 
     assert result == (False, 'Last program loop', 'Last code loop', 5, 0.8, 'model-e')
-    assert not os.path.exists(output_code_path)
-    assert not os.path.exists(output_program_path)
+    # Files should now be written even on failure to allow inspection
+    assert os.path.exists(output_code_path)
+    assert open(output_code_path).read() == 'Last code loop'
+    assert os.path.exists(output_program_path)
+    assert open(output_program_path).read() == 'Last program loop'
+
+
+@patch('pdd.fix_verification_main.fix_verification_errors_loop')
+@patch('pdd.fix_verification_main.fix_verification_errors')
+@patch('pdd.fix_verification_main.run_program')
+@patch('pdd.fix_verification_main.construct_paths')
+def test_output_files_written_when_fixes_applied(
+    mock_construct, mock_run_prog, mock_fix_errors, mock_fix_loop,
+    mock_context, setup_files, mock_construct_paths_response, tmp_path
+):
+    """Verify output files are written when verification finds issues and applies fixes."""
+    mock_construct.return_value = mock_construct_paths_response
+    mock_run_prog.return_value = (True, "Program output with issues", "")
+    mock_fix_errors.return_value = {
+        'verification_issues_count': 2,  # Has issues but fixes were applied
+        'fixed_program': 'Partially fixed program content',
+        'fixed_code': 'Partially fixed code content',
+        'total_cost': 0.25,
+        'model_name': 'model-partial',
+        'explanation': ['Found issues', 'Applied fixes']
+    }
+
+    output_code_path = mock_construct_paths_response[1]["output_code"]
+    output_results_path = mock_construct_paths_response[1]["output_results"]
+    output_program_path = mock_construct_paths_response[1]["output_program"]
+
+    result = fix_verification_main(
+        ctx=mock_context,
+        prompt_file=setup_files["prompt"],
+        code_file=setup_files["code"],
+        program_file=setup_files["program"],
+        output_results=None,
+        output_code=None,
+        output_program=None,
+        loop=False,
+        verification_program=None
+    )
+
+    # Should return True for success since fixes were applied (current logic considers fixes as success)
+    assert result == (True, 'Partially fixed program content', 'Partially fixed code content', 1, 0.25, 'model-partial')
+    
+    # NEW BEHAVIOR: Files are always written when specified, allowing inspection
+    assert os.path.exists(output_code_path)
+    assert open(output_code_path).read() == 'Partially fixed code content'
+    assert os.path.exists(output_program_path)
+    assert open(output_program_path).read() == 'Partially fixed program content'
+    assert os.path.exists(output_results_path)
+    assert "Success: True" in open(output_results_path).read()
+    assert "Issues Found Count: 2" in open(output_results_path).read()
 
 
 def test_loop_mode_missing_verification_program(mock_context, setup_files):

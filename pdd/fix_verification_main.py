@@ -382,7 +382,7 @@ def fix_verification_main(
         if final_code is not None:
             rich_print(f"  len(final_code): {len(final_code)}")
 
-    if success and output_code_path and final_code is not None:
+    if output_code_path and final_code is not None:
         try:
             if verbose:
                 rich_print(f"[cyan bold DEBUG] In fix_verification_main, ATTEMPTING to write code to: {output_code_path!r}")
@@ -402,7 +402,7 @@ def fix_verification_main(
         if final_program is not None:
             rich_print(f"  len(final_program): {len(final_program)}")
 
-    if success and output_program_path and final_program is not None:
+    if output_program_path and final_program is not None:
         try:
             if verbose:
                 rich_print(f"[cyan bold DEBUG] In fix_verification_main, ATTEMPTING to write program to: {output_program_path!r}")
