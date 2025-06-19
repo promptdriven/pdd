@@ -1,3 +1,33 @@
+## v0.0.41 (2025-06-18)
+
+### Feat
+
+- enhance sync command with logging and conflict resolution capabilities
+- add logo animation example and enhance sync animation functionality
+- enhance sync_animation for 'auto-deps' command and improve animation flow
+- enhance arrow animation in sync_animation for 'generate' command
+- introduce logo animation module and integrate with sync_animation
+- enhance sync_animation example and module for improved functionality
+- add sync_animation module and example script for terminal animation
+- update linting checklist and improve cmd_test_main functionality
+- update linting checklist and enhance change_main functionality
+- update linting checklist and enhance bug_to_unit_test and xml_tagger modules
+- enhance auto_update functionality with version fetching and upgrade logic
+
+### Fix
+
+- improve language parameter handling and update test assertions
+- update logo animation module and improve related documentation
+
+### Refactor
+
+- update output file handling in verification process
+- update sync_determine_operation module and example for clarity and functionality
+- simplify arrow animation logic in sync_animation
+- update sync_animation example and module for improved clarity and functionality
+- enhance Makefile and Python modules for improved functionality and clarity
+- improve preprocess function to handle None results from preprocess_main
+
 ## v0.0.40 (2025-06-05)
 
 ### Feat
