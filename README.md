@@ -155,7 +155,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.40
+Current version: 0.0.41
 
 To check your installed version, run:
 ```
@@ -462,6 +462,7 @@ Options:
 - `--skip-verify`: Skip the functional verification step
 - `--skip-tests`: Skip unit test generation and fixing
 - `--target-coverage FLOAT`: Desired code coverage percentage (default is 90.0)
+- `--log`: Display sync log for this basename instead of running sync operations
 
 **Language Detection**:
 The sync command automatically detects the programming language by scanning for existing prompt files matching the pattern `{basename}_{language}.prompt` in the prompts directory. For example:
@@ -497,6 +498,16 @@ The sync command automatically detects what files exist and executes the appropr
 **Environment Variables**:
 All existing PDD output path environment variables are respected, allowing the sync command to save files in the appropriate locations for your project structure.
 
+**Sync Logging**:
+The sync command maintains a detailed log of its decision-making process, which you can view using the `--log` option. This transparency helps you understand:
+- What files were detected as changed
+- Which analysis method was used (simple heuristics vs LLM analysis)
+- The reasoning behind operation recommendations
+- Cost and time information for each sync session
+- Success/failure status of operations
+
+Use `--verbose` with `--log` to see detailed LLM reasoning for complex multi-file change scenarios.
+
 **When to use**: This is the recommended starting point for most PDD workflows. Use sync when you want to ensure all artifacts (code, examples, tests) are up-to-date and synchronized with your prompt files. The command embodies the PDD philosophy by treating the workflow as a batch process that developers can launch and return to later, freeing them from constant supervision.
 
 Examples:
@@ -512,6 +523,12 @@ pdd sync --skip-verify --budget 5.0 web_scraper
 
 # Sync all detected languages for a basename
 pdd sync multi_language_module
+
+# View sync log to see previous operations and decisions
+pdd sync --log factorial_calculator
+
+# View detailed sync log with LLM reasoning (combine with --verbose global option)
+pdd --verbose sync --log factorial_calculator
 
 # Context-aware examples (with .pddrc)
 cd backend && pdd sync calculator     # Uses backend context settings
@@ -1018,16 +1035,16 @@ Arguments:
 
 Options:
 - `--output-results LOCATION`: Specify where to save the verification and fixing results log. This log typically contains the final status (pass/fail), number of attempts, total cost, and potentially LLM reasoning or identified issues. Default: `<basename>_verify_results.log`. If an environment variable `PDD_VERIFY_RESULTS_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
-- `--output-code LOCATION`: Specify where to save the successfully verified (and potentially fixed) code file. Default: `<basename>_verified.<language_extension>`. If an environment variable `PDD_VERIFY_CODE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
-- `--output-program LOCATION`: Specify where to save the successfully verified (and potentially fixed) program file. The default file name is `<program_basename>_verified.<language_extension>`. If an environment variable `PDD_VERIFY_PROGRAM_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output-code LOCATION`: Specify where to save the final code file after verification attempts (even if verification doesn't fully succeed). Default: `<basename>_verified.<language_extension>`. If an environment variable `PDD_VERIFY_CODE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output-program LOCATION`: Specify where to save the final program file after verification attempts (even if verification doesn't fully succeed). The default file name is `<program_basename>_verified.<language_extension>`. If an environment variable `PDD_VERIFY_PROGRAM_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--max-attempts INT`: Set the maximum number of fix attempts within the verification loop before giving up (default is 3).
 - `--budget FLOAT`: Set the maximum cost allowed for the entire verification and iterative fixing process (default is $5.0).
 
 The command operates iteratively if the initial run of `PROGRAM_FILE` produces output judged incorrect by the LLM based on the `PROMPT_FILE`. After each fix attempt on `CODE_FILE`, `PROGRAM_FILE` is re-run, and its output is re-evaluated. This continues until the output is judged correct, `--max-attempts` is reached, or the `--budget` is exhausted. Intermediate code files may be generated during the loop, similar to the `fix` command.
 
 Outputs:
-- Verified (and potentially fixed) code file at `--output-code` location upon success.
-- Verified (and potentially fixed) program file at `--output-program` location upon success.
+- Final code file at `--output-code` location (always written when specified, allowing inspection even if verification doesn't fully succeed).
+- Final program file at `--output-program` location (always written when specified, allowing inspection even if verification doesn't fully succeed).
 - Results log file at `--output-results` location detailing the process and outcome.
 - Potentially intermediate code files generated during the fixing loop (timestamp-based naming).
 
@@ -1222,8 +1239,8 @@ PDD uses several environment variables to customize its behavior:
 - **`PDD_AUTO_DEPS_OUTPUT_PATH`**: Default path for the modified prompt files generated by the `auto-deps` command.
 - **`PDD_AUTO_DEPS_CSV_PATH`**: Default path and filename for the CSV file used by the auto-deps command to store dependency information. If set, this overrides the default "project_dependencies.csv" filename.
 - **`PDD_VERIFY_RESULTS_OUTPUT_PATH`**: Default path for the results log file generated by the `verify` command.
-- **`PDD_VERIFY_CODE_OUTPUT_PATH`**: Default path for the verified code file generated by the `verify` command upon success.
-- **`PDD_VERIFY_PROGRAM_OUTPUT_PATH`**: Default path for the verified program file generated by the `verify` command upon success.
+- **`PDD_VERIFY_CODE_OUTPUT_PATH`**: Default path for the final code file generated by the `verify` command.
+- **`PDD_VERIFY_PROGRAM_OUTPUT_PATH`**: Default path for the final program file generated by the `verify` command.
 
 ### Configuration Priority
 
