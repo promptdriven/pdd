@@ -1,6 +1,6 @@
 # sync_main_python.prompt
 
-% You are an expert Python engineer. Your goal is to write a Python function, 'sync_main', that will be the CLI wrapper for the sync command. This function will handle the interface logic (e.g. grabbing environment variables, parameter validation, path construction) and then call the sync_orchestrate function to perform the actual sync workflow.
+% You are an expert Python engineer. Your goal is to write a Python function, 'sync_main', that will be the CLI wrapper for the sync command. This function will handle the interface logic (e.g. grabbing environment variables, parameter validation, path construction) and then call the sync_orchestration function to perform the actual sync workflow.
 
 <include>context/python_preamble.prompt</include>
 
@@ -26,7 +26,7 @@
 
     Outputs:
         - Returns a tuple containing:
-            - `Dict[str, Any]`: Comprehensive results dictionary from sync_orchestrate
+            - `Dict[str, Any]`: Comprehensive results dictionary from sync_orchestration
             - `float`: Total cost of the sync operation
             - `str`: Primary model name used during sync
 
@@ -60,8 +60,8 @@
     - Scan for existing prompt files matching the pattern `{basename}_{language}.prompt` in the prompts directory
     - If multiple language prompt files exist for the same basename, process all of them sequentially
     - If no prompt files found, raise `click.UsageError` with helpful message
-    - For each found prompt file, run the complete sync workflow (calling sync_orchestrate)
-    - Each sync_orchestrate call will use construct_paths normally with that specific prompt file
+    - For each found prompt file, run the complete sync workflow (calling sync_orchestration)
+    - Each sync_orchestration call will use construct_paths normally with that specific prompt file
 
 4. **File Path Validation**:
     - Validate that required prompt files exist for the given basename
@@ -96,9 +96,9 @@
         * Any errors or warnings
     - Provide helpful suggestions for common issues
 
-7. **Integration with sync_orchestrate**:
-    - Import and call `sync_orchestrate` function from the sync orchestration module
-    - Pass all parameters properly mapped to sync_orchestrate's interface, ensuring directory parameters match the expected names (prompts_dir, code_dir, examples_dir, tests_dir)
+7. **Integration with sync_orchestration**:
+    - Import and call `sync_orchestration` function from the sync orchestration module
+    - Pass all parameters properly mapped to sync_orchestration's interface, ensuring directory parameters match the expected names (prompts_dir, code_dir, examples_dir, tests_dir)
     - Handle return values and format them for CLI output
 
 <examples>
@@ -119,10 +119,10 @@
       <include>context/get_language_example.py</include>
       </get_language_example>
 
-      - Here is how to use the `sync_orchestrate` function:
-      <sync_orchestrate_example>
-        <include>context/sync_orchestrate_example.py</include>
-      </sync_orchestrate_example>
+      - Here is how to use the `sync_orchestration` function:
+      <sync_orchestration_example>
+        <include>context/sync_orchestration_example.py</include>
+      </sync_orchestration_example>
 
       - Here is an example of language detection for sync using existing PDD functions:
       <language_detection_example>
@@ -164,12 +164,12 @@
 1. **Main Function Structure**:
    - Follow the same pattern as other PDD main functions (like fix_main)
    - Handle all CLI interface logic in sync_main
-   - Delegate actual sync workflow to sync_orchestrate
+   - Delegate actual sync workflow to sync_orchestration
    - Return appropriate tuple for CLI result callback
 
 2. **Multiple Language Support**:
    - If multiple language prompt files exist for the same basename, process all of them
-   - Run sync_orchestrate separately for each detected language
+   - Run sync_orchestration separately for each detected language
    - Combine results and costs from all language syncs
 
 3. **Path Management**:
@@ -183,8 +183,8 @@
    - Provide clear success/failure indicators
 
 5. **State Management**:
-   - Let sync_orchestrate handle git integration and state tracking
+   - Let sync_orchestration handle git integration and state tracking
    - Don't duplicate state management logic in sync_main
    - Pass through all necessary parameters for state handling
 
-The sync_main function should act as a clean interface layer that handles CLI parameter extraction and validation while delegating path construction to `construct_paths` and the actual sync workflow intelligence to sync_orchestrate. Cost tracking is automatically handled by the `@track_cost` decorator at the CLI level.
+The sync_main function should act as a clean interface layer that handles CLI parameter extraction and validation while delegating path construction to `construct_paths` and the actual sync workflow intelligence to sync_orchestration. Cost tracking is automatically handled by the `@track_cost` decorator at the CLI level.
