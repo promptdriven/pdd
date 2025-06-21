@@ -26,6 +26,7 @@ COMMAND_OUTPUT_KEYS: Dict[str, List[str]] = {
     'bug': ['output'],
     'auto-deps': ['output'],
     'verify': ['output_results', 'output_code', 'output_program'],
+    'sync': ['generate_output_path', 'test_output_path', 'example_output_path'],
 }
 
 # Define default filename patterns for each output key
@@ -48,8 +49,8 @@ DEFAULT_FILENAMES: Dict[str, Dict[str, str]] = {
     },
     'change': {'output': 'modified_{basename}.prompt'},
     'update': {'output': 'modified_{basename}.prompt'}, # Consistent with change/split default
-    'detect': {'output': '{basename}_detect.csv'}, # Using basename as change_file_basename isn't available here
-    'conflicts': {'output': '{basename}_conflict.csv'}, # Using basename as prompt1/2 basenames aren't available
+    'detect': {'output': '{basename}_detect.csv'}, # basename here is from change_file per construct_paths logic
+    'conflicts': {'output': '{basename}_conflict.csv'}, # basename here is combined sorted prompt basenames per construct_paths logic
     'crash': {
         'output': '{basename}_fixed{ext}',
         # Using basename as program_basename isn't available here
@@ -62,6 +63,11 @@ DEFAULT_FILENAMES: Dict[str, Dict[str, str]] = {
         'output_results': '{basename}_verify_results.log',
         'output_code': '{basename}_verified{ext}',
         'output_program': '{basename}_program_verified{ext}',
+    },
+    'sync': {
+        'generate_output_path': '{basename}{ext}',
+        'test_output_path': 'test_{basename}{ext}',
+        'example_output_path': '{basename}_example{ext}',
     },
 }
 
@@ -95,6 +101,11 @@ ENV_VAR_MAP: Dict[str, Dict[str, str]] = {
         'output_results': 'PDD_VERIFY_RESULTS_OUTPUT_PATH',
         'output_code': 'PDD_VERIFY_CODE_OUTPUT_PATH',
         'output_program': 'PDD_VERIFY_PROGRAM_OUTPUT_PATH',
+    },
+    'sync': {
+        'generate_output_path': 'PDD_GENERATE_OUTPUT_PATH',
+        'test_output_path': 'PDD_TEST_OUTPUT_PATH',
+        'example_output_path': 'PDD_EXAMPLE_OUTPUT_PATH',
     },
 }
 
