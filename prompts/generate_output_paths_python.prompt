@@ -1,7 +1,7 @@
 % You are an expert Python software engineer. Your task is to implement a function called `generate_output_paths` that creates appropriate output filenames for different commands in the 'pdd' Python program.
 
 % Inputs: The function should take the following parameters:
-    - `command` (string): The command being executed (e.g., 'generate', 'example', 'test', 'preprocess', 'fix').
+    - `command` (string): The command being executed (e.g., 'generate', 'example', 'test', 'preprocess', 'fix', 'sync').
     - `output_locations` (dict): The output dictionary with keys (e.g., 'output', 'output_test') and the value of those options if specified by user.
     - `basename` (string): The base name of the file.
     - `language` (string): The programming language of the file.
@@ -17,7 +17,7 @@
 
 % Follow these steps:
     Step 1. List out all the different ways output locations can be constructed. For each way describe a few paragraphs in detail on how the output location can constructed from the inputs to this function and potential corner cases that need to be dealt with.
-    Step 2. List out the default naming conventions for each command.
+    Step 2. List out the default naming conventions for each command. Note that the 'sync' command uses the same output paths as 'generate', 'example', and 'test' commands since it orchestrates multiple operations that use these outputs.
     Step 3. List out all the environment variables that can be used to override the default naming conventions.
     Step 4. Identify potential error cases that need to be handled.
     Step 5. Write the code that implements the function to implement all these situations efficiently from the above steps.

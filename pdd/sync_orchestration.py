@@ -14,52 +14,23 @@ from dataclasses import asdict
 
 import click
 
-# --- Placeholder Imports for PDD Core Components ---
-# In a real PDD environment, these would be direct imports.
-# For this standalone module, we'll define mock functions to simulate their behavior.
-
-# Mocking PDD command main functions
-def _mock_pdd_command(name: str, cost: float, success: bool = True, **kwargs) -> Dict[str, Any]:
-    print(f"Executing mock: {name}")
-    time.sleep(2) # Simulate work
-    return {'success': success, 'cost': cost, **kwargs}
-
-def auto_deps_main(ctx, prompt_file, directory_path, **kwargs):
-    return _mock_pdd_command('auto-deps', 0.02, prompt_file=prompt_file, directory_path=directory_path, **kwargs)
-
-def code_generator_main(ctx, prompt_file, output, **kwargs):
-    Path(output).touch()
-    return _mock_pdd_command('generate', 0.05, prompt_file=prompt_file, output=output, **kwargs)
-
-def context_generator_main(ctx, prompt_file, code_file, output, **kwargs):
-    Path(output).touch()
-    return _mock_pdd_command('example', 0.03, prompt_file=prompt_file, code_file=code_file, output=output, **kwargs)
-
-def crash_main(ctx, prompt_file, code_file, program_file, error_file, **kwargs):
-    return _mock_pdd_command('crash', 0.08, prompt_file=prompt_file, code_file=code_file, **kwargs)
-
-def fix_verification_main(ctx, prompt_file, code_file, program_file, **kwargs):
-    return _mock_pdd_command('verify', 0.1, prompt_file=prompt_file, code_file=code_file, **kwargs)
-
-def cmd_test_main(ctx, prompt_file, code_file, output, **kwargs):
-    Path(output).touch()
-    return _mock_pdd_command('test', 0.06, prompt_file=prompt_file, code_file=code_file, output=output, tests_passed=9, tests_failed=1, coverage=85.0)
-
-def fix_main(ctx, prompt_file, code_file, unit_test_file, error_file, **kwargs):
-    return _mock_pdd_command('fix', 0.15, prompt_file=prompt_file, code_file=code_file, **kwargs)
-
-def update_main(ctx, input_prompt_file, modified_code_file, **kwargs):
-    return _mock_pdd_command('update', 0.04, input_prompt_file=input_prompt_file, modified_code_file=modified_code_file, **kwargs)
-
-# Mocking sync_animation and sync_determine_operation
-from pdd.sync_animation import sync_animation
-from pdd.sync_determine_operation import (
+# --- Real PDD Component Imports ---
+from .sync_animation import sync_animation
+from .sync_determine_operation import (
     determine_sync_operation,
     get_pdd_file_paths,
     RunReport,
     PDD_DIR,
     META_DIR,
 )
+from .auto_deps_main import auto_deps_main
+from .code_generator_main import code_generator_main
+from .context_generator_main import context_generator_main
+from .crash_main import crash_main
+from .fix_verification_main import fix_verification_main
+from .cmd_test_main import cmd_test_main
+from .fix_main import fix_main
+from .update_main import update_main
 
 # --- Mock Helper Functions ---
 
@@ -80,6 +51,28 @@ def save_run_report(report: Dict[str, Any], basename: str, language: str):
     META_DIR.mkdir(parents=True, exist_ok=True)
     with open(report_file, 'w') as f:
         json.dump(report, f, indent=2, default=str)
+
+def _save_operation_fingerprint(basename: str, language: str, operation: str, 
+                               paths: Dict[str, Path], cost: float, model: str):
+    """Save fingerprint state after successful operation."""
+    from datetime import datetime, timezone
+    from .sync_determine_operation import calculate_current_hashes, Fingerprint
+    
+    current_hashes = calculate_current_hashes(paths)
+    fingerprint = Fingerprint(
+        pdd_version="0.0.41",
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        command=operation,
+        prompt_hash=current_hashes.get('prompt_hash'),
+        code_hash=current_hashes.get('code_hash'),
+        example_hash=current_hashes.get('example_hash'),
+        test_hash=current_hashes.get('test_hash')
+    )
+    
+    META_DIR.mkdir(parents=True, exist_ok=True)
+    fingerprint_file = META_DIR / f"{basename}_{language}.json"
+    with open(fingerprint_file, 'w') as f:
+        json.dump(asdict(fingerprint), f, indent=2, default=str)
 
 class SyncLock:
     """Mock sync lock for demonstration."""
@@ -285,23 +278,95 @@ def sync_orchestration(
                     if operation == 'auto-deps':
                         result = auto_deps_main(ctx, prompt_file=str(pdd_files['prompt']), directory_path=examples_dir)
                     elif operation == 'generate':
-                        result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt']), output=str(pdd_files['code']))
+                        # Fix: Add missing required parameters for code_generator_main
+                        output_path, success, cost, model = code_generator_main(
+                            ctx, 
+                            prompt_file=str(pdd_files['prompt']), 
+                            output=str(pdd_files['code']),
+                            original_prompt_file_path=None,  # For full generation, not incremental
+                            force_incremental_flag=False     # For full generation
+                        )
+                        result = {'success': success, 'cost': cost, 'model': model, 'output_path': output_path}
                     elif operation == 'example':
-                        result = context_generator_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['example']))
+                        # This function signature is correct
+                        output_path, cost, model = context_generator_main(
+                            ctx, 
+                            prompt_file=str(pdd_files['prompt']), 
+                            code_file=str(pdd_files['code']), 
+                            output=str(pdd_files['example'])
+                        )
+                        result = {'success': True, 'cost': cost, 'model': model, 'output_path': output_path}
                     elif operation == 'crash':
                         # Crash requires an error file and a program file, which sync must orchestrate
                         # This is a simplified call for the example. A real implementation would run the example and capture stderr.
                         Path("crash.log").write_text("Simulated crash error")
-                        result = crash_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), program_file=str(pdd_files['example']), error_file="crash.log")
+                        # This function signature is correct
+                        success, output_code, output_program, attempts, cost, model = crash_main(
+                            ctx, 
+                            prompt_file=str(pdd_files['prompt']), 
+                            code_file=str(pdd_files['code']), 
+                            program_file=str(pdd_files['example']), 
+                            error_file="crash.log"
+                        )
+                        result = {'success': success, 'cost': cost, 'model': model, 'attempts': attempts}
                     elif operation == 'verify':
-                        result = fix_verification_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), program_file=str(pdd_files['example']))
+                        # Fix: Add missing required parameters for fix_verification_main
+                        success, output_code, output_program, attempts, cost, model = fix_verification_main(
+                            ctx, 
+                            prompt_file=str(pdd_files['prompt']), 
+                            code_file=str(pdd_files['code']), 
+                            program_file=str(pdd_files['example']),
+                            output_results=None,
+                            output_code=None,
+                            output_program=None,
+                            loop=False,
+                            verification_program=None
+                        )
+                        result = {'success': success, 'cost': cost, 'model': model, 'attempts': attempts}
                     elif operation == 'test':
-                        result = cmd_test_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['test']))
+                        # Fix: Add missing required parameters for cmd_test_main
+                        output_path, cost, model = cmd_test_main(
+                            ctx, 
+                            prompt_file=str(pdd_files['prompt']), 
+                            code_file=str(pdd_files['code']), 
+                            output=str(pdd_files['test']),
+                            language=language,
+                            coverage_report=None,
+                            existing_tests=None,
+                            target_coverage=target_coverage,
+                            merge=False
+                        )
+                        result = {'success': True, 'cost': cost, 'model': model, 'output_path': output_path}
                     elif operation == 'fix':
                         Path("fix_errors.log").write_text("Simulated test failures")
-                        result = fix_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), unit_test_file=str(pdd_files['test']), error_file="fix_errors.log")
+                        # Fix: Add missing required parameters for fix_main
+                        success, output_test, output_code, attempts, cost, model = fix_main(
+                            ctx, 
+                            prompt_file=str(pdd_files['prompt']), 
+                            code_file=str(pdd_files['code']), 
+                            unit_test_file=str(pdd_files['test']), 
+                            error_file="fix_errors.log",
+                            output_test=None,
+                            output_code=None,
+                            output_results=None,
+                            loop=False,
+                            verification_program=None,
+                            max_attempts=max_attempts,
+                            budget=budget - current_cost_ref[0],
+                            auto_submit=False
+                        )
+                        result = {'success': success, 'cost': cost, 'model': model, 'attempts': attempts}
                     elif operation == 'update':
-                        result = update_main(ctx, input_prompt_file=str(pdd_files['prompt']), modified_code_file=str(pdd_files['code']))
+                        # Fix: Add missing required parameters for update_main
+                        output_path, cost, model = update_main(
+                            ctx, 
+                            input_prompt_file=str(pdd_files['prompt']), 
+                            modified_code_file=str(pdd_files['code']),
+                            input_code_file=None,
+                            output=None,
+                            git=False
+                        )
+                        result = {'success': True, 'cost': cost, 'model': model, 'output_path': output_path}
                     
                     success = result.get('success', False)
                     current_cost_ref[0] += result.get('cost', 0.0)
@@ -312,6 +377,9 @@ def sync_orchestration(
 
                 if success:
                     operations_completed.append(operation)
+                    # Save fingerprint state after successful operation
+                    _save_operation_fingerprint(basename, language, operation, pdd_files, 
+                                               result.get('cost', 0.0), result.get('model', ''))
                 else:
                     errors.append(f"Operation '{operation}' failed.")
                     break # Exit loop on first failure
