@@ -61,15 +61,8 @@ def pdd_test_environment(tmp_path, monkeypatch):
     monkeypatch.setattr(sync_determine_operation, 'LOCKS_DIR', locks_dir)
     monkeypatch.setattr(sync_determine_operation, 'META_DIR', meta_dir)
     monkeypatch.setattr(sync_determine_operation, 'PROMPTS_ROOT_DIR', prompts_root)
-    # The code uses CODE_ROOT_DIR = Path(".") which means project root.
-    # For tests, let's make it explicit to the temp env's "code_root"
-    monkeypatch.setattr(sync_determine_operation, 'CODE_ROOT_DIR', code_root)
     monkeypatch.setattr(sync_determine_operation, 'EXAMPLES_ROOT_DIR', examples_root)
     monkeypatch.setattr(sync_determine_operation, 'TESTS_ROOT_DIR', tests_root)
-    
-    # Ensure LANGUAGE_EXTENSIONS has python for tests
-    if "python" not in sync_determine_operation.LANGUAGE_EXTENSIONS:
-         monkeypatch.setitem(sync_determine_operation.LANGUAGE_EXTENSIONS, "python", "py")
 
 
     class FileCreator:
@@ -117,6 +110,11 @@ def temp_git_repo(pdd_test_environment):
         subprocess.run(["git", "config", "user.email", "test@example.com"], check=True)
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         pytest.skip(f"Git setup failed, skipping git-dependent tests: {e}")
+
+    # Update the file creator paths to work within the git repo context
+    # Since we changed the working directory, we need to recalculate the paths
+    fc = pdd_test_environment['file_creator']
+    fc.paths = get_pdd_file_paths(TEST_BASENAME, TEST_LANGUAGE)
 
     def _commit_file(file_path_in_repo: Path, content: str, commit_message: str = "Initial commit"):
         # Git needs relative paths for adding files from subdirectories
@@ -214,26 +212,44 @@ def test_lock_contention_simulated(mock_pid_exists, pdd_test_environment):
 
 # --- Helper Function Tests ---
 
-def test_get_pdd_file_paths_uses_monkeypatched_roots(pdd_test_environment):
-    paths = get_pdd_file_paths("myunit", "python")
-    assert str(paths['prompt']).startswith(str(pdd_test_environment['base_dir'] / "prompts"))
-    assert str(paths['code']).startswith(str(pdd_test_environment['base_dir'] / "src")) # src is our choice for code_root
-    assert paths['code'].name == "myunit.py"
+def test_get_pdd_file_paths_uses_monkeypatched_roots(pdd_test_environment, monkeypatch):
+    # Change working directory to the test environment
+    original_cwd = os.getcwd()
+    test_base_dir = pdd_test_environment['base_dir']
+    monkeypatch.chdir(test_base_dir)
+    
+    try:
+        paths = get_pdd_file_paths("myunit", "python")
+        assert str(paths['prompt']).startswith(str(test_base_dir / "prompts"))
+        # Since we use generate_output_paths, the code will be in the current directory (test_base_dir)
+        assert str(paths['code']).startswith(str(test_base_dir))
+        assert paths['code'].name == "myunit.py"
+    finally:
+        # Restore original working directory
+        os.chdir(original_cwd)
 
-def test_get_language_extension(monkeypatch):
-    assert sync_determine_operation.get_language_extension("python") == "py"
-    monkeypatch.setitem(sync_determine_operation.LANGUAGE_EXTENSIONS, "testlang", "tst")
-    assert sync_determine_operation.get_language_extension("testlang") == "tst"
-    with pytest.raises(ValueError, match="Unsupported language: unknownlang"):
-        sync_determine_operation.get_language_extension("unknownlang")
+# Note: get_language_extension was removed as we now use PDD's get_extension function
 
-def test_calculate_sha256(pdd_test_environment):
-    fc = pdd_test_environment['file_creator']
-    p_file = fc.create_file('prompt', "content")
-    assert calculate_sha256(p_file) == hashlib.sha256(b"content").hexdigest()
-    assert calculate_sha256(fc.get_path('code')) is None # Non-existent
-    empty_file = fc.create_file('example', "")
-    assert calculate_sha256(empty_file) == hashlib.sha256(b"").hexdigest()
+def test_calculate_sha256(pdd_test_environment, monkeypatch):
+    # Change working directory to the test environment  
+    test_base_dir = pdd_test_environment['base_dir']
+    monkeypatch.chdir(test_base_dir)
+    
+    # Get fresh paths after changing working directory
+    paths = get_pdd_file_paths(TEST_BASENAME, TEST_LANGUAGE)
+    
+    # Create prompt file and test it
+    paths['prompt'].parent.mkdir(parents=True, exist_ok=True)
+    paths['prompt'].write_text("content")
+    assert calculate_sha256(paths['prompt']) == hashlib.sha256(b"content").hexdigest()
+    
+    # Test non-existent file (code doesn't exist yet)
+    assert calculate_sha256(paths['code']) is None
+    
+    # Create empty example file and test it
+    paths['example'].parent.mkdir(parents=True, exist_ok=True)
+    paths['example'].write_text("")
+    assert calculate_sha256(paths['example']) == hashlib.sha256(b"").hexdigest()
 
 def test_read_fingerprint(pdd_test_environment):
     fp_path = pdd_test_environment['meta_dir'] / f"{TEST_BASENAME}_{TEST_LANGUAGE}.json"
@@ -268,13 +284,21 @@ def test_read_run_report(pdd_test_environment):
     assert rr.coverage == 0.5
     # Other cases similar to read_fingerprint (non-existent, corrupted, missing fields)
 
-def test_calculate_current_hashes(pdd_test_environment):
-    fc = pdd_test_environment['file_creator']
-    fc.create_file('prompt', "p")
-    fc.create_file('code', "c")
+def test_calculate_current_hashes(pdd_test_environment, monkeypatch):
+    # Change working directory to the test environment
+    test_base_dir = pdd_test_environment['base_dir']
+    monkeypatch.chdir(test_base_dir)
+    
+    # Get paths after changing working directory
+    paths = get_pdd_file_paths(TEST_BASENAME, TEST_LANGUAGE)
+    
+    # Create files at the correct paths
+    paths['prompt'].parent.mkdir(parents=True, exist_ok=True)
+    paths['prompt'].write_text("p")
+    paths['code'].parent.mkdir(parents=True, exist_ok=True)
+    paths['code'].write_text("c")
     # example and test do not exist
     
-    paths = get_pdd_file_paths(TEST_BASENAME, TEST_LANGUAGE)
     hashes = sync_determine_operation.calculate_current_hashes(paths)
     
     assert hashes['prompt_hash'] == hashlib.sha256(b"p").hexdigest()
@@ -439,47 +463,105 @@ def test_determine_op_no_fingerprint_no_prompt(pdd_test_environment):
     assert "No PDD fingerprint and no prompt file found" in decision.reason
 
 # D. Fingerprint Exists - File States
-def test_determine_op_fp_exists_no_changes(pdd_test_environment):
+def test_determine_op_fp_exists_no_changes(pdd_test_environment, monkeypatch):
+    # Change working directory to the test environment  
+    test_base_dir = pdd_test_environment['base_dir']
+    monkeypatch.chdir(test_base_dir)
+    
+    # Get paths after changing working directory
+    paths = get_pdd_file_paths(TEST_BASENAME, TEST_LANGUAGE)
+    
+    # Create files at the correct paths and calculate hashes
+    paths['prompt'].parent.mkdir(parents=True, exist_ok=True)
+    paths['prompt'].write_text("p")
+    p_hash = calculate_sha256(paths['prompt'])
+    
+    paths['code'].parent.mkdir(parents=True, exist_ok=True)
+    paths['code'].write_text("c")
+    c_hash = calculate_sha256(paths['code'])
+    
+    # Create fingerprint file
     fc = pdd_test_environment['file_creator']
-    p_hash = calculate_sha256(fc.create_file('prompt', "p"))
-    c_hash = calculate_sha256(fc.create_file('code', "c"))
     fc.make_fingerprint_file(_default_fingerprint(fc, {'prompt': p_hash, 'code': c_hash}))
     
     decision = sync_determine_operation.determine_sync_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
     assert decision.operation == 'nothing'
 
-def test_determine_op_fp_prompt_changed(pdd_test_environment):
+def test_determine_op_fp_prompt_changed(pdd_test_environment, monkeypatch):
+    # Change working directory to the test environment  
+    test_base_dir = pdd_test_environment['base_dir']
+    monkeypatch.chdir(test_base_dir)
+    
+    # Get paths after changing working directory
+    paths = get_pdd_file_paths(TEST_BASENAME, TEST_LANGUAGE)
+    
+    # Create prompt file with old content and calculate hash
+    paths['prompt'].parent.mkdir(parents=True, exist_ok=True)
+    paths['prompt'].write_text("p_old")
+    p_hash_old = calculate_sha256(paths['prompt'])
+    
+    # Create fingerprint file
     fc = pdd_test_environment['file_creator']
-    p_path = fc.create_file('prompt', "p_old")
-    p_hash_old = calculate_sha256(p_path)
     fc.make_fingerprint_file(_default_fingerprint(fc, {'prompt': p_hash_old}))
     
-    p_path.write_text("p_new") # Change prompt
+    # Change prompt content
+    paths['prompt'].write_text("p_new")
     
     decision = sync_determine_operation.determine_sync_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
     assert decision.operation == 'generate'
 
 # Similar tests for code_changed -> update, test_changed -> test, example_changed -> verify
 
-def test_determine_op_fp_code_changed(pdd_test_environment):
+def test_determine_op_fp_code_changed(pdd_test_environment, monkeypatch):
+    # Change working directory to the test environment  
+    test_base_dir = pdd_test_environment['base_dir']
+    monkeypatch.chdir(test_base_dir)
+    
+    # Get paths after changing working directory
+    paths = get_pdd_file_paths(TEST_BASENAME, TEST_LANGUAGE)
+    
+    # Create files at the correct paths and calculate hashes
+    paths['prompt'].parent.mkdir(parents=True, exist_ok=True)
+    paths['prompt'].write_text("p")
+    p_hash = calculate_sha256(paths['prompt'])
+    
+    paths['code'].parent.mkdir(parents=True, exist_ok=True)
+    paths['code'].write_text("c_old")
+    c_hash_old = calculate_sha256(paths['code'])
+    
+    # Create fingerprint file
     fc = pdd_test_environment['file_creator']
-    p_hash = calculate_sha256(fc.create_file('prompt', "p"))
-    c_path = fc.create_file('code', "c_old")
-    c_hash_old = calculate_sha256(c_path)
     fc.make_fingerprint_file(_default_fingerprint(fc, {'prompt': p_hash, 'code': c_hash_old}))
     
-    c_path.write_text("c_new") # Change code
+    # Change code content
+    paths['code'].write_text("c_new")
     
     decision = sync_determine_operation.determine_sync_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
     assert decision.operation == 'update'
 
-def test_determine_op_fp_file_deleted(pdd_test_environment):
+def test_determine_op_fp_file_deleted(pdd_test_environment, monkeypatch):
+    # Change working directory to the test environment  
+    test_base_dir = pdd_test_environment['base_dir']
+    monkeypatch.chdir(test_base_dir)
+    
+    # Get paths after changing working directory
+    paths = get_pdd_file_paths(TEST_BASENAME, TEST_LANGUAGE)
+    
+    # Create files at the correct paths and calculate hashes
+    paths['prompt'].parent.mkdir(parents=True, exist_ok=True)
+    paths['prompt'].write_text("p")
+    p_hash = calculate_sha256(paths['prompt'])
+    
+    paths['code'].parent.mkdir(parents=True, exist_ok=True)
+    paths['code'].write_text("c")
+    c_hash_old = calculate_sha256(paths['code'])
+    
+    # Create fingerprint file
     fc = pdd_test_environment['file_creator']
-    p_hash = calculate_sha256(fc.create_file('prompt', "p"))
-    c_hash_old = calculate_sha256(fc.create_file('code', "c")) # Code existed
     fc.make_fingerprint_file(_default_fingerprint(fc, {'prompt': p_hash, 'code': c_hash_old}))
 
-    fc.delete_file('code') # Delete code file
+    # Delete code file
+    paths['code'].unlink()
     
     decision = sync_determine_operation.determine_sync_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
     # Deleting a file means its hash becomes None, different from fingerprint.
@@ -488,13 +570,26 @@ def test_determine_op_fp_file_deleted(pdd_test_environment):
     assert 'code' in decision.details['changed_files']
 
 
-def test_determine_op_fp_file_appeared(pdd_test_environment):
-    fc = pdd_test_environment['file_creator']
-    p_hash = calculate_sha256(fc.create_file('prompt', "p"))
+def test_determine_op_fp_file_appeared(pdd_test_environment, monkeypatch):
+    # Change working directory to the test environment  
+    test_base_dir = pdd_test_environment['base_dir']
+    monkeypatch.chdir(test_base_dir)
+    
+    # Get paths after changing working directory
+    paths = get_pdd_file_paths(TEST_BASENAME, TEST_LANGUAGE)
+    
+    # Create prompt file and calculate hash
+    paths['prompt'].parent.mkdir(parents=True, exist_ok=True)
+    paths['prompt'].write_text("p")
+    p_hash = calculate_sha256(paths['prompt'])
+    
     # Code did not exist in fingerprint (hash is None)
+    fc = pdd_test_environment['file_creator']
     fc.make_fingerprint_file(_default_fingerprint(fc, {'prompt': p_hash, 'code': None}))
 
-    fc.create_file('code', "c_new") # Create code file
+    # Create code file
+    paths['code'].parent.mkdir(parents=True, exist_ok=True)
+    paths['code'].write_text("c_new")
     
     decision = sync_determine_operation.determine_sync_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
     # Code appeared (hash from None to actual), it's 'update'.

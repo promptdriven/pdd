@@ -32,7 +32,7 @@ META_DIR = PDD_DIR / "meta"
 LOCKS_DIR = PDD_DIR / "locks"
 
 PROMPTS_ROOT_DIR = Path("prompts")
-CODE_ROOT_DIR = Path("src")
+# CODE_ROOT_DIR removed - now uses configuration-aware path resolution
 EXAMPLES_ROOT_DIR = Path("examples")
 TESTS_ROOT_DIR = Path("tests")
 
@@ -274,33 +274,19 @@ class SyncLock:
 
 # --- State Analysis Functions ---
 
-LANGUAGE_EXTENSIONS = {
-    "python": "py",
-    "javascript": "js",
-    "typescript": "ts",
-    "rust": "rs",
-    "go": "go",
-}
-
-def get_language_extension(language: str) -> str:
-    """Gets the file extension for a given language."""
-    if language not in LANGUAGE_EXTENSIONS:
-        raise ValueError(f"Unsupported language: {language}")
-    return LANGUAGE_EXTENSIONS[language]
-
 def get_pdd_file_paths(basename: str, language: str) -> Dict[str, Path]:
     """Returns configuration-aware dictionary mapping file types to their expected paths."""
     from .generate_output_paths import generate_output_paths
     from .get_extension import get_extension
     
-    ext = get_language_extension(language)
+    # Get the file extension for the language
     file_extension = get_extension(language)
     
-    # Use PDD's configuration system to determine paths
-    # Generate paths for each operation type to get the actual configured directories
+    # Use PDD's configuration system to determine paths for each operation type
+    # All commands use the same parameters: empty output_locations to use defaults
     generate_paths = generate_output_paths(
         command='generate',
-        output_locations={},  # No user overrides, use defaults/env vars
+        output_locations={},
         basename=basename,
         language=language,
         file_extension=file_extension
@@ -323,10 +309,10 @@ def get_pdd_file_paths(basename: str, language: str) -> Dict[str, Path]:
     )
     
     return {
-        'prompt': PROMPTS_ROOT_DIR / f"{basename}_{language}.prompt",  # Prompt path remains in prompts dir
-        'code': Path(generate_paths.get('output', f"{basename}.{ext}")),
-        'example': Path(example_paths.get('output', f"examples/{basename}_example.{ext}")),
-        'test': Path(test_paths.get('output', f"tests/test_{basename}.{ext}")),
+        'prompt': PROMPTS_ROOT_DIR / f"{basename}_{language}.prompt",
+        'code': Path(generate_paths.get('output', f"{basename}.{file_extension}")),
+        'example': Path(example_paths.get('output', f"examples/{basename}_example.{file_extension}")),
+        'test': Path(test_paths.get('output', f"tests/test_{basename}.{file_extension}")),
     }
 
 def calculate_sha256(file_path: Path) -> Optional[str]:
@@ -572,8 +558,27 @@ def determine_sync_operation(
             if current_hashes.get(file_type) != f_hash
         ]
         
-        # Case: No Changes
+        # Case: No Changes - but check workflow progression
         if not changed_files:
+            # Check if we need to progress the workflow even though no files have changed
+            # This handles the case where files don't exist yet but should be created
+            
+            # If we have code but no example, create example
+            if paths['code'].exists() and not paths['example'].exists():
+                return SyncDecision(
+                    operation='example',
+                    reason="Code exists but example file is missing. Creating example to demonstrate usage."
+                )
+            
+            # If we have code and example but no tests, create tests    
+            if (paths['code'].exists() and paths['example'].exists() and 
+                not paths['test'].exists()):
+                return SyncDecision(
+                    operation='test',
+                    reason="Code and example exist but test file is missing. Creating unit tests."
+                )
+            
+            # All synchronized and complete
             return SyncDecision(
                 operation='nothing',
                 reason="All files are synchronized with the last known good state."
