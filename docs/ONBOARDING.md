@@ -1,6 +1,6 @@
 # PDD Onboarding Guide
 
-This guide will help you get started with PDD (Prompt-Driven Development) by walking you through the necessary setup steps.
+This guide will help you get started with PDD (Prompt Driven Development) by walking you through the necessary setup steps.
 
 ## Prerequisites
 
@@ -29,7 +29,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 Using UV, install the PDD CLI tool:
 
 ```bash
-uv pip install pdd-cli
+uv tool install pdd-cli
 ```
 
 To verify your setup is complete, run:
@@ -42,7 +42,7 @@ pdd --version
 ### 3. Clone the GitHub Repository
 
 ```bash
-git clone https://github.com/your-org/pdd.git
+git clone https://github.com/gltanaka/pdd.git
 cd pdd
 ```
 
@@ -107,12 +107,6 @@ cd pdd
 
 If you encounter any issues during setup:
 
-1. Check the [FAQ section](https://github.com/your-org/pdd/wiki/FAQ)
+1. Check the [README](https://github.com/gltanaka/pdd/blob/main/README.md)
 2. Search existing issues on GitHub
-3. Join the Discord community for support
-
-## Additional Resources
-
-- [PDD Documentation](https://docs.pdd.dev)
-- [Community Forums](https://community.pdd.dev)
-- [Example Projects](https://github.com/your-org/pdd/tree/main/examples)
+3. Join the [Discord](https://discord.gg/Q7Ts5Qt3) community for support
