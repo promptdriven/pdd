@@ -35,6 +35,7 @@ from .fix_verification_main import fix_verification_main
 from .install_completion import install_completion, get_local_pdd_path
 from .preprocess_main import preprocess_main
 from .split_main import split_main
+from .sync_main import sync_main
 from .trace_main import trace_main
 from .track_cost import track_cost
 from .update_main import update_main
@@ -1096,6 +1097,83 @@ def verify(
     except Exception as e:
         handle_error(e, command_name, quiet)
         return None # Return None on failure
+
+
+@cli.command("sync")
+@click.argument("basename", type=str)
+@click.option(
+    "--max-attempts",
+    type=int,
+    default=3,
+    show_default=True,
+    help="Maximum number of sync attempts.",
+)
+@click.option(
+    "--budget",
+    type=float,
+    default=10.0,
+    show_default=True,
+    help="Maximum total cost allowed for the entire sync process.",
+)
+@click.option(
+    "--skip-verify",
+    is_flag=True,
+    default=False,
+    help="Skip verification step during sync.",
+)
+@click.option(
+    "--skip-tests",
+    is_flag=True,
+    default=False,
+    help="Skip test generation during sync.",
+)
+@click.option(
+    "--target-coverage",
+    type=click.FloatRange(0.0, 100.0),
+    default=90.0,
+    show_default=True,
+    help="Target code coverage percentage for generated tests.",
+)
+@click.option(
+    "--log",
+    is_flag=True,
+    default=False,
+    help="Enable detailed logging during sync.",
+)
+@click.pass_context
+@track_cost
+def sync(
+    ctx: click.Context,
+    basename: str,
+    max_attempts: int,
+    budget: float,
+    skip_verify: bool,
+    skip_tests: bool,
+    target_coverage: float,
+    log: bool,
+) -> Optional[Tuple[Dict[str, Any], float, str]]:
+    """Automatically execute the complete PDD workflow loop for a given basename. 
+    
+    This command implements the entire synchronized cycle, intelligently determining 
+    what steps are needed and executing them in the correct order. It detects 
+    programming languages by scanning for prompt files matching the pattern 
+    {basename}_{language}.prompt in the prompts directory.
+    """
+    try:
+        results, total_cost, model = sync_main(
+            ctx=ctx,
+            basename=basename,
+            max_attempts=max_attempts,
+            budget=budget,
+            skip_verify=skip_verify,
+            skip_tests=skip_tests,
+            target_coverage=target_coverage,
+            log=log,
+        )
+        return results, total_cost, model
+    except Exception as exception:
+        handle_error(exception, "sync", ctx.obj.get("quiet", False))
+        return None
 
 
 @cli.command("install_completion")

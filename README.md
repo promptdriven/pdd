@@ -4,7 +4,7 @@
 
 PDD (Prompt-Driven Development) is a versatile tool for generating code, creating examples, running unit tests, and managing prompt files. It leverages AI models to streamline the development process, allowing developers to work more efficiently with prompt-driven code generation.
 
-The primary command is **`sync`**, which automatically executes the complete PDD workflow loop - from dependency injection through code generation, testing, and verification. For most use cases, `sync` is the recommended starting point, as it intelligently determines what steps are needed and executes them in the correct order.
+The primary command is **`sync`**, which automatically executes the complete PDD workflow loop with intelligent decision-making, real-time visual feedback, and sophisticated state management. It analyzes your project files, determines what operations are needed, and executes them with live progress animation while maintaining detailed logs of all decisions and changes. For most use cases, `sync` is the recommended starting point, as it intelligently determines what steps are needed and executes them in the correct order.
 
 ## Installation
 
@@ -447,7 +447,7 @@ Here are the main commands provided by PDD:
 
 ### 1. sync
 
-**[PRIMARY COMMAND]** Automatically execute the complete PDD workflow loop for a given basename. This command implements the entire synchronized cycle from the whitepaper, intelligently determining what steps are needed and executing them in the correct order.
+**[PRIMARY COMMAND]** Automatically execute the complete PDD workflow loop for a given basename. This command implements the entire synchronized cycle from the whitepaper, intelligently determining what steps are needed and executing them in the correct order with real-time visual feedback and sophisticated state management.
 
 ```bash
 pdd [GLOBAL OPTIONS] sync [OPTIONS] BASENAME
@@ -464,6 +464,17 @@ Options:
 - `--target-coverage FLOAT`: Desired code coverage percentage (default is 90.0)
 - `--log`: Display sync log for this basename instead of running sync operations
 
+**Real-time Progress Animation**:
+The sync command provides live visual feedback showing:
+- Current operation being executed (auto-deps, generate, example, crash, verify, test, fix, update)
+- File status indicators with color coding:
+  - Green: File exists and up-to-date
+  - Yellow: File being processed
+  - Red: File has errors or missing
+  - Blue: File analysis in progress
+- Running cost totals and time elapsed
+- Progress through the workflow steps
+
 **Language Detection**:
 The sync command automatically detects the programming language by scanning for existing prompt files matching the pattern `{basename}_{language}.prompt` in the prompts directory. For example:
 - `factorial_calculator_python.prompt` → generates `factorial_calculator.py`
@@ -472,8 +483,12 @@ The sync command automatically detects the programming language by scanning for 
 
 If multiple language prompt files exist for the same basename, sync will process all of them.
 
-**Context Integration**:
-When a `.pddrc` file is present, the sync command automatically detects the appropriate context based on the current working directory and applies context-specific settings like output paths, default language, and model parameters. This eliminates the need to specify these options manually for each command.
+**Advanced Configuration Integration**:
+- **Automatic Context Detection**: Detects project structure and applies appropriate settings from `.pddrc`
+- **Configuration Hierarchy**: CLI options > .pddrc context > environment variables > defaults
+- **Multi-language Support**: Automatically processes all language variants of a basename
+- **Intelligent Path Resolution**: Uses sophisticated directory management for complex project structures
+- Context-specific settings include output paths, default language, model parameters, coverage targets, and budgets
 
 **Workflow Logic**:
 
@@ -488,52 +503,77 @@ The sync command automatically detects what files exist and executes the appropr
 7. **fix**: Resolve any bugs found by unit tests
 8. **update**: Back-propagate any learnings to the prompt file
 
-**Intelligence**:
+**Advanced Decision Making**:
+- **Fingerprint-based Change Detection**: Uses content hashes and timestamps to precisely detect what changed
+- **LLM-powered Conflict Resolution**: For complex scenarios with multiple file changes, uses AI to determine the best approach
+- **Persistent State Tracking**: Maintains sync history and learns from previous operations
+- **Smart Lock Management**: Prevents concurrent sync operations with automatic stale lock cleanup
 - Detects which files already exist and are up-to-date
 - Skips unnecessary steps (e.g., won't regenerate code if prompt hasn't changed)
 - Uses git integration to detect changes and determine incremental vs full regeneration
 - Accumulates tests over time rather than replacing them
 - Automatically handles dependencies between steps
 
+**Robust State Management**:
+- **Fingerprint Files**: Maintains `.pdd/meta/{basename}_{language}.json` with operation history
+- **Run Reports**: Tracks test results, coverage, and execution status  
+- **Lock Management**: Prevents race conditions with file-descriptor based locking
+- **Git Integration**: Leverages version control for change detection and rollback safety
+
 **Environment Variables**:
 All existing PDD output path environment variables are respected, allowing the sync command to save files in the appropriate locations for your project structure.
 
-**Sync Logging**:
-The sync command maintains a detailed log of its decision-making process, which you can view using the `--log` option. This transparency helps you understand:
-- What files were detected as changed
-- Which analysis method was used (simple heuristics vs LLM analysis)
-- The reasoning behind operation recommendations
-- Cost and time information for each sync session
-- Success/failure status of operations
+**Comprehensive Sync Logging**:
+The sync command maintains a detailed log of its decision-making process, which you can view using the `--log` option. View detailed logs of sync decision-making process:
 
-Use `--verbose` with `--log` to see detailed LLM reasoning for complex multi-file change scenarios.
+```bash
+# View sync history and decisions
+pdd sync --log calculator
+
+# View detailed LLM reasoning for complex scenarios  
+pdd --verbose sync --log calculator
+```
+
+**Log Contents Include**:
+- File change detection analysis and fingerprint comparisons
+- Decision reasoning (heuristic-based vs LLM-powered analysis)
+- Operation recommendations with confidence levels
+- Cost and timing information for each sync session
+- Success/failure status with detailed error information
+- Lock acquisition and release events
+- State management and conflict resolution details
+
+Use `--verbose` with `--log` to see detailed LLM reasoning for complex multi-file change scenarios and advanced state analysis.
 
 **When to use**: This is the recommended starting point for most PDD workflows. Use sync when you want to ensure all artifacts (code, examples, tests) are up-to-date and synchronized with your prompt files. The command embodies the PDD philosophy by treating the workflow as a batch process that developers can launch and return to later, freeing them from constant supervision.
 
 Examples:
 ```bash
-# Complete workflow for a new feature
+# Complete workflow with progress animation and intelligent decision-making
 pdd sync factorial_calculator
 
-# Sync with higher budget and coverage target
+# Advanced sync with higher budget, custom coverage, and full visual feedback
 pdd sync --budget 15.0 --target-coverage 95.0 data_processor
 
-# Quick sync skipping verification for rapid iteration
+# Quick sync with animation showing real-time status updates
 pdd sync --skip-verify --budget 5.0 web_scraper
 
-# Sync all detected languages for a basename
+# Multi-language sync with fingerprint-based change detection
 pdd sync multi_language_module
 
-# View sync log to see previous operations and decisions
-pdd sync --log factorial_calculator
+# View comprehensive sync log with decision analysis
+pdd sync --log factorial_calculator  
 
-# View detailed sync log with LLM reasoning (combine with --verbose global option)
+# View detailed sync log with LLM reasoning for complex conflict resolution
 pdd --verbose sync --log factorial_calculator
 
-# Context-aware examples (with .pddrc)
-cd backend && pdd sync calculator     # Uses backend context settings
-cd frontend && pdd sync dashboard     # Uses frontend context settings
-pdd --context backend sync calculator # Explicit context override
+# Monitor what sync would do without executing (with state analysis)
+pdd sync --log calculator
+
+# Context-aware examples with automatic configuration detection
+cd backend && pdd sync calculator     # Uses backend context settings with animation
+cd frontend && pdd sync dashboard     # Uses frontend context with real-time feedback
+pdd --context backend sync calculator # Explicit context override with visual progress
 ```
 
 ### 2. generate
@@ -1354,6 +1394,13 @@ Here are some common issues and their solutions:
    - Check internet connection
    - Try running with `--local` flag to compare
    - If persistent, check PDD Cloud status page
+
+8. **Sync-Specific Issues**:
+   - **"Another sync is running"**: Check for stale locks in `.pdd/locks/` directory and remove if process no longer exists
+   - **Complex conflict resolution problems**: Use `pdd --verbose sync --log basename` to see detailed LLM reasoning and decision analysis
+   - **State corruption or unexpected behavior**: Delete `.pdd/meta/{basename}_{language}.json` to reset fingerprint state
+   - **Animation display issues**: Sync operations work in background; animation is visual feedback only and doesn't affect functionality
+   - **Fingerprint mismatches**: Use `pdd sync --log basename` to see what changes were detected and why operations were recommended
 
 If you encounter persistent issues, consult the PDD documentation or post an issue on GitHub for assistance.
 

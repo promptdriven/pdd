@@ -289,13 +289,44 @@ def get_language_extension(language: str) -> str:
     return LANGUAGE_EXTENSIONS[language]
 
 def get_pdd_file_paths(basename: str, language: str) -> Dict[str, Path]:
-    """Returns a dictionary mapping file types to their expected paths."""
+    """Returns configuration-aware dictionary mapping file types to their expected paths."""
+    from .generate_output_paths import generate_output_paths
+    from .get_extension import get_extension
+    
     ext = get_language_extension(language)
+    file_extension = get_extension(language)
+    
+    # Use PDD's configuration system to determine paths
+    # Generate paths for each operation type to get the actual configured directories
+    generate_paths = generate_output_paths(
+        command='generate',
+        output_locations={},  # No user overrides, use defaults/env vars
+        basename=basename,
+        language=language,
+        file_extension=file_extension
+    )
+    
+    example_paths = generate_output_paths(
+        command='example',
+        output_locations={},
+        basename=basename,
+        language=language,
+        file_extension=file_extension
+    )
+    
+    test_paths = generate_output_paths(
+        command='test',
+        output_locations={},
+        basename=basename,
+        language=language,
+        file_extension=file_extension
+    )
+    
     return {
-        'prompt': PROMPTS_ROOT_DIR / f"{basename}_{language}.prompt",
-        'code': CODE_ROOT_DIR / f"{basename}.{ext}",
-        'example': EXAMPLES_ROOT_DIR / f"{basename}_example.{ext}",
-        'test': TESTS_ROOT_DIR / f"test_{basename}.{ext}",
+        'prompt': PROMPTS_ROOT_DIR / f"{basename}_{language}.prompt",  # Prompt path remains in prompts dir
+        'code': Path(generate_paths.get('output', f"{basename}.{ext}")),
+        'example': Path(example_paths.get('output', f"examples/{basename}_example.{ext}")),
+        'test': Path(test_paths.get('output', f"tests/test_{basename}.{ext}")),
     }
 
 def calculate_sha256(file_path: Path) -> Optional[str]:

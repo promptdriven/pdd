@@ -41,6 +41,11 @@
     % This will ensure the environment variable is properly set before any commands run.
 
     <internal_example_modules>
+        - The 'sync' command will be used to sync the prompt files with the code files. Here is an example of how to use the 'sync' command:
+        <sync_main_example>
+        <include>context/sync_main_example.py</include>
+        </sync_main_example>
+
         - The 'auto_update' function will be used to check if pdd is up to date if `PDD_AUTO_UPDATE` is not set or is True. Here is an example of how to use the 'auto_update' function:
         <auto_update_example>
         <include>context/auto_update_example.py</include>

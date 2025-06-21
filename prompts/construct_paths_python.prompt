@@ -7,7 +7,7 @@
     - 'input_file_paths' (dict) - A dictionary to the paths of the input files with the keys being those specified in the examples from the pdd program description. For example, the 'generate' command has the 'prompt_file' key, 'example' has 'code_file' key, etc. Additionally, handle an 'error_file' key.
     - 'force' (boolean) - A flag that indicates whether to overwrite the output files if they already exist.
     - 'quiet' (boolean) - A flag that indicates whether to suppress the output.
-    - 'command' (string) - pdd command that was run.
+    - 'command' (string) - pdd command that was run. Supported commands include: 'generate', 'example', 'test', 'preprocess', 'fix', 'split', 'change', 'update', 'detect', 'conflicts', 'crash', 'trace', 'bug', 'auto-deps', 'verify', 'sync'.
     - 'command_options' (dict) - A dictionary of the command options for the given command. For example, it could have the 'language' key for the 'test' command or output locations for other commands.
     - 'create_error_file' (boolean, optional, default: True) - A flag that indicates whether to create the error file if it does not exist.
     Outputs: A tuple containing:
@@ -35,7 +35,7 @@
 % This function will do the following:
     Step 1. Resolve input paths to absolute paths. For non-error files, ensure they exist strictly. For error files, resolve non-strictly. Then, load all existing input files into the input_strings dictionary using the 'input_file_paths' dictionary with the pdd description examples as the keys. For error files, conditionally create them if they don't exist based on `create_error_file`; if they do exist (or are created), load them like any other file. Alert the user and raise appropriate exceptions (e.g., `FileNotFoundError`, `IOError`) for path or reading issues.
     Step 2. Extract out the basename from the input file path. This involves:
-        - Prioritizing specific input files based on the `command` (e.g., `prompt1`/`prompt2` for `conflicts`, `change_file` for `detect`, `change_prompt_file` for `change`).
+        - Prioritizing specific input files based on the `command` (e.g., `prompt1`/`prompt2` for `conflicts`, `change_file` for `detect`, `change_prompt_file` for `change`, `prompt_file` for commands like `sync` that work with specific prompt files).
         - For prompt-based basenames, identifying the primary prompt file.
         - Stripping known language suffixes (e.g., `_python`) from the file stem, where known languages are defined in `$PDD_PATH/data/language_format.csv`.
         - Handling cases where no explicit prompt is found by using a fallback input file.
@@ -45,7 +45,7 @@
     Step 5. Return the 'input_strings', 'output_file_paths' (as a dictionary of string paths) and 'language'.
 
 Follow these steps in this order:
-    Step A. List out all the ways the basename can be extracted from the input file path for each of the commands. For example, the basename is usually the first input prompt file without the directory, language, or file extension. However, keep in mind for the 'detect' command, the change file determines the basename. For each way, in a paragraph, explain how the basename is extracted for each command, what are potential corner cases (like needing to validate language suffixes against `$PDD_PATH/data/language_format.csv`), and how to deal with them. This logic should carefully consider these rules.
+    Step A. List out all the ways the basename can be extracted from the input file path for each of the commands. For example, the basename is usually the first input prompt file without the directory, language, or file extension. However, keep in mind for the 'detect' command, the change file determines the basename. For the 'sync' command, the basename comes from the `prompt_file` input after stripping language suffixes. For each way, in a paragraph, explain how the basename is extracted for each command, what are potential corner cases (like needing to validate language suffixes against `$PDD_PATH/data/language_format.csv`), and how to deal with them. This logic should carefully consider these rules.
     Step B. List out all the ways language can be extracted from the input file path or command_options. This logic should determine the language with the following priority:
         1. An explicit 'language' option from `command_options` (if provided and not None).
         2. Inferred from the file extension of code/test input files (using `get_language`).
