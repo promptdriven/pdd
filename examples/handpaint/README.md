@@ -32,7 +32,7 @@ Average cost per run: ≈ $0.19
 |---------|------------|-----|-----------|
 | Active User Time | 38 min | 17 min | PDD: 55% less active time |
 | Multitasking | ❌ No | ✅ Yes | PDD: Users can work on other tasks |
-| Cost Efficiency | Higher | $0.19/run | PDD: More cost-effective |
+| Cost Efficiency | Higher | $1.52 | PDD: More cost-effective |
 | Setup Flexibility | Limited | Customizable | PDD: Adaptable to user needs |
 | Processing Mode | Real-time | Background | PDD: More efficient resource usage |
 
@@ -62,4 +62,4 @@ PDD demonstrates clear advantages over Vibecoding in terms of user time efficien
 
 The minor technical glitches in PDD are easily addressable through prompt tuning, making it the more practical choice for users who value efficiency and cost-effectiveness.
 
-The PDD example was created by a naive user who only utilized the basic PDD generate function without following the complete PDD lifecycle. This limited implementation doesn't showcase PDD's full potential. When properly implemented following the PDD lifecycle, including proper prompt engineering, iterative refinement, and comprehensive testing, PDD can achieve significantly better results with even higher efficiency and reliability. Furthermore, it's important to note that the two tests used different models - Claude 3.5 Sonnet and Gemini 2.5 Pro Preview. Since Claude 3.5 Sonnet is generally more optimized for code generation tasks, PDD's performance in this comparison may have been further limited by the model choice.
+The PDD example was created by a naive user who only utilized the basic PDD generate function without following the complete PDD lifecycle. This limited implementation doesn't showcase PDD's full potential. When properly implemented following the PDD lifecycle, including proper prompt engineering, iterative refinement, and comprehensive testing, PDD can achieve significantly better results with even higher efficiency and reliability. Furthermore, it's important to note that the two tests used different models - Claude 3.5 Sonnet and Gemini 2.5 Pro Preview. As different models have varying strengths and capabilities, the comparison might have yielded different results if both approaches had used the same model.
