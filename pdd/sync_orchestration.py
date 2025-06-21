@@ -22,6 +22,7 @@ from .sync_determine_operation import (
     RunReport,
     PDD_DIR,
     META_DIR,
+    SyncLock,
 )
 from .auto_deps_main import auto_deps_main
 from .code_generator_main import code_generator_main
@@ -74,31 +75,7 @@ def _save_operation_fingerprint(basename: str, language: str, operation: str,
     with open(fingerprint_file, 'w') as f:
         json.dump(asdict(fingerprint), f, indent=2, default=str)
 
-class SyncLock:
-    """Mock sync lock for demonstration."""
-    def __init__(self, basename: str, language: str):
-        self.basename = basename
-        self.language = language
-        self.acquired = False
-    
-    def acquire(self) -> bool:
-        """Always succeed for demo purposes."""
-        self.acquired = True
-        return True
-    
-    def release(self):
-        """Release the lock."""
-        self.acquired = False
-    
-    def __enter__(self):
-        """Enter context manager."""
-        self.acquire()
-        return self
-    
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Exit context manager."""
-        self.release()
-        return False
+# SyncLock class now imported from sync_determine_operation module
 
 # --- Helper for Click Context ---
 
@@ -174,12 +151,8 @@ def sync_orchestration(
     # --- Initialize State and Paths ---
     # Create file paths using provided directories
     ext = "py" if language == "python" else language  # Simple extension mapping
-    pdd_files = {
-        'prompt': Path(prompts_dir) / f"{basename}_{language}.prompt",
-        'code': Path(code_dir) / f"{basename}.{ext}",
-        'example': Path(examples_dir) / f"{basename}_example.{ext}",
-        'test': Path(tests_dir) / f"test_{basename}.{ext}",
-    }
+    # Use the same configuration-aware path resolution as sync_determine_operation
+    pdd_files = get_pdd_file_paths(basename, language)
     
     # Shared state for animation thread
     current_function_name_ref = ["initializing"]
@@ -200,12 +173,8 @@ def sync_orchestration(
 
     try:
         with SyncLock(basename, language) as lock:
-            if not lock.acquired:
-                return {
-                    'success': False,
-                    'errors': [f"Could not acquire lock for '{basename}'. Another sync process may be running."],
-                    'total_cost': 0, 'total_time': 0, 'operations_completed': [],
-                }
+            # If we reach here, the lock was successfully acquired
+            # (acquire() either succeeds or raises TimeoutError)
 
             # --- Start Animation Thread ---
             animation_thread = threading.Thread(
@@ -228,8 +197,8 @@ def sync_orchestration(
                 decision = determine_sync_operation(basename, language, target_coverage)
                 operation = decision.operation
 
-                if operation in ['all_synced', 'fail_and_request_manual_merge', 'error']:
-                    current_function_name_ref[0] = "synced" if operation == 'all_synced' else "conflict"
+                if operation in ['all_synced', 'nothing', 'fail_and_request_manual_merge', 'error']:
+                    current_function_name_ref[0] = "synced" if operation in ['all_synced', 'nothing'] else "conflict"
                     if operation == 'fail_and_request_manual_merge':
                         errors.append(f"Manual merge required: {decision.reason}")
                     elif operation == 'error':
