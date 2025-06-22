@@ -10,6 +10,11 @@ from dataclasses import dataclass, asdict, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any, List
+from pydantic import BaseModel
+
+# Import PDD functions
+from pdd.load_prompt_template import load_prompt_template
+from pdd.llm_invoke import llm_invoke
 
 # --- Dependencies ---
 # This implementation requires the 'psutil' library for robust PID checking.
@@ -30,15 +35,10 @@ else:
 PDD_DIR = Path(".pdd")
 META_DIR = PDD_DIR / "meta"
 LOCKS_DIR = PDD_DIR / "locks"
-
-PROMPTS_ROOT_DIR = Path("prompts")
-# CODE_ROOT_DIR removed - now uses configuration-aware path resolution
-EXAMPLES_ROOT_DIR = Path("examples")
-TESTS_ROOT_DIR = Path("tests")
-
+SYNC_FINGERPRINT_FILE = META_DIR / "sync_fingerprint.json"
+RUNNING_SYNC_LOCK = LOCKS_DIR / "sync.lock"
 
 # --- Data Structures ---
-
 @dataclass
 class Fingerprint:
     """Represents the last known good state of a PDD unit."""
@@ -51,6 +51,21 @@ class Fingerprint:
     test_hash: Optional[str] = None
 
 @dataclass
+class SyncFingerprint:
+    """Represents the state of all relevant files at a point in time."""
+    basename: str
+    language: str
+    files: Dict[str, Optional[str]]  # filename -> hash or None if file doesn't exist
+    timestamp: str
+    git_commit: Optional[str] = None
+
+class LLMConflictResolutionOutput(BaseModel):
+    """Output from LLM conflict resolution analysis."""
+    next_operation: str
+    reason: str
+    confidence: float
+
+@dataclass
 class RunReport:
     """Represents the results of the last test or execution run."""
     timestamp: str
@@ -60,184 +75,30 @@ class RunReport:
     coverage: float
 
 @dataclass
-class LLMConflictResolutionOutput:
-    """Represents the structured output from the LLM for conflict resolution."""
-    next_operation: str
-    reason: str
-    confidence: float
+class Fingerprint:
+    """Represents the last known good state of a PDD unit (compatibility class)."""
+    pdd_version: str
+    timestamp: str  # ISO 8601 format
+    command: str
+    prompt_hash: Optional[str] = None
+    code_hash: Optional[str] = None
+    example_hash: Optional[str] = None
+    test_hash: Optional[str] = None
 
 @dataclass
 class SyncDecision:
-    """Represents the recommended operation to run next."""
+    """Decision about what operation to perform next."""
     operation: str
     reason: str
-    details: Dict[str, Any] = field(default_factory=dict)
+    confidence: float = 0.0
+    
+    @property
+    def should_continue(self) -> bool:
+        """Returns True if the sync process should continue."""
+        return self.operation not in ["nothing", "fail_and_request_manual_merge"]
 
 # --- Mock Internal PDD Modules ---
 # These are placeholders for the internal pdd library functions.
-
-# Import real PDD functions
-try:
-    from pdd.load_prompt_template import load_prompt_template as real_load_prompt_template
-    from pdd.llm_invoke import llm_invoke as real_llm_invoke
-    _HAS_REAL_PDD = True
-except ImportError:
-    _HAS_REAL_PDD = False
-
-def load_prompt_template(prompt_name: str) -> Optional[str]:
-    """
-    Loads a prompt template from the pdd library.
-    Falls back to embedded template if real PDD functions unavailable.
-    """
-    if _HAS_REAL_PDD:
-        try:
-            # Strip .prompt extension if present for real PDD function
-            clean_name = prompt_name.replace('.prompt', '') if prompt_name.endswith('.prompt') else prompt_name
-            return real_load_prompt_template(clean_name)
-        except Exception as e:
-            print(f"Prompt file not found: {e}")
-            pass
-    
-    # Fallback embedded template for sync_analysis_LLM
-    if prompt_name in ["sync_analysis_LLM.prompt", "sync_analysis_LLM"]:
-        return """
-You are an expert software development assistant specialized in PDD (Prompt-Driven Development) workflow synchronization.
-Your task is to analyze a complex synchronization conflict and determine the best course of action.
-
-**CRITICAL: Detect Convergence States**
-If the changes represent a successful synchronization (e.g., an update operation that synchronized the prompt with code changes), 
-recommend "nothing" to indicate the workflow is complete and synchronized.
-
-Analyze the following information:
-
-**Last Known Good State (Fingerprint):**
-```json
-{fingerprint}
-```
-
-**Files Changed Since Last Sync:**
-- {changed_files_list}
-
-**Diffs (empty diffs mean file unchanged or doesn't exist):**
-
---- PROMPT DIFF ---
-{prompt_diff}
---- END PROMPT DIFF ---
-
---- CODE DIFF ---
-{code_diff}
---- END CODE DIFF ---
-
---- TEST DIFF ---
-{test_diff}
---- END TEST DIFF ---
-
---- EXAMPLE DIFF ---
-{example_diff}
---- END EXAMPLE DIFF ---
-
-**Analysis Guidelines:**
-1. **Convergence Detection**: If diffs show that files are now synchronized (e.g., prompt was updated to match code), recommend "nothing"
-2. **Workflow Progression**: If files are synchronized but missing next step files, recommend the next workflow step
-3. **Conflict Resolution**: If there are genuine conflicts, choose the most appropriate resolution
-
-**Available Operations:**
-- "generate": The prompt changes are significant; regenerate the code from the prompt
-- "update": The code changes are valuable; update the prompt to reflect the code changes
-- "fix": There are test failures or bugs that need fixing
-- "example": Code is ready but missing example usage file
-- "test": Code and example exist but missing or need updated tests
-- "verify": Example file needs to be verified/run
-- "nothing": All files are synchronized and the workflow is complete
-- "merge_manually": The conflict is too complex for automatic resolution
-
-**Response Format:**
-Respond with a JSON object using this exact format:
-{{
-  "next_operation": "your_recommendation",
-  "reason": "A clear, concise explanation of why you chose this operation, focusing on the current state and what needs to happen next.",
-  "confidence": 0.95
-}}
-
-**Confidence Guidelines:**
-- 0.9+ for clear, unambiguous situations
-- 0.75-0.89 for reasonable inferences
-- <0.75 for complex cases requiring manual intervention
-"""
-    return None
-
-def llm_invoke(prompt: str, **kwargs) -> Dict[str, Any]:
-    """
-    Invokes the LLM with a given prompt using real PDD integration.
-    Falls back to intelligent mock if real PDD functions unavailable.
-    """
-    if _HAS_REAL_PDD:
-        try:
-            # Use real PDD LLM invoke with structured output
-            response = real_llm_invoke(
-                prompt=prompt,
-                output_pydantic=LLMConflictResolutionOutput,
-                strength=kwargs.get('strength', 0.5),
-                temperature=kwargs.get('temperature', 0.0),
-                verbose=kwargs.get('verbose', False)
-            )
-            return response
-        except Exception as e:
-            print(f"Warning: Real LLM invoke failed ({e}), falling back to intelligent mock")
-    
-    # Intelligent mock that analyzes the prompt content for better responses
-    print("--- Using Intelligent Mock LLM ---")
-    
-    # Parse prompt to understand the situation
-    prompt_lower = prompt.lower()
-    
-    # Check for convergence indicators in the prompt
-    if ("update" in prompt_lower and "synchronized" in prompt_lower) or \
-       ("prompt was updated" in prompt_lower) or \
-       ("files are now synchronized" in prompt_lower):
-        # This looks like a convergence scenario
-        response_obj = LLMConflictResolutionOutput(
-            next_operation="nothing",
-            reason="Analysis indicates files have been successfully synchronized after update operation.",
-            confidence=0.95
-        )
-    elif "missing example" in prompt_lower or "example" in prompt_lower:
-        response_obj = LLMConflictResolutionOutput(
-            next_operation="example",
-            reason="Code exists but example file appears to be missing or needs updating.",
-            confidence=0.90
-        )
-    elif "test" in prompt_lower and ("missing" in prompt_lower or "failed" in prompt_lower):
-        response_obj = LLMConflictResolutionOutput(
-            next_operation="test",
-            reason="Test files need to be created or updated based on the analysis.",
-            confidence=0.90
-        )
-    elif "prompt" in prompt_lower and "changed" in prompt_lower:
-        response_obj = LLMConflictResolutionOutput(
-            next_operation="generate",
-            reason="Prompt changes detected, code should be regenerated to match.",
-            confidence=0.88
-        )
-    elif "code" in prompt_lower and "changed" in prompt_lower:
-        response_obj = LLMConflictResolutionOutput(
-            next_operation="update",
-            reason="Code changes detected, prompt should be updated to reflect changes.",
-            confidence=0.85
-        )
-    else:
-        # Default to manual merge for complex scenarios
-        response_obj = LLMConflictResolutionOutput(
-            next_operation="merge_manually",
-            reason="Complex conflict detected that requires manual review and resolution.",
-            confidence=0.60
-        )
-    
-    return {
-        "result": response_obj,
-        "cost": 0.001,
-        "model_name": "intelligent-mock-gpt-4"
-    }
 
 
 # --- Directory and Locking Mechanism ---
@@ -247,7 +108,88 @@ def _ensure_pdd_dirs_exist():
     META_DIR.mkdir(parents=True, exist_ok=True)
     LOCKS_DIR.mkdir(parents=True, exist_ok=True)
 
-_lock_registry = threading.local()
+class FileLock:
+    """Cross-platform file locking mechanism."""
+    
+    def __init__(self, lock_file: Path):
+        self.lock_file = lock_file
+        self.lock_handle = None
+        self.is_locked = False
+    
+    def __enter__(self):
+        return self.acquire()
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.release()
+    
+    def acquire(self, timeout_seconds: float = 30.0) -> bool:
+        """
+        Attempts to acquire the lock with a timeout.
+        Returns True if lock was acquired, False if timeout.
+        """
+        import time
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout_seconds:
+            try:
+                # Ensure parent directory exists
+                self.lock_file.parent.mkdir(parents=True, exist_ok=True)
+                
+                # Try to create and lock the file
+                self.lock_handle = open(self.lock_file, 'w')
+                
+                if sys.platform == 'win32':
+                    # Windows file locking
+                    try:
+                        msvcrt.locking(self.lock_handle.fileno(), msvcrt.LK_NBLCK, 1)
+                        self.is_locked = True
+                        return True
+                    except IOError:
+                        self.lock_handle.close()
+                        self.lock_handle = None
+                else:
+                    # Unix file locking
+                    try:
+                        fcntl.flock(self.lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        self.is_locked = True
+                        return True
+                    except (IOError, OSError):
+                        self.lock_handle.close()
+                        self.lock_handle = None
+                
+                # Lock failed, wait a bit and try again
+                time.sleep(0.1)
+                
+            except (IOError, OSError):
+                # File creation failed, wait a bit and try again
+                if self.lock_handle:
+                    self.lock_handle.close()
+                    self.lock_handle = None
+                time.sleep(0.1)
+        
+        return False  # Timeout
+    
+    def release(self):
+        """Releases the lock."""
+        if self.is_locked and self.lock_handle:
+            try:
+                if sys.platform == 'win32':
+                    msvcrt.locking(self.lock_handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(self.lock_handle.fileno(), fcntl.LOCK_UN)
+            except (IOError, OSError):
+                pass  # Lock may have been released already
+            
+            self.lock_handle.close()
+            self.lock_handle = None
+            self.is_locked = False
+            
+            # Try to remove the lock file
+            try:
+                if self.lock_file.exists():
+                    self.lock_file.unlink()
+            except (IOError, OSError):
+                pass  # File may have been removed already
 
 class SyncLock:
     """
@@ -256,158 +198,196 @@ class SyncLock:
     """
     def __init__(self, basename: str, language: str):
         _ensure_pdd_dirs_exist()  # Ensure directories exist before creating lock file
-        self.lock_dir = LOCKS_DIR
-        self.lock_path = self.lock_dir / f"{basename}_{language}.lock"
-        self._lock_fd = None
-        self._is_reentrant_acquisition = False
-        self.lock_key = str(self.lock_path)
-        # The file descriptor is only stored on the instance that actually acquires the lock
-        self._is_lock_owner = False
-
-    @property
-    def lock_file_path(self):
-        return self.lock_path
-
-    def _get_lock_count(self) -> int:
-        if not hasattr(_lock_registry, 'counts'):
-            _lock_registry.counts = {}
-        return _lock_registry.counts.get(self.lock_key, 0)
-
-    def _increment_lock_count(self):
-        if not hasattr(_lock_registry, 'counts'):
-            _lock_registry.counts = {}
-        count = _lock_registry.counts.get(self.lock_key, 0)
-        _lock_registry.counts[self.lock_key] = count + 1
-
-    def _decrement_lock_count(self) -> int:
-        if not hasattr(_lock_registry, 'counts'):
-            _lock_registry.counts = {}
-        count = _lock_registry.counts.get(self.lock_key, 0)
-        if count > 0:
-            _lock_registry.counts[self.lock_key] = count - 1
-        return _lock_registry.counts.get(self.lock_key, 0)
-
-    def acquire(self):
-        """
-        Acquires an exclusive lock, handling stale locks from crashed processes.
-        Raises TimeoutError if the lock is held by another active process.
-        """
-        lock_count = self._get_lock_count()
-        if lock_count > 0:  # Re-entrancy
-            self._is_reentrant_acquisition = True
-            self._increment_lock_count()
-            return
-
-        # First time acquiring in this thread. Perform the actual lock.
-        if self.lock_path.exists():
-            try:
-                pid_str = self.lock_path.read_text().strip()
-                if pid_str:
-                    pid = int(pid_str)
-                    if psutil.pid_exists(pid):
-                        raise TimeoutError(f"is locked by another process (PID: {pid})")
-                    else:
-                        self.lock_path.unlink()
-            except (ValueError, FileNotFoundError):
-                # Corrupted or unreadable lock file, treat as stale
-                self.lock_path.unlink(missing_ok=True)
-
-        # Use O_TRUNC to ensure we overwrite any previous (e.g., corrupted) content
-        self._lock_fd = os.open(self.lock_path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC)
-        self._is_lock_owner = True
-
-        try:
-            if sys.platform == 'win32':
-                msvcrt.locking(self._lock_fd, msvcrt.LK_NBLCK, 1)
-            else:
-                fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (IOError, BlockingIOError):
-            os.close(self._lock_fd)
-            self._lock_fd = None
-            self._is_lock_owner = False
-            raise TimeoutError("Failed to acquire lock; another process may have just started.")
-
-        os.write(self._lock_fd, str(os.getpid()).encode())
-        os.fsync(self._lock_fd)
-        self._increment_lock_count()
-
-    def release(self):
-        """Releases the lock and cleans up the lock file."""
-        new_count = self._decrement_lock_count()
-        
-        if new_count == 0 and self._is_lock_owner:
-            # This was the last lock holder in this thread, so release the file lock.
-            if self._lock_fd:
-                if sys.platform != 'win32':
-                     fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
-                os.close(self._lock_fd)
-                self._lock_fd = None
-            
-            try:
-                if self.lock_path.exists():
-                    # Safety check: only delete if we are still the owner
-                    pid_str = self.lock_path.read_text().strip()
-                    if not pid_str or int(pid_str) == os.getpid():
-                        self.lock_path.unlink()
-            except (OSError, ValueError, FileNotFoundError):
-                pass # Ignore errors on cleanup
-
+        self.lock_path = LOCKS_DIR / f"{basename}_{language}.lock"
+        self.file_lock = FileLock(self.lock_path)
+    
     def __enter__(self):
-        self.acquire()
-        return self
-
+        return self.file_lock.__enter__()
+    
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.release()
+        return self.file_lock.__exit__(exc_type, exc_val, exc_tb)
+    
+    def acquire(self, timeout_seconds: float = 30.0) -> bool:
+        return self.file_lock.acquire(timeout_seconds)
+    
+    def release(self):
+        return self.file_lock.release()
 
+# --- Sync Orchestration Functions ---
 
-# --- State Analysis Functions ---
+def should_run_sync(basename: str, language: str) -> bool:
+    """
+    Determines if sync should run by checking if any relevant files have changed.
+    
+    Args:
+        basename: The base name for the PDD module (e.g., 'split')
+        language: The target language (e.g., 'python')
+    
+    Returns:
+        bool: True if sync should run, False otherwise
+    """
+    try:
+        # Generate current fingerprint
+        current_fingerprint = generate_fingerprint(basename, language)
+        
+        # Load saved fingerprint
+        saved_fingerprint = load_sync_fingerprint()
+        
+        # If no saved fingerprint exists, we should run sync
+        if not saved_fingerprint:
+            return True
+        
+        # If basenames or languages differ, we should run sync
+        if (saved_fingerprint.basename != basename or 
+            saved_fingerprint.language != language):
+            return True
+        
+        # Compare file hashes
+        for file_path, current_hash in current_fingerprint.files.items():
+            saved_hash = saved_fingerprint.files.get(file_path)
+            if current_hash != saved_hash:
+                return True
+        
+        # Check for files that existed before but don't exist now
+        for file_path, saved_hash in saved_fingerprint.files.items():
+            if file_path not in current_fingerprint.files:
+                return True
+        
+        return False
+        
+    except Exception as e:
+        print(f"Error checking if sync should run: {e}")
+        return True  # Default to running sync if we can't determine
+
+def generate_fingerprint(basename: str, language: str) -> SyncFingerprint:
+    """
+    Generates a fingerprint of the current state of all relevant files.
+    
+    Args:
+        basename: The base name for the PDD module
+        language: The target language
+    
+    Returns:
+        SyncFingerprint: Current state fingerprint
+    """
+    files = {}
+    paths = get_pdd_file_paths(basename, language)
+    
+    for file_type, file_path in paths.items():
+        try:
+            if file_path.exists():
+                with open(file_path, 'rb') as f:
+                    content = f.read()
+                    files[str(file_path)] = hashlib.sha256(content).hexdigest()
+            else:
+                files[str(file_path)] = None
+        except Exception as e:
+            print(f"Warning: Could not read {file_path}: {e}")
+            files[str(file_path)] = None
+    
+    # Get current git commit if in a git repository
+    git_commit = None
+    try:
+        result = subprocess.run(['git', 'rev-parse', 'HEAD'], 
+                               capture_output=True, text=True, check=True)
+        git_commit = result.stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass  # Not in a git repo or git not available
+    
+    return SyncFingerprint(
+        basename=basename,
+        language=language,
+        files=files,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        git_commit=git_commit
+    )
+
+def save_sync_fingerprint(fingerprint: SyncFingerprint):
+    """
+    Saves the sync fingerprint to the metadata file.
+    
+    Args:
+        fingerprint: The fingerprint to save
+    """
+    try:
+        _ensure_pdd_dirs_exist()
+        with open(SYNC_FINGERPRINT_FILE, 'w') as f:
+            json.dump(asdict(fingerprint), f, indent=2)
+    except Exception as e:
+        print(f"Warning: Could not save sync fingerprint: {e}")
+
+def load_sync_fingerprint() -> Optional[SyncFingerprint]:
+    """
+    Loads the saved sync fingerprint from the metadata file.
+    
+    Returns:
+        SyncFingerprint or None if no saved fingerprint exists
+    """
+    try:
+        if not SYNC_FINGERPRINT_FILE.exists():
+            return None
+        
+        with open(SYNC_FINGERPRINT_FILE, 'r') as f:
+            data = json.load(f)
+            return SyncFingerprint(**data)
+    except Exception as e:
+        print(f"Warning: Could not load sync fingerprint: {e}")
+        return None
+
+def load_orchestration_fingerprint(basename: str, language: str) -> Optional[Fingerprint]:
+    """
+    Loads the fingerprint file saved by sync orchestration.
+    
+    Args:
+        basename: The base name for the PDD module
+        language: The target language
+    
+    Returns:
+        Fingerprint or None if no saved fingerprint exists
+    """
+    try:
+        fingerprint_file = META_DIR / f"{basename}_{language}.json"
+        if not fingerprint_file.exists():
+            return None
+        
+        with open(fingerprint_file, 'r') as f:
+            data = json.load(f)
+            return Fingerprint(**data)
+    except Exception as e:
+        print(f"Warning: Could not load orchestration fingerprint: {e}")
+        return None
 
 def get_pdd_file_paths(basename: str, language: str, context_config: Optional[Dict[str, str]] = None) -> Dict[str, Path]:
-    """Returns configuration-aware dictionary mapping file types to their expected paths."""
-    from .generate_output_paths import generate_output_paths
-    from .get_extension import get_extension
+    """
+    Returns the expected file paths for a PDD module.
     
-    # Get the file extension for the language
-    file_extension = get_extension(language)
+    Args:
+        basename: The base name for the PDD module
+        language: The target language
+        context_config: Optional configuration for custom paths
     
-    # Ensure context_config is not None
-    context_config = context_config or {}
-    
-    # Use PDD's configuration system to determine paths for each operation type
-    # All commands use the same parameters: empty output_locations to use defaults
-    generate_paths = generate_output_paths(
-        command='generate',
-        output_locations={},
-        basename=basename,
-        language=language,
-        file_extension=file_extension,
-        context_config=context_config
-    )
-    
-    example_paths = generate_output_paths(
-        command='example',
-        output_locations={},
-        basename=basename,
-        language=language,
-        file_extension=file_extension,
-        context_config=context_config
-    )
-    
-    test_paths = generate_output_paths(
-        command='test',
-        output_locations={},
-        basename=basename,
-        language=language,
-        file_extension=file_extension,
-        context_config=context_config
-    )
-    
-    return {
-        'prompt': PROMPTS_ROOT_DIR / f"{basename}_{language}.prompt",
-        'code': Path(generate_paths.get('output', f"{basename}.{file_extension}")),
-        'example': Path(example_paths.get('output', f"examples/{basename}_example.{file_extension}")),
-        'test': Path(test_paths.get('output', f"tests/test_{basename}.{file_extension}")),
-    }
+    Returns:
+        Dict mapping file types to their paths
+    """
+    if language == "python":
+        # Use context_config if provided, otherwise use defaults
+        if context_config:
+            code_path = context_config.get('generate_output_path', f"pdd/{basename}.py")
+            test_path = context_config.get('test_output_path', f"tests/test_{basename}.py")
+            example_path = context_config.get('example_output_path', f"examples/{basename}_example.py")
+        else:
+            code_path = f"pdd/{basename}.py"
+            test_path = f"tests/test_{basename}.py"
+            example_path = f"examples/{basename}_example.py"
+            
+        return {
+            'prompt': Path(f"prompts/{basename}_python.prompt"),
+            'code': Path(code_path),
+            'test': Path(test_path),
+            'example': Path(example_path)
+        }
+    else:
+        raise ValueError(f"Unsupported language: {language}")
 
 def calculate_sha256(file_path: Path) -> Optional[str]:
     """Calculates the SHA256 hash of a file if it exists, otherwise returns None."""
@@ -420,282 +400,351 @@ def calculate_sha256(file_path: Path) -> Optional[str]:
             sha256_hash.update(byte_block)
     return sha256_hash.hexdigest()
 
-def _read_json_file(file_path: Path, data_class) -> Optional[Any]:
-    """Generic JSON file reader and validator."""
-    if not file_path.is_file():
-        return None
-    try:
-        with open(file_path, 'r') as f:
-            data = json.load(f)
-            return data_class(**data)
-    except (json.JSONDecodeError, TypeError):
-        # Catches corrupted file, or if data doesn't match dataclass fields
-        return None
-
-def read_fingerprint(basename: str, language: str) -> Optional[Fingerprint]:
-    """Reads and validates the JSON fingerprint file."""
-    fingerprint_path = META_DIR / f"{basename}_{language}.json"
-    return _read_json_file(fingerprint_path, Fingerprint)
-
-def read_run_report(basename: str, language: str) -> Optional[RunReport]:
-    """Reads and validates the JSON run report file."""
-    report_path = META_DIR / f"{basename}_{language}_run.json"
-    return _read_json_file(report_path, RunReport)
-
 def calculate_current_hashes(paths: Dict[str, Path]) -> Dict[str, Optional[str]]:
-    """Computes the hashes for all current files on disk."""
-    return {
-        f"{file_type}_hash": calculate_sha256(path)
-        for file_type, path in paths.items()
-    }
-
-# --- LLM-based Conflict Analysis ---
+    """
+    Calculate current file hashes for the given paths.
+    
+    Args:
+        paths: Dictionary mapping file types to their paths
+    
+    Returns:
+        Dictionary mapping hash keys to file hashes or None if file doesn't exist
+    """
+    hashes = {}
+    
+    for file_type, file_path in paths.items():
+        hash_key = f"{file_type}_hash"
+        try:
+            if file_path.exists():
+                with open(file_path, 'rb') as f:
+                    content = f.read()
+                    hashes[hash_key] = hashlib.sha256(content).hexdigest()
+            else:
+                hashes[hash_key] = None
+        except Exception:
+            hashes[hash_key] = None
+    
+    return hashes
 
 def get_git_diff(file_path: Path) -> str:
     """
-    Gets the git diff of a file against its last committed version (HEAD).
-    Returns the full content for untracked files.
-    """
-    if not file_path.exists():
-        return ""
+    Gets the git diff for a specific file.
     
-    # Try to use a relative path if possible, as git's output is cleaner.
-    # This is safe because test fixtures chdir into the repo root.
+    Args:
+        file_path: Path to the file
+    
+    Returns:
+        Git diff as a string, or empty string if no diff or error
+    """
     try:
-        path_for_git = file_path.relative_to(Path.cwd())
-    except ValueError:
-        # Not relative to CWD, use the original absolute path.
-        path_for_git = file_path
-
-    # Use 'git status' to check if the file is tracked
-    try:
-        status_result = subprocess.run(
-            ['git', 'status', '--porcelain', str(path_for_git)],
-            capture_output=True, text=True, check=True, encoding='utf-8'
-        )
-        is_untracked = status_result.stdout.strip().startswith('??')
+        result = subprocess.run(['git', 'diff', str(file_path)], 
+                               capture_output=True, text=True, check=False)
+        return result.stdout
     except (subprocess.CalledProcessError, FileNotFoundError):
-        # Not a git repo, git not found, or file not in repo. Fallback to content.
-        return file_path.read_text(encoding='utf-8')
+        return ""
 
-    command = ['git', 'diff']
-    if is_untracked:
-        # Diff against nothing to show the whole file as an addition
-        # Use /dev/null for POSIX and NUL for Windows
-        null_device = "NUL" if sys.platform == "win32" else "/dev/null"
-        command.extend(['--no-index', null_device, str(path_for_git)])
-    else:
-        # Diff against the last commit
-        command.extend(['HEAD', '--', str(path_for_git)])
-        
-    try:
-        # The `git diff` command returns exit code 1 if there are differences,
-        # which `check=True` would interpret as an error. We must not use it.
-        diff_result = subprocess.run(
-            command, capture_output=True, text=True, encoding='utf-8'
-        )
-        return diff_result.stdout
-    except FileNotFoundError:
-        # Fallback if git command is not found
-        return file_path.read_text(encoding='utf-8')
-
-def analyze_conflict_with_llm(
-    basename: str,
-    language: str,
-    fingerprint: Fingerprint,
-    changed_files: List[str]
-) -> SyncDecision:
+def analyze_conflict_with_llm(fingerprint: SyncFingerprint, 
+                            changed_files: List[str]) -> SyncDecision:
     """
-    Uses an LLM to analyze a complex sync conflict and recommend an operation.
+    Uses LLM to analyze the conflict and determine the next operation.
+    
+    Args:
+        fingerprint: Current state fingerprint
+        changed_files: List of file types that have changed
+    
+    Returns:
+        SyncDecision with the recommended next operation
     """
     try:
-        prompt_template = load_prompt_template("sync_analysis_LLM.prompt")
-        if not prompt_template:
+        # Load the prompt template
+        template = load_prompt_template("sync_analysis_LLM")
+        if not template:
             return SyncDecision(
                 operation="fail_and_request_manual_merge",
-                reason="Failed to load LLM analysis prompt template 'sync_analysis_LLM.prompt'."
+                reason="Could not load sync analysis prompt template",
+                confidence=0.0
             )
 
-        paths = get_pdd_file_paths(basename, language)
+        # Get file paths and diffs
+        paths = get_pdd_file_paths(fingerprint.basename, fingerprint.language)
         diffs = {ftype: "" for ftype in ['prompt', 'code', 'test', 'example']}
         
         for file_type in changed_files:
             if file_type in paths:
                 diffs[file_type] = get_git_diff(paths[file_type])
 
-        # Format the prompt for the LLM
-        formatted_prompt = prompt_template.format(
-            fingerprint=json.dumps(asdict(fingerprint), indent=2),
-            changed_files_list=", ".join(changed_files),
-            prompt_diff=diffs['prompt'],
-            code_diff=diffs['code'],
-            test_diff=diffs['test'],
-            example_diff=diffs['example']
-        )
+        # Prepare input for LLM
+        input_json = {
+            "fingerprint": json.dumps(asdict(fingerprint), indent=2),
+            "changed_files_list": ", ".join(changed_files),
+            "prompt_diff": diffs['prompt'],
+            "code_diff": diffs['code'],
+            "test_diff": diffs['test'],
+            "example_diff": diffs['example'],
+            "prompt_path": str(paths['prompt']),
+            "code_path": str(paths['code']),
+            "test_path": str(paths['test']),
+            "example_path": str(paths['example'])
+        }
 
-        # Invoke the LLM
-        llm_response = llm_invoke(prompt=formatted_prompt)
+        # Invoke the LLM with structured output
+        llm_response = llm_invoke(
+            prompt=template,
+            input_json=input_json,
+            output_pydantic=LLMConflictResolutionOutput,
+            strength=0.5,
+            temperature=0.0,
+            verbose=False
+        )
         response_obj = llm_response.get('result')
 
         # Validate the response object
         if not isinstance(response_obj, LLMConflictResolutionOutput):
             return SyncDecision(
                 operation="fail_and_request_manual_merge",
-                reason=f"LLM did not return the expected Pydantic object. Got type: {type(response_obj).__name__}",
-                details={"raw_response": str(response_obj)}
+                reason="LLM returned invalid response format",
+                confidence=0.0
             )
 
-        next_op = response_obj.next_operation
-        reason = response_obj.reason
-        confidence = response_obj.confidence
-
-        if confidence < 0.75:
-            return SyncDecision(
-                operation="fail_and_request_manual_merge",
-                reason=f"LLM analysis confidence ({confidence:.2f}) is below threshold. "
-                       f"LLM suggestion was: '{next_op}' - {reason}",
-                details=asdict(response_obj)
-            )
-        
         return SyncDecision(
-            operation=next_op,
-            reason=f"LLM analysis: {reason}",
-            details=asdict(response_obj)
+            operation=response_obj.next_operation,
+            reason=response_obj.reason,
+            confidence=response_obj.confidence
         )
 
     except Exception as e:
+        print(f"DEBUG: LLM conflict analysis error details:")
+        print(f"  Exception: {type(e).__name__}: {e}")
+        print(f"  Basename: {fingerprint.basename}, Language: {fingerprint.language}")
+        print(f"  Changed files: {changed_files}")
+        print(f"  Full traceback:")
+        import traceback
+        traceback.print_exc()
+        
         return SyncDecision(
             operation="fail_and_request_manual_merge",
-            reason=f"LLM conflict analysis failed: {e}",
-            details={"raw_response": str(locals().get('llm_response', {}).get('result'))}
+            reason=f"LLM analysis failed: {str(e)}",
+            confidence=0.0
         )
 
-
-# --- Main Decision Function ---
-
-def determine_sync_operation(
-    basename: str,
-    language: str,
-    target_coverage: float = 80.0
-) -> SyncDecision:
+def determine_sync_operation(basename: str, language: str, target_coverage: float = 80.0) -> SyncDecision:
     """
-    Analyzes a PDD unit's state and determines the next operation.
-
-    This function is the core of the `pdd sync` command, providing a deterministic,
-    reliable, and safe decision based on runtime signals and file fingerprints.
-
+    Determines what sync operation should be performed.
+    
     Args:
-        basename: The base name of the PDD unit (e.g., 'calculator').
-        language: The programming language of the unit (e.g., 'python').
-        target_coverage: The desired test coverage percentage.
-
+        basename: The base name for the PDD module
+        language: The target language
+        target_coverage: Target code coverage percentage (unused but kept for compatibility)
+    
     Returns:
-        A SyncDecision object with the recommended operation and reason.
+        SyncDecision indicating the next operation to perform
     """
-    with SyncLock(basename, language):
-        # 1. Check Runtime Signals First (highest priority)
-        run_report = read_run_report(basename, language)
-        if run_report:
-            if run_report.exit_code != 0:
-                return SyncDecision(
-                    operation='crash',
-                    reason=f"The last run exited with a non-zero code ({run_report.exit_code}). "
-                           "This indicates a crash that must be fixed.",
-                    details=asdict(run_report)
-                )
-            if run_report.tests_failed > 0:
-                return SyncDecision(
-                    operation='fix',
-                    reason=f"The last test run had {run_report.tests_failed} failing tests. "
-                           "These must be fixed.",
-                    details=asdict(run_report)
-                )
-            if run_report.coverage < target_coverage:
-                return SyncDecision(
-                    operation='test',
-                    reason=f"Current test coverage ({run_report.coverage}%) is below the "
-                           f"target ({target_coverage}%). More tests are needed.",
-                    details=asdict(run_report)
-                )
-
-        # 2. Analyze File State
-        paths = get_pdd_file_paths(basename, language)
-        fingerprint = read_fingerprint(basename, language)
-        current_hashes = calculate_current_hashes(paths)
+    # Load the fingerprint saved by orchestration (preferred)
+    saved_orchestration_fingerprint = load_orchestration_fingerprint(basename, language)
+    
+    # Fallback to sync fingerprint for backward compatibility
+    if not saved_orchestration_fingerprint:
+        current_fingerprint = generate_fingerprint(basename, language)
+        saved_fingerprint = load_sync_fingerprint()
         
-        # 3. Implement the Decision Tree
-        
-        # Case: No Fingerprint (new or untracked unit)
-        if not fingerprint:
-            if paths['prompt'].exists():
-                return SyncDecision(
-                    operation='generate',
-                    reason="No fingerprint file found, but a prompt exists. This appears to be a new PDD unit."
-                )
-            else:
-                return SyncDecision(
-                    operation='nothing',
-                    reason="No PDD fingerprint and no prompt file found. Nothing to do."
-                )
-
-        # Compare current hashes with fingerprint
-        fingerprint_hashes = {
-            'prompt_hash': fingerprint.prompt_hash,
-            'code_hash': fingerprint.code_hash,
-            'example_hash': fingerprint.example_hash,
-            'test_hash': fingerprint.test_hash,
-        }
-        
-        changed_files = [
-            file_type.replace('_hash', '')
-            for file_type, f_hash in fingerprint_hashes.items()
-            if current_hashes.get(file_type) != f_hash
-        ]
-        
-        # Case: No Changes - but check workflow progression
-        if not changed_files:
-            # Check if we need to progress the workflow even though no files have changed
-            # This handles the case where files don't exist yet but should be created
-            
-            # If we have code but no example, create example
-            if paths['code'].exists() and not paths['example'].exists():
-                return SyncDecision(
-                    operation='example',
-                    reason="Code exists but example file is missing. Creating example to demonstrate usage."
-                )
-            
-            # If we have code and example but no tests, create tests    
-            if (paths['code'].exists() and paths['example'].exists() and 
-                not paths['test'].exists()):
-                return SyncDecision(
-                    operation='test',
-                    reason="Code and example exist but test file is missing. Creating unit tests."
-                )
-            
-            # All synchronized and complete
+        # If no saved fingerprint at all, this is the first run
+        if not saved_fingerprint:
             return SyncDecision(
-                operation='nothing',
-                reason="All files are synchronized with the last known good state."
+                operation="generate",
+                reason="No previous sync state found, starting fresh generation",
+                confidence=0.95
             )
+        
+        # Use the old logic for sync fingerprint comparison
+        changed_files = []
+        for file_path, current_hash in current_fingerprint.files.items():
+            saved_hash = saved_fingerprint.files.get(file_path)
+            if current_hash != saved_hash:
+                # Determine file type from path
+                file_path_obj = Path(file_path)
+                if 'prompt' in file_path_obj.name:
+                    changed_files.append('prompt')
+                elif file_path_obj.name.startswith('test_'):
+                    changed_files.append('test')
+                elif 'example' in file_path_obj.name:
+                    changed_files.append('example')
+                else:
+                    changed_files.append('code')
+        
+        # Remove duplicates while preserving order
+        changed_files = list(dict.fromkeys(changed_files))
+        
+        # If no changes detected, sync is complete
+        if not changed_files:
+            return SyncDecision(
+                operation="nothing",
+                reason="No changes detected since last sync",
+                confidence=1.0
+            )
+        
+        # Use LLM to analyze complex situations
+        return analyze_conflict_with_llm(current_fingerprint, changed_files)
+    
+    # Use orchestration fingerprint logic
+    paths = get_pdd_file_paths(basename, language)
+    current_hashes = calculate_current_hashes(paths)
+    
+    # Compare current file hashes with saved fingerprint
+    changed_files = []
+    
+    # Check each file type
+    for file_type in ['prompt', 'code', 'test', 'example']:
+        hash_key = f"{file_type}_hash"
+        current_hash = current_hashes.get(hash_key)
+        saved_hash = getattr(saved_orchestration_fingerprint, hash_key, None)
+        
+        if current_hash != saved_hash:
+            changed_files.append(file_type)
+    
+    # Remove duplicates while preserving order
+    changed_files = list(dict.fromkeys(changed_files))
+    
+    # If no changes detected, sync is complete
+    if not changed_files:
+        return SyncDecision(
+            operation="nothing",
+            reason="No changes detected since last sync",
+            confidence=1.0
+        )
+    
+    # Simple logic for common cases to avoid LLM calls when unnecessary
+    if changed_files == ['prompt']:
+        return SyncDecision(
+            operation="generate",
+            reason="Prompt has changed, regenerating code",
+            confidence=0.95
+        )
+    elif 'code' not in changed_files and 'example' in changed_files:
+        return SyncDecision(
+            operation="example",
+            reason="Example needs to be updated",
+            confidence=0.90
+        )
+    elif 'code' not in changed_files and 'test' in changed_files:
+        return SyncDecision(
+            operation="test",
+            reason="Tests need to be updated",
+            confidence=0.90
+        )
+    
+    # For complex situations, use LLM analysis
+    current_fingerprint = generate_fingerprint(basename, language)
+    return analyze_conflict_with_llm(current_fingerprint, changed_files)
 
-        details = {"changed_files": changed_files}
-        # Case: Simple Changes (Single File Modified)
-        if len(changed_files) == 1:
-            change = changed_files[0]
-            if change == 'prompt':
-                return SyncDecision('generate', "The prompt has been modified. Code should be regenerated.", details)
-            if change == 'code':
-                return SyncDecision('update', "The code has been modified manually. The prompt should be updated.", details)
-            if change == 'test':
-                return SyncDecision('test', "The test file has been modified. The new tests should be run.", details)
-            if change == 'example':
-                # 'verify' is a pdd command to run the example file
-                return SyncDecision('verify', "The example file has been modified. It should be verified.", details)
-
-        # Case: Complex Changes (Multiple Files Modified / Conflicts)
-        if len(changed_files) > 1:
-            # Use LLM analysis for complex conflicts as specified in requirements
-            return analyze_conflict_with_llm(basename, language, fingerprint, changed_files)
+def sync_operation_main(basename: str, language: str, max_attempts: int = 3) -> Dict[str, Any]:
+    """
+    Main sync operation orchestrator.
+    
+    Args:
+        basename: The base name for the PDD module
+        language: The target language  
+        max_attempts: Maximum number of sync attempts
+    
+    Returns:
+        Dict with sync results
+    """
+    _ensure_pdd_dirs_exist()
+    
+    # Use file locking to prevent concurrent sync operations
+    with FileLock(RUNNING_SYNC_LOCK) as lock_acquired:
+        if not lock_acquired:
+            return {
+                "success": False,
+                "reason": "Could not acquire sync lock - another sync may be running",
+                "attempts": 0
+            }
+        
+        attempts = 0
+        total_cost = 0.0
+        
+        while attempts < max_attempts:
+            attempts += 1
             
-        # Fallback, should not be reached
-        return SyncDecision('nothing', 'Analysis complete, no operation required.')
+            # Check if sync is needed
+            if not should_run_sync(basename, language):
+                return {
+                    "success": True,
+                    "reason": "No sync needed - files are already synchronized",
+                    "attempts": attempts,
+                    "cost": total_cost
+                }
+            
+            # Determine what operation to perform
+            decision = determine_sync_operation(basename, language)
+            
+            if decision.operation == "nothing":
+                # Save current state and finish
+                current_fingerprint = generate_fingerprint(basename, language)
+                save_sync_fingerprint(current_fingerprint)
+                return {
+                    "success": True,
+                    "reason": decision.reason,
+                    "attempts": attempts,
+                    "cost": total_cost,
+                    "operation": decision.operation
+                }
+            elif decision.operation == "fail_and_request_manual_merge":
+                return {
+                    "success": False,
+                    "reason": decision.reason,
+                    "attempts": attempts,
+                    "cost": total_cost,
+                    "operation": decision.operation,
+                    "confidence": decision.confidence
+                }
+            else:
+                # For now, we just report what operation would be performed
+                # In a full implementation, this would actually execute the operation
+                print(f"Would perform operation: {decision.operation}")
+                print(f"Reason: {decision.reason}")
+                print(f"Confidence: {decision.confidence}")
+                
+                # For this implementation, we'll break here
+                # In production, you would call the appropriate PDD operation
+                break
+        
+        return {
+            "success": False,
+            "reason": f"Max sync attempts ({max_attempts}) reached",
+            "attempts": attempts,
+            "cost": total_cost
+        }
+
+# --- Test Functions ---
+
+def test_fingerprint_generation():
+    """Test fingerprint generation functionality."""
+    print("Testing fingerprint generation...")
+    
+    fingerprint = generate_fingerprint("test", "python")
+    print(f"Generated fingerprint for test module:")
+    print(f"  Basename: {fingerprint.basename}")
+    print(f"  Language: {fingerprint.language}")
+    print(f"  Timestamp: {fingerprint.timestamp}")
+    print(f"  Git commit: {fingerprint.git_commit}")
+    print(f"  Files tracked: {len(fingerprint.files)}")
+    
+    for file_path, file_hash in fingerprint.files.items():
+        status = "exists" if file_hash else "missing"
+        print(f"    {file_path}: {status}")
+
+def test_sync_decision():
+    """Test sync decision logic."""
+    print("\\nTesting sync decision logic...")
+    
+    decision = determine_sync_operation("test", "python")
+    print(f"Sync decision:")
+    print(f"  Operation: {decision.operation}")
+    print(f"  Reason: {decision.reason}")
+    print(f"  Confidence: {decision.confidence}")
+    print(f"  Should continue: {decision.should_continue}")
+
+if __name__ == "__main__":
+    # Run basic tests
+    test_fingerprint_generation()
+    test_sync_decision()
