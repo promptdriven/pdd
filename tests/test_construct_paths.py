@@ -293,7 +293,8 @@ def test_construct_paths_basename_extraction(tmpdir):
             # Expect success
             with patch('pdd.construct_paths.get_extension', side_effect=dynamic_get_extension) as mock_get_ext, \
                  patch('pdd.construct_paths.get_language', return_value=determined_lang), \
-                 patch('pdd.construct_paths.generate_output_paths') as mock_generate_output_paths:
+                 patch('pdd.construct_paths.generate_output_paths') as mock_generate_output_paths, \
+                 patch('pdd.construct_paths._find_pddrc_file', return_value=None):
 
                 mock_generate_output_paths.return_value = mock_output_paths_dict_str
                 try:
@@ -313,7 +314,8 @@ def test_construct_paths_basename_extraction(tmpdir):
                     output_locations={}, # Filtered options
                     basename=expected_basename,
                     language=determined_lang, # Use the language determined for mocking
-                    file_extension=mock_ext # Use the extension determined for mocking
+                    file_extension=mock_ext, # Use the extension determined for mocking
+                    context_config={}
                 )
         # Clean up dummy code file
         if dummy_code and dummy_code.exists():
@@ -690,7 +692,8 @@ def test_construct_paths_special_characters_in_filenames(tmpdir):
     # Mocks should reflect the determined language/extension
     with patch('pdd.construct_paths.get_extension', return_value='.py') as mock_get_ext, \
          patch('pdd.construct_paths.get_language', return_value='python'), \
-         patch('pdd.construct_paths.generate_output_paths') as mock_generate_output_paths:
+         patch('pdd.construct_paths.generate_output_paths') as mock_generate_output_paths, \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=None):
 
         # Make get_extension dynamic for _strip_language_suffix
         def dynamic_get_extension(lang_candidate):
@@ -713,7 +716,8 @@ def test_construct_paths_special_characters_in_filenames(tmpdir):
             output_locations={},
             basename=expected_basename, # Verify basename was extracted correctly
             language='python',
-            file_extension='.py'
+            file_extension='.py',
+            context_config={}
         )
 
 
@@ -759,7 +763,8 @@ def test_construct_paths_conflicting_language_specification(tmpdir):
     # Mocks should reflect the *explicitly chosen* language (javascript)
     with patch('pdd.construct_paths.get_extension', return_value='.js'), \
          patch('pdd.construct_paths.get_language', return_value='javascript'), \
-         patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str) as mock_gen_paths:
+         patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str) as mock_gen_paths, \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=None):
 
         input_strings, output_file_paths, language = construct_paths(
             input_file_paths, force, quiet, command, command_options
@@ -773,7 +778,8 @@ def test_construct_paths_conflicting_language_specification(tmpdir):
             output_locations={}, # Filtered options should be empty here
             basename='my_project', # Basename from filename
             language='javascript', # Correct language passed
-            file_extension='.js'   # Correct extension passed
+            file_extension='.js',   # Correct extension passed
+            context_config={}
         )
         assert output_file_paths['output'] == str(mock_output_path)
 
@@ -923,7 +929,8 @@ def test_construct_paths_symbolic_links(tmpdir):
     # Mocks should reflect the *resolved* file's language
     with patch('pdd.construct_paths.get_extension', return_value='.py') as mock_get_ext, \
          patch('pdd.construct_paths.get_language', return_value='python'), \
-         patch('pdd.construct_paths.generate_output_paths') as mock_generate_output_paths:
+         patch('pdd.construct_paths.generate_output_paths') as mock_generate_output_paths, \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=None):
 
         # Make get_extension dynamic for _strip_language_suffix
         def dynamic_get_extension(lang_candidate):
@@ -946,7 +953,8 @@ def test_construct_paths_symbolic_links(tmpdir):
             output_locations={},
             basename=expected_basename, # Basename from the real file
             language='python',
-            file_extension='.py'
+            file_extension='.py',
+            context_config={}
         )
 
 # --- Fixture and tests below seem to use tmp_path_factory correctly ---
@@ -1026,7 +1034,8 @@ def test_construct_paths_generate_command(setup_test_files):
     with patch('pdd.construct_paths._is_known_language', side_effect=lambda x: True if x == "prompt" else False) as mock_is_known, \
          patch('pdd.construct_paths.get_extension', side_effect=mock_get_extension_func_gen) as mock_get_ext, \
          patch('pdd.construct_paths.get_language', side_effect=mock_get_language_func_gen) as mock_get_lang, \
-         patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str) as mock_gen_ops:
+         patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str) as mock_gen_ops, \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=None):
         # Correctly unpack the return tuple from construct_paths
         actual_input_strings, actual_output_file_paths, actual_determined_language = construct_paths(
             input_file_paths=input_file_paths,
@@ -1040,7 +1049,8 @@ def test_construct_paths_generate_command(setup_test_files):
         output_locations=command_options, # output_dir_abs is in command_options['output']
         basename='main_gen',
         language='prompt',
-        file_extension='.prompt'
+        file_extension='.prompt',
+        context_config={}
     )
 
 
@@ -1472,7 +1482,8 @@ def test_construct_paths_handles_makefile_suffix_correctly_or_fails_if_buggy(tmp
     # We DO NOT mock get_extension for "makefile", allowing the actual (buggy or fixed)
     # logic to run.
     with patch('pdd.construct_paths.get_language', return_value=None) as mock_get_lang, \
-         patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str) as mock_gen_ops:
+         patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str) as mock_gen_ops, \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=None):
 
         # If the bug (ValueError in _determine_language for "makefile") is present,
         # this call will raise an unhandled ValueError, and the test will FAIL.
@@ -1499,5 +1510,6 @@ def test_construct_paths_handles_makefile_suffix_correctly_or_fails_if_buggy(tmp
             output_locations={},
             basename='MyProject',
             language='makefile',
-            file_extension=''  # Makefiles have no extension
+            file_extension='',  # Makefiles have no extension
+            context_config={}
         )
