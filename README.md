@@ -481,7 +481,9 @@ The sync command automatically detects the programming language by scanning for 
 - `factorial_calculator_typescript.prompt` → generates `factorial_calculator.ts`
 - `factorial_calculator_javascript.prompt` → generates `factorial_calculator.js`
 
-If multiple language prompt files exist for the same basename, sync will process all of them.
+If multiple development language prompt files exist for the same basename, sync will process all of them.
+
+**Language Filtering**: The sync command only processes development languages (python, javascript, typescript, java, cpp, etc.) and excludes runtime languages (LLM). Files ending in `_llm.prompt` are used for internal processing only and cannot form valid development units since they lack associated code, examples, and tests required for the sync workflow.
 
 **Advanced Configuration Integration**:
 - **Automatic Context Detection**: Detects project structure and applies appropriate settings from `.pddrc`
@@ -897,18 +899,27 @@ Arguments:
 - `MODIFIED_CODE_FILE`: The filename of the code that was modified by the user.
 - `INPUT_CODE_FILE`: (Optional) The filename of the original code that was generated from the input prompt file. This argument is not required when using the `--git` option.
 
+**Important**: The `update` command has special behavior compared to other PDD commands. By default, it overwrites the original prompt file to maintain the core PDD principle of "prompts as source of truth." This ensures prompts remain in their canonical location and continue to serve as the authoritative specification.
+
 Options:
-- `--output LOCATION`: Specify where to save the modified prompt file. The default file name is `modified_<basename>.prompt`. If an environment variable `PDD_UPDATE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output LOCATION`: Specify where to save the updated prompt file. **If not specified, the original prompt file is overwritten to maintain it as the authoritative source of truth.** If an environment variable `PDD_UPDATE_OUTPUT_PATH` is set, it will be used only when `--output` is explicitly omitted and you want a different default location.
 - `--git`: Use git history to find the original code file, eliminating the need for the `INPUT_CODE_FILE` argument.
 
-Example:
+Example (overwrite original prompt - default behavior):
+```
+pdd [GLOBAL OPTIONS] update factorial_calculator_python.prompt src/modified_factorial_calculator.py src/original_factorial_calculator.py
+# This overwrites factorial_calculator_python.prompt in place
+```
+
+Example (save to different location):
 ```
 pdd [GLOBAL OPTIONS] update --output updated_factorial_calculator_python.prompt factorial_calculator_python.prompt src/modified_factorial_calculator.py src/original_factorial_calculator.py
 ```
 
 Example using the `--git` option:
 ```
-pdd [GLOBAL OPTIONS] update --git --output updated_factorial_calculator_python.prompt factorial_calculator_python.prompt src/modified_factorial_calculator.py
+pdd [GLOBAL OPTIONS] update --git factorial_calculator_python.prompt src/modified_factorial_calculator.py
+# This overwrites factorial_calculator_python.prompt in place using git history
 ```
 
 ### 10. detect

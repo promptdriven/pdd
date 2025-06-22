@@ -11,7 +11,14 @@ from rich import print as rprint
 
 # Relative imports from the pdd package
 from . import DEFAULT_STRENGTH, DEFAULT_TIME
-from .construct_paths import _is_known_language, construct_paths
+from .construct_paths import (
+    _is_known_language, 
+    construct_paths,
+    _find_pddrc_file,
+    _load_pddrc_config,
+    _detect_context,
+    _get_context_config
+)
 from .sync_orchestration import sync_orchestration
 
 # A simple regex for basename validation to prevent path traversal or other injection
@@ -33,8 +40,9 @@ def _detect_languages(basename: str, prompts_dir: Path) -> List[str]:
     """
     Detects all available languages for a given basename by finding
     matching prompt files in the prompts directory.
+    Excludes runtime languages (LLM) as they cannot form valid development units.
     """
-    languages = []
+    development_languages = []
     if not prompts_dir.is_dir():
         return []
 
@@ -47,14 +55,19 @@ def _detect_languages(basename: str, prompts_dir: Path) -> List[str]:
             potential_language = stem[len(basename) + 1 :]
             try:
                 if _is_known_language(potential_language):
-                    languages.append(potential_language)
+                    # Exclude runtime languages (LLM) as they cannot form valid development units
+                    if potential_language.lower() != 'llm':
+                        development_languages.append(potential_language)
             except ValueError:
                 # PDD_PATH not set (likely during testing) - assume language is valid
                 # if it matches common language patterns
                 common_languages = {"python", "javascript", "java", "cpp", "c", "go", "rust", "typescript"}
                 if potential_language.lower() in common_languages:
-                    languages.append(potential_language)
-    return sorted(languages)
+                    development_languages.append(potential_language)
+                # Explicitly exclude 'llm' even in test scenarios
+    
+    # Return only development languages, sorted alphabetically
+    return sorted(development_languages)
 
 
 def sync_main(
@@ -230,11 +243,25 @@ def sync_main(
                 quiet=True,
                 command="sync",
                 command_options=command_options,
+                context_override=ctx.obj.get("context", None),
             )
 
             code_dir = str(Path(output_file_paths["generate_output_path"]).parent)
             tests_dir = str(Path(output_file_paths["test_output_path"]).parent)
             examples_dir = str(Path(output_file_paths["example_output_path"]).parent)
+
+            # Load context configuration for sync orchestration
+            context_config = {}
+            try:
+                pddrc_path = _find_pddrc_file()
+                if pddrc_path:
+                    pddrc_config = _load_pddrc_config(pddrc_path)
+                    current_dir = Path.cwd()
+                    context = _detect_context(current_dir, pddrc_config, ctx.obj.get("context", None))
+                    context_config = _get_context_config(pddrc_config, context)
+            except Exception:
+                # Use empty config on error - already logged in construct_paths
+                context_config = {}
 
             sync_result = sync_orchestration(
                 basename=basename,
@@ -256,6 +283,7 @@ def sync_main(
                 output_cost=output_cost,
                 review_examples=review_examples,
                 local=local,
+                context_config=context_config,
             )
 
             lang_cost = sync_result.get("total_cost", 0.0)
