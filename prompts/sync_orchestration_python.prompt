@@ -35,7 +35,7 @@ def sync_orchestration(
     force: bool = False,
     strength: float = 0.5,
     temperature: float = 0.0,
-    time: float = 0.25,
+    time_param: float = 0.25,
     verbose: bool = False,
     quiet: bool = False,
     output_cost: Optional[str] = None,
@@ -114,12 +114,12 @@ The module should:
 
 For each operation:
 
-1. **Determine Next Step**: Call `sync_determine_operation` to get recommendation (lock already acquired)
-2. **Update Animation**: Set function_name_ref to current operation
-3. **Execute Command**: Run the appropriate PDD command with proper arguments
-4. **Track Results**: Update cost, file paths, and status colors
-5. **Handle Errors**: Implement retry logic within max_attempts and budget
-6. **Continue Analysis**: Re-analyze files to determine next operation (no persistent state needed)
+1. **Determine Next Step**: Call `sync_determine_operation`.
+2. **Update Animation**: Set `function_name_ref` to the current operation.
+3. **Execute Command**: Run the appropriate PDD `*_main` function.
+4. **Track Results**: Update cost, file paths, and status colors.
+5. **Persist State**: **If the operation was successful, save a new `Fingerprint` to disk.** This updates the state so the next call to `determine_sync_operation` can make a new decision.
+6. **Handle Errors**: Implement retry logic or break the loop on failure.
 
 ### State and Path Management
 
@@ -169,13 +169,14 @@ For each PDD operation, construct appropriate arguments:
 
 ```python
 # Example for generate operation
-result = code_generator_main(
-    ctx=mock_context,  # Construct from parameters
+output_path, success, cost, model = code_generator_main(
+    ctx=mock_context,
     prompt_file=prompt_path,
     output=code_path,
-    original_prompt_file_path=None,
-    force_incremental_flag=False,
+    original_prompt_file_path=None,  # Specify for full generation
+    force_incremental_flag=False     # Specify for full generation
 )
+result = {'success': success, 'cost': cost, 'model': model}
 ```
 
 ### Output Format
@@ -262,43 +263,54 @@ result = sync_orchestration(
 )
 ```
 
-## Lock Integration Pattern
+## Main Workflow and Lock Integration
 
-The orchestration module should use this pattern:
+The orchestrator must use the `SyncLock` context manager to ensure only one sync process runs at a time for a given unit. The entire workflow should be wrapped in this lock.
 
 ```python
 def sync_orchestration(..., log=False, verbose=False):
     # Handle log mode first
     if log:
-        return display_sync_log(basename, language, verbose=verbose)
-    
-    # Attempt to acquire lock for sync execution
-    lock_result = sync_determine_operation(basename, language, ...)
-    
-    if 'lock_failed' in lock_result:
-        return {
-            'success': False,
-            'errors': ['Another sync process is already running'],
-            'lock_conflict': True
-        }
-    
-    try:
-        # Main workflow loop using lock_result recommendations
-        # ...
-    finally:
-        # Always release lock
-        release_sync_lock(basename, language)
+        # Code to display the log...
+        return
 
-def display_sync_log(basename: str, language: str, verbose: bool = False) -> Dict[str, Any]:
-    """Display sync log for the given basename and language."""
-    log_entries = load_sync_log(basename, language)
+    try:
+        # The main workflow is wrapped in the SyncLock context manager.
+        # This will raise TimeoutError if the lock is already held.
+        with SyncLock(basename, language) as lock:
+            
+            # 1. Start animation thread here
+            # ...
+
+            # 2. Begin the main workflow loop
+            while True:
+                # 3. Determine the next operation
+                decision = determine_sync_operation(...)
+                
+                # 4. Execute the operation
+                # ...
+                
+                # 5. Save new state (fingerprint) on success
+                # ...
+
+                # 6. Break loop if finished, in conflict, or on error
+                if decision.operation in ['nothing', 'fail_and_request_manual_merge']:
+                    break
     
-    if verbose:
-        # Show detailed log with LLM reasoning
-        return format_detailed_log(log_entries)
-    else:
-        # Show summary log
-        return format_summary_log(log_entries)
+    except TimeoutError:
+        # Handle the case where the lock could not be acquired
+        return {'success': False, 'errors': ['Another sync process is running.']}
+    
+    except Exception as e:
+        # Handle other unexpected errors
+        # ...
+
+    finally:
+        # 7. Stop animation thread
+        # ...
+
+    # 8. Return final results
+    # ...
 ```
 
 The module should be the central coordinator that brings together all PDD components into a seamless, animated workflow that embodies the prompt-driven development philosophy described in the whitepaper.

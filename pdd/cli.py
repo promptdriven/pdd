@@ -696,7 +696,7 @@ def change(
     "--output",
     type=click.Path(writable=True),
     default=None,
-    help="Specify where to save the updated prompt file (file or directory).",
+    help="Specify where to save the updated prompt file. If not specified, overwrites the original prompt file to maintain it as the source of truth.",
 )
 @click.option(
     "--git",

@@ -36,7 +36,12 @@ def update_main(
         if not git and input_code_file is None:
             raise ValueError("Must provide an input code file or use --git option.")
 
-        command_options = {"output": output}
+        if output is None:
+            # Default to overwriting the original prompt file when no explicit output specified
+            # This preserves the "prompts as source of truth" philosophy
+            command_options = {"output": input_prompt_file}
+        else:
+            command_options = {"output": output}
         input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
             force=ctx.obj.get("force", False),

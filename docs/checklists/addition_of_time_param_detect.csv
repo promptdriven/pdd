@@ -1,0 +1,242 @@
+prompt_name,change_instructions
+auto_deps_main_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Inputs:"", for the `ctx` parameter, clarify that it's used to retrieve global options including `time`.
+    2.  In the function's implementation logic (derived from the README or examples), ensure that a `time` variable is retrieved from `ctx.obj.get('time', DEFAULT_TIME)`.
+    3.  If the `auto_deps_main` function calls `llm_invoke` or any other function that eventually calls `llm_invoke` (e.g., a hypothetical `dependency_analyzer_llm_call`), ensure this `time` variable is passed to that call. For example, if it calls a function `analyze_dependencies_with_llm`, the call should be `analyze_dependencies_with_llm(..., time=time)`."
+auto_include_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Inputs:"", add a new input parameter:
+        `'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.`
+    2.  In the ""% This program will do the following:"" section:
+        *   Modify ""Step 3. Run the auto_include_LLM prompt through llm_invoke:"" to include passing the `time` parameter to `llm_invoke`.
+        *   Modify ""Step 4. Run the extract_auto_include_LLM prompt through llm_invoke..."" to include passing the `time` parameter to `llm_invoke`."
+bug_main_python.prompt,"1.  In the function's implementation logic, ensure that a `time` variable is retrieved from `ctx.obj.get('time', DEFAULT_TIME)`.
+    2.  When calling the `bug_to_unit_test` function, ensure this `time` variable is passed as an argument. Update the `<bug_to_unit_test_example>` if necessary to reflect this."
+bug_to_unit_test_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Inputs:"", add a new input parameter:
+        `'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.`
+    2.  In the ""% This program will use llm_invoke to do the following:"" section:
+        *   Modify ""Step 2. Run the inputs through the model using llm_invoke."" to include passing the `time` parameter to `llm_invoke`."
+change_main_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Inputs:"", for the `ctx` parameter, note that `time` is retrieved from `ctx.obj`.
+    2.  In ""2. Parse Arguments and Options"":
+        *   Add `time` to the list of global options retrieved from `ctx.obj`, e.g., `time = ctx.obj.get('time', DEFAULT_TIME)`.
+    3.  In ""4. Perform Prompt Modification"":
+        *   When calling `process_csv_change`, add `time` to its arguments.
+        *   When calling `change_func` (non-CSV mode), add `time` to its arguments.
+    4.  Update the `<change_example>` and `<process_csv_change_example>` to reflect the `time` parameter being passed."
+change_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Inputs:"", add a new input parameter:
+        `'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.`
+    2.  In the ""% This program will do the following:"" section:
+        *   Modify ""Step 3. Run the change prompt through the model using llm_invoke."" to include passing the `time` parameter to `llm_invoke`.
+        *   Modify ""Step 5. Run the extract prompt through llm_invoke..."" to include passing the `time` parameter to `llm_invoke`."
+cli_python.prompt,"1.  In the main `cli` Click group definition (`@click.group(...)`), add a new global option:
+        `@click.option('--time', type=float, default=None, help='Controls reasoning allocation for LLMs (0.0-1.0). Uses DEFAULT_TIME if None.')`
+        (Note: The actual default value like 0.25 will be handled by `llm_invoke` or individual commands if `None` is passed from `ctx.obj`. `DEFAULT_TIME` should be a globally accessible constant.)
+    2.  Ensure the `ctx.obj` dictionary is populated with this `time` value. The existing mechanism for global options should handle this.
+    3.  In the `<program_description>` section (which includes `README.md`), the README itself should be updated externally, but the prompt should ensure the Click definition reflects the new option."
+cmd_test_main_python.prompt,"1.  In the function's implementation logic, ensure that a `time` variable is retrieved from `ctx.obj.get('time', DEFAULT_TIME)`.
+    2.  When calling `generate_test` or `increase_tests`, ensure this `time` variable is passed as an argument. Update the corresponding examples (`<generate_test_example>`, `<increase_tests_example>`) if necessary."
+code_generator_main_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Inputs:"", for the `ctx` parameter, note that `time` is retrieved from `ctx.obj`.
+    2.  In the function's implementation logic:
+        *   Retrieve `time = ctx.obj.get('time', DEFAULT_TIME)`.
+    3.  In ""% Cloud vs Local Execution Strategy:"":
+        *   For step ""2. Otherwise, attempt cloud execution first:"", if the cloud API supports a time/effort parameter, ensure the JSON payload includes it, derived from the `time` variable. Update the `<cloud_code_generator_example>` (api-documentation.md) to reflect this if applicable.
+    4.  In ""% The function's implementation should include these key steps:"":
+        *   When calling `incremental_code_generator` (Step 4), pass the `time` variable.
+        *   When calling `code_generator` (Step 5), pass the `time` variable.
+    5.  Update `<code_generator_example>` and `<incremental_code_generator_example>` to show `time` being passed."
+code_generator_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Inputs:"", add a new input parameter:
+        `'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.`
+    2.  In the ""% This program will do the following:"" section:
+        *   Modify ""Step 2. Run the prompt (either preprocessed or raw) through llm_invoke..."" to include passing the `time` parameter to `llm_invoke`."
+conflicts_in_prompts_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Inputs:"", add a new input parameter:
+        `'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.`
+    2.  In the ""% This function will do the following:"" section:
+        *   Modify ""Step 2. Run the prompts through the model using llm_invoke..."" to include passing the `time` parameter to `llm_invoke`.
+        *   Modify ""Step 3. Create a second llm_invoke call..."" to include passing the `time` parameter to `llm_invoke`."
+conflicts_main_python.prompt,"1.  In the function's implementation logic:
+        *   Retrieve `time = ctx.obj.get('time', DEFAULT_TIME)`.
+    2.  In ""3. Analyze Conflicts"":
+        *   When calling `conflicts_in_prompts`, pass the `time` variable as an argument. Update the example `<conflicts_in_prompts_example>` if necessary.
+        *   Modify the instruction: ""Important: Use `ctx.obj.get('strength', 0.9)`, `ctx.obj.get('temperature', 0)`, and `ctx.obj.get('time', DEFAULT_TIME)` to get these values."""
+context_generator_main_python.prompt,"1.  In the function's implementation logic:
+        *   Retrieve `time = ctx.obj.get('time', DEFAULT_TIME)`.
+    2.  When calling `context_generator`, ensure this `time` variable is passed as an argument. Update `<context_generator_example>` if necessary."
+context_generator_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Inputs:"", add a new input parameter:
+        `'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.`
+    2.  In the ""% This function will do the following:"" section:
+        *   Modify ""Step 2. Run the code through the model using llm_invoke."" to include passing the `time` parameter to `llm_invoke`."
+continue_generation_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Inputs:"", add a new input parameter:
+        `'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.`
+    2.  In the ""% Steps to be followed by the function:"" section:
+        *   Modify ""Step 3. Run the trim_results_start_LLM prompt through llm_invoke:"" to include passing the `time` parameter.
+        *   Modify ""Step 3. Enter a loop for continuing generation:""
+            *   In ""a. Run the continue_generation_LLM prompt through llm_invoke:"", include passing the `time` parameter.
+            *   In ""b. Check if generation is complete using unfinished_prompt:"", if `unfinished_prompt` itself calls an LLM, it would also need `time`. (Assuming `unfinished_prompt` is updated separately).
+            *   In ""If complete: * Run trim_results_LLM prompt through llm_invoke..."", include passing the `time` parameter."
+crash_main_python.prompt,"1.  In the function's implementation logic:
+        *   Retrieve `time = ctx.obj.get('time', DEFAULT_TIME)`.
+    2.  When calling `fix_code_module_errors` or `fix_code_loop`, ensure this `time` variable is passed as an argument. Update examples if necessary."
+detect_change_main_python.prompt,"1.  In the function's implementation logic:
+        *   Retrieve `time = ctx.obj.get('time', DEFAULT_TIME)`.
+    2.  When calling `detect_change`, ensure this `time` variable is passed as an argument. Update `<detect_change_example>` if necessary."
+detect_change_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Inputs:"", add a new input parameter:
+        `'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.`
+    2.  In the ""% Steps to be followed by the function:"" section:
+        *   Modify ""Step 2. Run the prompt_files and change_description through the model using `llm_invoke`:"" to include passing the `time` parameter.
+        *   Modify ""Step 3. Run the output from Step 2 through the 'extract_detect_change_LLM' prompt using `llm_invoke`..."" to include passing the `time` parameter."
+edit_file_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""<function_inputs>"":
+        Add: `- time (float, optional): Controls LLM reasoning effort (0.0-1.0). Defaults to DEFAULT_TIME.`
+    2.  In the ""% Implementation Requirements:"" section, under ""9. Model Integration:"":
+        Add a bullet point: `- The 'time' parameter should be utilized when invoking the Claude model for planning edits, mapping it to appropriate model-specific parameters if necessary.`"
+fix_code_loop_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Inputs:"", add a new input parameter:
+        `'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to underlying LLM calls. Default is DEFAULT_TIME.`
+    2.  In the ""% This function will do the following:"" section, under ""Step 3.d."":
+        *   When calling `fix_code_module_errors`, ensure the `time` parameter is passed."
+fix_code_module_errors_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Inputs:"", add a new input parameter:
+        `'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.`
+    2.  In the ""% This program will do the following:"" section:
+        *   Modify ""Step 2. Run the code through the model using llm_invoke..."" to include passing the `time` parameter.
+        *   Modify ""Step 4. Run a second llm_invoke..."" to include passing the `time` parameter."
+fix_error_loop_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Inputs:"", add a new input parameter:
+        `'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to underlying LLM calls. Default is DEFAULT_TIME.`
+    2.  In the ""% This function will do the following:"" section, under ""Step 4.d."":
+        *   When calling `fix_errors_from_unit_tests`, ensure the `time` parameter is passed."
+fix_errors_from_unit_tests_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Inputs:"", add a new input parameter:
+        `'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.`
+    2.  In the ""% This program will do the following:"" section:
+        *   Modify ""Step 3. Run the LLM prompt from Step 1 through llm_invoke:"" to include passing the `time` parameter.
+        *   Modify ""Step 5. Run a second LLM prompt to extract the fixed code/test:"" to include passing the `time` parameter to `llm_invoke`."
+fix_main_python.prompt,"1.  In the function's implementation logic:
+        *   Retrieve `time = ctx.obj.get('time', DEFAULT_TIME)`.
+    2.  When calling `fix_errors_from_unit_tests` or `fix_error_loop`, ensure this `time` variable is passed as an argument. Update examples if necessary."
+fix_verification_errors_loop_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Inputs:"", add a new input parameter:
+        `'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to underlying LLM calls. Default is DEFAULT_TIME.`
+    2.  In the ""% This function will do the following:"" section:
+        *   Under ""Step 3.d."", when calling `fix_verification_errors` for the initial state, pass the `time` parameter.
+        *   Under ""Step 4.e."", when calling `fix_verification_errors` in the loop, pass the `time` parameter."
+fix_verification_errors_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Inputs:"", add a new input parameter:
+        `'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.`
+    2.  In the ""% This program will do the following:"" section:
+        *   Modify ""Step 2. Run the code through the model using llm_invoke..."" to include passing the `time` parameter.
+        *   Modify ""Step 5. Only if issues_found, run a second llm_invoke..."" to include passing the `time` parameter."
+fix_verification_main_python.prompt,"1.  In the function's implementation logic:
+        *   Retrieve `time = ctx.obj.get('time', DEFAULT_TIME)`.
+    2.  When calling `fix_verification_errors_loop` or `fix_verification_errors`, ensure this `time` variable is passed as an argument. Update examples if necessary."
+generate_test_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Inputs:"", add a new input parameter:
+        `'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.`
+    2.  In the ""% This program will do the following:"" section:
+        *   Modify ""Step 3. Run the inputs through the model using llm_invoke."" to include passing the `time` parameter."
+git_update_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Inputs:"", add a new input parameter:
+        `'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to update_prompt. Default is DEFAULT_TIME.`
+    2.  When calling the `update_prompt` function internally, ensure the `time` parameter is passed. Update `<update_prompt_example>` if it's used to show the call."
+increase_tests_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Inputs:"", add a new input parameter:
+        `'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.`
+    2.  In the ""% This function will do the following:"" section:
+        *   Modify ""Step 2. Run the prompt through the model using llm_invoke..."" to include passing the `time` parameter."
+incremental_code_generator_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Inputs:"", for the existing `'time'` parameter, update its description to:
+        `'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME. This value influences how llm_invoke interprets reasoning effort based on model capabilities (e.g., 'budget' or 'effort' reasoning_types).`
+    2.  The rest of the prompt already correctly passes this `time` parameter to `llm_invoke` calls."
+insert_includes_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Inputs:"", add a new input parameter:
+        `'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to underlying LLM calls. Default is DEFAULT_TIME.`
+    2.  In ""% The function should do the following:"" section:
+        *   Modify ""Step 4. Use auto_include to get the dependencies for the input prompt."" to ensure `time` is passed to `auto_include` (assuming `auto_include` is updated to accept it).
+        *   Modify ""Step 5. Run with llm_invoke with the insert includes prompt..."" to include passing the `time` parameter to `llm_invoke`."
+llm_invoke_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Input:"", add a new parameter:
+        `'time' - Optional. Floating point number between 0 and 1 representing the relative amount of thinking effort requested. Default is 0.25. How this is interpreted depends on the selected model's 'reasoning_type' specified in the CSV.`
+    2.  In the ""% Function Logic Flow:"" section:
+        *   After ""5. API Key Check & Acquisition (CRITICAL):"", before ""6. LLM Invocation:"", insert a new step detailing `time` parameter processing:
+            ""5.X. **Process `time` parameter for Reasoning:**
+                a. Retrieve the `reasoning_type` (e.g., 'none', 'budget', 'effort') and `max_reasoning_tokens` (integer, nullable) for the selected model from the loaded CSV data.
+                b. Initialize an empty dictionary for `model_specific_params`.
+                c. If `reasoning_type` is 'budget':
+                    i. If `max_reasoning_tokens` is a positive integer:
+                        1. Calculate `budget_tokens = int(time * max_reasoning_tokens)`.
+                        2. If `budget_tokens > 0`, add the appropriate provider-specific parameter to `model_specific_params` (e.g., for Anthropic, `model_specific_params['thinking'] = {'type': 'enabled', 'budget_tokens': budget_tokens}`). Log this action if verbose.
+                d. Else if `reasoning_type` is 'effort':
+                    i. Map `time` to a qualitative category: ""low"" (0.0-0.3), ""medium"" (>0.3-0.7), ""high"" (>0.7-1.0).
+                    ii. Add this category to `model_specific_params` using the relevant key (e.g., `model_specific_params['reasoning_effort'] = mapped_category`). Log this action if verbose.
+                e. If `reasoning_type` is 'none' or conditions for 'budget'/'effort' are not met, no reasoning-specific parameters are added.""
+        *   Modify ""6. LLM Invocation:"" to: ""Call `litellm.completion` or `litellm.batch_completion` with the selected model, formatted messages, other parameters, and any `model_specific_params` derived from the `time` parameter.""
+    3.  In the section ""% Pass necessary parameters to `litellm.completion()`..."", add a new detailed subsection:
+        ""`- **Thinking/Reasoning (`time` parameter)**: Use the `reasoning_type` and `max_reasoning_tokens` columns from the CSV to determine how to handle the `time` parameter (0-1):`
+            `- **If `reasoning_type` is 'none'**: Ignore `time`, pass no reasoning parameters.`
+            `- **If `reasoning_type` is 'budget'**: Check if `max_reasoning_tokens` > 0. If so, calculate `budget = int(time * max_reasoning_tokens)`. If `budget > 0`, pass the provider-specific parameter(s) via LiteLLM (e.g., Anthropic's `thinking` requires `{\""type\"": \""enabled\"", \""budget_tokens\"": budget}`).`
+            `- **If `reasoning_type` is 'effort'**: Map `time` to a category (\""low\"": 0-0.3, \""medium\"": >0.3-0.7, \""high\"": >0.7-1.0). Pass this category to the `reasoning_effort` parameter in LiteLLM.`
+            `- Default `time` is 0.25.`""
+    4.  In the ""% If verbose is set to True, print the following information:"" section, add:
+        `- The `time` value used, and any derived reasoning parameters (e.g., budget_tokens, effort_category) passed to LiteLLM.`"
+llm_model_csv.prompt,"1.  In the introductory sentence describing the columns, update it to:
+        `% You are an expert AI engineer. Your goal is to write a comprehensive csv file that will have the following columns with the headers:`
+    2.  Add the following new column descriptions to the list:
+        `- 'reasoning_type': The type of reasoning control the model supports (e.g., 'none', 'budget', 'effort') (String, nullable)`
+        `- 'max_reasoning_tokens': If reasoning_type is 'budget', the maximum tokens the model can allocate for internal reasoning/thinking before generating the main response (Integer, nullable)`
+    3.  Ensure the example CSV headers (if any are shown implicitly or explicitly) include these new columns."
+pdd_completion_bash.prompt,"1.  Modify the Bash completion logic to recognize `--time` as a global option for the `pdd` command.
+    2.  Ensure that after `--time`, the completion suggests numerical values or expects a float."
+pdd_completion_fish.prompt,"1.  Modify the Fish completion logic to recognize `--time` as a global option for the `pdd` command.
+    2.  Add a completion rule for `--time` that might look like: `complete -c pdd -n ""__fish_seen_subcommand_from pdd"" -l time -d ""Controls LLM reasoning effort (0.0-1.0)""`"
+pdd_completion_zsh.prompt,"1.  Modify the Zsh completion logic to recognize `--time` as a global option for the `pdd` command.
+    2.  This typically involves adding `'--time[Controls LLM reasoning effort (0.0-1.0)]'` to the list of global options in the `_pdd_options` array or similar structure."
+postprocess_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Inputs:"", add a new input parameter:
+        `'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.`
+    2.  In the ""% This function will do the following:"" section:
+        *   Modify ""Step 3. Process the text using llm_invoke:"" to include passing the `time` parameter."
+preprocess_main_python.prompt,"1.  In the function's implementation logic:
+        *   Retrieve `time = ctx.obj.get('time', DEFAULT_TIME)`.
+    2.  If the `--xml` option is used, and the `xml_tagger` function is called, ensure this `time` variable is passed as an argument to `xml_tagger`. Update `<xml_tagger_example>` if necessary."
+process_csv_change_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Inputs:"", add a new input parameter:
+        `'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to the change function. Default is DEFAULT_TIME.`
+    2.  In the ""% This function will do the following:"" section:
+        *   Modify ""Step 2.b. Call the change function..."" to include passing the `time` parameter to the `change` function.
+    3.  Update the `<change_example>` to reflect the `time` parameter being passed if it shows the call signature."
+prompt_tester_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""CLI Inputs:"", add a new option:
+        `- Option 3: ""time"" of the LLM model to use. Default is 0.25.`
+    2.  In the ""% Follow these steps to test the prompt:"" section:
+        *   Modify ""Step 3: For each row in the CSV file: * Run the prompt with the test case via llm_invoke."" to include passing the `time` parameter (obtained from the CLI option) to `llm_invoke`."
+pypi_description_restructuredtext.prompt,"1.  In the instructions for generating the PyPI description, add a requirement:
+        `% Ensure the description mentions the global '--time' option for controlling LLM reasoning effort.`
+    2.  For example, in a features list or CLI overview section: `""- Global ``--time`` option to adjust LLM reasoning effort.""`"
+regression_bash.prompt,"1.  In the ""% Additional requirements:"" section, or as a new general instruction:
+        `% The regression script must test the new global '--time' option. For PDD commands that utilize LLMs (e.g., generate, change, fix, test, example, split, etc.), include test cases that run these commands with different '--time' values (e.g., --time 0.1, --time 0.5, --time 0.9) to verify its impact and ensure it doesn't cause errors.`
+    2.  The `run_pdd_command()` function might need to be adapted or specific command calls augmented to include various `--time` flags."
+split_main_python.prompt,"1.  In the function's implementation logic:
+        *   Retrieve `time = ctx.obj.get('time', DEFAULT_TIME)`.
+    2.  When calling the `split` function, ensure this `time` variable is passed as an argument. Update `<split_example>` if necessary."
+split_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Inputs:"", add a new input parameter:
+        `'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.`
+    2.  In the ""% Steps to be followed by the function:"" section:
+        *   Modify ""3. Run the input through the model using llm_invoke..."" to include passing the `time` parameter.
+        *   Modify ""4. Run the output from Step 3 through llm_invoke..."" to include passing the `time` parameter."
+summarize_directory_python.prompt,"1.  In the ""% Here are the inputs and outputs for the function:"" section, under ""Inputs:"", add a new input parameter:
+        `'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.`
+    2.  In the ""% This program will do the following:"" section:
+        *   Modify ""Step 2c: Summarize the files contents using llm_invoke..."" to include passing the `time` parameter."
+trace_main_python.prompt,"1.  In the function's implementation logic:
+        *   Retrieve `time = ctx.obj.get('time', DEFAULT_TIME)`.
+    2.  When calling the `trace` function, ensure this `time` variable is passed as an argument. Update `<trace_example>` if necessary."
+trace_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Inputs:"", add a new input parameter:
+        `'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.`
+    2.  In the ""% This function will do the following:"" section:
+        *   Modify ""Step 4. Invoke the model using llm_invoke."" to include passing the `time` parameter.
+        *   Modify ""Step 6. Invoke the model using llm_invoke..."" to include passing the `time` parameter."
+unfinished_prompt_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Inputs:"", add a new input parameter:
+        `'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.`
+    2.  In the ""% This function will do the following:"" section:
+        *   Modify ""Step 2. Run the prompt text through the model using llm_invoke."" to include passing the `time` parameter."
+update_main_python.prompt,"1.  In the function's implementation logic:
+        *   Retrieve `time = ctx.obj.get('time', DEFAULT_TIME)`.
+    2.  When calling `update_prompt` or `git_update`, ensure this `time` variable is passed as an argument. Update examples if necessary."
+update_model_costs_python.prompt,"1.  In the ""% Script Goal:"" section:
+        *   Modify the bullet point: ""- Add any missing expected columns (like `max_reasoning_tokens`) with `pd.NA`."" to explicitly include `reasoning_type` as well: ""- Add any missing expected columns (like `reasoning_type`, `max_reasoning_tokens`) with `pd.NA`.""
+        *   Modify the bullet point: ""- Enforce Data Types: ... `max_reasoning_tokens`) to nullable integers (`'Int64'`)."" to also mention `reasoning_type` should be object/string: ""- Enforce Data Types: After loading and adding columns, explicitly cast relevant columns (e.g., `coding_arena_elo`, `max_tokens`, `max_completion_tokens`, `max_reasoning_tokens`) to nullable integers (`'Int64'`) and `reasoning_type` to string/object.""
+    2.  In the ""% Core Logic:"" section:
+        *   Modify ""1. Define expected columns including `max_reasoning_tokens`."" to ""1. Define expected columns including `reasoning_type` and `max_reasoning_tokens`.""
+        *   Modify ""3. Enforce Data Types: ... `max_reasoning_tokens` as `Int64`."" to ""3. Enforce Data Types: Convert columns to their intended types (float, `'Int64'` for nullable integers like `coding_arena_elo` and `max_reasoning_tokens`, object/string for `reasoning_type`).""
+    3.  The script's purpose is to update costs and structured output flags. It should *ensure the new columns exist* but not necessarily populate `reasoning_type` or `max_reasoning_tokens` from LiteLLM, as the change description notes `max_reasoning_tokens` is not reliably available. The script should make sure these columns are present in the CSV, defaulting to `pd.NA` if they are missing entirely from the file."
+update_prompt_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Inputs:"", add a new input parameter:
+        `'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.`
+    2.  In the ""% Steps to be followed by the function:"" section:
+        *   Modify ""2. Run the first LLM invocation using llm_invoke:"" to include passing the `time` parameter.
+        *   Modify ""3. Run the second LLM invocation using llm_invoke:"" to include passing the `time` parameter."
+xml_tagger_python.prompt,"1.  In the ""% Here are the inputs and outputs of the function:"" section, under ""Inputs:"", add a new input parameter:
+        `'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.`
+    2.  In the ""% This program will do the following:"" section:
+        *   Modify ""Step 2. Run the code through the model using llm_invoke..."" to include passing the `time` parameter.
+        *   Modify ""Step 3. Run a second llm_invoke..."" to include passing the `time` parameter."

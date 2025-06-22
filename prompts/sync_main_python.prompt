@@ -56,11 +56,16 @@
     - After calling `construct_paths`, extract resolved configuration settings and override CLI parameters if context provides them
     - Apply configuration hierarchy: prefer CLI-provided values, then context values, then original defaults
 
-3. **Language Detection**:
+3. **Language Detection and Filtering**:
     - Scan for existing prompt files matching the pattern `{basename}_{language}.prompt` in the prompts directory
-    - If multiple language prompt files exist for the same basename, process all of them sequentially
-    - If no prompt files found, raise `click.UsageError` with helpful message
-    - For each found prompt file, run the complete sync workflow (calling sync_orchestration)
+    - Filter to include only development languages (python, javascript, typescript, java, cpp, etc.)
+    - Exclude runtime languages (LLM) as they cannot form valid development units:
+        * Files ending in `_llm.prompt` are used for internal processing only
+        * They don't have associated code, examples, or tests required for sync workflows
+        * Including them in sync would always fail since they cannot be executed or tested
+    - Sort detected development languages alphabetically
+    - If no valid development prompt files found, raise `click.UsageError` with helpful message
+    - For each found development prompt file, run the complete sync workflow (calling sync_orchestration)
     - Each sync_orchestration call will use construct_paths normally with that specific prompt file
 
 4. **File Path Validation**:
@@ -124,7 +129,7 @@
         <include>context/sync_orchestration_example.py</include>
       </sync_orchestration_example>
 
-      - Here is an example of language detection for sync using existing PDD functions:
+      - Here is an example of language detection for sync using existing PDD functions, excluding runtime languages:
       <language_detection_example>
       ```python
       import glob
@@ -132,12 +137,12 @@
       from pdd.construct_paths import _is_known_language
 
       def detect_languages_for_basename(basename: str, prompts_dir: str = "prompts") -> list:
-          """Detect all languages that have prompt files for a given basename"""
+          """Detect development languages that have prompt files for a given basename, excluding runtime languages"""
           prompts_path = Path(prompts_dir)
           pattern = f"{basename}_*.prompt"
           
           prompt_files = list(prompts_path.glob(pattern))
-          languages = []
+          development_languages = []
           
           for prompt_file in prompt_files:
               # Extract language from filename: basename_language.prompt
@@ -146,9 +151,12 @@
                   potential_language = stem.split('_', 1)[1]  # Get everything after first underscore
                   # Validate using existing PDD function
                   if _is_known_language(potential_language):
-                      languages.append(potential_language)
+                      # Exclude runtime languages (LLM) as they cannot form valid development units
+                      if potential_language.lower() != 'llm':
+                          development_languages.append(potential_language)
           
-          return languages
+          # Return only development languages, sorted alphabetically
+          return sorted(development_languages)
       ```
       </language_detection_example>
    </internal_example_modules>
