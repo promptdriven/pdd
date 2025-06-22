@@ -4,9 +4,12 @@ from __future__ import annotations
 import sys
 import os
 from pathlib import Path
-from typing import Dict, Tuple, Any, Optional # Added Optional
+from typing import Dict, Tuple, Any, Optional, List
+import fnmatch
+import logging
 
 import click
+import yaml
 from rich.console import Console
 from rich.theme import Theme
 
@@ -20,6 +23,114 @@ from .generate_output_paths import generate_output_paths
 import csv
 
 console = Console(theme=Theme({"info": "cyan", "warning": "yellow", "error": "bold red"}))
+
+# Configuration loading functions
+def _find_pddrc_file(start_path: Optional[Path] = None) -> Optional[Path]:
+    """Find .pddrc file by searching upward from the given path."""
+    if start_path is None:
+        start_path = Path.cwd()
+    
+    # Search upward through parent directories
+    for path in [start_path] + list(start_path.parents):
+        pddrc_file = path / ".pddrc"
+        if pddrc_file.is_file():
+            return pddrc_file
+    return None
+
+def _load_pddrc_config(pddrc_path: Path) -> Dict[str, Any]:
+    """Load and parse .pddrc configuration file."""
+    try:
+        with open(pddrc_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+        
+        if not isinstance(config, dict):
+            raise ValueError(f"Invalid .pddrc format: expected dictionary at root level")
+        
+        # Validate basic structure
+        if 'contexts' not in config:
+            raise ValueError(f"Invalid .pddrc format: missing 'contexts' section")
+        
+        return config
+    except yaml.YAMLError as e:
+        raise ValueError(f"YAML syntax error in .pddrc: {e}")
+    except Exception as e:
+        raise ValueError(f"Error loading .pddrc: {e}")
+
+def _detect_context(current_dir: Path, config: Dict[str, Any], context_override: Optional[str] = None) -> Optional[str]:
+    """Detect the appropriate context based on current directory path."""
+    if context_override:
+        # Validate that the override context exists
+        contexts = config.get('contexts', {})
+        if context_override not in contexts:
+            available = list(contexts.keys())
+            raise ValueError(f"Unknown context '{context_override}'. Available contexts: {available}")
+        return context_override
+    
+    contexts = config.get('contexts', {})
+    current_path_str = str(current_dir)
+    
+    # Try to match against each context's paths
+    for context_name, context_config in contexts.items():
+        if context_name == 'default':
+            continue  # Handle default as fallback
+        
+        paths = context_config.get('paths', [])
+        for path_pattern in paths:
+            # Convert glob pattern to match current directory
+            if fnmatch.fnmatch(current_path_str, f"*/{path_pattern}") or \
+               fnmatch.fnmatch(current_path_str, path_pattern) or \
+               current_path_str.endswith(f"/{path_pattern.rstrip('/**')}"):
+                return context_name
+    
+    # Return default context if available
+    if 'default' in contexts:
+        return 'default'
+    
+    return None
+
+def _get_context_config(config: Dict[str, Any], context_name: Optional[str]) -> Dict[str, Any]:
+    """Get configuration settings for the specified context."""
+    if not context_name:
+        return {}
+    
+    contexts = config.get('contexts', {})
+    context_config = contexts.get(context_name, {})
+    return context_config.get('defaults', {})
+
+def _resolve_config_hierarchy(
+    cli_options: Dict[str, Any],
+    context_config: Dict[str, Any],
+    env_vars: Dict[str, str]
+) -> Dict[str, Any]:
+    """Apply configuration hierarchy: CLI > context > environment > defaults."""
+    resolved = {}
+    
+    # Configuration keys to resolve
+    config_keys = {
+        'generate_output_path': 'PDD_GENERATE_OUTPUT_PATH',
+        'test_output_path': 'PDD_TEST_OUTPUT_PATH', 
+        'example_output_path': 'PDD_EXAMPLE_OUTPUT_PATH',
+        'default_language': 'PDD_DEFAULT_LANGUAGE',
+        'target_coverage': 'PDD_TEST_COVERAGE_TARGET',
+        'strength': None,
+        'temperature': None,
+        'budget': None,
+        'max_attempts': None,
+    }
+    
+    for config_key, env_var in config_keys.items():
+        # 1. CLI options (highest priority)
+        if config_key in cli_options and cli_options[config_key] is not None:
+            resolved[config_key] = cli_options[config_key]
+        # 2. Context configuration
+        elif config_key in context_config:
+            resolved[config_key] = context_config[config_key]
+        # 3. Environment variables
+        elif env_var and env_var in env_vars:
+            resolved[config_key] = env_vars[env_var]
+        # 4. Defaults are handled elsewhere
+    
+    return resolved
 
 
 def _read_file(path: Path) -> str:
@@ -267,10 +378,14 @@ def construct_paths(
     command: str,
     command_options: Optional[Dict[str, Any]], # Allow None
     create_error_file: bool = True,  # Added parameter to control error file creation
+    context_override: Optional[str] = None,  # Added parameter for context override
 ) -> Tuple[Dict[str, str], Dict[str, str], str]:
     """
     High‑level orchestrator that loads inputs, determines basename/language,
     computes output locations, and verifies overwrite rules.
+    
+    Supports .pddrc configuration with context-aware settings and configuration hierarchy:
+    CLI options > .pddrc context > environment variables > defaults
 
     Returns
     -------
@@ -280,6 +395,42 @@ def construct_paths(
 
     if not input_file_paths:
         raise ValueError("No input files provided")
+
+    # ------------- Load .pddrc configuration -----------------
+    pddrc_config = {}
+    context = None
+    context_config = {}
+    
+    try:
+        # Find and load .pddrc file
+        pddrc_path = _find_pddrc_file()
+        if pddrc_path:
+            pddrc_config = _load_pddrc_config(pddrc_path)
+            
+            # Detect appropriate context
+            current_dir = Path.cwd()
+            context = _detect_context(current_dir, pddrc_config, context_override)
+            
+            # Get context-specific configuration
+            context_config = _get_context_config(pddrc_config, context)
+            
+            if not quiet and context:
+                console.print(f"[info]Using .pddrc context:[/info] {context}")
+        
+        # Apply configuration hierarchy
+        env_vars = dict(os.environ)
+        resolved_config = _resolve_config_hierarchy(command_options, context_config, env_vars)
+        
+        # Update command_options with resolved configuration (CLI options take precedence)
+        for key, value in resolved_config.items():
+            if key not in command_options or command_options[key] is None:
+                command_options[key] = value
+                
+    except Exception as e:
+        error_msg = f"Configuration error: {e}"
+        console.print(f"[error]{error_msg}[/error]", style="error")
+        if not quiet:
+            console.print("[warning]Continuing with default configuration...[/warning]", style="warning")
 
     # ------------- normalise & resolve Paths -----------------
     input_paths: Dict[str, Path] = {}
@@ -407,6 +558,7 @@ def construct_paths(
             basename=basename,
             language=language,
             file_extension=file_extension,
+            context_config=context_config,
         )
         # Convert to Path objects for internal use
         output_paths_resolved: Dict[str, Path] = {k: Path(v) for k, v in output_paths_str.items()}

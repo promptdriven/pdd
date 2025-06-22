@@ -109,6 +109,45 @@ ENV_VAR_MAP: Dict[str, Dict[str, str]] = {
     },
 }
 
+# Define mapping from context config keys to output keys for different commands
+CONTEXT_CONFIG_MAP: Dict[str, Dict[str, str]] = {
+    'generate': {'output': 'generate_output_path'},
+    'example': {'output': 'example_output_path'},
+    'test': {'output': 'test_output_path'},
+    'sync': {
+        'generate_output_path': 'generate_output_path',
+        'test_output_path': 'test_output_path',
+        'example_output_path': 'example_output_path',
+    },
+    # For other commands, they can use the general mapping if needed
+    'preprocess': {'output': 'generate_output_path'},  # fallback
+    'fix': {
+        'output_test': 'test_output_path',
+        'output_code': 'generate_output_path',
+        'output_results': 'generate_output_path',  # fallback for results
+    },
+    'split': {
+        'output_sub': 'generate_output_path',      # fallback
+        'output_modified': 'generate_output_path', # fallback
+    },
+    'change': {'output': 'generate_output_path'},
+    'update': {'output': 'generate_output_path'},
+    'detect': {'output': 'generate_output_path'},
+    'conflicts': {'output': 'generate_output_path'},
+    'crash': {
+        'output': 'generate_output_path',
+        'output_program': 'generate_output_path',
+    },
+    'trace': {'output': 'generate_output_path'},
+    'bug': {'output': 'test_output_path'},
+    'auto-deps': {'output': 'generate_output_path'},
+    'verify': {
+        'output_results': 'generate_output_path',
+        'output_code': 'generate_output_path',
+        'output_program': 'generate_output_path',
+    },
+}
+
 # --- Helper Function ---
 
 def _get_default_filename(command: str, output_key: str, basename: str, language: str, file_extension: str) -> str:
@@ -138,14 +177,15 @@ def generate_output_paths(
     output_locations: Dict[str, Optional[str]],
     basename: str,
     language: str,
-    file_extension: str
+    file_extension: str,
+    context_config: Optional[Dict[str, str]] = None
 ) -> Dict[str, str]:
     """
     Generates the full, absolute output paths for a given PDD command.
 
-    It prioritizes user-specified paths (--output options), then environment
-    variables, and finally falls back to default naming conventions in the
-    current working directory.
+    It prioritizes user-specified paths (--output options), then context 
+    configuration from .pddrc, then environment variables, and finally 
+    falls back to default naming conventions in the current working directory.
 
     Args:
         command: The PDD command being executed (e.g., 'generate', 'fix').
@@ -157,6 +197,8 @@ def generate_output_paths(
         language: The programming language associated with the operation.
         file_extension: The file extension (including '.') for the language,
                         used when default patterns require it.
+        context_config: Optional dictionary with context-specific paths from .pddrc
+                       configuration (e.g., {'generate_output_path': 'src/'}).
 
     Returns:
         A dictionary where keys are the standardized output identifiers
@@ -166,8 +208,10 @@ def generate_output_paths(
     """
     logger.debug(f"Generating output paths for command: {command}")
     logger.debug(f"User output locations: {output_locations}")
+    logger.debug(f"Context config: {context_config}")
     logger.debug(f"Basename: {basename}, Language: {language}, Extension: {file_extension}")
 
+    context_config = context_config or {}
     result_paths: Dict[str, str] = {}
 
     if not basename:
@@ -194,6 +238,11 @@ def generate_output_paths(
         logger.debug(f"Processing output key: {output_key}")
 
         user_path: Optional[str] = processed_output_locations.get(output_key)
+        
+        # Get context configuration path for this output key
+        context_config_key = CONTEXT_CONFIG_MAP.get(command, {}).get(output_key)
+        context_path: Optional[str] = context_config.get(context_config_key) if context_config_key else None
+        
         env_var_name: Optional[str] = ENV_VAR_MAP.get(command, {}).get(output_key)
         env_path: Optional[str] = os.environ.get(env_var_name) if env_var_name else None
 
@@ -226,7 +275,26 @@ def generate_output_paths(
                 logger.debug(f"User path '{user_path}' identified as a specific file path.")
                 final_path = user_path # Assume it's a full path or filename
 
-        # 2. Check Environment Variable Path
+        # 2. Check Context Configuration Path (.pddrc)
+        elif context_path:
+            source = "context"
+            # Check if the context path is a directory
+            is_dir = context_path.endswith(os.path.sep) or context_path.endswith('/')
+            if not is_dir:
+                 try:
+                     if os.path.exists(context_path) and os.path.isdir(context_path):
+                         is_dir = True
+                 except Exception as e:
+                     logger.warning(f"Could not check if context path '{context_path}' is a directory: {e}")
+
+            if is_dir:
+                logger.debug(f"Context path '{context_path}' identified as a directory.")
+                final_path = os.path.join(context_path, default_filename)
+            else:
+                logger.debug(f"Context path '{context_path}' identified as a specific file path.")
+                final_path = context_path
+
+        # 3. Check Environment Variable Path
         elif env_path:
             source = "environment"
             # Check if the environment variable points to a directory
@@ -245,7 +313,7 @@ def generate_output_paths(
                 logger.debug(f"Env path '{env_path}' identified as a specific file path.")
                 final_path = env_path # Assume it's a full path or filename
 
-        # 3. Use Default Naming Convention in CWD
+        # 4. Use Default Naming Convention in CWD
         else:
             source = "default"
             logger.debug(f"Using default filename '{default_filename}' in current directory.")
@@ -284,7 +352,8 @@ if __name__ == '__main__':
         output_locations={}, # No user input
         basename=mock_basename,
         language=mock_language,
-        file_extension=mock_extension
+        file_extension=mock_extension,
+        context_config={}
     )
     print(f"Result: {paths1}")
     # Expected: {'output': '/path/to/cwd/my_module.py'}
@@ -296,7 +365,8 @@ if __name__ == '__main__':
         output_locations={'output': 'generated_code.py'},
         basename=mock_basename,
         language=mock_language,
-        file_extension=mock_extension
+        file_extension=mock_extension,
+        context_config={}
     )
     print(f"Result: {paths2}")
     # Expected: {'output': '/path/to/cwd/generated_code.py'}
@@ -311,7 +381,8 @@ if __name__ == '__main__':
         output_locations={'output': test_dir_gen + os.path.sep}, # Explicit directory
         basename=mock_basename,
         language=mock_language,
-        file_extension=mock_extension
+        file_extension=mock_extension,
+        context_config={}
     )
     print(f"Result: {paths3}")
     # Expected: {'output': '/path/to/cwd/temp_gen_output/my_module.py'}
@@ -330,7 +401,8 @@ if __name__ == '__main__':
         },
         basename=mock_basename,
         language=mock_language,
-        file_extension=mock_extension
+        file_extension=mock_extension,
+        context_config={}
     )
     print(f"Result: {paths4}")
     # Expected: {
@@ -355,7 +427,8 @@ if __name__ == '__main__':
         output_locations={}, # No user input
         basename=mock_basename,
         language=mock_language,
-        file_extension=mock_extension
+        file_extension=mock_extension,
+        context_config={}
     )
     print(f"Result: {paths5}")
     # Expected: {
@@ -376,7 +449,8 @@ if __name__ == '__main__':
         output_locations={},
         basename=mock_basename,
         language=mock_language,
-        file_extension=mock_extension # This extension is ignored for preprocess default
+        file_extension=mock_extension, # This extension is ignored for preprocess default
+        context_config={}
     )
     print(f"Result: {paths6}")
     # Expected: {'output': '/path/to/cwd/my_module_python_preprocessed.prompt'}
@@ -388,7 +462,8 @@ if __name__ == '__main__':
         output_locations={},
         basename=mock_basename,
         language=mock_language,
-        file_extension=mock_extension
+        file_extension=mock_extension,
+        context_config={}
     )
     print(f"Result: {paths7}")
     # Expected: {}
@@ -400,7 +475,8 @@ if __name__ == '__main__':
         output_locations={},
         basename="complex_prompt",
         language="javascript",
-        file_extension=".js" # Ignored for split defaults
+        file_extension=".js", # Ignored for split defaults
+        context_config={}
     )
     print(f"Result: {paths8}")
     # Expected: {
@@ -415,7 +491,8 @@ if __name__ == '__main__':
         output_locations={},
         basename="feature_analysis", # Used instead of change_file_basename
         language="", # Not relevant for detect default
-        file_extension="" # Not relevant for detect default
+        file_extension="", # Not relevant for detect default
+        context_config={}
     )
     print(f"Result: {paths9}")
     # Expected: {'output': '/path/to/cwd/feature_analysis_detect.csv'}
@@ -427,7 +504,8 @@ if __name__ == '__main__':
         output_locations={},
         basename="crashed_module", # Used for both code and program defaults
         language="java",
-        file_extension=".java"
+        file_extension=".java",
+        context_config={}
     )
     print(f"Result: {paths10}")
     # Expected: {
@@ -442,7 +520,8 @@ if __name__ == '__main__':
         output_locations={},
         basename="module_to_verify",
         language="python",
-        file_extension=".py"
+        file_extension=".py",
+        context_config={}
     )
     print(f"Result: {paths11}")
     # Expected: {
@@ -460,7 +539,8 @@ if __name__ == '__main__':
         output_locations={'output_program': test_dir_verify_prog + os.path.sep},
         basename="module_to_verify",
         language="python",
-        file_extension=".py"
+        file_extension=".py",
+        context_config={}
     )
     print(f"Result: {paths12}")
     # Expected: {
@@ -479,7 +559,8 @@ if __name__ == '__main__':
         output_locations={},
         basename="another_module_verify",
         language="python",
-        file_extension=".py"
+        file_extension=".py",
+        context_config={}
     )
     print(f"Result: {paths13}")
     # Expected: {

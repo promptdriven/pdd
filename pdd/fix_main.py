@@ -177,7 +177,7 @@ def fix_main(
                     try:
                         # Get JWT token for cloud authentication
                         jwt_token = asyncio.run(get_jwt_token(
-                            firebase_api_key=os.environ.get("REACT_APP_FIREBASE_API_KEY"),
+                            firebase_api_key=os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY"),
                             github_client_id=os.environ.get("GITHUB_CLIENT_ID"),
                             app_name="PDD Code Generator"
                         ))

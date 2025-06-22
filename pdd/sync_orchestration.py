@@ -136,6 +136,7 @@ def sync_orchestration(
     output_cost: Optional[str] = None,
     review_examples: bool = False,
     local: bool = False,
+    context_config: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """
     Orchestrates the complete PDD sync workflow with parallel animation.
@@ -152,7 +153,7 @@ def sync_orchestration(
     # Create file paths using provided directories
     ext = "py" if language == "python" else language  # Simple extension mapping
     # Use the same configuration-aware path resolution as sync_determine_operation
-    pdd_files = get_pdd_file_paths(basename, language)
+    pdd_files = get_pdd_file_paths(basename, language, context_config)
     
     # Shared state for animation thread
     current_function_name_ref = ["initializing"]
@@ -327,15 +328,21 @@ def sync_orchestration(
                         result = {'success': success, 'cost': cost, 'model': model, 'attempts': attempts}
                     elif operation == 'update':
                         # Fix: Add missing required parameters for update_main
+                        # Use git option to get the original code file
                         output_path, cost, model = update_main(
                             ctx, 
                             input_prompt_file=str(pdd_files['prompt']), 
                             modified_code_file=str(pdd_files['code']),
                             input_code_file=None,
                             output=None,
-                            git=False
+                            git=True  # Use git to get original code
                         )
                         result = {'success': True, 'cost': cost, 'model': model, 'output_path': output_path}
+                    else:
+                        # Unknown operation - this shouldn't happen but let's handle it gracefully
+                        errors.append(f"Unknown operation '{operation}' requested.")
+                        success = False
+                        result = {'success': False, 'cost': 0.0, 'model': 'unknown', 'error': f'Unknown operation: {operation}'}
                     
                     success = result.get('success', False)
                     current_cost_ref[0] += result.get('cost', 0.0)
