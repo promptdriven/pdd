@@ -393,9 +393,29 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "1" ]; then
   ENV_OUT_DIR="env_out_generate"
   mkdir "$ENV_OUT_DIR"
   export PDD_GENERATE_OUTPUT_PATH="$ENV_OUT_DIR/" # Trailing slash indicates directory
+  
+  # Temporarily modify .pddrc to test environment variable precedence
+  PDDRC_PATH="$PDD_BASE_DIR/.pddrc"
+  PDDRC_BACKUP_PATH="$PDD_BASE_DIR/.pddrc.backup"
+  if [ -f "$PDDRC_PATH" ]; then
+    cp "$PDDRC_PATH" "$PDDRC_BACKUP_PATH"
+    # Remove generate_output_path from pdd_cli context to test env var precedence
+    sed -i.tmp 's/generate_output_path: "pdd\/"/# generate_output_path: "pdd\/" # Temporarily commented for env var test/' "$PDDRC_PATH"
+    log "Temporarily modified .pddrc to test environment variables"
+  fi
+  
   run_pdd_command --local generate "$PROMPTS_PATH/$MATH_PROMPT" # No --output
   # Default name is <basename>.<lang_ext> which should be simple_math.py
   check_exists "$ENV_OUT_DIR/$MATH_SCRIPT" "'generate' output via env var" # Check for the Python file, not the prompt
+  
+  # Restore .pddrc file
+  if [ -f "$PDDRC_BACKUP_PATH" ]; then
+    mv "$PDDRC_BACKUP_PATH" "$PDDRC_PATH"
+    # Clean up sed backup file
+    rm -f "$PDDRC_PATH.tmp"
+    log "Restored .pddrc file"
+  fi
+  
   unset PDD_GENERATE_OUTPUT_PATH
 fi
 
@@ -599,7 +619,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "6" ]; then
                             "$MATH_VERIFICATION_PROGRAM" "${MATH_ERROR_LOG}_loop"
 
       # Conditionally adopt the fixed files if they were created by the loop
-      local loop_fix_produced=false
+      loop_fix_produced=false
       if [ -s "${CRASH_FIXED_SCRIPT}_loop" ]; then
           log "Crash --loop produced an output script. Adopting it for subsequent tests."
           cp "${CRASH_FIXED_SCRIPT}_loop" "$MATH_SCRIPT"
@@ -847,11 +867,31 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "8" ]; then
   # 8c. Test with env var output path
   log "8c. Testing 'test' with environment variable output path"
   ENV_OUT_DIR_TEST="env_out_test"
-  mkdir "$ENV_OUT_DIR_TEST"
+  mkdir -p "$ENV_OUT_DIR_TEST"
   export PDD_TEST_OUTPUT_PATH="$ENV_OUT_DIR_TEST/" # Trailing slash indicates directory
+  
+  # Temporarily modify .pddrc to test environment variable precedence
+  PDDRC_PATH="$PDD_BASE_DIR/.pddrc"
+  PDDRC_BACKUP_PATH="$PDD_BASE_DIR/.pddrc.backup"
+  if [ -f "$PDDRC_PATH" ]; then
+    cp "$PDDRC_PATH" "$PDDRC_BACKUP_PATH"
+    # Remove test_output_path from pdd_cli context to test env var precedence
+    sed -i.tmp 's/test_output_path: "tests\/"/# test_output_path: "tests\/" # Temporarily commented for env var test/' "$PDDRC_PATH"
+    log "Temporarily modified .pddrc to test environment variables"
+  fi
+  
   run_pdd_command test "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" # No --output
   # Default name is test_<basename>.<lang_ext>
   check_exists "$ENV_OUT_DIR_TEST/$MATH_TEST_SCRIPT" "'test' output via env var"
+  
+  # Restore .pddrc file
+  if [ -f "$PDDRC_BACKUP_PATH" ]; then
+    mv "$PDDRC_BACKUP_PATH" "$PDDRC_PATH"
+    # Clean up sed backup file
+    rm -f "$PDDRC_PATH.tmp"
+    log "Restored .pddrc file"
+  fi
+  
   unset PDD_TEST_OUTPUT_PATH
 fi
 
