@@ -1,6 +1,6 @@
 # Examples
 
-This directory contains examples that demonstrate comparisons between using Cursor and PDD (Prompt Driven Development) for various programming tasks. These examples serve as practical illustrations of how PDD can be used to generate and modify code, and how it compares to traditional development approaches.
+This directory contains examples that demonstrate comparisons between using Cursor and Prompt-Driven Development (PDD) for various programming tasks. These examples serve as practical illustrations of how PDD can be used to generate and modify code, and how it compares to traditional development approaches.
 
 ## Available Examples
 

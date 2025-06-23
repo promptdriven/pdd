@@ -1,6 +1,6 @@
 # PDD Onboarding Guide
 
-This guide will help you get started with PDD (Prompt Driven Development) by walking you through the necessary setup steps.
+This guide will help you get started with PDD (Prompt-Driven Development) by walking you through the necessary setup steps.
 
 ## Prerequisites
 
@@ -59,10 +59,13 @@ cd pdd
 
 ### 6. Install .prompt Extension
 
-1. Open Cursor
-2. Go to the Extensions marketplace
-3. Search for ".prompt" by gltanaka
-4. Click "Install"
+1. Find and download the `prompt-0.0.1.vsix` file from Slack
+2. Open Cursor
+3. Open the command palette:
+   - Use `Ctrl+Shift+P` (or `Cmd+Shift+P` on macOS)
+4. Type "Extensions: Install from VSIX" and select it
+5. Locate and select the `prompt-0.0.1.vsix` file you downloaded
+6. Confirm the installation. You may need to reload the window to activate it. 
 
 ### 7. Set Up Infisical
 
