@@ -52,15 +52,13 @@ def crash_main(
     ctx.params = ctx.params if isinstance(ctx.params, dict) else {}
 
     quiet = ctx.params.get("quiet", ctx.obj.get("quiet", False))
-    verbose = ctx.params.get("verbose", ctx.obj.get("verbose", False)) # Get verbose flag
+    verbose = ctx.params.get("verbose", ctx.obj.get("verbose", False))
 
-    # Get model parameters from context early, including time
     strength = ctx.obj.get("strength", DEFAULT_STRENGTH)
     temperature = ctx.obj.get("temperature", 0)
-    time_param = ctx.obj.get("time", DEFAULT_TIME) # Renamed from time_budget for clarity
+    time_param = ctx.obj.get("time", DEFAULT_TIME)
 
     try:
-        # Construct file paths
         input_file_paths = {
             "prompt_file": prompt_file,
             "code_file": code_file,
@@ -73,7 +71,6 @@ def crash_main(
         }
 
         force = ctx.params.get("force", ctx.obj.get("force", False))
-        # quiet = ctx.params.get("quiet", ctx.obj.get("quiet", False)) # Already defined above
 
         input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
@@ -83,78 +80,79 @@ def crash_main(
             command_options=command_options
         )
 
-        # Load input files
         prompt_content = input_strings["prompt_file"]
         code_content = input_strings["code_file"]
         program_content = input_strings["program_file"]
         error_content = input_strings["error_file"]
 
-        # Store original content for comparison later
         original_code_content = code_content
         original_program_content = program_content
-
-        # Get model parameters from context (strength, temperature, time already fetched)
-        # strength = ctx.obj.get("strength", DEFAULT_STRENGTH) # Moved up
-        # temperature = ctx.obj.get("temperature", 0) # Moved up
-        # time_budget = ctx.obj.get("time", DEFAULT_TIME) # Moved up and renamed
-
-        # verbose = ctx.params.get("verbose", ctx.obj.get("verbose", False)) # Already defined above
 
         code_updated: bool = False
         program_updated: bool = False
 
         if loop:
-            # Use iterative fixing process
-            # Corrected parameter order for fix_code_loop, adding time_param
             success, final_program, final_code, attempts, cost, model = fix_code_loop(
                 code_file, prompt_content, program_file, strength, temperature,
                 max_attempts or 3, budget or 5.0, error_file, verbose, time_param
             )
-            # Determine if content was updated by fix_code_loop
-            if success: # Only consider updates if the loop reported success
-                code_updated = bool(final_code and final_code != original_code_content)
-                program_updated = bool(final_program and final_program != original_program_content)
+            # Always set final_code/final_program to something non-empty
+            if not final_code:
+                final_code = original_code_content
+            if not final_program:
+                final_program = original_program_content
+            code_updated = final_code != original_code_content
+            program_updated = final_program != original_program_content
         else:
-            # Use single fix attempt
             if fix_code_module_errors is None:
-                 raise ImportError("fix_code_module_errors is required but not available.")
-            # Corrected parameter order for fix_code_module_errors, adding time_param
-            fm_update_program, fm_update_code, final_program, final_code, program_code_fix, cost, model = fix_code_module_errors(
-                program_content, prompt_content, code_content, error_content, strength, temperature, verbose, time_param
+                raise ImportError("fix_code_module_errors is required but not available.")
+
+            update_program, update_code, fixed_program, fixed_code, _, cost, model = fix_code_module_errors(
+                program_content, prompt_content, code_content, error_content,
+                strength, temperature, verbose, time_param
             )
-            success = True # Assume success after one attempt if no exception
+            success = True
             attempts = 1
-            # Use boolean flags from fix_code_module_errors and ensure content is not empty
-            code_updated = fm_update_code and bool(final_code)
-            program_updated = fm_update_program and bool(final_program)
 
-        # Removed fallback to original content if final_code/final_program are empty
-        # An empty string from a fix function means no valid update.
+            # Fallback if fixed_program is empty but update_program is True
+            if update_program and not fixed_program.strip():
+                fixed_program = program_content
+            if update_code and not fixed_code.strip():
+                fixed_code = code_content
 
-        # Determine whether to write the files based on whether paths are provided
+            final_code = fixed_code if update_code else code_content
+            final_program = fixed_program if update_program else program_content
+
+            # Always set final_code/final_program to something non-empty
+            if not final_code:
+                final_code = original_code_content
+            if not final_program:
+                final_program = original_program_content
+
+            code_updated = final_code != original_code_content
+            program_updated = final_program != original_program_content
+
         output_code_path_str = output_file_paths.get("output")
         output_program_path_str = output_file_paths.get("output_program")
 
-        # Write output files if path provided (always write for regression compatibility)
-        # Use fixed content if available, otherwise use original content
+        # Always write output files if output paths are specified
         if output_code_path_str:
             output_code_path = Path(output_code_path_str)
-            output_code_path.parent.mkdir(parents=True, exist_ok=True) # Ensure directory exists
+            output_code_path.parent.mkdir(parents=True, exist_ok=True)
             with open(output_code_path, "w") as f:
-                f.write(final_code if final_code else original_code_content)
+                f.write(final_code)
 
         if output_program_path_str:
             output_program_path = Path(output_program_path_str)
-            output_program_path.parent.mkdir(parents=True, exist_ok=True) # Ensure directory exists
+            output_program_path.parent.mkdir(parents=True, exist_ok=True)
             with open(output_program_path, "w") as f:
-                f.write(final_program if final_program else original_program_content)
+                f.write(final_program)
 
-        # Provide user feedback
         if not quiet:
             if success:
-                rprint("[bold green]Crash fix attempt completed.[/bold green]") # Changed message slightly
+                rprint("[bold green]Crash fix attempt completed.[/bold green]")
             else:
-                rprint("[bold yellow]Crash fix attempt completed with issues or no changes made.[/bold yellow]") # Changed message
+                rprint("[bold yellow]Crash fix attempt completed with issues.[/bold yellow]")
             rprint(f"[bold]Model used:[/bold] {model}")
             rprint(f"[bold]Total attempts:[/bold] {attempts}")
             rprint(f"[bold]Total cost:[/bold] ${cost:.2f}")
@@ -163,25 +161,20 @@ def crash_main(
                 if code_updated:
                     rprint(f"[bold]Fixed code saved to:[/bold] {output_code_path_str}")
                 else:
-                    rprint(f"[info]Code file {Path(code_file).name} was not modified. Original content saved to {output_code_path_str}.[/info]")
-            
+                    rprint(f"[info]Code file '{Path(code_file).name}' was not modified (but output file was written).[/info]")
             if output_program_path_str:
                 if program_updated:
                     rprint(f"[bold]Fixed program saved to:[/bold] {output_program_path_str}")
                 else:
-                    rprint(f"[info]Program file {Path(program_file).name} was not modified. Original content saved to {output_program_path_str}.[/info]")
+                    rprint(f"[info]Program file '{Path(program_file).name}' was not modified (but output file was written).[/info]")
 
         return success, final_code, final_program, attempts, cost, model
-    
+
     except FileNotFoundError as e:
         if not quiet:
-             # Provide a more specific error message for file not found
-             rprint(f"[bold red]Error:[/bold red] Input file not found: {e}")
+            rprint(f"[bold red]Error:[/bold red] Input file not found: {e}")
         sys.exit(1)
     except Exception as e:
         if not quiet:
             rprint(f"[bold red]An unexpected error occurred:[/bold red] {str(e)}")
-        # Consider logging the full traceback here for debugging
-        # import traceback
-        # traceback.print_exc()
         sys.exit(1)
