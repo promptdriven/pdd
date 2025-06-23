@@ -1,4 +1,4 @@
-# Handpaint with Prompt Driven Development (PDD)
+# Handpaint with Prompt-Driven Development (PDD)
 
 This is a basic implementation of a handpaint application using PDD. Note that this implementation represents a naive usage of PDD and does not utilize its full capabilities.
 
