@@ -425,6 +425,12 @@ def construct_paths(
         for key, value in resolved_config.items():
             if key not in command_options or command_options[key] is None:
                 command_options[key] = value
+        
+        # Also update context_config with resolved environment variables for generate_output_paths
+        # This ensures environment variables are available when context config doesn't override them
+        for key, value in resolved_config.items():
+            if key.endswith('_output_path') and key not in context_config:
+                context_config[key] = value
                 
     except Exception as e:
         error_msg = f"Configuration error: {e}"
