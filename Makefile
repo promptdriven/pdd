@@ -20,7 +20,7 @@ help:
 	@echo "Testing Commands:"
 	@echo "  make test                    - Run staging tests"
 	@echo "  make coverage                - Run tests with coverage"
-	@echo "  make regression              - Run regression tests"
+	@echo "  make regression [TEST_NUM=n] - Run regression tests (optionally specific test number)"
 	@echo "  make analysis                - Run regression analysis"
 	@echo "  make verify MODULE=name      - Verify code functionality against prompt intent"
 	@echo "  make lint                    - Run pylint for static code analysis"
@@ -370,8 +370,13 @@ production:
 regression:
 	@echo "Running regression tests"
 	@mkdir -p staging/regression
-	@@find staging/regression -type f ! -name ".*" -delete
+	@find staging/regression -type f ! -name ".*" -delete
+ifdef TEST_NUM
+	@echo "Running specific test: $(TEST_NUM)"
+	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/regression.sh $(TEST_NUM)
+else
 	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/regression.sh
+endif
 
 install:
 	@echo "Installing pdd"
