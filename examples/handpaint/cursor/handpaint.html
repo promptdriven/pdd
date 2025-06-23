@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Hand Paint</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: #1a1a1a;
+        }
+        #drawingCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 2;
+        }
+        #landmarkCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+        #video {
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 0;
+            transform: scaleX(-1); /* Unmirror the video feed */
+        }
+        .container {
+            position: relative;
+            width: 640px;
+            height: 480px;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils"></script>
+</head>
+<body>
+    <div class="container">
+        <canvas id="drawingCanvas" width="640" height="480"></canvas>
+        <canvas id="landmarkCanvas" width="640" height="480"></canvas>
+        <video id="video" width="640" height="480" autoplay></video>
+    </div>
+
+    <script>
+        const video = document.getElementById('video');
+        const drawingCanvas = document.getElementById('drawingCanvas');
+        const landmarkCanvas = document.getElementById('landmarkCanvas');
+        const drawingCtx = drawingCanvas.getContext('2d');
+        const landmarkCtx = landmarkCanvas.getContext('2d');
+
+        // Initialize MediaPipe Hands
+        const hands = new Hands({
+            locateFile: (file) => {
+                return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+            }
+        });
+
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        // Set up camera
+        const camera = new Camera(video, {
+            onFrame: async () => {
+                await hands.send({image: video});
+            },
+            width: 640,
+            height: 480
+        });
+
+        // Drawing settings
+        let isDrawing = false;
+        let lastX = 0;
+        let lastY = 0;
+        const brushSize = 5;
+        const eraserSize = 30;
+
+        // Function to draw a landmark point
+        function drawLandmarkPoint(x, y, color, size = 5) {
+            landmarkCtx.beginPath();
+            landmarkCtx.arc(x, y, size, 0, Math.PI * 2);
+            landmarkCtx.fillStyle = color;
+            landmarkCtx.fill();
+        }
+
+        // Function to check if index finger is extended and others are curled
+        function isIndexFingerExtended(landmarks) {
+            const palm = landmarks[0];
+            const indexBase = landmarks[5];
+            const indexTip = landmarks[8];
+            const middleTip = landmarks[12];
+            const ringTip = landmarks[16];
+            const pinkyTip = landmarks[20];
+
+            // Calculate distances from palm to finger tips
+            const indexDist = Math.sqrt(
+                Math.pow(indexTip.x - palm.x, 2) + 
+                Math.pow(indexTip.y - palm.y, 2)
+            );
+            const middleDist = Math.sqrt(
+                Math.pow(middleTip.x - palm.x, 2) + 
+                Math.pow(middleTip.y - palm.y, 2)
+            );
+            const ringDist = Math.sqrt(
+                Math.pow(ringTip.x - palm.x, 2) + 
+                Math.pow(ringTip.y - palm.y, 2)
+            );
+            const pinkyDist = Math.sqrt(
+                Math.pow(pinkyTip.x - palm.x, 2) + 
+                Math.pow(pinkyTip.y - palm.y, 2)
+            );
+
+            // Index finger should be extended (further from palm than its base)
+            const indexBaseDist = Math.sqrt(
+                Math.pow(indexBase.x - palm.x, 2) + 
+                Math.pow(indexBase.y - palm.y, 2)
+            );
+            // Increased threshold from 1.2 to 1.5 for more pronounced extension
+            const isIndexExtended = indexDist > indexBaseDist * 1.5;
+
+            // Other fingers should be curled (closer to palm)
+            // Increased threshold from 0.8 to 0.6 for tighter curl
+            const areOthersCurled = middleDist < indexDist * 0.6 && 
+                                  ringDist < indexDist * 0.6 && 
+                                  pinkyDist < indexDist * 0.6;
+
+            return isIndexExtended && areOthersCurled;
+        }
+
+        // Function to check if all fingers are extended (palm visible)
+        function isPalmVisible(landmarks) {
+            const palm = landmarks[0];
+            const indexTip = landmarks[8];
+            const middleTip = landmarks[12];
+            const ringTip = landmarks[16];
+            const pinkyTip = landmarks[20];
+            const thumbTip = landmarks[4];
+
+            // Calculate distances from palm to finger tips
+            const indexDist = Math.sqrt(
+                Math.pow(indexTip.x - palm.x, 2) + 
+                Math.pow(indexTip.y - palm.y, 2)
+            );
+            const middleDist = Math.sqrt(
+                Math.pow(middleTip.x - palm.x, 2) + 
+                Math.pow(middleTip.y - palm.y, 2)
+            );
+            const ringDist = Math.sqrt(
+                Math.pow(ringTip.x - palm.x, 2) + 
+                Math.pow(ringTip.y - palm.y, 2)
+            );
+            const pinkyDist = Math.sqrt(
+                Math.pow(pinkyTip.x - palm.x, 2) + 
+                Math.pow(pinkyTip.y - palm.y, 2)
+            );
+            const thumbDist = Math.sqrt(
+                Math.pow(thumbTip.x - palm.x, 2) + 
+                Math.pow(thumbTip.y - palm.y, 2)
+            );
+
+            // Calculate average distance for reference
+            const avgDist = (indexDist + middleDist + ringDist + pinkyDist) / 4;
+
+            // All fingers should be extended (similar distances from palm)
+            // Made the thresholds more lenient for easier palm detection
+            const areFingersExtended = 
+                indexDist > avgDist * 0.7 &&    // Reduced from 0.85
+                middleDist > avgDist * 0.7 &&   // Reduced from 0.85
+                ringDist > avgDist * 0.7 &&     // Reduced from 0.85
+                pinkyDist > avgDist * 0.7 &&    // Reduced from 0.85
+                Math.abs(indexDist - avgDist) < avgDist * 0.25 &&   // Increased from 0.15
+                Math.abs(middleDist - avgDist) < avgDist * 0.25 &&  // Increased from 0.15
+                Math.abs(ringDist - avgDist) < avgDist * 0.25 &&    // Increased from 0.15
+                Math.abs(pinkyDist - avgDist) < avgDist * 0.25;     // Increased from 0.15
+
+            // Thumb should be extended but can be at a different angle
+            const isThumbExtended = thumbDist > avgDist * 0.5;  // Reduced from 0.7
+
+            return areFingersExtended && isThumbExtended;
+        }
+
+        // Function to calculate palm center
+        function calculatePalmCenter(landmarks) {
+            // Get the base points of all fingers
+            const indexBase = landmarks[5];
+            const middleBase = landmarks[9];
+            const ringBase = landmarks[13];
+            const pinkyBase = landmarks[17];
+            const thumbBase = landmarks[2];
+
+            // Calculate the center point
+            const centerX = (indexBase.x + middleBase.x + ringBase.x + pinkyBase.x + thumbBase.x) / 5;
+            const centerY = (indexBase.y + middleBase.y + ringBase.y + pinkyBase.y + thumbBase.y) / 5;
+
+            return { x: centerX, y: centerY };
+        }
+
+        // Process hand landmarks
+        hands.onResults((results) => {
+            // Clear only the landmark canvas
+            landmarkCtx.clearRect(0, 0, landmarkCanvas.width, landmarkCanvas.height);
+
+            if (results.multiHandLandmarks) {
+                const landmarks = results.multiHandLandmarks[0];
+                if (landmarks) {
+                    // Draw all landmarks
+                    landmarks.forEach((landmark, index) => {
+                        const x = (1 - landmark.x) * landmarkCanvas.width; // Flip x coordinate
+                        const y = landmark.y * landmarkCanvas.height;
+                        
+                        // Draw regular landmarks in blue
+                        drawLandmarkPoint(x, y, 'rgba(0, 0, 255, 0.5)', 3);
+                    });
+
+                    // Get index finger tip position and palm
+                    const indexFinger = landmarks[8];
+                    const palm = landmarks[0];
+                    
+                    // Convert normalized coordinates to canvas coordinates
+                    const x = (1 - indexFinger.x) * landmarkCanvas.width; // Flip x coordinate
+                    const y = indexFinger.y * landmarkCanvas.height;
+                    const palmX = (1 - palm.x) * landmarkCanvas.width; // Flip x coordinate
+                    const palmY = palm.y * landmarkCanvas.height;
+
+                    // Draw index finger tip in red
+                    drawLandmarkPoint(x, y, 'rgba(255, 0, 0, 0.8)', 8);
+                    
+                    // Draw palm in green
+                    drawLandmarkPoint(palmX, palmY, 'rgba(0, 255, 0, 0.8)', 8);
+
+                    // Check for palm visible (all fingers extended)
+                    if (isPalmVisible(landmarks)) {
+                        // Calculate actual palm center
+                        const palmCenter = calculatePalmCenter(landmarks);
+                        const centerX = (1 - palmCenter.x) * landmarkCanvas.width;
+                        const centerY = palmCenter.y * landmarkCanvas.height;
+
+                        // Draw palm center in yellow for debugging
+                        drawLandmarkPoint(centerX, centerY, 'rgba(255, 255, 0, 0.8)', 8);
+
+                        // Erase at palm center
+                        drawingCtx.beginPath();
+                        drawingCtx.arc(centerX, centerY, eraserSize, 0, Math.PI * 2);
+                        drawingCtx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+                        drawingCtx.fill();
+                        drawingCtx.clearRect(centerX - eraserSize, centerY - eraserSize, eraserSize * 2, eraserSize * 2);
+                        isDrawing = false;
+                    }
+                    // Check for index finger extended for drawing
+                    else if (isIndexFingerExtended(landmarks)) {
+                        if (!isDrawing) {
+                            isDrawing = true;
+                            lastX = x;
+                            lastY = y;
+                        }
+
+                        drawingCtx.beginPath();
+                        drawingCtx.moveTo(lastX, lastY);
+                        drawingCtx.lineTo(x, y);
+                        drawingCtx.strokeStyle = '#00ff00';
+                        drawingCtx.lineWidth = brushSize;
+                        drawingCtx.lineCap = 'round';
+                        drawingCtx.stroke();
+
+                        lastX = x;
+                        lastY = y;
+                    } else {
+                        isDrawing = false;
+                    }
+                }
+            } else {
+                isDrawing = false;
+            }
+        });
+
+        // Start the camera
+        camera.start();
+    </script>
+</body>
+</html>
