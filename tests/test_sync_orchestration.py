@@ -33,7 +33,7 @@ def orchestration_fixture(tmp_path):
     (tmp_path / "tests").mkdir()
     pdd_meta_dir = tmp_path / ".pdd" / "meta"
     pdd_meta_dir.mkdir(parents=True)
-    
+
     # Create a dummy prompt file
     (tmp_path / "prompts" / "calculator_python.prompt").write_text("Create a calculator.")
 
@@ -41,29 +41,51 @@ def orchestration_fixture(tmp_path):
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.chdir(tmp_path)
 
-    mocks = {
-        'determine_sync_operation': MagicMock(),
-        'SyncLock': MagicMock(),
-        'sync_animation': MagicMock(),
-        'auto_deps_main': MagicMock(return_value={'success': True, 'cost': 0.01}),
-        'code_generator_main': MagicMock(return_value={'success': True, 'cost': 0.05}),
-        'context_generator_main': MagicMock(return_value={'success': True, 'cost': 0.03}),
-        'crash_main': MagicMock(return_value={'success': True, 'cost': 0.08}),
-        'fix_verification_main': MagicMock(return_value={'success': True, 'cost': 0.10}),
-        'cmd_test_main': MagicMock(return_value={'success': True, 'cost': 0.06}),
-        'fix_main': MagicMock(return_value={'success': True, 'cost': 0.15}),
-        'update_main': MagicMock(return_value={'success': True, 'cost': 0.04}),
-        'save_run_report': MagicMock(),
-        '_display_sync_log': MagicMock(return_value={'success': True, 'log_entries': ['log entry']}),
-    }
+    # Patch the module where the functions are used, not where they are defined
+    with patch('pdd.sync_orchestration.determine_sync_operation') as mock_determine, \
+         patch('pdd.sync_orchestration.SyncLock') as mock_lock, \
+         patch('pdd.sync_orchestration.sync_animation') as mock_animation, \
+         patch('pdd.sync_orchestration.auto_deps_main') as mock_auto_deps, \
+         patch('pdd.sync_orchestration.code_generator_main') as mock_code_gen, \
+         patch('pdd.sync_orchestration.context_generator_main') as mock_context_gen, \
+         patch('pdd.sync_orchestration.crash_main') as mock_crash, \
+         patch('pdd.sync_orchestration.fix_verification_main') as mock_verify, \
+         patch('pdd.sync_orchestration.cmd_test_main') as mock_test, \
+         patch('pdd.sync_orchestration.fix_main') as mock_fix, \
+         patch('pdd.sync_orchestration.update_main') as mock_update, \
+         patch('pdd.sync_orchestration.save_run_report') as mock_save_report, \
+         patch('pdd.sync_orchestration._display_sync_log') as mock_display_log, \
+         patch('pdd.sync_orchestration._save_operation_fingerprint') as mock_save_fp:
 
-    # Mock the lock to simulate successful acquisition by default
-    mock_lock_instance = MagicMock()
-    mock_lock_instance.acquired = True
-    mocks['SyncLock'].return_value.__enter__.return_value = mock_lock_instance
+        # Configure return values
+        mock_lock.return_value.__enter__.return_value = mock_lock
+        mock_lock.return_value.__exit__.return_value = None
+        mock_auto_deps.return_value = {'success': True, 'cost': 0.01, 'model': 'mock-model'}
+        mock_code_gen.return_value = {'success': True, 'cost': 0.05, 'model': 'mock-model'}
+        mock_context_gen.return_value = {'success': True, 'cost': 0.03, 'model': 'mock-model'}
+        mock_crash.return_value = {'success': True, 'cost': 0.08, 'model': 'mock-model'}
+        mock_verify.return_value = {'success': True, 'cost': 0.10, 'model': 'mock-model'}
+        mock_test.return_value = {'success': True, 'cost': 0.06, 'model': 'mock-model'}
+        mock_fix.return_value = {'success': True, 'cost': 0.15, 'model': 'mock-model'}
+        mock_update.return_value = {'success': True, 'cost': 0.04, 'model': 'mock-model'}
+        mock_display_log.return_value = {'success': True, 'log_entries': ['log entry']}
 
-    with patch.multiple('pdd.sync_orchestration', **mocks):
-        yield mocks
+        yield {
+            'determine_sync_operation': mock_determine,
+            'SyncLock': mock_lock,
+            'sync_animation': mock_animation,
+            'auto_deps_main': mock_auto_deps,
+            'code_generator_main': mock_code_gen,
+            'context_generator_main': mock_context_gen,
+            'crash_main': mock_crash,
+            'fix_verification_main': mock_verify,
+            'cmd_test_main': mock_test,
+            'fix_main': mock_fix,
+            'update_main': mock_update,
+            'save_run_report': mock_save_report,
+            '_display_sync_log': mock_display_log,
+            '_save_operation_fingerprint': mock_save_fp,
+        }
 
 
 # --- Test Cases ---
@@ -124,7 +146,7 @@ def test_budget_exceeded(orchestration_fixture):
         SyncDecision(operation='example', reason='Code exists, example missing'),
     ]
     # Set a low budget and make the first operation costly
-    orchestration_fixture['code_generator_main'].return_value = {'success': True, 'cost': 0.11}
+    orchestration_fixture['code_generator_main'].return_value = {'success': True, 'cost': 0.11, 'model': 'mock-model'}
 
     result = sync_orchestration(basename="calculator", language="python", budget=0.1)
 
@@ -138,9 +160,8 @@ def test_lock_failure(orchestration_fixture):
     """
     Tests the behavior when SyncLock cannot be acquired.
     """
-    mock_lock_instance = MagicMock()
-    mock_lock_instance.acquired = False
-    orchestration_fixture['SyncLock'].return_value.__enter__.return_value = mock_lock_instance
+    # Correctly mock a lock failure by raising TimeoutError
+    orchestration_fixture['SyncLock'].return_value.__enter__.side_effect = TimeoutError("Failed to acquire lock.")
 
     result = sync_orchestration(basename="calculator", language="python")
 
@@ -182,8 +203,8 @@ def test_skip_verify_flag(orchestration_fixture):
     assert 'verify' not in result['operations_completed']
     assert 'test' in result['operations_completed']
     orchestration_fixture['fix_verification_main'].assert_not_called()
-    # Verify the state was advanced by saving a run report
-    orchestration_fixture['save_run_report'].assert_any_call(ANY, "calculator", "python")
+    # Verify the state was advanced by saving a fingerprint
+    orchestration_fixture['_save_operation_fingerprint'].assert_any_call("calculator", "python", 'verify', ANY, 0.0, 'skipped')
 
 def test_skip_tests_flag(orchestration_fixture):
     """
@@ -202,7 +223,7 @@ def test_skip_tests_flag(orchestration_fixture):
     assert 'test' in result['skipped_operations']
     assert 'test' not in result['operations_completed']
     orchestration_fixture['cmd_test_main'].assert_not_called()
-    orchestration_fixture['save_run_report'].assert_any_call(ANY, "calculator", "python")
+    orchestration_fixture['_save_operation_fingerprint'].assert_any_call("calculator", "python", 'test', ANY, 0.0, 'skipped')
 
 def test_manual_merge_request(orchestration_fixture):
     """
@@ -231,7 +252,7 @@ def test_unexpected_exception_handling(orchestration_fixture):
     result = sync_orchestration(basename="calculator", language="python")
 
     assert result['success'] is False
-    assert "Exception during 'generate': Unexpected error" in result['errors']
+    assert "Exception during 'generate': Unexpected error" in result['errors'][0]
     
     # Verify cleanup happened
     mock_animation = orchestration_fixture['sync_animation']
@@ -244,6 +265,9 @@ def test_final_state_reporting(orchestration_fixture, tmp_path):
     """
     Verifies the final_state dictionary correctly reflects created files.
     """
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.chdir(tmp_path)
+
     mock_determine = orchestration_fixture['determine_sync_operation']
     mock_determine.side_effect = [
         SyncDecision(operation='generate', reason='New unit'),
@@ -254,8 +278,9 @@ def test_final_state_reporting(orchestration_fixture, tmp_path):
     pdd_files = get_pdd_file_paths("calculator", "python")
     code_path = pdd_files['code']
     def create_file_and_succeed(*args, **kwargs):
+        code_path.parent.mkdir(parents=True, exist_ok=True)
         code_path.touch()
-        return {'success': True, 'cost': 0.05}
+        return {'success': True, 'cost': 0.05, 'model': 'mock-model'}
     orchestration_fixture['code_generator_main'].side_effect = create_file_and_succeed
 
     result = sync_orchestration(basename="calculator", language="python")

@@ -150,9 +150,6 @@ def sync_orchestration(
         return _display_sync_log(basename, language, verbose)
 
     # --- Initialize State and Paths ---
-    # Create file paths using provided directories
-    ext = "py" if language == "python" else language  # Simple extension mapping
-    # Use the same configuration-aware path resolution as sync_determine_operation
     pdd_files = get_pdd_file_paths(basename, language, context_config)
     
     # Shared state for animation thread
@@ -171,12 +168,10 @@ def sync_orchestration(
     skipped_operations: List[str] = []
     errors: List[str] = []
     start_time = time.time()
+    animation_thread = None
 
     try:
-        with SyncLock(basename, language) as lock:
-            # If we reach here, the lock was successfully acquired
-            # (acquire() either succeeds or raises TimeoutError)
-
+        with SyncLock(basename, language):
             # --- Start Animation Thread ---
             animation_thread = threading.Thread(
                 target=sync_animation,
@@ -209,27 +204,21 @@ def sync_orchestration(
                 # Handle skips
                 if operation == 'verify' and skip_verify:
                     skipped_operations.append('verify')
-                    # We need to inform the state machine that this step is done.
-                    # A simple way is to simulate a successful run report for it.
                     report_data = RunReport(
                         timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                        exit_code=0,
-                        tests_passed=0,
-                        tests_failed=0,
-                        coverage=0.0
+                        exit_code=0, tests_passed=0, tests_failed=0, coverage=0.0
                     )
                     save_run_report(asdict(report_data), basename, language)
+                    _save_operation_fingerprint(basename, language, 'verify', pdd_files, 0.0, 'skipped')
                     continue
                 if operation == 'test' and skip_tests:
                     skipped_operations.append('test')
                     report_data = RunReport(
                         timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                        exit_code=0, 
-                        tests_passed=0, 
-                        tests_failed=0, 
-                        coverage=1.0
+                        exit_code=0, tests_passed=0, tests_failed=0, coverage=1.0
                     )
                     save_run_report(asdict(report_data), basename, language)
+                    _save_operation_fingerprint(basename, language, 'test', pdd_files, 0.0, 'skipped')
                     continue
 
                 current_function_name_ref[0] = operation
@@ -248,54 +237,43 @@ def sync_orchestration(
                     if operation == 'auto-deps':
                         result = auto_deps_main(ctx, prompt_file=str(pdd_files['prompt']), directory_path=examples_dir)
                     elif operation == 'generate':
-                        # Fix: Add missing required parameters for code_generator_main
-                        output_path, success, cost, model = code_generator_main(
+                        result = code_generator_main(
                             ctx, 
                             prompt_file=str(pdd_files['prompt']), 
                             output=str(pdd_files['code']),
-                            original_prompt_file_path=None,  # For full generation, not incremental
-                            force_incremental_flag=False     # For full generation
+                            original_prompt_file_path=None,
+                            force_incremental_flag=False
                         )
-                        result = {'success': success, 'cost': cost, 'model': model, 'output_path': output_path}
                     elif operation == 'example':
-                        # This function signature is correct
-                        output_path, cost, model = context_generator_main(
+                        result = context_generator_main(
                             ctx, 
                             prompt_file=str(pdd_files['prompt']), 
                             code_file=str(pdd_files['code']), 
                             output=str(pdd_files['example'])
                         )
-                        result = {'success': True, 'cost': cost, 'model': model, 'output_path': output_path}
                     elif operation == 'crash':
-                        # Crash requires an error file and a program file, which sync must orchestrate
-                        # This is a simplified call for the example. A real implementation would run the example and capture stderr.
                         Path("crash.log").write_text("Simulated crash error")
-                        # This function signature is correct
-                        success, output_code, output_program, attempts, cost, model = crash_main(
+                        result = crash_main(
                             ctx, 
                             prompt_file=str(pdd_files['prompt']), 
                             code_file=str(pdd_files['code']), 
                             program_file=str(pdd_files['example']), 
                             error_file="crash.log"
                         )
-                        result = {'success': success, 'cost': cost, 'model': model, 'attempts': attempts}
                     elif operation == 'verify':
-                        # Fix: Add missing required parameters for fix_verification_main
-                        success, output_code, output_program, attempts, cost, model = fix_verification_main(
+                        result = fix_verification_main(
                             ctx, 
                             prompt_file=str(pdd_files['prompt']), 
                             code_file=str(pdd_files['code']), 
                             program_file=str(pdd_files['example']),
                             output_results=None,
-                            output_code=None,
-                            output_program=None,
+                            output_code=str(pdd_files['code']),
+                            output_program=str(pdd_files['example']),
                             loop=False,
                             verification_program=None
                         )
-                        result = {'success': success, 'cost': cost, 'model': model, 'attempts': attempts}
                     elif operation == 'test':
-                        # Fix: Add missing required parameters for cmd_test_main
-                        output_path, cost, model = cmd_test_main(
+                        result = cmd_test_main(
                             ctx, 
                             prompt_file=str(pdd_files['prompt']), 
                             code_file=str(pdd_files['code']), 
@@ -306,18 +284,16 @@ def sync_orchestration(
                             target_coverage=target_coverage,
                             merge=False
                         )
-                        result = {'success': True, 'cost': cost, 'model': model, 'output_path': output_path}
                     elif operation == 'fix':
                         Path("fix_errors.log").write_text("Simulated test failures")
-                        # Fix: Add missing required parameters for fix_main
-                        success, output_test, output_code, attempts, cost, model = fix_main(
+                        result = fix_main(
                             ctx, 
                             prompt_file=str(pdd_files['prompt']), 
                             code_file=str(pdd_files['code']), 
                             unit_test_file=str(pdd_files['test']), 
                             error_file="fix_errors.log",
-                            output_test=None,
-                            output_code=None,
+                            output_test=str(pdd_files['test']),
+                            output_code=str(pdd_files['code']),
                             output_results=None,
                             loop=False,
                             verification_program=None,
@@ -325,24 +301,18 @@ def sync_orchestration(
                             budget=budget - current_cost_ref[0],
                             auto_submit=False
                         )
-                        result = {'success': success, 'cost': cost, 'model': model, 'attempts': attempts}
                     elif operation == 'update':
-                        # Fix: Add missing required parameters for update_main
-                        # Use git option to get the original code file
-                        output_path, cost, model = update_main(
+                        result = update_main(
                             ctx, 
                             input_prompt_file=str(pdd_files['prompt']), 
                             modified_code_file=str(pdd_files['code']),
                             input_code_file=None,
-                            output=None,
-                            git=True  # Use git to get original code
+                            output=str(pdd_files['prompt']),
+                            git=True
                         )
-                        result = {'success': True, 'cost': cost, 'model': model, 'output_path': output_path}
                     else:
-                        # Unknown operation - this shouldn't happen but let's handle it gracefully
                         errors.append(f"Unknown operation '{operation}' requested.")
-                        success = False
-                        result = {'success': False, 'cost': 0.0, 'model': 'unknown', 'error': f'Unknown operation: {operation}'}
+                        result = {'success': False, 'cost': 0.0}
                     
                     success = result.get('success', False)
                     current_cost_ref[0] += result.get('cost', 0.0)
@@ -353,25 +323,20 @@ def sync_orchestration(
 
                 if success:
                     operations_completed.append(operation)
-                    # Save fingerprint state after successful operation
                     _save_operation_fingerprint(basename, language, operation, pdd_files, 
                                                result.get('cost', 0.0), result.get('model', ''))
                 else:
                     errors.append(f"Operation '{operation}' failed.")
-                    break # Exit loop on first failure
+                    break
 
     except TimeoutError:
-        return {
-            'success': False,
-            'errors': [f"Could not acquire lock for '{basename}'. Another sync process may be running."],
-            'total_cost': 0, 'total_time': 0, 'operations_completed': [],
-        }
+        errors.append(f"Could not acquire lock for '{basename}'. Another sync process may be running.")
     except Exception as e:
         errors.append(f"An unexpected error occurred in the orchestrator: {e}")
     finally:
-        # --- Clean Up ---
-        stop_event.set()
-        if 'animation_thread' in locals() and animation_thread.is_alive():
+        if stop_event:
+            stop_event.set()
+        if animation_thread and animation_thread.is_alive():
             animation_thread.join(timeout=5)
         
     total_time = time.time() - start_time
