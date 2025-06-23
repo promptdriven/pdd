@@ -22,10 +22,6 @@ Create a module with the following main function:
 def sync_orchestration(
     basename: str,
     language: str = "python",
-    prompts_dir: str = "prompts",
-    code_dir: str = "src", 
-    examples_dir: str = "examples",
-    tests_dir: str = "tests",
     max_attempts: int = 3,
     budget: float = 10.0,
     skip_verify: bool = False,
@@ -41,12 +37,16 @@ def sync_orchestration(
     output_cost: Optional[str] = None,
     review_examples: bool = False,
     local: bool = False,
+    context_config: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """
     Orchestrate the complete PDD sync workflow with parallel animation.
     
     If log=True, display sync log for this basename instead of running sync.
     The verbose flag (global option) controls detail level of log output.
+
+    Path configuration is handled via `context_config`, which overrides default
+    locations for prompts, code, examples, and tests directories.
     
     Returns a dictionary with:
     - 'success': bool indicating overall success
@@ -70,6 +70,32 @@ Here are examples of how to use the internal functions:
       <sync_determine_operation_example>
         <include>context/sync_determine_operation_example.py</include>
       </sync_determine_operation_example>
+
+    - For examples of how to execute core PDD operations, refer to their respective test files included below. These provide the most up-to-date usage patterns.
+      <auto_deps_main_example>
+        <include>context/auto_deps_main_example.py</include>
+      </auto_deps_main_example>
+      <code_generator_main_example>
+        <include>context/code_generator_main_example.py</include>
+      </code_generator_main_example>
+      <context_generator_main_example>
+        <include>context/context_generator_main_example.py</include>
+      </context_generator_main_example>
+      <crash_main_example>
+        <include>context/crash_main_example.py</include>
+      </crash_main_example>
+      <fix_verification_main_example>
+        <include>context/fix_verification_main_example.py</include>
+      </fix_verification_main_example>
+      <cmd_test_main_example>
+        <include>context/cmd_test_main_example.py</include>
+      </cmd_test_main_example>
+      <fix_main_example>
+        <include>context/fix_main_example.py</include>
+      </fix_main_example>
+      <update_main_example>
+        <include>context/update_main_example.py</include>
+      </update_main_example>
 </examples>
 
 ## Workflow Orchestration
@@ -98,6 +124,11 @@ The orchestrator should execute these operations in order as determined by `sync
 7. **fix**: Resolve any bugs found by unit tests
 8. **update**: Back-propagate any learnings to the prompt file
 
+### Handling Skipped Operations
+If `--skip-verify` or `--skip-tests` flags are used, the orchestrator should not simply ignore the step. To ensure the state machine progresses correctly, it should:
+1. Log that the operation was skipped.
+2. Simulate a successful run for that operation by creating a `RunReport` and saving it. This updates the state, allowing `determine_sync_operation` to correctly select the next step.
+
 ### Parallel Animation System
 
 The module should:
@@ -119,13 +150,13 @@ For each operation:
 3. **Execute Command**: Run the appropriate PDD `*_main` function.
 4. **Track Results**: Update cost, file paths, and status colors.
 5. **Persist State**: **If the operation was successful, save a new `Fingerprint` to disk.** This updates the state so the next call to `determine_sync_operation` can make a new decision.
-6. **Handle Errors**: Implement retry logic or break the loop on failure.
+6. **Handle Errors**: Implement retry logic up to `max_attempts` or break the loop on a definitive failure.
 
 ### State and Path Management
 
 The orchestrator should:
 
-- **Construct File Paths**: Use the directory parameters to build full paths
+- **Construct File Paths**: Use the `get_pdd_file_paths(basename, language, context_config)` helper function to resolve all required file paths. This allows for centralized configuration.
 - **Track File States**: Monitor which files exist and their modification times
 - **Update Animation Colors**: Set colors based on file status:
   - Green: File exists and up-to-date
@@ -141,7 +172,7 @@ Implement robust error handling:
 
 - **Lock Acquisition Failure**: Exit immediately with clear message if another sync is running
 - **Budget Constraints**: Stop if total cost exceeds budget
-- **Max Attempts**: Limit retry attempts for failed operations
+- **Retry Logic**: If an operation fails, the orchestrator MUST retry the operation up to `max_attempts` times before considering it a definitive failure. It should not exit the loop on the first failure of an operation.
 - **Graceful Degradation**: Continue workflow even if non-critical steps fail
 - **User Feedback**: Provide clear error messages through animation
 - **Lock Cleanup**: Always release lock, even on exceptions or early exits
@@ -165,19 +196,7 @@ from .update_main import update_main
 
 ### Command Execution Pattern
 
-For each PDD operation, construct appropriate arguments:
-
-```python
-# Example for generate operation
-output_path, success, cost, model = code_generator_main(
-    ctx=mock_context,
-    prompt_file=prompt_path,
-    output=code_path,
-    original_prompt_file_path=None,  # Specify for full generation
-    force_incremental_flag=False     # Specify for full generation
-)
-result = {'success': success, 'cost': cost, 'model': model}
-```
+For each PDD operation, construct appropriate arguments based on the up-to-date usage patterns found in the corresponding test files, which are included in the `<examples>` section of this prompt. The orchestrator is responsible for adapting these examples into robust calls that handle cost tracking, state persistence, and retry logic.
 
 ### Output Format
 
@@ -255,11 +274,10 @@ if not result['success']:
 result = sync_orchestration(
     basename="data_processor",
     language="python",
-    code_dir="backend/src",
-    tests_dir="backend/tests",
     budget=15.0,
     target_coverage=95.0,
-    skip_verify=False
+    skip_verify=False,
+    context_config={'code_dir': 'backend/src', 'tests_dir': 'backend/tests'}
 )
 ```
 
