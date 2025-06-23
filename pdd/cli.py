@@ -871,8 +871,8 @@ def crash(
         result_data = {
             "success": success,
             "attempts": attempts,
-            "fixed_code_path": output,
-            "fixed_program_path": output_program,
+            "fixed_code": fixed_code,
+            "fixed_program": fixed_program,
         }
         return result_data, cost, model
     except Exception as e:

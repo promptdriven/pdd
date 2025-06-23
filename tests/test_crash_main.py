@@ -158,13 +158,17 @@ def test_crash_fix_without_output_paths(ctx, test_files):
     if os.path.exists(default_output_program):
         os.remove(default_output_program)
 
+    # FIX: Set force=True to prevent interactive prompts in tests
+    ctx.params['force'] = True
+    ctx.obj['force'] = True
+
     success, final_code, final_program, attempts, cost, model = crash_main(
         ctx=ctx,
         prompt_file=test_files["prompt_file"],
         code_file=test_files["code_file"],
         program_file=test_files["program_file"],
         error_file=test_files["error_file"]
-        # No output paths specified, force=False by default in ctx fixture
+        # No output paths specified, force=True now set in ctx
     )
     
     assert success is True
@@ -202,13 +206,17 @@ def test_crash_fix_with_verbose_output(ctx, test_files):
     if os.path.exists(default_output_program):
         os.remove(default_output_program)
 
+    # FIX: Set force=True to prevent interactive prompts in tests
+    ctx.params['force'] = True
+    ctx.obj['force'] = True
+
     success, final_code, final_program, attempts, cost, model = crash_main(
         ctx=ctx,
         prompt_file=test_files["prompt_file"],
         code_file=test_files["code_file"],
         program_file=test_files["program_file"],
         error_file=test_files["error_file"]
-        # No output paths specified, force=False by default
+        # No output paths specified, force=True now set
     )
     
     assert success is True
@@ -231,13 +239,17 @@ def test_crash_fix_with_quiet_mode(ctx, test_files):
     if os.path.exists(default_output_program):
         os.remove(default_output_program)
 
+    # FIX: Set force=True to prevent interactive prompts in tests
+    ctx.params['force'] = True
+    ctx.obj['force'] = True
+
     success, final_code, final_program, attempts, cost, model = crash_main(
         ctx=ctx,
         prompt_file=test_files["prompt_file"],
         code_file=test_files["code_file"],
         program_file=test_files["program_file"],
         error_file=test_files["error_file"]
-        # No output paths specified, force=False by default
+        # No output paths specified, force=True now set
     )
     
     assert success is True
