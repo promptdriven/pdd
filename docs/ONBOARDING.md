@@ -67,7 +67,7 @@ cd pdd
    - Use `Ctrl+Shift+P` (or `Cmd+Shift+P` on macOS)
 4. Type "Extensions: Install from VSIX" and select it
 5. Locate and select the `prompt-0.0.1.vsix` file you downloaded
-6. Confirm the installation. You may need to reload the window to activate it. 
+6. Confirm the installation. You may need to reload the window to activate it.
 
 1.  **Locate the Extension:** The extension file (`prompt-*.vsix`) is located in the `dist/` directory of this repository. Alternatively, it can be downloaded from the project's [GitHub Releases](https://github.com/gltanaka/pdd/releases).
 2.  **Open Cursor** and the command palette (`Ctrl+Shift+P` or `Cmd+Shift+P`).
@@ -204,3 +204,5 @@ The application needs the absolute path to the `pdd/` source directory to functi
     ```bash
     echo ".env" >> .gitignore
     ```
+
+
