@@ -54,7 +54,7 @@ def test_construct_paths_load_input_files(tmpdir):
          patch('pdd.construct_paths.get_language', return_value='python'), \
          patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
 
-        input_strings, output_file_paths, language = construct_paths(
+        _, input_strings, output_file_paths, language = construct_paths(
             input_file_paths, force, quiet, command, command_options
         )
 
@@ -154,7 +154,7 @@ def test_construct_paths_error_file_creation(tmpdir):
          patch('pdd.construct_paths.get_language', return_value='python'), \
          patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
 
-        input_strings, output_file_paths, language = construct_paths(
+        _, input_strings, output_file_paths, language = construct_paths(
             input_file_paths, force, quiet, command, command_options
         )
 
@@ -298,7 +298,7 @@ def test_construct_paths_basename_extraction(tmpdir):
 
                 mock_generate_output_paths.return_value = mock_output_paths_dict_str
                 try:
-                    input_strings, output_file_paths, language = construct_paths(
+                    _, input_strings, output_file_paths, language = construct_paths(
                         input_file_paths, force, quiet, command, command_options
                     )
                 except ValueError as e:
@@ -341,7 +341,7 @@ def test_construct_paths_language_extraction(tmpdir):
     with patch('pdd.construct_paths.get_extension', return_value='.py'), \
          patch('pdd.construct_paths.get_language', return_value='python'), \
          patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
-        _, _, language1 = construct_paths(input_file_paths_1, True, True, 'generate', command_options_1)
+        _, _, _, language1 = construct_paths(input_file_paths_1, True, True, 'generate', command_options_1)
         assert language1 == 'python'
 
     # Case 2: Language in command_options (overrides filename if different)
@@ -353,7 +353,7 @@ def test_construct_paths_language_extraction(tmpdir):
     with patch('pdd.construct_paths.get_extension', return_value='.js'), \
          patch('pdd.construct_paths.get_language', return_value='javascript'), \
          patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
-        _, _, language2 = construct_paths(input_file_paths_2, True, True, 'generate', command_options_2)
+        _, _, _, language2 = construct_paths(input_file_paths_2, True, True, 'generate', command_options_2)
         assert language2 == 'javascript'
 
     # Case 3: Language inferred from code_file extension (when not explicit or in prompt name)
@@ -372,7 +372,7 @@ def test_construct_paths_language_extraction(tmpdir):
     with patch('pdd.construct_paths.get_extension', side_effect=mock_get_extension_func_case3), \
          patch('pdd.construct_paths.get_language', side_effect=mock_get_language_func_case3), \
          patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
-        _, _, language3 = construct_paths(input_file_paths_3, True, True, 'generate', command_options_3)
+        _, _, _, language3 = construct_paths(input_file_paths_3, True, True, 'generate', command_options_3)
         assert language3 == 'javascript' # Should prioritize .js over .prompt
 
     # Case 4: Language cannot be determined (no explicit, no code file, generic prompt name)
@@ -406,7 +406,7 @@ def test_construct_paths_language_extraction(tmpdir):
          # Need a basename source - add generic prompt
          input_file_paths_5['prompt_file'] = str(prompt_file_generic)
          # Need language source for generate_output_paths call - rely on Makefile
-         _, _, language5 = construct_paths(input_file_paths_5, True, True, 'generate', command_options_5)
+         _, _, _, language5 = construct_paths(input_file_paths_5, True, True, 'generate', command_options_5)
          assert language5 == 'makefile'
 
 
@@ -480,7 +480,7 @@ def test_construct_paths_output_file_exists(tmpdir):
          patch('click.secho') as mock_secho, \
          patch('pdd.construct_paths.console.print') as mock_print:
 
-        input_strings, output_file_paths, language = construct_paths(
+        _, input_strings, output_file_paths, language = construct_paths(
             input_file_paths, force, quiet, command, command_options
         )
 
@@ -531,7 +531,7 @@ def test_construct_paths_quiet_flag(tmpdir, capsys):
 
         # Use try-except to prevent test failure if construct_paths fails unexpectedly
         try:
-            input_strings, output_file_paths, language = construct_paths(
+            _, input_strings, output_file_paths, language = construct_paths(
                 input_file_paths, force, quiet, command, command_options
             )
         except Exception as e:
@@ -554,7 +554,7 @@ def test_construct_paths_quiet_flag(tmpdir, capsys):
          patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
 
         try:
-            input_strings, output_file_paths, language = construct_paths(
+            _, input_strings, output_file_paths, language = construct_paths(
                 input_file_paths, force, quiet, command, command_options
             )
         except Exception as e:
@@ -619,7 +619,7 @@ def test_construct_paths_missing_command_options(tmpdir):
          patch('pdd.construct_paths.get_language', return_value='python'), \
          patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
         try:
-            input_strings, output_file_paths, language = construct_paths(
+            _, input_strings, output_file_paths, language = construct_paths(
                 input_file_paths, force, quiet, command, command_options
             )
             # Check that defaults are used and no exception is raised
@@ -703,7 +703,7 @@ def test_construct_paths_special_characters_in_filenames(tmpdir):
 
         mock_generate_output_paths.return_value = mock_output_paths_dict_str
 
-        input_strings, output_file_paths, language = construct_paths(
+        _, input_strings, output_file_paths, language = construct_paths(
             input_file_paths, force, quiet, command, command_options
         )
 
@@ -723,12 +723,13 @@ def test_construct_paths_special_characters_in_filenames(tmpdir):
 
 def test_construct_paths_no_input_files(tmpdir):
     """
-    Test that construct_paths raises a ValueError when no input files are provided.
+    Test that construct_paths raises a ValueError when no input files are provided
+    for a command that requires them (i.e., not 'sync').
     """
     input_file_paths = {}
     force = True
     quiet = True
-    command = 'generate'
+    command = 'generate' # Use a command other than sync
     command_options = {}
 
     with pytest.raises(ValueError) as excinfo:
@@ -736,7 +737,48 @@ def test_construct_paths_no_input_files(tmpdir):
             input_file_paths, force, quiet, command, command_options
         )
     # Check the specific error message
-    assert "No input files provided" == str(excinfo.value)
+    assert "No input files provided" in str(excinfo.value)
+
+
+def test_construct_paths_sync_discovery_mode(tmpdir):
+    """
+    Test that construct_paths runs in 'discovery mode' for the sync command
+    when no input files are provided.
+    """
+    input_file_paths = {} # No inputs
+    force = False
+    quiet = True
+    command = 'sync'
+    command_options = {"basename": "my_sync_project"}
+    
+    # Mock generate_output_paths which is used internally for path inference
+    mock_output_paths = {
+        "generate_output_path": str(tmpdir / "src" / "my_sync_project.py"),
+        "test_output_path": str(tmpdir / "tests" / "test_my_sync_project.py"),
+        "example_output_path": str(tmpdir / "examples" / "ex_my_sync_project.py"),
+    }
+    
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths) as mock_gen_paths:
+        resolved_config, input_strings, output_file_paths, language = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+
+    # Assert that discovery mode was successful
+    assert "prompts_dir" in resolved_config
+    assert "code_dir" in resolved_config
+    assert "tests_dir" in resolved_config
+    assert "examples_dir" in resolved_config
+    
+    # Check that paths are derived correctly
+    assert Path(resolved_config["prompts_dir"]).name == "prompts"
+    assert Path(resolved_config["code_dir"]).name == "src"
+    assert Path(resolved_config["tests_dir"]).name == "tests"
+    assert Path(resolved_config["examples_dir"]).name == "examples"
+    
+    # Assert that other return values are empty/default
+    assert input_strings == {}
+    assert output_file_paths == {}
+    assert language == ""
 
 
 def test_construct_paths_conflicting_language_specification(tmpdir):
@@ -766,7 +808,7 @@ def test_construct_paths_conflicting_language_specification(tmpdir):
          patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str) as mock_gen_paths, \
          patch('pdd.construct_paths._find_pddrc_file', return_value=None):
 
-        input_strings, output_file_paths, language = construct_paths(
+        _, input_strings, output_file_paths, language = construct_paths(
             input_file_paths, force, quiet, command, command_options
         )
 
@@ -814,7 +856,7 @@ def test_construct_paths_missing_error_file_key(tmpdir):
          patch('pdd.construct_paths.get_language', return_value='python'), \
          patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
         try:
-            input_strings, output_file_paths, language = construct_paths(
+            _, input_strings, output_file_paths, language = construct_paths(
                 input_file_paths, force, quiet, command, command_options
             )
             # Check that construct_paths does not fail
@@ -881,7 +923,7 @@ def test_construct_paths_relative_paths(tmpdir):
         with patch('pdd.construct_paths.get_extension', return_value='.py'), \
              patch('pdd.construct_paths.get_language', return_value='python'), \
              patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
-            input_strings, output_file_paths, language = construct_paths(
+            _, input_strings, output_file_paths, language = construct_paths(
                 input_file_paths, force, quiet, command, command_options
             )
             # Check that files are correctly found and read
@@ -940,7 +982,7 @@ def test_construct_paths_symbolic_links(tmpdir):
 
         mock_generate_output_paths.return_value = mock_output_paths_dict_str
 
-        input_strings, output_file_paths, language = construct_paths(
+        _, input_strings, output_file_paths, language = construct_paths(
             input_file_paths, force, quiet, command, command_options
         )
         # Check that the symlink is correctly resolved and content read
@@ -992,7 +1034,7 @@ def test_construct_paths_example_command(setup_test_files):
          patch('pdd.construct_paths.get_language', return_value='python'), \
          patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
 
-        input_strings, output_file_paths, language = construct_paths(
+        _, input_strings, output_file_paths, language = construct_paths(
             input_file_paths=input_file_paths,
             force=True, quiet=True, command="example", command_options=command_options
         )
@@ -1037,7 +1079,7 @@ def test_construct_paths_generate_command(setup_test_files):
          patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str) as mock_gen_ops, \
          patch('pdd.construct_paths._find_pddrc_file', return_value=None):
         # Correctly unpack the return tuple from construct_paths
-        actual_input_strings, actual_output_file_paths, actual_determined_language = construct_paths(
+        _, actual_input_strings, actual_output_file_paths, actual_determined_language = construct_paths(
             input_file_paths=input_file_paths,
             force=True, quiet=True, command="generate", command_options=command_options
         )
@@ -1093,7 +1135,7 @@ def test_construct_paths_bash_example(setup_test_files):
          patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
 
         # Call the construct_paths function
-        input_strings, output_file_paths, language = construct_paths(
+        _, input_strings, output_file_paths, language = construct_paths(
             input_file_paths=input_file_paths,
             force=True, quiet=False, command="generate", command_options=command_options
         )
@@ -1157,7 +1199,7 @@ def test_construct_paths_change_command_language_detection(tmpdir):
          patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
         
         # This should now succeed with the default language being 'python'
-        input_strings, output_file_paths, language = construct_paths(
+        _, input_strings, output_file_paths, language = construct_paths(
             input_file_paths, force, quiet, command, command_options
         )
         
@@ -1181,7 +1223,7 @@ def test_construct_paths_change_command_language_detection(tmpdir):
         
         # The "generate" command should raise ValueError with no language indicators
         with pytest.raises(ValueError) as excinfo:
-            input_strings, output_file_paths, language = construct_paths(
+            _, input_strings, output_file_paths, language = construct_paths(
                 input_file_paths_no_lang, force, quiet, "generate", command_options
             )
         
@@ -1227,7 +1269,7 @@ def test_construct_paths_detect_command_language_detection(tmpdir):
          patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
         
         # This should succeed with the default language being 'prompt'
-        input_strings, output_file_paths, language = construct_paths(
+        _, input_strings, output_file_paths, language = construct_paths(
             input_file_paths, force, quiet, command, command_options
         )
         
@@ -1244,7 +1286,7 @@ def test_construct_paths_detect_command_language_detection(tmpdir):
         
         # Using a different command should result in ValueError
         with pytest.raises(ValueError) as excinfo:
-            input_strings, output_file_paths, language = construct_paths(
+            _, input_strings, output_file_paths, language = construct_paths(
                 input_file_paths, force, quiet, "generate", command_options  # Use different command
             )
         
@@ -1299,7 +1341,7 @@ def test_construct_paths_bug_command_language_detection(tmpdir):
          patch('pdd.construct_paths._determine_language', return_value=None):  # Simulate the bug where language is None
 
         # Now that the fix is in place, this should run without error
-        input_strings, output_file_paths, language = construct_paths(
+        _, input_strings, output_file_paths, language = construct_paths(
             input_file_paths, force, quiet, command, command_options
         )
 
@@ -1310,7 +1352,7 @@ def test_construct_paths_bug_command_language_detection(tmpdir):
 
     # Test Part 2: Without mocking _determine_language, ensure standard behavior
     with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths):
-        input_strings, output_file_paths, language = construct_paths(
+        _, input_strings, output_file_paths, language = construct_paths(
             input_file_paths, force, quiet, command, command_options
         )
 
@@ -1352,7 +1394,7 @@ def test_construct_paths_force_overwrite(tmpdir):
 
         try:
             # Call the function with force=True
-            input_strings, output_file_paths, language = construct_paths(
+            _, input_strings, output_file_paths, language = construct_paths(
                 input_file_paths=input_file_paths,
                 force=force,
                 quiet=quiet,
@@ -1414,7 +1456,7 @@ def test_construct_paths_verify_command_default_and_options(tmpdir):
          patch('pdd.construct_paths.get_language', return_value='python'), \
          patch('pdd.construct_paths.generate_output_paths', return_value=mock_gen_paths_return_default) as mock_gen_paths_default:
         
-        _, output_paths_default, _ = construct_paths(
+        _, input_strings, output_paths_default, _ = construct_paths(
             input_file_paths, force, quiet, "verify", command_options_default
         )
         
@@ -1440,7 +1482,7 @@ def test_construct_paths_verify_command_default_and_options(tmpdir):
          patch('pdd.construct_paths.get_language', return_value='python'), \
          patch('pdd.construct_paths.generate_output_paths', return_value=mock_gen_paths_return_user_program) as mock_gen_paths_user:
         
-        _, output_paths_user, _ = construct_paths(
+        _, input_strings, output_paths_user, _ = construct_paths(
             input_file_paths, force, quiet, "verify", command_options_user_program
         )
 
@@ -1488,7 +1530,7 @@ def test_construct_paths_handles_makefile_suffix_correctly_or_fails_if_buggy(tmp
         # If the bug (ValueError in _determine_language for "makefile") is present,
         # this call will raise an unhandled ValueError, and the test will FAIL.
         # If the bug is fixed, this call will succeed.
-        _, _, determined_language = construct_paths(
+        _, input_strings, output_file_paths, language = construct_paths(
             input_file_paths=input_file_paths,
             force=True,
             quiet=True,
@@ -1497,7 +1539,7 @@ def test_construct_paths_handles_makefile_suffix_correctly_or_fails_if_buggy(tmp
         )
 
         # These assertions are only reached if construct_paths does NOT raise an error.
-        assert determined_language == "makefile", \
+        assert language == "makefile", \
             "If the 'makefile' language bug is fixed, determined_language should be 'makefile'."
 
         # This assertion verifies that generate_output_paths is called with the correct

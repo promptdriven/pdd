@@ -122,29 +122,19 @@ def sync_main(
     if not quiet and budget < 1.0:
         console.log(f"[yellow]Warning:[/] Budget of ${budget:.2f} is low. Complex operations may exceed this limit.")
 
-    # 3. Find prompts directory without using construct_paths initially
-    # Since sync doesn't have input files yet, we need to locate the prompts directory manually
+    # 3. Use construct_paths in 'discovery' mode to find the prompts directory.
     try:
-        # Start from current directory and look for prompts directory
-        current_dir = Path.cwd()
-        prompts_dir = None
-        
-        # Look for prompts directory in current directory and parent directories
-        for potential_root in [current_dir] + list(current_dir.parents):
-            candidate_prompts = potential_root / "prompts"
-            if candidate_prompts.is_dir():
-                prompts_dir = candidate_prompts
-                break
-        
-        # If not found, default to ./prompts
-        if prompts_dir is None:
-            prompts_dir = current_dir / "prompts"
-            
-        if not prompts_dir.exists():
-            raise click.UsageError(f"Prompts directory not found. Expected: {prompts_dir}")
-
+        initial_config, _, _, _ = construct_paths(
+            input_file_paths={},
+            force=False,
+            quiet=True,
+            command="sync",
+            command_options={"basename": basename},
+            context_override=ctx.obj.get("context", None),
+        )
+        prompts_dir = Path(initial_config.get("prompts_dir", "prompts"))
     except Exception as e:
-        rprint(f"[bold red]Error loading configuration:[/bold red] {e}")
+        rprint(f"[bold red]Error initializing PDD paths:[/bold red] {e}")
         raise click.Abort()
 
     # 4. Detect all languages for the given basename
@@ -211,33 +201,21 @@ def sync_main(
             continue
 
         try:
-            # Get final configuration, applying CLI > .pddrc > default hierarchy
-            # Use safe parameter source checking with fallback
-            def is_from_cli(param_name: str) -> bool:
-                try:
-                    return ctx.get_parameter_source(param_name).name == "COMMANDLINE"
-                except (AttributeError, KeyError):
-                    return False
-            
-            # Use CLI parameters as they are - config file handling will be done in construct_paths later
-            final_strength = strength
-            final_temp = temperature
-            final_max_attempts = max_attempts
-            final_target_coverage = target_coverage
-
-            # Re-run construct_paths for the specific prompt file to get its content and exact paths
+            # Get the fully resolved configuration for this specific language using construct_paths.
             prompt_file_path = prompts_dir / f"{basename}_{lang}.prompt"
+            
             command_options = {
                 "basename": basename,
                 "language": lang,
-                "strength": final_strength,
-                "temperature": final_temp,
-                "time": time_param,
-                "max_attempts": final_max_attempts,
+                "max_attempts": max_attempts,
                 "budget": budget,
-                "target_coverage": final_target_coverage,
+                "target_coverage": target_coverage,
+                "strength": strength,
+                "temperature": temperature,
+                "time": time_param,
             }
-            _, output_file_paths, resolved_language = construct_paths(
+
+            resolved_config, _, _, resolved_language = construct_paths(
                 input_file_paths={"prompt_file": str(prompt_file_path)},
                 force=force,
                 quiet=True,
@@ -246,30 +224,23 @@ def sync_main(
                 context_override=ctx.obj.get("context", None),
             )
 
-            code_dir = str(Path(output_file_paths["generate_output_path"]).parent)
-            tests_dir = str(Path(output_file_paths["test_output_path"]).parent)
-            examples_dir = str(Path(output_file_paths["example_output_path"]).parent)
-
-            # Load context configuration for sync orchestration
-            context_config = {}
-            try:
-                pddrc_path = _find_pddrc_file()
-                if pddrc_path:
-                    pddrc_config = _load_pddrc_config(pddrc_path)
-                    current_dir = Path.cwd()
-                    context = _detect_context(current_dir, pddrc_config, ctx.obj.get("context", None))
-                    context_config = _get_context_config(pddrc_config, context)
-            except Exception:
-                # Use empty config on error - already logged in construct_paths
-                context_config = {}
+            # Extract all parameters directly from the resolved configuration
+            final_strength = resolved_config.get("strength", strength)
+            final_temp = resolved_config.get("temperature", temperature)
+            final_max_attempts = resolved_config.get("max_attempts", max_attempts)
+            final_target_coverage = resolved_config.get("target_coverage", target_coverage)
+            
+            code_dir = resolved_config.get("code_dir", "src")
+            tests_dir = resolved_config.get("tests_dir", "tests")
+            examples_dir = resolved_config.get("examples_dir", "examples")
 
             sync_result = sync_orchestration(
                 basename=basename,
                 language=resolved_language,
                 prompts_dir=str(prompts_dir),
-                code_dir=code_dir,
-                examples_dir=examples_dir,
-                tests_dir=tests_dir,
+                code_dir=str(code_dir),
+                examples_dir=str(examples_dir),
+                tests_dir=str(tests_dir),
                 budget=remaining_budget,
                 max_attempts=final_max_attempts,
                 skip_verify=skip_verify,
@@ -283,7 +254,7 @@ def sync_main(
                 output_cost=output_cost,
                 review_examples=review_examples,
                 local=local,
-                context_config=context_config,
+                context_config=resolved_config,
             )
 
             lang_cost = sync_result.get("total_cost", 0.0)
