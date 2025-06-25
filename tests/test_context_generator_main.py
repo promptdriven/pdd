@@ -38,6 +38,7 @@ def test_context_generator_main_success(mock_ctx):
         
         # Mock construct_paths
         mock_construct_paths.return_value = (
+            {},  # resolved_config
             {"prompt_file": MOCK_PROMPT_CONTENT, "code_file": MOCK_CODE_CONTENT},
             {"output": "output/example_code.py"},
             None
@@ -62,6 +63,7 @@ def test_context_generator_main_no_output(mock_ctx):
         
         # Mock construct_paths
         mock_construct_paths.return_value = (
+            {},  # resolved_config
             {"prompt_file": MOCK_PROMPT_CONTENT, "code_file": MOCK_CODE_CONTENT},
             {"output": None},
             None
@@ -104,6 +106,7 @@ def test_context_generator_main_quiet_mode(mock_ctx):
         
         # Mock construct_paths
         mock_construct_paths.return_value = (
+            {},  # resolved_config
             {"prompt_file": MOCK_PROMPT_CONTENT, "code_file": MOCK_CODE_CONTENT},
             {"output": "output/example_code.py"},
             None
@@ -130,6 +133,7 @@ def test_context_generator_main_verbose_mode(mock_ctx):
         
         # Mock construct_paths
         mock_construct_paths.return_value = (
+            {},  # resolved_config
             {"prompt_file": MOCK_PROMPT_CONTENT, "code_file": MOCK_CODE_CONTENT},
             {"output": "output/example_code.py"},
             None

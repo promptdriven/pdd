@@ -60,6 +60,7 @@ def test_fix_main_without_loop(
     mock_path_instance.exists.return_value = True
 
     mock_construct_paths.return_value = (
+        {},  # resolved_config
         {
             'prompt_file': 'Test prompt file content',
             'code_file': 'Test code file content',
@@ -156,6 +157,7 @@ def test_fix_main_with_loop(
     # No need to patch Path.exists here as the check is skipped when loop=True
 
     mock_construct_paths.return_value = (
+        {},  # resolved_config
         {
             'prompt_file': 'Test prompt file content',
             'code_file': 'Test code file content',

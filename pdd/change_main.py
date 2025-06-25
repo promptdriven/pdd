@@ -197,7 +197,7 @@ def change_main(
         logger.debug("Calling construct_paths with inputs: %s and options: %s",
                      input_file_paths, command_options)
         try:
-            input_strings, output_file_paths, language = construct_paths(
+            resolved_config, input_strings, output_file_paths, language = construct_paths(
                 input_file_paths=input_file_paths,
                 force=force,
                 quiet=quiet,

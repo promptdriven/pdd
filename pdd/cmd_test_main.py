@@ -81,7 +81,7 @@ def cmd_test_main(
             "target_coverage": target_coverage,
         }
 
-        input_strings, output_file_paths, language = construct_paths(
+        resolved_config, input_strings, output_file_paths, language = construct_paths(
             input_file_paths=input_file_paths,
             force=ctx.obj["force"],
             quiet=ctx.obj["quiet"],

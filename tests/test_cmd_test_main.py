@@ -66,6 +66,7 @@ def test_cmd_test_main_coverage_handling(
 
         # Mock construct_paths to return some test data
         mock_construct_paths.return_value = (
+            {},  # resolved_config
             {
                 "prompt_file": "prompt_contents",
                 "code_file": "code_contents",
@@ -158,6 +159,7 @@ def test_cmd_test_main_generate_test_error(mock_ctx_fixture, mock_files_fixture)
          patch("pdd.cmd_test_main.generate_test") as mock_generate_test:
 
         mock_construct_paths.return_value = (
+            {},  # resolved_config
             {"prompt_file": "prompt_contents", "code_file": "code_contents"},
             {"output": mock_files_fixture["output"]},
             "python"
@@ -196,6 +198,7 @@ def test_cmd_test_main_increase_tests_error(mock_ctx_fixture, mock_files_fixture
          patch("pdd.cmd_test_main.increase_tests") as mock_increase_tests:
 
         mock_construct_paths.return_value = (
+            {},  # resolved_config
             {
                 "prompt_file": "prompt_contents",
                 "code_file": "code_contents",
@@ -240,6 +243,7 @@ def test_cmd_test_main_successful_generate_test_no_coverage(mock_ctx_fixture, mo
          patch("builtins.open", mock_open()) as m_file:
 
         mock_construct_paths.return_value = (
+            {},  # resolved_config
             {"prompt_file": "prompt_contents", "code_file": "code_contents"},
             {"output": mock_files_fixture["output"]},
             "python"
@@ -277,6 +281,7 @@ def test_cmd_test_main_successful_increase_test_with_coverage(mock_ctx_fixture, 
          patch("builtins.open", mock_open()) as m_file:
 
         mock_construct_paths.return_value = (
+            {},  # resolved_config
             {
                 "prompt_file": "prompt_contents",
                 "code_file": "code_contents",
@@ -318,6 +323,7 @@ def test_cmd_test_main_merge_existing_tests(mock_ctx_fixture, mock_files_fixture
 
         # Ensure 'existing_tests' is in the output path from construct_paths
         mock_construct_paths.return_value = (
+            {},  # resolved_config
             {"prompt_file": "p", "code_file": "c", "existing_tests": "et"},
             {"output": mock_files_fixture["output"]},
             "python"

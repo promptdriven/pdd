@@ -55,7 +55,7 @@ def test_split_main_success(mock_ctx, quiet_mode, capsys):
          patch("builtins.open", mock_open()) as m_file:
 
         # Set up our patched functions
-        mock_construct_paths.return_value = (mock_input_strings, mock_output_paths, mock_language)
+        mock_construct_paths.return_value = ({}, mock_input_strings, mock_output_paths, mock_language)
         # Use standardized return order (result_data, cost, model_name)
         mock_split.return_value = ((extracted_functionality_result, remaining_prompt_result), total_cost_result, mock_model_name)
 
@@ -156,7 +156,7 @@ def test_split_main_io_error_during_write(mock_ctx, capsys):
          patch("builtins.open", side_effect=IOError("Disk full")), \
          pytest.raises(SystemExit) as exc_info:
 
-        mock_construct_paths.return_value = (mock_input_strings, mock_output_paths, mock_language)
+        mock_construct_paths.return_value = ({}, mock_input_strings, mock_output_paths, mock_language)
         # Use standardized return order (result_data, cost, model_name)
         mock_split.return_value = (("extracted functionality", "remaining prompt"), 0.5, mock_model_name)
 
@@ -184,6 +184,7 @@ def test_split_main_value_error(mock_ctx, capsys):
          pytest.raises(SystemExit) as exc_info:
 
         mock_construct_paths.return_value = (
+            {},  # resolved_config
             {
                 "input_prompt": "prompt content",
                 "input_code": "code content",
@@ -232,7 +233,7 @@ def test_split_main_quiet_mode(mock_ctx, capsys):
     with patch("pdd.split_main.construct_paths") as mock_construct_paths, \
          patch("pdd.split_main.split") as mock_split, \
          patch("builtins.open", mock_open()):
-        mock_construct_paths.return_value = (mock_input_strings, mock_output_paths, None)
+        mock_construct_paths.return_value = ({}, mock_input_strings, mock_output_paths, None)
         # Use standardized return order (result_data, cost, model_name)
         mock_split.return_value = (("extracted functionality", "remaining prompt"), 1.234, mock_model_name)
 
