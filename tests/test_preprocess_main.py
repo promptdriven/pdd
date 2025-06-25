@@ -41,6 +41,7 @@ def test_preprocess_main_no_xml(basic_click_context):
 
         # Mock the return values
         mock_construct_paths.return_value = (
+            {},  # resolved_config
             {"prompt_file": "fake prompt content"},
             {"output": "/tmp/output.prompt"},
             None
@@ -102,6 +103,7 @@ def test_preprocess_main_with_xml(basic_click_context):
 
         # Mock the return values
         mock_construct_paths.return_value = (
+            {},  # resolved_config
             {"prompt_file": "fake prompt content for xml"},
             {"output": "/tmp/xml_output.prompt"},
             None
@@ -163,6 +165,7 @@ def test_preprocess_main_recursive_and_double(basic_click_context):
          patch("builtins.open", mock_open()) as m_file:
 
         mock_construct_paths.return_value = (
+            {},  # resolved_config
             {"prompt_file": "some prompt for recursive test"},
             {"output": "/tmp/output_recursive.prompt"},
             None
@@ -206,6 +209,7 @@ def test_preprocess_main_quiet_mode(basic_click_context, capsys):
          patch("builtins.open", mock_open()) as m_file:
 
         mock_construct_paths.return_value = (
+            {},  # resolved_config
             {"prompt_file": "quiet prompt content"},
             {"output": "/tmp/quiet_output.prompt"},
             None

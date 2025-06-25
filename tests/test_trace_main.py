@@ -37,6 +37,7 @@ def test_trace_main_success(mock_rprint, mock_trace, mock_construct_paths, mock_
 
     # Mock construct_paths return value
     mock_construct_paths.return_value = (
+        {},  # resolved_config
         {
             "prompt_file": "Prompt content here.",
             "code_file": "Code content here."
@@ -115,6 +116,7 @@ def test_trace_main_value_error(mock_rprint, mock_trace, mock_construct_paths, m
     output = 'output/trace_result.txt'
 
     mock_construct_paths.return_value = (
+        {},  # resolved_config
         {
             "prompt_file": "Valid prompt content.",
             "code_file": "Valid code content."
@@ -156,6 +158,7 @@ def test_trace_main_unexpected_exception(mock_rprint, mock_trace, mock_construct
     output = 'output/trace_result.txt'
 
     mock_construct_paths.return_value = (
+        {},  # resolved_config
         {
             "prompt_file": "Another prompt content.",
             "code_file": "Another code content."
@@ -197,6 +200,7 @@ def test_trace_main_no_output(mock_rprint, mock_trace, mock_construct_paths, moc
     output = None
 
     mock_construct_paths.return_value = (
+        {},  # resolved_config
         {
             "prompt_file": "Prompt content without output.",
             "code_file": "Code content without output."
@@ -253,6 +257,7 @@ def test_trace_main_quiet_mode(mock_rprint, mock_trace, mock_construct_paths, mo
     mock_ctx.obj['quiet'] = True
 
     mock_construct_paths.return_value = (
+        {},  # resolved_config
         {
             "prompt_file": "Quiet prompt content.",
             "code_file": "Quiet code content."
@@ -308,6 +313,7 @@ def test_trace_main_force_overwrite(mock_rprint, mock_trace, mock_construct_path
     mock_ctx.obj['force'] = True
 
     mock_construct_paths.return_value = (
+        {},  # resolved_config
         {
             "prompt_file": "Force prompt content.",
             "code_file": "Force code content."
@@ -363,6 +369,7 @@ def test_trace_main_zero_cost(mock_rprint, mock_trace, mock_construct_paths, moc
     output = 'output/trace_result_zero_cost.txt'
 
     mock_construct_paths.return_value = (
+        {},  # resolved_config
         {
             "prompt_file": "Zero cost prompt content.",
             "code_file": "Zero cost code content."
@@ -422,6 +429,7 @@ def test_trace_main_missing_strength_temperature(mock_rprint, mock_trace, mock_c
     mock_ctx.obj.pop('temperature', None)
 
     mock_construct_paths.return_value = (
+        {},  # resolved_config
         {
             "prompt_file": "Missing params prompt content.",
             "code_file": "Missing params code content."
@@ -477,6 +485,7 @@ def test_trace_main_output_file_write_failure(mock_rprint, mock_trace, mock_cons
     output = 'output/trace_result_write_fail.txt'
 
     mock_construct_paths.return_value = (
+        {},  # resolved_config
         {
             "prompt_file": "Prompt content for write failure.",
             "code_file": "Code content for write failure."
@@ -521,6 +530,7 @@ def test_trace_main_empty_files(mock_rprint, mock_trace, mock_construct_paths, m
     output = 'output/trace_result_empty.txt'
 
     mock_construct_paths.return_value = (
+        {},  # resolved_config
         {
             "prompt_file": "",
             "code_file": ""
@@ -566,6 +576,7 @@ def test_trace_main_large_code_line_number(mock_rprint, mock_trace, mock_constru
     output = 'output/trace_result_large_code_line.txt'
 
     mock_construct_paths.return_value = (
+        {},  # resolved_config
         {
             "prompt_file": "Prompt content for large code line.",
             "code_file": "Code content with fewer lines."

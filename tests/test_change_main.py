@@ -166,6 +166,7 @@ def test_change_main_batch_mode(mock_process_csv, setup_environment, caplog, mon
         # Mock construct_paths (still needed for output path determination)
         with patch('pdd.change_main.construct_paths') as mock_cp:
             mock_cp.return_value = (
+                {},  # resolved_config
                 {'change_prompt_file': 'Dummy CSV content read by open'},  # Content doesn't matter here
                 {'output_prompt_file': env["batch_output_file"]},  # construct_paths determines output file path
                 'python'  # Language inferred
@@ -298,6 +299,7 @@ def test_change_main_non_csv_success(
 
     # Mock construct_paths return value
     mock_construct_paths_fixture.return_value = (
+        {},  # resolved_config
         {
             "change_prompt_file": "Change Prompt Content",
             "input_code": "Input Code Content",
@@ -437,6 +439,7 @@ def test_change_main_non_csv_change_func_error(
 
     mock_os_isdir.return_value = False
     mock_construct_paths_fixture.return_value = (
+        {},  # resolved_config
         {
             "change_prompt_file": "Change Prompt Content",
             "input_code": "Input Code Content",
@@ -569,6 +572,7 @@ def test_change_main_csv_output_none_saves_individual_files(
 
         # Mock construct_paths return value (output should be None here)
         mock_construct_paths.return_value = (
+            {},  # resolved_config
             {'change_prompt_file': 'dummy content'},
             {}, # output_file_paths reflects no --output given
             'python'
@@ -804,6 +808,7 @@ def test_change_main_csv_output_dir_slash_saves_individual_files(
 
         # Mock construct_paths return (output path here should be the *normalized* one)
         mock_construct_paths.return_value = (
+            {},  # resolved_config
             {'change_prompt_file': 'dummy content'},
             {'output': str(output_dir_normalized)}, # construct_paths receives normalized path
             'python'

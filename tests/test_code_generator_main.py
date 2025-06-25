@@ -151,6 +151,7 @@ def mock_construct_paths_fixture(monkeypatch):
     mock = MagicMock()
     monkeypatch.setattr("pdd.code_generator_main.construct_paths", mock)
     mock.return_value = (
+        {},  # resolved_config
         {"prompt_file": "Test prompt content"}, 
         {"output": "output/test_output.py"}, 
         DEFAULT_MOCK_LANGUAGE
@@ -232,6 +233,7 @@ def test_full_gen_local_no_output_file(
     output_file_path_str = str(temp_dir_setup["output_dir"] / output_file_name)
 
     mock_construct_paths_fixture.return_value = (
+        {},  # resolved_config
         {"prompt_file": "Local test prompt"},
         {"output": output_file_path_str}, 
         "python"
@@ -269,6 +271,7 @@ def test_full_gen_local_output_exists_no_incremental_possible(
     create_file(output_file_path, "Old code")
 
     mock_construct_paths_fixture.return_value = (
+        {},  # resolved_config
         {"prompt_file": "Local test prompt"},
         {"output": str(output_file_path)}, 
         "python"
@@ -295,6 +298,7 @@ def test_full_gen_local_output_to_console(
     create_file(prompt_file_path, "Console test prompt")
 
     mock_construct_paths_fixture.return_value = (
+        {},  # resolved_config
         {"prompt_file": "Console test prompt"},
         {"output": None}, 
         "python"
@@ -333,6 +337,7 @@ def test_full_gen_cloud_success(
     output_file_path_str = str(temp_dir_setup["output_dir"] / output_file_name)
 
     mock_construct_paths_fixture.return_value = (
+        {},  # resolved_config
         {"prompt_file": "Cloud test prompt"},
         {"output": output_file_path_str}, 
         "python"
@@ -384,8 +389,10 @@ def test_full_gen_cloud_fallback_scenarios(
     output_file_path_str = str(temp_dir_setup["output_dir"] / "fallback_output.py")
 
     mock_construct_paths_fixture.return_value = (
+        {},  # resolved_config
         {"prompt_file": "Fallback test prompt"},
-        {"output": output_file_path_str}, "python" 
+        {"output": output_file_path_str}, 
+        "python" 
     )
     mock_pdd_preprocess_fixture.return_value = "Preprocessed fallback prompt"
 
@@ -452,8 +459,10 @@ def test_full_gen_cloud_missing_env_vars_fallback_to_local(
     output_file_path_str = str(temp_dir_setup["output_dir"] / "env_var_output.py")
 
     mock_construct_paths_fixture.return_value = (
+        {},  # resolved_config
         {"prompt_file": "Env var test prompt"},
-        {"output": output_file_path_str}, "python" 
+        {"output": output_file_path_str}, 
+        "python" 
     )
     
     monkeypatch.delenv("NEXT_PUBLIC_FIREBASE_API_KEY", raising=False)
@@ -492,6 +501,7 @@ def test_incremental_gen_with_original_prompt_file(
     create_file(original_prompt_file_path, "Original prompt content")
 
     mock_construct_paths_fixture.return_value = (
+        {},  # resolved_config
         {
             "prompt_file": "New prompt content",
             "original_prompt_file": "Original prompt content" 
@@ -563,6 +573,7 @@ def test_incremental_gen_with_git_committed_prompt(
     create_file(output_file_path, "Existing code for git test")
 
     mock_construct_paths_fixture.return_value = (
+        {},  # resolved_config
         {"prompt_file": new_prompt_content_on_disk}, 
         {"output": str(output_file_path)}, 
         "python"
@@ -607,8 +618,10 @@ def test_incremental_gen_fallback_to_full_on_generator_suggestion(
     create_file(original_prompt_file_path, "Original prompt")
 
     mock_construct_paths_fixture.return_value = (
+        {},  # resolved_config
         {"prompt_file": "New prompt", "original_prompt_file": "Original prompt"},
-        {"output": str(output_file_path)}, "python" 
+        {"output": str(output_file_path)}, 
+        "python" 
     )
     mock_incremental_generator_fixture.return_value = (None, False, 0.001, "inc_model_suggests_full")
 
@@ -648,6 +661,7 @@ def test_incremental_gen_force_incremental_flag_but_no_output_file(
     output_path_str = str(temp_dir_setup["output_dir"] / "force_inc_no_out.py") 
 
     mock_construct_paths_fixture.return_value = (
+        {},  # resolved_config
         {"prompt_file": "Prompt content"},
         {"output": output_path_str}, 
         "python"
@@ -685,8 +699,10 @@ def test_code_generation_fails_no_code_produced(
     output_path_str = str(temp_dir_setup["output_dir"] / "no_code_output.py")
 
     mock_construct_paths_fixture.return_value = (
+        {},  # resolved_config
         {"prompt_file": "Prompt for no code"},
-        {"output": output_path_str}, "python" 
+        {"output": output_path_str}, 
+        "python" 
     )
     mock_local_generator_fixture.return_value = (None, 0.0, "model_failed") 
 
@@ -706,8 +722,10 @@ def test_unexpected_exception_during_generation(
     output_path_str = str(temp_dir_setup["output_dir"] / "exception_output.py")
 
     mock_construct_paths_fixture.return_value = (
+        {},  # resolved_config
         {"prompt_file": "Prompt for exception"},
-        {"output": output_path_str}, "python" 
+        {"output": output_path_str}, 
+        "python" 
     )
     mock_local_generator_fixture.side_effect = Exception("Unexpected LLM error")
 

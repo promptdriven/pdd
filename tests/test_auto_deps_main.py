@@ -46,6 +46,7 @@ def test_auto_deps_normal_operation(
     prompt_file = "sample_prompt_python.prompt"
     directory_path = "context/"
     mock_construct_paths.return_value = (
+        {},  # resolved_config
         {"prompt_file": "Contents of prompt file"},
         {
             "output": "output/sample_prompt_python_with_deps.prompt",
@@ -81,7 +82,7 @@ def test_auto_deps_normal_operation(
     mock_insert_includes.assert_called_once_with(
         input_prompt="Contents of prompt file",
         directory_path=directory_path,
-        csv_filename=mock_construct_paths.return_value[1]["csv"],
+        csv_filename=mock_construct_paths.return_value[2]["csv"],
         strength=mock_ctx.obj["strength"],
         temperature=mock_ctx.obj["temperature"],
         time=mock_ctx.obj["time"],
@@ -113,6 +114,7 @@ def test_auto_deps_force_scan_operation(
     prompt_file = "another_prompt_python.prompt"
     directory_path = "context/"
     mock_construct_paths.return_value = (
+        {},  # resolved_config
         {"prompt_file": "Contents of prompt file"},
         {
             "output": "output/another_prompt_python_with_deps.prompt",

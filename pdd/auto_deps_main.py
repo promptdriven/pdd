@@ -44,7 +44,7 @@ def auto_deps_main(  # pylint: disable=too-many-arguments, too-many-locals
             "csv": auto_deps_csv_path
         }
 
-        input_strings, output_file_paths, _ = construct_paths(
+        resolved_config, input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
             force=ctx.obj.get('force', False),
             quiet=ctx.obj.get('quiet', False),

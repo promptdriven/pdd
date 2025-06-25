@@ -157,7 +157,7 @@ def code_generator_main(
     command_options: Dict[str, Any] = {"output": output}
 
     try:
-        input_strings, output_file_paths, language = construct_paths(
+        resolved_config, input_strings, output_file_paths, language = construct_paths(
             input_file_paths=input_file_paths_dict,
             force=force_overwrite,
             quiet=quiet,

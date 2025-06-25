@@ -34,7 +34,7 @@ def trace_main(ctx: click.Context, prompt_file: str, code_file: str, code_line: 
         command_options = {
             "output": output
         }
-        input_strings, output_file_paths, _ = construct_paths(
+        resolved_config, input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
             force=ctx.obj.get('force', False),
             quiet=quiet,

@@ -183,7 +183,7 @@ def fix_verification_main(
 
     try:
         # First try the official helper.
-        input_strings, output_file_paths, language = construct_paths(
+        resolved_config, input_strings, output_file_paths, language = construct_paths(
             input_file_paths=input_file_paths,
             force=force,
             quiet=quiet,
