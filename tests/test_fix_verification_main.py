@@ -57,6 +57,7 @@ def mock_construct_paths_response(tmp_path):
     output_results_path = tmp_path / "output_results.log"
     output_program_path = tmp_path / "output_verified_program.py"
     return (
+        {},  # resolved_config
         { # input_strings
             "prompt_file": "Original prompt content",
             "code_file": "Original code content",
@@ -94,9 +95,9 @@ def test_single_pass_success_no_issues(
         'explanation': ['All good']
     }
 
-    output_code_path = mock_construct_paths_response[1]["output_code"]
-    output_results_path = mock_construct_paths_response[1]["output_results"]
-    output_program_path = mock_construct_paths_response[1]["output_program"]
+    output_code_path = mock_construct_paths_response[2]["output_code"]
+    output_results_path = mock_construct_paths_response[2]["output_results"]
+    output_program_path = mock_construct_paths_response[2]["output_program"]
 
     result = fix_verification_main(
         ctx=mock_context,
@@ -155,9 +156,9 @@ def test_single_pass_success_with_fixes(
         'explanation': ['Found issue', 'Applied fix']
     }
 
-    output_code_path = mock_construct_paths_response[1]["output_code"]
-    output_results_path = mock_construct_paths_response[1]["output_results"]
-    output_program_path = mock_construct_paths_response[1]["output_program"]
+    output_code_path = mock_construct_paths_response[2]["output_code"]
+    output_results_path = mock_construct_paths_response[2]["output_results"]
+    output_program_path = mock_construct_paths_response[2]["output_program"]
 
     result = fix_verification_main(
         ctx=mock_context,
@@ -174,9 +175,9 @@ def test_single_pass_success_with_fixes(
     mock_construct.assert_called_once()
     mock_run_prog.assert_called_once()
     mock_fix_errors.assert_called_once_with(
-        program=mock_construct_paths_response[0]["program_file"],
-        prompt=mock_construct_paths_response[0]["prompt_file"],
-        code=mock_construct_paths_response[0]["code_file"],
+        program=mock_construct_paths_response[1]["program_file"],
+        prompt=mock_construct_paths_response[1]["prompt_file"],
+        code=mock_construct_paths_response[1]["code_file"],
         output="Program output with issue",
         strength=DEFAULT_STRENGTH,
         temperature=DEFAULT_TEMPERATURE,
@@ -217,9 +218,9 @@ def test_single_pass_failure_no_fixes(
         'explanation': ['Found issue', 'Could not fix']
     }
 
-    output_code_path = mock_construct_paths_response[1]["output_code"]
-    output_results_path = mock_construct_paths_response[1]["output_results"]
-    output_program_path = mock_construct_paths_response[1]["output_program"]
+    output_code_path = mock_construct_paths_response[2]["output_code"]
+    output_results_path = mock_construct_paths_response[2]["output_results"]
+    output_program_path = mock_construct_paths_response[2]["output_program"]
 
     result = fix_verification_main(
         ctx=mock_context,
@@ -236,9 +237,9 @@ def test_single_pass_failure_no_fixes(
     mock_construct.assert_called_once()
     mock_run_prog.assert_called_once()
     mock_fix_errors.assert_called_once_with(
-        program=mock_construct_paths_response[0]["program_file"],
-        prompt=mock_construct_paths_response[0]["prompt_file"],
-        code=mock_construct_paths_response[0]["code_file"],
+        program=mock_construct_paths_response[1]["program_file"],
+        prompt=mock_construct_paths_response[1]["prompt_file"],
+        code=mock_construct_paths_response[1]["code_file"],
         output="Program output with issue",
         strength=DEFAULT_STRENGTH,
         temperature=DEFAULT_TEMPERATURE,
@@ -317,8 +318,8 @@ def test_loop_mode_success(
     mock_context, setup_files, mock_construct_paths_response, tmp_path
 ):
     """Verify loop mode calls fix_verification_errors_loop and handles success."""
-    input_strings, output_paths, lang = mock_construct_paths_response
-    mock_construct.return_value = (input_strings, output_paths, lang)
+    resolved_config, input_strings, output_paths, lang = mock_construct_paths_response
+    mock_construct.return_value = (resolved_config, input_strings, output_paths, lang)
 
     mock_fix_loop.return_value = {
         'success': True,
@@ -390,8 +391,8 @@ def test_loop_mode_failure(
         'total_cost': 0.8,
         'model_name': 'model-e'
     }
-    output_code_path = mock_construct_paths_response[1]["output_code"]
-    output_program_path = mock_construct_paths_response[1]["output_program"]
+    output_code_path = mock_construct_paths_response[2]["output_code"]
+    output_program_path = mock_construct_paths_response[2]["output_program"]
 
     result = fix_verification_main(
         ctx=mock_context,
@@ -416,7 +417,7 @@ def test_loop_mode_failure(
         temperature=DEFAULT_TEMPERATURE,
         max_attempts=5,
         budget=5.0,
-        verification_log_file=mock_construct_paths_response[1]["output_results"],
+        verification_log_file=mock_construct_paths_response[2]["output_results"],
         verbose=False,
         program_args=[],
         llm_time=DEFAULT_TIME
@@ -453,9 +454,9 @@ def test_output_files_written_when_fixes_applied(
         'explanation': ['Found issues', 'Applied fixes']
     }
 
-    output_code_path = mock_construct_paths_response[1]["output_code"]
-    output_results_path = mock_construct_paths_response[1]["output_results"]
-    output_program_path = mock_construct_paths_response[1]["output_program"]
+    output_code_path = mock_construct_paths_response[2]["output_code"]
+    output_results_path = mock_construct_paths_response[2]["output_results"]
+    output_program_path = mock_construct_paths_response[2]["output_program"]
 
     result = fix_verification_main(
         ctx=mock_context,
@@ -546,9 +547,9 @@ def test_output_code_write_error(
         'total_cost': 0.1, 'model_name': 'model-a', 'explanation': ['OK']
     }
 
-    output_code_path = mock_construct_paths_response[1]["output_code"]
-    output_results_path = mock_construct_paths_response[1]["output_results"]
-    output_program_path = mock_construct_paths_response[1]["output_program"]
+    output_code_path = mock_construct_paths_response[2]["output_code"]
+    output_results_path = mock_construct_paths_response[2]["output_results"]
+    output_program_path = mock_construct_paths_response[2]["output_program"]
 
     # Define a simpler side_effect for mock_open_func
     def open_side_effect(filename_arg, mode_arg="r", *args, **kwargs):
@@ -681,9 +682,9 @@ def test_force_flag_retrieved_from_ctx_obj(
     # call_args[1] is safer for kwargs
     assert mock_construct.call_args[1].get('force') is True, "construct_paths should have been called with force=True in single pass"
     mock_fix_errors.assert_called_once_with(
-        program=mock_construct_paths_response[0]["program_file"],
-        prompt=mock_construct_paths_response[0]["prompt_file"],
-        code=mock_construct_paths_response[0]["code_file"],
+        program=mock_construct_paths_response[1]["program_file"],
+        prompt=mock_construct_paths_response[1]["prompt_file"],
+        code=mock_construct_paths_response[1]["code_file"],
         output="Program output",
         strength=DEFAULT_STRENGTH,
         temperature=DEFAULT_TEMPERATURE,
@@ -716,13 +717,13 @@ def test_force_flag_retrieved_from_ctx_obj(
     mock_fix_loop.assert_called_once_with(
         program_file=setup_files["program"],
         code_file=setup_files["code"],
-        prompt=mock_construct_paths_response[0]["prompt_file"],
+        prompt=mock_construct_paths_response[1]["prompt_file"],
         verification_program=setup_files["verifier"],
         strength=DEFAULT_STRENGTH,
         temperature=DEFAULT_TEMPERATURE,
         max_attempts=DEFAULT_MAX_ATTEMPTS,
         budget=DEFAULT_BUDGET,
-        verification_log_file=mock_construct_paths_response[1]["output_results"],
+        verification_log_file=mock_construct_paths_response[2]["output_results"],
         verbose=False, # mock_context.obj['verbose'] is False here
         program_args=[],
         llm_time=DEFAULT_TIME

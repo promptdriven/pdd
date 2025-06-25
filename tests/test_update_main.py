@@ -47,6 +47,7 @@ def mock_construct_paths():
     with patch("pdd.update_main.construct_paths") as mock_cp:
         # Mock the return value: (input_strings, output_file_paths, language)
         mock_cp.return_value = (
+            {},  # resolved_config
             {
                 "input_prompt_file": "prompt content",
                 "modified_code_file": "def modified_code(): pass",
@@ -146,6 +147,7 @@ def test_update_main_with_git_no_input_code(
     # Arrange
     # Remove input_code_file from the construct_paths dictionary to simulate using --git
     mock_construct_paths.return_value = (
+        {},  # resolved_config
         {
             "input_prompt_file": "prompt content",
             "modified_code_file": "def git_modified_code(): pass",

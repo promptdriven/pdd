@@ -56,6 +56,7 @@ def test_detect_change_main_success(mock_construct_paths, mock_detect_change, mo
     output = 'output.csv'
 
     mock_construct_paths.return_value = (
+        {},  # resolved_config
         {'change_file': 'change content', 'prompt_file_0': 'prompt1 content', 'prompt_file_1': 'prompt2 content'},
         {'output': 'output.csv'},
         None
@@ -126,6 +127,7 @@ def test_detect_change_main_no_changes(mock_construct_paths, mock_detect_change,
     output = None
 
     mock_construct_paths.return_value = (
+        {},  # resolved_config
         {'change_file': 'change content', 'prompt_file_0': 'prompt1 content'},
         {},
         None
@@ -196,6 +198,7 @@ def test_detect_change_main_quiet_mode(mock_construct_paths, mock_detect_change,
     output = None
 
     mock_construct_paths.return_value = (
+        {},  # resolved_config
         {'change_file': 'change content', 'prompt_file_0': 'prompt1 content'},
         {},
         None
@@ -237,6 +240,7 @@ def test_detect_change_main_csv_output(mock_construct_paths, mock_detect_change,
     output = 'output.csv'
 
     mock_construct_paths.return_value = (
+        {},  # resolved_config
         {'change_file': 'change content', 'prompt_file_0': 'prompt1 content'},
         {'output': 'output.csv'},
         None

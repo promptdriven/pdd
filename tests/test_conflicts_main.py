@@ -26,6 +26,7 @@ def test_success_with_output(mock_file, mock_rprint, mock_construct_paths, mock_
     """Test conflicts_main with valid inputs and an output path."""
     # Setup mock for construct_paths
     mock_construct_paths.return_value = (
+        {},  # resolved_config
         {
             'prompt1': 'Content of prompt1',
             'prompt2': 'Content of prompt2'
@@ -123,6 +124,7 @@ def test_success_without_output(
     """Test conflicts_main with valid inputs and no output path."""
     # Setup mock for construct_paths
     mock_construct_paths.return_value = (
+        {},  # resolved_config
         {
             'prompt1': 'Content of prompt1',
             'prompt2': 'Content of prompt2'
@@ -230,6 +232,7 @@ def test_conflicts_in_prompts_error(mock_rprint, mock_construct_paths, mock_conf
     """Test conflicts_main handling exceptions from conflicts_in_prompts."""
     # Setup construct_paths
     mock_construct_paths.return_value = (
+        {},  # resolved_config
         {
             'prompt1': 'Content of prompt1',
             'prompt2': 'Content of prompt2'
@@ -267,6 +270,7 @@ def test_quiet_mode(mock_rprint, mock_construct_paths, mock_conflicts_in_prompts
     
     # Setup construct_paths
     mock_construct_paths.return_value = (
+        {},  # resolved_config
         {
             'prompt1': 'Content of prompt1',
             'prompt2': 'Content of prompt2'
@@ -322,6 +326,7 @@ def test_force_option(mock_file, mock_rprint, mock_construct_paths, mock_conflic
     
     # Setup construct_paths
     mock_construct_paths.return_value = (
+        {},  # resolved_config
         {
             'prompt1': 'Content of prompt1',
             'prompt2': 'Content of prompt2'
@@ -405,6 +410,7 @@ def test_replace_prompt_names(mock_rprint, mock_construct_paths, mock_conflicts_
     """Test that prompt names are correctly replaced with actual file paths."""
     # Setup construct_paths
     mock_construct_paths.return_value = (
+        {},  # resolved_config
         {
             'prompt1': 'Content of prompt1',
             'prompt2': 'Content of prompt2'
@@ -470,6 +476,7 @@ def test_verbose_mode(mock_dict_writer, mock_file, mock_rprint, mock_construct_p
     """Test conflicts_main with verbose mode enabled."""
     # Setup construct_paths
     mock_construct_paths.return_value = (
+        {},  # resolved_config
         {
             'prompt1': 'Verbose prompt1 content',
             'prompt2': 'Verbose prompt2 content'

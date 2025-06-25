@@ -25,7 +25,7 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
         command_options = {
             "output": output
         }
-        input_strings, output_file_paths, language = construct_paths(
+        resolved_config, input_strings, output_file_paths, language = construct_paths(
             input_file_paths=input_file_paths,
             force=ctx.obj.get('force', False),
             quiet=ctx.obj.get('quiet', False),

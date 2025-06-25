@@ -39,7 +39,7 @@ def detect_change_main(
             "output": output
         }
 
-        input_strings, output_file_paths, _ = construct_paths(
+        resolved_config, input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
             force=ctx.obj.get('force', False),
             quiet=ctx.obj.get('quiet', False),

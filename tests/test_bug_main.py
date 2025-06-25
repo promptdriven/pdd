@@ -49,6 +49,7 @@ def test_bug_main_success(mock_ctx, mock_input_files, tmpdir):
         
         # Mock construct_paths
         mock_construct_paths.return_value = (
+            {},  # resolved_config
             {
                 "prompt_file": "Prompt content",
                 "code_file": "Code content",
@@ -88,6 +89,7 @@ def test_bug_main_no_output(mock_ctx, mock_input_files):
         
         # Mock construct_paths
         mock_construct_paths.return_value = (
+            {},  # resolved_config
             {
                 "prompt_file": "Prompt content",
                 "code_file": "Code content",
@@ -143,6 +145,7 @@ def test_bug_main_quiet_mode(mock_ctx, mock_input_files):
         
         # Mock construct_paths
         mock_construct_paths.return_value = (
+            {},  # resolved_config
             {
                 "prompt_file": "Prompt content",
                 "code_file": "Code content",
@@ -177,6 +180,7 @@ def test_bug_main_different_language(mock_ctx, mock_input_files):
         
         # Mock construct_paths
         mock_construct_paths.return_value = (
+            {},  # resolved_config
             {
                 "prompt_file": "Prompt content",
                 "code_file": "Code content",
@@ -216,6 +220,7 @@ def test_bug_main_language_from_construct_paths(mock_ctx, mock_input_files):
         
         # Mock construct_paths to return "python" as detected language
         mock_construct_paths.return_value = (
+            {},  # resolved_config
             {
                 "prompt_file": "Prompt content",
                 "code_file": "Code content",

@@ -354,7 +354,7 @@ def sample_function():
     command_options = {"output": output_path}
 
     # Call the function directly
-    input_strings, output_file_paths, language = construct_paths(
+    resolved_config, input_strings, output_file_paths, language = construct_paths(
         input_file_paths=input_file_paths,
         force=force,
         quiet=quiet,
