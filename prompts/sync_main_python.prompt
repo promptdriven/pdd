@@ -17,6 +17,7 @@
             - output_cost (Optional[str]): Path to CSV file for cost tracking
             - review_examples (bool): Whether to review few-shot examples
             - local (bool): Whether to run commands locally instead of in cloud
+            - log (bool): If True, display sync logs instead of running the sync.
         - `basename` (str): The base name for the prompt file (e.g., "factorial_calculator" for "factorial_calculator_python.prompt")
         - `max_attempts` (int): Maximum number of fix attempts in any iterative loop (default is 3)
         - `budget` (float): Maximum total cost allowed for the entire sync process (default is $10.0)
@@ -44,7 +45,12 @@
     - Retrieve `local = ctx.obj.get('local', False)`.
     - Retrieve `context = ctx.obj.get('context', None)`.
 
-2. **Configuration and Path Handling**:
+2. **Log Mode**:
+    - If `log` is True, the function should display the sync logs for the given basename and then exit.
+    - It should iterate through each detected language, print a header, and call `sync_orchestration` with `log=True`.
+    - No other processing, such as budgeting or result aggregation, should occur in this mode.
+
+3. **Configuration and Path Handling**:
     - The `construct_paths` function handles `.pddrc` configuration files and context-aware settings
     - Pass `context_override=context` parameter to `construct_paths` when `--context` CLI option is used
     - `construct_paths` automatically handles:
@@ -56,7 +62,7 @@
     - After calling `construct_paths`, extract resolved configuration settings and override CLI parameters if context provides them
     - Apply configuration hierarchy: prefer CLI-provided values, then context values, then original defaults
 
-3. **Language Detection and Filtering**:
+4. **Language Detection and Filtering**:
     - Scan for existing prompt files matching the pattern `{basename}_{language}.prompt` in the prompts directory
     - Filter to include only development languages (python, javascript, typescript, java, cpp, etc.)
     - Exclude runtime languages (LLM) as they cannot form valid development units:
@@ -68,12 +74,12 @@
     - For each found development prompt file, run the complete sync workflow (calling sync_orchestration)
     - Each sync_orchestration call will use construct_paths normally with that specific prompt file
 
-4. **File Path Validation**:
+5. **File Path Validation**:
     - Validate that required prompt files exist for the given basename
     - Ensure output directories are accessible  
     - `construct_paths` handles directory creation and path resolution automatically
 
-5. **Error Handling Requirements**:
+6. **Error Handling Requirements**:
     - Validate basename parameter:
         * Raise `click.UsageError` if basename is empty or contains invalid characters
         * Check that at least one prompt file exists for the basename
@@ -88,7 +94,7 @@
     - Provide formatted error messages using `rich.print`
     - Exit with appropriate error codes on critical failures
 
-6. **User Feedback**:
+7. **User Feedback**:
     - Use `rich.print` for formatted output (unless `quiet` is True)
     - Show sync progress summary before starting, including:
         * Detected context (if using .pddrc)
@@ -101,7 +107,7 @@
         * Any errors or warnings
     - Provide helpful suggestions for common issues
 
-7. **Integration with sync_orchestration**:
+8. **Integration with sync_orchestration**:
     - Import and call `sync_orchestration` function from the sync orchestration module
     - Pass all parameters properly mapped to sync_orchestration's interface, ensuring directory parameters match the expected names (prompts_dir, code_dir, examples_dir, tests_dir)
     - Handle return values and format them for CLI output

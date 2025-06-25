@@ -72,7 +72,7 @@ def crash_main(
 
         force = ctx.params.get("force", ctx.obj.get("force", False))
 
-        input_strings, output_file_paths, _ = construct_paths(
+        resolved_config, input_strings, output_file_paths, language = construct_paths(
             input_file_paths=input_file_paths,
             force=force,
             quiet=quiet,
