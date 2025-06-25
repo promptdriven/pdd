@@ -49,7 +49,7 @@ command_options = {}  # '--output', '--language', … would land here
 # ---------------------------------------------------------------------------
 # 3. Invoke the helper – exactly what the CLI does internally
 # ---------------------------------------------------------------------------
-input_strings, output_file_paths, language = construct_paths(
+resolved_config, input_strings, output_file_paths, language = construct_paths(
     input_file_paths=input_file_paths,
     force=force,
     quiet=quiet,

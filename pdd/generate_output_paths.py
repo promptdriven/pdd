@@ -135,8 +135,8 @@ CONTEXT_CONFIG_MAP: Dict[str, Dict[str, str]] = {
     'detect': {'output': 'generate_output_path'},
     'conflicts': {'output': 'generate_output_path'},
     'crash': {
-        'output': 'generate_output_path',
-        'output_program': 'generate_output_path',
+        'output': None,  # Use default CWD behavior, not context paths
+        'output_program': None,  # Use default CWD behavior, not context paths
     },
     'trace': {'output': 'generate_output_path'},
     'bug': {'output': 'test_output_path'},

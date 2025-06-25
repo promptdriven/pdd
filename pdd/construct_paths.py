@@ -237,29 +237,24 @@ def _is_known_language(language_name: str) -> bool:
 
 def _strip_language_suffix(path_like: os.PathLike[str]) -> str:
     """
-    Remove trailing '_<language>.prompt' or '_<language>' from a filename stem
-    if it matches a known language.
+    Remove trailing '_<language>' from a filename stem if it matches a known language.
     """
     p = Path(path_like)
-    stem = p.stem # removes last extension (e.g. '.prompt', '.py')
+    stem = p.stem  # removes last extension (e.g., '.prompt', '.py')
 
-    if "_" not in stem: # No underscore, nothing to strip
+    if "_" not in stem:
         return stem
 
     parts = stem.split("_")
-    # Avoid splitting single-word stems like "Makefile_" if that's possible
-    if len(parts) < 2:
-        return stem
-
     candidate_lang = parts[-1]
 
-    # Check if the last part is a known language
     if _is_known_language(candidate_lang):
-        # If the last part is a language, strip it
+        # Do not strip '_prompt' from a non-.prompt file (e.g., 'test_prompt.txt')
+        if candidate_lang == 'prompt' and p.suffix != '.prompt':
+            return stem
         return "_".join(parts[:-1])
-    else:
-        # Last part is not a language, return original stem
-        return stem
+    
+    return stem
 
 
 def _extract_basename(
@@ -379,7 +374,7 @@ def construct_paths(
     command_options: Optional[Dict[str, Any]], # Allow None
     create_error_file: bool = True,  # Added parameter to control error file creation
     context_override: Optional[str] = None,  # Added parameter for context override
-) -> Tuple[Dict[str, str], Dict[str, str], str]:
+) -> Tuple[Dict[str, Any], Dict[str, str], Dict[str, str], str]:
     """
     High‑level orchestrator that loads inputs, determines basename/language,
     computes output locations, and verifies overwrite rules.
@@ -389,12 +384,9 @@ def construct_paths(
 
     Returns
     -------
-    (input_strings, output_file_paths, language)
+    (resolved_config, input_strings, output_file_paths, language)
     """
     command_options = command_options or {} # Ensure command_options is a dict
-
-    if not input_file_paths:
-        raise ValueError("No input files provided")
 
     # ------------- Load .pddrc configuration -----------------
     pddrc_config = {}
@@ -421,7 +413,7 @@ def construct_paths(
         env_vars = dict(os.environ)
         resolved_config = _resolve_config_hierarchy(command_options, context_config, env_vars)
         
-        # Update command_options with resolved configuration (CLI options take precedence)
+        # Update command_options with resolved configuration for internal use
         for key, value in resolved_config.items():
             if key not in command_options or command_options[key] is None:
                 command_options[key] = value
@@ -437,6 +429,44 @@ def construct_paths(
         console.print(f"[error]{error_msg}[/error]", style="error")
         if not quiet:
             console.print("[warning]Continuing with default configuration...[/warning]", style="warning")
+        # Initialize resolved_config on error to avoid downstream issues
+        resolved_config = command_options.copy()
+
+
+    # ------------- Handle sync discovery mode ----------------
+    if command == "sync" and not input_file_paths:
+        basename = command_options.get("basename")
+        if not basename:
+            raise ValueError("Basename must be provided in command_options for sync discovery mode.")
+        
+        # For discovery, we only need directory paths. Call generate_output_paths with dummy values.
+        try:
+            output_paths_str = generate_output_paths(
+                command="sync",
+                output_locations={},
+                basename=basename,
+                language="python", # Dummy language
+                file_extension=".py", # Dummy extension
+                context_config=context_config,
+            )
+            # Infer base directories from a sample output path
+            gen_path = Path(output_paths_str.get("generate_output_path", "src"))
+            resolved_config["prompts_dir"] = str(gen_path.parent.parent / "prompts")
+            resolved_config["code_dir"] = str(gen_path.parent)
+            resolved_config["tests_dir"] = str(Path(output_paths_str.get("test_output_path", "tests")).parent)
+            resolved_config["examples_dir"] = str(Path(output_paths_str.get("example_output_path", "examples")).parent)
+
+        except Exception as e:
+            console.print(f"[error]Failed to determine initial paths for sync: {e}", style="error")
+            raise
+        
+        # Return early for discovery mode
+        return resolved_config, {}, {}, ""
+
+
+    if not input_file_paths:
+        raise ValueError("No input files provided")
+
 
     # ------------- normalise & resolve Paths -----------------
     input_paths: Dict[str, Path] = {}
@@ -620,4 +650,14 @@ def construct_paths(
     # Since we converted to Path, convert back now.
     output_file_paths_str_return = {k: str(v) for k, v in output_paths_resolved.items()}
 
-    return input_strings, output_file_paths_str_return, language
+    # Add resolved paths to the config that gets returned
+    resolved_config.update(output_file_paths_str_return)
+    # Also add inferred directory paths
+    gen_path = Path(resolved_config.get("generate_output_path", "src"))
+    resolved_config["prompts_dir"] = str(next(iter(input_paths.values())).parent)
+    resolved_config["code_dir"] = str(gen_path.parent)
+    resolved_config["tests_dir"] = str(Path(resolved_config.get("test_output_path", "tests")).parent)
+    resolved_config["examples_dir"] = str(Path(resolved_config.get("example_output_path", "examples")).parent)
+
+
+    return resolved_config, input_strings, output_file_paths_str_return, language
