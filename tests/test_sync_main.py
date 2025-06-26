@@ -119,9 +119,9 @@ def mock_construct_paths(mocker: MagicMock, mock_project_dir: Path) -> MagicMock
         # First call for initial setup
         if not input_paths:
             return (
+                {"prompts_dir": str(prompts_dir)},
                 {},
                 {
-                    "prompts_dir": str(prompts_dir),
                     "generate_output_path": str(mock_project_dir / "src"),
                     "test_output_path": str(mock_project_dir / "tests"),
                     "example_output_path": str(mock_project_dir / "examples"),
@@ -131,6 +131,11 @@ def mock_construct_paths(mocker: MagicMock, mock_project_dir: Path) -> MagicMock
         
         # Subsequent calls for specific languages
         return (
+            {
+                "code_dir": str(mock_project_dir / "src"),
+                "tests_dir": str(mock_project_dir / "tests"),
+                "examples_dir": str(mock_project_dir / "examples"),
+            },
             {"prompt_file": "prompt content"},
             {
                 "generate_output_path": str(mock_project_dir / "src" / f"{basename}.{lang}"),

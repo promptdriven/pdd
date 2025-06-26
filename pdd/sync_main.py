@@ -110,7 +110,7 @@ def sync_main(
     output_cost = ctx.obj.get("output_cost", None)
     review_examples = ctx.obj.get("review_examples", False)
     local = ctx.obj.get("local", False)
-    # context_override = ctx.obj.get("context", None)
+    context_override = ctx.obj.get("context", None)
 
     # 2. Validate inputs
     _validate_basename(basename)
@@ -130,7 +130,7 @@ def sync_main(
             quiet=True,
             command="sync",
             command_options={"basename": basename},
-            context_override=ctx.obj.get("context", None),
+            context_override=context_override,
         )
         prompts_dir = Path(initial_config.get("prompts_dir", "prompts"))
     except Exception as e:
@@ -154,9 +154,27 @@ def sync_main(
             if not quiet:
                 rprint(f"\n--- Log for language: [bold green]{lang}[/bold green] ---")
 
-            code_dir = prompts_dir.parent / "src"
-            tests_dir = prompts_dir.parent / "tests"
-            examples_dir = prompts_dir.parent / "examples"
+            # Use construct_paths to get proper directory configuration for log mode
+            prompt_file_path = prompts_dir / f"{basename}_{lang}.prompt"
+            
+            try:
+                resolved_config, _, _, _ = construct_paths(
+                    input_file_paths={"prompt_file": str(prompt_file_path)},
+                    force=False,
+                    quiet=True,
+                    command="sync",
+                    command_options={"basename": basename, "language": lang},
+                    context_override=context_override,
+                )
+                
+                code_dir = resolved_config.get("code_dir", "src")
+                tests_dir = resolved_config.get("tests_dir", "tests")
+                examples_dir = resolved_config.get("examples_dir", "examples")
+            except Exception:
+                # Fallback to default paths if construct_paths fails
+                code_dir = str(prompts_dir.parent / "src")
+                tests_dir = str(prompts_dir.parent / "tests")
+                examples_dir = str(prompts_dir.parent / "examples")
 
             sync_orchestration(
                 basename=basename,
@@ -221,7 +239,7 @@ def sync_main(
                 quiet=True,
                 command="sync",
                 command_options=command_options,
-                context_override=ctx.obj.get("context", None),
+                context_override=context_override,
             )
 
             # Extract all parameters directly from the resolved configuration
@@ -248,6 +266,7 @@ def sync_main(
                 target_coverage=final_target_coverage,
                 strength=final_strength,
                 temperature=final_temp,
+                time_param=time_param,
                 force=force,
                 quiet=quiet,
                 verbose=verbose,
