@@ -209,4 +209,28 @@ The application needs the absolute path to the `pdd/` source directory to functi
     echo ".env" >> .gitignore
     ```
 
+**3. Set Conda Environment Variable (Recommended for WSL):**
+This is the most robust method to ensure `PDD_PATH` is always set correctly when your Conda environment is active, as it takes precedence over system variables within the Conda shell.
+
+-   **Step 1: Set the Conda variable.**
+    Using the same absolute path you copied in Step 2.1 (`/path/to/your/project/pdd`), run the following command from your project root:
+    ```bash
+    # Replace "/path/to/your/project/pdd" with the correct path
+    conda env config vars set PDD_PATH="/path/to/your/project/pdd"
+    ```
+
+-   **Step 2: Reactivate the environment.**
+    The change will only take effect after you deactivate and reactivate your environment.
+    ```bash
+    conda deactivate
+    conda activate pdd
+    ```
+
+-   **Step 3: Verify the change.**
+    You can now check if the path is set correctly.
+    ```bash
+    echo $PDD_PATH
+    # It should print the correct path: /path/to/your/project/pdd
+    ```
+
 
