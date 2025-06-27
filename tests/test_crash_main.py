@@ -16,9 +16,9 @@ def delete_output_files():
         "output/fixed_program.py", # Added potential output file in output dir
         "output/fixed_code_force.py", # Added potential output file in output dir
         "output/fixed_program_force.py", # Added potential output file in output dir
-        "test_fixed.prompt", # Default output in root
-        "test_fixed.py", # Default output in root for crash command based on error log
-        "test_program_fixed.py" # Default output in root for crash command based on error log
+        "output/test_fixed.prompt", # Default output in output dir
+        "output/test_fixed.py", # Default output in output dir for crash command based on error log
+        "output/test_program_fixed.py" # Default output in output dir for crash command based on error log
     ]
     for file in output_files:
         if os.path.exists(file):
