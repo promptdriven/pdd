@@ -186,8 +186,6 @@ rm -f data
 # (use rm -rf if they already exist as regular directories)
 ln -s ../prompts .
 ln -s ../data .
-rm -f prompts
-rm -f data
 # Go back to the project root
 cd ..
 ```
