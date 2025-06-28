@@ -4,6 +4,8 @@ You are an expert Python developer. Your task is to implement the core decision-
 
 This implementation must replace any previous complex state management with a more robust system based on file "fingerprints" and robust locking, as described below.
 
+**Note**: This function analyzes a single language unit (basename + language). The sync_main function handles multiple language detection and orchestration. This function is called once per language by the orchestration layer.
+
 ### Core Principles:
 
 1.  **Authoritative Fingerprints**: The system's state is not tracked in a complex state machine. Instead, it's derived by comparing the current state of files against a version-controlled "fingerprint" file that contains hashes of the last known good state from a PDD operation.
@@ -38,9 +40,12 @@ Create the following `dataclasses` to structure the data:
     -   `tests_failed: int`
     -   `coverage: float`
 -   `SyncDecision`:
-    -   `operation: str` (e.g., 'generate', 'fix', 'update', 'test', 'crash', 'analyze_conflict', 'nothing')
+    -   `operation: str` (e.g., 'auto-deps', 'generate', 'example', 'crash', 'verify', 'test', 'fix', 'update', 'analyze_conflict', 'nothing')
     -   `reason: str` (A human-readable explanation for the decision)
     -   `details: Dict[str, Any]` (Optional extra info for the orchestrator)
+    -   `estimated_cost: float` (Estimated cost for the operation, default 0.0)
+    -   `confidence: float` (Confidence level in the decision, default 1.0)
+    -   `prerequisites: List[str]` (List of operations that should be completed first)
 
 #### 2. Locking Mechanism
 
@@ -61,7 +66,22 @@ Implement a `SyncLock` context manager:
 
 Implement the following helper functions:
 
--   `get_pdd_file_paths(basename: str, language: str) -> Dict[str, Path]`: Returns a dictionary mapping file types ('prompt', 'code', 'example', 'test') to their expected `pathlib.Path` objects. The implementation should use the project's internal configuration-aware functions (like `generate_output_paths`) rather than hardcoding directories to respect user configuration.
+-   `get_pdd_file_paths(basename: str, language: str) -> Dict[str, Path]`: Returns a dictionary mapping file types ('prompt', 'code', 'example', 'test') to their expected `pathlib.Path` objects. The implementation should use the project's internal configuration-aware functions:
+    ```python
+    from pdd.construct_paths import construct_paths
+    
+    # Use construct_paths to get configuration-aware paths
+    prompt_file = f"{basename}_{language}.prompt"
+    _, config = construct_paths(prompt_file, None)
+    
+    # Extract paths from config
+    return {
+        'prompt': Path(config['prompt_file']),
+        'code': Path(config['code_file']),
+        'example': Path(config['example_file']),
+        'test': Path(config['test_file'])
+    }
+    ```
 -   `calculate_sha256(file_path: Path) -> Optional[str]`: Calculates the SHA256 hash of a file if it exists, otherwise returns `None`.
 -   `read_fingerprint(basename: str, language: str) -> Optional[Fingerprint]`: Reads and validates the JSON fingerprint file. Returns `None` if it doesn't exist or is invalid.
 -   `read_run_report(basename: str, language: str) -> Optional[RunReport]`: Reads and validates the JSON run report file.
@@ -71,11 +91,11 @@ Implement the following helper functions:
 
 This is the core function that orchestrates the decision-making process.
 
-`determine_sync_operation(basename: str, language: str, target_coverage: float) -> SyncDecision:`
+`determine_sync_operation(basename: str, language: str, target_coverage: float, budget: float = 10.0, log_mode: bool = False) -> SyncDecision:`
 
 **Logic Flow:**
 
-1.  **Acquire Lock**: Start by acquiring the `SyncLock` for the given unit. The entire function should operate within the `with` block of the lock.
+1.  **Acquire Lock**: Start by acquiring the `SyncLock` for the given unit. The entire function should operate within the `with` block of the lock. Note: In `log_mode`, locks should be acquired in read-only mode (not enforced) to avoid blocking other processes.
 2.  **Check Runtime Signals First**:
     -   Read the latest `RunReport`.
     -   If the report exists and `exit_code != 0`, return a decision to run `crash`.
@@ -87,18 +107,34 @@ This is the core function that orchestrates the decision-making process.
     -   Calculate the hashes of the current files.
     -   Compare the current hashes with the hashes in the fingerprint.
 4.  **Implement the Decision Tree**:
+    
+    **Priority Order** (highest to lowest):
+    1. Runtime failures (`crash`) - highest priority
+    2. Test failures (`fix`) - second priority  
+    3. Missing dependencies (`auto-deps`) - before generate
+    4. Code generation (`generate`) - when prompt changed
+    5. Example generation (`example`) - after code exists
+    6. Verification (`verify`) - after example exists
+    7. Test generation (`test`) - after code verified
+    8. Prompt updates (`update`) - when code changed
+    9. Complex conflicts (`analyze_conflict`) - when multiple files changed
+    
     -   **No Fingerprint (New or Untracked Unit):**
-        -   If a `prompt` file exists -> **`generate`**. (Reason: A prompt is ready for a new unit).
+        -   If a `prompt` file exists:
+            -   Check if prompt has `<include>` tags or references to other modules -> **`auto-deps`**. (Reason: Need to inject dependencies before generating).
+            -   Otherwise -> **`generate`**. (Reason: A prompt is ready for a new unit).
         -   Otherwise -> **`nothing`**. (Reason: No prompt and no history means there's nothing to do).
     -   **No Changes (Hashes Match Fingerprint):**
         -   If `code` exists but `example` does not -> **`example`**. (Reason: Progress the workflow).
         -   If `code` and `example` exist but `test` does not -> **`test`**. (Reason: Progress the workflow).
-        -   Otherwise -> **`nothing`**. (Reason: All files are synchronized and the unit is complete).
+        -   If all files exist and tests pass -> **`nothing`**. (Reason: All files are synchronized and the unit is complete).
     -   **Simple Changes (Single File Modified)**:
-        -   If only the `prompt_hash` differs -> `generate`.
-        -   If only the `code_hash` differs -> `update`.
-        -   If only the `test_hash` differs -> `test` (to run the new tests).
-        -   If only the `example_hash` differs -> `verify` (to run the new example).
+        -   If only the `prompt_hash` differs:
+            -   Check if dependencies need updating -> **`auto-deps`**.
+            -   Otherwise -> **`generate`**.
+        -   If only the `code_hash` differs -> **`update`**.
+        -   If only the `test_hash` differs -> **`test`** (to run the new tests).
+        -   If only the `example_hash` differs -> **`verify`** (to run the new example).
     -   **Complex Changes (Multiple Files Modified / Conflicts)**:
         -   Return a decision to run **`analyze_conflict`**. The calling orchestrator will handle this.
 5.  **Return the Decision**: The function must always return a `SyncDecision` object with the recommended operation and a clear reason.
@@ -116,7 +152,21 @@ This is the core function that orchestrates the decision-making process.
         <llm_invoke_example>
             <include>context/llm_invoke_example.py</include>
         </llm_invoke_example>
+
+        For path construction and configuration:
+        <construct_paths_example>
+            <include>context/construct_paths_example.py</include>
+        </construct_paths_example>
+
+        For language detection:
+        <get_language_example>
+            <include>context/get_language_example.py</include>
+        </get_language_example>
     
+        Here is the LLM prompt that will be used to analyze the conflict:
+        <sync_analysis_LLM.prompt>
+            <include>prompts/sync_analysis_LLM.prompt</include>
+        </sync_analysis_LLM.prompt>
 
 Implement a second function `analyze_conflict_with_llm` to resolve complex sync conflicts using an LLM.
 
@@ -135,3 +185,19 @@ Implement a second function `analyze_conflict_with_llm` to resolve complex sync 
     -   If the LLM response is not valid JSON or if the confidence is low (e.g., < 0.75), return a default `fail_and_request_manual_merge` decision as a safety measure.
 
 The final Python script should be well-structured with clear functions, type hints, and docstrings, containing all the logic described above.
+
+### Integration with sync_orchestration
+
+This function is called by sync_orchestration for each language. The orchestration layer:
+1. Handles multiple language detection and iteration
+2. Executes the recommended operations
+3. Tracks cumulative costs and results
+4. Manages the overall workflow loop
+5. Handles budget constraints and maximum attempts
+
+The determine_sync_operation function provides single-unit analysis while sync_orchestration handles the execution and multi-language coordination. The orchestration layer will:
+- Call this function repeatedly as operations complete
+- Track total cost against the budget parameter
+- Stop if budget is exceeded or max attempts reached
+- Handle the actual execution of operations (generate, test, fix, etc.)
+- Update fingerprints and run reports after each operation
