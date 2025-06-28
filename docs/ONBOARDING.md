@@ -90,7 +90,7 @@ cd pdd
 
    **Linux:**
    ```bash
-   curl -fsSL https://infisical.com/install.sh | sh
+   curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo -E bash
    ```
 
 2. Accept Project Invitation:
@@ -200,7 +200,7 @@ The application needs the absolute path to the `pdd/` source directory to functi
     pwd  # Copy the full path output by this command
     cd ..
     ```
--   **Step 2: Create a local `.env` file.** The `infisical run` command loads this file automatically, making the variable available.
+-   **Step 2: Create a local `.env` file.** 
     ```bash
     # Replace "/path/to/your/project/pdd" with the path you copied
     echo "PDD_PATH=/path/to/your/project/pdd" > .env
@@ -213,7 +213,7 @@ The application needs the absolute path to the `pdd/` source directory to functi
 	**3. Set Conda Environment Variable (Recommended for WSL):**
 This is the most robust method to ensure `PDD_PATH` is always set correctly when your Conda environment is active, as it takes precedence over system variables within the Conda shell.
 -   **Step 1: Set the Conda variable.**
-    Using the same absolute path you copied in Step 2.1 (`/path/to/your/project/pdd`), run the following command from your project root:
+    Using the same absolute path you copied in Step 2.1 (`/path/to/your/project/pdd`), run the following command from your project root (using pwd):
     ```bash
     # Replace "/path/to/your/project/pdd" with the correct path
     conda env config vars set PDD_PATH="/path/to/your/project/pdd"
