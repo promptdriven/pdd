@@ -151,10 +151,12 @@ The development environment relies on Conda to manage Python versions and depend
     *You must activate this environment whenever you work on the project. Your terminal prompt should now be prefixed with `(pdd)`.*
 
 3. **Install Project Dependencies:**
-   With the `pdd` environment active, install the required Python packages from the project root.
+   With the `pdd` environment active, install the required Python packages and the project in editable mode from the project root.
    ```bash
    pip install -r requirements.txt
+   pip install -e .
    ```
+   *Installing with `-e .` (editable mode) is crucial for development, as it makes your changes to the source code take effect without needing to reinstall the package.*
 
 ### Running Commands with Secrets
 

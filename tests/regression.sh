@@ -33,6 +33,26 @@ export PDD_AUTO_UPDATE=false
 # Set PDD base directory as the script's location (two directories up from this script)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PDD_BASE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Load .env file from the base directory if it exists
+if [ -f "$PDD_BASE_DIR/.env" ]; then
+    log "Loading environment variables from .env file"
+    # Create a temporary, cleaned version of the .env file to source.
+    # This makes the sourcing more robust to common .env file formatting issues,
+    # such as spaces around the '=' character, which would otherwise cause 'command not found' errors.
+    TEMP_ENV_FILE=$(mktemp)
+    # The grep filters comments/empty lines; the sed removes whitespace around the first '=' on each line.
+    grep -v -e '^#' -e '^$' "$PDD_BASE_DIR/.env" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/[[:space:]]*=[[:space:]]*/=/' > "$TEMP_ENV_FILE"
+
+    set -o allexport
+    source "$TEMP_ENV_FILE"
+    set +o allexport
+
+    rm "$TEMP_ENV_FILE"
+else
+    log "No .env file found at $PDD_BASE_DIR/.env"
+fi
+
 PDD_PATH="$PDD_BASE_DIR/pdd"
 STAGING_PATH="$PDD_BASE_DIR/staging"
 PDD_SCRIPT="pdd" # Assumes pdd is in PATH
