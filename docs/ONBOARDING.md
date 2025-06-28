@@ -151,10 +151,12 @@ The development environment relies on Conda to manage Python versions and depend
     *You must activate this environment whenever you work on the project. Your terminal prompt should now be prefixed with `(pdd)`.*
 
 3. **Install Project Dependencies:**
-   With the `pdd` environment active, install the required Python packages from the project root.
+   With the `pdd` environment active, install the required Python packages and the project in editable mode from the project root.
    ```bash
    pip install -r requirements.txt
+   pip install -e .
    ```
+   *Installing with `-e .` (editable mode) is crucial for development, as it makes your changes to the source code take effect without needing to reinstall the package.*
 
 ### Running Commands with Secrets
 
@@ -176,11 +178,14 @@ The application's source code in `pdd/` needs access to the project's root `prom
 # Navigate into the pdd directory
 cd pdd
 
+# Remove the existing prompts and data files in the pdd folder
+rm -f prompts
+rm -f data
+
 # Link to the root prompts/ and data/ directories
 # (use rm -rf if they already exist as regular directories)
 ln -s ../prompts .
 ln -s ../data .
-
 # Go back to the project root
 cd ..
 ```
@@ -205,4 +210,23 @@ The application needs the absolute path to the `pdd/` source directory to functi
     echo ".env" >> .gitignore
     ```
 
-
+	**3. Set Conda Environment Variable (Recommended for WSL):**
+This is the most robust method to ensure `PDD_PATH` is always set correctly when your Conda environment is active, as it takes precedence over system variables within the Conda shell.
+-   **Step 1: Set the Conda variable.**
+    Using the same absolute path you copied in Step 2.1 (`/path/to/your/project/pdd`), run the following command from your project root:
+    ```bash
+    # Replace "/path/to/your/project/pdd" with the correct path
+    conda env config vars set PDD_PATH="/path/to/your/project/pdd"
+    ```
+-   **Step 2: Reactivate the environment.**
+    The change will only take effect after you deactivate and reactivate your environment.
+    ```bash
+    conda deactivate
+    conda activate pdd
+    ```
+-   **Step 3: Verify the change.**
+    You can now check if the path is set correctly.
+    ```bash
+    echo $PDD_PATH
+    # It should print the correct path: /path/to/your/project/pdd
+    ```
