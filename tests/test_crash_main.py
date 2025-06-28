@@ -152,8 +152,8 @@ def test_crash_fix_without_output_paths(ctx, test_files):
     """Test crash fix without specifying output paths"""
     # Ensure default output files do not exist before the test
     # The default basename will be 'test_prompt' from the prompt file
-    default_output_code = "test_prompt_fixed.py"
-    default_output_program = "test_prompt_program_fixed.py"
+    default_output_code = "output/test_prompt_fixed.py"
+    default_output_program = "output/test_prompt_program_fixed.py"
     if os.path.exists(default_output_code):
         os.remove(default_output_code)
     if os.path.exists(default_output_program):
