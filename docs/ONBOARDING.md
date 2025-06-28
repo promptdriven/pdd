@@ -178,6 +178,9 @@ The application's source code in `pdd/` needs access to the project's root `prom
 # Navigate into the pdd directory
 cd pdd
 
+# Remove the existing prompts and data files in the pdd folder
+rm -f prompts
+rm -f data
 
 # Link to the root prompts/ and data/ directories
 # (use rm -rf if they already exist as regular directories)
