@@ -1180,6 +1180,7 @@ def divide(a, b):
 
     # Create a program file to test the functionality
     program_content = """# test_divide.py
+import sys
 from divide import divide
 
 def main():
@@ -1193,6 +1194,7 @@ def main():
         print(f"5 / 0 = {divide(5, 0)}")
     except Exception as e:
         print(f"Error: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

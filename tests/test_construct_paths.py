@@ -538,14 +538,17 @@ def test_construct_paths_quiet_flag(tmpdir, capsys):
             pytest.fail(f"construct_paths failed unexpectedly with quiet=False: {e}")
 
         captured = capsys.readouterr()
+        # Remove newlines from captured output to make assertions robust against line wrapping by rich
+        captured_out_no_newlines = captured.out.replace('\n', '')
+
         # Check for specific markers in the output
-        assert "Input files:" in captured.out
+        assert "Input files:" in captured_out_no_newlines
         # Check for filename instead of resolved path to avoid line wrapping issues
-        assert prompt_file.name in captured.out
-        assert "Output files:" in captured.out
-        assert mock_output_path.name in captured.out
-        assert "Detected language:" in captured.out
-        assert "Basename:" in captured.out
+        assert prompt_file.name in captured_out_no_newlines
+        assert "Output files:" in captured_out_no_newlines
+        assert mock_output_path.name in captured_out_no_newlines
+        assert "Detected language:" in captured_out_no_newlines
+        assert "Basename:" in captured_out_no_newlines
 
     # Test with quiet=True
     quiet = True
