@@ -17,7 +17,7 @@ import click
 # --- Real PDD Component Imports ---
 from .sync_animation import sync_animation
 from .sync_determine_operation import (
-    determine_sync_operation,
+    sync_determine_operation,
     get_pdd_file_paths,
     RunReport,
     PDD_DIR,
@@ -190,7 +190,7 @@ def sync_orchestration(
                     errors.append(f"Budget of ${budget:.2f} exceeded.")
                     break
 
-                decision = determine_sync_operation(basename, language, target_coverage)
+                decision = sync_determine_operation(basename, language, target_coverage)
                 operation = decision.operation
 
                 if operation in ['all_synced', 'nothing', 'fail_and_request_manual_merge', 'error']:

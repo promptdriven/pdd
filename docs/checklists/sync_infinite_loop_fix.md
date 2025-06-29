@@ -164,7 +164,7 @@ pdd --force --local sync get_extension
 
 ### Functions Enhanced
 
-- `determine_sync_operation()`: Now uses LLM for complex conflicts
+- `sync_determine_operation()`: Now uses LLM for complex conflicts
 - `analyze_conflict_with_llm()`: Properly integrated with real LLM
 - `load_prompt_template()`: Real PDD integration with fallback
 - `llm_invoke()`: Real LLM calls with intelligent mock fallback
