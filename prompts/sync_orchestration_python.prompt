@@ -14,6 +14,15 @@ Create a Python module that orchestrates the complete PDD (Prompt-Driven Develop
 
 The sync command is the primary command in PDD that automatically executes the complete workflow loop from dependency injection through code generation, testing, and verification. This orchestration module coordinates the execution while providing real-time feedback to users.
 
+## Architecture
+
+This module works in conjunction with `sync_main`, which handles the CLI interface:
+
+- **sync_main**: Handles CLI parameter extraction, validation, language detection, path resolution via `construct_paths()`, and .pddrc configuration management
+- **sync_orchestration**: Focuses solely on workflow orchestration, animation coordination, and operation execution using the resolved paths provided by sync_main
+
+The separation allows sync_main to handle all CLI and configuration concerns while sync_orchestration handles the core workflow logic.
+
 ## Requirements
 
 Create a module with the following main function:
@@ -22,6 +31,10 @@ Create a module with the following main function:
 def sync_orchestration(
     basename: str,
     language: str = "python",
+    prompts_dir: str = "prompts",
+    code_dir: str = "src",
+    examples_dir: str = "examples",
+    tests_dir: str = "tests",
     max_attempts: int = 3,
     budget: float = 10.0,
     skip_verify: bool = False,
@@ -45,17 +58,25 @@ def sync_orchestration(
     If log=True, display sync log for this basename instead of running sync.
     The verbose flag (global option) controls detail level of log output.
 
-    Path configuration is handled via `context_config`, which overrides default
-    locations for prompts, code, examples, and tests directories.
+    The directory parameters (prompts_dir, code_dir, examples_dir, tests_dir) 
+    specify the base locations for different file types. These are typically
+    resolved by sync_main using construct_paths() based on .pddrc configuration
+    and CLI context settings before being passed to this function.
+    
+    The context_config parameter can provide additional path overrides or
+    configuration settings that affect file resolution.
     
     Returns a dictionary with:
     - 'success': bool indicating overall success
     - 'operations_completed': List of completed operations
+    - 'skipped_operations': List of operations that were skipped
     - 'total_cost': float total cost of all operations
     - 'total_time': float total time elapsed
     - 'final_state': Dict with final file states
     - 'errors': List of any errors encountered
     - 'log_entries': List of log entries (when log=True)
+    - 'git_commits_created': int number of git commits created (if applicable)
+    - 'test_coverage_achieved': float percentage of test coverage achieved
     """
 ```
 
@@ -156,7 +177,7 @@ For each operation:
 
 The orchestrator should:
 
-- **Construct File Paths**: Use the `get_pdd_file_paths(basename, language, context_config)` helper function to resolve all required file paths. This allows for centralized configuration.
+- **Construct File Paths**: Use the `get_pdd_file_paths(basename, language, prompts_dir)` helper function to resolve all required file paths, using the provided directory parameters as base paths.
 - **Track File States**: Monitor which files exist and their modification times
 - **Update Animation Colors**: Set colors based on file status:
   - Green: File exists and up-to-date
@@ -173,6 +194,10 @@ Implement robust error handling:
 - **Lock Acquisition Failure**: Exit immediately with clear message if another sync is running
 - **Budget Constraints**: Stop if total cost exceeds budget
 - **Retry Logic**: If an operation fails, the orchestrator MUST retry the operation up to `max_attempts` times before considering it a definitive failure. It should not exit the loop on the first failure of an operation.
+- **Return Value Handling**: Handle different return formats from command functions:
+  - Dictionary format: Extract 'success', 'cost', and 'model' fields directly
+  - Tuple format: Treat as successful if no exceptions, extract cost from second-to-last element and model from last element
+  - Ensure fingerprint state is saved after successful operations regardless of return format
 - **Graceful Degradation**: Continue workflow even if non-critical steps fail
 - **User Feedback**: Provide clear error messages through animation
 - **Lock Cleanup**: Always release lock, even on exceptions or early exits
@@ -226,11 +251,14 @@ Return comprehensive results:
 1. **Lock Management**: Use context managers or try/finally for reliable lock cleanup
 2. **Threading**: Use threading.Thread for animation, threading.Event for coordination
 3. **Context Management**: Create Click context objects for command execution
-4. **Path Resolution**: Handle relative and absolute paths correctly
-5. **File Operations**: Use pathlib.Path for cross-platform compatibility
-6. **Cost Tracking**: Accumulate costs from all operations
+4. **Path Resolution**: Use provided directory parameters with pathlib.Path for cross-platform compatibility
+5. **File Operations**: Use pathlib.Path for all file operations
+6. **Cost Tracking**: Accumulate costs from all operations, handling both dict and tuple return formats
 7. **Time Tracking**: Monitor elapsed time for each operation
 8. **Exception Handling**: Catch and handle all operation failures gracefully, always releasing locks
+9. **Return Format Compatibility**: Handle both dictionary and tuple return values from command functions
+10. **Retry Implementation**: Implement proper retry logic that attempts operations multiple times before failing
+11. **State Persistence**: Always save fingerprint state after successful operations to enable workflow progression
 
 ## Dependencies
 
@@ -270,14 +298,17 @@ if not result['success']:
         print("Another sync is already running for this module")
         exit(1)
 
-# Advanced sync with custom settings  
+# Advanced sync with custom directories  
 result = sync_orchestration(
     basename="data_processor",
     language="python",
+    prompts_dir="backend/prompts",
+    code_dir="backend/src",
+    examples_dir="backend/examples", 
+    tests_dir="backend/tests",
     budget=15.0,
     target_coverage=95.0,
-    skip_verify=False,
-    context_config={'code_dir': 'backend/src', 'tests_dir': 'backend/tests'}
+    skip_verify=False
 )
 ```
 

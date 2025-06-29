@@ -314,8 +314,22 @@ def sync_orchestration(
                         errors.append(f"Unknown operation '{operation}' requested.")
                         result = {'success': False, 'cost': 0.0}
                     
-                    success = result.get('success', False)
-                    current_cost_ref[0] += result.get('cost', 0.0)
+                    # Handle different return formats from command functions
+                    if isinstance(result, dict):
+                        # Dictionary return (e.g., from some commands)
+                        success = result.get('success', False)
+                        current_cost_ref[0] += result.get('cost', 0.0)
+                    elif isinstance(result, tuple) and len(result) >= 3:
+                        # Tuple return (e.g., from code_generator_main, context_generator_main)
+                        # For tuples, success is determined by no exceptions and valid return
+                        success = True
+                        # Extract cost from tuple (usually second-to-last element)
+                        cost = result[-2] if len(result) >= 2 and isinstance(result[-2], (int, float)) else 0.0
+                        current_cost_ref[0] += cost
+                    else:
+                        # Unknown return format
+                        success = result is not None
+                        current_cost_ref[0] += 0.0
 
                 except Exception as e:
                     errors.append(f"Exception during '{operation}': {e}")
@@ -323,8 +337,17 @@ def sync_orchestration(
 
                 if success:
                     operations_completed.append(operation)
-                    _save_operation_fingerprint(basename, language, operation, pdd_files, 
-                                               result.get('cost', 0.0), result.get('model', ''))
+                    # Extract cost and model from result based on format
+                    if isinstance(result, dict):
+                        cost = result.get('cost', 0.0)
+                        model = result.get('model', '')
+                    elif isinstance(result, tuple) and len(result) >= 3:
+                        cost = result[-2] if len(result) >= 2 and isinstance(result[-2], (int, float)) else 0.0
+                        model = result[-1] if len(result) >= 1 and isinstance(result[-1], str) else ''
+                    else:
+                        cost = 0.0
+                        model = ''
+                    _save_operation_fingerprint(basename, language, operation, pdd_files, cost, model)
                 else:
                     errors.append(f"Operation '{operation}' failed.")
                     break
