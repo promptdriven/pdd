@@ -362,7 +362,7 @@ def test_get_git_diff_git_command_not_found(mock_subprocess_run, pdd_test_enviro
     assert diff == "content" # Should fall back to file content
 
 
-# --- determine_sync_operation Tests ---
+# --- sync_determine_operation Tests ---
 
 # Helper to create a default fingerprint
 def _default_fingerprint(fc, hashes: Optional[Dict[str, Optional[str]]] = None) -> Fingerprint:
@@ -410,7 +410,7 @@ def test_determine_op_uses_lock(pdd_test_environment):
 
     with patch.object(SyncLock, 'acquire', new_acquire), \
          patch.object(SyncLock, 'release', new_release):
-        sync_determine_operation.determine_sync_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
+        sync_determine_operation.sync_determine_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
 
     assert len(acquired_event) > 0 and acquired_event[0] is True, "Lock was not acquired or PID was wrong"
     if len(acquired_event) > 1 and acquired_event[1] is False:
@@ -422,43 +422,43 @@ def test_determine_op_uses_lock(pdd_test_environment):
 def test_determine_op_report_exit_code_nonzero(pdd_test_environment):
     fc = pdd_test_environment['file_creator']
     fc.make_run_report_file(_default_run_report(exit_code=1))
-    decision = sync_determine_operation.determine_sync_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
+    decision = sync_determine_operation.sync_determine_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
     assert decision.operation == 'crash'
 
 def test_determine_op_report_tests_failed(pdd_test_environment):
     fc = pdd_test_environment['file_creator']
     fc.make_run_report_file(_default_run_report(tests_failed=1))
-    decision = sync_determine_operation.determine_sync_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
+    decision = sync_determine_operation.sync_determine_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
     assert decision.operation == 'fix'
 
 def test_determine_op_report_low_coverage(pdd_test_environment):
     fc = pdd_test_environment['file_creator']
     fc.make_run_report_file(_default_run_report(coverage=TEST_TARGET_COVERAGE - 0.1))
-    decision = sync_determine_operation.determine_sync_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
+    decision = sync_determine_operation.sync_determine_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
     assert decision.operation == 'test'
 
 def test_determine_op_report_priority(pdd_test_environment):
     fc = pdd_test_environment['file_creator']
     # Crash > Fix > Coverage
     fc.make_run_report_file(_default_run_report(exit_code=1, tests_failed=1, coverage=0.1))
-    decision = sync_determine_operation.determine_sync_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
+    decision = sync_determine_operation.sync_determine_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
     assert decision.operation == 'crash'
     
     # Fix > Coverage
     fc.make_run_report_file(_default_run_report(exit_code=0, tests_failed=1, coverage=0.1))
-    decision = sync_determine_operation.determine_sync_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
+    decision = sync_determine_operation.sync_determine_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
     assert decision.operation == 'fix'
 
 # C. No Fingerprint
 def test_determine_op_no_fingerprint_prompt_exists(pdd_test_environment):
     fc = pdd_test_environment['file_creator']
     fc.create_file('prompt', "content")
-    decision = sync_determine_operation.determine_sync_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
+    decision = sync_determine_operation.sync_determine_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
     assert decision.operation == 'generate'
 
 def test_determine_op_no_fingerprint_no_prompt(pdd_test_environment):
     # No files created, no fingerprint
-    decision = sync_determine_operation.determine_sync_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
+    decision = sync_determine_operation.sync_determine_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
     assert decision.operation == 'nothing'
     assert "No PDD fingerprint and no prompt file found" in decision.reason
 
@@ -484,7 +484,7 @@ def test_determine_op_fp_exists_no_changes(pdd_test_environment, monkeypatch):
     fc = pdd_test_environment['file_creator']
     fc.make_fingerprint_file(_default_fingerprint(fc, {'prompt': p_hash, 'code': c_hash}))
     
-    decision = sync_determine_operation.determine_sync_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
+    decision = sync_determine_operation.sync_determine_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
     # With workflow progression logic, if code exists but example doesn't, it should create example
     assert decision.operation == 'example'
     assert 'example' in decision.reason.lower()
@@ -509,7 +509,7 @@ def test_determine_op_fp_prompt_changed(pdd_test_environment, monkeypatch):
     # Change prompt content
     paths['prompt'].write_text("p_new")
     
-    decision = sync_determine_operation.determine_sync_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
+    decision = sync_determine_operation.sync_determine_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
     assert decision.operation == 'generate'
 
 # Similar tests for code_changed -> update, test_changed -> test, example_changed -> verify
@@ -538,7 +538,7 @@ def test_determine_op_fp_code_changed(pdd_test_environment, monkeypatch):
     # Change code content
     paths['code'].write_text("c_new")
     
-    decision = sync_determine_operation.determine_sync_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
+    decision = sync_determine_operation.sync_determine_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
     assert decision.operation == 'update'
 
 def test_determine_op_fp_file_deleted(pdd_test_environment, monkeypatch):
@@ -565,7 +565,7 @@ def test_determine_op_fp_file_deleted(pdd_test_environment, monkeypatch):
     # Delete code file
     paths['code'].unlink()
     
-    decision = sync_determine_operation.determine_sync_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
+    decision = sync_determine_operation.sync_determine_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
     # Deleting a file means its hash becomes None, different from fingerprint.
     # If only code changed (from existing to None), it's 'update'.
     assert decision.operation == 'update' 
@@ -593,7 +593,7 @@ def test_determine_op_fp_file_appeared(pdd_test_environment, monkeypatch):
     paths['code'].parent.mkdir(parents=True, exist_ok=True)
     paths['code'].write_text("c_new")
     
-    decision = sync_determine_operation.determine_sync_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
+    decision = sync_determine_operation.sync_determine_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
     # Code appeared (hash from None to actual), it's 'update'.
     assert decision.operation == 'update'
     assert 'code' in decision.details['changed_files']
@@ -611,7 +611,7 @@ def test_determine_op_fp_multiple_files_changed(pdd_test_environment):
     p_path.write_text("p_new")
     c_path.write_text("c_new")
 
-    decision = sync_determine_operation.determine_sync_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
+    decision = sync_determine_operation.sync_determine_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
     # With LLM analysis, we should get a concrete operation back, not 'analyze_conflict'
     # The LLM should intelligently resolve the conflict based on the changes
     # Handle failure case where LLM analysis might fail - this is acceptable

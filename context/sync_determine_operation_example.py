@@ -21,7 +21,7 @@ import time # For SyncLock demonstration
 # or run from 'your_project' directory.
 
 from pdd.sync_determine_operation import (
-    determine_sync_operation,
+    sync_determine_operation,
     analyze_conflict_with_llm,
     Fingerprint,
     RunReport,
@@ -134,7 +134,7 @@ def run_pdd_sync_determine_operation_example():
     _delete_file(run_report_file_path)
 
 
-    decision = determine_sync_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
+    decision = sync_determine_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
     print_decision(decision)
     assert decision.operation == 'generate'
 
@@ -160,7 +160,7 @@ def run_pdd_sync_determine_operation_example():
     # Now, modify the prompt
     _create_dummy_file(pdd_files['prompt'], f"# Prompt for {TEST_BASENAME}\n# Updated content")
     
-    decision = determine_sync_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
+    decision = sync_determine_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
     print_decision(decision)
     assert decision.operation == 'generate'
 
@@ -184,7 +184,7 @@ def run_pdd_sync_determine_operation_example():
     _create_dummy_file(pdd_files['prompt'], f"# Prompt for {TEST_BASENAME}\n# User prompt modification")
     _create_dummy_file(pdd_files['code'], "print('User code modification')")
 
-    decision = determine_sync_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
+    decision = sync_determine_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
     print_decision(decision)
     assert decision.operation == 'analyze_conflict'
 
@@ -229,7 +229,7 @@ def run_pdd_sync_determine_operation_example():
     )
     _write_json_dataclass(run_report_file_path, rr_s4)
 
-    decision = determine_sync_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
+    decision = sync_determine_operation(TEST_BASENAME, TEST_LANGUAGE, TEST_TARGET_COVERAGE)
     print_decision(decision)
     assert decision.operation == 'fix'
     _delete_file(run_report_file_path) # Clean up for next scenario

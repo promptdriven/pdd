@@ -11,7 +11,7 @@ from pdd.sync_determine_operation import SyncDecision, get_pdd_file_paths
 # Test Plan:
 # The sync_orchestration module is the central coordinator for the `pdd sync` command.
 # Its primary responsibilities are:
-# 1. Managing the overall workflow based on decisions from `determine_sync_operation`.
+# 1. Managing the overall workflow based on decisions from `sync_determine_operation`.
 # 2. Handling resource constraints like budget and concurrent execution locks.
 # 3. Coordinating a parallel animation thread for user feedback.
 # 4. Calling the appropriate PDD sub-command functions with the correct parameters.
@@ -42,7 +42,7 @@ def orchestration_fixture(tmp_path):
     monkeypatch.chdir(tmp_path)
 
     # Patch the module where the functions are used, not where they are defined
-    with patch('pdd.sync_orchestration.determine_sync_operation') as mock_determine, \
+    with patch('pdd.sync_orchestration.sync_determine_operation') as mock_determine, \
          patch('pdd.sync_orchestration.SyncLock') as mock_lock, \
          patch('pdd.sync_orchestration.sync_animation') as mock_animation, \
          patch('pdd.sync_orchestration.auto_deps_main') as mock_auto_deps, \
@@ -71,7 +71,7 @@ def orchestration_fixture(tmp_path):
         mock_display_log.return_value = {'success': True, 'log_entries': ['log entry']}
 
         yield {
-            'determine_sync_operation': mock_determine,
+            'sync_determine_operation': mock_determine,
             'SyncLock': mock_lock,
             'sync_animation': mock_animation,
             'auto_deps_main': mock_auto_deps,
@@ -94,7 +94,7 @@ def test_happy_path_full_sync(orchestration_fixture):
     """
     Tests a complete, successful sync workflow from start to finish.
     """
-    mock_determine = orchestration_fixture['determine_sync_operation']
+    mock_determine = orchestration_fixture['sync_determine_operation']
     mock_determine.side_effect = [
         SyncDecision(operation='generate', reason='New unit'),
         SyncDecision(operation='example', reason='Code exists, example missing'),
@@ -121,7 +121,7 @@ def test_sync_stops_on_operation_failure(orchestration_fixture):
     """
     Ensures the workflow halts immediately if any step fails.
     """
-    mock_determine = orchestration_fixture['determine_sync_operation']
+    mock_determine = orchestration_fixture['sync_determine_operation']
     mock_determine.side_effect = [
         SyncDecision(operation='generate', reason='New unit'),
         SyncDecision(operation='example', reason='Code exists, example missing'),
@@ -140,7 +140,7 @@ def test_budget_exceeded(orchestration_fixture):
     """
     Verifies the workflow stops when the budget is exceeded.
     """
-    mock_determine = orchestration_fixture['determine_sync_operation']
+    mock_determine = orchestration_fixture['sync_determine_operation']
     mock_determine.side_effect = [
         SyncDecision(operation='generate', reason='New unit'),
         SyncDecision(operation='example', reason='Code exists, example missing'),
@@ -167,7 +167,7 @@ def test_lock_failure(orchestration_fixture):
 
     assert result['success'] is False
     assert "Could not acquire lock" in result['errors'][0]
-    orchestration_fixture['determine_sync_operation'].assert_not_called()
+    orchestration_fixture['sync_determine_operation'].assert_not_called()
     orchestration_fixture['sync_animation'].assert_not_called()
 
 def test_log_mode(orchestration_fixture):
@@ -182,13 +182,13 @@ def test_log_mode(orchestration_fixture):
     assert result == mock_log_display.return_value
     # Ensure main workflow components were not touched
     orchestration_fixture['SyncLock'].assert_not_called()
-    orchestration_fixture['determine_sync_operation'].assert_not_called()
+    orchestration_fixture['sync_determine_operation'].assert_not_called()
 
 def test_skip_verify_flag(orchestration_fixture):
     """
     Tests that the --skip-verify flag correctly bypasses the verify step.
     """
-    mock_determine = orchestration_fixture['determine_sync_operation']
+    mock_determine = orchestration_fixture['sync_determine_operation']
     mock_determine.side_effect = [
         SyncDecision(operation='generate', reason='New unit'),
         SyncDecision(operation='verify', reason='Ready to verify'),
@@ -210,7 +210,7 @@ def test_skip_tests_flag(orchestration_fixture):
     """
     Tests that the --skip-tests flag correctly bypasses the test generation step.
     """
-    mock_determine = orchestration_fixture['determine_sync_operation']
+    mock_determine = orchestration_fixture['sync_determine_operation']
     mock_determine.side_effect = [
         SyncDecision(operation='generate', reason='New unit'),
         SyncDecision(operation='test', reason='Ready for tests'),
@@ -227,9 +227,9 @@ def test_skip_tests_flag(orchestration_fixture):
 
 def test_manual_merge_request(orchestration_fixture):
     """
-    Tests behavior when determine_sync_operation signals a conflict.
+    Tests behavior when sync_determine_operation signals a conflict.
     """
-    mock_determine = orchestration_fixture['determine_sync_operation']
+    mock_determine = orchestration_fixture['sync_determine_operation']
     mock_determine.return_value = SyncDecision(
         operation='fail_and_request_manual_merge',
         reason='Prompt and code both changed'
@@ -245,7 +245,7 @@ def test_unexpected_exception_handling(orchestration_fixture):
     """
     Ensures the finally block runs and cleans up even with unexpected errors.
     """
-    mock_determine = orchestration_fixture['determine_sync_operation']
+    mock_determine = orchestration_fixture['sync_determine_operation']
     mock_determine.return_value = SyncDecision(operation='generate', reason='New unit')
     orchestration_fixture['code_generator_main'].side_effect = ValueError("Unexpected error")
 
@@ -268,7 +268,7 @@ def test_final_state_reporting(orchestration_fixture, tmp_path):
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.chdir(tmp_path)
 
-    mock_determine = orchestration_fixture['determine_sync_operation']
+    mock_determine = orchestration_fixture['sync_determine_operation']
     mock_determine.side_effect = [
         SyncDecision(operation='generate', reason='New unit'),
         SyncDecision(operation='all_synced', reason='Done'),

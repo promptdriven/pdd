@@ -82,13 +82,13 @@ TESTS_ROOT_DIR = Path("tests")         # ✅ Correct default
 **The Core Issue:** `sync_orchestration.py:206`
 ```python
 while True:
-    decision = determine_sync_operation(basename, language, target_coverage)
+    decision = sync_determine_operation(basename, language, target_coverage)
     operation = decision.operation
     # ... execute operation ...
     # ❌ NO FINGERPRINT STATE IS SAVED AFTER OPERATION SUCCESS
 ```
 
-**Result:** Every call to `determine_sync_operation` returns the same recommendation because no fingerprint is created to track progress.
+**Result:** Every call to `sync_determine_operation` returns the same recommendation because no fingerprint is created to track progress.
 
 **Evidence from sync_determine_operation.py:518-528:**
 ```python
@@ -103,10 +103,10 @@ if not fingerprint:
 ### 4. **Infinite Loop in Decision Logic**
 
 **Sequence of Events:**
-1. First call: `determine_sync_operation()` → `'generate'` (no fingerprint exists)
+1. First call: `sync_determine_operation()` → `'generate'` (no fingerprint exists)
 2. Execute `generate` operation → succeeds, creates `./get_extension.py`
 3. **❌ No fingerprint saved to track this success**
-4. Second call: `determine_sync_operation()` → looks for `src/get_extension.py` (wrong path)
+4. Second call: `sync_determine_operation()` → looks for `src/get_extension.py` (wrong path)
 5. **❌ File not found at expected location, returns 'generate' again**
 6. Loop continues indefinitely until failure
 
@@ -191,8 +191,8 @@ def get_pdd_file_paths(basename: str, language: str,
         'test': Path(tests_dir) / f"test_{basename}.{ext}",
     }
 
-# Update determine_sync_operation to use configuration-aware paths
-def determine_sync_operation(basename: str, language: str, target_coverage: float = 80.0,
+# Update sync_determine_operation to use configuration-aware paths
+def sync_determine_operation(basename: str, language: str, target_coverage: float = 80.0,
                            **path_overrides) -> SyncDecision:
     """Use configuration-aware path resolution."""
     paths = get_pdd_file_paths(basename, language, **path_overrides)

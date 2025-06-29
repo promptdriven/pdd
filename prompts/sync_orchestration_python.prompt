@@ -127,7 +127,7 @@ The orchestrator should execute these operations in order as determined by `sync
 ### Handling Skipped Operations
 If `--skip-verify` or `--skip-tests` flags are used, the orchestrator should not simply ignore the step. To ensure the state machine progresses correctly, it should:
 1. Log that the operation was skipped.
-2. Simulate a successful run for that operation by creating a `RunReport` and saving it. This updates the state, allowing `determine_sync_operation` to correctly select the next step.
+2. Simulate a successful run for that operation by creating a `RunReport` and saving it. This updates the state, allowing `sync_determine_operation` to correctly select the next step.
 
 ### Parallel Animation System
 
@@ -149,7 +149,7 @@ For each operation:
 2. **Update Animation**: Set `function_name_ref` to the current operation.
 3. **Execute Command**: Run the appropriate PDD `*_main` function.
 4. **Track Results**: Update cost, file paths, and status colors.
-5. **Persist State**: **If the operation was successful, save a new `Fingerprint` to disk.** This updates the state so the next call to `determine_sync_operation` can make a new decision.
+5. **Persist State**: **If the operation was successful, save a new `Fingerprint` to disk.** This updates the state so the next call to `sync_determine_operation` can make a new decision.
 6. **Handle Errors**: Implement retry logic up to `max_attempts` or break the loop on a definitive failure.
 
 ### State and Path Management
@@ -303,7 +303,7 @@ def sync_orchestration(..., log=False, verbose=False):
             # 2. Begin the main workflow loop
             while True:
                 # 3. Determine the next operation
-                decision = determine_sync_operation(...)
+                decision = sync_determine_operation(...)
                 
                 # 4. Execute the operation
                 # ...
