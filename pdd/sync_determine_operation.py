@@ -196,12 +196,15 @@ def get_extension(language: str) -> str:
     return extensions.get(language.lower(), language.lower())
 
 
-def get_pdd_file_paths(basename: str, language: str) -> Dict[str, Path]:
+def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts") -> Dict[str, Path]:
     """Returns a dictionary mapping file types to their expected Path objects."""
     try:
         # Use construct_paths to get configuration-aware paths
+        prompt_filename = f"{basename}_{language}.prompt"
+        prompt_path = str(Path(prompts_dir) / prompt_filename)
+        
         input_file_paths = {
-            "prompt_file": f"{basename}_{language}.prompt"
+            "prompt_file": prompt_path
         }
         
         resolved_config, input_strings, output_file_paths, detected_language = construct_paths(
@@ -216,7 +219,7 @@ def get_pdd_file_paths(basename: str, language: str) -> Dict[str, Path]:
         extension = get_extension(language)
         
         return {
-            'prompt': Path(input_file_paths['prompt_file']),
+            'prompt': Path(prompt_path),
             'code': Path(output_file_paths.get('code_file', f"{basename}.{extension}")),
             'example': Path(output_file_paths.get('example_file', f"{basename}_example.{extension}")),
             'test': Path(output_file_paths.get('test_file', f"test_{basename}.{extension}"))
@@ -226,7 +229,7 @@ def get_pdd_file_paths(basename: str, language: str) -> Dict[str, Path]:
         # Fallback to simple naming if construct_paths fails
         extension = get_extension(language)
         return {
-            'prompt': Path(f"{basename}_{language}.prompt"),
+            'prompt': Path(prompts_dir) / f"{basename}_{language}.prompt",
             'code': Path(f"{basename}.{extension}"),
             'example': Path(f"{basename}_example.{extension}"),
             'test': Path(f"test_{basename}.{extension}")
@@ -336,7 +339,7 @@ def check_for_dependencies(prompt_content: str) -> bool:
     return any(indicator in prompt_lower for indicator in dependency_indicators)
 
 
-def sync_determine_operation(basename: str, language: str, target_coverage: float, budget: float = 10.0, log_mode: bool = False) -> SyncDecision:
+def sync_determine_operation(basename: str, language: str, target_coverage: float, budget: float = 10.0, log_mode: bool = False, prompts_dir: str = "prompts") -> SyncDecision:
     """
     Core decision-making function for sync operations.
     
@@ -346,6 +349,7 @@ def sync_determine_operation(basename: str, language: str, target_coverage: floa
         target_coverage: Desired test coverage percentage
         budget: Maximum budget for operations
         log_mode: If True, skip locking entirely for read-only analysis
+        prompts_dir: Directory containing prompt files
     
     Returns:
         SyncDecision object with the recommended operation
@@ -353,14 +357,14 @@ def sync_determine_operation(basename: str, language: str, target_coverage: floa
     
     if log_mode:
         # Skip locking for read-only analysis
-        return _perform_sync_analysis(basename, language, target_coverage, budget)
+        return _perform_sync_analysis(basename, language, target_coverage, budget, prompts_dir)
     else:
         # Normal exclusive locking for actual operations
         with SyncLock(basename, language) as lock:
-            return _perform_sync_analysis(basename, language, target_coverage, budget)
+            return _perform_sync_analysis(basename, language, target_coverage, budget, prompts_dir)
 
 
-def _perform_sync_analysis(basename: str, language: str, target_coverage: float, budget: float) -> SyncDecision:
+def _perform_sync_analysis(basename: str, language: str, target_coverage: float, budget: float, prompts_dir: str = "prompts") -> SyncDecision:
     """
     Perform the sync state analysis without locking concerns.
     
@@ -369,6 +373,7 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
         language: The programming language
         target_coverage: Desired test coverage percentage
         budget: Maximum budget for operations
+        prompts_dir: Directory containing prompt files
     
     Returns:
         SyncDecision object with the recommended operation
@@ -427,7 +432,7 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
             )
     
     # 2. Analyze File State
-    paths = get_pdd_file_paths(basename, language)
+    paths = get_pdd_file_paths(basename, language, prompts_dir)
     current_hashes = calculate_current_hashes(paths)
     
     # 3. Implement the Decision Tree
