@@ -150,7 +150,7 @@ def sync_orchestration(
         return _display_sync_log(basename, language, verbose)
 
     # --- Initialize State and Paths ---
-    pdd_files = get_pdd_file_paths(basename, language)
+    pdd_files = get_pdd_file_paths(basename, language, prompts_dir)
     
     # Shared state for animation thread
     current_function_name_ref = ["initializing"]
@@ -190,7 +190,7 @@ def sync_orchestration(
                     errors.append(f"Budget of ${budget:.2f} exceeded.")
                     break
 
-                decision = sync_determine_operation(basename, language, target_coverage)
+                decision = sync_determine_operation(basename, language, target_coverage, budget - current_cost_ref[0], False, prompts_dir)
                 operation = decision.operation
 
                 if operation in ['all_synced', 'nothing', 'fail_and_request_manual_merge', 'error']:
