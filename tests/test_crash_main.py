@@ -150,14 +150,14 @@ def test_crash_fix_with_loop(ctx, test_files):
 
 def test_crash_fix_without_output_paths(ctx, test_files):
     """Test crash fix without specifying output paths"""
-    # Ensure default output files do not exist before the test
     # The default basename will be 'test_prompt' from the prompt file
-    default_output_code = "test_prompt_fixed.py"
-    default_output_program = "test_prompt_program_fixed.py"
-    if os.path.exists(default_output_code):
-        os.remove(default_output_code)
-    if os.path.exists(default_output_program):
-        os.remove(default_output_program)
+    os.makedirs("output", exist_ok=True)
+    output_code = "output/test_prompt_fixed.py"
+    output_program = "output/test_prompt_program_fixed.py"
+    if os.path.exists(output_code):
+        os.remove(output_code)
+    if os.path.exists(output_program):
+        os.remove(output_program)
 
     # FIX: Set force=True to prevent interactive prompts in tests
     ctx.params['force'] = True
@@ -168,8 +168,9 @@ def test_crash_fix_without_output_paths(ctx, test_files):
         prompt_file=test_files["prompt_file"],
         code_file=test_files["code_file"],
         program_file=test_files["program_file"],
-        error_file=test_files["error_file"]
-        # No output paths specified, force=True now set in ctx
+        error_file=test_files["error_file"],
+        output=output_code,
+        output_program=output_program
     )
     
     assert success is True
@@ -179,8 +180,8 @@ def test_crash_fix_without_output_paths(ctx, test_files):
     assert isinstance(cost, float)
     assert isinstance(model, str)
     # Check if default files were created in the root directory
-    assert os.path.exists(default_output_code)
-    assert os.path.exists(default_output_program)
+    assert os.path.exists(output_code)
+    assert os.path.exists(output_program)
 
 def test_crash_fix_with_invalid_files(ctx):
     """Test crash fix with invalid input files"""
@@ -200,12 +201,12 @@ def test_crash_fix_with_verbose_output(ctx, test_files):
     ctx.obj['verbose'] = True # Also set in obj for consistency if accessed there
 
     # Ensure default output files do not exist before the test
-    default_output_code = "test_fixed.py"
-    default_output_program = "test_program_fixed.py"
-    if os.path.exists(default_output_code):
-        os.remove(default_output_code)
-    if os.path.exists(default_output_program):
-        os.remove(default_output_program)
+    output_code = "output/test_fixed.py"
+    output_program = "output/test_program_fixed.py"
+    if os.path.exists(output_code):
+        os.remove(output_code)
+    if os.path.exists(output_program):
+        os.remove(output_program)
 
     # FIX: Set force=True to prevent interactive prompts in tests
     ctx.params['force'] = True
@@ -216,8 +217,9 @@ def test_crash_fix_with_verbose_output(ctx, test_files):
         prompt_file=test_files["prompt_file"],
         code_file=test_files["code_file"],
         program_file=test_files["program_file"],
-        error_file=test_files["error_file"]
-        # No output paths specified, force=True now set
+        error_file=test_files["error_file"],
+        output=output_code,
+        output_program=output_program
     )
     
     assert success is True
@@ -233,12 +235,12 @@ def test_crash_fix_with_quiet_mode(ctx, test_files):
     ctx.obj['quiet'] = True # Also set in obj for consistency
 
     # Ensure default output files do not exist before the test
-    default_output_code = "test_fixed.py"
-    default_output_program = "test_program_fixed.py"
-    if os.path.exists(default_output_code):
-        os.remove(default_output_code)
-    if os.path.exists(default_output_program):
-        os.remove(default_output_program)
+    output_code = "output/test_fixed_quiet.py"
+    output_program = "output/test_program_fixed_quiet.py"
+    if os.path.exists(output_code):
+        os.remove(output_code)
+    if os.path.exists(output_program):
+        os.remove(output_program)
 
     # FIX: Set force=True to prevent interactive prompts in tests
     ctx.params['force'] = True
@@ -249,8 +251,9 @@ def test_crash_fix_with_quiet_mode(ctx, test_files):
         prompt_file=test_files["prompt_file"],
         code_file=test_files["code_file"],
         program_file=test_files["program_file"],
-        error_file=test_files["error_file"]
-        # No output paths specified, force=True now set
+        error_file=test_files["error_file"],
+        output=output_code,
+        output_program=output_program
     )
     
     assert success is True
