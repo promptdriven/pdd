@@ -13,16 +13,19 @@ from unittest.mock import patch, MagicMock, mock_open
 
 # Import the module and classes under test
 # Assuming the test file is in 'tests/' and the module is in 'pdd/'
-from pdd import sync_determine_operation
+import pdd.sync_determine_operation as sync_determine_operation
 from pdd.sync_determine_operation import (
     Fingerprint,
     RunReport,
     SyncDecision,
     SyncLock,
-    LLMConflictResolutionOutput,
     get_pdd_file_paths, # For convenience in tests
     calculate_sha256, # For convenience
-    _ensure_pdd_dirs_exist # For direct testing if needed
+    sync_determine_operation,
+    analyze_conflict_with_llm,
+    PDD_DIR,
+    META_DIR,
+    LOCKS_DIR
 )
 
 # --- Constants for Tests ---
@@ -60,9 +63,8 @@ def pdd_test_environment(tmp_path, monkeypatch):
     monkeypatch.setattr(sync_determine_operation, 'PDD_DIR', pdd_dir)
     monkeypatch.setattr(sync_determine_operation, 'LOCKS_DIR', locks_dir)
     monkeypatch.setattr(sync_determine_operation, 'META_DIR', meta_dir)
-    monkeypatch.setattr(sync_determine_operation, 'PROMPTS_ROOT_DIR', prompts_root)
-    monkeypatch.setattr(sync_determine_operation, 'EXAMPLES_ROOT_DIR', examples_root)
-    monkeypatch.setattr(sync_determine_operation, 'TESTS_ROOT_DIR', tests_root)
+    # Note: PROMPTS_ROOT_DIR, EXAMPLES_ROOT_DIR, TESTS_ROOT_DIR don't exist in our implementation
+    # We'll just patch the get_pdd_file_paths function if needed
 
 
     class FileCreator:

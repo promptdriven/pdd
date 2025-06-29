@@ -374,16 +374,39 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
         SyncDecision object with the recommended operation
     """
     # 1. Check Runtime Signals First (Highest Priority)
+    # Workflow Order (from whitepaper):
+    # 1. auto-deps (find context/dependencies)
+    # 2. generate (create code module)  
+    # 3. example (create usage example)
+    # 4. crash (resolve crashes if code doesn't run)
+    # 5. verify (verify example runs correctly after crash fix)
+    # 6. test (generate unit tests)
+    # 7. fix (resolve bugs found by tests)
+    # 8. update (sync changes back to prompt)
+    
+    # Read fingerprint early since we need it for crash verification
+    fingerprint = read_fingerprint(basename, language)
+    
     run_report = read_run_report(basename, language)
     if run_report:
         if run_report.exit_code != 0:
-            return SyncDecision(
-                operation='crash',
-                reason='Runtime error detected in last run',
-                details={'exit_code': run_report.exit_code},
-                estimated_cost=2.0,
-                confidence=0.95
-            )
+            # Check if this was from a crash fix that needs verification
+            if fingerprint and fingerprint.command == 'crash':
+                return SyncDecision(
+                    operation='verify',
+                    reason='Previous crash was fixed - verify example runs correctly',
+                    details={'previous_command': 'crash', 'previous_exit_code': run_report.exit_code},
+                    estimated_cost=0.7,
+                    confidence=0.90
+                )
+            else:
+                return SyncDecision(
+                    operation='crash',
+                    reason='Runtime error detected in last run',
+                    details={'exit_code': run_report.exit_code},
+                    estimated_cost=2.0,
+                    confidence=0.95
+                )
         
         if run_report.tests_failed > 0:
             return SyncDecision(
@@ -404,7 +427,6 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
             )
     
     # 2. Analyze File State
-    fingerprint = read_fingerprint(basename, language)
     paths = get_pdd_file_paths(basename, language)
     current_hashes = calculate_current_hashes(paths)
     
