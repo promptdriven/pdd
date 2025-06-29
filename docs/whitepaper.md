@@ -191,7 +191,7 @@ flowchart TD
     end
     
     subgraph Verification
-        E --> F["fix\n(Resolve Crashes)"]
+        E --> F["crash\n(Resolve Runtime Errors)"]
         F --> G["verify\n(Functional Correctness)"]
         G -->|Issues| F
     end
@@ -224,10 +224,11 @@ A typical PDD workflow involves a **batch-oriented, synchronized cycle**, contra
 1.  **Define**: Start with a requirement (e.g., from a PRD) and break it down into a specific prompt for a code module. Use `auto-deps` to find and include necessary context.
 2.  **Generate**: Use `generate` to create the code module from the prompt.
 3.  **Example**: Use `example` to create a minimal usage example (the interface).
-4.  **Verify (Initial)**: Use `verify` or `crash` to ensure the example/code runs and aligns with the prompt's intent, fixing basic issues iteratively.
-5.  **Test**: Use `test` to generate unit tests for the code module.
-6.  **Fix**: Use `fix` along with the generated tests to identify and correct bugs in the generated code, iterating until tests pass.
-7.  **Update & Back-propagate**: Use `update` to synchronize any necessary changes made during fixing back to the prompt. Crucially, propagate these learnings back up the chain to architectural specs or parent prompts to ensure consistency across the system.
+4.  **Crash**: Use `crash` to fix any runtime errors that prevent the code/example from running.
+5.  **Verify**: After resolving crashes, use `verify` to ensure the example runs correctly and aligns with the prompt's intent.
+6.  **Test**: Use `test` to generate unit tests for the code module.
+7.  **Fix**: Use `fix` along with the generated tests to identify and correct bugs in the generated code, iterating until tests pass.
+8.  **Update & Back-propagate**: Use `update` to synchronize any necessary changes made during fixing back to the prompt. Crucially, propagate these learnings back up the chain to architectural specs or parent prompts to ensure consistency across the system.
 
 The fundamental unit is often considered the prompt and its generated code, example, and test file – all kept in sync. If a prompt is too complex to generate correctly in one shot (even with fixing), it should be split (`split`) into smaller, manageable units.
 
