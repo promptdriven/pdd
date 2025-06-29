@@ -151,6 +151,7 @@ def test_crash_fix_with_loop(ctx, test_files):
 def test_crash_fix_without_output_paths(ctx, test_files):
     """Test crash fix without specifying output paths"""
     # The default basename will be 'test_prompt' from the prompt file
+    os.makedirs("output", exist_ok=True)
     output_code = "output/test_prompt_fixed.py"
     output_program = "output/test_prompt_program_fixed.py"
     if os.path.exists(output_code):
