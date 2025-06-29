@@ -66,20 +66,11 @@ Implement a `SyncLock` context manager:
 
 Implement the following helper functions:
 
--   `get_pdd_file_paths(basename: str, language: str) -> Dict[str, Path]`: Returns a dictionary mapping file types ('prompt', 'code', 'example', 'test') to their expected `pathlib.Path` objects. The implementation should use the project's internal configuration-aware functions:
-    ```python
-    from pdd.construct_paths import construct_paths
-    
-    # Use construct_paths to get configuration-aware paths
-    
-    # Extract paths from config
-    return {
-        'prompt': Path(config['prompt_file']),
-        'code': Path(config['code_file']),
-        'example': Path(config['example_file']),
-        'test': Path(config['test_file'])
-    }
-    ```
+-   `get_pdd_file_paths(basename: str, language: str) -> Dict[str, Path]`: Returns a dictionary mapping file types ('prompt', 'code', 'example', 'test') to their expected `pathlib.Path` objects. Use the project's internal `construct_paths` function (see included examples) to get configuration-aware paths. The function should:
+    - Build the prompt file path from basename and language
+    - Call `construct_paths` to get the output paths based on project configuration
+    - Extract the code path from the returned `output_file_paths`
+    - Derive example and test paths based on the code file location
 -   `calculate_sha256(file_path: Path) -> Optional[str]`: Calculates the SHA256 hash of a file if it exists, otherwise returns `None`.
 -   `read_fingerprint(basename: str, language: str) -> Optional[Fingerprint]`: Reads and validates the JSON fingerprint file. Returns `None` if it doesn't exist or is invalid.
 -   `read_run_report(basename: str, language: str) -> Optional[RunReport]`: Reads and validates the JSON run report file.
@@ -220,5 +211,7 @@ The sync_determine_operation function provides single-unit analysis while sync_o
 - Stop if budget is exceeded or max attempts reached
 - Handle the actual execution of operations (generate, test, fix, etc.)
 - Update fingerprints and run reports after each operation
+
+**Note on Implementation**: The orchestration layer may pass additional parameters (like `prompts_dir`) to help locate prompt files in different project structures. The `get_pdd_file_paths` function should be flexible enough to accept such parameters.
 
 Define the PDD_DIR, META_DIR, LOCKS_DIR constants so that other modules can use them.
