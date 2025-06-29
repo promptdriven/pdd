@@ -53,7 +53,7 @@ cd pdd
 1. Read through the [PDD Whitepaper](https://www.notion.so/Whitepaper-The-Case-for-Prompt-Driven-Development-1efd44f08ca480ac987ae068f2578f83) to understand the core concepts and architecture
 2. Review the [main README.md](https://github.com/gltanaka/pdd/blob/main/README.md) for project overview and setup instructions
 
-### 5. Set Up Cursor IDE
+### 5. Set Up Cursor IDE (*Optional but heavily recommended, Visual Studio Code or other similar IDE)
 
 1. Visit [Cursor.sh](https://cursor.sh) and sign up for a trial account
 2. Download and install Cursor for your operating system
@@ -61,106 +61,70 @@ cd pdd
 
 ### 6. Install .prompt Extension
 
-1. Find and download the `prompt-0.0.1.vsix` file from Slack
-2. Open Cursor
-3. Open the command palette:
-   - Use `Ctrl+Shift+P` (or `Cmd+Shift+P` on macOS)
-4. Type "Extensions: Install from VSIX" and select it
-5. Locate and select the `prompt-0.0.1.vsix` file you downloaded
-6. Confirm the installation. You may need to reload the window to activate it.
+To enable syntax highlighting for `.prompt` files in your editor, you'll need to install the PDD extension.
 
-1.  **Locate the Extension:** The extension file (`prompt-*.vsix`) is located in the `dist/` directory of this repository. Alternatively, it can be downloaded from the project's [GitHub Releases](https://github.com/gltanaka/pdd/releases).
-2.  **Open Cursor** and the command palette (`Ctrl+Shift+P` or `Cmd+Shift+P`).
-3.  Type and select **"Extensions: Install from VSIX..."**
-4.  Locate and select the `prompt-*.vsix` file to install it.
+1.  **Download the Extension:**
+    -   Navigate to the [project's GitHub Releases page](https://github.com/gltanaka/pdd/releases).
+    -   Download the latest version of the extension, which will be a file named `prompt-*.vsix`.
 
-### 7. Set Up Infisical for Secrets Management
+2.  **Install in your IDE:**
+    -   Open your IDE (Cursor, VS Code, etc.).
+    -   Open the command palette with `Ctrl+Shift+P` (or `Cmd+Shift+P` on macOS).
+    -   Type `"Extensions: Install from VSIX..."` and select it.
+    -   Locate the `prompt-*.vsix` file you downloaded and select it to complete the installation.
 
-1. Install Infisical CLI:
+### 7. Set Up Infisical for Secrets Management (Recommended)
 
-   **Windows (PowerShell):**
-   ```powershell
-   winget install infisical
-   ```
+Managing API keys and other secrets securely is crucial. We recommend using [Infisical](https://infisical.com/) to handle your environment variables.
 
-   **macOS:**
-   ```bash
-   brew install infisical
-   ```
+**1. Install the Infisical CLI:**
 
-   **Linux:**
-   ```bash
-   curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo -E bash
-   ```
+Choose the command for your operating system:
 
-2. Accept Project Invitation:
-   - Check your email for an invitation to the PDD project in Infisical
-   - Click the invitation link and accept the project
-   - Verify that you can see the `PDD-secrets` project in your Infisical dashboard
-
-3. Authenticate and Link:
-   ```bash
-   # Login to Infisical
-   infisical login
-   
-   # Link the project (run this in your PDD project directory)
-   infisical init
-   ```
-
-## Next Steps
-
-- Join the PDD community on Discord
-- Review example projects in the `examples/` directory
-- Start with the basic tutorials in the documentation
-
-## Troubleshooting
-
-If you encounter any issues during setup:
-
-1. Re-read the instructions carefully.
-2. Check the [README](https://github.com/gltanaka/pdd/blob/main/README.md) for additional details.
-3. Search existing issues on GitHub.
-4. Join the [Discord](https://discord.gg/Q7Ts5Qt3) community for support.
-
----
-
-## Appendix: Advanced Setup for Local Development (including WSL)
-
-The steps below are **required** for developers who want to contribute code, run the test suite, and work on PDD locally.
-
-### For Windows Users: Install WSL
-
-If you are on Windows, you **must** use the Windows Subsystem for Linux (WSL) to run project commands like `make test`.
-
--   **Action:** Install WSL by following the [official Microsoft guide](https://learn.microsoft.com/en-us/windows/wsl/install). An Ubuntu distribution is recommended.
--   **Important:** For optimal performance, clone the repository and run all subsequent commands **inside your WSL home directory (`~/`)**, not on a mounted Windows drive (`/mnt/c/...`).
-
-### Environment Setup with Conda
-
-The development environment relies on Conda to manage Python versions and dependencies.
-
-1.  **Install Anaconda/Miniconda:** Follow the official instructions on the [Anaconda website](https://www.anaconda.com/products/distribution).
-2.  **Create and Activate Conda Environment:**
-    ```bash
-    # Create the environment
-    conda create --name pdd python=3.11 -y
-
-    # Activate the environment
-    conda activate pdd
+-   **Windows (PowerShell):**
+    ```powershell
+    winget install infisical
     ```
-    *You must activate this environment whenever you work on the project. Your terminal prompt should now be prefixed with `(pdd)`.*
+-   **macOS:**
+    ```bash
+    brew install infisical
+    ```
+-   **Linux:**
+    ```bash
+    curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo -E bash
+    ```
 
-3. **Install Project Dependencies:**
-   With the `pdd` environment active, install the required Python packages and the project in editable mode from the project root.
-   ```bash
-   pip install -r requirements.txt
-   pip install -e .
-   ```
-   *Installing with `-e .` (editable mode) is crucial for development, as it makes your changes to the source code take effect without needing to reinstall the package.*
+**2. Configure Your Project:**
 
-### Running Commands with Secrets
+You can either use your own Infisical project or join an existing one.
 
-Any command that requires API keys (like `make test`) must be run using the `infisical run` wrapper, which injects the secrets into the command's environment.
+-   **To use your own project:**
+    1.  Set up a new project in your Infisical dashboard.
+    2.  Add all the API keys you intend to use with PDD.
+    3.  Refer to the [Infisical Quick Start Guide](https://infisical.com/docs/cli/usage) for more details.
+-   **To join an existing project:**
+    1.  Check your email for an invitation.
+    2.  Accept the invitation and ensure you can see the project in your dashboard.
+
+**3. Authenticate and Link Your Local Repository:**
+
+Run these commands in your terminal from the root of the `pdd` repository:
+
+```bash
+# Log in to your Infisical account
+infisical login
+
+# Link your local repo to the Infisical project
+infisical init
+```
+
+**Important Notes on Secrets Management:**
+- Using Infisical is the recommended way to manage secrets, as it avoids storing keys in plaintext files like `.env`.
+- If you use a local `.env` file for non-secret values (e.g., local file paths), ensure that the keys do not overlap with any secret names in your Infisical project. In case of a name conflict, Infisical's values will take precedence.
+
+Any command that requires API keys (like `make test`) should be run using the `infisical run` wrapper. This command injects the secrets from your Infisical project into the command's environment, making them securely available.
+
+If your local `.env` file contains keys that are also present in your Infisical project, the values from Infisical will be used. Keys that exist only in your local `.env` file will also be loaded.
 
 - **Example:**
   ```bash
@@ -230,3 +194,19 @@ This is the most robust method to ensure `PDD_PATH` is always set correctly when
     echo $PDD_PATH
     # It should print the correct path: /path/to/your/project/pdd
     ```
+
+---
+## Next Steps
+
+- Join the PDD community on Discord
+- Review example projects in the `examples/` directory
+- Start with the basic tutorials in the documentation
+
+## Troubleshooting
+
+If you encounter any issues during setup:
+
+1. Re-read the instructions carefully.
+2. Check the [README](https://github.com/gltanaka/pdd/blob/main/README.md) for additional details.
+3. Search existing issues on GitHub.
+4. Join the [Discord](https://discord.gg/Q7Ts5Qt3) community for support.
