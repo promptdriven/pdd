@@ -150,7 +150,7 @@ def sync_orchestration(
         return _display_sync_log(basename, language, verbose)
 
     # --- Initialize State and Paths ---
-    pdd_files = get_pdd_file_paths(basename, language, context_config)
+    pdd_files = get_pdd_file_paths(basename, language)
     
     # Shared state for animation thread
     current_function_name_ref = ["initializing"]

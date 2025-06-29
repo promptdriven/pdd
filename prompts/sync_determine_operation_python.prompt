@@ -126,7 +126,7 @@ Log mode performs the complete analysis (reading fingerprints, calculating hashe
     3. Missing dependencies (`auto-deps`) - before generate
     4. Code generation (`generate`) - when prompt changed
     5. Example generation (`example`) - after code exists
-    6. Verification (`verify`) - after example exists
+    6. Verification (`verify`) - after example exists and doesn't crash
     7. Test generation (`test`) - after code verified
     8. Prompt updates (`update`) - when code changed
     9. Complex conflicts (`analyze_conflict`) - when multiple files changed
