@@ -48,9 +48,12 @@ def main():
     print("SCENARIO 1: New Unit")
     print("  - State: A new prompt file exists. No other files or history.")
     # Cleanup and setup
-    for f in list(output_dir.glob("*.prompt")) + list(meta_dir.glob("*")):
+    for f in (list(output_dir.glob("*.prompt")) + list(output_dir.glob("prompts/*.prompt")) + 
+              list(meta_dir.glob("*"))):
         if f.is_file(): f.unlink(missing_ok=True)
-    create_file(Path(f"{basename}_{language}.prompt"), "Create a function to add two numbers.")
+    # Create prompts directory and prompt file
+    Path("prompts").mkdir(exist_ok=True)
+    create_file(Path(f"prompts/{basename}_{language}.prompt"), "Create a function to add two numbers.")
     
     # Determine the operation
     decision = sync_determine_operation(basename, language, target_coverage, log_mode=True)
@@ -62,7 +65,8 @@ def main():
     print("SCENARIO 2: Test Failure")
     print("  - State: A run report exists indicating test failures.")
     # Setup files
-    prompt_hash = create_file(Path(f"{basename}_{language}.prompt"), "...")
+    Path("prompts").mkdir(exist_ok=True)
+    prompt_hash = create_file(Path(f"prompts/{basename}_{language}.prompt"), "...")
     code_hash = create_file(Path(f"{basename}.py"), "def add(a, b): return a + b")
     test_hash = create_file(Path(f"test_{basename}.py"), "assert add(2, 2) == 5")
     
@@ -83,7 +87,8 @@ def main():
     if (meta_dir / f"{basename}_{language}_run.json").exists():
         (meta_dir / f"{basename}_{language}_run.json").unlink()
     
-    prompt_hash = create_file(Path(f"{basename}_{language}.prompt"), "...")
+    Path("prompts").mkdir(exist_ok=True)
+    prompt_hash = create_file(Path(f"prompts/{basename}_{language}.prompt"), "...")
     # The hash of the code file as it was last saved by PDD
     original_code_hash = "abc123def456" 
     
@@ -104,7 +109,8 @@ def main():
     print("SCENARIO 4: Unit Synchronized")
     print("  - State: All file hashes match the fingerprint and tests passed.")
     # Setup files with matching hashes
-    prompt_hash = create_file(Path(f"{basename}_{language}.prompt"), "...")
+    Path("prompts").mkdir(exist_ok=True)
+    prompt_hash = create_file(Path(f"prompts/{basename}_{language}.prompt"), "...")
     code_hash = create_file(Path(f"{basename}.py"), "def add(a, b): return a + b")
     example_hash = create_file(Path(f"{basename}_example.py"), "print(add(1,1))")
     test_hash = create_file(Path(f"test_{basename}.py"), "assert add(2, 2) == 4")
