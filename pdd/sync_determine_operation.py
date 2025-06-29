@@ -36,14 +36,23 @@ from pdd.load_prompt_template import load_prompt_template
 from pdd.llm_invoke import llm_invoke
 from pdd.get_language import get_language
 
-# Constants
-PDD_DIR = Path.cwd() / '.pdd'
-META_DIR = PDD_DIR / 'meta'
-LOCKS_DIR = PDD_DIR / 'locks'
+# Constants - Use functions for dynamic path resolution
+def get_pdd_dir():
+    """Get the .pdd directory relative to current working directory."""
+    return Path.cwd() / '.pdd'
 
-# Ensure directories exist
-META_DIR.mkdir(parents=True, exist_ok=True)
-LOCKS_DIR.mkdir(parents=True, exist_ok=True)
+def get_meta_dir():
+    """Get the metadata directory."""
+    return get_pdd_dir() / 'meta'
+
+def get_locks_dir():
+    """Get the locks directory."""
+    return get_pdd_dir() / 'locks'
+
+# For backward compatibility
+PDD_DIR = get_pdd_dir()
+META_DIR = get_meta_dir()
+LOCKS_DIR = get_locks_dir()
 
 # Export constants for other modules
 __all__ = ['PDD_DIR', 'META_DIR', 'LOCKS_DIR', 'Fingerprint', 'RunReport', 'SyncDecision', 
@@ -89,7 +98,7 @@ class SyncLock:
     def __init__(self, basename: str, language: str):
         self.basename = basename
         self.language = language
-        self.lock_file = LOCKS_DIR / f"{basename}_{language}.lock"
+        self.lock_file = get_locks_dir() / f"{basename}_{language}.lock"
         self.fd = None
         self.current_pid = os.getpid()
     
@@ -102,6 +111,9 @@ class SyncLock:
     
     def acquire(self):
         """Acquire the lock, handling stale locks and re-entrancy."""
+        # Ensure lock directory exists
+        self.lock_file.parent.mkdir(parents=True, exist_ok=True)
+        
         try:
             # Check if lock file exists
             if self.lock_file.exists():
@@ -209,20 +221,42 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         
         resolved_config, input_strings, output_file_paths, detected_language = construct_paths(
             input_file_paths=input_file_paths,
-            force=False,
+            force=True,  # Use force=True to avoid interactive prompts during sync
             quiet=True,
             command="generate",
             command_options={}
         )
         
-        # Extract paths from the configuration
-        extension = get_extension(language)
+        # Extract paths from config as specified in the spec
+        # The spec shows: return { 'prompt': Path(config['prompt_file']), ... }
+        # But we need to map the output_file_paths keys to our expected structure
+        
+        # For generate command, construct_paths returns these in output_file_paths:
+        # - 'output' or 'code_file' for the generated code
+        # For other commands, we need to construct the full set of paths
+        
+        # Get the code file path from output_file_paths
+        code_path = output_file_paths.get('output', output_file_paths.get('code_file', ''))
+        if not code_path:
+            # Fallback to constructing from basename
+            extension = get_extension(language)
+            code_path = f"{basename}.{extension}"
+        
+        # Derive example and test paths from the code path
+        code_path_obj = Path(code_path)
+        code_dir = code_path_obj.parent
+        code_stem = code_path_obj.stem
+        code_ext = code_path_obj.suffix
+        
+        # Example and test paths follow the pattern from the code path location
+        example_path = code_dir / f"{code_stem}_example{code_ext}"
+        test_path = code_dir / f"test_{code_stem}{code_ext}"
         
         return {
             'prompt': Path(prompt_path),
-            'code': Path(output_file_paths.get('code_file', f"{basename}.{extension}")),
-            'example': Path(output_file_paths.get('example_file', f"{basename}_example.{extension}")),
-            'test': Path(output_file_paths.get('test_file', f"test_{basename}.{extension}"))
+            'code': Path(code_path),
+            'example': example_path,
+            'test': test_path
         }
         
     except Exception as e:
@@ -253,7 +287,9 @@ def calculate_sha256(file_path: Path) -> Optional[str]:
 
 def read_fingerprint(basename: str, language: str) -> Optional[Fingerprint]:
     """Reads and validates the JSON fingerprint file."""
-    fingerprint_file = META_DIR / f"{basename}_{language}.json"
+    meta_dir = get_meta_dir()
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    fingerprint_file = meta_dir / f"{basename}_{language}.json"
     
     if not fingerprint_file.exists():
         return None
@@ -277,7 +313,9 @@ def read_fingerprint(basename: str, language: str) -> Optional[Fingerprint]:
 
 def read_run_report(basename: str, language: str) -> Optional[RunReport]:
     """Reads and validates the JSON run report file."""
-    run_report_file = META_DIR / f"{basename}_{language}_run.json"
+    meta_dir = get_meta_dir()
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    run_report_file = meta_dir / f"{basename}_{language}_run.json"
     
     if not run_report_file.exists():
         return None
@@ -299,8 +337,9 @@ def read_run_report(basename: str, language: str) -> Optional[RunReport]:
 
 def calculate_current_hashes(paths: Dict[str, Path]) -> Dict[str, Optional[str]]:
     """Computes the hashes for all current files on disk."""
+    # Return hash keys that match what the fingerprint expects
     return {
-        file_type: calculate_sha256(file_path)
+        f"{file_type}_hash": calculate_sha256(file_path)
         for file_type, file_path in paths.items()
     }
 
@@ -467,13 +506,13 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
     
     # Compare current hashes with fingerprint
     changes = []
-    if current_hashes['prompt'] != fingerprint.prompt_hash:
+    if current_hashes.get('prompt_hash') != fingerprint.prompt_hash:
         changes.append('prompt')
-    if current_hashes['code'] != fingerprint.code_hash:
+    if current_hashes.get('code_hash') != fingerprint.code_hash:
         changes.append('code')
-    if current_hashes['example'] != fingerprint.example_hash:
+    if current_hashes.get('example_hash') != fingerprint.example_hash:
         changes.append('example')
-    if current_hashes['test'] != fingerprint.test_hash:
+    if current_hashes.get('test_hash') != fingerprint.test_hash:
         changes.append('test')
     
     if not changes:
@@ -597,7 +636,7 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
     )
 
 
-def analyze_conflict_with_llm(basename: str, language: str, fingerprint: Fingerprint, changed_files: List[str]) -> SyncDecision:
+def analyze_conflict_with_llm(basename: str, language: str, fingerprint: Fingerprint, changed_files: List[str], prompts_dir: str = "prompts") -> SyncDecision:
     """
     Resolve complex sync conflicts using an LLM.
     
@@ -606,6 +645,7 @@ def analyze_conflict_with_llm(basename: str, language: str, fingerprint: Fingerp
         language: The programming language
         fingerprint: The last known good state
         changed_files: List of files that have changed
+        prompts_dir: Directory containing prompt files
     
     Returns:
         SyncDecision object with LLM-recommended operation
@@ -625,7 +665,7 @@ def analyze_conflict_with_llm(basename: str, language: str, fingerprint: Fingerp
             )
         
         # 2. Gather file paths and diffs
-        paths = get_pdd_file_paths(basename, language)
+        paths = get_pdd_file_paths(basename, language, prompts_dir)
         
         # Generate diffs for changed files
         diffs = {}

@@ -26,7 +26,10 @@ from sync_determine_operation import (
     read_run_report,
     PDD_DIR,
     META_DIR,
-    LOCKS_DIR
+    LOCKS_DIR,
+    get_pdd_dir,
+    get_meta_dir,
+    get_locks_dir
 )
 
 # --- Test Plan ---
@@ -94,28 +97,30 @@ TARGET_COVERAGE = 90.0
 @pytest.fixture
 def pdd_test_environment(tmp_path):
     """Creates a temporary, isolated PDD project structure for testing."""
-    # Override the default PDD directories to use the temp path
-    original_pdd_dir = PDD_DIR
-    original_meta_dir = META_DIR
-    original_locks_dir = LOCKS_DIR
-
-    # Point constants to tmp_path for test isolation
-    pdd_module = sys.modules['sync_determine_operation']
-    pdd_module.PDD_DIR = tmp_path / '.pdd'
-    pdd_module.META_DIR = pdd_module.PDD_DIR / 'meta'
-    pdd_module.LOCKS_DIR = pdd_module.PDD_DIR / 'locks'
-
+    # Change to tmp_path
+    original_cwd = Path.cwd()
+    os.chdir(tmp_path)
+    
     # Create directories
-    pdd_module.META_DIR.mkdir(parents=True, exist_ok=True)
-    pdd_module.LOCKS_DIR.mkdir(parents=True, exist_ok=True)
-    (tmp_path / "prompts").mkdir(exist_ok=True)
-
+    Path(".pdd/meta").mkdir(parents=True, exist_ok=True)
+    Path(".pdd/locks").mkdir(parents=True, exist_ok=True)
+    Path("prompts").mkdir(exist_ok=True)
+    
+    # Now update the constants after changing directory
+    pdd_module = sys.modules['sync_determine_operation']
+    pdd_module.PDD_DIR = pdd_module.get_pdd_dir()
+    pdd_module.META_DIR = pdd_module.get_meta_dir()
+    pdd_module.LOCKS_DIR = pdd_module.get_locks_dir()
+    
     yield tmp_path
 
-    # Restore original constants after test
-    pdd_module.PDD_DIR = original_pdd_dir
-    pdd_module.META_DIR = original_meta_dir
-    pdd_module.LOCKS_DIR = original_locks_dir
+    # Restore original working directory
+    os.chdir(original_cwd)
+    
+    # Update constants again
+    pdd_module.PDD_DIR = pdd_module.get_pdd_dir()
+    pdd_module.META_DIR = pdd_module.get_meta_dir()
+    pdd_module.LOCKS_DIR = pdd_module.get_locks_dir()
 
 def create_file(path: Path, content: str = "") -> str:
     """Creates a file with given content and returns its SHA256 hash."""
@@ -139,7 +144,7 @@ def create_run_report_file(path: Path, data: dict):
 
 class TestSyncLock:
     def test_lock_acquire_and_release(self, pdd_test_environment):
-        lock_file = LOCKS_DIR / f"{BASENAME}_{LANGUAGE}.lock"
+        lock_file = get_locks_dir() / f"{BASENAME}_{LANGUAGE}.lock"
         lock = SyncLock(BASENAME, LANGUAGE)
 
         assert not lock_file.exists()
@@ -150,7 +155,7 @@ class TestSyncLock:
         assert not lock_file.exists()
 
     def test_lock_context_manager(self, pdd_test_environment):
-        lock_file = LOCKS_DIR / f"{BASENAME}_{LANGUAGE}.lock"
+        lock_file = get_locks_dir() / f"{BASENAME}_{LANGUAGE}.lock"
         assert not lock_file.exists()
         with SyncLock(BASENAME, LANGUAGE) as lock:
             assert lock_file.exists()
@@ -158,7 +163,7 @@ class TestSyncLock:
         assert not lock_file.exists()
 
     def test_lock_stale_lock(self, pdd_test_environment, monkeypatch):
-        lock_file = LOCKS_DIR / f"{BASENAME}_{LANGUAGE}.lock"
+        lock_file = get_locks_dir() / f"{BASENAME}_{LANGUAGE}.lock"
         stale_pid = 99999  # A non-existent PID
         lock_file.write_text(str(stale_pid))
 
@@ -170,7 +175,7 @@ class TestSyncLock:
             assert lock_file.read_text().strip() == str(os.getpid())
 
     def test_lock_held_by_another_process(self, pdd_test_environment, monkeypatch):
-        lock_file = LOCKS_DIR / f"{BASENAME}_{LANGUAGE}.lock"
+        lock_file = get_locks_dir() / f"{BASENAME}_{LANGUAGE}.lock"
         other_pid = os.getpid() + 1
         lock_file.write_text(str(other_pid))
 
@@ -184,7 +189,7 @@ class TestSyncLock:
         with lock:
             # Try acquiring again within the same process
             lock.acquire() # Should not raise an error
-            assert LOCKS_DIR / f"{BASENAME}_{LANGUAGE}.lock"
+            assert get_locks_dir() / f"{BASENAME}_{LANGUAGE}.lock"
 
 
 class TestFileUtilities:
@@ -199,7 +204,7 @@ class TestFileUtilities:
         assert calculate_sha256(pdd_test_environment / "nonexistent.txt") is None
 
     def test_read_fingerprint_success(self, pdd_test_environment):
-        fp_path = META_DIR / f"{BASENAME}_{LANGUAGE}.json"
+        fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
         fp_data = {
             "pdd_version": "1.0", "timestamp": "2023-01-01T00:00:00Z",
             "command": "generate", "prompt_hash": "p_hash", "code_hash": "c_hash",
@@ -211,12 +216,12 @@ class TestFileUtilities:
         assert fp.prompt_hash == "p_hash"
 
     def test_read_fingerprint_invalid_json(self, pdd_test_environment):
-        fp_path = META_DIR / f"{BASENAME}_{LANGUAGE}.json"
+        fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
         fp_path.write_text("{ not valid json }")
         assert read_fingerprint(BASENAME, LANGUAGE) is None
 
     def test_read_run_report_success(self, pdd_test_environment):
-        rr_path = META_DIR / f"{BASENAME}_{LANGUAGE}_run.json"
+        rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
         rr_data = {
             "timestamp": "2023-01-01T00:00:00Z", "exit_code": 0,
             "tests_passed": 10, "tests_failed": 0, "coverage": 95.5
@@ -243,7 +248,7 @@ def test_log_mode_skips_lock(mock_construct, pdd_test_environment):
 # --- Runtime Signal Tests ---
 @patch('sync_determine_operation.construct_paths')
 def test_decision_crash_on_exit_code_nonzero(mock_construct, pdd_test_environment):
-    rr_path = META_DIR / f"{BASENAME}_{LANGUAGE}_run.json"
+    rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
     create_run_report_file(rr_path, {
         "timestamp": "t", "exit_code": 1, "tests_passed": 0, "tests_failed": 0, "coverage": 0.0
     })
@@ -254,13 +259,13 @@ def test_decision_crash_on_exit_code_nonzero(mock_construct, pdd_test_environmen
 @patch('sync_determine_operation.construct_paths')
 def test_decision_verify_after_crash_fix(mock_construct, pdd_test_environment):
     # Last command was 'crash'
-    fp_path = META_DIR / f"{BASENAME}_{LANGUAGE}.json"
+    fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
     create_fingerprint_file(fp_path, {
         "pdd_version": "1.0", "timestamp": "t", "command": "crash",
         "prompt_hash": "p", "code_hash": "c", "example_hash": "e", "test_hash": "t"
     })
     # And the run report shows a crash
-    rr_path = META_DIR / f"{BASENAME}_{LANGUAGE}_run.json"
+    rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
     create_run_report_file(rr_path, {
         "timestamp": "t", "exit_code": 1, "tests_passed": 0, "tests_failed": 0, "coverage": 0.0
     })
@@ -270,7 +275,7 @@ def test_decision_verify_after_crash_fix(mock_construct, pdd_test_environment):
 
 @patch('sync_determine_operation.construct_paths')
 def test_decision_fix_on_test_failures(mock_construct, pdd_test_environment):
-    rr_path = META_DIR / f"{BASENAME}_{LANGUAGE}_run.json"
+    rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
     create_run_report_file(rr_path, {
         "timestamp": "t", "exit_code": 0, "tests_passed": 5, "tests_failed": 2, "coverage": 80.0
     })
@@ -280,7 +285,7 @@ def test_decision_fix_on_test_failures(mock_construct, pdd_test_environment):
 
 @patch('sync_determine_operation.construct_paths')
 def test_decision_test_on_low_coverage(mock_construct, pdd_test_environment):
-    rr_path = META_DIR / f"{BASENAME}_{LANGUAGE}_run.json"
+    rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
     create_run_report_file(rr_path, {
         "timestamp": "t", "exit_code": 0, "tests_passed": 10, "tests_failed": 0, "coverage": 75.0
     })
@@ -328,7 +333,7 @@ def test_decision_nothing_when_synced(mock_construct, pdd_test_environment):
         LANGUAGE
     )
 
-    fp_path = META_DIR / f"{BASENAME}_{LANGUAGE}.json"
+    fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
     create_fingerprint_file(fp_path, {
         "pdd_version": "1.0", "timestamp": "t", "command": "test",
         "prompt_hash": p_hash, "code_hash": c_hash, "example_hash": e_hash, "test_hash": t_hash
@@ -354,7 +359,7 @@ def test_decision_example_when_missing(mock_construct, pdd_test_environment):
         LANGUAGE
     )
 
-    fp_path = META_DIR / f"{BASENAME}_{LANGUAGE}.json"
+    fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
     create_fingerprint_file(fp_path, {
         "pdd_version": "1.0", "timestamp": "t", "command": "generate",
         "prompt_hash": p_hash, "code_hash": c_hash, "example_hash": None, "test_hash": None
@@ -380,7 +385,7 @@ def test_decision_update_on_code_change(mock_construct, pdd_test_environment):
         LANGUAGE
     )
 
-    fp_path = META_DIR / f"{BASENAME}_{LANGUAGE}.json"
+    fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
     create_fingerprint_file(fp_path, {
         "pdd_version": "1.o", "timestamp": "t", "command": "generate",
         "prompt_hash": p_hash, "code_hash": "original_code_hash", "example_hash": None, "test_hash": None
@@ -406,7 +411,7 @@ def test_decision_analyze_conflict_on_multiple_changes(mock_construct, pdd_test_
         LANGUAGE
     )
 
-    fp_path = META_DIR / f"{BASENAME}_{LANGUAGE}.json"
+    fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
     create_fingerprint_file(fp_path, {
         "pdd_version": "1.0", "timestamp": "t", "command": "generate",
         "prompt_hash": "original_prompt_hash", "code_hash": "original_code_hash",
@@ -487,3 +492,168 @@ def test_analyze_conflict_llm_template_missing(mock_construct, mock_load_templat
     decision = analyze_conflict_with_llm(BASENAME, LANGUAGE, fingerprint, ['prompt'])
     assert decision.operation == 'fail_and_request_manual_merge'
     assert "LLM analysis template not found" in decision.reason
+
+
+# --- Part 4: Integration Tests - Example Scenarios ---
+
+class TestIntegrationScenarios:
+    """Test the four scenarios from the example script using actual filesystem operations."""
+    
+    @pytest.fixture
+    def integration_test_environment(self, tmp_path):
+        """Creates a temporary test environment that mimics real usage."""
+        original_cwd = Path.cwd()
+        
+        # Change to the temp directory to ensure relative paths work correctly
+        os.chdir(tmp_path)
+        
+        # Create necessary directories
+        Path(".pdd/meta").mkdir(parents=True, exist_ok=True)
+        Path(".pdd/locks").mkdir(parents=True, exist_ok=True)
+        
+        yield tmp_path
+        
+        # Restore original working directory
+        os.chdir(original_cwd)
+    
+    def test_scenario_new_unit(self, integration_test_environment):
+        """Scenario 1: New Unit - A new prompt file exists with no other files or history."""
+        basename = "calculator"
+        language = "python"
+        target_coverage = 90.0
+        
+        # Re-import after changing directory to ensure proper module state
+        from pdd.sync_determine_operation import sync_determine_operation
+        
+        # Create a new prompt file in the default prompts location
+        prompts_dir = Path("prompts")
+        prompts_dir.mkdir(exist_ok=True)
+        prompt_path = prompts_dir / f"{basename}_{language}.prompt"
+        create_file(prompt_path, "Create a function to add two numbers.")
+        
+        # No need to mock construct_paths - let it use default behavior
+        decision = sync_determine_operation(basename, language, target_coverage, log_mode=True)
+        
+        assert decision.operation == 'generate'
+        assert "New prompt ready" in decision.reason
+    
+    def test_scenario_test_failures(self, integration_test_environment):
+        """Scenario 2: Test Failure - A run report exists indicating test failures."""
+        basename = "calculator"
+        language = "python"
+        target_coverage = 90.0
+        
+        # Re-import after changing directory
+        from pdd.sync_determine_operation import sync_determine_operation
+        
+        # Create files
+        prompts_dir = Path("prompts")
+        prompts_dir.mkdir(exist_ok=True)
+        create_file(prompts_dir / f"{basename}_{language}.prompt", "...")
+        create_file(Path(f"{basename}.py"), "def add(a, b): return a + b")
+        create_file(Path(f"test_{basename}.py"), "assert add(2, 2) == 5")
+        
+        # Create run report with test failure (exit_code=0 but tests_failed>0 for 'fix' operation)
+        run_report = {
+            "timestamp": "2025-06-29T10:00:00",
+            "exit_code": 0,  # Use 0 to avoid 'crash' operation
+            "tests_passed": 0,
+            "tests_failed": 1,
+            "coverage": 50.0
+        }
+        rr_path = Path(".pdd/meta") / f"{basename}_{language}_run.json"
+        create_run_report_file(rr_path, run_report)
+        
+        decision = sync_determine_operation(basename, language, target_coverage, log_mode=True)
+        
+        assert decision.operation == 'fix'
+        assert "Test failures detected" in decision.reason
+    
+    def test_scenario_manual_code_change(self, integration_test_environment):
+        """Scenario 3: Manual Code Change - Code file was modified; its hash no longer matches the fingerprint."""
+        basename = "calculator"
+        language = "python"
+        target_coverage = 90.0
+        
+        # Re-import after changing directory
+        from pdd.sync_determine_operation import sync_determine_operation
+        
+        # Create files
+        prompts_dir = Path("prompts")
+        prompts_dir.mkdir(exist_ok=True)
+        prompt_content = "..."
+        prompt_hash = hashlib.sha256(prompt_content.encode()).hexdigest()
+        create_file(prompts_dir / f"{basename}_{language}.prompt", prompt_content)
+        
+        # Create fingerprint with old code hash
+        old_code_hash = "abc123def456"
+        fingerprint = {
+            "pdd_version": "0.1.0",
+            "timestamp": "2025-06-29T10:00:00",
+            "command": "generate",
+            "prompt_hash": prompt_hash,
+            "code_hash": old_code_hash,
+            "example_hash": None,
+            "test_hash": None
+        }
+        fp_path = Path(".pdd/meta") / f"{basename}_{language}.json"
+        create_fingerprint_file(fp_path, fingerprint)
+        
+        # Create code file with different content (different hash)
+        create_file(Path(f"{basename}.py"), "# User added a comment\ndef add(a, b): return a + b")
+        
+        decision = sync_determine_operation(basename, language, target_coverage, log_mode=True)
+        
+        assert decision.operation == 'update'
+        assert "Code changed" in decision.reason
+    
+    def test_scenario_synchronized_unit(self, integration_test_environment):
+        """Scenario 4: Unit Synchronized - All file hashes match the fingerprint and tests passed."""
+        basename = "calculator"
+        language = "python"
+        target_coverage = 90.0
+        
+        # Re-import after changing directory
+        from pdd.sync_determine_operation import sync_determine_operation
+        
+        # Create all files with specific content
+        prompts_dir = Path("prompts")
+        prompts_dir.mkdir(exist_ok=True)
+        prompt_content = "..."
+        code_content = "def add(a, b): return a + b"
+        example_content = "print(add(1,1))"
+        test_content = "assert add(2, 2) == 4"
+        
+        prompt_hash = create_file(prompts_dir / f"{basename}_{language}.prompt", prompt_content)
+        code_hash = create_file(Path(f"{basename}.py"), code_content)
+        example_hash = create_file(Path(f"{basename}_example.py"), example_content)
+        test_hash = create_file(Path(f"test_{basename}.py"), test_content)
+        
+        # Create matching fingerprint
+        fingerprint = {
+            "pdd_version": "0.1.0",
+            "timestamp": "2025-06-29T10:00:00",
+            "command": "fix",
+            "prompt_hash": prompt_hash,
+            "code_hash": code_hash,
+            "example_hash": example_hash,
+            "test_hash": test_hash
+        }
+        fp_path = Path(".pdd/meta") / f"{basename}_{language}.json"
+        create_fingerprint_file(fp_path, fingerprint)
+        
+        # Create successful run report
+        run_report = {
+            "timestamp": "2025-06-29T10:00:00",
+            "exit_code": 0,
+            "tests_passed": 1,
+            "tests_failed": 0,
+            "coverage": 100.0
+        }
+        rr_path = Path(".pdd/meta") / f"{basename}_{language}_run.json"
+        create_run_report_file(rr_path, run_report)
+        
+        decision = sync_determine_operation(basename, language, target_coverage, log_mode=True)
+        
+        assert decision.operation == 'nothing'
+        assert "All files synchronized" in decision.reason
