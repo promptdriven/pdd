@@ -433,6 +433,17 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
     
     run_report = read_run_report(basename, language)
     if run_report:
+        # Check test failures first (higher priority than exit code)
+        if run_report.tests_failed > 0:
+            return SyncDecision(
+                operation='fix',
+                reason=f'Test failures detected: {run_report.tests_failed} failed tests',
+                details={'tests_failed': run_report.tests_failed},
+                estimated_cost=1.5,
+                confidence=0.90
+            )
+        
+        # Then check for runtime crashes (only if no test failures)
         if run_report.exit_code != 0:
             # Check if this was from a crash fix that needs verification
             if fingerprint and fingerprint.command == 'crash':
@@ -451,15 +462,6 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
                     estimated_cost=2.0,
                     confidence=0.95
                 )
-        
-        if run_report.tests_failed > 0:
-            return SyncDecision(
-                operation='fix',
-                reason=f'Test failures detected: {run_report.tests_failed} failed tests',
-                details={'tests_failed': run_report.tests_failed},
-                estimated_cost=1.5,
-                confidence=0.90
-            )
         
         if run_report.coverage < target_coverage:
             return SyncDecision(
