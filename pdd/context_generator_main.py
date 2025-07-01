@@ -51,9 +51,13 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
             verbose=ctx.obj.get('verbose', False)
         )
 
-        # Save results
-        if output_file_paths["output"]:
-            with open(output_file_paths["output"], 'w') as f:
+        # Save results - prioritize orchestration output path over construct_paths result
+        final_output_path = output or output_file_paths["output"]
+        print(f"DEBUG: output param = {output}")
+        print(f"DEBUG: output_file_paths['output'] = {output_file_paths['output']}")
+        print(f"DEBUG: final_output_path = {final_output_path}")
+        if final_output_path:
+            with open(final_output_path, 'w') as f:
                 f.write(example_code)
 
         # Provide user feedback
@@ -61,8 +65,8 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
             rprint("[bold green]Example code generated successfully.[/bold green]")
             rprint(f"[bold]Model used:[/bold] {model_name}")
             rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
-            if output:
-                rprint(f"[bold]Example code saved to:[/bold] {output_file_paths['output']}")
+            if final_output_path:
+                rprint(f"[bold]Example code saved to:[/bold] {final_output_path}")
 
         # Always print example code, even in quiet mode
         rprint("[bold]Generated Example Code:[/bold]")

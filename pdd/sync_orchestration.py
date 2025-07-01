@@ -262,12 +262,14 @@ def sync_orchestration(
                 decision = sync_determine_operation(basename, language, target_coverage, budget - current_cost_ref[0], False, prompts_dir)
                 operation = decision.operation
 
-                if operation in ['all_synced', 'nothing', 'fail_and_request_manual_merge', 'error']:
+                if operation in ['all_synced', 'nothing', 'fail_and_request_manual_merge', 'error', 'analyze_conflict']:
                     current_function_name_ref[0] = "synced" if operation in ['all_synced', 'nothing'] else "conflict"
                     if operation == 'fail_and_request_manual_merge':
                         errors.append(f"Manual merge required: {decision.reason}")
                     elif operation == 'error':
                         errors.append(f"Error determining operation: {decision.reason}")
+                    elif operation == 'analyze_conflict':
+                        errors.append(f"Conflict detected: {decision.reason}")
                     break
                 
                 # Handle skips
@@ -339,6 +341,8 @@ def sync_orchestration(
                             force_incremental_flag=False
                         )
                     elif operation == 'example':
+                        print(f"DEBUG SYNC: pdd_files['example'] = {pdd_files['example']}")
+                        print(f"DEBUG SYNC: str(pdd_files['example']) = {str(pdd_files['example'])}")
                         result = context_generator_main(
                             ctx, 
                             prompt_file=str(pdd_files['prompt']), 

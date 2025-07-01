@@ -242,15 +242,69 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             extension = get_extension(language)
             code_path = f"{basename}.{extension}"
         
-        # Derive example and test paths from the code path
-        code_path_obj = Path(code_path)
-        code_dir = code_path_obj.parent
-        code_stem = code_path_obj.stem
-        code_ext = code_path_obj.suffix
-        
-        # Example and test paths follow the pattern from the code path location
-        example_path = code_dir / f"{code_stem}_example{code_ext}"
-        test_path = code_dir / f"test_{code_stem}{code_ext}"
+        # Get configured paths for example and test files using construct_paths
+        # Note: construct_paths requires files to exist, so we need to handle the case
+        # where code file doesn't exist yet (during initial sync startup)
+        try:
+            # Create a temporary empty code file if it doesn't exist for path resolution
+            code_path_obj = Path(code_path)
+            temp_code_created = False
+            if not code_path_obj.exists():
+                code_path_obj.parent.mkdir(parents=True, exist_ok=True)
+                code_path_obj.touch()
+                temp_code_created = True
+            
+            try:
+                # Get example path using example command
+                _, _, example_output_paths, _ = construct_paths(
+                    input_file_paths={"prompt_file": prompt_path, "code_file": code_path},
+                    force=True, quiet=True, command="example", command_options={}
+                )
+                example_path = Path(example_output_paths.get('output', f"{basename}_example.{get_extension(language)}"))
+                
+                # Get test path using test command  
+                _, _, test_output_paths, _ = construct_paths(
+                    input_file_paths={"prompt_file": prompt_path, "code_file": code_path},
+                    force=True, quiet=True, command="test", command_options={}
+                )
+                test_path = Path(test_output_paths.get('output', f"test_{basename}.{get_extension(language)}"))
+                
+            finally:
+                # Clean up temporary file if we created it
+                if temp_code_created and code_path_obj.exists() and code_path_obj.stat().st_size == 0:
+                    code_path_obj.unlink()
+            
+        except Exception as e:
+            # Log the specific exception that's causing fallback to wrong paths
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"construct_paths failed in get_pdd_file_paths: {type(e).__name__}: {e}")
+            logger.warning(f"Falling back to .pddrc-aware path construction")
+            logger.warning(f"prompt_path: {prompt_path}, code_path: {code_path}")
+            
+            # Improved fallback: try to use construct_paths with just prompt_file to get proper directory configs
+            try:
+                # Get configured directories by using construct_paths with just the prompt file
+                _, _, example_output_paths, _ = construct_paths(
+                    input_file_paths={"prompt_file": prompt_path},
+                    force=True, quiet=True, command="example", command_options={}
+                )
+                example_path = Path(example_output_paths.get('output', f"{basename}_example.{get_extension(language)}"))
+                
+                _, _, test_output_paths, _ = construct_paths(
+                    input_file_paths={"prompt_file": prompt_path},
+                    force=True, quiet=True, command="test", command_options={}
+                )
+                test_path = Path(test_output_paths.get('output', f"test_{basename}.{get_extension(language)}"))
+                
+            except Exception:
+                # Final fallback to deriving from code path if all else fails
+                code_path_obj = Path(code_path)
+                code_dir = code_path_obj.parent
+                code_stem = code_path_obj.stem
+                code_ext = code_path_obj.suffix
+                example_path = code_dir / f"{code_stem}_example{code_ext}"
+                test_path = code_dir / f"test_{code_stem}{code_ext}"
         
         return {
             'prompt': Path(prompt_path),
