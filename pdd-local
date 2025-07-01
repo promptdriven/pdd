@@ -1,0 +1,8 @@
+#!/bin/bash
+# Wrapper script to run local development version of PDD
+
+# Get the directory this script is in
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export PYTHONPATH="$SCRIPT_DIR"
+
+exec python -c "from pdd.cli import cli; cli()" "$@"
