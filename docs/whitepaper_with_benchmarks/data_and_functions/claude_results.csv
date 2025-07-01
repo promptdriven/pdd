@@ -1,0 +1,46 @@
+file_size,language,edit_type,execution_time_seconds,api_cost,input_tokens,output_tokens,success,error_message
+small,python,simple,25.3821,0.14557350000000002,0,0,1,
+small,python,insert,34.1955,0.199719,0,0,1,
+small,python,multiple,28.282,0.15656550000000002,0,0,1,
+small,python,complex,50.0356,0.45489975000000005,0,0,0,Editing process exceeded maximum iterations
+small,python,format,45.0934,0.37757175000000004,0,0,0,Editing process exceeded maximum iterations
+medium,python,simple,43.0323,0.35533125000000004,0,0,0,Editing process exceeded maximum iterations
+medium,python,insert,37.4283,0.35879924999999996,0,0,0,Editing process exceeded maximum iterations
+medium,python,multiple,48.8996,0.375876,0,0,0,Editing process exceeded maximum iterations
+medium,python,complex,48.8465,0.42068700000000003,0,0,1,
+medium,python,format,44.4467,0.38040675,0,0,0,Editing process exceeded maximum iterations
+large,python,simple,47.8428,0.48171975,0,0,0,Editing process exceeded maximum iterations
+large,python,insert,46.8018,0.46961175000000005,0,0,0,Editing process exceeded maximum iterations
+large,python,multiple,55.8485,0.4764075,0,0,0,Editing process exceeded maximum iterations
+large,python,complex,53.7169,0.6373942499999999,0,0,0,Editing process exceeded maximum iterations
+large,python,format,57.8905,0.5814892500000001,0,0,0,Editing process exceeded maximum iterations
+small,javascript,simple,26.1616,0.14737275,0,0,1,
+small,javascript,insert,36.5376,0.185187,0,0,1,
+small,javascript,multiple,36.3769,0.1715055,0,0,1,
+small,javascript,complex,33.61,0.118806,0,0,1,
+small,javascript,format,61.6702,0.36992475,0,0,0,Editing process exceeded maximum iterations
+medium,javascript,simple,52.8405,0.36365775000000006,0,0,0,Editing process exceeded maximum iterations
+medium,javascript,insert,48.5568,0.3288705,0,0,0,Editing process exceeded maximum iterations
+medium,javascript,multiple,70.0051,0.4358685,0,0,0,Editing process exceeded maximum iterations
+medium,javascript,complex,45.8174,0.2053935,0,0,1,
+medium,javascript,format,65.5375,0.44510474999999994,0,0,0,Editing process exceeded maximum iterations
+large,javascript,simple,103.3651,0.5488267499999999,0,0,0,Editing process exceeded maximum iterations
+large,javascript,insert,25.4983,0.20553825,0,0,1,
+large,javascript,multiple,52.3057,0.33580575,0,0,1,
+large,javascript,complex,90.8906,0.6474795,0,0,1,
+large,javascript,format,60.3346,0.4915702500000001,0,0,0,Editing process exceeded maximum iterations
+small,typescript,simple,31.8778,0.17963400000000002,0,0,1,
+small,typescript,insert,32.1282,0.122949,0,0,1,
+small,typescript,multiple,38.3283,0.26375625,0,0,1,
+small,typescript,complex,70.7173,0.34842675,0,0,1,
+small,typescript,format,53.8212,0.39404324999999996,0,0,0,Editing process exceeded maximum iterations
+medium,typescript,simple,36.8883,0.233346,0,0,1,
+medium,typescript,insert,32.6991,0.179265,0,0,1,
+medium,typescript,multiple,50.1348,0.40378125,0,0,1,
+medium,typescript,complex,67.3824,0.440064,0,0,0,Editing process exceeded maximum iterations
+medium,typescript,format,48.3456,0.43626525,0,0,0,Editing process exceeded maximum iterations
+large,typescript,simple,58.959,0.47469975,0,0,0,Editing process exceeded maximum iterations
+large,typescript,insert,28.0098,0.20631675,0,0,1,
+large,typescript,multiple,50.2245,0.46965225,0,0,1,
+large,typescript,complex,91.7324,0.6309255,0,0,0,Editing process exceeded maximum iterations
+large,typescript,format,116.4444,0.62154225,0,0,0,Editing process exceeded maximum iterations
