@@ -304,7 +304,32 @@ def sync_orchestration(
                 # --- Execute Operation ---
                 try:
                     if operation == 'auto-deps':
-                        result = auto_deps_main(ctx, prompt_file=str(pdd_files['prompt']), directory_path=examples_dir)
+                        # Save the modified prompt to a temporary location
+                        temp_output = str(pdd_files['prompt']).replace('.prompt', '_with_deps.prompt')
+                        
+                        # Read original prompt content to compare later
+                        original_content = pdd_files['prompt'].read_text(encoding='utf-8')
+                        
+                        result = auto_deps_main(
+                            ctx, 
+                            prompt_file=str(pdd_files['prompt']), 
+                            directory_path=examples_dir,
+                            auto_deps_csv_path="project_dependencies.csv",
+                            output=temp_output,
+                            force_scan=False  # Don't force scan every time
+                        )
+                        
+                        # Only move the temp file back if content actually changed
+                        if Path(temp_output).exists():
+                            import shutil
+                            new_content = Path(temp_output).read_text(encoding='utf-8')
+                            if new_content != original_content:
+                                shutil.move(temp_output, str(pdd_files['prompt']))
+                            else:
+                                # No changes needed, remove temp file
+                                Path(temp_output).unlink()
+                                # Mark as successful with no changes
+                                result = (new_content, 0.0, 'no-changes')
                     elif operation == 'generate':
                         result = code_generator_main(
                             ctx, 

@@ -363,19 +363,32 @@ def get_git_diff(file_path: Path) -> str:
 
 
 def check_for_dependencies(prompt_content: str) -> bool:
-    """Check if prompt contains dependency indicators."""
-    dependency_indicators = [
+    """Check if prompt contains actual dependency indicators that need auto-deps processing."""
+    # Only check for specific XML tags that indicate actual dependencies
+    xml_dependency_indicators = [
         '<include>',
-        'include',
-        'import',
-        'from ',
-        'require',
-        'dependency',
-        'dependencies'
+        '<web>',
+        '<shell>'
+    ]
+    
+    # Check for explicit dependency management mentions
+    explicit_dependency_indicators = [
+        'auto-deps',
+        'auto_deps',
+        'dependencies needed',
+        'requires dependencies',
+        'include dependencies'
     ]
     
     prompt_lower = prompt_content.lower()
-    return any(indicator in prompt_lower for indicator in dependency_indicators)
+    
+    # Check for XML tags (case-sensitive for proper XML)
+    has_xml_deps = any(indicator in prompt_content for indicator in xml_dependency_indicators)
+    
+    # Check for explicit dependency mentions
+    has_explicit_deps = any(indicator in prompt_lower for indicator in explicit_dependency_indicators)
+    
+    return has_xml_deps or has_explicit_deps
 
 
 def sync_determine_operation(basename: str, language: str, target_coverage: float, budget: float = 10.0, log_mode: bool = False, prompts_dir: str = "prompts") -> SyncDecision:
