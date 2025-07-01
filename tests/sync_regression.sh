@@ -35,7 +35,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PDD_BASE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PDD_PATH="$PDD_BASE_DIR/pdd"
 STAGING_PATH="$PDD_BASE_DIR/staging"
-PDD_SCRIPT="pdd" # Assumes pdd is in PATH
+# Use local development version instead of globally installed pdd
+PDD_SCRIPT="$PDD_BASE_DIR/pdd-local"
 PROMPTS_PATH="$PDD_BASE_DIR/prompts"
 CONTEXT_PATH="$PDD_BASE_DIR/context"
 OUTPUT_PATH="$PDD_BASE_DIR/output"
@@ -302,9 +303,22 @@ log "Temperature: $TEMPERATURE"
 log "Local Execution: $TEST_LOCAL"
 log "----------------------------------------"
 
+# Copy .pddrc configuration from project root to test directory
+log "Copying .pddrc configuration for proper directory structure"
+if [ -f "$PDD_BASE_DIR/.pddrc" ]; then
+    cp "$PDD_BASE_DIR/.pddrc" .
+    log "Copied .pddrc configuration to test directory"
+else
+    log_error ".pddrc file not found in project root: $PDD_BASE_DIR/.pddrc"
+    exit 1
+fi
+
+# Create directory structure expected by .pddrc configuration
+log "Creating directory structure for .pddrc configuration"
+mkdir -p pdd examples tests context
+
 # Create context files needed by tests
 log "Creating context files for sync tests"
-mkdir -p context
 cat << EOF > "context/test.prompt"
 For functions defined in prompt files, ensure the test imports are correctly structured.
 Use proper import statements based on the module name and function definitions.
@@ -405,54 +419,13 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "1" ]; then
     # Use verbose mode and higher budget to help with sync completion
     run_pdd_command --verbose sync --budget 15.0 "$SIMPLE_BASENAME"
     
-    # Check what files were actually created (may be incomplete)
+    # Check that generated files exist - sync should always generate code, example, and test
     log "Checking generated files..."
-    if [ -f "pdd/${SIMPLE_BASENAME}.py" ]; then
-        log "Code file generated successfully"
-        check_exists "pdd/${SIMPLE_BASENAME}.py" "Generated Python code"
-    else
-        log_error "Code file not generated"
-        exit 1
-    fi
+    check_sync_files "$SIMPLE_BASENAME" "python" true  # true = strict, require all files
     
-    # Check for example and test files (may not exist if sync failed)
-    if [ -f "examples/${SIMPLE_BASENAME}_example.py" ]; then
-        log "Example file generated successfully"
-        check_exists "examples/${SIMPLE_BASENAME}_example.py" "Generated Python example"
-    else
-        log "Example file not generated (sync may have failed at example step)"
-    fi
-    
-    if [ -f "tests/test_${SIMPLE_BASENAME}.py" ]; then
-        log "Test file generated successfully"  
-        check_exists "tests/test_${SIMPLE_BASENAME}.py" "Generated Python tests"
-    else
-        log "Test file not generated (sync may have failed at test step)"
-    fi
-    
-    # Verify files are functional by running the example (if it exists)
-    if [ -f "examples/${SIMPLE_BASENAME}_example.py" ]; then
-        log "Testing generated example functionality"
-        python "examples/${SIMPLE_BASENAME}_example.py" >> "$LOG_FILE" 2>&1
-        if [ $? -eq 0 ]; then
-            log "Generated example runs successfully"
-            log_timestamped "Validation success: Generated example executes correctly"
-        else
-            log_error "Generated example failed to run"
-            log_timestamped "Validation failed: Generated example execution failed"
-            # Don't exit since this is testing sync robustness
-        fi
-    else
-        log "Skipping example test - no example file generated"
-    fi
-    
-    # Test the generated tests (if they exist)  
-    if [ -f "tests/test_${SIMPLE_BASENAME}.py" ]; then
-        log "Running generated tests"
-        python -m pytest "tests/test_${SIMPLE_BASENAME}.py" >> "$LOG_FILE" 2>&1 || true
-    else
-        log "Skipping test execution - no test file generated"
-    fi
+    # Test the generated tests
+    log "Running generated tests"
+    python -m pytest "tests/test_${SIMPLE_BASENAME}.py" >> "$LOG_FILE" 2>&1 || true
 fi
 
 # 2. Sync with Skip Options
