@@ -200,7 +200,7 @@ This is the most robust method to ensure `PDD_PATH` is always set correctly when
 
 - Join the PDD community on Discord
 - Review example projects in the `examples/` directory
-- Start with the basic tutorials in the documentation
+- Start with the basic tutorials in the [Tutorials](./TUTORIALS.md) documentation
 
 ## Troubleshooting
 
