@@ -146,8 +146,8 @@ def cmd_test_main(
             ctx.exit(1)
             return "", 0.0, ""
 
-    # Handle output
-    output_file = output_file_paths["output"]
+    # Handle output - prioritize orchestration output path over construct_paths result
+    output_file = output or output_file_paths["output"]
     if merge and existing_tests:
         output_file = existing_tests
 
