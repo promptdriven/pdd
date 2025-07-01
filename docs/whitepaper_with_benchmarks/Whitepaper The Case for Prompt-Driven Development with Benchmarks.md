@@ -230,9 +230,9 @@ A typical PDD workflow involves a **batch-oriented, synchronized cycle**, contra
 
 The fundamental unit is often considered the prompt and its generated code, example, and test file – all kept in sync. If a prompt is too complex to generate correctly in one shot (even with fixing), it should be split (`split`) into smaller, manageable units.
 
-## **Benchmark Case Study: PDD vs. Claude Code for Edit File Tool Development**
+## **Benchmark Case Studies: PDD vs. Interactive AI Development**
 
-This section presents a real-world case study evaluating Prompt-Driven Development (PDD) against Claude Code-the latter referring **not** to Claude's chat interface. Both methods were tasked with independently developing an Edit File Tool. The Edit File Tool uses Claude's `text_editor_20250124` model to edit files. This case study analyzes their performance across multiple dimensions: development cost and time, success rates, and runtime efficiency.
+This section presents two real-world case studies evaluating Prompt-Driven Development (PDD) against interactive AI development approaches. The studies examine different types of projects to demonstrate PDD's versatility and effectiveness across various development scenarios.
 
 ### 1. Executive Summary
 
@@ -264,6 +264,60 @@ Once developed, both tools were subjected to a standardized benchmark suite. The
 
 Performance was measured based on success rate, execution time, and API costs. The creation process itself was also analyzed for cost and time. Data for this analysis is sourced from the `PDD_creation.csv`, `claude_creation.csv`, and the consolidated benchmark results detailed in the `BENCHMARK_REPORT` and `analysis/creation_report` sections of this whitepaper.
 
+#### **Failure Criteria and Iteration Limits**
+
+To ensure fair comparison and prevent infinite loops, both development approaches were subject to identical constraints:
+
+- **Maximum Iterations per Task**: Both PDD and Claude Code were limited to 5 iterations/attempts per individual task during the benchmark phase
+- **Failure Definition**: A task was considered failed if it could not be completed successfully within the 5-iteration limit
+- **Creation Phase vs. Benchmark Phase**: The "attempts" mentioned in creation (5 attempts for Claude Code) refer to complete development sessions where the agent failed to produce a viable tool, requiring the developer to restart the entire process. The 5-iteration limit applies to individual benchmark tasks run against the completed tools.
+
+This constraint explains the significant difference in success rates: PDD's tool consistently completed tasks within 5 iterations (100% success rate), while Claude Code's tool frequently exceeded this limit (46.67% success rate), indicating difficulty in converging on correct solutions.
+
+#### **PDD Toolchain Implementation Details**
+
+The PDD development process followed a structured 8-phase workflow for each module, as exemplified by the cost_tracker component:
+
+**Phase 1: Generate Initial Prompt**
+```bash
+pdd generate --output "cost_tracker/cost_tracker_python.prompt" "cost_tracker/cost_tracker_python_prompt.prompt"
+```
+
+**Phase 2: Find Dependencies (auto-deps)**
+```bash
+pdd auto-deps --output "cost_tracker/cost_tracker_modified_prompt.prompt" "cost_tracker/cost_tracker_python.prompt" "."
+```
+
+**Phase 3: Generate Function**
+```bash
+pdd generate --output "cost_tracker/cost_tracker.py" "cost_tracker/cost_tracker_modified_prompt.prompt"
+```
+
+**Phase 4: Create Example**
+```bash
+pdd example --output "cost_tracker/cost_tracker_example.py" "cost_tracker/cost_tracker_python_prompt.prompt" "cost_tracker/cost_tracker.py"
+```
+
+**Phase 5: Verify Logical Correctness (Max 3 Attempts)**
+```bash
+pdd verify --max-attempts 3 --output-code "cost_tracker/cost_tracker_verified.py" --output-program "cost_tracker/cost_tracker_example_verified.py" [...]
+```
+
+**Phase 6: Generate Unit Tests**
+```bash
+pdd test --output "test_cost_tracker.py" "cost_tracker/cost_tracker_modified_prompt.prompt" "cost_tracker/cost_tracker_iteration_2.py"
+```
+
+**Phase 7: Fix Unit Test Failures (Max 3 Attempts)**
+```bash
+pdd fix --loop --max-attempts 3 --verification-program "verify_cost_tracker_fix.py" [...]
+```
+
+**Phase 8: Organize Final Outputs**
+Final file organization and placement in the project structure.
+
+Each module of the Edit File Tool was generated using this systematic process, with initial prompts derived from the project's README document. This structured approach aligns with the PDD workflow diagram shown earlier in this paper, ensuring consistent, reproducible development across all components.
+
 ### 3. Key Performance Metrics
 
 The development workflows and associated costs for creating the Edit File Tool differed substantially between PDD and Claude Code.
@@ -277,6 +331,15 @@ While the total creation costs and times appear somewhat comparable in aggregate
 *   **Claude Code**: 7,159 lines (total added) / $28.53 = **250.93 lines per dollar**
 
 PDD not only produced a more reliable tool but was also more cost-effective in the generation phase itself.
+
+#### **Development Process Efficiency**
+
+The fundamental difference in development approaches becomes clear when examining the creation statistics:
+
+- **PDD**: Single comprehensive session generating a complete, functional tool (9,718 lines) with systematic verification at each step
+- **Claude Code**: Multiple failed attempts requiring complete restarts, indicating the interactive approach's vulnerability to partial failures and abandonment
+
+This pattern suggests that PDD's batch-oriented, systematic approach provides better protection against development dead-ends, while interactive approaches may encourage partial work that ultimately proves unviable.
 
 ![PDD Average Cost per Module Distribution](creation_report/pdd_avg_cost_per_module_dist.png)
 ![Claude Cost per Run Distribution](creation_report/claude_cost_per_run_dist.png)
@@ -311,7 +374,14 @@ The performance gap persists across different file sizes and edit types.
 
 ### 5. Part 3: The 'Why' - Qualitative Analysis & Developer Experience
 
-The benchmark data reveals a critical difference in reliability. Claude Code's primary failure mode, occurring in 24 failed tasks, was "Editing process exceeded maximum iterations." This suggests that the direct iterative approach with Claude Code is prone to getting stuck or failing to converge on a solution within a practical number of steps.
+The benchmark data reveals a critical difference in convergence capability. Claude Code's primary failure mode, occurring in 24 of the 45 benchmark tasks, was "Editing process exceeded maximum iterations." With both tools subject to identical 5-iteration limits per task, this pattern indicates that Claude Code's tool struggled to converge on correct solutions within practical constraints.
+
+This convergence failure suggests several potential issues:
+1. **Context Loss**: The iterative editing approach may lose track of the overall goal across multiple edit cycles
+2. **Conflicting Constraints**: The tool may attempt to satisfy contradictory requirements introduced during the editing process  
+3. **Insufficient Systematic Approach**: Unlike PDD's structured workflow (generate → example → verify → test → fix), the iterative editing approach lacks systematic validation steps
+
+The 5-iteration limit was chosen to reflect real-world constraints where developers cannot afford infinite attempts to achieve a working solution. PDD's 100% success rate within this constraint demonstrates superior practical reliability.
 
 The higher variance in wall time for Claude Code's creation runs (std: 4119.79 seconds vs. PDD's more consistent module times, though PDD's `main_editor` module was an outlier) and its multiple-attempt nature point to a higher risk of abandonment or significant rework. Developers using such an approach might invest considerable time in an attempt only to find it unsuccessful, necessitating further costly retrials.
 
