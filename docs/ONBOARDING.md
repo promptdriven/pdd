@@ -196,11 +196,70 @@ This is the most robust method to ensure `PDD_PATH` is always set correctly when
     ```
 
 ---
+## Testing Prompts with `prompt_tester.py`
+
+A key part of developing with PDD is ensuring your prompts are robust and reliable. The repository includes a powerful tool, `tests/prompt_tester.py`, designed for this purpose. It allows you to test a prompt against a suite of test cases defined in a CSV file and evaluate its performance.
+
+### How It Works
+
+The `prompt_tester.py` script takes a prompt file and a CSV file of test cases. For each row in the CSV, it:
+1.  Runs the specified prompt with the `input_variables` from the row.
+2.  Compares the `actual_output` from the LLM with the `expected_output` from the row.
+3.  **Advanced Comparison:** If the outputs don't match exactly, it uses a more powerful LLM to perform a *semantic comparison*. It determines if the actual output is equivalent in meaning to the expected output, which is perfect for robustness testing.
+
+### Step-by-Step Guide
+
+#### 1. Create a Test Case CSV File
+
+First, create a CSV file to define your test cases. For example, you could create `tests/csv/my_prompt_tests.csv`.
+
+The CSV file must contain these columns:
+- `test_case_name`: A brief, human-readable description of the test.
+- `input_variables`: A JSON string representing the dictionary of variables your prompt expects.
+- `expected_output`: The "golden" or ideal output you expect the prompt to generate.
+
+**Example: Testing a Summarization Prompt**
+
+Imagine you have a prompt that summarizes text. Your CSV file (`tests/csv/summarization_tests.csv`) might look like this:
+
+```csv
+test_case_name,input_variables,expected_output
+"Baseline summarization","{""text"": ""The quick brown fox jumps over the lazy dog. This famous sentence contains all the letters of the English alphabet.""}", "A sentence about a fox jumping over a dog contains all letters of the alphabet."
+"Robustness test with typo","{""text"": ""The quik brown fox jumps over the lazy dog. This famous sentence contains all the letters of the English alphabet.""}", "A sentence about a fox jumping over a dog contains all letters of the alphabet."
+"Robustness test with different phrasing","{""text"": ""A well-known sentence about a speedy brown fox leaping over a tired canine includes every letter in the English alphabet.""}", "A sentence about a fox jumping over a dog contains all letters of the alphabet."
+```
+
+In this example, we test a baseline case and then two "robustness" cases where the input is slightly different, but the core meaning and expected summary remain the same.
+
+#### 2. Run the Prompt Tester
+
+Execute the script from the root of the project using the following command. Make sure your conda environment is active.
+
+```bash
+# General usage
+python -m tests.prompt_tester <prompt_name> --csv_file <path_to_your_csv>
+
+# Example using the summarization test
+python -m tests.prompt_tester summarize_LLM --csv_file tests/csv/summarization_tests.csv
+```
+-   Replace `<prompt_name>` with the name of the prompt file (without the `.prompt` extension).
+-   Replace `<path_to_your_csv>` with the path to the CSV file you created.
+
+#### 3. Analyze the Results
+
+The script will print a detailed, color-coded report to the console for each test case, showing:
+-   **PASS** or **FAIL**.
+-   The expected output vs. the actual output.
+-   A `diff` view highlighting the exact differences for failed tests.
+-   The reasoning from the LLM judge if a semantic comparison was performed.
+
+This allows you to quickly identify which cases are failing and why, so you can refine your prompt accordingly.
+
 ## Next Steps
 
 - Join the PDD community on Discord
 - Review example projects in the `examples/` directory
-- Start with the basic tutorials in the [Tutorials](./TUTORIALS.md) documentation
+- Start with the basic tutorials in the documentation
 
 ## Troubleshooting
 
