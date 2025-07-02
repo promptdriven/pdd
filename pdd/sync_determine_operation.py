@@ -215,10 +215,22 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         prompt_filename = f"{basename}_{language}.prompt"
         prompt_path = str(Path(prompts_dir) / prompt_filename)
         
+        # Check if prompt file exists - if not, we can't proceed with construct_paths
+        if not Path(prompt_path).exists():
+            # Fall back to default path construction if prompt doesn't exist
+            extension = get_extension(language)
+            return {
+                'prompt': Path(prompt_path),
+                'code': Path(f"{basename}.{extension}"),
+                'example': Path(f"{basename}_example.{extension}"),
+                'test': Path(f"test_{basename}.{extension}")
+            }
+        
         input_file_paths = {
             "prompt_file": prompt_path
         }
         
+        # Only call construct_paths if the prompt file exists
         resolved_config, input_strings, output_file_paths, detected_language = construct_paths(
             input_file_paths=input_file_paths,
             force=True,  # Use force=True to avoid interactive prompts during sync
