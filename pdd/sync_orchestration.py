@@ -219,7 +219,19 @@ def sync_orchestration(
         return _display_sync_log(basename, language, verbose)
 
     # --- Initialize State and Paths ---
-    pdd_files = get_pdd_file_paths(basename, language, prompts_dir)
+    try:
+        pdd_files = get_pdd_file_paths(basename, language, prompts_dir)
+    except Exception as e:
+        # Log the error and return early with failure status
+        console.print(f"[red]Error constructing paths: {e}[/red]")
+        return {
+            "success": False,
+            "total_cost": 0.0,
+            "model_name": "",
+            "error": f"Failed to construct paths: {str(e)}",
+            "operations_completed": [],
+            "errors": [f"Path construction failed: {str(e)}"]
+        }
     
     # Shared state for animation thread
     current_function_name_ref = ["initializing"]
