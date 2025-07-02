@@ -62,14 +62,14 @@ PDD is built on several fundamental concepts, detailed in the PDD methodology:
 2. **Regenerative Development**: Changes are implemented by modifying the relevant prompt(s) and regenerating the affected code. This avoids the accumulation of patches and maintains conceptual integrity.
 3. **Intent Preservation**: Prompts capture the "why" behind the code, preserving design rationale more effectively than code comments alone.
 4. **Modularity**: Similar to code, prompts are designed as modular units, often linked via minimal "example" files that act as interfaces, promoting reusability and token efficiency.
-5. **Synchronization**: A core tenet is maintaining synchronization between the prompt, the generated code, usage examples, and tests. Learning gained during implementation is fed back into the prompts, ensuring they remain accurate and up-to-date. This contrasts with patching approaches where documentation and original specifications often become stale.
+5. **Synchronization**: A core tenet is maintaining synchronization between the prompt, the generated code, usage examples, and tests. Learning gained during implementation is fed back into the prompts, ensuring they remain accurate and up-to-date. This contrasts with patching approaches, where documentation and original specifications often become stale.
 6. **Batch-Oriented Workflow**: PDD is fundamentally designed as a batch process, allowing for scripted, reproducible generation, contrasting with the inherently interactive nature of many code-patching AI tools.
 
 ## **Key Benefits of PDD**
 
 Adopting a PDD approach offers numerous advantages, particularly when contrasted with direct code patching using interactive AI assistants:
 
-- **Reduced Maintenance Cost & Effort**: By regenerating code from updated prompts, PDD avoids the "rat's nest" complexity that arises from repeated patching. Refactoring and implementing large changes become significantly easier and cleaner.
+- **Reduced Maintenance Cost & Effort**: By regenerating code from updated prompts, PDD avoids the "rat's nest" complexity that arises from repeated patching. Refactoring and implementing significant changes become significantly easier and cleaner.
 - **Increased Efficiency & Speed (Developer Focus & Throughput)**: Developers operate at a higher abstraction level. While a single patch might seem faster interactively, PDD's batch nature frees up developer time by eliminating the need to constantly "babysit" the AI, leading to greater overall throughput, especially on larger tasks.
 - **Cost Savings (LLM Usage)**:
     - **Token Efficiency**: PDD workflows, being more structured and modular (using examples as interfaces), can be more deterministic and token-efficient compared to the potentially verbose interactions of purely agentic/chat-based coding assistants.
@@ -103,8 +103,8 @@ gantt
 *Figure 1: Comparison of developer time utilization in interactive vs. batch (PDD) workflows. While both approaches might use similar total LLM processing time, the PDD approach frees the developer from constant supervision, allowing them to work on other tasks while batch processing occurs.*
 
 - **Enhanced Control & Consistency**: PDD provides more direct control over the generation process. Prompts are attached to specific code modules, making the generation highly directed and reproducible, unlike less predictable, "universal chatbot" style interactions.
-- **Improved Collaboration & Accessibility**: Prompts, being in natural language, serve as a common language accessible to both technical and non-technical stakeholders. This facilitates validation of business logic and keeps everyone aligned, unlike code-centric patching workflows.
-- **Easier Onboarding**: New team members can understand the system's purpose and structure by reading the prompts, which are typically much shorter and clearer than the full codebase resulting from numerous patches.
+- **Improved Collaboration & Accessibility**: Prompts, being in natural language, serve as a common language accessible to both technical and non-technical stakeholders. Unlike code-centric patching workflows, this facilitates business logic validation and keeps everyone aligned.
+- **Easier Onboarding**: New team members can understand the system's purpose and structure by reading the prompts, which are typically much shorter and more precise than the complete codebase resulting from numerous patches.
 - **Better Scalability & Complexity Management**: For large, complex systems, PDD's directed, modular approach with regeneration offers more control and manageability than repeatedly patching a large, monolithic codebase via interactive chat.
 - **Enhanced Code Quality (via Explicit Context)**: PDD emphasizes systematically finding and providing relevant context (like few-shot examples, potentially sourced from a shared cloud) to the LLM during generation. Good context can allow even less powerful models to outperform stronger models that lack context, leading to higher-quality, more accurate code compared to zero-shot or implicit context approaches.
 - **Adaptability**: PDD excels in scenarios requiring frequent changes or evolution. Modifying high-level prompts is often simpler and safer than performing deep surgery on patched code.
@@ -285,7 +285,7 @@ Key findings include:
 *   **Execution Performance (Runtime)**: PDD's average execution time per task was 37.3605 seconds, compared to 50.7765 seconds for Claude Code.
 *   **API Cost Efficiency (Runtime)**: PDD's average API cost per task was $0.0789, significantly lower than Claude Code's $0.3617.
 *   **Creation Cost and Effort**: PDD's single creation process cost $29.92 and took 7h 5m 56.1s. Claude Code's 5 attempts totaled $28.53 in cost and 6h 18m 55.4s in wall duration.
-*   **Primaary Cause of Claude Code's failures**: The primary failure mode for Claude Code's tool was exceeding the maximum edit iterations, suggesting it struggled to converge on a correct solution. This unreliability undermines its practical use.
+*   **Primary Cause of Claude Code's failures**: Claude Code's tool's primary failure mode exceeded the maximum edit iterations, suggesting it struggled to converge on a correct solution. This unreliability undermines its practical use.
 
 ![Overall Success Rate](analysis_report/overall_success_rate.png)
 ![Total Creation Cost Comparison](creation_report/total_cost_comparison.png)
@@ -295,7 +295,7 @@ Key findings include:
 
 #### **2.2 Methodology**
 
-This case study involved the independent development of an "Edit File Tool" using two distinct methodologies: Prompt-Driven Development (PDD) and Anthropic's `claude-code` CLI tool, a state-of-the-art agentic coding assistant. To ensure a fair comparison and control for user skill, the same developer, proficient in both PDD and agentic tool usage, undertook the development for both systems. Both development efforts aimed to create a tool that leverages Claude's `text_editor_20250124` model for performing file edits based on natural language instructions.
+This case study involved the independent development of an "Edit File Tool" using two distinct methodologies: Prompt-Driven Development (PDD) and Anthropic's `claude-code` CLI tool, a state-of-the-art agentic coding assistant. To ensure a fair comparison and control for user skill, the same developer, proficient in both PDD and agentic tool usage, developed for both systems. Both development efforts aimed to create a tool that leverages Claude's `text_editor_20250124` model for performing file edits based on natural language instructions.
 
 The `claude-code` workflow consisted of the developer issuing high-level natural language commands in the terminal (e.g., "implement the main file editing logic," "add error handling," "write tests for the core function"). An "attempt" was defined as a continuous session of work. The multiple attempts recorded reflect sessions where the agent failed to produce a viable, complete solution, requiring the developer to restart the process.
 
@@ -314,7 +314,7 @@ To ensure fair comparison and prevent infinite loops, both development approache
 - **Failure Definition**: A task was considered failed if it could not be completed successfully within the 5-iteration limit
 - **Creation Phase vs. Benchmark Phase**: The "attempts" mentioned in creation (5 attempts for Claude Code) refer to complete development sessions where the agent failed to produce a viable tool, requiring the developer to restart the entire process. The 5-iteration limit applies to individual benchmark tasks run against the completed tools.
 
-This constraint explains the significant difference in success rates: PDD's tool consistently completed tasks within 5 iterations (100% success rate), while Claude Code's tool frequently exceeded this limit (46.67% success rate), indicating difficulty in converging on correct solutions.
+This constraint explains the significant difference in success rates: PDD's tool consistently completed tasks within 5 iterations (100% success rate). In constrast, while Claude Code's tool frequently exceeded this limit (46.67% success rate), indicating difficulty in converging on correct solutions.
 
 #### **PDD Toolchain Implementation Details**
 
@@ -365,14 +365,14 @@ Each module of the Edit File Tool was generated using this systematic process, w
 The development workflows and associated costs for creating the Edit File Tool differed substantially between PDD and Claude Code.
 
 *   **PDD**: The PDD approach involved a single, monolithic session that generated 9,718 lines of working code. This process incurred a total cost of $29.92 and took 7h 5m 56.1s (25556.13 seconds). The average cost per module within this process was $0.3990.
-*   **Claude Code**: The development using Claude Code consisted of 5 isolated attempts, which in total produced 7,159 lines of code (net 5,759 lines added). The aggregated cost for these attempts was $28.53, with a total wall duration of 6h 18m 55.4s (22735.40 seconds). The average cost per run was $5.7066.
+*   **Claude Code**: The development using Claude Code consisted of 5 isolated attempts, totaling 7,159 lines of code (net 5,759 lines added). The aggregated cost for these attempts was $28.53, with a total wall duration of 6h 18m 55.4s (22735.40 seconds). The average cost per run was $5.7066.
 
-While the total creation costs and times appear somewhat comparable in aggregate, the PDD approach yielded a fully functional tool in one comprehensive effort, whereas the Claude Code approach involved multiple, potentially incomplete or iterative, attempts. This difference in process also reflects in development efficiency. We can measure this as lines of code generated per dollar spent:
+While the total creation costs and times appear somewhat comparable in aggregate, the PDD approach yielded a fully functional tool in one comprehensive effort. In contrast, the Claude Code approach involved multiple, potentially incomplete or iterative, attempts. This difference in process is also reflected in development efficiency. We can measure this as lines of code generated per dollar spent:
 
 *   **PDD**: 9,718 lines / $29.92 = **324.80 lines per dollar**
 *   **Claude Code**: 7,159 lines (total added) / $28.53 = **250.93 lines per dollar**
 
-PDD not only produced a more reliable tool but was also more cost-effective in the generation phase itself.
+PDD produced a more reliable tool and was more cost-effective in the generation phase itself.
 
 #### **Development Process Efficiency**
 
@@ -416,7 +416,7 @@ The performance gap persists across different file sizes and edit types.
 
 #### **2.5 Qualitative Analysis & Developer Experience**
 
-The benchmark data reveals a critical difference in convergence capability. Claude Code's primary failure mode, occurring in 24 of the 45 benchmark tasks, was "Editing process exceeded maximum iterations." With both tools subject to identical 5-iteration limits per task, this pattern indicates that Claude Code's tool struggled to converge on correct solutions within practical constraints.
+The benchmark data reveals a critical difference in convergence capability. Claude Code's primary failure mode occurred in 24 of the 45 benchmark tasks: “Editing process exceeded maximum iterations." With both tools subject to identical 5-iteration limits per task, this pattern indicates that Claude Code's tool struggled to converge on correct solutions within practical constraints.
 
 This convergence failure suggests several potential issues:
 1. **Context Loss**: The iterative editing approach may lose track of the overall goal across multiple edit cycles
@@ -435,13 +435,13 @@ This points to a fundamental difference in cognitive load. When using an agentic
 
 #### **2.6 Conclusion: Predictability is Priceless**
 
-While the upfront development costs and times for both PDD and Claude Code appear comparable at first glance, this case study reveals that PDD offers a fundamentally more robust and predictable path to creating complex, reliable software.
+While the upfront development costs and times for PDD and Claude Code appear comparable at first glance, this case study reveals that PDD offers a more robust and predictable path to creating complex, reliable software.
 
-The Claude Code agent's 47% success rate demonstrates a high risk of project failure. It produces a tool that is not only less reliable in practice but also nearly 10x more expensive per successful operation. The iterative, multi-attempt nature of its development process introduces uncertainty and a high potential for wasted time and resources.
+The Claude Code agent's 47% success rate demonstrates a high risk of project failure. It produces a tool that is less reliable in practice and nearly 10x more expensive per successful operation. The iterative, multi-attempt nature of its development process introduces uncertainty and a high potential for wasted time and resources.
 
-In contrast, PDD delivered a 100% successful tool in a single, comprehensive session. By front-loading the effort into structured prompts, PDD mitigates risk and reduces the cognitive load on the developer, trading frantic, turn-by-turn agent supervision for a methodical process of verification.
+In contrast, PDD delivered a 100% successful tool in a single, comprehensive session. By front-loading the effort into structured prompts, PDD mitigates risk and reduces the cognitive load on the developer, trading frantic, turn-by-turn agent supervision for a methodical verification process.
 
-Ultimately, this study favors PDD's structured workflow. For complex projects where reliability, efficiency, and predictability are paramount, it proves to be the superior methodology, yielding a better final product at a dramatically lower effective cost.
+Ultimately, this study favors PDD's structured workflow. For complex projects where reliability, efficiency, and predictability are paramount, it is the superior methodology, yielding a better final product at a dramatically lower effective cost.
 
 ### **Detailed Analysis References**
 
@@ -487,11 +487,11 @@ Prompt-Driven Development offers a compelling alternative to traditional coding 
 
 By establishing prompts as the primary artifact, emphasizing regeneration over patching, and leveraging LLMs within a structured, batch-oriented workflow for code generation and synchronization, PDD consistently delivers:
 
-- **Cognitive Load Reduction**: 55% reduction in active developer time (HandPaint) and systematic workflow that eliminates constant supervision requirements
+- **Cognitive Load Reduction**: 55% reduction in active developer time (HandPaint) and a systematic workflow that eliminates constant supervision requirements
 - **Superior Reliability**: 100% success rate in complex scenarios vs. 46.67% for interactive approaches  
 - **Cost Efficiency**: Demonstrable cost advantages across both simple prototyping ($0.19/run) and complex development ($0.0789/task) scenarios
 - **Cross-Domain Effectiveness**: Proven benefits for both user-facing applications and developer infrastructure tools
 
 The methodological validation through diverse approaches (Vibecoding, Claude Code), different models (Gemini, Claude), and varied application types (UI-focused, CLI-based) strengthens confidence in PDD's generalizability. The consistent patterns of resource optimization and developer experience improvements across these contexts position PDD not as a niche optimization but as a fundamental advancement in software engineering methodology.
 
-While requiring a shift in mindset and acknowledging that interactive tools have their place for specific tasks, the empirical evidence demonstrates that PDD's benefits – particularly for projects prioritizing efficiency, reliability, and cost-effectiveness – represent a significant evolution in software engineering practices. This approach enables developers to work faster, more strategically, and at a higher level of abstraction while maintaining the predictability and control essential for professional software development.
+While requiring a shift in mindset and acknowledging that interactive tools have their place for specific tasks, the empirical evidence demonstrates that PDD's benefits, particularly for projects prioritizing efficiency, reliability, and cost-effectiveness, represent a significant evolution in software engineering practices. This approach enables developers to work faster, more strategically, and at a higher level of abstraction while maintaining the predictability and control essential for professional software development.
