@@ -271,7 +271,7 @@ def sync_orchestration(
                     errors.append(f"Budget of ${budget:.2f} exceeded.")
                     break
 
-                decision = sync_determine_operation(basename, language, target_coverage, budget - current_cost_ref[0], False, prompts_dir)
+                decision = sync_determine_operation(basename, language, target_coverage, budget - current_cost_ref[0], False, prompts_dir, skip_tests, skip_verify)
                 operation = decision.operation
 
                 if operation in ['all_synced', 'nothing', 'fail_and_request_manual_merge', 'error', 'analyze_conflict']:
@@ -285,14 +285,16 @@ def sync_orchestration(
                     break
                 
                 # Handle skips
-                if operation == 'verify' and skip_verify:
+                if operation == 'verify' and (skip_verify or skip_tests):
+                    # Skip verification if explicitly requested OR if tests are skipped (can't verify without tests)
                     skipped_operations.append('verify')
+                    skip_reason = 'skip_verify' if skip_verify else 'skip_tests_implies_skip_verify'
                     report_data = RunReport(
                         timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
                         exit_code=0, tests_passed=0, tests_failed=0, coverage=0.0
                     )
                     save_run_report(asdict(report_data), basename, language)
-                    _save_operation_fingerprint(basename, language, 'verify', pdd_files, 0.0, 'skipped')
+                    _save_operation_fingerprint(basename, language, 'verify', pdd_files, 0.0, skip_reason)
                     continue
                 if operation == 'test' and skip_tests:
                     skipped_operations.append('test')
@@ -302,6 +304,17 @@ def sync_orchestration(
                     )
                     save_run_report(asdict(report_data), basename, language)
                     _save_operation_fingerprint(basename, language, 'test', pdd_files, 0.0, 'skipped')
+                    continue
+                if operation == 'crash' and skip_tests:
+                    # Skip crash operations when tests are skipped since crash fixes usually require test execution
+                    skipped_operations.append('crash')
+                    # Create a dummy run report indicating crash was skipped
+                    report_data = RunReport(
+                        timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                        exit_code=0, tests_passed=0, tests_failed=0, coverage=0.0
+                    )
+                    save_run_report(asdict(report_data), basename, language)
+                    _save_operation_fingerprint(basename, language, 'crash', pdd_files, 0.0, 'skipped')
                     continue
 
                 current_function_name_ref[0] = operation
