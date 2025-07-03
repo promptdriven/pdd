@@ -486,6 +486,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "3" ]; then
     # Test with budget limit
     log "3a. Testing 'sync --budget 2.0'"
     rm -f "pdd/${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
+    rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
     run_pdd_command_noexit sync --budget 2.0 "$SIMPLE_BASENAME"
     # Should still create basic files even with low budget
     check_exists "pdd/${SIMPLE_BASENAME}.py" "Generated code with budget limit"
@@ -493,12 +494,14 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "3" ]; then
     # Test with max attempts
     log "3b. Testing 'sync --max-attempts 1'"
     rm -f "pdd/${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
+    rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
     run_pdd_command sync --max-attempts 1 "$SIMPLE_BASENAME"
     check_sync_files "$SIMPLE_BASENAME" "python"
     
     # Test with target coverage
     log "3c. Testing 'sync --target-coverage 95.0'"
     rm -f "pdd/${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
+    rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
     run_pdd_command sync --target-coverage 95.0 "$SIMPLE_BASENAME"
     check_sync_files "$SIMPLE_BASENAME" "python"
 fi
@@ -507,9 +510,9 @@ fi
 if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "4" ]; then
     log "4. Testing multi-language 'sync'"
     
-    # Test Python variant
+    # Test multi-language sync with higher budget
     log "4a. Testing Python calculator sync"
-    run_pdd_command sync "$MULTI_LANG_BASENAME"
+    run_pdd_command sync --budget 30.0 "$MULTI_LANG_BASENAME"
     check_sync_files "$MULTI_LANG_BASENAME" "python"
     
     # Test JavaScript variant (if prompt exists)

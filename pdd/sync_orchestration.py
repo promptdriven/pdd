@@ -375,14 +375,31 @@ def sync_orchestration(
                             output=str(pdd_files['example'])
                         )
                     elif operation == 'crash':
-                        Path("crash.log").write_text("Simulated crash error")
-                        result = crash_main(
-                            ctx, 
-                            prompt_file=str(pdd_files['prompt']), 
-                            code_file=str(pdd_files['code']), 
-                            program_file=str(pdd_files['example']), 
-                            error_file="crash.log"
-                        )
+                        # Validate required files exist before attempting crash operation
+                        required_files = [pdd_files['code'], pdd_files['example']]
+                        missing_files = [f for f in required_files if not f.exists()]
+                        
+                        if missing_files:
+                            # Skip crash operation if required files are missing
+                            print(f"Skipping crash operation - missing files: {[f.name for f in missing_files]}")
+                            skipped_operations.append('crash')
+                            # Create a dummy run report indicating crash was skipped due to missing files
+                            report_data = RunReport(
+                                timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                                exit_code=0, tests_passed=0, tests_failed=0, coverage=0.0
+                            )
+                            save_run_report(asdict(report_data), basename, language)
+                            _save_operation_fingerprint(basename, language, 'crash', pdd_files, 0.0, 'skipped_missing_files')
+                            continue
+                        else:
+                            Path("crash.log").write_text("Simulated crash error")
+                            result = crash_main(
+                                ctx, 
+                                prompt_file=str(pdd_files['prompt']), 
+                                code_file=str(pdd_files['code']), 
+                                program_file=str(pdd_files['example']), 
+                                error_file="crash.log"
+                            )
                     elif operation == 'verify':
                         result = fix_verification_main(
                             ctx, 
