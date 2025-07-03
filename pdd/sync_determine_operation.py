@@ -428,6 +428,143 @@ def get_git_diff(file_path: Path) -> str:
         return ""
 
 
+def validate_expected_files(fingerprint: Optional[Fingerprint], paths: Dict[str, Path]) -> Dict[str, bool]:
+    """
+    Validate that files expected to exist based on fingerprint actually exist.
+    
+    Args:
+        fingerprint: The last known good state fingerprint
+        paths: Dict mapping file types to their expected Path objects
+    
+    Returns:
+        Dict mapping file types to existence status
+    """
+    validation = {}
+    
+    if not fingerprint:
+        return validation
+    
+    # Check each file type that has a hash in the fingerprint
+    if fingerprint.code_hash:
+        validation['code'] = paths['code'].exists()
+    if fingerprint.example_hash:
+        validation['example'] = paths['example'].exists()
+    if fingerprint.test_hash:
+        validation['test'] = paths['test'].exists()
+        
+    return validation
+
+
+def _handle_missing_expected_files(
+    missing_files: List[str], 
+    paths: Dict[str, Path], 
+    fingerprint: Fingerprint,
+    basename: str, 
+    language: str, 
+    prompts_dir: str,
+    skip_tests: bool = False,
+    skip_verify: bool = False
+) -> SyncDecision:
+    """
+    Handle the case where expected files are missing.
+    Determine the appropriate recovery operation.
+    
+    Args:
+        missing_files: List of file types that are missing
+        paths: Dict mapping file types to their expected Path objects
+        fingerprint: The last known good state fingerprint
+        basename: The base name for the PDD unit
+        language: The programming language
+        prompts_dir: Directory containing prompt files
+        skip_tests: If True, skip test generation
+        skip_verify: If True, skip verification operations
+    
+    Returns:
+        SyncDecision object with the appropriate recovery operation
+    """
+    
+    # Priority: regenerate from the earliest missing component
+    if 'code' in missing_files:
+        # Code file missing - start from the beginning
+        if paths['prompt'].exists():
+            prompt_content = paths['prompt'].read_text(encoding='utf-8', errors='ignore')
+            if check_for_dependencies(prompt_content):
+                return SyncDecision(
+                    operation='auto-deps',
+                    reason='Code file missing, prompt has dependencies - regenerate from auto-deps',
+                    details={'missing_files': missing_files, 'prompt_path': str(paths['prompt'])},
+                    estimated_cost=0.5,
+                    confidence=0.85
+                )
+            else:
+                return SyncDecision(
+                    operation='generate',
+                    reason='Code file missing - regenerate from prompt',
+                    details={'missing_files': missing_files, 'prompt_path': str(paths['prompt'])},
+                    estimated_cost=1.0,
+                    confidence=0.90
+                )
+    
+    elif 'example' in missing_files and paths['code'].exists():
+        # Code exists but example missing
+        return SyncDecision(
+            operation='example',
+            reason='Example file missing - regenerate example',
+            details={'missing_files': missing_files, 'code_path': str(paths['code'])},
+            estimated_cost=0.5,
+            confidence=0.85
+        )
+    
+    elif 'test' in missing_files and paths['code'].exists() and paths['example'].exists():
+        # Code and example exist but test missing
+        if skip_tests:
+            # Skip test generation if --skip-tests flag is used
+            return SyncDecision(
+                operation='nothing',
+                reason='Test file missing but --skip-tests specified - workflow complete',
+                details={'missing_files': missing_files, 'skip_tests': True},
+                estimated_cost=0.0,
+                confidence=1.0
+            )
+        else:
+            return SyncDecision(
+                operation='test',
+                reason='Test file missing - regenerate tests',
+                details={'missing_files': missing_files, 'code_path': str(paths['code'])},
+                estimated_cost=1.0,
+                confidence=0.85
+            )
+    
+    # Fallback - regenerate everything
+    return SyncDecision(
+        operation='generate',
+        reason='Multiple files missing - regenerate from prompt',
+        details={'missing_files': missing_files},
+        estimated_cost=2.0,
+        confidence=0.80
+    )
+
+
+def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip_verify: bool = False) -> bool:
+    """
+    Check if workflow is complete considering skip flags.
+    
+    Args:
+        paths: Dict mapping file types to their expected Path objects
+        skip_tests: If True, test files are not required for completion
+        skip_verify: If True, verification operations are not required
+    
+    Returns:
+        True if all required files exist for the current workflow configuration
+    """
+    required_files = ['code', 'example']
+    
+    if not skip_tests:
+        required_files.append('test')
+        
+    return all(paths[f].exists() for f in required_files)
+
+
 def check_for_dependencies(prompt_content: str) -> bool:
     """Check if prompt contains actual dependency indicators that need auto-deps processing."""
     # Only check for specific XML tags that indicate actual dependencies
@@ -457,9 +594,9 @@ def check_for_dependencies(prompt_content: str) -> bool:
     return has_xml_deps or has_explicit_deps
 
 
-def sync_determine_operation(basename: str, language: str, target_coverage: float, budget: float = 10.0, log_mode: bool = False, prompts_dir: str = "prompts") -> SyncDecision:
+def sync_determine_operation(basename: str, language: str, target_coverage: float, budget: float = 10.0, log_mode: bool = False, prompts_dir: str = "prompts", skip_tests: bool = False, skip_verify: bool = False) -> SyncDecision:
     """
-    Core decision-making function for sync operations.
+    Core decision-making function for sync operations with skip flag awareness.
     
     Args:
         basename: The base name for the PDD unit
@@ -468,6 +605,8 @@ def sync_determine_operation(basename: str, language: str, target_coverage: floa
         budget: Maximum budget for operations
         log_mode: If True, skip locking entirely for read-only analysis
         prompts_dir: Directory containing prompt files
+        skip_tests: If True, skip test generation and execution
+        skip_verify: If True, skip verification operations
     
     Returns:
         SyncDecision object with the recommended operation
@@ -475,14 +614,14 @@ def sync_determine_operation(basename: str, language: str, target_coverage: floa
     
     if log_mode:
         # Skip locking for read-only analysis
-        return _perform_sync_analysis(basename, language, target_coverage, budget, prompts_dir)
+        return _perform_sync_analysis(basename, language, target_coverage, budget, prompts_dir, skip_tests, skip_verify)
     else:
         # Normal exclusive locking for actual operations
         with SyncLock(basename, language) as lock:
-            return _perform_sync_analysis(basename, language, target_coverage, budget, prompts_dir)
+            return _perform_sync_analysis(basename, language, target_coverage, budget, prompts_dir, skip_tests, skip_verify)
 
 
-def _perform_sync_analysis(basename: str, language: str, target_coverage: float, budget: float, prompts_dir: str = "prompts") -> SyncDecision:
+def _perform_sync_analysis(basename: str, language: str, target_coverage: float, budget: float, prompts_dir: str = "prompts", skip_tests: bool = False, skip_verify: bool = False) -> SyncDecision:
     """
     Perform the sync state analysis without locking concerns.
     
@@ -492,6 +631,8 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
         target_coverage: Desired test coverage percentage
         budget: Maximum budget for operations
         prompts_dir: Directory containing prompt files
+        skip_tests: If True, skip test generation and execution
+        skip_verify: If True, skip verification operations
     
     Returns:
         SyncDecision object with the recommended operation
@@ -543,13 +684,24 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
                 )
         
         if run_report.coverage < target_coverage:
-            return SyncDecision(
-                operation='test',
-                reason=f'Coverage {run_report.coverage:.1f}% below target {target_coverage:.1f}%',
-                details={'current_coverage': run_report.coverage, 'target_coverage': target_coverage},
-                estimated_cost=1.0,
-                confidence=0.85
-            )
+            if skip_tests:
+                # When tests are skipped but coverage is low, consider workflow complete
+                # since we can't improve coverage without running tests
+                return SyncDecision(
+                    operation='all_synced',
+                    reason=f'Coverage {run_report.coverage:.1f}% below target {target_coverage:.1f}% but tests skipped',
+                    details={'current_coverage': run_report.coverage, 'target_coverage': target_coverage, 'tests_skipped': True},
+                    estimated_cost=0.0,
+                    confidence=0.90
+                )
+            else:
+                return SyncDecision(
+                    operation='test',
+                    reason=f'Coverage {run_report.coverage:.1f}% below target {target_coverage:.1f}%',
+                    details={'current_coverage': run_report.coverage, 'target_coverage': target_coverage},
+                    estimated_cost=1.0,
+                    confidence=0.85
+                )
     
     # 2. Analyze File State
     paths = get_pdd_file_paths(basename, language, prompts_dir)
@@ -585,19 +737,46 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
                 confidence=1.0
             )
     
-    # Compare current hashes with fingerprint
+    # CRITICAL FIX: Validate expected files exist before hash comparison
+    if fingerprint:
+        file_validation = validate_expected_files(fingerprint, paths)
+        missing_expected_files = [
+            file_type for file_type, exists in file_validation.items() 
+            if not exists
+        ]
+        
+        if missing_expected_files:
+            # Files are missing that should exist - need to regenerate
+            # This prevents the incorrect analyze_conflict decision
+            return _handle_missing_expected_files(
+                missing_expected_files, paths, fingerprint, basename, language, prompts_dir, skip_tests, skip_verify
+            )
+    
+    # Compare hashes only for files that actually exist (prevents None != "hash" false positives)
     changes = []
-    if current_hashes.get('prompt_hash') != fingerprint.prompt_hash:
-        changes.append('prompt')
-    if current_hashes.get('code_hash') != fingerprint.code_hash:
-        changes.append('code')
-    if current_hashes.get('example_hash') != fingerprint.example_hash:
-        changes.append('example')
-    if current_hashes.get('test_hash') != fingerprint.test_hash:
-        changes.append('test')
+    if fingerprint:
+        if current_hashes.get('prompt_hash') != fingerprint.prompt_hash:
+            changes.append('prompt')
+        # Only compare hashes for files that exist
+        if paths['code'].exists() and current_hashes.get('code_hash') != fingerprint.code_hash:
+            changes.append('code')
+        if paths['example'].exists() and current_hashes.get('example_hash') != fingerprint.example_hash:
+            changes.append('example')
+        if paths['test'].exists() and current_hashes.get('test_hash') != fingerprint.test_hash:
+            changes.append('test')
     
     if not changes:
-        # No Changes (Hashes Match Fingerprint) - Progress workflow if needed
+        # No Changes (Hashes Match Fingerprint) - Progress workflow with skip awareness
+        if _is_workflow_complete(paths, skip_tests, skip_verify):
+            return SyncDecision(
+                operation='nothing',
+                reason=f'All required files synchronized (skip_tests={skip_tests}, skip_verify={skip_verify})',
+                details={'skip_tests': skip_tests, 'skip_verify': skip_verify},
+                estimated_cost=0.0,
+                confidence=1.0
+            )
+        
+        # Progress workflow considering skip flags
         if paths['code'].exists() and not paths['example'].exists():
             return SyncDecision(
                 operation='example',
@@ -608,22 +787,13 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
             )
         
         if (paths['code'].exists() and paths['example'].exists() and 
-            not paths['test'].exists()):
+            not skip_tests and not paths['test'].exists()):
             return SyncDecision(
                 operation='test',
                 reason='Code and example exist but test missing - progress workflow',
                 details={'code_path': str(paths['code']), 'example_path': str(paths['example'])},
                 estimated_cost=1.0,
                 confidence=0.85
-            )
-        
-        if all(paths[f].exists() for f in ['code', 'example', 'test']):
-            return SyncDecision(
-                operation='nothing',
-                reason='All files synchronized and unit complete',
-                details={},
-                estimated_cost=0.0,
-                confidence=1.0
             )
         
         # Some files are missing but no changes detected

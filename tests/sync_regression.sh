@@ -439,8 +439,9 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "2" ]; then
     
     # Test --skip-tests
     log "2b. Testing 'sync --skip-tests'"
-    # Clean previous files to test fresh generation
+    # Clean previous files AND metadata to test fresh generation
     rm -f "pdd/${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
+    rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
     run_pdd_command_noexit sync --skip-tests "$SIMPLE_BASENAME"
     # Check what was actually generated (sync may only generate code)
     if [ -f "pdd/${SIMPLE_BASENAME}.py" ]; then
@@ -464,6 +465,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "2" ]; then
     # Test both skip options together
     log "2c. Testing 'sync --skip-verify --skip-tests'"
     rm -f "pdd/${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py"
+    rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
     run_pdd_command_noexit sync --skip-verify --skip-tests "$SIMPLE_BASENAME"
     check_exists "pdd/${SIMPLE_BASENAME}.py" "Generated code with both skip options"
     
