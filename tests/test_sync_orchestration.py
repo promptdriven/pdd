@@ -293,3 +293,275 @@ def test_final_state_reporting(orchestration_fixture, tmp_path):
     assert final_state['example']['exists'] is False
     assert final_state['test']['exists'] is False
     assert Path(final_state['code']['path']).name == 'calculator.py'
+
+def test_regression_2b_scenario_skip_tests_after_cleanup(orchestration_fixture):
+    """
+    Test the exact scenario from regression test 2b.
+    This tests sync --skip-tests after files are cleaned but metadata exists.
+    """
+    # Use the existing fixture structure - directories already created
+    
+    # Create prompt file (exact content from regression test)
+    prompt_content = """Create a Python module with a simple math function.
+
+Requirements:
+- Function name: add
+- Parameters: a, b (both numbers)  
+- Return: sum of a and b
+- Include type hints
+- Add docstring explaining the function
+
+Example usage:
+result = add(5, 3)  # Should return 8"""
+    
+    # Note: Files are created in working directory since fixture uses tmp_path
+    
+    # Create fingerprint metadata (simulate previous successful sync)
+    fingerprint_data = {
+        "pdd_version": "0.0.41",
+        "timestamp": "2023-01-01T00:00:00Z",
+        "command": "test",
+        "prompt_hash": "abc123",
+        "code_hash": "def456", 
+        "example_hash": "ghi789",
+        "test_hash": "jkl012"
+    }
+    import json
+    # Note: Using Path.cwd() since fixture changes to tmp_path
+    from pathlib import Path
+    (Path.cwd() / ".pdd" / "meta" / "simple_math_python.json").write_text(json.dumps(fingerprint_data, indent=2))
+    
+    # Create run report with low coverage (to trigger test operation normally)
+    run_report = {
+        "timestamp": "2023-01-01T00:00:00Z",
+        "exit_code": 0,
+        "tests_passed": 1,
+        "tests_failed": 0,
+        "coverage": 1.0  # Low coverage to trigger test operation
+    }
+    (Path.cwd() / ".pdd" / "meta" / "simple_math_python_run.json").write_text(json.dumps(run_report, indent=2))
+    
+    # Files are missing (cleaned) but metadata exists - this is the problematic scenario
+    
+    # Mock sync_determine_operation to return decisions appropriate for skip_tests scenario
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='generate', reason='Code file missing'),
+        SyncDecision(operation='example', reason='Example file missing'),
+        SyncDecision(operation='all_synced', reason='All required files synchronized (skip_tests=True, skip_verify=False)'),
+    ]
+    
+    # Test sync with skip_tests=True (the problematic scenario)
+    result = sync_orchestration(basename="simple_math", language="python", skip_tests=True)
+    
+    assert result['success'] is True
+    assert result['operations_completed'] == ['generate', 'example']
+    assert not result['errors']
+    
+    # Verify that the workflow completed without hanging
+
+def test_regression_3b_scenario_crash_with_missing_files(orchestration_fixture):
+    """
+    Test sync --max-attempts 1 with missing files but crash metadata.
+    This verifies that crash operations are properly skipped when required files are missing.
+    """
+    # Use existing fixture structure - directories already created
+    
+    # Create metadata indicating crash (like what test 3b inherits)
+    fingerprint_data = {
+        "pdd_version": "0.0.41",
+        "timestamp": "2025-07-03T02:56:22.795978+00:00",
+        "command": "crash",
+        "prompt_hash": "abc123",
+        "code_hash": "def456",
+        "example_hash": "ghi789",
+        "test_hash": "jkl012"
+    }
+    import json
+    from pathlib import Path
+    (Path.cwd() / ".pdd" / "meta" / "simple_math_python.json").write_text(json.dumps(fingerprint_data, indent=2))
+    
+    # Create run report with crash exit code (exact content from failing test)
+    run_report = {
+        "timestamp": "2025-07-03T02:56:22.795978+00:00",
+        "exit_code": 2,  # This triggers crash operation
+        "tests_passed": 0,
+        "tests_failed": 0,
+        "coverage": 0.0
+    }
+    (Path.cwd() / ".pdd" / "meta" / "simple_math_python_run.json").write_text(json.dumps(run_report, indent=2))
+    
+    # Files are missing (like test 3b after cleanup) - this is the key scenario
+    
+    # Mock sync_determine_operation to return crash operation initially
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='crash', reason='Runtime error detected (exit_code=2)'),
+        SyncDecision(operation='generate', reason='Code file missing after crash skip'),
+        SyncDecision(operation='all_synced', reason='All required files synchronized'),
+    ]
+    
+    # Test sync with max_attempts=1 (the problematic scenario)
+    result = sync_orchestration(basename="simple_math", language="python", max_attempts=1)
+    
+    assert result['success'] is True
+    # Crash should be skipped due to missing files, then generate should run
+    assert 'crash' in result['skipped_operations']
+    assert 'generate' in result['operations_completed']
+    assert not result['errors']
+
+def test_comprehensive_sync_fix_scenarios(orchestration_fixture):
+    """
+    Comprehensive test of sync regression scenarios with skip flags.
+    Tests multiple scenarios that were causing hangs or failures.
+    """
+    # Use existing fixture structure - directories already created
+    
+    scenarios = [
+        {
+            "name": "missing_files_skip_tests",
+            "fingerprint": None,
+            "run_report": None,
+            "skip_tests": True,
+            "expected_operations": ["generate"],
+            "should_succeed": True
+        },
+        {
+            "name": "crash_metadata_skip_tests", 
+            "fingerprint": {
+                "pdd_version": "0.0.41",
+                "timestamp": "2023-01-01T00:00:00Z",
+                "command": "crash",
+                "prompt_hash": "abc123",
+                "code_hash": "def456",
+                "example_hash": "ghi789",
+                "test_hash": "jkl012"
+            },
+            "run_report": {
+                "timestamp": "2023-01-01T00:00:00Z",
+                "exit_code": 2,
+                "tests_passed": 0,
+                "tests_failed": 0,
+                "coverage": 0.0
+            },
+            "skip_tests": True,
+            "expected_operations": ["generate"],  # crash should be skipped
+            "should_succeed": True
+        },
+        {
+            "name": "low_coverage_skip_tests",
+            "fingerprint": {
+                "pdd_version": "0.0.41",
+                "timestamp": "2023-01-01T00:00:00Z",
+                "command": "test",
+                "prompt_hash": "abc123",
+                "code_hash": "def456",
+                "example_hash": "ghi789", 
+                "test_hash": "jkl012"
+            },
+            "run_report": {
+                "timestamp": "2023-01-01T00:00:00Z",
+                "exit_code": 0,
+                "tests_passed": 5,
+                "tests_failed": 0,
+                "coverage": 50.0  # Below target 90%
+            },
+            "skip_tests": True,
+            "expected_operations": [],  # should be all_synced due to skip_tests
+            "should_succeed": True
+        }
+    ]
+    
+    for scenario in scenarios:
+        # Clean up previous state
+        from pathlib import Path
+        for meta_file in (Path.cwd() / ".pdd" / "meta").glob("*.json"):
+            meta_file.unlink()
+        
+        # Setup scenario metadata
+        import json
+        if scenario["fingerprint"]:
+            (Path.cwd() / ".pdd" / "meta" / "simple_math_python.json").write_text(
+                json.dumps(scenario["fingerprint"], indent=2)
+            )
+        if scenario["run_report"]:
+            (Path.cwd() / ".pdd" / "meta" / "simple_math_python_run.json").write_text(
+                json.dumps(scenario["run_report"], indent=2)
+            )
+        
+        # Mock determine operation for this scenario
+        mock_determine = orchestration_fixture['sync_determine_operation']
+        if scenario["expected_operations"]:
+            side_effects = []
+            for op in scenario["expected_operations"]:
+                side_effects.append(SyncDecision(operation=op, reason=f'Test operation: {op}'))
+            side_effects.append(SyncDecision(operation='all_synced', reason='Test completed'))
+            mock_determine.side_effect = side_effects
+        else:
+            mock_determine.side_effect = [
+                SyncDecision(operation='all_synced', reason='All required files synchronized (skip_tests=True)')
+            ]
+        
+        # Test the scenario
+        result = sync_orchestration(
+            basename="simple_math", 
+            language="python",
+            skip_tests=scenario["skip_tests"]
+        )
+        
+        assert result['success'] == scenario["should_succeed"], f"Scenario {scenario['name']} failed"
+        if scenario["expected_operations"]:
+            for op in scenario["expected_operations"]:
+                assert op in result['operations_completed'], f"Expected operation {op} not completed in {scenario['name']}"
+
+def test_regression_2b_focused_skip_tests_after_cleanup(orchestration_fixture):
+    """
+    Focused test for regression 2b: sync --skip-tests after file cleanup.
+    Tests the exact sequence: successful sync → file cleanup → skip-tests (should not hang).
+    """
+    # Use existing fixture structure - directories already created
+    
+    # Simulate state after successful sync (step 1)
+    fingerprint_data = {
+        "pdd_version": "0.0.41",
+        "timestamp": "2023-01-01T00:00:00Z",
+        "command": "test",
+        "prompt_hash": "abc123",
+        "code_hash": "def456",
+        "example_hash": "ghi789", 
+        "test_hash": "jkl012"
+    }
+    import json
+    from pathlib import Path
+    (Path.cwd() / ".pdd" / "meta" / "simple_math_python.json").write_text(json.dumps(fingerprint_data, indent=2))
+    
+    run_report = {
+        "timestamp": "2023-01-01T00:00:00Z",
+        "exit_code": 0,
+        "tests_passed": 5,
+        "tests_failed": 0,
+        "coverage": 95.0
+    }
+    (Path.cwd() / ".pdd" / "meta" / "simple_math_python_run.json").write_text(json.dumps(run_report, indent=2))
+    
+    # Files are missing after cleanup (step 2) - this is the problematic state
+    # Metadata exists but files are gone
+    
+    # Mock operations for the skip-tests scenario
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='generate', reason='Code file missing'),
+        SyncDecision(operation='example', reason='Example file missing'),
+        SyncDecision(operation='all_synced', reason='All required files synchronized (skip_tests=True, skip_verify=False)'),
+    ]
+    
+    # Test sync --skip-tests (step 3 - the problematic command)
+    result = sync_orchestration(basename="simple_math", language="python", skip_tests=True)
+    
+    # The key test: this should complete successfully without hanging
+    assert result['success'] is True
+    assert result['operations_completed'] == ['generate', 'example']
+    assert not result['errors']
+    
+    # Verify we completed the workflow correctly
+    assert len(mock_determine.call_args_list) == 3

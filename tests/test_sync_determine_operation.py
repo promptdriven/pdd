@@ -343,6 +343,190 @@ def test_decision_nothing_when_synced(mock_construct, pdd_test_environment):
     assert decision.operation == 'nothing'
     assert "All required files synchronized" in decision.reason
 
+def test_crash_skip_with_metadata_and_exit_code(pdd_test_environment):
+    """Test sync --skip-tests when a crash operation would be triggered."""
+    
+    # Create prompt file
+    prompts_dir = pdd_test_environment / "prompts"
+    prompts_dir.mkdir(exist_ok=True)
+    create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", "Create a simple add function")
+    
+    # Create metadata with real hashes
+    fingerprint_data = {
+        "pdd_version": "0.0.41",
+        "timestamp": "2025-07-03T02:34:36.929768+00:00", 
+        "command": "test",
+        "prompt_hash": "79a219808ec6de6d5b885c28ee811a033ae4a92eba993f7853b5a9d6a3befa84",
+        "code_hash": "6d0669923dc331420baaaefea733849562656e00f90c6519bbed46c1e9096595",
+        "example_hash": "861d5b27f80c1e3b5b21b23fb58bfebb583bd4224cde95b2517a426ea4661fae",
+        "test_hash": "37f6503380c4dd80a5c33be2fe08429dbc9239dd602a8147ed150863db17651f"
+    }
+    fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
+    create_fingerprint_file(fp_path, fingerprint_data)
+    
+    # Create run report with exit_code=2 (crash scenario)
+    run_report = {
+        "timestamp": "2025-07-03T02:34:36.182803+00:00",
+        "exit_code": 2,
+        "tests_passed": 0,
+        "tests_failed": 0,
+        "coverage": 0.0
+    }
+    rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
+    create_run_report_file(rr_path, run_report)
+    
+    # Test with skip_tests=True - sync_determine_operation should still return crash
+    # (the orchestration layer handles skipping it)
+    decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, skip_tests=True, prompts_dir=str(prompts_dir))
+    
+    # sync_determine_operation should still return crash when exit_code=2
+    # The skip_tests logic is handled at the orchestration layer
+    assert decision.operation == 'crash'
+    assert "Runtime error detected" in decision.reason
+    assert decision.details['exit_code'] == 2
+
+def test_regression_root_cause_missing_files_with_metadata(pdd_test_environment):
+    """
+    Test that demonstrates the root cause fix: sync_determine_operation should return 'generate'
+    (not 'analyze_conflict') when files are missing but metadata exists.
+    """
+    
+    # Create prompt file
+    prompts_dir = pdd_test_environment / "prompts"  
+    prompts_dir.mkdir(exist_ok=True)
+    prompt_content = """Create a Python module with a simple math function.
+
+Requirements:
+- Function name: add
+- Parameters: a, b (both numbers)  
+- Return: sum of a and b
+- Include type hints
+- Add docstring explaining the function
+
+Example usage:
+result = add(5, 3)  # Should return 8"""
+    
+    create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", prompt_content)
+    
+    # Create metadata with real hashes from actual regression test
+    from datetime import datetime, timezone
+    fingerprint_data = {
+        "pdd_version": "0.0.41",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "command": "test",
+        "prompt_hash": "79a219808ec6de6d5b885c28ee811a033ae4a92eba993f7853b5a9d6a3befa84",
+        "code_hash": "6d0669923dc331420baaaefea733849562656e00f90c6519bbed46c1e9096595", 
+        "example_hash": "861d5b27f80c1e3b5b21b23fb58bfebb583bd4224cde95b2517a426ea4661fae",
+        "test_hash": "37f6503380c4dd80a5c33be2fe08429dbc9239dd602a8147ed150863db17651f"
+    }
+    fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
+    create_fingerprint_file(fp_path, fingerprint_data)
+    
+    # Create run report indicating previous successful test execution
+    run_report = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "exit_code": 0,
+        "tests_passed": 1,
+        "tests_failed": 0,
+        "coverage": 100.0
+    }
+    rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
+    create_run_report_file(rr_path, run_report)
+    
+    # Key test: Files are missing but metadata exists
+    # This was causing 'analyze_conflict' but should return 'generate'
+    
+    decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
+    
+    # The fix: should detect missing files and return 'generate', not 'analyze_conflict' 
+    assert decision.operation == 'generate'
+    assert decision.operation != 'analyze_conflict'
+    assert "file missing" in decision.reason.lower() or "new" in decision.reason.lower()
+
+def test_regression_fix_validation_skip_tests_scenarios(pdd_test_environment):
+    """
+    Validate that skip_tests scenarios work correctly after the regression fix.
+    """
+    
+    # Create prompt file
+    prompts_dir = pdd_test_environment / "prompts"
+    prompts_dir.mkdir(exist_ok=True) 
+    create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", "Create a simple add function")
+    
+    test_scenarios = [
+        {
+            "name": "missing_files_with_metadata_skip_tests",
+            "metadata": {
+                "pdd_version": "0.0.41", 
+                "timestamp": "2023-01-01T00:00:00Z",
+                "command": "test",
+                "prompt_hash": "abc123",
+                "code_hash": "def456",
+                "example_hash": "ghi789",
+                "test_hash": "jkl012"
+            },
+            "run_report": {
+                "timestamp": "2023-01-01T00:00:00Z",
+                "exit_code": 0,
+                "tests_passed": 5,
+                "tests_failed": 0,
+                "coverage": 50.0  # Low coverage
+            },
+            "skip_tests": True,
+            "expected_not": ["analyze_conflict", "test"],
+            "expected_in": ["all_synced", "generate", "auto-deps"]
+        },
+        {
+            "name": "crash_scenario_skip_tests",
+            "metadata": {
+                "pdd_version": "0.0.41",
+                "timestamp": "2023-01-01T00:00:00Z", 
+                "command": "crash",
+                "prompt_hash": "abc123",
+                "code_hash": "def456",
+                "example_hash": "ghi789",
+                "test_hash": "jkl012"
+            },
+            "run_report": {
+                "timestamp": "2023-01-01T00:00:00Z",
+                "exit_code": 2,  # Crash exit code
+                "tests_passed": 0,
+                "tests_failed": 0,
+                "coverage": 0.0
+            },
+            "skip_tests": True,
+            "expected_not": ["analyze_conflict"],
+            "expected_in": ["verify"]  # When fingerprint.command='crash' and exit_code=2, returns 'verify'
+        }
+    ]
+    
+    for scenario in test_scenarios:
+        # Clean up previous state
+        for meta_file in get_meta_dir().glob("*.json"):
+            meta_file.unlink()
+        
+        # Setup scenario
+        if scenario["metadata"]:
+            fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
+            create_fingerprint_file(fp_path, scenario["metadata"])
+        
+        if scenario["run_report"]:
+            rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
+            create_run_report_file(rr_path, scenario["run_report"])
+        
+        # Test decision
+        decision = sync_determine_operation(
+            BASENAME, LANGUAGE, TARGET_COVERAGE, 
+            skip_tests=scenario["skip_tests"],
+            prompts_dir=str(prompts_dir)
+        )
+        
+        # Validate results
+        for forbidden_op in scenario["expected_not"]:
+            assert decision.operation != forbidden_op, f"Scenario {scenario['name']}: got forbidden operation {forbidden_op}"
+        
+        assert decision.operation in scenario["expected_in"], f"Scenario {scenario['name']}: got {decision.operation}, expected one of {scenario['expected_in']}"
+
 @patch('sync_determine_operation.construct_paths')
 def test_decision_example_when_missing(mock_construct, pdd_test_environment):
     prompts_dir = pdd_test_environment / "prompts"
