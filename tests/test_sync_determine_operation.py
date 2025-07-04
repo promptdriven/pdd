@@ -408,11 +408,12 @@ result = add(5, 3)  # Should return 8"""
     
     create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", prompt_content)
     
-    # Create metadata with real hashes from actual regression test
+    # Create metadata with real hashes from actual regression test  
+    # These are the exact hash values from the failing debug_real_hashes.py scenario
     from datetime import datetime, timezone
     fingerprint_data = {
         "pdd_version": "0.0.41",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": "2025-07-03T02:34:36.929768+00:00",  # Exact timestamp from debug scenario
         "command": "test",
         "prompt_hash": "79a219808ec6de6d5b885c28ee811a033ae4a92eba993f7853b5a9d6a3befa84",
         "code_hash": "6d0669923dc331420baaaefea733849562656e00f90c6519bbed46c1e9096595", 
@@ -526,6 +527,67 @@ def test_regression_fix_validation_skip_tests_scenarios(pdd_test_environment):
             assert decision.operation != forbidden_op, f"Scenario {scenario['name']}: got forbidden operation {forbidden_op}"
         
         assert decision.operation in scenario["expected_in"], f"Scenario {scenario['name']}: got {decision.operation}, expected one of {scenario['expected_in']}"
+
+def test_real_hashes_with_crash_scenario_skip_tests(pdd_test_environment):
+    """
+    Test the exact scenario from debug_real_hashes.py:
+    Missing files with metadata containing real hashes AND exit_code=2 with skip_tests=True.
+    """
+    
+    # Create prompt file
+    prompts_dir = pdd_test_environment / "prompts"
+    prompts_dir.mkdir(exist_ok=True)
+    prompt_content = """Create a Python module with a simple math function.
+
+Requirements:
+- Function name: add
+- Parameters: a, b (both numbers)  
+- Return: sum of a and b
+- Include type hints
+- Add docstring explaining the function
+
+Example usage:
+result = add(5, 3)  # Should return 8"""
+    
+    create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", prompt_content)
+    
+    # Create metadata with REAL hashes (exact values from debug_real_hashes.py)
+    fingerprint_data = {
+        "pdd_version": "0.0.41",
+        "timestamp": "2025-07-03T02:34:36.929768+00:00", 
+        "command": "test",
+        "prompt_hash": "79a219808ec6de6d5b885c28ee811a033ae4a92eba993f7853b5a9d6a3befa84",
+        "code_hash": "6d0669923dc331420baaaefea733849562656e00f90c6519bbed46c1e9096595",
+        "example_hash": "861d5b27f80c1e3b5b21b23fb58bfebb583bd4224cde95b2517a426ea4661fae",
+        "test_hash": "37f6503380c4dd80a5c33be2fe08429dbc9239dd602a8147ed150863db17651f"
+    }
+    fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
+    create_fingerprint_file(fp_path, fingerprint_data)
+    
+    # Create run report with crash exit code (exact from debug scenario)
+    run_report = {
+        "timestamp": "2025-07-03T02:34:36.182803+00:00",
+        "exit_code": 2,  # This triggers crash operation normally
+        "tests_passed": 0,
+        "tests_failed": 0,
+        "coverage": 0.0
+    }
+    rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
+    create_run_report_file(rr_path, run_report)
+    
+    # Test with skip_tests=True - the exact scenario that was causing issues
+    decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, skip_tests=True, prompts_dir=str(prompts_dir))
+    
+    # Key assertions from debug_real_hashes.py:
+    # 1. Should not return 'analyze_conflict' (was causing infinite loops)
+    assert decision.operation != 'analyze_conflict', "Should not return analyze_conflict with missing files and real hashes"
+    
+    # 2. Should not return 'test' operation when skip_tests=True
+    assert decision.operation != 'test', "Should not return test operation when skip_tests=True"
+    
+    # 3. Should return crash (since exit_code=2 takes priority over skip_tests in determine_operation)
+    assert decision.operation == 'crash', f"Expected crash operation, got {decision.operation}"
+    assert "Runtime error detected" in decision.reason
 
 @patch('sync_determine_operation.construct_paths')
 def test_decision_example_when_missing(mock_construct, pdd_test_environment):
