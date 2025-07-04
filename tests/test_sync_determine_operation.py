@@ -193,7 +193,7 @@ class TestSyncLock:
         with lock:
             # Try acquiring again within the same process
             lock.acquire() # Should not raise an error
-            assert get_locks_dir() / f"{BASENAME}_{LANGUAGE}.lock"
+            assert (get_locks_dir() / f"{BASENAME}_{LANGUAGE}.lock").exists()
 
 
 class TestFileUtilities:
