@@ -204,7 +204,7 @@ def test_skip_verify_flag(orchestration_fixture):
     assert 'test' in result['operations_completed']
     orchestration_fixture['fix_verification_main'].assert_not_called()
     # Verify the state was advanced by saving a fingerprint
-    orchestration_fixture['_save_operation_fingerprint'].assert_any_call("calculator", "python", 'verify', ANY, 0.0, 'skipped')
+    orchestration_fixture['_save_operation_fingerprint'].assert_any_call("calculator", "python", 'verify', ANY, 0.0, 'skip_verify')
 
 def test_skip_tests_flag(orchestration_fixture):
     """

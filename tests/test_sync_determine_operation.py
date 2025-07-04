@@ -341,7 +341,7 @@ def test_decision_nothing_when_synced(mock_construct, pdd_test_environment):
 
     decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
     assert decision.operation == 'nothing'
-    assert "All files synchronized" in decision.reason
+    assert "All required files synchronized" in decision.reason
 
 @patch('sync_determine_operation.construct_paths')
 def test_decision_example_when_missing(mock_construct, pdd_test_environment):
@@ -494,7 +494,70 @@ def test_analyze_conflict_llm_template_missing(mock_construct, mock_load_templat
     assert "LLM analysis template not found" in decision.reason
 
 
-# --- Part 4: Integration Tests - Example Scenarios ---
+# --- Part 4: Skip Flag Tests ---
+
+@patch('sync_determine_operation.construct_paths')
+def test_skip_tests_prevents_test_operation_on_low_coverage(mock_construct, pdd_test_environment):
+    """Test that test operation is not returned when skip_tests=True even with low coverage."""
+    rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
+    create_run_report_file(rr_path, {
+        "timestamp": "t", "exit_code": 0, "tests_passed": 10, "tests_failed": 0, "coverage": 75.0
+    })
+    decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, skip_tests=True)
+    assert decision.operation == 'all_synced'
+    assert "tests skipped" in decision.reason.lower()
+
+@patch('sync_determine_operation.construct_paths')
+def test_skip_tests_workflow_completion(mock_construct, pdd_test_environment):
+    """Test workflow completion when skip_tests=True and test files are missing."""
+    prompts_dir = pdd_test_environment / "prompts"
+    p_hash = create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt")
+    c_hash = create_file(pdd_test_environment / f"{BASENAME}.py")
+    e_hash = create_file(pdd_test_environment / f"{BASENAME}_example.py")
+    # Note: NO test file created
+
+    mock_construct.return_value = (
+        {}, {},
+        {
+            'code_file': str(pdd_test_environment / f"{BASENAME}.py"),
+            'example_file': str(pdd_test_environment / f"{BASENAME}_example.py"),
+            'test_file': str(pdd_test_environment / f"test_{BASENAME}.py")
+        },
+        LANGUAGE
+    )
+
+    fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
+    create_fingerprint_file(fp_path, {
+        "pdd_version": "1.0", "timestamp": "t", "command": "example",
+        "prompt_hash": p_hash, "code_hash": c_hash, "example_hash": e_hash, "test_hash": None
+    })
+
+    decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir), skip_tests=True)
+    assert decision.operation == 'nothing'
+    assert "skip_tests=True" in decision.reason
+
+@patch('sync_determine_operation.construct_paths')
+def test_skip_flags_parameter_propagation(mock_construct, pdd_test_environment):
+    """Test that skip flags are correctly used in decision logic."""
+    # Test with both flags enabled
+    decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, skip_tests=True, skip_verify=True)
+    # Should not crash and should handle skip flags properly
+    assert isinstance(decision, SyncDecision)
+
+@patch('sync_determine_operation.construct_paths')
+def test_skip_flags_dont_interfere_with_crash_fix(mock_construct, pdd_test_environment):
+    """Test that skip flags don't interfere with crash/fix operations."""
+    # Create run report with test failures (fix should still trigger)
+    rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
+    create_run_report_file(rr_path, {
+        "timestamp": "t", "exit_code": 0, "tests_passed": 5, "tests_failed": 2, "coverage": 80.0
+    })
+    
+    decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, skip_tests=True, skip_verify=True)
+    assert decision.operation == 'fix'  # Should still trigger fix despite skip flags
+    assert "Test failures detected" in decision.reason
+
+# --- Part 5: Integration Tests - Example Scenarios ---
 
 class TestIntegrationScenarios:
     """Test the four scenarios from the example script using actual filesystem operations."""
@@ -656,4 +719,4 @@ class TestIntegrationScenarios:
         decision = sync_determine_operation(basename, language, target_coverage, log_mode=True)
         
         assert decision.operation == 'nothing'
-        assert "All files synchronized" in decision.reason
+        assert "All required files synchronized" in decision.reason

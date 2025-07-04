@@ -66,11 +66,12 @@ Implement a `SyncLock` context manager:
 
 Implement the following helper functions:
 
--   `get_pdd_file_paths(basename: str, language: str) -> Dict[str, Path]`: Returns a dictionary mapping file types ('prompt', 'code', 'example', 'test') to their expected `pathlib.Path` objects. Use the project's internal `construct_paths` function (see included examples) to get configuration-aware paths. The function should:
-    - Build the prompt file path from basename and language
+-   `get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts") -> Dict[str, Path]`: Returns a dictionary mapping file types ('prompt', 'code', 'example', 'test') to their expected `pathlib.Path` objects. Use the project's internal `construct_paths` function (see included examples) to get configuration-aware paths based on .pddrc settings. The function should:
+    - Build the prompt file path from basename, language, and prompts_dir
     - Call `construct_paths` to get the output paths based on project configuration
     - Extract the code path from the returned `output_file_paths`
-    - Derive example and test paths based on the code file location
+    - Derive example and test paths using construct_paths for different commands
+    - Provide robust fallback mechanisms when files don't exist yet
 -   `calculate_sha256(file_path: Path) -> Optional[str]`: Calculates the SHA256 hash of a file if it exists, otherwise returns `None`.
 -   `read_fingerprint(basename: str, language: str) -> Optional[Fingerprint]`: Reads and validates the JSON fingerprint file. Returns `None` if it doesn't exist or is invalid.
 -   `read_run_report(basename: str, language: str) -> Optional[RunReport]`: Reads and validates the JSON run report file.
@@ -80,7 +81,7 @@ Implement the following helper functions:
 
 This is the core function that orchestrates the decision-making process.
 
-`sync_determine_operation(basename: str, language: str, target_coverage: float, budget: float = 10.0, log_mode: bool = False) -> SyncDecision:`
+`sync_determine_operation(basename: str, language: str, target_coverage: float, budget: float = 10.0, log_mode: bool = False, prompts_dir: str = "prompts", skip_tests: bool = False, skip_verify: bool = False) -> SyncDecision:`
 
 **Logic Flow:**
 
@@ -103,12 +104,13 @@ Log mode performs the complete analysis (reading fingerprints, calculating hashe
     -   Read the latest `RunReport`.
     -   If the report exists and `exit_code != 0`, return a decision to run `crash`.
     -   If `tests_failed > 0`, return a decision to run `fix`.
-    -   If `coverage < target_coverage`, return a decision to run `test` to improve coverage.
+    -   If `coverage < target_coverage` and `skip_tests=False`, return a decision to run `test` to improve coverage. If `skip_tests=True`, consider workflow complete despite low coverage.
     -   If any of these conditions are met, the analysis stops here, as fixing a broken state is the highest priority.
 3.  **Analyze File State**:
     -   Read the last saved `Fingerprint`.
     -   Calculate the hashes of the current files.
-    -   Compare the current hashes with the hashes in the fingerprint.
+    -   **Validate Expected Files**: Before comparing hashes, verify that files expected to exist based on the fingerprint actually exist. If expected files are missing, prioritize regenerating them rather than treating it as a complex conflict.
+    -   Compare the current hashes with the hashes in the fingerprint for files that exist.
 4.  **Implement the Decision Tree**:
     
     **Priority Order** (highest to lowest):
@@ -129,8 +131,9 @@ Log mode performs the complete analysis (reading fingerprints, calculating hashe
         -   Otherwise -> **`nothing`**. (Reason: No prompt and no history means there's nothing to do).
     -   **No Changes (Hashes Match Fingerprint):**
         -   If `code` exists but `example` does not -> **`example`**. (Reason: Progress the workflow).
-        -   If `code` and `example` exist but `test` does not -> **`test`**. (Reason: Progress the workflow).
-        -   If all files exist and tests pass -> **`nothing`**. (Reason: All files are synchronized and the unit is complete).
+        -   If `code` and `example` exist but `test` does not and `skip_tests=False` -> **`test`**. (Reason: Progress the workflow).
+        -   If all required files exist considering skip flags -> **`nothing`**. (Reason: All files are synchronized according to current workflow configuration).
+        -   **Skip Flag Considerations**: When `skip_tests=True`, test files are not required for workflow completion. When `skip_verify=True`, verification operations are not required.
     -   **Simple Changes (Single File Modified)**:
         -   If only the `prompt_hash` differs:
             -   Check if dependencies need updating -> **`auto-deps`**.

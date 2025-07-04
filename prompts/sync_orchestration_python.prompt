@@ -75,8 +75,7 @@ def sync_orchestration(
     - 'final_state': Dict with final file states
     - 'errors': List of any errors encountered
     - 'log_entries': List of log entries (when log=True)
-    - 'git_commits_created': int number of git commits created (if applicable)
-    - 'test_coverage_achieved': float percentage of test coverage achieved
+    - 'model_name': str name of the model used for operations
     """
 ```
 
@@ -149,6 +148,13 @@ The orchestrator should execute these operations in order as determined by `sync
 If `--skip-verify` or `--skip-tests` flags are used, the orchestrator should not simply ignore the step. To ensure the state machine progresses correctly, it should:
 1. Log that the operation was skipped.
 2. Simulate a successful run for that operation by creating a `RunReport` and saving it. This updates the state, allowing `sync_determine_operation` to correctly select the next step.
+3. Handle cascading skip effects:
+   - If `skip_tests` is True, also skip `verify` operations (can't verify without tests)
+   - If `skip_tests` is True, also skip `crash` operations (crash fixes usually require test execution)
+4. Create appropriate dummy RunReports for skipped operations:
+   - For verify operations: Create RunReport with zero test results and appropriate skip reason
+   - For test operations: Create RunReport with perfect coverage assumption when skipped
+   - For crash operations: Create RunReport indicating the operation was skipped due to missing files or test skip requirements
 
 ### Parallel Animation System
 
@@ -193,7 +199,8 @@ Implement robust error handling:
 
 - **Lock Acquisition Failure**: Exit immediately with clear message if another sync is running
 - **Budget Constraints**: Stop if total cost exceeds budget
-- **Retry Logic**: If an operation fails, the orchestrator MUST retry the operation up to `max_attempts` times before considering it a definitive failure. It should not exit the loop on the first failure of an operation.
+- **File Validation**: Validate required files exist before operations (especially for crash operations that need both code and example files)
+- **Actual Error Capture**: For fix operations, capture real test failure information by re-running tests and capturing stdout/stderr output to provide meaningful error context
 - **Return Value Handling**: Handle different return formats from command functions:
   - Dictionary format: Extract 'success', 'cost', and 'model' fields directly
   - Tuple format: Treat as successful if no exceptions, extract cost from second-to-last element and model from last element
@@ -219,9 +226,42 @@ from .fix_main import fix_main
 from .update_main import update_main
 ```
 
+### Required Dependencies
+
+The module requires these additional imports:
+
+```python
+import threading
+import time
+import json
+import datetime
+import subprocess
+import re
+from pathlib import Path
+from typing import Dict, Any, Optional, List
+from dataclasses import asdict
+
+import click
+from rich.console import Console
+```
+
 ### Command Execution Pattern
 
 For each PDD operation, construct appropriate arguments based on the up-to-date usage patterns found in the corresponding test files, which are included in the `<examples>` section of this prompt. The orchestrator is responsible for adapting these examples into robust calls that handle cost tracking, state persistence, and retry logic.
+
+### Helper Functions for State Management
+
+The orchestrator should implement these helper functions for proper state management:
+
+- **load_sync_log(basename, language)**: Load sync log entries from the metadata directory
+- **save_run_report(report, basename, language)**: Save RunReport data to enable state progression
+- **_save_operation_fingerprint(basename, language, operation, paths, cost, model)**: Save fingerprint state after successful operations to update the workflow state machine
+
+### Test Execution Integration
+
+The orchestrator should include test execution functionality to create proper RunReports:
+
+- **_execute_tests_and_create_run_report(test_file, basename, language, target_coverage)**: Execute pytest with coverage reporting and parse results into RunReport objects. This enables the state machine to detect test failures and trigger fix operations in subsequent sync runs.
 
 ### Output Format
 
@@ -241,8 +281,7 @@ Return comprehensive results:
     },
     'errors': [],
     'skipped_operations': ['verify'] if skip_verify else [],
-    'git_commits_created': 3,
-    'test_coverage_achieved': 92.5
+    'model_name': 'gpt-4'
 }
 ```
 
@@ -257,7 +296,7 @@ Return comprehensive results:
 7. **Time Tracking**: Monitor elapsed time for each operation
 8. **Exception Handling**: Catch and handle all operation failures gracefully, always releasing locks
 9. **Return Format Compatibility**: Handle both dictionary and tuple return values from command functions
-10. **Retry Implementation**: Implement proper retry logic that attempts operations multiple times before failing
+10. **Error Recovery**: Handle operation failures gracefully and break workflow loop on definitive failures
 11. **State Persistence**: Always save fingerprint state after successful operations to enable workflow progression
 
 ## Dependencies
