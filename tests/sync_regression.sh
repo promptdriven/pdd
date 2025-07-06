@@ -39,7 +39,7 @@ STAGING_PATH="$PDD_BASE_DIR/staging"
 PDD_SCRIPT="$PDD_BASE_DIR/pdd-local"
 PROMPTS_PATH="$PDD_BASE_DIR/prompts"
 CONTEXT_PATH="$PDD_BASE_DIR/context"
-OUTPUT_PATH="$PDD_BASE_DIR/output"
+OUTPUT_PATH="$PDD_BASE_DIR/staging"
 
 # Determine REGRESSION_DIR
 if [ -n "${REGRESSION_TARGET_DIR:-}" ]; then
@@ -162,8 +162,8 @@ run_pdd_command_base() {
     log_timestamped "Starting command: $full_command_str"
     log "Running: $full_command_str"
 
-    # Execute the command, redirecting stdout/stderr to log file
-    "${cmd_array[@]}" >> "$LOG_FILE" 2>&1
+    # Execute the command, redirecting stdout/stderr to log file and stdin from /dev/null
+    "${cmd_array[@]}" < /dev/null >> "$LOG_FILE" 2>&1
     local status=$?
 
     if [ $status -eq 0 ]; then
