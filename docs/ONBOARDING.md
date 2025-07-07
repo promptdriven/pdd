@@ -259,7 +259,7 @@ This allows you to quickly identify which cases are failing and why, so you can 
 
 - Join the PDD community on Discord
 - Review example projects in the `examples/` directory
-- Start with the basic tutorials in the documentation
+- Start with the basic tutorials in the [Tutorials](./TUTORIALS.md) documentation
 
 ## Troubleshooting
 
