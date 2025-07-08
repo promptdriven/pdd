@@ -166,7 +166,7 @@ def sync_main(
             try:
                 resolved_config, _, _, _ = construct_paths(
                     input_file_paths={"prompt_file": str(prompt_file_path)},
-                    force=False,
+                    force=force,
                     quiet=True,
                     command="sync",
                     command_options={"basename": basename, "language": lang},
