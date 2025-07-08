@@ -302,6 +302,34 @@ def test_sync_log_mode(mock_project_dir, mock_construct_paths, mock_sync_orchest
     assert results == {}
 
 
+def test_sync_log_mode_respects_force_flag(mock_project_dir, mock_construct_paths, mock_sync_orchestration):
+    """Tests that --log mode properly passes the force flag to construct_paths."""
+    (mock_project_dir / "prompts" / "force_test_python.prompt").touch()
+
+    ctx = create_mock_context({"force": True, "verbose": False})
+    results, total_cost, model = sync_main(
+        ctx, "force_test", max_attempts=3, budget=10.0, skip_verify=False, skip_tests=False, target_coverage=90.0, log=True
+    )
+
+    # Verify that construct_paths was called with force=True for log mode
+    mock_construct_paths.assert_called()
+    calls = mock_construct_paths.call_args_list
+    
+    # Find the call from log mode (should have force=True)
+    log_mode_call = None
+    for call in calls:
+        args, kwargs = call
+        if kwargs.get('force') is True:
+            log_mode_call = call
+            break
+    
+    assert log_mode_call is not None, "construct_paths should be called with force=True in log mode"
+    
+    assert total_cost == 0.0
+    assert model == ""
+    assert results == {}
+
+
 def test_sync_quiet_mode(runner, mock_project_dir, mock_construct_paths, mock_sync_orchestration):
     """Tests that --quiet mode suppresses output."""
     (mock_project_dir / "prompts" / "quiet_app_python.prompt").touch()
