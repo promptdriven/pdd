@@ -327,6 +327,8 @@ EOF
 cat << EOF > "context/example.prompt"
 For functions defined in prompt files, ensure examples demonstrate practical usage.
 Include appropriate import statements and realistic function calls.
+- When importing from the generated module, use the exact basename as the module name (e.g., for data_processor.py, use "from data_processor import ClassName")
+- Do not add suffixes like "_module" to the import statement
 EOF
 
 # Create test prompt files

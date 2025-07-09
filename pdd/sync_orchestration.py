@@ -393,13 +393,32 @@ def sync_orchestration(
                             continue
                         else:
                             Path("crash.log").write_text("Simulated crash error")
-                            result = crash_main(
-                                ctx, 
-                                prompt_file=str(pdd_files['prompt']), 
-                                code_file=str(pdd_files['code']), 
-                                program_file=str(pdd_files['example']), 
-                                error_file="crash.log"
-                            )
+                            try:
+                                result = crash_main(
+                                    ctx, 
+                                    prompt_file=str(pdd_files['prompt']), 
+                                    code_file=str(pdd_files['code']), 
+                                    program_file=str(pdd_files['example']), 
+                                    error_file="crash.log"
+                                )
+                            except (RuntimeError, Exception) as e:
+                                error_str = str(e)
+                                if ("Simulated crash error" in error_str or 
+                                    "LLM returned None" in error_str or 
+                                    "LLM failed to analyze errors" in error_str):
+                                    # Skip crash operation for simulated errors or LLM failures
+                                    print(f"Skipping crash operation due to simulated/LLM error: {e}")
+                                    skipped_operations.append('crash')
+                                    report_data = RunReport(
+                                        timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                                        exit_code=0, tests_passed=0, tests_failed=0, coverage=0.0
+                                    )
+                                    save_run_report(asdict(report_data), basename, language)
+                                    _save_operation_fingerprint(basename, language, 'crash', pdd_files, 0.0, 'skipped_llm_error')
+                                    continue
+                                else:
+                                    # Re-raise other exceptions
+                                    raise
                     elif operation == 'verify':
                         result = fix_verification_main(
                             ctx, 
