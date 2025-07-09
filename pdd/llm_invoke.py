@@ -932,6 +932,46 @@ def llm_invoke(
                     # Result (String or Pydantic)
                     try:
                         raw_result = resp_item.choices[0].message.content
+                        
+                        # Check if raw_result is None (likely cached corrupted data)
+                        if raw_result is None:
+                            logger.warning(f"[WARNING] LLM returned None content for item {i}, likely due to corrupted cache. Retrying with cache bypass...")
+                            # Retry with cache bypass by modifying the prompt slightly
+                            if not use_batch_mode and prompt and input_json is not None:
+                                # Add a small space to bypass cache
+                                modified_prompt = prompt + " "
+                                try:
+                                    retry_messages = _format_messages(modified_prompt, input_json, use_batch_mode)
+                                    # Disable cache for retry
+                                    litellm.cache = None
+                                    retry_response = litellm.completion(
+                                        model=model_name_litellm,
+                                        messages=retry_messages,
+                                        temperature=temperature,
+                                        response_format=response_format,
+                                        max_completion_tokens=max_tokens,
+                                        **time_kwargs
+                                    )
+                                    # Re-enable cache
+                                    litellm.cache = Cache()
+                                    # Extract result from retry
+                                    retry_raw_result = retry_response.choices[0].message.content
+                                    if retry_raw_result is not None:
+                                        logger.info(f"[SUCCESS] Cache bypass retry succeeded for item {i}")
+                                        raw_result = retry_raw_result
+                                    else:
+                                        logger.error(f"[ERROR] Cache bypass retry also returned None for item {i}")
+                                        results.append("ERROR: LLM returned None content even after cache bypass")
+                                        continue
+                                except Exception as retry_e:
+                                    logger.error(f"[ERROR] Cache bypass retry failed for item {i}: {retry_e}")
+                                    results.append(f"ERROR: LLM returned None content and retry failed: {retry_e}")
+                                    continue
+                            else:
+                                logger.error(f"[ERROR] Cannot retry - batch mode or missing prompt/input_json")
+                                results.append("ERROR: LLM returned None content and cannot retry")
+                                continue
+                        
                         if output_pydantic:
                             parsed_result = None
                             json_string_to_parse = None
