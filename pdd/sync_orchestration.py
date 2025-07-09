@@ -529,8 +529,9 @@ def sync_orchestration(
                         current_cost_ref[0] += result.get('cost', 0.0)
                     elif isinstance(result, tuple) and len(result) >= 3:
                         # Tuple return (e.g., from code_generator_main, context_generator_main)
-                        # For tuples, success is determined by no exceptions and valid return
-                        success = True
+                        # For tuples, success is determined by no exceptions and valid return content
+                        # Check if the first element (generated content) is None, which indicates failure
+                        success = result[0] is not None
                         # Extract cost from tuple (usually second-to-last element)
                         cost = result[-2] if len(result) >= 2 and isinstance(result[-2], (int, float)) else 0.0
                         current_cost_ref[0] += cost
