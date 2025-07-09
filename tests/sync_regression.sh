@@ -177,7 +177,7 @@ run_pdd_command_base() {
         fi
     fi
     return $status
-}
+}   
 
 run_pdd_command() {
     run_pdd_command_base true "$@"
