@@ -1,11 +1,21 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/test_change_main.py::test_change_main_csv_output_dir_slash_saves_individual_files -xvs)",
+      "Bash(python3:*)",
+      "Bash(ls:*)",
+      "Bash(./pdd-local:*)",
+      "Bash(echo $PATH)",
+      "Bash(echo $PYTHONPATH)",
+      "Bash(pip show:*)",
+      "Bash(dos2unix:*)",
+      "Bash(sed:*)",
+      "Bash(echo $PDD_PATH)",
+      "Bash(pytest:*)"
+    ]
+  },
   "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "pdd"
-  ],
-  "permissions": {
-    "allow": [
-      "Bash(python -m pytest tests/test_change_main.py::test_change_main_csv_output_dir_slash_saves_individual_files -xvs)"
-    ]
-  }
+  ]
 }

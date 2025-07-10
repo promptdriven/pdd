@@ -540,7 +540,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "5" ]; then
 
   # 5a. Change with --csv
   log "5a. Testing 'change --csv'"
-  run_pdd_command change --csv --output "$CHANGE_CSV_OUT_DIR/" "$CHANGE_CSV_FILE" "$CHANGE_CSV_CODE_DIR/" # Note trailing slash for output dir
+  run_pdd_command change --csv --output "$CHANGE_CSV_OUT_DIR/" "$CHANGE_CSV_FILE" "$CHANGE_CSV_CODE_DIR/" # Note trailing slash for output di
   check_exists "$CHANGE_CSV_OUT_DIR/$DUMMY_PROMPT_A" "'change --csv' output A"
   check_exists "$CHANGE_CSV_OUT_DIR/$DUMMY_PROMPT_B" "'change --csv' output B"
 
@@ -554,7 +554,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "5" ]; then
       else
           log_error "Cost file only contains header or is empty after several commands."
           log_timestamped "Validation failed: Cost file missing data rows (intermediate check)."
-          # Decide if this should be fatal; for now, just log error
+          # Decide if this should be fatal; for now, just log erro
           # exit 1
       fi
   else
@@ -573,7 +573,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "6" ]; then
   log "Running example program before introducing error..."
   python "$MATH_VERIFICATION_PROGRAM" >> "$LOG_FILE" 2>&1
   log "Introducing error into $MATH_VERIFICATION_PROGRAM"
-  # Intentionally cause a TypeError
+  # Intentionally cause a TypeErro
   echo "import $MATH_BASENAME" > "$MATH_VERIFICATION_PROGRAM" # Overwrite
   echo "result = $MATH_BASENAME.add(5, 'a')" >> "$MATH_VERIFICATION_PROGRAM"
   echo "print(f'The sum is: {result}')" >> "$MATH_VERIFICATION_PROGRAM"
@@ -621,7 +621,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "6" ]; then
   # 6a. Crash with --loop (introduce different error)
   log "6a. Testing 'crash --loop'"
   log "Introducing different error for 'crash --loop'"
-  # Intentionally cause NameError
+  # Intentionally cause NameErro
   echo "import $MATH_BASENAME" > "$MATH_VERIFICATION_PROGRAM" # Overwrite
   echo "result = $MATH_BASENAME.multiply(5, 3)" >> "$MATH_VERIFICATION_PROGRAM" # Assume multiply doesn't exist
   echo "print(f'The product is: {result}')" >> "$MATH_VERIFICATION_PROGRAM"
@@ -756,7 +756,7 @@ def check_add_operation(filepath):
 
 
                         # Looser check: also allow direct numeric constants if one side is a param
-                        # This is to accommodate cases like 'return a + 0' or 'return 0 + b' if such variants appear
+                        # This is to accommodate cases like 'return a + 0' or 'return 0 + b' if such variants appea
                         left_is_numeric_const = is_numeric_node(left)
                         right_is_numeric_const = is_numeric_node(right)
 
@@ -1063,7 +1063,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "15" ]; then
                              "$PROMPTS_PATH/$MATH_PROMPT" "$CONTEXT_PATH_GLOB"
   check_exists "forced_scan_${AUTO_DEPS_PROMPT}" "'auto-deps --force-scan' output"
   # Check if CSV timestamp updated (simple check)
-  if [ "$AUTO_DEPS_CSV" -ot "forced_scan_${AUTO_DEPS_PROMPT}" ]; then # Check if CSV is older
+  if [ "$AUTO_DEPS_CSV" -ot "forced_scan_${AUTO_DEPS_PROMPT}" ]; then # Check if CSV is olde
       log "Auto-deps CSV timestamp updated after --force-scan, as expected."
   else
       log "Warning: Auto-deps CSV timestamp did not update after --force-scan (check might be unreliable)."

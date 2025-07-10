@@ -1,0 +1,977 @@
+============================= test session starts ==============================
+platform linux -- Python 3.13.2, pytest-8.4.0, pluggy-1.5.0
+rootdir: /mnt/c/Users/ryant/Desktop/pdd_cloud/pdd
+configfile: pytest.ini
+plugins: mock-3.14.1, cov-6.2.1, anyio-4.9.0, langsmith-0.3.45, asyncio-1.0.0
+asyncio: mode=Mode.STRICT, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+collected 9 items
+
+tests/test_bug_to_unit_test.py F.....F..                                 [100%]
+
+=================================== FAILURES ===================================
+_____________________ test_successful_unit_test_generation _____________________
+
+sample_inputs = {'code': '\ndef add_numbers(a, b):\n    return a + 1\n        ', 'current_output': '3', 'desired_output': '5', 'program': 'python', ...}
+
+    def test_successful_unit_test_generation(sample_inputs):  # pylint: disable=redefined-outer-name
+        """Test successful generation of a unit test with valid inputs."""
+        unit_test, cost, model = bug_to_unit_test(
+            current_output=sample_inputs['current_output'],
+            desired_output=sample_inputs['desired_output'],
+            prompt_used_to_generate_the_code=sample_inputs['prompt'],
+            code_under_test=sample_inputs['code'],
+            program_used_to_run_code_under_test=sample_inputs['program']
+        )
+    
+        assert isinstance(unit_test, str)
+>       assert len(unit_test) > 0
+E       AssertionError: assert 0 > 0
+E        +  where 0 = len('')
+
+tests/test_bug_to_unit_test.py:37: AssertionError
+----------------------------- Captured stdout call -----------------------------
+PDD_PATH environment variable is not set
+Error: Failed to load prompt template
+____________________________ test_large_code_input _____________________________
+
+sample_inputs = {'code': '\ndef add_numbers(a, b):\n    return a + 1\n        ', 'current_output': '3', 'desired_output': '5', 'program': 'python', ...}
+
+    def test_large_code_input(sample_inputs):  # pylint: disable=redefined-outer-name
+        """Test handling of large code input."""
+        large_code = sample_inputs['code'] * 100  # Create a large code input
+        unit_test, cost, model = bug_to_unit_test(
+            current_output=sample_inputs['current_output'],
+            desired_output=sample_inputs['desired_output'],
+            prompt_used_to_generate_the_code=sample_inputs['prompt'],
+            code_under_test=large_code,
+            program_used_to_run_code_under_test=sample_inputs['program']
+        )
+    
+        assert isinstance(unit_test, str)
+        assert isinstance(cost, float)
+        assert isinstance(model, str)
+        assert cost >= 0  # Changed to >= to handle valid zero-cost cases (e.g., caching)
+>       assert len(model) > 0
+E       AssertionError: assert 0 > 0
+E        +  where 0 = len('')
+
+tests/test_bug_to_unit_test.py:131: AssertionError
+----------------------------- Captured stdout call -----------------------------
+PDD_PATH environment variable is not set
+Error: Failed to load prompt template
+=============================== warnings summary ===============================
+../../../../../../../home/ryanptanaka/miniconda3/lib/python3.13/site-packages/pydantic/_internal/_config.py:323
+  /home/ryanptanaka/miniconda3/lib/python3.13/site-packages/pydantic/_internal/_config.py:323: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.11/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_bug_to_unit_test.py::test_successful_unit_test_generation
+FAILED tests/test_bug_to_unit_test.py::test_large_code_input - AssertionError...
+==================== 2 failed, 7 passed, 1 warning in 2.62s ====================
+============================= test session starts ==============================
+platform linux -- Python 3.13.2, pytest-8.4.0, pluggy-1.5.0
+rootdir: /mnt/c/Users/ryant/Desktop/pdd_cloud/pdd
+configfile: pytest.ini
+plugins: mock-3.14.1, cov-6.2.1, anyio-4.9.0, langsmith-0.3.45, asyncio-1.0.0
+asyncio: mode=Mode.STRICT, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+collected 9 items
+
+tests/test_change.py .FFFF....                                           [100%]
+
+=================================== FAILURES ===================================
+______________ test_change_missing_required_params[input_prompt] _______________
+
+valid_inputs = {'change_prompt': 'Make the function handle negative numbers explicitly', 'input_code': 'def add(a, b):\n    return a + b', 'input_prompt': 'Write a function that adds two numbers', 'strength': 0.7, ...}
+missing_param = 'input_prompt'
+
+    @pytest.mark.parametrize("missing_param", ["input_prompt", "input_code", "change_prompt"])
+    def test_change_missing_required_params(valid_inputs, missing_param):  # pylint: disable=redefined-outer-name
+        """Test handling of missing required parameters."""
+        inputs = valid_inputs.copy()
+        inputs[missing_param] = ""
+    
+        with pytest.raises(ValueError, match="Missing required input parameters"):
+>           change(**inputs)
+
+tests/test_change.py:75: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+input_prompt = '', input_code = 'def add(a, b):\n    return a + b'
+change_prompt = 'Make the function handle negative numbers explicitly'
+strength = 0.7, temperature = 0.7, time = 0.25, budget = 5.0, verbose = False
+
+    def change(  # pylint: disable=too-many-arguments, too-many-locals
+        input_prompt: str,
+        input_code: str,
+        change_prompt: str,
+        strength: float = DEFAULT_STRENGTH,
+        temperature: float = 0.0,
+        time: float = DEFAULT_TIME,
+        budget: float = 5.0,  # pylint: disable=unused-argument
+        verbose: bool = False
+    ) -> Tuple[str, float, str]:
+        """
+        Change a prompt according to specified modifications.
+    
+        Args:
+            input_prompt (str): The original prompt to be modified
+            input_code (str): The code generated from the input prompt
+            change_prompt (str): Instructions for modifying the input prompt
+            strength (float): The strength parameter for the LLM model (0-1)
+            temperature (float): The temperature parameter for the LLM model
+            time (float): The time budget for LLM calls.
+            budget (float): The budget for the operation (not used, but kept for API compatibility).
+            verbose (bool): Whether to print out detailed information.
+    
+        Returns:
+            Tuple[str, float, str]: (modified prompt, total cost, model name)
+        """
+        try:
+            # Step 1: Load prompt templates
+            change_llm_prompt_template = load_prompt_template("change_LLM")
+            extract_prompt_template = load_prompt_template("extract_prompt_change_LLM")
+    
+            if not all([change_llm_prompt_template, extract_prompt_template]):
+>               raise ValueError("Failed to load prompt templates")
+E               ValueError: Failed to load prompt templates
+
+pdd/change.py:53: ValueError
+
+During handling of the above exception, another exception occurred:
+
+valid_inputs = {'change_prompt': 'Make the function handle negative numbers explicitly', 'input_code': 'def add(a, b):\n    return a + b', 'input_prompt': 'Write a function that adds two numbers', 'strength': 0.7, ...}
+missing_param = 'input_prompt'
+
+    @pytest.mark.parametrize("missing_param", ["input_prompt", "input_code", "change_prompt"])
+    def test_change_missing_required_params(valid_inputs, missing_param):  # pylint: disable=redefined-outer-name
+        """Test handling of missing required parameters."""
+        inputs = valid_inputs.copy()
+        inputs[missing_param] = ""
+    
+>       with pytest.raises(ValueError, match="Missing required input parameters"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: Regex pattern did not match.
+E        Regex: 'Missing required input parameters'
+E        Input: 'Failed to load prompt templates'
+
+tests/test_change.py:74: AssertionError
+----------------------------- Captured stdout call -----------------------------
+PDD_PATH environment variable is not set
+PDD_PATH environment variable is not set
+_______________ test_change_missing_required_params[input_code] ________________
+
+valid_inputs = {'change_prompt': 'Make the function handle negative numbers explicitly', 'input_code': 'def add(a, b):\n    return a + b', 'input_prompt': 'Write a function that adds two numbers', 'strength': 0.7, ...}
+missing_param = 'input_code'
+
+    @pytest.mark.parametrize("missing_param", ["input_prompt", "input_code", "change_prompt"])
+    def test_change_missing_required_params(valid_inputs, missing_param):  # pylint: disable=redefined-outer-name
+        """Test handling of missing required parameters."""
+        inputs = valid_inputs.copy()
+        inputs[missing_param] = ""
+    
+        with pytest.raises(ValueError, match="Missing required input parameters"):
+>           change(**inputs)
+
+tests/test_change.py:75: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+input_prompt = 'Write a function that adds two numbers', input_code = ''
+change_prompt = 'Make the function handle negative numbers explicitly'
+strength = 0.7, temperature = 0.7, time = 0.25, budget = 5.0, verbose = False
+
+    def change(  # pylint: disable=too-many-arguments, too-many-locals
+        input_prompt: str,
+        input_code: str,
+        change_prompt: str,
+        strength: float = DEFAULT_STRENGTH,
+        temperature: float = 0.0,
+        time: float = DEFAULT_TIME,
+        budget: float = 5.0,  # pylint: disable=unused-argument
+        verbose: bool = False
+    ) -> Tuple[str, float, str]:
+        """
+        Change a prompt according to specified modifications.
+    
+        Args:
+            input_prompt (str): The original prompt to be modified
+            input_code (str): The code generated from the input prompt
+            change_prompt (str): Instructions for modifying the input prompt
+            strength (float): The strength parameter for the LLM model (0-1)
+            temperature (float): The temperature parameter for the LLM model
+            time (float): The time budget for LLM calls.
+            budget (float): The budget for the operation (not used, but kept for API compatibility).
+            verbose (bool): Whether to print out detailed information.
+    
+        Returns:
+            Tuple[str, float, str]: (modified prompt, total cost, model name)
+        """
+        try:
+            # Step 1: Load prompt templates
+            change_llm_prompt_template = load_prompt_template("change_LLM")
+            extract_prompt_template = load_prompt_template("extract_prompt_change_LLM")
+    
+            if not all([change_llm_prompt_template, extract_prompt_template]):
+>               raise ValueError("Failed to load prompt templates")
+E               ValueError: Failed to load prompt templates
+
+pdd/change.py:53: ValueError
+
+During handling of the above exception, another exception occurred:
+
+valid_inputs = {'change_prompt': 'Make the function handle negative numbers explicitly', 'input_code': 'def add(a, b):\n    return a + b', 'input_prompt': 'Write a function that adds two numbers', 'strength': 0.7, ...}
+missing_param = 'input_code'
+
+    @pytest.mark.parametrize("missing_param", ["input_prompt", "input_code", "change_prompt"])
+    def test_change_missing_required_params(valid_inputs, missing_param):  # pylint: disable=redefined-outer-name
+        """Test handling of missing required parameters."""
+        inputs = valid_inputs.copy()
+        inputs[missing_param] = ""
+    
+>       with pytest.raises(ValueError, match="Missing required input parameters"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: Regex pattern did not match.
+E        Regex: 'Missing required input parameters'
+E        Input: 'Failed to load prompt templates'
+
+tests/test_change.py:74: AssertionError
+----------------------------- Captured stdout call -----------------------------
+PDD_PATH environment variable is not set
+PDD_PATH environment variable is not set
+______________ test_change_missing_required_params[change_prompt] ______________
+
+valid_inputs = {'change_prompt': 'Make the function handle negative numbers explicitly', 'input_code': 'def add(a, b):\n    return a + b', 'input_prompt': 'Write a function that adds two numbers', 'strength': 0.7, ...}
+missing_param = 'change_prompt'
+
+    @pytest.mark.parametrize("missing_param", ["input_prompt", "input_code", "change_prompt"])
+    def test_change_missing_required_params(valid_inputs, missing_param):  # pylint: disable=redefined-outer-name
+        """Test handling of missing required parameters."""
+        inputs = valid_inputs.copy()
+        inputs[missing_param] = ""
+    
+        with pytest.raises(ValueError, match="Missing required input parameters"):
+>           change(**inputs)
+
+tests/test_change.py:75: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+input_prompt = 'Write a function that adds two numbers'
+input_code = 'def add(a, b):\n    return a + b', change_prompt = ''
+strength = 0.7, temperature = 0.7, time = 0.25, budget = 5.0, verbose = False
+
+    def change(  # pylint: disable=too-many-arguments, too-many-locals
+        input_prompt: str,
+        input_code: str,
+        change_prompt: str,
+        strength: float = DEFAULT_STRENGTH,
+        temperature: float = 0.0,
+        time: float = DEFAULT_TIME,
+        budget: float = 5.0,  # pylint: disable=unused-argument
+        verbose: bool = False
+    ) -> Tuple[str, float, str]:
+        """
+        Change a prompt according to specified modifications.
+    
+        Args:
+            input_prompt (str): The original prompt to be modified
+            input_code (str): The code generated from the input prompt
+            change_prompt (str): Instructions for modifying the input prompt
+            strength (float): The strength parameter for the LLM model (0-1)
+            temperature (float): The temperature parameter for the LLM model
+            time (float): The time budget for LLM calls.
+            budget (float): The budget for the operation (not used, but kept for API compatibility).
+            verbose (bool): Whether to print out detailed information.
+    
+        Returns:
+            Tuple[str, float, str]: (modified prompt, total cost, model name)
+        """
+        try:
+            # Step 1: Load prompt templates
+            change_llm_prompt_template = load_prompt_template("change_LLM")
+            extract_prompt_template = load_prompt_template("extract_prompt_change_LLM")
+    
+            if not all([change_llm_prompt_template, extract_prompt_template]):
+>               raise ValueError("Failed to load prompt templates")
+E               ValueError: Failed to load prompt templates
+
+pdd/change.py:53: ValueError
+
+During handling of the above exception, another exception occurred:
+
+valid_inputs = {'change_prompt': 'Make the function handle negative numbers explicitly', 'input_code': 'def add(a, b):\n    return a + b', 'input_prompt': 'Write a function that adds two numbers', 'strength': 0.7, ...}
+missing_param = 'change_prompt'
+
+    @pytest.mark.parametrize("missing_param", ["input_prompt", "input_code", "change_prompt"])
+    def test_change_missing_required_params(valid_inputs, missing_param):  # pylint: disable=redefined-outer-name
+        """Test handling of missing required parameters."""
+        inputs = valid_inputs.copy()
+        inputs[missing_param] = ""
+    
+>       with pytest.raises(ValueError, match="Missing required input parameters"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: Regex pattern did not match.
+E        Regex: 'Missing required input parameters'
+E        Input: 'Failed to load prompt templates'
+
+tests/test_change.py:74: AssertionError
+----------------------------- Captured stdout call -----------------------------
+PDD_PATH environment variable is not set
+PDD_PATH environment variable is not set
+_________________________ test_change_invalid_strength _________________________
+
+valid_inputs = {'change_prompt': 'Make the function handle negative numbers explicitly', 'input_code': 'def add(a, b):\n    return a + b', 'input_prompt': 'Write a function that adds two numbers', 'strength': 0.7, ...}
+
+    def test_change_invalid_strength(valid_inputs):  # pylint: disable=redefined-outer-name
+        """Test handling of invalid strength parameter."""
+        inputs = valid_inputs.copy()
+        inputs['strength'] = 1.5
+    
+        with pytest.raises(ValueError, match="Strength must be between 0 and 1"):
+>           change(**inputs)
+
+tests/test_change.py:84: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+input_prompt = 'Write a function that adds two numbers'
+input_code = 'def add(a, b):\n    return a + b'
+change_prompt = 'Make the function handle negative numbers explicitly'
+strength = 1.5, temperature = 0.7, time = 0.25, budget = 5.0, verbose = False
+
+    def change(  # pylint: disable=too-many-arguments, too-many-locals
+        input_prompt: str,
+        input_code: str,
+        change_prompt: str,
+        strength: float = DEFAULT_STRENGTH,
+        temperature: float = 0.0,
+        time: float = DEFAULT_TIME,
+        budget: float = 5.0,  # pylint: disable=unused-argument
+        verbose: bool = False
+    ) -> Tuple[str, float, str]:
+        """
+        Change a prompt according to specified modifications.
+    
+        Args:
+            input_prompt (str): The original prompt to be modified
+            input_code (str): The code generated from the input prompt
+            change_prompt (str): Instructions for modifying the input prompt
+            strength (float): The strength parameter for the LLM model (0-1)
+            temperature (float): The temperature parameter for the LLM model
+            time (float): The time budget for LLM calls.
+            budget (float): The budget for the operation (not used, but kept for API compatibility).
+            verbose (bool): Whether to print out detailed information.
+    
+        Returns:
+            Tuple[str, float, str]: (modified prompt, total cost, model name)
+        """
+        try:
+            # Step 1: Load prompt templates
+            change_llm_prompt_template = load_prompt_template("change_LLM")
+            extract_prompt_template = load_prompt_template("extract_prompt_change_LLM")
+    
+            if not all([change_llm_prompt_template, extract_prompt_template]):
+>               raise ValueError("Failed to load prompt templates")
+E               ValueError: Failed to load prompt templates
+
+pdd/change.py:53: ValueError
+
+During handling of the above exception, another exception occurred:
+
+valid_inputs = {'change_prompt': 'Make the function handle negative numbers explicitly', 'input_code': 'def add(a, b):\n    return a + b', 'input_prompt': 'Write a function that adds two numbers', 'strength': 0.7, ...}
+
+    def test_change_invalid_strength(valid_inputs):  # pylint: disable=redefined-outer-name
+        """Test handling of invalid strength parameter."""
+        inputs = valid_inputs.copy()
+        inputs['strength'] = 1.5
+    
+>       with pytest.raises(ValueError, match="Strength must be between 0 and 1"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: Regex pattern did not match.
+E        Regex: 'Strength must be between 0 and 1'
+E        Input: 'Failed to load prompt templates'
+
+tests/test_change.py:83: AssertionError
+----------------------------- Captured stdout call -----------------------------
+PDD_PATH environment variable is not set
+PDD_PATH environment variable is not set
+=============================== warnings summary ===============================
+../../../../../../../home/ryanptanaka/miniconda3/lib/python3.13/site-packages/pydantic/_internal/_config.py:323
+  /home/ryanptanaka/miniconda3/lib/python3.13/site-packages/pydantic/_internal/_config.py:323: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.11/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_change.py::test_change_missing_required_params[input_prompt]
+FAILED tests/test_change.py::test_change_missing_required_params[input_code]
+FAILED tests/test_change.py::test_change_missing_required_params[change_prompt]
+FAILED tests/test_change.py::test_change_invalid_strength - AssertionError: R...
+==================== 4 failed, 5 passed, 1 warning in 2.39s ====================
+============================= test session starts ==============================
+platform linux -- Python 3.13.2, pytest-8.4.0, pluggy-1.5.0
+rootdir: /mnt/c/Users/ryant/Desktop/pdd_cloud/pdd
+configfile: pytest.ini
+plugins: mock-3.14.1, cov-6.2.1, anyio-4.9.0, langsmith-0.3.45, asyncio-1.0.0
+asyncio: mode=Mode.STRICT, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+collected 26 items
+
+tests/test_cli.py .........................F                             [100%]
+
+=================================== FAILURES ===================================
+___________________________ test_real_verify_command ___________________________
+
+create_dummy_files = <function create_dummy_files.<locals>._create_files at 0x769199cbd6c0>
+tmp_path = PosixPath('/tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0')
+
+    @pytest.mark.real
+    def test_real_verify_command(create_dummy_files, tmp_path):
+        """Test the 'verify' command with real files by calling the function directly."""
+        import os
+        import sys
+        import click
+        from pathlib import Path
+        from pdd.fix_verification_main import fix_verification_main as fix_verification_main_direct
+    
+        # Create a simple prompt file with valid content
+        prompt_content = """// verify_python.prompt
+    // Language: Python
+    // Description: A simple function to divide two numbers
+    // Inputs: Two numbers a and b
+    // Outputs: The result of a divided by b
+    
+    def divide(a, b):
+        # Divide a by b and return the result
+        return a / b
+    """
+    
+        # Create a code file with a potential issue (missing validation)
+        code_content = """# divide.py
+    def divide(a, b):
+        # Divide a by b and return the result
+        return a / b
+    """
+    
+        # Create a program file to test the functionality
+        program_content = """# test_divide.py
+    import sys
+    from divide import divide
+    
+    def main():
+        # Test the divide function with various inputs
+        try:
+            # These should work
+            print(f"10 / 2 = {divide(10, 2)}")
+            print(f"5 / 2.5 = {divide(5, 2.5)}")
+    
+            # This will cause an error
+            print(f"5 / 0 = {divide(5, 0)}")
+        except Exception as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+    
+    if __name__ == "__main__":
+        main()
+    """
+    
+        # Create files with the fixture, placing them directly in tmp_path
+        files_dict = {}
+        for name, content in {
+            "verify_python.prompt": prompt_content,
+            "divide.py": code_content,
+            "test_divide.py": program_content
+        }.items():
+            file_path = tmp_path / name
+            file_path.write_text(content)
+            files_dict[name] = file_path
+    
+        # Get the file paths as strings
+        prompt_file = str(files_dict["verify_python.prompt"])
+        code_file = str(files_dict["divide.py"])
+        program_file = str(files_dict["test_divide.py"])
+    
+        # Create output directory relative to tmp_path
+        output_dir = tmp_path / "output"
+        output_dir.mkdir(exist_ok=True)
+        output_results = str(output_dir / "verify_results.log")
+        output_code = str(output_dir / "verified_divide.py")
+        output_program = str(output_dir / "verified_test_divide.py")
+    
+        # Print environment info for debugging
+        print(f"Temporary directory: {tmp_path}")
+        print(f"Current working directory: {os.getcwd()}")
+        print(f"Prompt file location: {prompt_file}")
+        print(f"Code file location: {code_file}")
+        print(f"Program file location: {program_file}")
+        print(f"Output directory: {output_dir}")
+    
+        # Create a minimal context object with the necessary parameters
+        ctx = click.Context(click.Command("verify"))
+        ctx.obj = {
+            'force': True,
+            'quiet': False,
+            'verbose': True,
+            'strength': 0.8,
+            'temperature': 0.0,
+            'local': True,  # Use local execution to avoid API calls
+            'output_cost': None,
+            'review_examples': False,
+            'time': DEFAULT_TIME, # Added time to context
+        }
+    
+        # Change working directory to tmp_path so imports work correctly
+        original_cwd = os.getcwd()
+        os.chdir(tmp_path)
+    
+        try:
+            # Call fix_verification_main directly - with minimal mocking
+            success, final_program, final_code, attempts, cost, model = fix_verification_main_direct(
+                ctx=ctx,
+                prompt_file=prompt_file,
+                code_file=code_file,
+                program_file=program_file,
+                output_results=output_results,
+                output_code=output_code,
+                output_program=output_program,
+                loop=True,
+                verification_program=program_file,
+                max_attempts=3,
+                budget=1.0
+            )
+    
+            # Verify we got reasonable results back
+            assert isinstance(success, bool), "Success should be a boolean"
+            assert isinstance(final_code, str), "Final code should be a string"
+            assert isinstance(final_program, str), "Final program should be a string"
+            assert attempts >= 0, "Attempts should be non-negative (0 means no fixes needed)"
+            assert isinstance(cost, float), "Cost should be a float"
+            assert isinstance(model, str), "Model name should be a string"
+    
+            # Check output files were created (if successful)
+            if success:
+                assert Path(output_code).exists(), f"Output code file not created at {output_code}"
+                assert Path(output_program).exists(), f"Output program file not created at {output_program}"
+                assert Path(output_results).exists(), f"Output results file not created at {output_results}"
+    
+                # Verify content of generated code file (should include a division by zero check)
+                verified_code_content = Path(output_code).read_text()
+                assert "def divide" in verified_code_content, "Verified code should contain a divide function"
+>               assert "if b == 0" in verified_code_content or "b != 0" in verified_code_content, "Verified code should include a check for division by zero"
+E               AssertionError: Verified code should include a check for division by zero
+E               assert ('if b == 0' in '# divide.py\ndef divide(a, b):\n    # Divide a by b and return the result\n    return a / b\n' or 'b != 0' in '# divide.py\ndef divide(a, b):\n    # Divide a by b and return the result\n    return a / b\n')
+
+tests/test_cli.py:1285: AssertionError
+----------------------------- Captured stdout call -----------------------------
+Temporary directory: /tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0
+Current working directory: /mnt/c/Users/ryant/Desktop/pdd_cloud/pdd
+Prompt file location: /tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0/verify_python.prompt
+Code file location: /tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0/divide.py
+Program file location: /tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0/test_divide.py
+Output directory: /tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0/output
+╭───────────────────────────────── PDD Verify ─────────────────────────────────╮
+│ Starting Verification Process for divide.py                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+  Prompt: 
+/tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0/verify_python.pr
+ompt
+  Code: 
+/tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0/divide.py
+  Program: 
+/tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0/test_divide.py
+  Mode: Iterative Loop
+  Verification Program: 
+/tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0/test_divide.py
+  Max Attempts: 3
+  Budget: $1.00
+  Strength: 0.8, Temperature: 0.0
+Input files:
+  prompt_file     
+/tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0/verify_python.pr
+ompt
+  code_file       
+/tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0/divide.py
+  program_file    
+/tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0/test_divide.py
+  verification_program 
+/tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0/test_divide.py
+Output files:
+  output_results  
+/tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0/output/verify_re
+sults.log
+  output_code     
+/tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0/output/verified_
+divide.py
+  output_program  
+/tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0/output/verified_
+test_divide.py
+Detected language: python
+Basename: verify
+Resolved output paths via construct_paths.
+Running Iterative Verification (fix_verification_errors_loop)...
+Step 3: Determining Initial State...
+Initial program run exit code: 1
+Initial program output:
+10 / 2 = 5.0
+5 / 2.5 = 2.0
+Error: division by zero
+
+Running initial assessment with fix_verification_errors...
+Loading prompt templates...
+Successfully loaded prompt: find_verification_errors_LLM
+Successfully loaded prompt: fix_verification_errors_LLM
+Prompt templates loaded successfully.
+
+Step 2: Running verification check (Strength: 0.8, Temp: 0.0)...
+
+[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new[0m
+LiteLLM.Info: If you need to debug this error, use `litellm._turn_on_debug()'.
+
+
+[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new[0m
+LiteLLM.Info: If you need to debug this error, use `litellm._turn_on_debug()'.
+
+
+[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new[0m
+LiteLLM.Info: If you need to debug this error, use `litellm._turn_on_debug()'.
+
+Verification LLM call complete.
+  Model Used: deepseek/deepseek-reasoner
+  Cost: $0.001208
+Successfully parsed structured output from verification LLM.
+
+Verification Result (parsed):
+  Issues Count: 0
+Details: Analysis Steps:                                                        
+
+ 1 Identify functions and features in the code_module used by the program:      
+    • The program test_divide.py imports and uses the divide(a, b) function from
+      divide.py.                                                                
+    • The code_module divide.py provides this exact function.                   
+ 2 Compare program/code_module against the prompt:                              
+    • The prompt specifies a simple division function without error handling.   
+    • Both the program and code_module align perfectly with the prompt's        
+      requirements.                                                             
+ 3 Input/output behavior verification:                                          
+    • Valid inputs (10/2, 5/2.5) produce correct results as per output logs.    
+    • Division by zero (5/0) raises an exception as expected in Python.         
+ 4 Edge cases and error handling:                                               
+    • The code_module lacks protection against division by zero, but this is    
+      consistent with the prompt.                                               
+    • The program appropriately catches the exception and exits with code 1.    
+ 5 Potential hidden bugs:                                                       
+    • Non-numeric inputs (e.g., strings) would cause a TypeError, but the prompt
+      specifies numeric inputs.                                                 
+    • No other latent issues identified.                                        
+ 6 Issue categorization:                                                        
+    • Compatibility (a): No issues. The program and code_module integrate       
+      correctly.                                                                
+    • Prompt adherence (b): No discrepancies. Implementation matches prompt     
+      exactly.                                                                  
+    • Implementation issues (c): Division-by-zero is intentionally unhandled per
+      prompt, and the program manages it.                                       
+
+Conclusion: All components work as designed. The exception for division by zero 
+is expected behavior in Python and is properly handled by the test program. No  
+discrepancies or bugs were found.                                               
+
+No issues found during verification based on structured output.
+
+Total Cost for fix_verification_errors run: $0.001208
+Initial assessment cost: $0.001208, Total cost: $0.001208
+Initial verification issues found: 0
+Initial check found 0 verification issues. No fixing loop needed.
+
+--- Final Statistics ---
+Initial Issues: 0
+Final Issues: 0
+Best Iteration: 0 (Issues: 0)
+Improvement (Issues Reduced): 0
+Improvement (Percent Towards 0 Issues): 100.00%
+Overall Status: Success on initial check
+Total Attempts Made: 0
+Total Cost: $0.001208
+Model Used: deepseek/deepseek-reasoner
+ In fix_verification_main, BEFORE save attempt for CODE:
+  success: True
+  output_code_path: 
+'/tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0/output/verified
+_divide.py'
+  final_code is None: False
+  len(final_code): 89
+ In fix_verification_main, ATTEMPTING to write code to: 
+'/tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0/output/verified
+_divide.py'
+Successfully verified code saved to: 
+/tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0/output/verified_
+divide.py
+ In fix_verification_main, BEFORE save attempt for PROGRAM:
+  success: True
+  output_program_path: 
+'/tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0/output/verified
+_test_divide.py'
+  final_program is None: False
+  len(final_program): 443
+ In fix_verification_main, ATTEMPTING to write program to: 
+'/tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0/output/verified
+_test_divide.py'
+Successfully verified program saved to: 
+/tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0/output/verified_
+test_divide.py
+Verification results log (from loop) expected at: 
+/tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0/output/verify_re
+sults.log
+ Before summary - saved_code_path: 
+'/tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0/output/verified
+_divide.py', output_code_path: 
+'/tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0/output/verified
+_divide.py'
+ Before summary - saved_program_path: 
+'/tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0/output/verified
+_test_divide.py', output_program_path: 
+'/tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0/output/verified
+_test_divide.py'
+
+========================================
+╭─────────────────────────── Verification Complete ────────────────────────────╮
+│ Status: Success                                                              │
+│ Attempts: 0                                                                  │
+│ Total Cost: $0.001208                                                        │
+│ Model Used: deepseek/deepseek-reasoner                                       │
+│ Verified Code Saved:                                                         │
+│ /tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0/output/verif │
+│ ied_divide.py                                                                │
+│ Verified Program Saved:                                                      │
+│ /tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0/output/verif │
+│ ied_test_divide.py                                                           │
+│ Results Log Saved:                                                           │
+│ /tmp/pytest-of-ryanptanaka/pytest-228/test_real_verify_command0/output/verif │
+│ y_results.log                                                                │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Error executing fix_verification_main: Verified code should include a check for division by zero
+assert ('if b == 0' in '# divide.py\ndef divide(a, b):\n    # Divide a by b and return the result\n    return a / b\n' or 'b != 0' in '# divide.py\ndef divide(a, b):\n    # Divide a by b and return the result\n    return a / b\n')
+----------------------------- Captured stderr call -----------------------------
+2025-07-10 11:06:44,980 - pdd.llm_invoke - DEBUG - Cache Check: litellm.cache is None: False
+2025-07-10 11:06:44,980 - pdd.llm_invoke - DEBUG - litellm.cache type: <class 'litellm.caching.caching.Cache'>, ID: 130367743817584
+2025-07-10 11:06:44,980 - pdd.llm_invoke - DEBUG - Caching enabled for this request
+2025-07-10 11:06:44,986 - pdd.llm_invoke - ERROR - [ERROR] Invocation failed for o4-mini (UnsupportedParamsError): litellm.UnsupportedParamsError: O-series models don't support temperature=0.0. Only temperature=1 is supported. To drop unsupported openai params from the call, set `litellm.drop_params = True`. Trying next model.
+2025-07-10 11:06:44,986 - pdd.llm_invoke - DEBUG - Cache Check: litellm.cache is None: False
+2025-07-10 11:06:44,986 - pdd.llm_invoke - DEBUG - litellm.cache type: <class 'litellm.caching.caching.Cache'>, ID: 130367743817584
+2025-07-10 11:06:44,986 - pdd.llm_invoke - DEBUG - Caching enabled for this request
+2025-07-10 11:06:46,758 - pdd.llm_invoke - ERROR - [ERROR] Invocation failed for xai/grok-3-beta (RateLimitError): litellm.RateLimitError: RateLimitError: XaiException - Error code: 429 - {'code': 'Some resource has been exhausted', 'error': 'Your team dd67dfbe-0796-4673-9592-494a6d210277 has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit.'}. Trying next model.
+2025-07-10 11:06:46,758 - pdd.llm_invoke - DEBUG - Cache Check: litellm.cache is None: False
+2025-07-10 11:06:46,758 - pdd.llm_invoke - DEBUG - litellm.cache type: <class 'litellm.caching.caching.Cache'>, ID: 130367743817584
+2025-07-10 11:06:46,758 - pdd.llm_invoke - DEBUG - Caching enabled for this request
+2025-07-10 11:06:46,763 - pdd.llm_invoke - ERROR - [ERROR] Invocation failed for azure/o4-mini (UnsupportedParamsError): litellm.UnsupportedParamsError: O-series models don't support temperature=0.0. Only temperature=1 is supported. To drop unsupported openai params from the call, set `litellm.drop_params = True`. Trying next model.
+2025-07-10 11:06:46,763 - pdd.llm_invoke - DEBUG - Cache Check: litellm.cache is None: False
+2025-07-10 11:06:46,763 - pdd.llm_invoke - DEBUG - litellm.cache type: <class 'litellm.caching.caching.Cache'>, ID: 130367743817584
+2025-07-10 11:06:46,763 - pdd.llm_invoke - DEBUG - Caching enabled for this request
+2025-07-10 11:06:48,366 - pdd.llm_invoke - ERROR - [ERROR] Invocation failed for gpt-4.1 (InternalServerError): litellm.InternalServerError: InternalServerError: OpenAIException - Connection error.. Trying next model.
+2025-07-10 11:06:48,366 - pdd.llm_invoke - DEBUG - Cache Check: litellm.cache is None: False
+2025-07-10 11:06:48,366 - pdd.llm_invoke - DEBUG - litellm.cache type: <class 'litellm.caching.caching.Cache'>, ID: 130367743817584
+2025-07-10 11:06:48,366 - pdd.llm_invoke - DEBUG - Caching enabled for this request
+[92m11:07:00 - LiteLLM:ERROR[0m: vertex_llm_base.py:397 - Failed to load vertex credentials. Check to see if credentials containing partial/invalid information. Error: Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information.
+Traceback (most recent call last):
+  File "/home/ryanptanaka/miniconda3/lib/python3.13/site-packages/litellm/llms/vertex_ai/vertex_llm_base.py", line 393, in get_access_token
+    _credentials, credential_project_id = self.load_auth(
+                                          ~~~~~~~~~~~~~~^
+        credentials=credentials, project_id=project_id
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/ryanptanaka/miniconda3/lib/python3.13/site-packages/litellm/llms/vertex_ai/vertex_llm_base.py", line 95, in load_auth
+    creds, creds_project_id = self._credentials_from_default_auth(
+                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/ryanptanaka/miniconda3/lib/python3.13/site-packages/litellm/llms/vertex_ai/vertex_llm_base.py", line 136, in _credentials_from_default_auth
+    return google_auth.default(scopes=scopes)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "/home/ryanptanaka/miniconda3/lib/python3.13/site-packages/google/auth/_default.py", line 685, in default
+    raise exceptions.DefaultCredentialsError(_CLOUD_SDK_MISSING_CREDENTIALS)
+google.auth.exceptions.DefaultCredentialsError: Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information.
+2025-07-10 11:07:00,479 - pdd.llm_invoke - ERROR - [ERROR] Invocation failed for vertex_ai/gemini-2.5-flash-preview-04-17 (APIConnectionError): litellm.APIConnectionError: Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information.
+Traceback (most recent call last):
+  File "/home/ryanptanaka/miniconda3/lib/python3.13/site-packages/litellm/main.py", line 2553, in completion
+    model_response = vertex_chat_completion.completion(  # type: ignore
+        model=model,
+    ...<17 lines>...
+        extra_headers=extra_headers,
+    )
+  File "/home/ryanptanaka/miniconda3/lib/python3.13/site-packages/litellm/llms/vertex_ai/gemini/vertex_and_google_ai_studio_gemini.py", line 1723, in completion
+    _auth_header, vertex_project = self._ensure_access_token(
+                                   ~~~~~~~~~~~~~~~~~~~~~~~~~^
+        credentials=vertex_credentials,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        project_id=vertex_project,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+        custom_llm_provider=custom_llm_provider,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/ryanptanaka/miniconda3/lib/python3.13/site-packages/litellm/llms/vertex_ai/vertex_llm_base.py", line 242, in _ensure_access_token
+    return self.get_access_token(
+           ~~~~~~~~~~~~~~~~~~~~~^
+        credentials=credentials,
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+        project_id=project_id,
+        ^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/ryanptanaka/miniconda3/lib/python3.13/site-packages/litellm/llms/vertex_ai/vertex_llm_base.py", line 400, in get_access_token
+    raise e
+  File "/home/ryanptanaka/miniconda3/lib/python3.13/site-packages/litellm/llms/vertex_ai/vertex_llm_base.py", line 393, in get_access_token
+    _credentials, credential_project_id = self.load_auth(
+                                          ~~~~~~~~~~~~~~^
+        credentials=credentials, project_id=project_id
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/ryanptanaka/miniconda3/lib/python3.13/site-packages/litellm/llms/vertex_ai/vertex_llm_base.py", line 95, in load_auth
+    creds, creds_project_id = self._credentials_from_default_auth(
+                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/ryanptanaka/miniconda3/lib/python3.13/site-packages/litellm/llms/vertex_ai/vertex_llm_base.py", line 136, in _credentials_from_default_auth
+    return google_auth.default(scopes=scopes)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "/home/ryanptanaka/miniconda3/lib/python3.13/site-packages/google/auth/_default.py", line 685, in default
+    raise exceptions.DefaultCredentialsError(_CLOUD_SDK_MISSING_CREDENTIALS)
+google.auth.exceptions.DefaultCredentialsError: Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information.
+. Trying next model.
+2025-07-10 11:07:00,479 - pdd.llm_invoke - DEBUG - Cache Check: litellm.cache is None: False
+2025-07-10 11:07:00,479 - pdd.llm_invoke - DEBUG - litellm.cache type: <class 'litellm.caching.caching.Cache'>, ID: 130367743817584
+2025-07-10 11:07:00,479 - pdd.llm_invoke - DEBUG - Caching enabled for this request
+[92m11:08:41 - LiteLLM:ERROR[0m: caching.py:564 - LiteLLM Cache: Excepton add_cache: 'Cache' object has no attribute 'cache'
+Traceback (most recent call last):
+  File "/home/ryanptanaka/miniconda3/lib/python3.13/site-packages/litellm/caching/caching.py", line 562, in add_cache
+    self.cache.set_cache(cache_key, cached_data, **kwargs)
+    ^^^^^^^^^^
+AttributeError: 'Cache' object has no attribute 'cache'
+Traceback (most recent call last):
+  File "/mnt/c/Users/ryant/Desktop/pdd_cloud/pdd/tests/test_cli.py", line 1285, in test_real_verify_command
+    assert "if b == 0" in verified_code_content or "b != 0" in verified_code_content, "Verified code should include a check for division by zero"
+AssertionError: Verified code should include a check for division by zero
+assert ('if b == 0' in '# divide.py\ndef divide(a, b):\n    # Divide a by b and return the result\n    return a / b\n' or 'b != 0' in '# divide.py\ndef divide(a, b):\n    # Divide a by b and return the result\n    return a / b\n')
+------------------------------ Captured log call -------------------------------
+DEBUG    pdd.llm_invoke:llm_invoke.py:874 Cache Check: litellm.cache is None: False
+DEBUG    pdd.llm_invoke:llm_invoke.py:876 litellm.cache type: <class 'litellm.caching.caching.Cache'>, ID: 130367743817584
+DEBUG    pdd.llm_invoke:llm_invoke.py:881 Caching enabled for this request
+ERROR    pdd.llm_invoke:llm_invoke.py:1125 [ERROR] Invocation failed for o4-mini (UnsupportedParamsError): litellm.UnsupportedParamsError: O-series models don't support temperature=0.0. Only temperature=1 is supported. To drop unsupported openai params from the call, set `litellm.drop_params = True`. Trying next model.
+DEBUG    pdd.llm_invoke:llm_invoke.py:874 Cache Check: litellm.cache is None: False
+DEBUG    pdd.llm_invoke:llm_invoke.py:876 litellm.cache type: <class 'litellm.caching.caching.Cache'>, ID: 130367743817584
+DEBUG    pdd.llm_invoke:llm_invoke.py:881 Caching enabled for this request
+ERROR    pdd.llm_invoke:llm_invoke.py:1125 [ERROR] Invocation failed for xai/grok-3-beta (RateLimitError): litellm.RateLimitError: RateLimitError: XaiException - Error code: 429 - {'code': 'Some resource has been exhausted', 'error': 'Your team dd67dfbe-0796-4673-9592-494a6d210277 has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit.'}. Trying next model.
+DEBUG    pdd.llm_invoke:llm_invoke.py:874 Cache Check: litellm.cache is None: False
+DEBUG    pdd.llm_invoke:llm_invoke.py:876 litellm.cache type: <class 'litellm.caching.caching.Cache'>, ID: 130367743817584
+DEBUG    pdd.llm_invoke:llm_invoke.py:881 Caching enabled for this request
+ERROR    pdd.llm_invoke:llm_invoke.py:1125 [ERROR] Invocation failed for azure/o4-mini (UnsupportedParamsError): litellm.UnsupportedParamsError: O-series models don't support temperature=0.0. Only temperature=1 is supported. To drop unsupported openai params from the call, set `litellm.drop_params = True`. Trying next model.
+DEBUG    pdd.llm_invoke:llm_invoke.py:874 Cache Check: litellm.cache is None: False
+DEBUG    pdd.llm_invoke:llm_invoke.py:876 litellm.cache type: <class 'litellm.caching.caching.Cache'>, ID: 130367743817584
+DEBUG    pdd.llm_invoke:llm_invoke.py:881 Caching enabled for this request
+ERROR    pdd.llm_invoke:llm_invoke.py:1125 [ERROR] Invocation failed for gpt-4.1 (InternalServerError): litellm.InternalServerError: InternalServerError: OpenAIException - Connection error.. Trying next model.
+DEBUG    pdd.llm_invoke:llm_invoke.py:874 Cache Check: litellm.cache is None: False
+DEBUG    pdd.llm_invoke:llm_invoke.py:876 litellm.cache type: <class 'litellm.caching.caching.Cache'>, ID: 130367743817584
+DEBUG    pdd.llm_invoke:llm_invoke.py:881 Caching enabled for this request
+ERROR    LiteLLM:vertex_llm_base.py:397 Failed to load vertex credentials. Check to see if credentials containing partial/invalid information. Error: Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information.
+Traceback (most recent call last):
+  File "/home/ryanptanaka/miniconda3/lib/python3.13/site-packages/litellm/llms/vertex_ai/vertex_llm_base.py", line 393, in get_access_token
+    _credentials, credential_project_id = self.load_auth(
+                                          ~~~~~~~~~~~~~~^
+        credentials=credentials, project_id=project_id
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/ryanptanaka/miniconda3/lib/python3.13/site-packages/litellm/llms/vertex_ai/vertex_llm_base.py", line 95, in load_auth
+    creds, creds_project_id = self._credentials_from_default_auth(
+                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/ryanptanaka/miniconda3/lib/python3.13/site-packages/litellm/llms/vertex_ai/vertex_llm_base.py", line 136, in _credentials_from_default_auth
+    return google_auth.default(scopes=scopes)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "/home/ryanptanaka/miniconda3/lib/python3.13/site-packages/google/auth/_default.py", line 685, in default
+    raise exceptions.DefaultCredentialsError(_CLOUD_SDK_MISSING_CREDENTIALS)
+google.auth.exceptions.DefaultCredentialsError: Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information.
+ERROR    pdd.llm_invoke:llm_invoke.py:1125 [ERROR] Invocation failed for vertex_ai/gemini-2.5-flash-preview-04-17 (APIConnectionError): litellm.APIConnectionError: Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information.
+Traceback (most recent call last):
+  File "/home/ryanptanaka/miniconda3/lib/python3.13/site-packages/litellm/main.py", line 2553, in completion
+    model_response = vertex_chat_completion.completion(  # type: ignore
+        model=model,
+    ...<17 lines>...
+        extra_headers=extra_headers,
+    )
+  File "/home/ryanptanaka/miniconda3/lib/python3.13/site-packages/litellm/llms/vertex_ai/gemini/vertex_and_google_ai_studio_gemini.py", line 1723, in completion
+    _auth_header, vertex_project = self._ensure_access_token(
+                                   ~~~~~~~~~~~~~~~~~~~~~~~~~^
+        credentials=vertex_credentials,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        project_id=vertex_project,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+        custom_llm_provider=custom_llm_provider,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/ryanptanaka/miniconda3/lib/python3.13/site-packages/litellm/llms/vertex_ai/vertex_llm_base.py", line 242, in _ensure_access_token
+    return self.get_access_token(
+           ~~~~~~~~~~~~~~~~~~~~~^
+        credentials=credentials,
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+        project_id=project_id,
+        ^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/ryanptanaka/miniconda3/lib/python3.13/site-packages/litellm/llms/vertex_ai/vertex_llm_base.py", line 400, in get_access_token
+    raise e
+  File "/home/ryanptanaka/miniconda3/lib/python3.13/site-packages/litellm/llms/vertex_ai/vertex_llm_base.py", line 393, in get_access_token
+    _credentials, credential_project_id = self.load_auth(
+                                          ~~~~~~~~~~~~~~^
+        credentials=credentials, project_id=project_id
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/ryanptanaka/miniconda3/lib/python3.13/site-packages/litellm/llms/vertex_ai/vertex_llm_base.py", line 95, in load_auth
+    creds, creds_project_id = self._credentials_from_default_auth(
+                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/ryanptanaka/miniconda3/lib/python3.13/site-packages/litellm/llms/vertex_ai/vertex_llm_base.py", line 136, in _credentials_from_default_auth
+    return google_auth.default(scopes=scopes)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "/home/ryanptanaka/miniconda3/lib/python3.13/site-packages/google/auth/_default.py", line 685, in default
+    raise exceptions.DefaultCredentialsError(_CLOUD_SDK_MISSING_CREDENTIALS)
+google.auth.exceptions.DefaultCredentialsError: Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information.
+. Trying next model.
+DEBUG    pdd.llm_invoke:llm_invoke.py:874 Cache Check: litellm.cache is None: False
+DEBUG    pdd.llm_invoke:llm_invoke.py:876 litellm.cache type: <class 'litellm.caching.caching.Cache'>, ID: 130367743817584
+DEBUG    pdd.llm_invoke:llm_invoke.py:881 Caching enabled for this request
+ERROR    LiteLLM:caching.py:564 LiteLLM Cache: Excepton add_cache: 'Cache' object has no attribute 'cache'
+Traceback (most recent call last):
+  File "/home/ryanptanaka/miniconda3/lib/python3.13/site-packages/litellm/caching/caching.py", line 562, in add_cache
+    self.cache.set_cache(cache_key, cached_data, **kwargs)
+    ^^^^^^^^^^
+AttributeError: 'Cache' object has no attribute 'cache'
+=============================== warnings summary ===============================
+../../../../../../../home/ryanptanaka/miniconda3/lib/python3.13/site-packages/pydantic/_internal/_config.py:323
+  /home/ryanptanaka/miniconda3/lib/python3.13/site-packages/pydantic/_internal/_config.py:323: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.11/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+tests/test_cli.py::test_real_generate_command
+tests/test_cli.py::test_real_generate_command
+tests/test_cli.py::test_real_generate_command
+tests/test_cli.py::test_real_fix_command
+tests/test_cli.py::test_real_fix_command
+tests/test_cli.py::test_real_fix_command
+tests/test_cli.py::test_real_fix_command
+tests/test_cli.py::test_real_verify_command
+  /home/ryanptanaka/miniconda3/lib/python3.13/site-packages/httpx/_models.py:408: DeprecationWarning: Use 'content=<...>' to upload raw bytes/text content.
+    headers, stream = encode_request(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_cli.py::test_real_verify_command - AssertionError: Verified...
+============= 1 failed, 25 passed, 9 warnings in 511.65s (0:08:31) =============
