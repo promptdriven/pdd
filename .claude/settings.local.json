@@ -11,7 +11,12 @@
       "Bash(dos2unix:*)",
       "Bash(sed:*)",
       "Bash(echo $PDD_PATH)",
-      "Bash(pytest:*)"
+      "Bash(pytest:*)",
+      "Bash(bash pdd-local --help)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(mkdir:*)",
+      "Bash(../pdd-local sync simple_test)"
     ]
   },
   "enableAllProjectMcpServers": true,
