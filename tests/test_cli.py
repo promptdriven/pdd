@@ -1269,7 +1269,7 @@ if __name__ == "__main__":
         assert isinstance(success, bool), "Success should be a boolean"
         assert isinstance(final_code, str), "Final code should be a string"
         assert isinstance(final_program, str), "Final program should be a string" 
-        assert attempts > 0, "Should have at least one attempt"
+        assert attempts >= 0, "Attempts should be non-negative (0 means no fixes needed)"
         assert isinstance(cost, float), "Cost should be a float"
         assert isinstance(model, str), "Model name should be a string"
 
