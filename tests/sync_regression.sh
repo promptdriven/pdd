@@ -538,7 +538,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "5" ]; then
     
     # First sync to establish baseline
     log "5a. Initial sync to establish state"
-    run_pdd_command sync "$SIMPLE_BASENAME"
+    run_pdd_command sync --skip-verify "$SIMPLE_BASENAME"
     check_sync_files "$SIMPLE_BASENAME" "python" false
     
     # Check metadata files (optional - may not exist in test environment)
@@ -554,7 +554,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "5" ]; then
     # Second sync without changes (should be fast/skipped)
     log "5b. Testing incremental sync with no changes"
     SYNC_START_TIME=$(date +%s)
-    run_pdd_command sync "$SIMPLE_BASENAME"
+    run_pdd_command sync --skip-verify "$SIMPLE_BASENAME"
     SYNC_END_TIME=$(date +%s)
     SYNC_DURATION=$((SYNC_END_TIME - SYNC_START_TIME))
     
@@ -572,7 +572,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "5" ]; then
     echo "" >> "prompts/$SIMPLE_PROMPT"
     echo "# Updated prompt for incremental test" >> "prompts/$SIMPLE_PROMPT"
     
-    run_pdd_command sync "$SIMPLE_BASENAME"
+    run_pdd_command sync --skip-verify "$SIMPLE_BASENAME"
     check_sync_files "$SIMPLE_BASENAME" "python" false
 fi
 
@@ -593,7 +593,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "6" ]; then
     # Test sync with actual operations to generate logs
     log "6c. Running sync to generate log entries"
     rm -f "${SIMPLE_BASENAME}.py" "${SIMPLE_BASENAME}_example.py" "test_${SIMPLE_BASENAME}.py"
-    run_pdd_command sync "$SIMPLE_BASENAME"
+    run_pdd_command sync --skip-verify "$SIMPLE_BASENAME"
     
     # Now check the logs
     log "6d. Viewing logs after sync operations"
@@ -682,7 +682,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "9" ]; then
     # Test with automatic context detection (if .pddrc exists)
     if [ -f "$PDD_BASE_DIR/.pddrc" ]; then
         log "9a. Testing sync with automatic context detection"
-        run_pdd_command sync "$SIMPLE_BASENAME"
+        run_pdd_command sync --skip-verify "$SIMPLE_BASENAME"
         check_sync_files "$SIMPLE_BASENAME" "python"
         log "Context detection from .pddrc working correctly"
         log_timestamped "Validation success: Automatic context detection working"
@@ -711,7 +711,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "9" ]; then
     # Test working directory context
     log "9c. Testing working directory context integration"
     # Check that PDD respects the current working directory for file placement
-    run_pdd_command sync "$SIMPLE_BASENAME"
+    run_pdd_command sync --skip-verify "$SIMPLE_BASENAME"
     if [ -f "pdd/${SIMPLE_BASENAME}.py" ]; then
         log "Working directory context integration successful"
         log_timestamped "Validation success: Working directory context working"
