@@ -16,7 +16,12 @@
       "Bash(find:*)",
       "Bash(grep:*)",
       "Bash(mkdir:*)",
-      "Bash(../pdd-local sync simple_test)"
+      "Bash(../pdd-local sync simple_test)",
+      "Bash(/mnt/c/Users/ryant/Desktop/pdd_cloud/pdd/pdd-local --force --output-cost sync_regression_cost.csv --strength 0.75 --temperature 0.0 sync - simple_math)",
+      "Bash(/mnt/c/Users/ryant/Desktop/pdd_cloud/pdd/pdd-local sync --help)",
+      "Bash(/mnt/c/Users/ryant/Desktop/pdd_cloud/pdd/pdd-local --force sync simple_math --budget 1.0 --max-attempts 1 --skip-verify --skip-tests)",
+      "Bash(/mnt/c/Users/ryant/Desktop/pdd_cloud/pdd/pdd-local --force --output-cost sync_regression_cost.csv --strength 0.75 --temperature 0.0 sync --skip-verify simple_math)",
+      "Bash(make sync-regression:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
