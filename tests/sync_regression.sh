@@ -20,6 +20,47 @@ log() {
     fi
 }
 
+# WSL environment detection and validation
+is_wsl() {
+    # Check multiple WSL indicators
+    if [ -f /proc/version ] && grep -qi microsoft /proc/version; then
+        return 0
+    elif [ -n "${WSL_DISTRO_NAME:-}" ]; then
+        return 0
+    elif echo "${PATH}" | grep -q "/mnt/c/"; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+validate_wsl_environment() {
+    if is_wsl; then
+        log "WSL environment detected"
+        
+        # Check for API key environment variables and validate they don't contain carriage returns
+        if [ -n "${OPENAI_API_KEY:-}" ]; then
+            # Check if API key contains carriage return characters
+            if echo "${OPENAI_API_KEY}" | grep -q $'\r'; then
+                log "WARNING: OPENAI_API_KEY contains carriage return characters"
+                log "This is a known WSL issue that can cause API authentication failures"
+                log "Consider re-setting your API key or checking your .env file for line ending issues"
+            else
+                log "OPENAI_API_KEY appears to be properly formatted"
+            fi
+        fi
+        
+        # Check for other potential WSL issues
+        if [ ! -d "/mnt/c" ]; then
+            log "WARNING: WSL detected but /mnt/c directory not found - this may indicate WSL configuration issues"
+        fi
+        
+        log "WSL environment validation complete"
+    else
+        log "Non-WSL environment detected"
+    fi
+}
+
 # --- Test Selection ---
 # Accept a single argument (test number) to run only that test. Default to "all".
 TARGET_TEST=${1:-"all"}
@@ -286,6 +327,9 @@ cleanup() {
 trap cleanup EXIT
 
 # --- Setup ---
+
+# Validate WSL environment before starting tests
+validate_wsl_environment
 
 # Create regression test directory and ensure it's clean
 log "Creating sync regression test directory: $REGRESSION_DIR"
