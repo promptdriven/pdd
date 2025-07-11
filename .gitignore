@@ -6,6 +6,12 @@ __pycache__/
 
 .vscode/settings.json
 
+# Claude folder
+.claude/
+
+# Test sync folder
+test_sync/
+
 # langchain cache
 .langchain.db
 *.pckl
