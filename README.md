@@ -10,7 +10,7 @@ The primary command is **`sync`**, which automatically executes the complete PDD
 
 For a detailed explanation of the concepts, architecture, and benefits of Prompt-Driven Development, please refer to our full whitepaper. This document provides an in-depth look at the PDD philosophy, its advantages over traditional development, and includes benchmarks and case studies.
 
-[Read the Full Whitepaper with Benchmarks](./whitepaper/Whitepaper%20The%20Case%20for%20Prompt-Driven%20Development%20with%20Benchmarks.md)
+[Read the Full Whitepaper with Benchmarks](docs/whitepaper_with_benchmarks/whitepaper_w_benchmarks.md)
 
 ## Installation
 

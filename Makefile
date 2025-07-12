@@ -414,8 +414,8 @@ release:
 	@echo "Copying examples to public repo"
 	@cp -r ./examples staging/public/pdd/
 	@echo "Copying whitepaper to public repo"
-	@mkdir -p staging/public/pdd/whitepaper
-	@cp "docs/whitepaper_with_benchmarks/Whitepaper The Case for Prompt-Driven Development with Benchmarks.md" staging/public/pdd/whitepaper/
+	@mkdir -p staging/public/pdd/docs/whitepaper_with_benchmarks
+	@cp "docs/whitepaper_with_benchmarks/whitepaper_w_benchmarks.md" staging/public/pdd/docs/whitepaper_with_benchmarks/whitepaper_w_benchmarks.md
 	@cd staging/public/pdd/ && git add . && git commit -m "Bump version" && git push
 	
 analysis:
