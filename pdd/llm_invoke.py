@@ -81,6 +81,58 @@ from pdd import DEFAULT_LLM_MODEL
 # Opt-in to future pandas behavior regarding downcasting
 pd.set_option('future.no_silent_downcasting', True)
 
+
+def _is_wsl_environment() -> bool:
+    """
+    Detect if we're running in WSL (Windows Subsystem for Linux) environment.
+    
+    Returns:
+        True if running in WSL, False otherwise
+    """
+    try:
+        # Check for WSL-specific indicators
+        if os.path.exists('/proc/version'):
+            with open('/proc/version', 'r') as f:
+                version_info = f.read().lower()
+                return 'microsoft' in version_info or 'wsl' in version_info
+        
+        # Alternative check: WSL_DISTRO_NAME environment variable
+        if os.getenv('WSL_DISTRO_NAME'):
+            return True
+            
+        # Check for Windows-style paths in PATH
+        path_env = os.getenv('PATH', '')
+        return '/mnt/c/' in path_env.lower()
+        
+    except Exception:
+        return False
+
+
+def _get_environment_info() -> Dict[str, str]:
+    """
+    Get environment information for debugging and error reporting.
+    
+    Returns:
+        Dictionary containing environment details
+    """
+    import platform
+    
+    info = {
+        'platform': platform.system(),
+        'platform_release': platform.release(),
+        'platform_version': platform.version(),
+        'architecture': platform.machine(),
+        'is_wsl': str(_is_wsl_environment()),
+        'python_version': platform.python_version(),
+    }
+    
+    # Add WSL-specific information
+    if _is_wsl_environment():
+        info['wsl_distro'] = os.getenv('WSL_DISTRO_NAME', 'unknown')
+        info['wsl_interop'] = os.getenv('WSL_INTEROP', 'not_set')
+    
+    return info
+
 # <<< SET LITELLM DEBUG LOGGING >>>
 # os.environ['LITELLM_LOG'] = 'DEBUG' # Keep commented out unless debugging LiteLLM itself
 
@@ -163,6 +215,12 @@ GCS_ENDPOINT_URL = "https://storage.googleapis.com" # GCS S3 compatibility endpo
 GCS_REGION_NAME = os.getenv("GCS_REGION_NAME", "auto") # Often 'auto' works for GCS
 GCS_HMAC_ACCESS_KEY_ID = os.getenv("GCS_HMAC_ACCESS_KEY_ID") # Load HMAC Key ID
 GCS_HMAC_SECRET_ACCESS_KEY = os.getenv("GCS_HMAC_SECRET_ACCESS_KEY") # Load HMAC Secret
+
+# Sanitize GCS credentials to handle WSL environment issues
+if GCS_HMAC_ACCESS_KEY_ID:
+    GCS_HMAC_ACCESS_KEY_ID = GCS_HMAC_ACCESS_KEY_ID.strip()
+if GCS_HMAC_SECRET_ACCESS_KEY:
+    GCS_HMAC_SECRET_ACCESS_KEY = GCS_HMAC_SECRET_ACCESS_KEY.strip()
 
 cache_configured = False
 
@@ -448,6 +506,54 @@ def _select_model_candidates(
     return candidates
 
 
+def _sanitize_api_key(key_value: str) -> str:
+    """
+    Sanitize API key by removing whitespace and carriage returns.
+    
+    This fixes WSL environment issues where API keys may contain trailing \r characters
+    that make them invalid for HTTP headers.
+    
+    Args:
+        key_value: The raw API key value from environment
+        
+    Returns:
+        Sanitized API key with whitespace and carriage returns removed
+        
+    Raises:
+        ValueError: If the API key format is invalid after sanitization
+    """
+    if not key_value:
+        return key_value
+    
+    # Strip all whitespace including carriage returns, newlines, etc.
+    sanitized = key_value.strip()
+    
+    # Additional validation: ensure no remaining control characters
+    if any(ord(c) < 32 for c in sanitized):
+        logger.warning("API key contains control characters that may cause issues")
+        # Remove any remaining control characters
+        sanitized = ''.join(c for c in sanitized if ord(c) >= 32)
+    
+    # Validate API key format (basic checks)
+    if sanitized:
+        # Check for common API key patterns
+        if len(sanitized) < 10:
+            logger.warning(f"API key appears too short ({len(sanitized)} characters) - may be invalid")
+        
+        # Check for invalid characters in API keys (should be printable ASCII)
+        if not all(32 <= ord(c) <= 126 for c in sanitized):
+            logger.warning("API key contains non-printable characters")
+            
+        # Check for WSL-specific issues (detect if original had carriage returns)
+        if key_value != sanitized and '\r' in key_value:
+            if _is_wsl_environment():
+                logger.info("Detected and fixed WSL line ending issue in API key")
+            else:
+                logger.info("Detected and fixed line ending issue in API key")
+    
+    return sanitized
+
+
 def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, bool], verbose: bool) -> bool:
     """Checks for API key in env, prompts user if missing, and updates .env."""
     key_name = model_info.get('api_key')
@@ -458,6 +564,8 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
         return True # Assume key is handled elsewhere or not needed
 
     key_value = os.getenv(key_name)
+    if key_value:
+        key_value = _sanitize_api_key(key_value)
 
     if key_value:
         if verbose:
@@ -473,6 +581,9 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
                 logger.error("No API key provided. Cannot proceed with this model.")
                 return False
 
+            # Sanitize the user-provided key
+            user_provided_key = _sanitize_api_key(user_provided_key)
+            
             # Set environment variable for the current process
             os.environ[key_name] = user_provided_key
             logger.info(f"API key '{key_name}' set for the current session.")
@@ -767,6 +878,7 @@ def llm_invoke(
             elif api_key_name_from_csv: # For other api_key_names specified in CSV (e.g., OPENAI_API_KEY, or a direct VERTEX_AI_API_KEY string)
                 key_value = os.getenv(api_key_name_from_csv)
                 if key_value:
+                    key_value = _sanitize_api_key(key_value)
                     litellm_kwargs["api_key"] = key_value
                     if verbose:
                         logger.info(f"[INFO] Explicitly passing API key from env var '{api_key_name_from_csv}' as 'api_key' parameter to LiteLLM.")
@@ -932,6 +1044,46 @@ def llm_invoke(
                     # Result (String or Pydantic)
                     try:
                         raw_result = resp_item.choices[0].message.content
+                        
+                        # Check if raw_result is None (likely cached corrupted data)
+                        if raw_result is None:
+                            logger.warning(f"[WARNING] LLM returned None content for item {i}, likely due to corrupted cache. Retrying with cache bypass...")
+                            # Retry with cache bypass by modifying the prompt slightly
+                            if not use_batch_mode and prompt and input_json is not None:
+                                # Add a small space to bypass cache
+                                modified_prompt = prompt + " "
+                                try:
+                                    retry_messages = _format_messages(modified_prompt, input_json, use_batch_mode)
+                                    # Disable cache for retry
+                                    litellm.cache = None
+                                    retry_response = litellm.completion(
+                                        model=model_name_litellm,
+                                        messages=retry_messages,
+                                        temperature=temperature,
+                                        response_format=response_format,
+                                        max_completion_tokens=max_tokens,
+                                        **time_kwargs
+                                    )
+                                    # Re-enable cache
+                                    litellm.cache = Cache()
+                                    # Extract result from retry
+                                    retry_raw_result = retry_response.choices[0].message.content
+                                    if retry_raw_result is not None:
+                                        logger.info(f"[SUCCESS] Cache bypass retry succeeded for item {i}")
+                                        raw_result = retry_raw_result
+                                    else:
+                                        logger.error(f"[ERROR] Cache bypass retry also returned None for item {i}")
+                                        results.append("ERROR: LLM returned None content even after cache bypass")
+                                        continue
+                                except Exception as retry_e:
+                                    logger.error(f"[ERROR] Cache bypass retry failed for item {i}: {retry_e}")
+                                    results.append(f"ERROR: LLM returned None content and retry failed: {retry_e}")
+                                    continue
+                            else:
+                                logger.error(f"[ERROR] Cannot retry - batch mode or missing prompt/input_json")
+                                results.append("ERROR: LLM returned None content and cannot retry")
+                                continue
+                        
                         if output_pydantic:
                             parsed_result = None
                             json_string_to_parse = None
@@ -1064,6 +1216,16 @@ def llm_invoke(
             # --- 6b. Handle Invocation Errors ---
             except openai.AuthenticationError as e:
                 last_exception = e
+                error_message = str(e)
+                
+                # Check for WSL-specific issues in authentication errors
+                if _is_wsl_environment() and ('Illegal header value' in error_message or '\r' in error_message):
+                    logger.warning(f"[WSL AUTH ERROR] Authentication failed for {model_name_litellm} - detected WSL line ending issue")
+                    logger.warning("[WSL AUTH ERROR] This is likely caused by API key environment variables containing carriage returns")
+                    logger.warning("[WSL AUTH ERROR] Try setting your API key again or check your .env file for line ending issues")
+                    env_info = _get_environment_info()
+                    logger.debug(f"Environment info: {env_info}")
+                    
                 if newly_acquired_keys.get(api_key_name):
                     logger.warning(f"[AUTH ERROR] Authentication failed for {model_name_litellm} with the newly provided key for '{api_key_name}'. Please check the key and try again.")
                     # Invalidate the key in env for this session to force re-prompt on retry

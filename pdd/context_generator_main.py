@@ -51,22 +51,37 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
             verbose=ctx.obj.get('verbose', False)
         )
 
-        # Save results
-        if output_file_paths["output"]:
-            with open(output_file_paths["output"], 'w') as f:
+        # Save results - prioritize orchestration output path over construct_paths result
+        final_output_path = output or output_file_paths["output"]
+        print(f"DEBUG: output param = {output}")
+        print(f"DEBUG: output_file_paths['output'] = {output_file_paths['output']}")
+        print(f"DEBUG: final_output_path = {final_output_path}")
+        if final_output_path and example_code is not None:
+            with open(final_output_path, 'w') as f:
                 f.write(example_code)
+        elif final_output_path and example_code is None:
+            # Log the error but don't crash
+            if not ctx.obj.get('quiet', False):
+                rprint("[bold red]Warning:[/bold red] Example generation failed, skipping file write")
 
         # Provide user feedback
         if not ctx.obj.get('quiet', False):
-            rprint("[bold green]Example code generated successfully.[/bold green]")
-            rprint(f"[bold]Model used:[/bold] {model_name}")
-            rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
-            if output:
-                rprint(f"[bold]Example code saved to:[/bold] {output_file_paths['output']}")
+            if example_code is not None:
+                rprint("[bold green]Example code generated successfully.[/bold green]")
+                rprint(f"[bold]Model used:[/bold] {model_name}")
+                rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
+                if final_output_path and example_code is not None:
+                    rprint(f"[bold]Example code saved to:[/bold] {final_output_path}")
+            else:
+                rprint("[bold red]Example code generation failed.[/bold red]")
+                rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
 
-        # Always print example code, even in quiet mode
-        rprint("[bold]Generated Example Code:[/bold]")
-        rprint(example_code)
+        # Always print example code, even in quiet mode (if it exists)
+        if example_code is not None:
+            rprint("[bold]Generated Example Code:[/bold]")
+            rprint(example_code)
+        else:
+            rprint("[bold red]No example code generated due to errors.[/bold red]")
 
         return example_code, total_cost, model_name
 

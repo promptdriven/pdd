@@ -66,8 +66,14 @@ def _detect_languages(basename: str, prompts_dir: Path) -> List[str]:
                     development_languages.append(potential_language)
                 # Explicitly exclude 'llm' even in test scenarios
     
-    # Return only development languages, sorted alphabetically
-    return sorted(development_languages)
+    # Return only development languages, with Python prioritized first, then sorted alphabetically
+    if 'python' in development_languages:
+        # Put Python first, then the rest sorted alphabetically
+        other_languages = sorted([lang for lang in development_languages if lang != 'python'])
+        return ['python'] + other_languages
+    else:
+        # No Python, just return sorted alphabetically
+        return sorted(development_languages)
 
 
 def sync_main(
@@ -160,7 +166,7 @@ def sync_main(
             try:
                 resolved_config, _, _, _ = construct_paths(
                     input_file_paths={"prompt_file": str(prompt_file_path)},
-                    force=False,
+                    force=force,
                     quiet=True,
                     command="sync",
                     command_options={"basename": basename, "language": lang},

@@ -72,19 +72,34 @@ def generate_test(
         model_name = response['model_name']
         result = response['result']
 
+        # Validate that we got a non-empty result
+        if not result or not result.strip():
+            raise ValueError(f"LLM test generation returned empty result. Model: {model_name}, Cost: ${response['cost']:.6f}")
+
         if verbose:
             console.print(Markdown(result))
             console.print(f"[bold green]Initial generation cost: ${total_cost:.6f}[/bold green]")
 
         # Step 4: Check if generation is complete
         last_600_chars = result[-600:] if len(result) > 600 else result
-        reasoning, is_finished, check_cost, check_model = unfinished_prompt(
-            prompt_text=last_600_chars,
-            strength=strength,
-            temperature=temperature,
-            time=time,
-            verbose=verbose
-        )
+        
+        # Validate that the last_600_chars is not empty after stripping
+        if not last_600_chars.strip():
+            # If the tail is empty, assume generation is complete
+            if verbose:
+                console.print("[bold yellow]Last 600 chars are empty, assuming generation is complete[/bold yellow]")
+            reasoning = "Generation appears complete (tail is empty)"
+            is_finished = True
+            check_cost = 0.0
+            check_model = model_name
+        else:
+            reasoning, is_finished, check_cost, check_model = unfinished_prompt(
+                prompt_text=last_600_chars,
+                strength=strength,
+                temperature=temperature,
+                time=time,
+                verbose=verbose
+            )
         total_cost += check_cost
 
         if not is_finished:
@@ -104,15 +119,37 @@ def generate_test(
             model_name = continue_model
 
         # Process the final result
-        processed_result, post_cost, post_model = postprocess(
-            result,
-            language=language,
-            strength=EXTRACTION_STRENGTH,
-            temperature=temperature,
-            time=time,
-            verbose=verbose
-        )
-        total_cost += post_cost
+        try:
+            processed_result, post_cost, post_model = postprocess(
+                result,
+                language=language,
+                strength=EXTRACTION_STRENGTH,
+                temperature=temperature,
+                time=time,
+                verbose=verbose
+            )
+            total_cost += post_cost
+        except Exception as e:
+            console.print(f"[bold red]Postprocess failed: {str(e)}[/bold red]")
+            console.print(f"[bold yellow]Falling back to raw result[/bold yellow]")
+            
+            # Try to extract code blocks directly from the raw result
+            import re
+            code_blocks = re.findall(r'```(?:python)?\s*(.*?)```', result, re.DOTALL | re.IGNORECASE)
+            
+            if code_blocks:
+                # Use the first substantial code block
+                for block in code_blocks:
+                    if len(block.strip()) > 100 and ('def test_' in block or 'import' in block):
+                        processed_result = block.strip()
+                        break
+                else:
+                    processed_result = code_blocks[0].strip() if code_blocks else result
+            else:
+                # No code blocks found, use raw result
+                processed_result = result
+            
+            post_cost = 0.0
 
         # Step 5: Print total cost if verbose
         if verbose:

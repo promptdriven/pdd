@@ -21,6 +21,8 @@ help:
 	@echo "  make test                    - Run staging tests"
 	@echo "  make coverage                - Run tests with coverage"
 	@echo "  make regression [TEST_NUM=n] - Run regression tests (optionally specific test number)"
+	@echo "  make sync-regression [TEST_NUM=n] - Run sync regression tests (optionally specific test number)"
+	@echo "  make all-regression 		  - Run all regression test suites"
 	@echo "  make analysis                - Run regression analysis"
 	@echo "  make verify MODULE=name      - Verify code functionality against prompt intent"
 	@echo "  make lint                    - Run pylint for static code analysis"
@@ -63,7 +65,7 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory
 EXAMPLE_FILES := $(wildcard $(CONTEXT_DIR)/*_example.py)
 
-.PHONY: all clean test requirements production coverage staging regression install build analysis fix crash update-extension generate run-examples verify detect change lint
+.PHONY: all clean test requirements production coverage staging regression sync-regression all-regression install build analysis fix crash update-extension generate run-examples verify detect change lint
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -377,6 +379,19 @@ ifdef TEST_NUM
 else
 	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/regression.sh
 endif
+
+sync-regression:
+	@echo "Running sync regression tests"
+ifdef TEST_NUM
+	@echo "Running specific sync test: $(TEST_NUM)"
+	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/sync_regression.sh $(TEST_NUM)
+else
+	@echo "Running all sync regression tests"
+	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/sync_regression.sh
+endif
+
+all-regression: regression sync-regression
+	@echo "All regression test suites completed."
 
 install:
 	@echo "Installing pdd"

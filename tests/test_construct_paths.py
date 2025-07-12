@@ -1558,3 +1558,48 @@ def test_construct_paths_handles_makefile_suffix_correctly_or_fails_if_buggy(tmp
             file_extension='',  # Makefiles have no extension
             context_config={}
         )
+
+
+# Test context detection functions that were in test_context_detection.py
+def test_find_pddrc_file_real():
+    """Test _find_pddrc_file finds the actual .pddrc file in the project."""
+    from pdd.construct_paths import _find_pddrc_file
+    
+    pddrc_path = _find_pddrc_file()
+    assert pddrc_path is not None, "Should find .pddrc file in project"
+    assert Path(pddrc_path).exists(), "Found .pddrc path should exist"
+    assert Path(pddrc_path).name == ".pddrc", "Should find file named .pddrc"
+
+
+def test_detect_context_real():
+    """Test _detect_context with actual .pddrc configuration."""
+    from pdd.construct_paths import _find_pddrc_file, _load_pddrc_config, _detect_context
+    
+    pddrc_path = _find_pddrc_file()
+    if pddrc_path:
+        config = _load_pddrc_config(pddrc_path)
+        current_dir = Path.cwd()
+        
+        context = _detect_context(current_dir, config)
+        assert context is not None, "Should detect a context"
+        assert isinstance(context, str), "Context should be a string"
+
+
+def test_get_context_config_real():
+    """Test _get_context_config with actual .pddrc configuration."""
+    from pdd.construct_paths import _find_pddrc_file, _load_pddrc_config, _detect_context, _get_context_config
+    
+    pddrc_path = _find_pddrc_file()
+    if pddrc_path:
+        config = _load_pddrc_config(pddrc_path)
+        current_dir = Path.cwd()
+        context = _detect_context(current_dir, config)
+        
+        if context:
+            context_config = _get_context_config(config, context)
+            assert isinstance(context_config, dict), "Context config should be a dictionary"
+            # Check for expected keys based on the .pddrc format
+            if 'generate_output_path' in context_config:
+                assert isinstance(context_config['generate_output_path'], str)
+            if 'example_output_path' in context_config:
+                assert isinstance(context_config['example_output_path'], str)

@@ -81,6 +81,18 @@ def fix_code_module_errors(
         model_name = first_response.get('model_name', '')
         program_code_fix = first_response['result']
 
+        # Check if the LLM response is None or an error string
+        if program_code_fix is None:
+            error_msg = "LLM returned None result during error analysis"
+            if verbose:
+                print(f"[red]{error_msg}[/red]")
+            raise RuntimeError(error_msg)
+        elif isinstance(program_code_fix, str) and program_code_fix.startswith("ERROR:"):
+            error_msg = f"LLM failed to analyze errors: {program_code_fix}"
+            if verbose:
+                print(f"[red]{error_msg}[/red]")
+            raise RuntimeError(error_msg)
+
         if verbose:
             print("[green]Error analysis complete[/green]")
             print(Markdown(program_code_fix))

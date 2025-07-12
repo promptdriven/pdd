@@ -462,7 +462,7 @@ Options:
 - `--skip-verify`: Skip the functional verification step
 - `--skip-tests`: Skip unit test generation and fixing
 - `--target-coverage FLOAT`: Desired code coverage percentage (default is 90.0)
-- `--log`: Display sync log for this basename instead of running sync operations
+- `--log`: Display real-time sync analysis for this basename instead of running sync operations. This performs the same state analysis as a normal sync run but without acquiring exclusive locks or executing any operations, allowing inspection even when another sync process is active.
 
 **Real-time Progress Animation**:
 The sync command provides live visual feedback showing:
@@ -525,25 +525,26 @@ The sync command automatically detects what files exist and executes the appropr
 **Environment Variables**:
 All existing PDD output path environment variables are respected, allowing the sync command to save files in the appropriate locations for your project structure.
 
-**Comprehensive Sync Logging**:
-The sync command maintains a detailed log of its decision-making process, which you can view using the `--log` option. View detailed logs of sync decision-making process:
+**Sync State Analysis**:
+The sync command maintains detailed decision-making logs which you can view using the `--log` option:
 
 ```bash
-# View sync history and decisions
+# View current sync state analysis (non-blocking)
 pdd sync --log calculator
 
 # View detailed LLM reasoning for complex scenarios  
 pdd --verbose sync --log calculator
 ```
 
-**Log Contents Include**:
-- File change detection analysis and fingerprint comparisons
-- Decision reasoning (heuristic-based vs LLM-powered analysis)
+**Analysis Contents Include**:
+- Current file state and fingerprint comparisons
+- Real-time decision reasoning (heuristic-based vs LLM-powered analysis)
 - Operation recommendations with confidence levels
-- Cost and timing information for each sync session
-- Success/failure status with detailed error information
-- Lock acquisition and release events
-- State management and conflict resolution details
+- Estimated costs for recommended operations
+- Lock status and potential conflicts
+- State management details
+
+The `--log` option performs live analysis of the current project state, making it safe to run even when another sync operation is in progress. This differs from viewing historical logs - it shows what sync would decide to do right now based on current file states.
 
 Use `--verbose` with `--log` to see detailed LLM reasoning for complex multi-file change scenarios and advanced state analysis.
 

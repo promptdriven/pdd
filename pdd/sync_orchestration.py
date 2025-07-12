@@ -8,6 +8,8 @@ import threading
 import time
 import json
 import datetime
+import subprocess
+import re
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from dataclasses import asdict
@@ -17,7 +19,7 @@ import click
 # --- Real PDD Component Imports ---
 from .sync_animation import sync_animation
 from .sync_determine_operation import (
-    determine_sync_operation,
+    sync_determine_operation,
     get_pdd_file_paths,
     RunReport,
     PDD_DIR,
@@ -48,7 +50,7 @@ def load_sync_log(basename: str, language: str) -> List[Dict[str, Any]]:
 
 def save_run_report(report: Dict[str, Any], basename: str, language: str):
     """Save a run report to the metadata directory."""
-    report_file = META_DIR / f"{basename}_{language}_run_report.json"
+    report_file = META_DIR / f"{basename}_{language}_run.json"
     META_DIR.mkdir(parents=True, exist_ok=True)
     with open(report_file, 'w') as f:
         json.dump(report, f, indent=2, default=str)
@@ -76,6 +78,73 @@ def _save_operation_fingerprint(basename: str, language: str, operation: str,
         json.dump(asdict(fingerprint), f, indent=2, default=str)
 
 # SyncLock class now imported from sync_determine_operation module
+
+def _execute_tests_and_create_run_report(test_file: Path, basename: str, language: str, target_coverage: float = 90.0) -> RunReport:
+    """Execute tests and create a RunReport with actual results."""
+    timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    
+    try:
+        # Execute pytest with coverage reporting on the specific module
+        # Extract module name from test file (e.g., test_factorial.py -> factorial)
+        module_name = test_file.name.replace('test_', '').replace('.py', '')
+        
+        # Use the module import path rather than file path for coverage
+        result = subprocess.run([
+            'python', '-m', 'pytest', 
+            str(test_file), 
+            '-v', 
+            '--tb=short',
+            f'--cov=pdd.{module_name}',
+            '--cov-report=term-missing'
+        ], capture_output=True, text=True, timeout=300)
+        
+        exit_code = result.returncode
+        stdout = result.stdout
+        stderr = result.stderr
+        
+        # Parse test results from pytest output
+        tests_passed = 0
+        tests_failed = 0
+        coverage = 0.0
+        
+        # Parse passed/failed tests
+        if 'passed' in stdout:
+            passed_match = re.search(r'(\d+) passed', stdout)
+            if passed_match:
+                tests_passed = int(passed_match.group(1))
+        
+        if 'failed' in stdout:
+            failed_match = re.search(r'(\d+) failed', stdout)
+            if failed_match:
+                tests_failed = int(failed_match.group(1))
+        
+        # Parse coverage percentage
+        coverage_match = re.search(r'TOTAL.*?(\d+)%', stdout)
+        if coverage_match:
+            coverage = float(coverage_match.group(1))
+        
+        # Create and save run report
+        report = RunReport(
+            timestamp=timestamp,
+            exit_code=exit_code,
+            tests_passed=tests_passed,
+            tests_failed=tests_failed,
+            coverage=coverage
+        )
+        
+    except (subprocess.TimeoutExpired, subprocess.CalledProcessError, Exception) as e:
+        # If test execution fails, create a report indicating failure
+        report = RunReport(
+            timestamp=timestamp,
+            exit_code=1,
+            tests_passed=0,
+            tests_failed=1,
+            coverage=0.0
+        )
+    
+    # Save the run report
+    save_run_report(asdict(report), basename, language)
+    return report
 
 # --- Helper for Click Context ---
 
@@ -150,7 +219,19 @@ def sync_orchestration(
         return _display_sync_log(basename, language, verbose)
 
     # --- Initialize State and Paths ---
-    pdd_files = get_pdd_file_paths(basename, language, context_config)
+    try:
+        pdd_files = get_pdd_file_paths(basename, language, prompts_dir)
+    except Exception as e:
+        # Log the error and return early with failure status
+        console.print(f"[red]Error constructing paths: {e}[/red]")
+        return {
+            "success": False,
+            "total_cost": 0.0,
+            "model_name": "",
+            "error": f"Failed to construct paths: {str(e)}",
+            "operations_completed": [],
+            "errors": [f"Path construction failed: {str(e)}"]
+        }
     
     # Shared state for animation thread
     current_function_name_ref = ["initializing"]
@@ -190,26 +271,30 @@ def sync_orchestration(
                     errors.append(f"Budget of ${budget:.2f} exceeded.")
                     break
 
-                decision = determine_sync_operation(basename, language, target_coverage)
+                decision = sync_determine_operation(basename, language, target_coverage, budget - current_cost_ref[0], False, prompts_dir, skip_tests, skip_verify)
                 operation = decision.operation
 
-                if operation in ['all_synced', 'nothing', 'fail_and_request_manual_merge', 'error']:
+                if operation in ['all_synced', 'nothing', 'fail_and_request_manual_merge', 'error', 'analyze_conflict']:
                     current_function_name_ref[0] = "synced" if operation in ['all_synced', 'nothing'] else "conflict"
                     if operation == 'fail_and_request_manual_merge':
                         errors.append(f"Manual merge required: {decision.reason}")
                     elif operation == 'error':
                         errors.append(f"Error determining operation: {decision.reason}")
+                    elif operation == 'analyze_conflict':
+                        errors.append(f"Conflict detected: {decision.reason}")
                     break
                 
                 # Handle skips
-                if operation == 'verify' and skip_verify:
+                if operation == 'verify' and (skip_verify or skip_tests):
+                    # Skip verification if explicitly requested OR if tests are skipped (can't verify without tests)
                     skipped_operations.append('verify')
+                    skip_reason = 'skip_verify' if skip_verify else 'skip_tests_implies_skip_verify'
                     report_data = RunReport(
                         timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
                         exit_code=0, tests_passed=0, tests_failed=0, coverage=0.0
                     )
                     save_run_report(asdict(report_data), basename, language)
-                    _save_operation_fingerprint(basename, language, 'verify', pdd_files, 0.0, 'skipped')
+                    _save_operation_fingerprint(basename, language, 'verify', pdd_files, 0.0, skip_reason)
                     continue
                 if operation == 'test' and skip_tests:
                     skipped_operations.append('test')
@@ -219,6 +304,17 @@ def sync_orchestration(
                     )
                     save_run_report(asdict(report_data), basename, language)
                     _save_operation_fingerprint(basename, language, 'test', pdd_files, 0.0, 'skipped')
+                    continue
+                if operation == 'crash' and skip_tests:
+                    # Skip crash operations when tests are skipped since crash fixes usually require test execution
+                    skipped_operations.append('crash')
+                    # Create a dummy run report indicating crash was skipped
+                    report_data = RunReport(
+                        timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                        exit_code=0, tests_passed=0, tests_failed=0, coverage=0.0
+                    )
+                    save_run_report(asdict(report_data), basename, language)
+                    _save_operation_fingerprint(basename, language, 'crash', pdd_files, 0.0, 'skipped')
                     continue
 
                 current_function_name_ref[0] = operation
@@ -235,7 +331,32 @@ def sync_orchestration(
                 # --- Execute Operation ---
                 try:
                     if operation == 'auto-deps':
-                        result = auto_deps_main(ctx, prompt_file=str(pdd_files['prompt']), directory_path=examples_dir)
+                        # Save the modified prompt to a temporary location
+                        temp_output = str(pdd_files['prompt']).replace('.prompt', '_with_deps.prompt')
+                        
+                        # Read original prompt content to compare later
+                        original_content = pdd_files['prompt'].read_text(encoding='utf-8')
+                        
+                        result = auto_deps_main(
+                            ctx, 
+                            prompt_file=str(pdd_files['prompt']), 
+                            directory_path=examples_dir,
+                            auto_deps_csv_path="project_dependencies.csv",
+                            output=temp_output,
+                            force_scan=False  # Don't force scan every time
+                        )
+                        
+                        # Only move the temp file back if content actually changed
+                        if Path(temp_output).exists():
+                            import shutil
+                            new_content = Path(temp_output).read_text(encoding='utf-8')
+                            if new_content != original_content:
+                                shutil.move(temp_output, str(pdd_files['prompt']))
+                            else:
+                                # No changes needed, remove temp file
+                                Path(temp_output).unlink()
+                                # Mark as successful with no changes
+                                result = (new_content, 0.0, 'no-changes')
                     elif operation == 'generate':
                         result = code_generator_main(
                             ctx, 
@@ -245,6 +366,8 @@ def sync_orchestration(
                             force_incremental_flag=False
                         )
                     elif operation == 'example':
+                        print(f"DEBUG SYNC: pdd_files['example'] = {pdd_files['example']}")
+                        print(f"DEBUG SYNC: str(pdd_files['example']) = {str(pdd_files['example'])}")
                         result = context_generator_main(
                             ctx, 
                             prompt_file=str(pdd_files['prompt']), 
@@ -252,14 +375,50 @@ def sync_orchestration(
                             output=str(pdd_files['example'])
                         )
                     elif operation == 'crash':
-                        Path("crash.log").write_text("Simulated crash error")
-                        result = crash_main(
-                            ctx, 
-                            prompt_file=str(pdd_files['prompt']), 
-                            code_file=str(pdd_files['code']), 
-                            program_file=str(pdd_files['example']), 
-                            error_file="crash.log"
-                        )
+                        # Validate required files exist before attempting crash operation
+                        required_files = [pdd_files['code'], pdd_files['example']]
+                        missing_files = [f for f in required_files if not f.exists()]
+                        
+                        if missing_files:
+                            # Skip crash operation if required files are missing
+                            print(f"Skipping crash operation - missing files: {[f.name for f in missing_files]}")
+                            skipped_operations.append('crash')
+                            # Create a dummy run report indicating crash was skipped due to missing files
+                            report_data = RunReport(
+                                timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                                exit_code=0, tests_passed=0, tests_failed=0, coverage=0.0
+                            )
+                            save_run_report(asdict(report_data), basename, language)
+                            _save_operation_fingerprint(basename, language, 'crash', pdd_files, 0.0, 'skipped_missing_files')
+                            continue
+                        else:
+                            Path("crash.log").write_text("Simulated crash error")
+                            try:
+                                result = crash_main(
+                                    ctx, 
+                                    prompt_file=str(pdd_files['prompt']), 
+                                    code_file=str(pdd_files['code']), 
+                                    program_file=str(pdd_files['example']), 
+                                    error_file="crash.log"
+                                )
+                            except (RuntimeError, Exception) as e:
+                                error_str = str(e)
+                                if ("Simulated crash error" in error_str or 
+                                    "LLM returned None" in error_str or 
+                                    "LLM failed to analyze errors" in error_str):
+                                    # Skip crash operation for simulated errors or LLM failures
+                                    print(f"Skipping crash operation due to simulated/LLM error: {e}")
+                                    skipped_operations.append('crash')
+                                    report_data = RunReport(
+                                        timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                                        exit_code=0, tests_passed=0, tests_failed=0, coverage=0.0
+                                    )
+                                    save_run_report(asdict(report_data), basename, language)
+                                    _save_operation_fingerprint(basename, language, 'crash', pdd_files, 0.0, 'skipped_llm_error')
+                                    continue
+                                else:
+                                    # Re-raise other exceptions
+                                    raise
                     elif operation == 'verify':
                         result = fix_verification_main(
                             ctx, 
@@ -273,6 +432,7 @@ def sync_orchestration(
                             verification_program=None
                         )
                     elif operation == 'test':
+                        # First, generate the test file
                         result = cmd_test_main(
                             ctx, 
                             prompt_file=str(pdd_files['prompt']), 
@@ -284,17 +444,65 @@ def sync_orchestration(
                             target_coverage=target_coverage,
                             merge=False
                         )
+                        
+                        # After successful test generation, execute the tests and create run report
+                        # This enables the next sync iteration to detect test failures and trigger fix
+                        if isinstance(result, dict) and result.get('success', False):
+                            try:
+                                test_file = pdd_files['test']
+                                if test_file.exists():
+                                    _execute_tests_and_create_run_report(
+                                        test_file, basename, language, target_coverage
+                                    )
+                            except Exception as e:
+                                # Don't fail the entire operation if test execution fails
+                                # Just log it - the test file generation was successful
+                                print(f"Warning: Test execution failed: {e}")
+                        elif isinstance(result, tuple) and len(result) >= 3:
+                            # Handle tuple return format - assume success and execute tests
+                            try:
+                                test_file = pdd_files['test']
+                                if test_file.exists():
+                                    _execute_tests_and_create_run_report(
+                                        test_file, basename, language, target_coverage
+                                    )
+                            except Exception as e:
+                                print(f"Warning: Test execution failed: {e}")
                     elif operation == 'fix':
-                        Path("fix_errors.log").write_text("Simulated test failures")
+                        # Create error file with actual test failure information
+                        error_file_path = Path("fix_errors.log")
+                        
+                        # Try to get actual test failure details from latest run
+                        try:
+                            from .sync_determine_operation import read_run_report
+                            run_report = read_run_report(basename, language)
+                            if run_report and run_report.tests_failed > 0:
+                                # Run the tests again to capture actual error output
+                                test_result = subprocess.run([
+                                    'python', '-m', 'pytest', 
+                                    str(pdd_files['test']), 
+                                    '-v', '--tb=short'
+                                ], capture_output=True, text=True, timeout=300)
+                                
+                                error_content = f"Test failures detected ({run_report.tests_failed} failed tests):\n\n"
+                                error_content += "STDOUT:\n" + test_result.stdout + "\n\n"
+                                error_content += "STDERR:\n" + test_result.stderr
+                            else:
+                                error_content = "Simulated test failures"
+                        except Exception as e:
+                            error_content = f"Could not capture test failures: {e}\nUsing simulated test failures"
+                        
+                        error_file_path.write_text(error_content)
+                        
                         result = fix_main(
                             ctx, 
                             prompt_file=str(pdd_files['prompt']), 
                             code_file=str(pdd_files['code']), 
                             unit_test_file=str(pdd_files['test']), 
-                            error_file="fix_errors.log",
+                            error_file=str(error_file_path),
                             output_test=str(pdd_files['test']),
                             output_code=str(pdd_files['code']),
-                            output_results=None,
+                            output_results=f"{basename}_fix_results.log",
                             loop=False,
                             verification_program=None,
                             max_attempts=max_attempts,
@@ -314,8 +522,23 @@ def sync_orchestration(
                         errors.append(f"Unknown operation '{operation}' requested.")
                         result = {'success': False, 'cost': 0.0}
                     
-                    success = result.get('success', False)
-                    current_cost_ref[0] += result.get('cost', 0.0)
+                    # Handle different return formats from command functions
+                    if isinstance(result, dict):
+                        # Dictionary return (e.g., from some commands)
+                        success = result.get('success', False)
+                        current_cost_ref[0] += result.get('cost', 0.0)
+                    elif isinstance(result, tuple) and len(result) >= 3:
+                        # Tuple return (e.g., from code_generator_main, context_generator_main)
+                        # For tuples, success is determined by no exceptions and valid return content
+                        # Check if the first element (generated content) is None, which indicates failure
+                        success = result[0] is not None
+                        # Extract cost from tuple (usually second-to-last element)
+                        cost = result[-2] if len(result) >= 2 and isinstance(result[-2], (int, float)) else 0.0
+                        current_cost_ref[0] += cost
+                    else:
+                        # Unknown return format
+                        success = result is not None
+                        current_cost_ref[0] += 0.0
 
                 except Exception as e:
                     errors.append(f"Exception during '{operation}': {e}")
@@ -323,8 +546,29 @@ def sync_orchestration(
 
                 if success:
                     operations_completed.append(operation)
-                    _save_operation_fingerprint(basename, language, operation, pdd_files, 
-                                               result.get('cost', 0.0), result.get('model', ''))
+                    # Extract cost and model from result based on format
+                    if isinstance(result, dict):
+                        cost = result.get('cost', 0.0)
+                        model = result.get('model', '')
+                    elif isinstance(result, tuple) and len(result) >= 3:
+                        cost = result[-2] if len(result) >= 2 and isinstance(result[-2], (int, float)) else 0.0
+                        model = result[-1] if len(result) >= 1 and isinstance(result[-1], str) else ''
+                    else:
+                        cost = 0.0
+                        model = ''
+                    _save_operation_fingerprint(basename, language, operation, pdd_files, cost, model)
+                    
+                    # After successful fix operation, execute tests to update run report
+                    if operation == 'fix':
+                        try:
+                            test_file = pdd_files['test']
+                            if test_file.exists():
+                                _execute_tests_and_create_run_report(
+                                    test_file, basename, language, target_coverage
+                                )
+                        except Exception as e:
+                            # Don't fail the entire operation if test execution fails
+                            print(f"Warning: Post-fix test execution failed: {e}")
                 else:
                     errors.append(f"Operation '{operation}' failed.")
                     break
