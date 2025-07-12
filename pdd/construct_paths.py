@@ -392,6 +392,7 @@ def construct_paths(
     pddrc_config = {}
     context = None
     context_config = {}
+    original_context_config = {}  # Keep track of original context config for sync discovery
     
     try:
         # Find and load .pddrc file
@@ -405,6 +406,7 @@ def construct_paths(
             
             # Get context-specific configuration
             context_config = _get_context_config(pddrc_config, context)
+            original_context_config = context_config.copy()  # Store original before modifications
             
             if not quiet and context:
                 console.print(f"[info]Using .pddrc context:[/info] {context}")
@@ -451,8 +453,30 @@ def construct_paths(
             )
             # Infer base directories from a sample output path
             gen_path = Path(output_paths_str.get("generate_output_path", "src"))
-            resolved_config["prompts_dir"] = str(gen_path.parent.parent / "prompts")
-            resolved_config["code_dir"] = str(gen_path.parent)
+            
+            # First, check current working directory for prompt files matching the basename pattern
+            current_dir = Path.cwd()
+            prompt_pattern = f"{basename}_*.prompt"
+            if list(current_dir.glob(prompt_pattern)):
+                # Found prompt files in current working directory
+                resolved_config["prompts_dir"] = str(current_dir)
+                resolved_config["code_dir"] = str(current_dir)
+                if not quiet:
+                    console.print(f"[info]Found prompt files in current directory:[/info] {current_dir}")
+            else:
+                # Fall back to context-aware logic
+                # Use original_context_config to avoid checking augmented config with env vars
+                if original_context_config and any(key.endswith('_output_path') for key in original_context_config):
+                    # For configured contexts, prompts are typically at the same level as output dirs
+                    # e.g., if code goes to "pdd/", prompts should be at "prompts/" (siblings)
+                    resolved_config["prompts_dir"] = "prompts"
+                    resolved_config["code_dir"] = str(gen_path.parent)
+                else:
+                    # For default contexts, maintain relative relationship 
+                    # e.g., if code goes to "pi.py", prompts should be at "prompts/" (siblings)
+                    resolved_config["prompts_dir"] = str(gen_path.parent / "prompts")
+                    resolved_config["code_dir"] = str(gen_path.parent)
+            
             resolved_config["tests_dir"] = str(Path(output_paths_str.get("test_output_path", "tests")).parent)
             resolved_config["examples_dir"] = str(Path(output_paths_str.get("example_output_path", "examples")).parent)
 
