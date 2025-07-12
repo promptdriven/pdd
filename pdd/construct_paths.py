@@ -451,7 +451,7 @@ def construct_paths(
             )
             # Infer base directories from a sample output path
             gen_path = Path(output_paths_str.get("generate_output_path", "src"))
-            resolved_config["prompts_dir"] = str(gen_path.parent.parent / "prompts")
+            resolved_config["prompts_dir"] = str(gen_path.parent / "prompts")
             resolved_config["code_dir"] = str(gen_path.parent)
             resolved_config["tests_dir"] = str(Path(output_paths_str.get("test_output_path", "tests")).parent)
             resolved_config["examples_dir"] = str(Path(output_paths_str.get("example_output_path", "examples")).parent)

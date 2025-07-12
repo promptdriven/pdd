@@ -784,6 +784,59 @@ def test_construct_paths_sync_discovery_mode(tmpdir):
     assert language == ""
 
 
+def test_construct_paths_sync_discovery_prompts_dir_bug_fix(tmpdir):
+    """
+    Test that the sync discovery mode correctly calculates prompts_dir path.
+    This is a regression test for the bug where prompts_dir was calculated as
+    gen_path.parent.parent / "prompts" instead of gen_path.parent / "prompts".
+    
+    Bug scenario: When generate_output_path is "/tmp/sync_test/pi.py", 
+    prompts_dir should be "/tmp/sync_test/prompts", not "/tmp/prompts".
+    """
+    input_file_paths = {}  # No inputs for sync discovery mode
+    force = False
+    quiet = True
+    command = 'sync'
+    command_options = {"basename": "pi"}
+    
+    # Simulate the exact scenario from the bug report
+    # Working directory: /tmp/sync_test
+    # Generated code path: /tmp/sync_test/pi.py
+    working_dir = Path("/tmp/sync_test")
+    generate_output_path = working_dir / "pi.py"
+    
+    mock_output_paths = {
+        "generate_output_path": str(generate_output_path),
+        "test_output_path": str(working_dir / "test_pi.py"),
+        "example_output_path": str(working_dir / "pi_example.py"),
+    }
+    
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths):
+        resolved_config, input_strings, output_file_paths, language = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+
+    # THE KEY TEST: prompts_dir should be relative to the working directory
+    expected_prompts_dir = working_dir / "prompts"
+    actual_prompts_dir = Path(resolved_config["prompts_dir"])
+    
+    # Before the fix: actual_prompts_dir would be Path("/tmp/prompts")  
+    # After the fix: actual_prompts_dir should be Path("/tmp/sync_test/prompts")
+    assert actual_prompts_dir == expected_prompts_dir, \
+        f"prompts_dir should be {expected_prompts_dir}, but got {actual_prompts_dir}. " \
+        f"This indicates the gen_path.parent.parent bug is still present."
+    
+    # Additional verification: prompts_dir should be a sibling of the code directory
+    code_dir = Path(resolved_config["code_dir"])
+    assert actual_prompts_dir.parent == code_dir, \
+        f"prompts_dir ({actual_prompts_dir}) should be inside code_dir ({code_dir})"
+    
+    # Verify other directories are calculated correctly relative to working directory
+    assert Path(resolved_config["code_dir"]) == working_dir
+    assert Path(resolved_config["tests_dir"]) == working_dir
+    assert Path(resolved_config["examples_dir"]) == working_dir
+
+
 def test_construct_paths_conflicting_language_specification(tmpdir):
     """
     Test that command options language overrides filename language.
