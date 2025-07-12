@@ -628,8 +628,12 @@ def construct_paths(
                 click.secho("Operation cancelled.", fg="red", err=True)
                 sys.exit(1) # Exit if user chooses not to overwrite
         except Exception as e: # Catch potential errors during confirm (like EOFError in non-interactive)
-             click.secho(f"Confirmation failed: {e}. Aborting.", fg="red", err=True)
-             sys.exit(1)
+            if 'EOF' in str(e) or 'end-of-file' in str(e).lower():
+                # Non-interactive environment, default to not overwriting
+                click.secho("Non-interactive environment detected. Use --force to overwrite existing files.", fg="yellow", err=True)
+            else:
+                click.secho(f"Confirmation failed: {e}. Aborting.", fg="red", err=True)
+            sys.exit(1)
 
 
     # ------------- Final reporting ---------------------------

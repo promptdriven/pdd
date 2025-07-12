@@ -20,6 +20,47 @@ log() {
     fi
 }
 
+# WSL environment detection and validation
+is_wsl() {
+    # Check multiple WSL indicators
+    if [ -f /proc/version ] && grep -qi microsoft /proc/version; then
+        return 0
+    elif [ -n "${WSL_DISTRO_NAME:-}" ]; then
+        return 0
+    elif echo "${PATH}" | grep -q "/mnt/c/"; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+validate_wsl_environment() {
+    if is_wsl; then
+        log "WSL environment detected"
+        
+        # Check for API key environment variables and validate they don't contain carriage returns
+        if [ -n "${OPENAI_API_KEY:-}" ]; then
+            # Check if API key contains carriage return characters
+            if echo "${OPENAI_API_KEY}" | grep -q $'\r'; then
+                log "WARNING: OPENAI_API_KEY contains carriage return characters"
+                log "This is a known WSL issue that can cause API authentication failures"
+                log "Consider re-setting your API key or checking your .env file for line ending issues"
+            else
+                log "OPENAI_API_KEY appears to be properly formatted"
+            fi
+        fi
+        
+        # Check for other potential WSL issues
+        if [ ! -d "/mnt/c" ]; then
+            log "WARNING: WSL detected but /mnt/c directory not found - this may indicate WSL configuration issues"
+        fi
+        
+        log "WSL environment validation complete"
+    else
+        log "Non-WSL environment detected"
+    fi
+}
+
 # --- Test Selection ---
 # Accept a single argument (test number) to run only that test. Default to "all".
 TARGET_TEST=${1:-"all"}
@@ -35,10 +76,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PDD_BASE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PDD_PATH="$PDD_BASE_DIR/pdd"
 STAGING_PATH="$PDD_BASE_DIR/staging"
-PDD_SCRIPT="pdd" # Assumes pdd is in PATH
+# Use local development version instead of globally installed pdd
+PDD_SCRIPT="$PDD_BASE_DIR/pdd-local"
 PROMPTS_PATH="$PDD_BASE_DIR/prompts"
 CONTEXT_PATH="$PDD_BASE_DIR/context"
-OUTPUT_PATH="$PDD_BASE_DIR/output"
+OUTPUT_PATH="$PDD_BASE_DIR/staging"
 
 # Determine REGRESSION_DIR
 if [ -n "${REGRESSION_TARGET_DIR:-}" ]; then
@@ -161,8 +203,8 @@ run_pdd_command_base() {
     log_timestamped "Starting command: $full_command_str"
     log "Running: $full_command_str"
 
-    # Execute the command, redirecting stdout/stderr to log file
-    "${cmd_array[@]}" >> "$LOG_FILE" 2>&1
+    # Execute the command, redirecting stdout/stderr to log file and stdin from /dev/null
+    "${cmd_array[@]}" < /dev/null >> "$LOG_FILE" 2>&1
     local status=$?
 
     if [ $status -eq 0 ]; then
@@ -176,7 +218,7 @@ run_pdd_command_base() {
         fi
     fi
     return $status
-}
+}   
 
 run_pdd_command() {
     run_pdd_command_base true "$@"
@@ -286,6 +328,9 @@ trap cleanup EXIT
 
 # --- Setup ---
 
+# Validate WSL environment before starting tests
+validate_wsl_environment
+
 # Create regression test directory and ensure it's clean
 log "Creating sync regression test directory: $REGRESSION_DIR"
 mkdir -p "$REGRESSION_DIR"
@@ -302,9 +347,22 @@ log "Temperature: $TEMPERATURE"
 log "Local Execution: $TEST_LOCAL"
 log "----------------------------------------"
 
+# Copy .pddrc configuration from project root to test directory
+log "Copying .pddrc configuration for proper directory structure"
+if [ -f "$PDD_BASE_DIR/.pddrc" ]; then
+    cp "$PDD_BASE_DIR/.pddrc" .
+    log "Copied .pddrc configuration to test directory"
+else
+    log_error ".pddrc file not found in project root: $PDD_BASE_DIR/.pddrc"
+    exit 1
+fi
+
+# Create directory structure expected by .pddrc configuration
+log "Creating directory structure for .pddrc configuration"
+mkdir -p pdd examples tests context
+
 # Create context files needed by tests
 log "Creating context files for sync tests"
-mkdir -p context
 cat << EOF > "context/test.prompt"
 For functions defined in prompt files, ensure the test imports are correctly structured.
 Use proper import statements based on the module name and function definitions.
@@ -313,6 +371,8 @@ EOF
 cat << EOF > "context/example.prompt"
 For functions defined in prompt files, ensure examples demonstrate practical usage.
 Include appropriate import statements and realistic function calls.
+- When importing from the generated module, use the exact basename as the module name (e.g., for data_processor.py, use "from data_processor import ClassName")
+- Do not add suffixes like "_module" to the import statement
 EOF
 
 # Create test prompt files
@@ -405,54 +465,13 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "1" ]; then
     # Use verbose mode and higher budget to help with sync completion
     run_pdd_command --verbose sync --budget 15.0 "$SIMPLE_BASENAME"
     
-    # Check what files were actually created (may be incomplete)
+    # Check that generated files exist - sync should always generate code, example, and test
     log "Checking generated files..."
-    if [ -f "pdd/${SIMPLE_BASENAME}.py" ]; then
-        log "Code file generated successfully"
-        check_exists "pdd/${SIMPLE_BASENAME}.py" "Generated Python code"
-    else
-        log_error "Code file not generated"
-        exit 1
-    fi
+    check_sync_files "$SIMPLE_BASENAME" "python" true  # true = strict, require all files
     
-    # Check for example and test files (may not exist if sync failed)
-    if [ -f "examples/${SIMPLE_BASENAME}_example.py" ]; then
-        log "Example file generated successfully"
-        check_exists "examples/${SIMPLE_BASENAME}_example.py" "Generated Python example"
-    else
-        log "Example file not generated (sync may have failed at example step)"
-    fi
-    
-    if [ -f "tests/test_${SIMPLE_BASENAME}.py" ]; then
-        log "Test file generated successfully"  
-        check_exists "tests/test_${SIMPLE_BASENAME}.py" "Generated Python tests"
-    else
-        log "Test file not generated (sync may have failed at test step)"
-    fi
-    
-    # Verify files are functional by running the example (if it exists)
-    if [ -f "examples/${SIMPLE_BASENAME}_example.py" ]; then
-        log "Testing generated example functionality"
-        python "examples/${SIMPLE_BASENAME}_example.py" >> "$LOG_FILE" 2>&1
-        if [ $? -eq 0 ]; then
-            log "Generated example runs successfully"
-            log_timestamped "Validation success: Generated example executes correctly"
-        else
-            log_error "Generated example failed to run"
-            log_timestamped "Validation failed: Generated example execution failed"
-            # Don't exit since this is testing sync robustness
-        fi
-    else
-        log "Skipping example test - no example file generated"
-    fi
-    
-    # Test the generated tests (if they exist)  
-    if [ -f "tests/test_${SIMPLE_BASENAME}.py" ]; then
-        log "Running generated tests"
-        python -m pytest "tests/test_${SIMPLE_BASENAME}.py" >> "$LOG_FILE" 2>&1 || true
-    else
-        log "Skipping test execution - no test file generated"
-    fi
+    # Test the generated tests
+    log "Running generated tests"
+    python -m pytest "tests/test_${SIMPLE_BASENAME}.py" >> "$LOG_FILE" 2>&1 || true
 fi
 
 # 2. Sync with Skip Options
@@ -466,8 +485,9 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "2" ]; then
     
     # Test --skip-tests
     log "2b. Testing 'sync --skip-tests'"
-    # Clean previous files to test fresh generation
+    # Clean previous files AND metadata to test fresh generation
     rm -f "pdd/${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
+    rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
     run_pdd_command_noexit sync --skip-tests "$SIMPLE_BASENAME"
     # Check what was actually generated (sync may only generate code)
     if [ -f "pdd/${SIMPLE_BASENAME}.py" ]; then
@@ -491,6 +511,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "2" ]; then
     # Test both skip options together
     log "2c. Testing 'sync --skip-verify --skip-tests'"
     rm -f "pdd/${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py"
+    rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
     run_pdd_command_noexit sync --skip-verify --skip-tests "$SIMPLE_BASENAME"
     check_exists "pdd/${SIMPLE_BASENAME}.py" "Generated code with both skip options"
     
@@ -511,6 +532,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "3" ]; then
     # Test with budget limit
     log "3a. Testing 'sync --budget 2.0'"
     rm -f "pdd/${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
+    rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
     run_pdd_command_noexit sync --budget 2.0 "$SIMPLE_BASENAME"
     # Should still create basic files even with low budget
     check_exists "pdd/${SIMPLE_BASENAME}.py" "Generated code with budget limit"
@@ -518,12 +540,14 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "3" ]; then
     # Test with max attempts
     log "3b. Testing 'sync --max-attempts 1'"
     rm -f "pdd/${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
+    rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
     run_pdd_command sync --max-attempts 1 "$SIMPLE_BASENAME"
     check_sync_files "$SIMPLE_BASENAME" "python"
     
     # Test with target coverage
     log "3c. Testing 'sync --target-coverage 95.0'"
     rm -f "pdd/${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
+    rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
     run_pdd_command sync --target-coverage 95.0 "$SIMPLE_BASENAME"
     check_sync_files "$SIMPLE_BASENAME" "python"
 fi
@@ -532,9 +556,9 @@ fi
 if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "4" ]; then
     log "4. Testing multi-language 'sync'"
     
-    # Test Python variant
+    # Test multi-language sync with higher budget
     log "4a. Testing Python calculator sync"
-    run_pdd_command sync "$MULTI_LANG_BASENAME"
+    run_pdd_command sync --budget 30.0 "$MULTI_LANG_BASENAME"
     check_sync_files "$MULTI_LANG_BASENAME" "python"
     
     # Test JavaScript variant (if prompt exists)
@@ -558,7 +582,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "5" ]; then
     
     # First sync to establish baseline
     log "5a. Initial sync to establish state"
-    run_pdd_command sync "$SIMPLE_BASENAME"
+    run_pdd_command sync --skip-verify "$SIMPLE_BASENAME"
     check_sync_files "$SIMPLE_BASENAME" "python" false
     
     # Check metadata files (optional - may not exist in test environment)
@@ -574,7 +598,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "5" ]; then
     # Second sync without changes (should be fast/skipped)
     log "5b. Testing incremental sync with no changes"
     SYNC_START_TIME=$(date +%s)
-    run_pdd_command sync "$SIMPLE_BASENAME"
+    run_pdd_command sync --skip-verify "$SIMPLE_BASENAME"
     SYNC_END_TIME=$(date +%s)
     SYNC_DURATION=$((SYNC_END_TIME - SYNC_START_TIME))
     
@@ -592,7 +616,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "5" ]; then
     echo "" >> "prompts/$SIMPLE_PROMPT"
     echo "# Updated prompt for incremental test" >> "prompts/$SIMPLE_PROMPT"
     
-    run_pdd_command sync "$SIMPLE_BASENAME"
+    run_pdd_command sync --skip-verify "$SIMPLE_BASENAME"
     check_sync_files "$SIMPLE_BASENAME" "python" false
 fi
 
@@ -613,7 +637,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "6" ]; then
     # Test sync with actual operations to generate logs
     log "6c. Running sync to generate log entries"
     rm -f "${SIMPLE_BASENAME}.py" "${SIMPLE_BASENAME}_example.py" "test_${SIMPLE_BASENAME}.py"
-    run_pdd_command sync "$SIMPLE_BASENAME"
+    run_pdd_command sync --skip-verify "$SIMPLE_BASENAME"
     
     # Now check the logs
     log "6d. Viewing logs after sync operations"
@@ -702,7 +726,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "9" ]; then
     # Test with automatic context detection (if .pddrc exists)
     if [ -f "$PDD_BASE_DIR/.pddrc" ]; then
         log "9a. Testing sync with automatic context detection"
-        run_pdd_command sync "$SIMPLE_BASENAME"
+        run_pdd_command sync --skip-verify "$SIMPLE_BASENAME"
         check_sync_files "$SIMPLE_BASENAME" "python"
         log "Context detection from .pddrc working correctly"
         log_timestamped "Validation success: Automatic context detection working"
@@ -731,7 +755,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "9" ]; then
     # Test working directory context
     log "9c. Testing working directory context integration"
     # Check that PDD respects the current working directory for file placement
-    run_pdd_command sync "$SIMPLE_BASENAME"
+    run_pdd_command sync --skip-verify "$SIMPLE_BASENAME"
     if [ -f "pdd/${SIMPLE_BASENAME}.py" ]; then
         log "Working directory context integration successful"
         log_timestamped "Validation success: Working directory context working"

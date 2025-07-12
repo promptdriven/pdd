@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/test_change_main.py::test_change_main_csv_output_dir_slash_saves_individual_files -xvs)",
+      "Bash(python3:*)",
+      "Bash(ls:*)",
+      "Bash(./pdd-local:*)",
+      "Bash(echo $PATH)",
+      "Bash(echo $PYTHONPATH)",
+      "Bash(pip show:*)",
+      "Bash(dos2unix:*)",
+      "Bash(sed:*)",
+      "Bash(echo $PDD_PATH)",
+      "Bash(pytest:*)",
+      "Bash(bash pdd-local --help)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(mkdir:*)",
+      "Bash(../pdd-local sync simple_test)",
+      "Bash(/mnt/c/Users/ryant/Desktop/pdd_cloud/pdd/pdd-local --force --output-cost sync_regression_cost.csv --strength 0.75 --temperature 0.0 sync - simple_math)",
+      "Bash(/mnt/c/Users/ryant/Desktop/pdd_cloud/pdd/pdd-local sync --help)",
+      "Bash(/mnt/c/Users/ryant/Desktop/pdd_cloud/pdd/pdd-local --force sync simple_math --budget 1.0 --max-attempts 1 --skip-verify --skip-tests)",
+      "Bash(/mnt/c/Users/ryant/Desktop/pdd_cloud/pdd/pdd-local --force --output-cost sync_regression_cost.csv --strength 0.75 --temperature 0.0 sync --skip-verify simple_math)",
+      "Bash(make sync-regression:*)"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "pdd"
+  ]
+}

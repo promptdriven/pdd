@@ -749,7 +749,7 @@ def test_change_main_csv_output_dir_slash_saves_individual_files(
     caplog.set_level('DEBUG')
     # Arrange
     monkeypatch.chdir(tmp_path)
-    output_dir_with_slash_str = str(tmp_path / "output/") # Path with slash
+    output_dir_with_slash_str = str(tmp_path / "output") + "/" # Path with slash
     output_dir_normalized = Path(str(tmp_path / "output")) # Normalized path
     input_csv_path = tmp_path / "changes.csv"
     csv_content = "prompt_name,change_instructions\nfile1.prompt,Change 1"

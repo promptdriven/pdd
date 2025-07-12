@@ -1,0 +1,16 @@
+#!/bin/bash
+# Wrapper script to run local development version of PDD
+
+# Get the directory this script is in
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export PYTHONPATH="$SCRIPT_DIR"
+
+# Try python3 first, then python
+if command -v python3 &> /dev/null; then
+    exec python3 -c "from pdd.cli import cli; cli()" "$@"
+elif command -v python &> /dev/null; then
+    exec python -c "from pdd.cli import cli; cli()" "$@"
+else
+    echo "Error: Neither python3 nor python found in PATH" >&2
+    exit 127
+fi

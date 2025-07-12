@@ -411,3 +411,48 @@ def test_output_locations_hyphen_key():
     assert result['output_code'] == abs_path_cwd(expected_code_default_name)
     assert result['output_results'] == abs_path_cwd(expected_results_default_name)
 
+
+def test_sync_orchestration_example_scenario():
+    """Test the exact scenario from sync orchestration with .pddrc context config."""
+    # Test case from test_path_resolution.py
+    basename = "factorial"
+    language = "python"
+    file_extension = ".py"
+    
+    # Context config from .pddrc pdd_cli context
+    context_config = {
+        'generate_output_path': 'pdd/',
+        'test_output_path': 'tests/',
+        'example_output_path': 'examples/',
+        'default_language': 'python',
+        'target_coverage': 90.0,
+        'strength': 0.9,
+        'temperature': 0.0,
+        'budget': 10.0,
+        'max_attempts': 3
+    }
+    
+    # This is the path that get_pdd_file_paths determined
+    user_output_path = os.path.join(os.getcwd(), "examples", "factorial_example.py")
+    
+    output_locations = {
+        'output': user_output_path
+    }
+    
+    result = generate_output_paths(
+        command='example',
+        output_locations=output_locations,
+        basename=basename,
+        language=language,
+        file_extension=file_extension,
+        context_config=context_config
+    )
+    
+    # The output should preserve the user-specified path since it's a valid file path
+    assert 'output' in result
+    assert result['output'] == os.path.abspath(user_output_path)
+    
+    # Test that directory detection works correctly
+    assert not user_output_path.endswith(os.path.sep), "Path should not end with separator"
+    # The path should be treated as a file, not a directory
+
