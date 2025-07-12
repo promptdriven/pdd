@@ -1,0 +1,68 @@
+# Benchmark Analysis Prompt
+
+## Objective
+Analyze and compare the performance of two AI coding assistants, PDD and Claude, based on benchmark data. The goal is to generate comprehensive visualizations and statistical comparisons to identify their respective strengths and weaknesses.
+
+## Input Data
+- The script should read two CSV files using their relative paths:
+  - `analysis/claude_results.csv`
+  - `analysis/PDD_results.csv`
+
+## Required Analysis
+
+### 1. Overall Performance Comparison
+1.  Calculate and compare the average execution time, API cost, and success rate for each tool across all tests.
+2.  Generate bar charts comparing these key metrics (average time, cost, and success rate) for PDD vs. Claude.
+3.  Determine the best overall tool using a weighted scoring system.
+    - **Score Formula**: `Overall Score = w_time * (1 - norm_time) + w_cost * (1 - norm_cost) + w_success * norm_success_rate`
+    - **Weights**: Use `w_time = 0.3`, `w_cost = 0.3`, and `w_success = 0.4`. Success is weighted highest as it's a primary indicator of utility.
+    - **Normalization**: Normalize time and cost using min-max scaling across both tools to a [0, 1] range. The success rate is already a [0, 1] metric. The `(1 - ...)` terms are used because lower is better for time and cost.'
+3.5 State that you are using the weighted scoring system and formula to determine the best overall tool.
+
+### 2. Dimension-Specific Analysis
+For each dimension (`file_size`, `language`, `edit_type`):
+1.  Compare the performance (execution time, API cost, success rate) of PDD and Claude for each value within the dimension (e.g., for `file_size`, compare performance on 'small', 'medium', and 'large' files).
+2.  Generate grouped bar charts to visualize how each tool's performance metrics change across the values of each dimension. For example, a chart showing execution time for both tools across different languages.
+
+### 3. Cost-Efficiency Analysis
+1.  Calculate and compare the "cost per successful task" for each tool. This is calculated as `total_api_cost / number_of_successful_tasks`.
+2.  Generate a scatter plot of `execution_time_seconds` vs. `api_cost` for each tool to visualize their relationship and identify any trade-offs. Color-code the points by tool.
+
+### 4. Success and Error Analysis
+1.  Compare success rates across all dimensions. `success` is `1` for success and `0` for failure.
+2.  Analyze the `error_message` column for failed tasks. Group the errors by tool and message to identify common failure patterns for each.
+3.  Calculate confidence intervals for the overall success rates of each tool.
+
+### 5. Statistical Significance
+1.  To determine if performance differences are statistically significant, perform the following tests:
+    - **For continuous metrics** (`execution_time_seconds`, `api_cost`): Use the **Mann-Whitney U test** to compare the distributions for PDD and Claude. This non-parametric test is suitable if the data is not normally distributed.
+    - **For the binary `success` metric**: Use the **Chi-squared test of independence** to determine if there is a significant association between the tool used and the success outcome.
+2.  For any significant differences found, calculate and report the effect size:
+    - **Mann-Whitney U**: Report the **rank-biserial correlation**.
+    - **Chi-squared test**: Report **Cramér's V**.
+3.  Create a summary table presenting the p-values, confidence intervals, and effect sizes from the statistical tests.
+
+### 6. Required Visualizations
+Generate and save the following visualizations comparing PDD and Claude:
+1.  **Overall Performance**: Bar charts for overall average execution time, API cost, and success rate.
+2.  **Success Rate by Edit Type**: Grouped bar chart showing success rates for different edit types.
+3.  **Performance by File Size**: Grouped bar charts showing success rate and efficiency (time and cost) across different file sizes ('small', 'medium', 'large').
+4.  **Performance by Language**: Grouped bar charts showing success rate and accuracy across different programming languages.
+5.  **Time vs. Cost**: A scatter plot of execution time vs. API cost for both tools.
+6.  **Cost Comparison**: Bar chart comparing the total API cost for running all benchmarks for each tool.
+
+## Output Format
+The script should produce two types of output:
+1.  **Image Files**: All charts generated during the analysis should be saved as PNG files.
+2.  **Markdown Report**: A final, comprehensive executive summary report named `benchmark_analysis.md`. This report should synthesize information from all generated graphs and statistical tests. It must include:
+    - A summary of overall performance (success rate, execution time, and API cost).
+    - A summary of dimension-specific performance (`file_size`, `language`, `edit_type`).
+    - A summary of the cost-efficiency analysis (total cost and cost per successful task).
+    - The overall "winner" based on the weighted scoring system.
+    - Key takeaways from the statistical significance tests (p-values and effect sizes).
+    - A final recommendation on which tool to use for different scenarios based on the analysis.
+
+3.  **Output Directory**: All generated outputs (markdown report, images) should be saved in a directory named `analysis/analysis_report`. The script should create this directory if it doesn't exist.
+
+## Analysis Code
+Use Python with `pandas` for data manipulation, `seaborn` and `matplotlib` for visualizations, and `scipy.stats` for statistical tests. Include all code used for the analysis.

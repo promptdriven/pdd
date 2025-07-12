@@ -1,0 +1,95 @@
+You are tasked with performing a detailed analysis comparing two CSV datasets: `claude_creation.csv` and `PDD_creation.csv`.
+
+The goal is to compare the performance and cost of a file creation task between two different approaches.
+
+## Input Data
+- CSV 1: <csv1> <include> analysis\claude_creation.csv </include> </csv1>
+- CSV 2: <csv2> <include> analysis\PDD_creation.csv </include> </csv2>
+
+### Dataset Details:
+
+* **`claude_creation.csv`** contains data from multiple runs of a creation task. Its columns are:
+
+  * `Total Cost` (format: "$X.Y" in USD)
+  * `API Duration` (format: "Xh Ym Z.Ws" or "Xm Y.Zs")
+  * `Wall Duration` (format: "Xh Ym Z.Ws" or "Xm Y.Zs")
+  * `Lines Added`
+  * `Lines Removed`
+
+* **`PDD_creation.csv`** contains aggregated data from a single run, broken down by module. Its columns are:
+  * `module` (string)
+  * `avg_time` (float, in seconds)
+  * `total_time` (float, in seconds)
+  * `avg_cost` (float, in USD)
+  * `total_cost` (float, in USD)
+
+### CSV Parsing Instructions:
+
+**IMPORTANT:** When loading the CSV files, use explicit parameters to ensure correct column parsing. You will also need to perform some data cleaning and conversion.
+
+```python
+import csv
+import pandas as pd
+
+# For loading claude_creation.csv
+df_claude = pd.read_csv('analysis/claude_creation.csv', sep=',', quoting=csv.QUOTE_MINIMAL)
+# Clean and convert claude data
+df_claude['total_cost'] = df_claude['total_cost'].replace({'\$': ''}, regex=True).astype(float)
+# You will need a function to convert duration strings to seconds for 'API Duration' and 'Wall Duration'
+
+# For loading PDD_creation.csv
+df_pdd = pd.read_csv('analysis/PDD_creation.csv', sep=',', quoting=csv.QUOTE_MINIMAL)
+
+# Verify data was loaded correctly by examining the first few rows
+print("Claude data preview:")
+print(df_claude.head())
+print("\nPDD data preview:")
+print(df_pdd.head())
+
+# Verify the columns were parsed properly
+print("\nClaude columns:", df_claude.columns.tolist())
+print("PDD columns:", df_pdd.columns.tolist())
+```
+
+Always check that the expected columns are present and contain the correct data types before proceeding with analysis.
+
+### Task Instructions:
+
+1. **Note on Data Formats**:
+   * Claude's `total_cost` is a string with a '$' prefix and needs to be converted to a float.
+   * Claude's `API Duration` and `Wall Duration` are strings (e.g., "Xh Ym Z.Ws") and must be converted to seconds for comparison.
+   * PDD's time (`avg_time`, `total_time`) and cost (`avg_cost`, `total_cost`) columns are already numeric (float) and in seconds and USD respectively.
+
+2. **Perform Comparative Analysis**:
+   Provide a thorough comparison of the two datasets based on these metrics:
+
+   * **Cost Analysis**:
+     * **Total Cost**: 
+       * For `claude_creation.csv`: Calculate the sum of the `total_cost` column to get the total cost across all runs.
+       * For `PDD_creation.csv`: Calculate the sum of the `total_cost` column to get the total cost for the entire process.
+     * **Average Cost**: 
+       * For `claude_creation.csv`: Calculate the average of the `total_cost` column (average cost per run).
+       * For `PDD_creation.csv`: The `avg_cost` per module is provided. You can analyze the distribution of `avg_cost` across modules. The overall average cost per module is the mean of the `avg_cost` column.
+
+   * **Time Analysis (Wall Duration)**:
+     * `PDD_creation.csv` does not have a direct equivalent for `API Duration`. Therefore, focus the time comparison on the total execution time (Wall time).
+     * For `claude_creation.csv`, use the `Wall Duration` column (after converting to seconds).
+     * For `PDD_creation.csv`, use the `total_time` column.
+     * **Total Time**: Compare the sum of `Wall Duration` from `claude_creation.csv` with the sum of `total_time` from `PDD_creation.csv`.
+     * **Per-unit Time comparison**:
+        * For `claude_creation.csv`, analyze the statistics (average, median, min, max) of `Wall Duration` per run.
+        * For `PDD_creation.csv`, analyze the statistics (average, median, min, max) of `total_time` per module.
+     * Discuss any observed discrepancies or performance differences.
+
+3. **Summary and Insights**:
+
+   * Summarize your findings clearly.
+   * Provide insights or recommendations based on your comparative analysis, focusing on performance, efficiency, and cost-effectiveness.
+   * Consider the fundamental difference in the data: Claude's data represents multiple independent runs, while PDD's is a breakdown of a single, possibly more complex, process. Your insights should reflect this.
+
+### Output Requirements:
+
+* Include calculated values explicitly in your analysis.
+* Present the findings clearly with visual aids (charts, tables) where appropriate.
+* Provide a concise summary at the end highlighting key differences and conclusions.
+* Save all generated images, tables, and analysis outputs to a folder called `creation_report`.
