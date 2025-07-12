@@ -1,3 +1,29 @@
+## v0.0.42 (2025-07-11)
+
+### Feat
+
+- add factorial function and test program
+- add GEMINI customization documentation and enhance construct_paths functionality
+- add .pddrc configuration file and enhance sync command behavior
+- add analysis and documentation for output paths and sync command
+- add sync_main module and example for PDD workflow
+- introduce sync orchestration module and example for PDD workflow
+
+### Fix
+
+- improve error handling in test program for divide function
+
+### Refactor
+
+- remove unused factorial function and test program
+- enhance sync operation decision-making and add regression testing
+- enhance context handling and directory resolution in sync_main
+- update construct_paths function to include resolved_config
+- streamline sync_orchestration logic and enhance context configuration
+- improve variable naming and streamline crash handling logic
+- remove get_extension.py and enhance sync command functionality
+- remove get_extension.py and enhance sync command functionality
+
 ## v0.0.41 (2025-06-18)
 
 ### Feat
