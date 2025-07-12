@@ -20,6 +20,16 @@ This project demonstrates a simple approach to creating a handpaint application 
 - Allow the site to use your camera
 - Start drawing!
 
+## Working with this PDD Example
+
+**If you want to test this example using PDD, use `pdd sync`:**
+
+1. Install PDD by following the instructions in the main [README.md](https://github.com/gltanaka/pdd/blob/main/README.md)
+2. Navigate to this directory (`examples/handpaint/pdd/`)
+3. Run: `pdd sync handpaint`
+
+This will automatically handle the complete PDD workflow including code generation, testing, verification, and any necessary error fixing based on the `handpaint_html.prompt` file.
+
 ## Usage
 
 1. To draw:
@@ -34,10 +44,12 @@ This project demonstrates a simple approach to creating a handpaint application 
 
 This is a learning example that shows a basic implementation of PDD concepts. For production use, consider exploring PDD's full capabilities including but not limited to:
 
+- **Using `pdd sync`** - The primary command that automatically handles the complete development workflow (dependency injection, code generation, testing, verification, and error fixing)
 - A more robust prompt that handles edge cases and errors
-- Using `pdd test` to generate comprehensive unit tests
-- Using `pdd fix` and `pdd crash` to debug and resolve issues automatically
-- Using `pdd update` to keep the prompt synchronized with any manual code changes
+- For advanced users who need granular control, individual commands are available:
+  - Using `pdd test` to generate comprehensive unit tests
+  - Using `pdd fix` and `pdd crash` to debug and resolve issues automatically
+  - Using `pdd update` to keep the prompt synchronized with any manual code changes
 
 ## PDD Prompt Evolution
 
@@ -47,7 +59,10 @@ To replicate this generation process:
 1.  Install PDD by following the instructions in the main [README.md](https://github.com/gltanaka/pdd/blob/main/README.md).
 2.  Create a new file named `handpaint_html.prompt`.
 3.  Paste the desired iteration of the prompt into that file.
-4.  Run `pdd generate --output handpaint_pdd.html handpaint_html.prompt` to generate the code.
+4.  **Recommended**: Run `pdd sync handpaint` to automatically handle the complete workflow (code generation, testing, verification, and error fixing).
+5.  **Alternative** (for manual control): Run `pdd generate --output handpaint_pdd.html handpaint_html.prompt` to generate only the code.
+
+The `sync` command is the primary PDD interface that intelligently determines what steps are needed and executes them automatically. Individual commands like `generate`, `test`, and `fix` are still available for users who prefer manual control over specific parts of the workflow.
 
 The evolution of the prompt through various iterations demonstrates how PDD can be refined to achieve better results.
 
