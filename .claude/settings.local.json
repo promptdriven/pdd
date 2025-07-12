@@ -21,7 +21,14 @@
       "Bash(/mnt/c/Users/ryant/Desktop/pdd_cloud/pdd/pdd-local sync --help)",
       "Bash(/mnt/c/Users/ryant/Desktop/pdd_cloud/pdd/pdd-local --force sync simple_math --budget 1.0 --max-attempts 1 --skip-verify --skip-tests)",
       "Bash(/mnt/c/Users/ryant/Desktop/pdd_cloud/pdd/pdd-local --force --output-cost sync_regression_cost.csv --strength 0.75 --temperature 0.0 sync --skip-verify simple_math)",
-      "Bash(make sync-regression:*)"
+      "Bash(make sync-regression:*)",
+      "Bash(python -m pytest tests/test_construct_paths.py::test_construct_paths_sync_discovery_prompts_dir_bug_fix -vv)",
+      "Bash(python -m pytest tests/test_construct_paths.py -v)",
+      "Bash(pylint:*)",
+      "Bash(cp:*)",
+      "Bash(python:*)",
+      "Bash(make:*)",
+      "Bash(bash:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
