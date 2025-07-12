@@ -413,9 +413,28 @@ release:
 	@cp ./README.md staging/public/pdd/README.md
 	@echo "Copying examples to public repo"
 	@cp -r ./examples staging/public/pdd/
-	@echo "Copying whitepaper to public repo"
-	@mkdir -p staging/public/pdd/docs/whitepaper_with_benchmarks
-	@cp "docs/whitepaper_with_benchmarks/whitepaper_w_benchmarks.md" staging/public/pdd/docs/whitepaper_with_benchmarks/whitepaper_w_benchmarks.md
+	@echo "Copying whitepaper and its assets to public repo"
+	@mkdir -p staging/public/pdd/docs/whitepaper_with_benchmarks/analysis_report
+	@mkdir -p staging/public/pdd/docs/whitepaper_with_benchmarks/creation_report
+	@cp "docs/whitepaper_with_benchmarks/whitepaper_w_benchmarks.md" staging/public/pdd/docs/whitepaper_with_benchmarks/
+	@cp \
+		docs/whitepaper_with_benchmarks/analysis_report/overall_success_rate.png \
+		docs/whitepaper_with_benchmarks/analysis_report/overall_avg_execution_time.png \
+		docs/whitepaper_with_benchmarks/analysis_report/overall_avg_api_cost.png \
+		docs/whitepaper_with_benchmarks/analysis_report/cost_per_successful_task.png \
+		docs/whitepaper_with_benchmarks/analysis_report/success_rate_by_file_size.png \
+		docs/whitepaper_with_benchmarks/analysis_report/avg_api_cost_by_file_size.png \
+		docs/whitepaper_with_benchmarks/analysis_report/avg_execution_time_by_file_size.png \
+		docs/whitepaper_with_benchmarks/analysis_report/success_rate_by_edit_type.png \
+		docs/whitepaper_with_benchmarks/analysis_report/avg_api_cost_by_edit_type.png \
+		docs/whitepaper_with_benchmarks/analysis_report/avg_execution_time_by_edit_type.png \
+		staging/public/pdd/docs/whitepaper_with_benchmarks/analysis_report/
+	@cp \
+		docs/whitepaper_with_benchmarks/creation_report/total_cost_comparison.png \
+		docs/whitepaper_with_benchmarks/creation_report/total_time_comparison.png \
+		docs/whitepaper_with_benchmarks/creation_report/pdd_avg_cost_per_module_dist.png \
+		docs/whitepaper_with_benchmarks/creation_report/claude_cost_per_run_dist.png \
+		staging/public/pdd/docs/whitepaper_with_benchmarks/creation_report/
 	@cd staging/public/pdd/ && git add . && git commit -m "Bump version" && git push
 	
 analysis:
