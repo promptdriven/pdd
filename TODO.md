@@ -57,6 +57,8 @@
 - [ ] have landing page that allows people to take their chat history and make it a proper one shot prompt
 - [ ] have landing page that allows people to take their code and give their prompt
 - [ ] do a design compiler like strategy where you can retarget code to a different language
+- [ ] create llm_agentic_invoke that will invoke the llm with the agentic mode (e.g. claude code)
+- [ ] Have this sync between development units
 
 ## Documentation
 - [ ] make readme accessible via cli/mcp server
