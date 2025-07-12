@@ -411,6 +411,8 @@ release:
 	@$(MAKE) build
 	@echo "Copying public README.md to project root"
 	@cp ./README.md staging/public/pdd/README.md
+	@echo "Copying examples to public repo"
+	@cp -r ./examples staging/public/pdd/
 	@cd staging/public/pdd/ && git add . && git commit -m "Bump version" && git push
 	
 analysis:
