@@ -786,55 +786,152 @@ def test_construct_paths_sync_discovery_mode(tmpdir):
 
 def test_construct_paths_sync_discovery_prompts_dir_bug_fix(tmpdir):
     """
-    Test that the sync discovery mode correctly calculates prompts_dir path.
-    This is a regression test for the bug where prompts_dir was calculated as
-    gen_path.parent.parent / "prompts" instead of gen_path.parent / "prompts".
+    Test that the sync discovery mode correctly calculates prompts_dir path
+    for both default context and configured context scenarios.
     
-    Bug scenario: When generate_output_path is "/tmp/sync_test/pi.py", 
-    prompts_dir should be "/tmp/sync_test/prompts", not "/tmp/prompts".
+    This is a regression test for the original bug where prompts_dir was 
+    calculated incorrectly, and ensures the new context-aware logic works correctly.
     """
     input_file_paths = {}  # No inputs for sync discovery mode
     force = False
     quiet = True
     command = 'sync'
-    command_options = {"basename": "pi"}
     
-    # Simulate the exact scenario from the bug report
-    # Working directory: /tmp/sync_test
-    # Generated code path: /tmp/sync_test/pi.py
+    # Test 1: Default context scenario (no .pddrc context config)
+    # This simulates the original user's scenario: /tmp/sync_test with pi.py
+    command_options = {"basename": "pi"}
     working_dir = Path("/tmp/sync_test")
     generate_output_path = working_dir / "pi.py"
     
-    mock_output_paths = {
+    mock_output_paths_default = {
         "generate_output_path": str(generate_output_path),
         "test_output_path": str(working_dir / "test_pi.py"),
         "example_output_path": str(working_dir / "pi_example.py"),
     }
     
-    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths):
+    # Mock no context config (default behavior) - also mock context detection
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_default), \
+         patch('pdd.construct_paths._get_context_config', return_value={}):
         resolved_config, input_strings, output_file_paths, language = construct_paths(
             input_file_paths, force, quiet, command, command_options
         )
-
-    # THE KEY TEST: prompts_dir should be relative to the working directory
+    
+    # For default context: prompts should be sibling to generated code
     expected_prompts_dir = working_dir / "prompts"
     actual_prompts_dir = Path(resolved_config["prompts_dir"])
     
-    # Before the fix: actual_prompts_dir would be Path("/tmp/prompts")  
-    # After the fix: actual_prompts_dir should be Path("/tmp/sync_test/prompts")
     assert actual_prompts_dir == expected_prompts_dir, \
-        f"prompts_dir should be {expected_prompts_dir}, but got {actual_prompts_dir}. " \
-        f"This indicates the gen_path.parent.parent bug is still present."
+        f"Default context: prompts_dir should be {expected_prompts_dir}, but got {actual_prompts_dir}"
     
-    # Additional verification: prompts_dir should be a sibling of the code directory
-    code_dir = Path(resolved_config["code_dir"])
-    assert actual_prompts_dir.parent == code_dir, \
-        f"prompts_dir ({actual_prompts_dir}) should be inside code_dir ({code_dir})"
+    assert Path(resolved_config["code_dir"]) == working_dir, \
+        f"Default context: code_dir should be {working_dir}"
+
+    # Test 2: Configured context scenario (with .pddrc context config)
+    # This simulates PDD project scenario with generate_output_path: "pdd/"
+    command_options_context = {"basename": "simple_math"}
+    working_dir_context = Path("/path/to/project")
+    generate_output_path_context = working_dir_context / "pdd" / "simple_math.py"
     
-    # Verify other directories are calculated correctly relative to working directory
-    assert Path(resolved_config["code_dir"]) == working_dir
-    assert Path(resolved_config["tests_dir"]) == working_dir
-    assert Path(resolved_config["examples_dir"]) == working_dir
+    mock_output_paths_context = {
+        "generate_output_path": str(generate_output_path_context),
+        "test_output_path": str(working_dir_context / "tests" / "test_simple_math.py"),
+        "example_output_path": str(working_dir_context / "examples" / "simple_math_example.py"),
+    }
+    
+    # Mock context config with output path configuration
+    mock_context_config = {"generate_output_path": "pdd/"}
+    
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_context), \
+         patch('pdd.construct_paths._get_context_config', return_value=mock_context_config):
+        
+        resolved_config_context, _, _, _ = construct_paths(
+            input_file_paths, force, quiet, command, command_options_context
+        )
+    
+    # For configured context: prompts should be at root level (sibling to pdd/)
+    expected_prompts_dir_context = "prompts"  # Relative path at root level
+    actual_prompts_dir_context = resolved_config_context["prompts_dir"]
+    
+    assert actual_prompts_dir_context == expected_prompts_dir_context, \
+        f"Configured context: prompts_dir should be '{expected_prompts_dir_context}', but got '{actual_prompts_dir_context}'"
+    
+    assert Path(resolved_config_context["code_dir"]) == working_dir_context / "pdd", \
+        f"Configured context: code_dir should be {working_dir_context / 'pdd'}"
+
+
+def test_construct_paths_sync_discovery_context_detection(tmpdir):
+    """
+    Test that sync discovery mode correctly detects and handles different context configurations.
+    This ensures the context_config detection logic works properly.
+    """
+    input_file_paths = {}
+    force = False
+    quiet = True
+    command = 'sync'
+    command_options = {"basename": "test"}
+    
+    # Test case 1: Empty context config (should use default logic)
+    mock_output_paths = {
+        "generate_output_path": "/some/path/test.py",
+        "test_output_path": "/some/path/test_test.py",
+        "example_output_path": "/some/path/test_example.py",
+    }
+    
+    empty_context = {}
+    
+    # Mock all context detection to ensure no .pddrc is found
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths), \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=None), \
+         patch('pdd.construct_paths._get_context_config', return_value=empty_context):
+        
+        resolved_config, _, _, _ = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+    
+    # With no .pddrc and empty context, should use default logic (relative to generated code)
+    assert resolved_config["prompts_dir"] == "/some/path/prompts"
+    
+    # Test case 2: Context with output_path config (should use context-aware logic)
+    context_with_output_path = {
+        "generate_output_path": "src/",
+        "test_output_path": "tests/",
+        "some_other_config": "value"
+    }
+    
+    # Mock finding .pddrc and getting context config with output paths
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths), \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=Path('/fake/.pddrc')), \
+         patch('pdd.construct_paths._load_pddrc_config', return_value={'contexts': {'test': context_with_output_path}}), \
+         patch('pdd.construct_paths._detect_context', return_value='test'), \
+         patch('pdd.construct_paths._get_context_config', return_value=context_with_output_path):
+        
+        resolved_config_context, _, _, _ = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+    
+    # With context config containing output paths, should use context-aware logic
+    assert resolved_config_context["prompts_dir"] == "prompts"
+    
+    # Test case 3: Context with non-output config (should use default logic)
+    context_without_output_path = {
+        "strength": 0.8,
+        "temperature": 0.1,
+        "some_setting": "value"
+    }
+    
+    # Mock finding .pddrc but context config has no output paths
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths), \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=Path('/fake/.pddrc')), \
+         patch('pdd.construct_paths._load_pddrc_config', return_value={'contexts': {'test': context_without_output_path}}), \
+         patch('pdd.construct_paths._detect_context', return_value='test'), \
+         patch('pdd.construct_paths._get_context_config', return_value=context_without_output_path):
+        
+        resolved_config_no_output, _, _, _ = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+    
+    # Without output path config, should use default logic
+    assert resolved_config_no_output["prompts_dir"] == "/some/path/prompts"
 
 
 def test_construct_paths_conflicting_language_specification(tmpdir):
