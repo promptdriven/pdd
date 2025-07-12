@@ -6,6 +6,12 @@ PDD (Prompt-Driven Development) is a versatile tool for generating code, creatin
 
 The primary command is **`sync`**, which automatically executes the complete PDD workflow loop with intelligent decision-making, real-time visual feedback, and sophisticated state management. It analyzes your project files, determines what operations are needed, and executes them with live progress animation while maintaining detailed logs of all decisions and changes. For most use cases, `sync` is the recommended starting point, as it intelligently determines what steps are needed and executes them in the correct order.
 
+## Whitepaper
+
+For a detailed explanation of the concepts, architecture, and benefits of Prompt-Driven Development, please refer to our full whitepaper. This document provides an in-depth look at the PDD philosophy, its advantages over traditional development, and includes benchmarks and case studies.
+
+[Read the Full Whitepaper with Benchmarks](./whitepaper/Whitepaper%20The%20Case%20for%20Prompt-Driven%20Development%20with%20Benchmarks.md)
+
 ## Installation
 
 ### Recommended Method: uv
