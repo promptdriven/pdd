@@ -28,7 +28,9 @@
       "Bash(cp:*)",
       "Bash(python:*)",
       "Bash(make:*)",
-      "Bash(bash:*)"
+      "Bash(bash:*)",
+      "Bash(pdd sync:*)",
+      "Bash(pdd:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
