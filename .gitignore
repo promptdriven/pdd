@@ -179,3 +179,7 @@ cython_debug/
 #.idea/
 
 .DS_Store
+
+# Ignore nested repositories
+edit-file-tool/
+
