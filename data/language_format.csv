@@ -31,6 +31,7 @@ Dart,//,.dart
 F#,//,.fs
 YAML,#,.yml
 JSON,del,.json
+JSONL,del,.jsonl
 XML,"<!-- -->",.xml
 Makefile,#,
 CSV,del,.csv
