@@ -92,7 +92,7 @@ def test_single_pass_success_no_issues(
         'fixed_code': 'Original code content',
         'total_cost': 0.1,
         'model_name': 'model-a',
-        'explanation': ['All good']
+        'explanation': None
     }
 
     output_code_path = mock_construct_paths_response[2]["output_code"]
@@ -153,7 +153,7 @@ def test_single_pass_success_with_fixes(
         'fixed_code': 'Fixed code content',
         'total_cost': 0.2,
         'model_name': 'model-b',
-        'explanation': ['Found issue', 'Applied fix']
+        'explanation': '<verification_details>Found issue</verification_details>\n<fix_explanation>Applied fix</fix_explanation>'
     }
 
     output_code_path = mock_construct_paths_response[2]["output_code"]
@@ -215,7 +215,7 @@ def test_single_pass_failure_no_fixes(
         'fixed_code': 'Original code content',
         'total_cost': 0.15,
         'model_name': 'model-c',
-        'explanation': ['Found issue', 'Could not fix']
+        'explanation': '<verification_details>Found issue</verification_details>\n<fix_explanation>Could not fix</fix_explanation>'
     }
 
     output_code_path = mock_construct_paths_response[2]["output_code"]
@@ -278,7 +278,7 @@ def test_single_pass_program_run_fails(
         'fixed_code': 'Original code content',
         'total_cost': 0.1,
         'model_name': 'model-a',
-        'explanation': ['Error in program run']
+        'explanation': '<verification_details>Error in program run</verification_details>\n<fix_explanation>No fix applied</fix_explanation>'
     }
 
     result = fix_verification_main(
@@ -451,7 +451,7 @@ def test_output_files_written_when_fixes_applied(
         'fixed_code': 'Partially fixed code content',
         'total_cost': 0.25,
         'model_name': 'model-partial',
-        'explanation': ['Found issues', 'Applied fixes']
+        'explanation': '<verification_details>Found issues</verification_details>\n<fix_explanation>Applied fixes</fix_explanation>'
     }
 
     output_code_path = mock_construct_paths_response[2]["output_code"]
@@ -544,7 +544,7 @@ def test_output_code_write_error(
         'verification_issues_count': 0,
         'fixed_program': 'Original program content',
         'fixed_code': 'Original code content',
-        'total_cost': 0.1, 'model_name': 'model-a', 'explanation': ['OK']
+        'total_cost': 0.1, 'model_name': 'model-a', 'explanation': None
     }
 
     output_code_path = mock_construct_paths_response[2]["output_code"]
@@ -601,7 +601,7 @@ def test_verbose_flag_propagation(
     mock_context.obj['verbose'] = True
     mock_construct.return_value = mock_construct_paths_response
     mock_run_prog.return_value = (True, "Output", "")
-    mock_fix_errors.return_value = { 'verification_issues_count': 0, 'fixed_program': 'p', 'fixed_code': 'c', 'total_cost': 0, 'model_name': 'm', 'explanation': [] }
+    mock_fix_errors.return_value = { 'verification_issues_count': 0, 'fixed_program': 'p', 'fixed_code': 'c', 'total_cost': 0, 'model_name': 'm', 'explanation': None }
     mock_fix_loop.return_value = { 'success': True, 'final_program': 'p', 'final_code': 'c', 'total_attempts': 1, 'total_cost': 0, 'model_name': 'm' }
 
     fix_verification_main(
@@ -661,7 +661,7 @@ def test_force_flag_retrieved_from_ctx_obj(
         'fixed_code': 'Fixed code',
         'total_cost': 0.3,
         'model_name': 'model-single',
-        'explanation': []
+        'explanation': None
     }
     mock_run_prog.return_value = (True, "Program output", "")
 
