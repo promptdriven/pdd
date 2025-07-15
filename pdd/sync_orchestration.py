@@ -10,6 +10,7 @@ import json
 import datetime
 import subprocess
 import re
+import os
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from dataclasses import asdict
@@ -47,6 +48,53 @@ def load_sync_log(basename: str, language: str) -> List[Dict[str, Any]]:
             return [json.loads(line) for line in f if line.strip()]
     except Exception:
         return []
+
+def create_sync_log_entry(decision, budget_remaining: float) -> Dict[str, Any]:
+    """Create initial log entry from decision with all fields (actual results set to None initially)."""
+    return {
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "operation": decision.operation,
+        "reason": decision.reason,
+        "decision_type": decision.details.get("decision_type", "heuristic") if decision.details else "heuristic",
+        "confidence": decision.confidence,
+        "estimated_cost": decision.estimated_cost,
+        "actual_cost": None,
+        "success": None,
+        "model": None,
+        "duration": None,
+        "error": None,
+        "details": {
+            **(decision.details if decision.details else {}),
+            "budget_remaining": budget_remaining
+        }
+    }
+
+def update_sync_log_entry(entry: Dict[str, Any], result: Dict[str, Any], duration: float) -> Dict[str, Any]:
+    """Update log entry with execution results (actual_cost, success, model, duration, error)."""
+    entry.update({
+        "actual_cost": result.get("cost", 0.0),
+        "success": result.get("success", False),
+        "model": result.get("model", "unknown"),
+        "duration": duration,
+        "error": result.get("error") if not result.get("success") else None
+    })
+    return entry
+
+def append_sync_log(basename: str, language: str, entry: Dict[str, Any]):
+    """Append completed log entry to the sync log file."""
+    log_file = META_DIR / f"{basename}_{language}_sync.log"
+    META_DIR.mkdir(parents=True, exist_ok=True)
+    with open(log_file, 'a') as f:
+        f.write(json.dumps(entry) + '\n')
+
+def log_sync_event(basename: str, language: str, event: str, details: Dict[str, Any] = None):
+    """Log a special sync event (lock_acquired, budget_warning, etc.)."""
+    entry = {
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "event": event,
+        "details": details or {}
+    }
+    append_sync_log(basename, language, entry)
 
 def save_run_report(report: Dict[str, Any], basename: str, language: str):
     """Save a run report to the metadata directory."""
@@ -171,13 +219,66 @@ def _display_sync_log(basename: str, language: str, verbose: bool = False) -> Di
 
     for entry in log_entries:
         timestamp = entry.get('timestamp', 'N/A')
-        decision = entry.get('decision', {})
-        operation = decision.get('operation', 'N/A')
-        reason = decision.get('reason', 'N/A')
-        print(f"[{timestamp}] Operation: {operation:<15} | Reason: {reason}")
-        if verbose and 'details' in decision and decision['details']:
-            details_str = json.dumps(decision['details'], indent=2)
-            print(f"  Details: {details_str}")
+        
+        # Handle special event entries
+        if 'event' in entry:
+            event = entry.get('event', 'N/A')
+            print(f"[{timestamp[:19]}] EVENT: {event}")
+            if verbose and 'details' in entry:
+                details_str = json.dumps(entry['details'], indent=2)
+                print(f"  Details: {details_str}")
+            continue
+        
+        # Handle operation entries
+        operation = entry.get('operation', 'N/A')
+        reason = entry.get('reason', 'N/A')
+        success = entry.get('success')
+        actual_cost = entry.get('actual_cost')
+        estimated_cost = entry.get('estimated_cost', 0.0)
+        duration = entry.get('duration')
+        
+        if verbose:
+            # Verbose format
+            print(f"[{timestamp[:19]}] {operation:<12} | {reason}")
+            decision_type = entry.get('decision_type', 'N/A')
+            confidence = entry.get('confidence', 'N/A')
+            model = entry.get('model', 'N/A')
+            budget_remaining = entry.get('details', {}).get('budget_remaining', 'N/A')
+            
+            print(f"  Decision Type: {decision_type} | Confidence: {confidence}")
+            if actual_cost is not None:
+                print(f"  Cost: ${actual_cost:.2f} (estimated: ${estimated_cost:.2f}) | Model: {model}")
+                if duration is not None:
+                    print(f"  Duration: {duration:.1f}s | Budget Remaining: ${budget_remaining}")
+            else:
+                print(f"  Estimated Cost: ${estimated_cost:.2f}")
+            
+            if 'details' in entry and entry['details']:
+                # Show details without budget_remaining to avoid clutter
+                details_copy = entry['details'].copy()
+                details_copy.pop('budget_remaining', None)
+                if details_copy:
+                    details_str = json.dumps(details_copy, indent=2)
+                    print(f"  Details: {details_str}")
+        else:
+            # Normal format: [timestamp] operation | reason | status cost | duration
+            status_icon = "✓" if success else "✗" if success is False else "?"
+            
+            cost_info = ""
+            if actual_cost is not None:
+                cost_info = f" | {status_icon} ${actual_cost:.2f} (est: ${estimated_cost:.2f})"
+            else:
+                cost_info = f" | Est: ${estimated_cost:.2f}"
+            
+            duration_info = ""
+            if duration is not None:
+                duration_info = f" | {duration:.1f}s"
+            
+            error_info = ""
+            if entry.get('error'):
+                error_info = f" | Error: {entry['error']}"
+            
+            print(f"[{timestamp[:19]}] {operation:<12} | {reason}{cost_info}{duration_info}{error_info}")
 
     print("--- End of Log ---")
     return {'success': True, 'log_entries': log_entries}
@@ -250,9 +351,16 @@ def sync_orchestration(
     errors: List[str] = []
     start_time = time.time()
     animation_thread = None
+    
+    # Track operation history for cycle detection
+    operation_history: List[str] = []
+    MAX_CYCLE_REPEATS = 2  # Maximum times to allow crash-verify cycle
 
     try:
         with SyncLock(basename, language):
+            # Log lock acquisition
+            log_sync_event(basename, language, "lock_acquired", {"pid": os.getpid()})
+            
             # --- Start Animation Thread ---
             animation_thread = threading.Thread(
                 target=sync_animation,
@@ -267,21 +375,80 @@ def sync_orchestration(
 
             # --- Main Workflow Loop ---
             while True:
+                budget_remaining = budget - current_cost_ref[0]
                 if current_cost_ref[0] >= budget:
                     errors.append(f"Budget of ${budget:.2f} exceeded.")
+                    log_sync_event(basename, language, "budget_exceeded", {
+                        "total_cost": current_cost_ref[0], 
+                        "budget": budget
+                    })
                     break
 
-                decision = sync_determine_operation(basename, language, target_coverage, budget - current_cost_ref[0], False, prompts_dir, skip_tests, skip_verify)
+                # Log budget warning when running low
+                if budget_remaining < budget * 0.2 and budget_remaining > 0:
+                    log_sync_event(basename, language, "budget_warning", {
+                        "remaining": budget_remaining,
+                        "percentage": (budget_remaining / budget) * 100
+                    })
+
+                decision = sync_determine_operation(basename, language, target_coverage, budget_remaining, False, prompts_dir, skip_tests, skip_verify)
                 operation = decision.operation
+                
+                # Create log entry with decision info
+                log_entry = create_sync_log_entry(decision, budget_remaining)
+                
+                # Track operation history
+                operation_history.append(operation)
+                
+                # Detect crash-verify cycles
+                if len(operation_history) >= 4:
+                    # Check for repeating crash-verify pattern
+                    recent_ops = operation_history[-4:]
+                    if (recent_ops == ['crash', 'verify', 'crash', 'verify'] or
+                        recent_ops == ['verify', 'crash', 'verify', 'crash']):
+                        # Count how many times this cycle has occurred
+                        cycle_count = 0
+                        for i in range(0, len(operation_history) - 1, 2):
+                            if i + 1 < len(operation_history):
+                                if ((operation_history[i] == 'crash' and operation_history[i+1] == 'verify') or
+                                    (operation_history[i] == 'verify' and operation_history[i+1] == 'crash')):
+                                    cycle_count += 1
+                        
+                        if cycle_count >= MAX_CYCLE_REPEATS:
+                            errors.append(f"Detected crash-verify cycle repeated {cycle_count} times. Breaking cycle.")
+                            errors.append("The example file may have syntax errors that couldn't be automatically fixed.")
+                            log_sync_event(basename, language, "cycle_detected", {
+                                "cycle_type": "crash-verify",
+                                "cycle_count": cycle_count,
+                                "operation_history": operation_history[-10:]  # Last 10 operations
+                            })
+                            break
 
                 if operation in ['all_synced', 'nothing', 'fail_and_request_manual_merge', 'error', 'analyze_conflict']:
                     current_function_name_ref[0] = "synced" if operation in ['all_synced', 'nothing'] else "conflict"
+                    
+                    # Log these final operations
+                    success = operation in ['all_synced', 'nothing']
+                    error_msg = None
                     if operation == 'fail_and_request_manual_merge':
                         errors.append(f"Manual merge required: {decision.reason}")
+                        error_msg = f"Manual merge required: {decision.reason}"
                     elif operation == 'error':
                         errors.append(f"Error determining operation: {decision.reason}")
+                        error_msg = f"Error determining operation: {decision.reason}"
                     elif operation == 'analyze_conflict':
                         errors.append(f"Conflict detected: {decision.reason}")
+                        error_msg = f"Conflict detected: {decision.reason}"
+                    
+                    # Update log entry for final operation
+                    update_sync_log_entry(log_entry, {
+                        'success': success,
+                        'cost': 0.0,
+                        'model': 'none',
+                        'error': error_msg
+                    }, 0.0)
+                    append_sync_log(basename, language, log_entry)
+                    
                     break
                 
                 # Handle skips
@@ -289,6 +456,17 @@ def sync_orchestration(
                     # Skip verification if explicitly requested OR if tests are skipped (can't verify without tests)
                     skipped_operations.append('verify')
                     skip_reason = 'skip_verify' if skip_verify else 'skip_tests_implies_skip_verify'
+                    
+                    # Update log entry for skipped operation
+                    update_sync_log_entry(log_entry, {
+                        'success': True,
+                        'cost': 0.0,
+                        'model': 'skipped',
+                        'error': None
+                    }, 0.0)
+                    log_entry['details']['skip_reason'] = skip_reason
+                    append_sync_log(basename, language, log_entry)
+                    
                     report_data = RunReport(
                         timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
                         exit_code=0, tests_passed=0, tests_failed=0, coverage=0.0
@@ -298,6 +476,17 @@ def sync_orchestration(
                     continue
                 if operation == 'test' and skip_tests:
                     skipped_operations.append('test')
+                    
+                    # Update log entry for skipped operation
+                    update_sync_log_entry(log_entry, {
+                        'success': True,
+                        'cost': 0.0,
+                        'model': 'skipped',
+                        'error': None
+                    }, 0.0)
+                    log_entry['details']['skip_reason'] = 'skip_tests'
+                    append_sync_log(basename, language, log_entry)
+                    
                     report_data = RunReport(
                         timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
                         exit_code=0, tests_passed=0, tests_failed=0, coverage=1.0
@@ -308,6 +497,17 @@ def sync_orchestration(
                 if operation == 'crash' and skip_tests:
                     # Skip crash operations when tests are skipped since crash fixes usually require test execution
                     skipped_operations.append('crash')
+                    
+                    # Update log entry for skipped operation
+                    update_sync_log_entry(log_entry, {
+                        'success': True,
+                        'cost': 0.0,
+                        'model': 'skipped',
+                        'error': None
+                    }, 0.0)
+                    log_entry['details']['skip_reason'] = 'skip_tests'
+                    append_sync_log(basename, language, log_entry)
+                    
                     # Create a dummy run report indicating crash was skipped
                     report_data = RunReport(
                         timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -327,6 +527,7 @@ def sync_orchestration(
                 
                 result = {}
                 success = False
+                start_time = time.time()  # Track execution time
 
                 # --- Execute Operation ---
                 try:
@@ -383,6 +584,18 @@ def sync_orchestration(
                             # Skip crash operation if required files are missing
                             print(f"Skipping crash operation - missing files: {[f.name for f in missing_files]}")
                             skipped_operations.append('crash')
+                            
+                            # Update log entry for skipped operation
+                            update_sync_log_entry(log_entry, {
+                                'success': True,
+                                'cost': 0.0,
+                                'model': 'skipped',
+                                'error': None
+                            }, 0.0)
+                            log_entry['details']['skip_reason'] = 'missing_files'
+                            log_entry['details']['missing_files'] = [f.name for f in missing_files]
+                            append_sync_log(basename, language, log_entry)
+                            
                             # Create a dummy run report indicating crash was skipped due to missing files
                             report_data = RunReport(
                                 timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -392,7 +605,66 @@ def sync_orchestration(
                             _save_operation_fingerprint(basename, language, 'crash', pdd_files, 0.0, 'skipped_missing_files')
                             continue
                         else:
-                            Path("crash.log").write_text("Simulated crash error")
+                            # Actually run the example program to get real errors
+                            crash_log_content = ""
+                            try:
+                                # Run the example program to capture actual errors
+                                example_result = subprocess.run(
+                                    ['python', str(pdd_files['example'])],
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=60,
+                                    env=os.environ.copy(),
+                                    cwd=str(pdd_files['example'].parent)
+                                )
+                                
+                                if example_result.returncode != 0:
+                                    # Capture actual error output
+                                    crash_log_content = f"Exit code: {example_result.returncode}\n\n"
+                                    if example_result.stdout:
+                                        crash_log_content += f"STDOUT:\n{example_result.stdout}\n\n"
+                                    if example_result.stderr:
+                                        crash_log_content += f"STDERR:\n{example_result.stderr}\n"
+                                    
+                                    # Check for syntax errors specifically
+                                    if "SyntaxError" in example_result.stderr:
+                                        crash_log_content = f"SYNTAX ERROR DETECTED:\n\n{crash_log_content}"
+                                else:
+                                    # Program ran successfully, no crash to fix
+                                    print("Example program ran successfully, skipping crash fix")
+                                    skipped_operations.append('crash')
+                                    
+                                    # Update log entry for skipped operation
+                                    update_sync_log_entry(log_entry, {
+                                        'success': True,
+                                        'cost': 0.0,
+                                        'model': 'skipped',
+                                        'error': None
+                                    }, time.time() - start_time)
+                                    log_entry['details']['skip_reason'] = 'no_crash'
+                                    append_sync_log(basename, language, log_entry)
+                                    
+                                    report_data = RunReport(
+                                        timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                                        exit_code=0, tests_passed=0, tests_failed=0, coverage=0.0
+                                    )
+                                    save_run_report(asdict(report_data), basename, language)
+                                    _save_operation_fingerprint(basename, language, 'crash', pdd_files, 0.0, 'no_crash')
+                                    continue
+                                    
+                            except subprocess.TimeoutExpired:
+                                crash_log_content = "Program execution timed out after 60 seconds\n"
+                                crash_log_content += "This may indicate an infinite loop or the program is waiting for input."
+                            except Exception as e:
+                                crash_log_content = f"Error running example program: {str(e)}\n"
+                                crash_log_content += f"Program path: {pdd_files['example']}"
+                            
+                            # Write actual error content or fallback
+                            if not crash_log_content:
+                                crash_log_content = "Unknown crash error - program failed but no error output captured"
+                            
+                            Path("crash.log").write_text(crash_log_content)
+                            
                             try:
                                 result = crash_main(
                                     ctx, 
@@ -403,12 +675,22 @@ def sync_orchestration(
                                 )
                             except (RuntimeError, Exception) as e:
                                 error_str = str(e)
-                                if ("Simulated crash error" in error_str or 
-                                    "LLM returned None" in error_str or 
+                                if ("LLM returned None" in error_str or 
                                     "LLM failed to analyze errors" in error_str):
-                                    # Skip crash operation for simulated errors or LLM failures
-                                    print(f"Skipping crash operation due to simulated/LLM error: {e}")
+                                    # Skip crash operation for LLM failures
+                                    print(f"Skipping crash operation due to LLM error: {e}")
                                     skipped_operations.append('crash')
+                                    
+                                    # Update log entry for skipped operation
+                                    update_sync_log_entry(log_entry, {
+                                        'success': False,
+                                        'cost': 0.0,
+                                        'model': 'skipped',
+                                        'error': f"LLM error: {str(e)}"
+                                    }, time.time() - start_time)
+                                    log_entry['details']['skip_reason'] = 'llm_error'
+                                    append_sync_log(basename, language, log_entry)
+                                    
                                     report_data = RunReport(
                                         timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
                                         exit_code=0, tests_passed=0, tests_failed=0, coverage=0.0
@@ -544,6 +826,33 @@ def sync_orchestration(
                     errors.append(f"Exception during '{operation}': {e}")
                     success = False
 
+                # Calculate execution duration
+                duration = time.time() - start_time
+
+                # Extract cost and model from result for logging
+                actual_cost = 0.0
+                model_name = "unknown"
+                error_message = None
+                
+                if success:
+                    if isinstance(result, dict):
+                        actual_cost = result.get('cost', 0.0)
+                        model_name = result.get('model', 'unknown')
+                    elif isinstance(result, tuple) and len(result) >= 3:
+                        actual_cost = result[-2] if len(result) >= 2 and isinstance(result[-2], (int, float)) else 0.0
+                        model_name = result[-1] if len(result) >= 1 and isinstance(result[-1], str) else 'unknown'
+                else:
+                    error_message = errors[-1] if errors else "Operation failed"
+
+                # Update and save log entry with execution results
+                update_sync_log_entry(log_entry, {
+                    'success': success,
+                    'cost': actual_cost,
+                    'model': model_name,
+                    'error': error_message
+                }, duration)
+                append_sync_log(basename, language, log_entry)
+
                 if success:
                     operations_completed.append(operation)
                     # Extract cost and model from result based on format
@@ -578,6 +887,16 @@ def sync_orchestration(
     except Exception as e:
         errors.append(f"An unexpected error occurred in the orchestrator: {e}")
     finally:
+        # Log lock release
+        try:
+            log_sync_event(basename, language, "lock_released", {
+                "pid": os.getpid(),
+                "total_operations": len(operations_completed) if 'operations_completed' in locals() else 0,
+                "total_cost": current_cost_ref[0] if 'current_cost_ref' in locals() else 0.0
+            })
+        except Exception:
+            pass  # Don't fail if logging fails
+            
         if stop_event:
             stop_event.set()
         if animation_thread and animation_thread.is_alive():
