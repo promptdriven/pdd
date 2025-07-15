@@ -883,20 +883,68 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
         
         if (paths['code'].exists() and paths['example'].exists() and 
             not skip_tests and not paths['test'].exists()):
-            return SyncDecision(
-                operation='test',
-                reason='Code and example exist but test missing - progress workflow',
-                confidence=0.85,
-                estimated_cost=estimate_operation_cost('test'),
-                details={
-                    'decision_type': 'heuristic',
-                    'code_path': str(paths['code']),
-                    'example_path': str(paths['example']),
-                    'code_exists': True,
-                    'example_exists': True,
-                    'test_exists': False
-                }
-            )
+            
+            # Check if example has been crash-tested and verified before allowing test generation
+            run_report = read_run_report(basename, language)
+            if not run_report:
+                # No run report exists - need to test the example first
+                return SyncDecision(
+                    operation='crash',
+                    reason='Example exists but needs runtime testing before test generation',
+                    confidence=0.85,
+                    estimated_cost=estimate_operation_cost('crash'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'code_path': str(paths['code']),
+                        'example_path': str(paths['example']),
+                        'no_run_report': True,
+                        'workflow_stage': 'crash_validation'
+                    }
+                )
+            elif run_report.exit_code != 0:
+                # Example crashed - fix it before proceeding
+                return SyncDecision(
+                    operation='crash',
+                    reason='Example crashes - fix runtime errors before test generation',
+                    confidence=0.90,
+                    estimated_cost=estimate_operation_cost('crash'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'exit_code': run_report.exit_code,
+                        'workflow_stage': 'crash_fix'
+                    }
+                )
+            elif fingerprint and fingerprint.command != 'verify' and not skip_verify:
+                # Example runs but hasn't been verified yet
+                return SyncDecision(
+                    operation='verify',
+                    reason='Example runs but needs verification before test generation',
+                    confidence=0.85,
+                    estimated_cost=estimate_operation_cost('verify'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'exit_code': run_report.exit_code,
+                        'last_command': fingerprint.command,
+                        'workflow_stage': 'verify_validation'
+                    }
+                )
+            else:
+                # Example runs and is verified (or verify is skipped) - now safe to generate tests
+                return SyncDecision(
+                    operation='test',
+                    reason='Example validated - ready for test generation',
+                    confidence=0.85,
+                    estimated_cost=estimate_operation_cost('test'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'code_path': str(paths['code']),
+                        'example_path': str(paths['example']),
+                        'code_exists': True,
+                        'example_exists': True,
+                        'test_exists': False,
+                        'workflow_stage': 'test_generation'
+                    }
+                )
         
         # Some files are missing but no changes detected
         if not paths['code'].exists():

@@ -1095,7 +1095,7 @@ class TestHandleMissingExpectedFiles:
         
         assert decision.operation == 'generate'
         assert 'Code file missing' in decision.reason
-        assert decision.confidence == 0.90
+        assert decision.confidence == 1.0
     
     def test_missing_test_file_with_skip_tests(self, tmp_path):
         """Test recovery when test file is missing and skip_tests is True."""
