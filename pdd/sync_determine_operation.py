@@ -713,34 +713,34 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
                 }
             )
         
+        # Check if we just completed a crash operation and need verification
+        if fingerprint and fingerprint.command == 'crash' and not skip_verify:
+            return SyncDecision(
+                operation='verify',
+                reason='Previous crash operation completed - verify example runs correctly',
+                confidence=0.90,
+                estimated_cost=estimate_operation_cost('verify'),
+                details={
+                    'decision_type': 'heuristic',
+                    'previous_command': 'crash',
+                    'current_exit_code': run_report.exit_code,
+                    'fingerprint_command': fingerprint.command
+                }
+            )
+        
         # Then check for runtime crashes (only if no test failures)
         if run_report.exit_code != 0:
-            # Check if this was from a crash fix that needs verification
-            if fingerprint and fingerprint.command == 'crash':
-                return SyncDecision(
-                    operation='verify',
-                    reason='Previous crash was fixed - verify example runs correctly',
-                    confidence=0.90,
-                    estimated_cost=estimate_operation_cost('verify'),
-                    details={
-                        'decision_type': 'heuristic',
-                        'previous_command': 'crash',
-                        'previous_exit_code': run_report.exit_code,
-                        'fingerprint_command': fingerprint.command
-                    }
-                )
-            else:
-                return SyncDecision(
-                    operation='crash',
-                    reason='Runtime error detected in last run',
-                    confidence=0.95,
-                    estimated_cost=estimate_operation_cost('crash'),
-                    details={
-                        'decision_type': 'heuristic',
-                        'exit_code': run_report.exit_code,
-                        'timestamp': run_report.timestamp
-                    }
-                )
+            return SyncDecision(
+                operation='crash',
+                reason='Runtime error detected in last run',
+                confidence=0.95,
+                estimated_cost=estimate_operation_cost('crash'),
+                details={
+                    'decision_type': 'heuristic',
+                    'exit_code': run_report.exit_code,
+                    'timestamp': run_report.timestamp
+                }
+            )
         
         if run_report.coverage < target_coverage:
             if skip_tests:
