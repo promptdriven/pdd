@@ -48,7 +48,7 @@ def run_program(program_path: str, args: List[str] = []) -> Tuple[bool, str, str
         # A more robust solution might use the 'language' from construct_paths
         interpreter = []
         if program_path.endswith(".py"):
-            interpreter = [sys.executable] # Use the current Python interpreter
+            interpreter = ["python"] # Use python from PATH instead of sys.executable
         elif program_path.endswith(".js"):
             interpreter = ["node"]
         elif program_path.endswith(".sh"):
@@ -57,13 +57,21 @@ def run_program(program_path: str, args: List[str] = []) -> Tuple[bool, str, str
 
         command = interpreter + [program_path] + args
         rich_print(f"[dim]Running command:[/dim] {' '.join(command)}")
+        rich_print(f"[dim]Working directory:[/dim] {os.path.dirname(program_path) if program_path else 'None'}")
+        rich_print(f"[dim]Environment PYTHONPATH:[/dim] {os.environ.get('PYTHONPATH', 'Not set')}")
 
+        # Create a copy of environment with PYTHONUNBUFFERED set
+        env = os.environ.copy()
+        env['PYTHONUNBUFFERED'] = '1'  # Force unbuffered output
+        
         process = subprocess.run(
             command,
             capture_output=True,
             text=True,
             check=False, # Don't raise exception on non-zero exit code
-            timeout=60 # Add a timeout to prevent hangs
+            timeout=60, # Add a timeout to prevent hangs
+            env=env, # Pass modified environment variables
+            cwd=os.path.dirname(program_path) if program_path else None # Set working directory
         )
 
         success = process.returncode == 0
@@ -71,11 +79,17 @@ def run_program(program_path: str, args: List[str] = []) -> Tuple[bool, str, str
         stderr = process.stderr
 
         if not success:
-             rich_print(f"[yellow]Warning:[/yellow] Program '{os.path.basename(program_path)}' exited with code {process.returncode}.")
-             if stderr:
-                 rich_print("[yellow]Stderr:[/yellow]")
-                 rich_print(Panel(stderr, border_style="yellow"))
-
+            rich_print(f"[yellow]Warning:[/yellow] Program '{os.path.basename(program_path)}' exited with code {process.returncode}.")
+            
+            # Check for syntax errors specifically
+            if "SyntaxError" in stderr:
+                rich_print("[bold red]Syntax Error Detected:[/bold red]")
+                rich_print(Panel(stderr, border_style="red", title="Python Syntax Error"))
+                # Return with special indicator for syntax errors
+                return False, stdout, f"SYNTAX_ERROR: {stderr}"
+            elif stderr:
+                rich_print("[yellow]Stderr:[/yellow]")
+                rich_print(Panel(stderr, border_style="yellow"))
 
         return success, stdout, stderr
 
@@ -354,7 +368,13 @@ def fix_verification_main(
             results_log_content += f"Model Used: {model_name}\n"
             results_log_content += f"Total Cost: ${total_cost:.6f}\n"
             results_log_content += "\n--- LLM Explanation ---\n"
-            results_log_content += "\n".join(fix_results.get('explanation', ['N/A']))
+            # The original code here was:
+            # results_log_content += "\n".join(fix_results.get('explanation', ['N/A']))
+            # This was incorrect because fix_results['explanation'] is a single string.
+            # The list constructor would then iterate through it character-by-character,
+            # causing the single-character-per-line output.
+            # The fix is to just append the string directly, using a default value if it is None.
+            results_log_content += fix_results.get('explanation') or 'N/A'
             results_log_content += "\n\n--- Program Output Used for Verification ---\n"
             results_log_content += program_output
 

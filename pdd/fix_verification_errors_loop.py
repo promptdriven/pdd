@@ -60,8 +60,15 @@ def _run_program(
             text=True,
             timeout=timeout,
             check=False,  # Don't raise exception for non-zero exit codes
+            env=os.environ.copy(),  # Pass current environment variables
+            cwd=program_path.parent  # Set working directory to program's directory
         )
         combined_output = result.stdout + result.stderr
+        
+        # Check for syntax errors
+        if result.returncode != 0 and "SyntaxError" in result.stderr:
+            return result.returncode, f"SYNTAX_ERROR: {combined_output}"
+        
         return result.returncode, combined_output
     except FileNotFoundError:
         return -1, f"Error: Python interpreter not found or '{program_path}' not found."
