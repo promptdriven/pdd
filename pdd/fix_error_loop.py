@@ -12,6 +12,7 @@ from rich.console import Console
 # Relative import from an internal module.
 from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
 from . import DEFAULT_TIME # Import DEFAULT_TIME
+from .python_env_detector import detect_host_python_executable
 
 console = Console()
 
@@ -26,7 +27,9 @@ def run_pytest_on_file(test_file: str) -> tuple[int, int, int, str]:
     """
     try:
         # Include "--json-only" to ensure only valid JSON is printed.
-        cmd = [sys.executable, "-m", "pdd.pytest_output", "--json-only", test_file]
+        # Use environment-aware Python executable for pytest execution
+        python_executable = detect_host_python_executable()
+        cmd = [python_executable, "-m", "pdd.pytest_output", "--json-only", test_file]
         result = subprocess.run(cmd, capture_output=True, text=True)
         
         # Parse the JSON output from stdout
@@ -380,7 +383,7 @@ def fix_error_loop(unit_test_file: str,
 
             # Run the verification:
             try:
-                verify_cmd = [sys.executable, verification_program]
+                verify_cmd = [detect_host_python_executable(), verification_program]
                 verify_result = subprocess.run(verify_cmd, capture_output=True, text=True)
                 # Safely handle None for stdout or stderr:
                 verify_stdout = verify_result.stdout or ""

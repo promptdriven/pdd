@@ -36,6 +36,7 @@ from .fix_verification_main import fix_verification_main
 from .cmd_test_main import cmd_test_main
 from .fix_main import fix_main
 from .update_main import update_main
+from .python_env_detector import detect_host_python_executable
 
 # --- Mock Helper Functions ---
 
@@ -138,8 +139,10 @@ def _execute_tests_and_create_run_report(test_file: Path, basename: str, languag
         module_name = test_file.name.replace('test_', '').replace('.py', '')
         
         # Use the module import path rather than file path for coverage
+        # Use environment-aware Python executable for pytest execution
+        python_executable = detect_host_python_executable()
         result = subprocess.run([
-            'python', '-m', 'pytest', 
+            python_executable, '-m', 'pytest', 
             str(test_file), 
             '-v', 
             '--tb=short',
@@ -775,8 +778,10 @@ def sync_orchestration(
                             run_report = read_run_report(basename, language)
                             if run_report and run_report.tests_failed > 0:
                                 # Run the tests again to capture actual error output
+                                # Use environment-aware Python executable for pytest execution
+                                python_executable = detect_host_python_executable()
                                 test_result = subprocess.run([
-                                    'python', '-m', 'pytest', 
+                                    python_executable, '-m', 'pytest', 
                                     str(pdd_files['test']), 
                                     '-v', '--tb=short'
                                 ], capture_output=True, text=True, timeout=300)
