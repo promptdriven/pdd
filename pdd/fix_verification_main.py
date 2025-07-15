@@ -17,6 +17,7 @@ from .fix_verification_errors import fix_verification_errors
 from .fix_verification_errors_loop import fix_verification_errors_loop
 # Import DEFAULT_STRENGTH from the main package
 from . import DEFAULT_STRENGTH, DEFAULT_TIME
+from .python_env_detector import detect_host_python_executable
 
 # Default values from the README
 DEFAULT_TEMPERATURE = 0.0
@@ -48,7 +49,7 @@ def run_program(program_path: str, args: List[str] = []) -> Tuple[bool, str, str
         # A more robust solution might use the 'language' from construct_paths
         interpreter = []
         if program_path.endswith(".py"):
-            interpreter = ["python"] # Use python from PATH instead of sys.executable
+            interpreter = [detect_host_python_executable()] # Use environment-aware Python executable
         elif program_path.endswith(".js"):
             interpreter = ["node"]
         elif program_path.endswith(".sh"):
