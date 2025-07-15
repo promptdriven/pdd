@@ -59,20 +59,20 @@ def detect_host_python_executable() -> str:
                 return str(conda_python)
             
             # Windows
-            conda_python = Path(conda_prefix) / f'{python_name}.exe'
+            conda_python = Path(conda_prefix) / python_name + '.exe'
             if conda_python.is_file():
                 return str(conda_python)
     
     # Use PATH resolution as fallback (respects shell's PATH modifications)
     which_python = shutil.which('python')
-    if which_python and Path(which_python).resolve() != Path(sys.executable).resolve():
+    if which_python and which_python != sys.executable:
         # Only use if it's different from the current sys.executable
         # This helps detect when we're in a different environment
         return which_python
     
     # Try python3 as well
     which_python3 = shutil.which('python3')
-    if which_python3 and Path(which_python3).resolve() != Path(sys.executable).resolve():
+    if which_python3 and which_python3 != sys.executable:
         return which_python3
     
     # Final fallback to current executable

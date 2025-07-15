@@ -2,6 +2,7 @@ import os
 import shutil
 import subprocess
 import datetime
+import sys
 from pathlib import Path
 from typing import Dict, Tuple, Any, Optional
 from xml.sax.saxutils import escape
@@ -25,6 +26,7 @@ except ImportError:
         )
 
 from . import DEFAULT_TIME # Import DEFAULT_TIME
+from .python_env_detector import detect_host_python_executable
 
 # Initialize Rich Console for pretty printing
 console = Console()
@@ -49,7 +51,7 @@ def _run_program(
     if not program_path.is_file():
         return -1, f"Error: Program file not found at {program_path}"
 
-    command = ["python", str(program_path)]
+    command = [detect_host_python_executable(), str(program_path)]
     if args:
         command.extend(args)
 
