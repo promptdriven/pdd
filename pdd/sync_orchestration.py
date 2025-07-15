@@ -683,7 +683,10 @@ def sync_orchestration(
                                     program_file=str(pdd_files['example']), 
                                     error_file="crash.log",
                                     output=str(pdd_files['code']),
-                                    output_program=str(pdd_files['example'])
+                                    output_program=str(pdd_files['example']),
+                                    loop=True,
+                                    max_attempts=max_attempts,
+                                    budget=budget - current_cost_ref[0]
                                 )
                             except (RuntimeError, Exception) as e:
                                 error_str = str(e)
@@ -719,11 +722,12 @@ def sync_orchestration(
                             prompt_file=str(pdd_files['prompt']), 
                             code_file=str(pdd_files['code']), 
                             program_file=str(pdd_files['example']),
-                            output_results=None,
+                            output_results=f"{basename}_verify_results.log",
                             output_code=str(pdd_files['code']),
                             output_program=str(pdd_files['example']),
-                            loop=False,
-                            verification_program=None
+                            loop=True,
+                            max_attempts=max_attempts,
+                            budget=budget - current_cost_ref[0]
                         )
                     elif operation == 'test':
                         # First, generate the test file
@@ -796,11 +800,11 @@ def sync_orchestration(
                             output_test=str(pdd_files['test']),
                             output_code=str(pdd_files['code']),
                             output_results=f"{basename}_fix_results.log",
-                            loop=False,
-                            verification_program=None,
+                            loop=True,
+                            verification_program=str(pdd_files['example']),
                             max_attempts=max_attempts,
                             budget=budget - current_cost_ref[0],
-                            auto_submit=False
+                            auto_submit=True
                         )
                     elif operation == 'update':
                         result = update_main(
