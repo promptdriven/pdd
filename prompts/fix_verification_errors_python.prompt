@@ -42,37 +42,51 @@
     Step 0. Define two Pydantic models at the beginning of the function:
         - `VerificationOutput` with fields: `issues_count: int` and `details: Optional[str]`.
         - `FixerOutput` with fields: `explanation: str`, `fixed_code: str`, and `fixed_program: str`.
-    Step 1. Load the 'find_verification_errors_LLM' and 'fix_verification_errors_LLM' prompt templates.
-    Step 2. Run the code through the model using llm_invoke with the provided strength, temperature, and time to identify issues.
-        2a. Pass the following string parameters to the 'find_verification_errors_LLM' prompt during invoke:
+    Step 1. Validate inputs and parameters:
+        1a. Check that all required inputs (program, prompt, code) are provided and non-empty.
+        1b. Validate that strength parameter is between 0.0 and 1.0.
+        1c. If validation fails, return appropriate error response with default values.
+    Step 3. Run the code through the model using llm_invoke with the provided strength, temperature, and time to identify issues.
+        3a. Pass the following string parameters to the 'find_verification_errors_LLM' prompt during invoke:
             - 'program'
             - 'prompt'
             - 'code'
             - 'output'
-        2b. Crucially, pass the `VerificationOutput` Pydantic model to the `output_pydantic` parameter of `llm_invoke`.
-        2c. If verbose is True, pretty print a message letting the user know it is running and how many tokens are in the prompt and the cost.
-    Step 3. If verbose is True, pretty print the structured result (which will be a `VerificationOutput` object or an error indication from `llm_invoke`).
-    Step 4. Analyze the verification result object (an instance of `VerificationOutput` if successful) from `llm_invoke`.
-        4a. Get `verification_issues_count` from the `issues_count` field of the parsed `VerificationOutput` object.
-        4b. If `verification_issues_count` is 0, set issues_found to False and return with 'explanation' as None, fixed_program (original program), fixed_code (original code), and `verification_issues_count`.
-        4c. If `verification_issues_count` is greater than 0, set issues_found to True. Get `verification_details` from the `details` field of the parsed `VerificationOutput` object. Proceed to Step 5, passing `verification_details` as the 'issues' parameter.
-        4d. Handle cases where the `result` from `llm_invoke` is not a `VerificationOutput` instance (e.g., due to parsing failure by `llm_invoke`), print an error, and return default values.
-    Step 5. Only if issues_found, run a second llm_invoke with the 'fix_verification_errors_LLM' prompt, using the provided strength, temperature, and time, to generate fixes.
-        5a. Pass the following string parameters to the prompt during invoke:
+        3b. Crucially, pass the `VerificationOutput` Pydantic model to the `output_pydantic` parameter of `llm_invoke`.
+        3c. If verbose is True, pretty print a message letting the user know it is running and how many tokens are in the prompt and the cost.
+    Step 4. If verbose is True, pretty print the structured result (which will be a `VerificationOutput` object or an error indication from `llm_invoke`).
+    Step 5. Analyze the verification result object from `llm_invoke` with fallback parsing:
+        5a. If the result is a `VerificationOutput` instance, extract `verification_issues_count` from the `issues_count` field and `verification_details` from the `details` field.
+        5b. If the result is a string, use regex to parse XML tags: extract integer from `<issues_count>` and text from `<details>`.
+        5c. If `verification_issues_count` is 0, set issues_found to False and return with 'explanation' as None, fixed_program (original program), fixed_code (original code), and `verification_issues_count`.
+        5d. If `verification_issues_count` is greater than 0 but `verification_details` is empty or missing, treat as no actionable issues (set issues_found to False, verification_issues_count to 0).
+        5e. If `verification_issues_count` is greater than 0 and `verification_details` exists, set issues_found to True and proceed to Step 6.
+        5f. Handle cases where neither Pydantic parsing nor string parsing succeeds, print an error, and return default values.
+    Step 6. Only if issues_found, run a second llm_invoke with the 'fix_verification_errors_LLM' prompt, using the provided strength, temperature, and time, to generate fixes.
+        6a. Pass the following string parameters to the prompt during invoke:
             - 'program': The original program
             - 'prompt': The original prompt
             - 'code': The original code module
             - 'output': The original output
-            - 'issues': The `verification_details` obtained in Step 4c.
-        5b. Crucially, pass the `FixerOutput` Pydantic model to the `output_pydantic` parameter of `llm_invoke`.
-        5c. If verbose is True, pretty print a message letting the user know it is running and how many tokens are in the prompt and the cost.
-    Step 6. Process the result object (an instance of `FixerOutput` if successful) from the fix generation `llm_invoke` call.
-        6a. Extract `fixed_program` from the `fixed_program` field.
-        6b. Extract `fixed_code` from the `fixed_code` field.
-        6c. Extract `fix_explanation` from the `explanation` field.
-        6d. Handle cases where the `result` from `llm_invoke` is not a `FixerOutput` instance, print an error, and use original program/code and a default error explanation.
-    Step 7. If verbose is True, print the total cost of the run(s).
-    Step 8. Remove this step. The function should NOT call `edit_file`. It should return the `fixed_program` and `fixed_code` strings for the caller to handle.
-    Step 9. Construct the final `explanation` string by combining the stored `verification_details` (from `VerificationOutput.details`) and `fix_explanation` (from `FixerOutput.explanation`) using XML tags: `<verification_details>{verification_details}</verification_details>\n<fix_explanation>{fix_explanation}</fix_explanation>`. Return the final `explanation`, `fixed_program` string, `fixed_code` string, `total_cost`, `model_name`, and the stored `verification_issues_count`.
+            - 'issues': The `verification_details` obtained in Step 5.
+        6b. Crucially, pass the `FixerOutput` Pydantic model to the `output_pydantic` parameter of `llm_invoke`.
+        6c. If verbose is True, pretty print a message letting the user know it is running and how many tokens are in the prompt and the cost.
+    Step 7. Process the result object from the fix generation `llm_invoke` call with fallback parsing:
+        7a. If the result is a `FixerOutput` instance, extract `fixed_program`, `fixed_code`, and `fix_explanation` from the respective fields.
+        7b. If the result is a string, use regex to parse XML tags: extract content from `<fixed_program>`, `<fixed_code>`, and `<explanation>`.
+        7c. For both parsing methods, unescape literal `\n` strings (replace `\\n` with actual newlines) in the fixed code outputs.
+        7d. Use original program/code as fallback if parsing fails for those fields, and provide a default error explanation.
+        7e. Handle cases where neither Pydantic parsing nor string parsing succeeds, print an error, and use original program/code with default error explanation.
+    Step 8. If verbose is True, print the total cost of the run(s).
+    Step 9. Remove this step. The function should NOT call `edit_file`. It should return the `fixed_program` and `fixed_code` strings for the caller to handle.
+    Step 10. Construct the final `explanation` string by combining the stored `verification_details` (from `VerificationOutput.details`) and `fix_explanation` (from `FixerOutput.explanation`) using XML tags: `<verification_details>{verification_details}</verification_details>\n<fix_explanation>{fix_explanation}</fix_explanation>`. Return the final `explanation`, `fixed_program` string, `fixed_code` string, `total_cost`, `model_name`, and the stored `verification_issues_count`.
 
-% Ensure that the function handles potential issues gracefully, such as when `llm_invoke` fails to parse the output into the Pydantic model, or when expected fields are missing. In such error cases, it should still return the standard output dictionary with appropriate default/error values.
+% Enhanced Error Handling and Robustness Requirements:
+    - Implement comprehensive input validation before processing
+    - Provide fallback XML tag parsing when Pydantic model parsing fails
+    - Handle template loading failures gracefully
+    - Implement detailed verbose logging including model names, costs, and structured result display
+    - Validate that issues with positive count have actionable details
+    - Process string unescaping for newline characters in code outputs
+    - Ensure graceful degradation for all LLM call failures
+    - Return consistent dictionary structure even in error cases with appropriate default values
