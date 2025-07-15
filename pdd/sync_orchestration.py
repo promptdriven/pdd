@@ -26,6 +26,7 @@ from .sync_determine_operation import (
     PDD_DIR,
     META_DIR,
     SyncLock,
+    read_run_report,
 )
 from .auto_deps_main import auto_deps_main
 from .code_generator_main import code_generator_main
@@ -605,59 +606,68 @@ def sync_orchestration(
                             _save_operation_fingerprint(basename, language, 'crash', pdd_files, 0.0, 'skipped_missing_files')
                             continue
                         else:
-                            # Actually run the example program to get real errors
+                            # Check if we have a run report indicating failures that need crash fixing
+                            current_run_report = read_run_report(basename, language)
                             crash_log_content = ""
-                            try:
-                                # Run the example program to capture actual errors
-                                example_result = subprocess.run(
-                                    ['python', str(pdd_files['example'])],
-                                    capture_output=True,
-                                    text=True,
-                                    timeout=60,
-                                    env=os.environ.copy(),
-                                    cwd=str(pdd_files['example'].parent)
-                                )
+                            
+                            # If we have a run report with exit_code != 0, that indicates a crash that needs fixing
+                            if current_run_report and current_run_report.exit_code != 0:
+                                # We have a crash to fix based on the run report
+                                crash_log_content = f"Test execution failed with exit code: {current_run_report.exit_code}\n\n"
                                 
-                                if example_result.returncode != 0:
-                                    # Capture actual error output
-                                    crash_log_content = f"Exit code: {example_result.returncode}\n\n"
-                                    if example_result.stdout:
-                                        crash_log_content += f"STDOUT:\n{example_result.stdout}\n\n"
-                                    if example_result.stderr:
-                                        crash_log_content += f"STDERR:\n{example_result.stderr}\n"
-                                    
-                                    # Check for syntax errors specifically
-                                    if "SyntaxError" in example_result.stderr:
-                                        crash_log_content = f"SYNTAX ERROR DETECTED:\n\n{crash_log_content}"
-                                else:
-                                    # Program ran successfully, no crash to fix
-                                    print("Example program ran successfully, skipping crash fix")
-                                    skipped_operations.append('crash')
-                                    
-                                    # Update log entry for skipped operation
-                                    update_sync_log_entry(log_entry, {
-                                        'success': True,
-                                        'cost': 0.0,
-                                        'model': 'skipped',
-                                        'error': None
-                                    }, time.time() - start_time)
-                                    log_entry['details']['skip_reason'] = 'no_crash'
-                                    append_sync_log(basename, language, log_entry)
-                                    
-                                    report_data = RunReport(
-                                        timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                                        exit_code=0, tests_passed=0, tests_failed=0, coverage=0.0
+                                # Try to run the example program to get additional error details
+                                try:
+                                    example_result = subprocess.run(
+                                        ['python', str(pdd_files['example'])],
+                                        capture_output=True,
+                                        text=True,
+                                        timeout=60,
+                                        env=os.environ.copy(),
+                                        cwd=str(pdd_files['example'].parent)
                                     )
-                                    save_run_report(asdict(report_data), basename, language)
-                                    _save_operation_fingerprint(basename, language, 'crash', pdd_files, 0.0, 'no_crash')
-                                    continue
                                     
-                            except subprocess.TimeoutExpired:
-                                crash_log_content = "Program execution timed out after 60 seconds\n"
-                                crash_log_content += "This may indicate an infinite loop or the program is waiting for input."
-                            except Exception as e:
-                                crash_log_content = f"Error running example program: {str(e)}\n"
-                                crash_log_content += f"Program path: {pdd_files['example']}"
+                                    if example_result.returncode != 0:
+                                        crash_log_content += f"Example program also failed with exit code: {example_result.returncode}\n\n"
+                                        if example_result.stdout:
+                                            crash_log_content += f"STDOUT:\n{example_result.stdout}\n\n"
+                                        if example_result.stderr:
+                                            crash_log_content += f"STDERR:\n{example_result.stderr}\n"
+                                        
+                                        # Check for syntax errors specifically
+                                        if "SyntaxError" in example_result.stderr:
+                                            crash_log_content = f"SYNTAX ERROR DETECTED:\n\n{crash_log_content}"
+                                    else:
+                                        crash_log_content += "Example program runs successfully, but tests are failing.\n"
+                                        crash_log_content += "This may indicate issues with test execution or test file syntax.\n"
+                                        
+                                except subprocess.TimeoutExpired:
+                                    crash_log_content += "Example program execution timed out after 60 seconds\n"
+                                    crash_log_content += "This may indicate an infinite loop or the program is waiting for input.\n"
+                                except Exception as e:
+                                    crash_log_content += f"Error running example program: {str(e)}\n"
+                                    crash_log_content += f"Program path: {pdd_files['example']}\n"
+                            else:
+                                # No crash detected, skip crash operation
+                                print("No crash detected in run report, skipping crash fix")
+                                skipped_operations.append('crash')
+                                
+                                # Update log entry for skipped operation
+                                update_sync_log_entry(log_entry, {
+                                    'success': True,
+                                    'cost': 0.0,
+                                    'model': 'skipped',
+                                    'error': None
+                                }, time.time() - start_time)
+                                log_entry['details']['skip_reason'] = 'no_crash'
+                                append_sync_log(basename, language, log_entry)
+                                
+                                report_data = RunReport(
+                                    timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                                    exit_code=0, tests_passed=0, tests_failed=0, coverage=0.0
+                                )
+                                save_run_report(asdict(report_data), basename, language)
+                                _save_operation_fingerprint(basename, language, 'crash', pdd_files, 0.0, 'no_crash')
+                                continue
                             
                             # Write actual error content or fallback
                             if not crash_log_content:
@@ -671,7 +681,9 @@ def sync_orchestration(
                                     prompt_file=str(pdd_files['prompt']), 
                                     code_file=str(pdd_files['code']), 
                                     program_file=str(pdd_files['example']), 
-                                    error_file="crash.log"
+                                    error_file="crash.log",
+                                    output=str(pdd_files['code']),
+                                    output_program=str(pdd_files['example'])
                                 )
                             except (RuntimeError, Exception) as e:
                                 error_str = str(e)
@@ -756,7 +768,6 @@ def sync_orchestration(
                         
                         # Try to get actual test failure details from latest run
                         try:
-                            from .sync_determine_operation import read_run_report
                             run_report = read_run_report(basename, language)
                             if run_report and run_report.tests_failed > 0:
                                 # Run the tests again to capture actual error output
@@ -866,6 +877,47 @@ def sync_orchestration(
                         cost = 0.0
                         model = ''
                     _save_operation_fingerprint(basename, language, operation, pdd_files, cost, model)
+                    
+                    # After successful crash operation, re-run the example to generate fresh run report
+                    if operation == 'crash':
+                        try:
+                            example_file = pdd_files['example']
+                            if example_file.exists():
+                                # Run the example program to check if crash is actually fixed
+                                try:
+                                    example_result = subprocess.run(
+                                        ['python', str(example_file)],
+                                        capture_output=True,
+                                        text=True,
+                                        timeout=60,
+                                        env=os.environ.copy(),
+                                        cwd=str(example_file.parent)
+                                    )
+                                    
+                                    # Create fresh run report based on actual execution
+                                    report_data = RunReport(
+                                        timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                                        exit_code=example_result.returncode,
+                                        tests_passed=1 if example_result.returncode == 0 else 0,
+                                        tests_failed=0 if example_result.returncode == 0 else 1,
+                                        coverage=100.0 if example_result.returncode == 0 else 0.0
+                                    )
+                                    save_run_report(asdict(report_data), basename, language)
+                                    print(f"Re-ran example after crash fix: exit_code={example_result.returncode}")
+                                    
+                                except subprocess.TimeoutExpired:
+                                    # Example timed out - still considered a failure
+                                    report_data = RunReport(
+                                        timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                                        exit_code=124,  # Standard timeout exit code
+                                        tests_passed=0, tests_failed=1, coverage=0.0
+                                    )
+                                    save_run_report(asdict(report_data), basename, language)
+                                    print("Example timed out after crash fix - created failure run report")
+                                    
+                        except Exception as e:
+                            # Don't fail the entire operation if example re-execution fails
+                            print(f"Warning: Post-crash example re-execution failed: {e}")
                     
                     # After successful fix operation, execute tests to update run report
                     if operation == 'fix':
