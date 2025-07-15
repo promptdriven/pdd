@@ -275,7 +275,7 @@ def test_decision_verify_after_crash_fix(mock_construct, pdd_test_environment):
     })
     decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE)
     assert decision.operation == 'verify'
-    assert "Previous crash was fixed" in decision.reason
+    assert "Previous crash operation completed" in decision.reason
 
 @patch('sync_determine_operation.construct_paths')
 def test_decision_fix_on_test_failures(mock_construct, pdd_test_environment):
