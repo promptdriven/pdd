@@ -56,7 +56,7 @@ LOCKS_DIR = get_locks_dir()
 
 # Export constants for other modules
 __all__ = ['PDD_DIR', 'META_DIR', 'LOCKS_DIR', 'Fingerprint', 'RunReport', 'SyncDecision', 
-           'sync_determine_operation', 'analyze_conflict_with_llm']
+           'sync_determine_operation', 'analyze_conflict_with_llm', 'read_run_report', 'get_pdd_file_paths']
 
 
 @dataclass
