@@ -729,6 +729,7 @@ def sync_orchestration(
                             output_code=str(pdd_files['code']),
                             output_program=str(pdd_files['example']),
                             loop=True,
+                            verification_program=str(pdd_files['example']),
                             max_attempts=max_attempts,
                             budget=budget - current_cost_ref[0]
                         )
