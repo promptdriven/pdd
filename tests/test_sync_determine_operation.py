@@ -250,6 +250,71 @@ def test_log_mode_skips_lock(mock_construct, pdd_test_environment):
         mock_lock.assert_called_once_with(BASENAME, LANGUAGE)
 
 # --- Runtime Signal Tests ---
+def test_context_aware_fix_over_crash_logic(pdd_test_environment):
+    """Test the new context-aware decision logic that prefers 'fix' over 'crash'."""
+    
+    # Create prompt file
+    prompts_dir = pdd_test_environment / "prompts"
+    prompts_dir.mkdir(exist_ok=True)
+    create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", "Test prompt")
+    
+    # Test Case 1: No successful history - should use 'crash'
+    create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
+        "pdd_version": "1.0.0",
+        "timestamp": "2025-07-15T12:00:00Z",
+        "command": "generate",  # No successful example history
+        "prompt_hash": "test_hash",
+        "code_hash": "test_hash",
+        "example_hash": None,
+        "test_hash": None
+    })
+    
+    create_run_report_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", {
+        "timestamp": "2025-07-15T12:00:00Z",
+        "exit_code": 1,
+        "tests_passed": 0,
+        "tests_failed": 0,
+        "coverage": 0.0
+    })
+    
+    decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
+    assert decision.operation == 'crash'
+    assert "no successful example history" in decision.reason.lower()
+    assert decision.details['example_success_history'] == False
+    
+    # Test Case 2: Successful history via 'verify' command - should use 'fix'
+    create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
+        "pdd_version": "1.0.0",
+        "timestamp": "2025-07-15T12:00:00Z",
+        "command": "verify",  # Indicates successful example history
+        "prompt_hash": "test_hash",
+        "code_hash": "test_hash",
+        "example_hash": "test_hash",
+        "test_hash": None
+    })
+    
+    decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
+    assert decision.operation == 'fix'
+    assert "prefer fix over crash" in decision.reason.lower()
+    assert decision.details['example_success_history'] == True
+    
+    # Test Case 3: Successful history via 'test' command - should use 'fix'
+    create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
+        "pdd_version": "1.0.0",
+        "timestamp": "2025-07-15T12:00:00Z",
+        "command": "test",  # Indicates successful example history
+        "prompt_hash": "test_hash",
+        "code_hash": "test_hash",
+        "example_hash": "test_hash",
+        "test_hash": "test_hash"
+    })
+    
+    decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
+    assert decision.operation == 'fix'
+    assert "prefer fix over crash" in decision.reason.lower()
+    assert decision.details['example_success_history'] == True
+
+
 @patch('sync_determine_operation.construct_paths')
 def test_decision_crash_on_exit_code_nonzero(mock_construct, pdd_test_environment):
     rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
@@ -347,7 +412,7 @@ def test_decision_nothing_when_synced(mock_construct, pdd_test_environment):
     assert decision.operation == 'nothing'
     assert "All required files synchronized" in decision.reason
 
-def test_crash_skip_with_metadata_and_exit_code(pdd_test_environment):
+def test_fix_over_crash_with_successful_example_history(pdd_test_environment):
     """Test sync --skip-tests when a crash operation would be triggered."""
     
     # Create prompt file
@@ -379,15 +444,16 @@ def test_crash_skip_with_metadata_and_exit_code(pdd_test_environment):
     rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
     create_run_report_file(rr_path, run_report)
     
-    # Test with skip_tests=True - sync_determine_operation should still return crash
-    # (the orchestration layer handles skipping it)
+    # Test with skip_tests=True - sync_determine_operation should prefer fix over crash
+    # when there's successful example history (fingerprint command is "test")
     decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, skip_tests=True, prompts_dir=str(prompts_dir))
     
-    # sync_determine_operation should still return crash when exit_code=2
-    # The skip_tests logic is handled at the orchestration layer
-    assert decision.operation == 'crash'
-    assert "Runtime error detected" in decision.reason
+    # With context-aware decision logic, should prefer 'fix' over 'crash' when example has run successfully before
+    # The fingerprint command is "test" which indicates successful example history
+    assert decision.operation == 'fix'
+    assert "prefer fix over crash" in decision.reason.lower()
     assert decision.details['exit_code'] == 2
+    assert decision.details['example_success_history'] == True
 
 def test_regression_root_cause_missing_files_with_metadata(pdd_test_environment):
     """
@@ -532,7 +598,7 @@ def test_regression_fix_validation_skip_tests_scenarios(pdd_test_environment):
         
         assert decision.operation in scenario["expected_in"], f"Scenario {scenario['name']}: got {decision.operation}, expected one of {scenario['expected_in']}"
 
-def test_real_hashes_with_crash_scenario_skip_tests(pdd_test_environment):
+def test_real_hashes_with_context_aware_fix_over_crash(pdd_test_environment):
     """
     Test the exact scenario from debug_real_hashes.py:
     Missing files with metadata containing real hashes AND exit_code=2 with skip_tests=True.
@@ -589,9 +655,11 @@ result = add(5, 3)  # Should return 8"""
     # 2. Should not return 'test' operation when skip_tests=True
     assert decision.operation != 'test', "Should not return test operation when skip_tests=True"
     
-    # 3. Should return crash (since exit_code=2 takes priority over skip_tests in determine_operation)
-    assert decision.operation == 'crash', f"Expected crash operation, got {decision.operation}"
-    assert "Runtime error detected" in decision.reason
+    # 3. With context-aware decision logic, should prefer 'fix' over 'crash' when example has run successfully before
+    # The fingerprint command is "test" which indicates successful example history
+    assert decision.operation == 'fix', f"Expected fix operation (context-aware), got {decision.operation}"
+    assert "prefer fix over crash" in decision.reason.lower()
+    assert decision.details['example_success_history'] == True
 
 @patch('sync_determine_operation.construct_paths')
 def test_decision_example_when_missing(mock_construct, pdd_test_environment):

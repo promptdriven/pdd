@@ -1,5 +1,11 @@
 from typing import Optional, Tuple
-from datetime import datetime, UTC
+from datetime import datetime
+try:
+    from datetime import UTC
+except ImportError:
+    # Python < 3.11 compatibility
+    from datetime import timezone
+    UTC = timezone.utc
 from io import StringIO
 import os
 import glob

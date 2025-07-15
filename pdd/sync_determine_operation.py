@@ -56,7 +56,8 @@ LOCKS_DIR = get_locks_dir()
 
 # Export constants for other modules
 __all__ = ['PDD_DIR', 'META_DIR', 'LOCKS_DIR', 'Fingerprint', 'RunReport', 'SyncDecision', 
-           'sync_determine_operation', 'analyze_conflict_with_llm', 'read_run_report', 'get_pdd_file_paths']
+           'sync_determine_operation', 'analyze_conflict_with_llm', 'read_run_report', 'get_pdd_file_paths',
+           '_check_example_success_history']
 
 
 @dataclass
@@ -639,6 +640,56 @@ def check_for_dependencies(prompt_content: str) -> bool:
     return has_xml_deps or has_explicit_deps
 
 
+def _check_example_success_history(basename: str, language: str) -> bool:
+    """
+    Check if the example has run successfully before by examining historical fingerprints and run reports.
+    
+    Args:
+        basename: The base name for the PDD unit
+        language: The programming language
+    
+    Returns:
+        True if the example has run successfully before, False otherwise
+    """
+    meta_dir = get_meta_dir()
+    
+    # Strategy 1: Check if there's a fingerprint with 'verify' command (indicates successful example run)
+    fingerprint = read_fingerprint(basename, language)
+    if fingerprint and fingerprint.command == 'verify':
+        return True
+    
+    # Strategy 2: Check current run report for successful runs (exit_code == 0)
+    # Note: We check the current run report for successful history since it's updated
+    # This allows for a simple check of recent success
+    current_run_report = read_run_report(basename, language)
+    if current_run_report and current_run_report.exit_code == 0:
+        return True
+    
+    # Strategy 2b: Look for historical run reports with exit_code == 0
+    # Check all run report files in the meta directory that match the pattern
+    run_report_pattern = f"{basename}_{language}_run"
+    for file in meta_dir.glob(f"{run_report_pattern}*.json"):
+        try:
+            with open(file, 'r') as f:
+                data = json.load(f)
+            
+            # If we find any historical run with exit_code == 0, the example has run successfully
+            if data.get('exit_code') == 0:
+                return True
+        except (json.JSONDecodeError, KeyError, IOError):
+            continue
+    
+    # Strategy 3: Check if fingerprint has example_hash and was created after successful operations
+    # Commands that indicate example was working: 'example', 'verify', 'test', 'fix'
+    if fingerprint and fingerprint.example_hash:
+        successful_commands = {'example', 'verify', 'test', 'fix'}
+        if fingerprint.command in successful_commands:
+            # If the fingerprint was created after these commands, the example likely worked
+            return True
+    
+    return False
+
+
 def sync_determine_operation(basename: str, language: str, target_coverage: float, budget: float = 10.0, log_mode: bool = False, prompts_dir: str = "prompts", skip_tests: bool = False, skip_verify: bool = False) -> SyncDecision:
     """
     Core decision-making function for sync operations with skip flag awareness.
@@ -730,17 +781,37 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
         
         # Then check for runtime crashes (only if no test failures)
         if run_report.exit_code != 0:
-            return SyncDecision(
-                operation='crash',
-                reason='Runtime error detected in last run',
-                confidence=0.95,
-                estimated_cost=estimate_operation_cost('crash'),
-                details={
-                    'decision_type': 'heuristic',
-                    'exit_code': run_report.exit_code,
-                    'timestamp': run_report.timestamp
-                }
-            )
+            # Context-aware decision: prefer 'fix' over 'crash' when example has run successfully before
+            has_example_run_successfully = _check_example_success_history(basename, language)
+            
+            if has_example_run_successfully:
+                return SyncDecision(
+                    operation='fix',
+                    reason='Runtime error detected but example has run successfully before - prefer fix over crash',
+                    confidence=0.90,
+                    estimated_cost=estimate_operation_cost('fix'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'exit_code': run_report.exit_code,
+                        'timestamp': run_report.timestamp,
+                        'example_success_history': True,
+                        'decision_rationale': 'prefer_fix_over_crash'
+                    }
+                )
+            else:
+                return SyncDecision(
+                    operation='crash',
+                    reason='Runtime error detected in last run - no successful example history',
+                    confidence=0.95,
+                    estimated_cost=estimate_operation_cost('crash'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'exit_code': run_report.exit_code,
+                        'timestamp': run_report.timestamp,
+                        'example_success_history': False,
+                        'decision_rationale': 'crash_without_history'
+                    }
+                )
         
         if run_report.coverage < target_coverage:
             if skip_tests:
