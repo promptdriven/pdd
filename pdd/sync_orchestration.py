@@ -141,12 +141,20 @@ def _execute_tests_and_create_run_report(test_file: Path, basename: str, languag
         # Use the module import path rather than file path for coverage
         # Use environment-aware Python executable for pytest execution
         python_executable = detect_host_python_executable()
+        
+        # Determine coverage target based on module location
+        # Check if this is in the pdd package structure
+        cov_target = f'pdd.{module_name}'
+        if not (test_file.parent / 'pdd' / f'{module_name}.py').exists():
+            # Try direct module name if not in pdd package
+            cov_target = module_name
+        
         result = subprocess.run([
             python_executable, '-m', 'pytest', 
             str(test_file), 
             '-v', 
             '--tb=short',
-            f'--cov=pdd.{module_name}',
+            f'--cov={cov_target}',
             '--cov-report=term-missing'
         ], capture_output=True, text=True, timeout=300)
         
@@ -170,8 +178,15 @@ def _execute_tests_and_create_run_report(test_file: Path, basename: str, languag
             if failed_match:
                 tests_failed = int(failed_match.group(1))
         
-        # Parse coverage percentage
+        # Parse coverage percentage - try multiple patterns
         coverage_match = re.search(r'TOTAL.*?(\d+)%', stdout)
+        if not coverage_match:
+            # Try alternative patterns for coverage output
+            coverage_match = re.search(r'(\d+)%\s*$', stdout, re.MULTILINE)
+        if not coverage_match:
+            # Try pattern with decimal
+            coverage_match = re.search(r'(\d+(?:\.\d+)?)%', stdout)
+        
         if coverage_match:
             coverage = float(coverage_match.group(1))
         
