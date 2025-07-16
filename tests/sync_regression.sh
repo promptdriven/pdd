@@ -203,9 +203,21 @@ run_pdd_command_base() {
     log_timestamped "Starting command: $full_command_str"
     log "Running: $full_command_str"
 
+    # Set PYTHONPATH to include current directory for sync commands
+    local original_pythonpath="$PYTHONPATH"
+    if [[ "$command_name" == "sync" ]]; then
+        export PYTHONPATH="${PYTHONPATH}:$(pwd)"
+        log "Set PYTHONPATH for sync command: $PYTHONPATH"
+    fi
+
     # Execute the command, redirecting stdout/stderr to log file and stdin from /dev/null
     "${cmd_array[@]}" < /dev/null >> "$LOG_FILE" 2>&1
     local status=$?
+
+    # Restore original PYTHONPATH
+    if [[ "$command_name" == "sync" ]]; then
+        export PYTHONPATH="$original_pythonpath"
+    fi
 
     if [ $status -eq 0 ]; then
         log "Command completed successfully."
@@ -381,77 +393,83 @@ mkdir -p prompts
 
 # Simple math prompt for basic sync testing
 cat << EOF > "prompts/$SIMPLE_PROMPT"
-Create a Python module with a simple math function.
+Create a Python module simple_math.py with a simple math function.
 
 Requirements:
-- Function name: add
+- Function name: simple_math
 - Parameters: a, b (both numbers)  
 - Return: sum of a and b
 - Include type hints
 - Add docstring explaining the function
 
 Example usage:
-result = add(5, 3)  # Should return 8
+result = simple_math(5, 3)  # Should return 8
 EOF
 
 # Complex data processor prompt for advanced sync testing
 cat << EOF > "prompts/$COMPLEX_PROMPT"
-Create a Python module for data processing.
+Create a Python module data_processor.py for data processing.
 
 Requirements:
-- Class name: DataProcessor
-- Method: process_data(data: list) -> dict
+- Function name: data_processor
+- Parameters: data (list of numbers)
+- Return: dict with statistics (min, max, mean)
 - Functionality: Calculate statistics (min, max, mean) of numeric data
 - Handle empty lists and non-numeric data gracefully
 - Include comprehensive error handling
 - Add detailed docstrings
 
 Example usage:
-processor = DataProcessor()
-stats = processor.process_data([1, 2, 3, 4, 5])
+stats = data_processor([1, 2, 3, 4, 5])
 EOF
 
 # Multi-language calculator prompts
 cat << EOF > "prompts/$MULTI_LANG_PYTHON_PROMPT"
-Create a Python calculator module.
+Create a Python calculator module calculator.py.
 
 Requirements:
-- Functions: add, subtract, multiply, divide
+- Main function name: calculator
+- Parameters: operation (str), a (float), b (float)
+- Supported operations: 'add', 'subtract', 'multiply', 'divide'
 - Type hints for all functions
-- Error handling for division by zero
+- Error handling for division by zero and invalid operations
 - Comprehensive docstrings
 
 Example:
-calc.add(10, 5)  # Returns 15
-calc.divide(10, 0)  # Raises ValueError
+result = calculator('add', 10, 5)  # Returns 15
+result = calculator('divide', 10, 0)  # Raises ValueError
 EOF
 
 cat << EOF > "prompts/$MULTI_LANG_JS_PROMPT"
-Create a JavaScript calculator module.
+Create a JavaScript calculator module calculator.js.
 
 Requirements:
-- Functions: add, subtract, multiply, divide
+- Main function name: calculator
+- Parameters: operation (string), a (number), b (number)
+- Supported operations: 'add', 'subtract', 'multiply', 'divide'
 - JSDoc comments for all functions
-- Error handling for division by zero
-- Export all functions
+- Error handling for division by zero and invalid operations
+- Export the main calculator function
 
 Example:
-calculator.add(10, 5);  // Returns 15
-calculator.divide(10, 0);  // Throws Error
+calculator('add', 10, 5);  // Returns 15
+calculator('divide', 10, 0);  // Throws Error
 EOF
 
 cat << EOF > "prompts/$MULTI_LANG_TS_PROMPT"
-Create a TypeScript calculator module.
+Create a TypeScript calculator module calculator.ts.
 
 Requirements:
-- Functions: add, subtract, multiply, divide
+- Main function name: calculator
+- Parameters: operation (string), a (number), b (number)
+- Supported operations: 'add', 'subtract', 'multiply', 'divide'
 - Full TypeScript types
-- Error handling for division by zero
-- Export all functions with proper types
+- Error handling for division by zero and invalid operations
+- Export the main calculator function with proper types
 
 Example:
-add(10, 5);  // Returns 15
-divide(10, 0);  // Throws Error
+calculator('add', 10, 5);  // Returns 15
+calculator('divide', 10, 0);  // Throws Error
 EOF
 
 # --- Sync Regression Tests ---
