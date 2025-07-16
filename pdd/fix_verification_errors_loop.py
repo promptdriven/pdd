@@ -56,6 +56,10 @@ def _run_program(
         command.extend(args)
 
     try:
+        # Run from staging root directory instead of examples/ directory
+        # This allows imports from both pdd/ and examples/ subdirectories
+        staging_root = program_path.parent.parent  # Go up from examples/ to staging root
+        
         result = subprocess.run(
             command,
             capture_output=True,
@@ -63,7 +67,7 @@ def _run_program(
             timeout=timeout,
             check=False,  # Don't raise exception for non-zero exit codes
             env=os.environ.copy(),  # Pass current environment variables
-            cwd=program_path.parent  # Set working directory to program's directory
+            cwd=staging_root  # Set working directory to staging root
         )
         combined_output = result.stdout + result.stderr
         
