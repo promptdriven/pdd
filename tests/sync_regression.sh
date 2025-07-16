@@ -77,7 +77,7 @@ PDD_BASE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PDD_PATH="$PDD_BASE_DIR/pdd"
 STAGING_PATH="$PDD_BASE_DIR/staging"
 # Use local development version instead of globally installed pdd
-PDD_SCRIPT="$PDD_BASE_DIR/pdd-local"
+PDD_SCRIPT="$PDD_BASE_DIR/pdd-local.sh"
 PROMPTS_PATH="$PDD_BASE_DIR/prompts"
 CONTEXT_PATH="$PDD_BASE_DIR/context"
 OUTPUT_PATH="$PDD_BASE_DIR/staging"
