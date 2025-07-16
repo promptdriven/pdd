@@ -110,10 +110,11 @@ def _save_operation_fingerprint(basename: str, language: str, operation: str,
     """Save fingerprint state after successful operation."""
     from datetime import datetime, timezone
     from .sync_determine_operation import calculate_current_hashes, Fingerprint
+    from . import __version__
     
     current_hashes = calculate_current_hashes(paths)
     fingerprint = Fingerprint(
-        pdd_version="0.0.41",
+        pdd_version=__version__,
         timestamp=datetime.now(timezone.utc).isoformat(),
         command=operation,
         prompt_hash=current_hashes.get('prompt_hash'),
@@ -343,7 +344,7 @@ def sync_orchestration(
         pdd_files = get_pdd_file_paths(basename, language, prompts_dir)
     except Exception as e:
         # Log the error and return early with failure status
-        console.print(f"[red]Error constructing paths: {e}[/red]")
+        print(f"Error constructing paths: {e}")
         return {
             "success": False,
             "total_cost": 0.0,
