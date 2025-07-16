@@ -30,6 +30,7 @@ Create a module with the following main function:
 ```python
 def sync_orchestration(
     basename: str,
+    target_coverage: float = 90.0,
     language: str = "python",
     prompts_dir: str = "prompts",
     code_dir: str = "src",
@@ -39,7 +40,6 @@ def sync_orchestration(
     budget: float = 10.0,
     skip_verify: bool = False,
     skip_tests: bool = False,
-    target_coverage: float = 90.0,
     log: bool = False,
     force: bool = False,
     strength: float = 0.5,
@@ -293,14 +293,18 @@ The orchestrator should:
 
 Implement robust error handling:
 
+- **Path Construction Validation**: Validate file paths early and exit gracefully on failures with clear error messages
 - **Lock Acquisition Failure**: Exit immediately with clear message if another sync is running
 - **Budget Constraints**: Stop if total cost exceeds budget
 - **File Validation**: Validate required files exist before operations (especially for crash operations that need both code and example files)
+- **LLM Error Recovery**: Handle LLM failures gracefully, skipping operations when appropriate (e.g., "LLM returned None" errors)
+- **Subprocess Timeout Handling**: Implement timeouts for test execution and example runs to prevent hanging
 - **Actual Error Capture**: For fix operations, capture real test failure information by re-running tests and capturing stdout/stderr output to provide meaningful error context
 - **Return Value Handling**: Handle different return formats from command functions:
   - Dictionary format: Extract 'success', 'cost', and 'model' fields directly
   - Tuple format: Treat as successful if no exceptions, extract cost from second-to-last element and model from last element
   - Ensure fingerprint state is saved after successful operations regardless of return format
+- **Enhanced Cycle Detection**: Detect and break crash-verify cycles with configurable repeat limits (e.g., MAX_CYCLE_REPEATS = 2)
 - **Graceful Degradation**: Continue workflow even if non-critical steps fail
 - **User Feedback**: Provide clear error messages through animation
 - **Lock Cleanup**: Always release lock, even on exceptions or early exits
@@ -338,7 +342,7 @@ from typing import Dict, Any, Optional, List
 from dataclasses import asdict
 
 import click
-from rich.console import Console
+# Note: rich.console.Console not used in current implementation
 ```
 
 ### Command Execution Pattern
@@ -361,6 +365,14 @@ The orchestrator should implement these helper functions for proper state manage
 The orchestrator should include test execution functionality to create proper RunReports:
 
 - **_execute_tests_and_create_run_report(test_file, basename, language, target_coverage)**: Execute pytest with coverage reporting and parse results into RunReport objects. This enables the state machine to detect test failures and trigger fix operations in subsequent sync runs.
+
+### Post-Operation Validation
+
+After successful operations, the orchestrator should validate results:
+
+- **After 'crash' operations**: Re-run the example program to verify the crash is fixed and update run reports with actual execution results
+- **After 'fix' operations**: Execute tests to verify fixes worked and update run reports with current test status
+- **After 'test' operations**: Execute generated tests to create initial run reports for failure detection in subsequent sync runs
 
 ### Output Format
 
@@ -396,7 +408,8 @@ Return comprehensive results:
 9. **Return Format Compatibility**: Handle both dictionary and tuple return values from command functions
 10. **Error Recovery**: Handle operation failures gracefully and break workflow loop on definitive failures
 11. **State Persistence**: Always save fingerprint state after successful operations to enable workflow progression
-12. **Version Handling**: Import PDD version dynamically using `from . import __version__` and use it when creating Fingerprint objects for the pdd_version field
+12. **Version Handling**: Import PDD version dynamically using `from . import __version__` and use it when creating Fingerprint objects for the pdd_version field instead of hardcoding version strings
+13. **Debug Output**: Debug print statements may be included during development but should be configurable or removable for production use
 
 ## Dependencies
 
