@@ -305,6 +305,7 @@ def _display_sync_log(basename: str, language: str, verbose: bool = False) -> Di
 
 def sync_orchestration(
     basename: str,
+    target_coverage: float = 90.0,
     language: str = "python",
     prompts_dir: str = "prompts",
     code_dir: str = "src",
@@ -314,7 +315,6 @@ def sync_orchestration(
     budget: float = 10.0,
     skip_verify: bool = False,
     skip_tests: bool = False,
-    target_coverage: float = 90.0,
     log: bool = False,
     force: bool = False,
     strength: float = 0.5,

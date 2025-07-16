@@ -1305,14 +1305,15 @@ def analyze_conflict_with_llm(basename: str, language: str, fingerprint: Fingerp
 
 if __name__ == "__main__":
     # Example usage
-    if len(sys.argv) != 3:
-        print("Usage: python sync_determine_operation.py <basename> <language>")
+    if len(sys.argv) < 3 or len(sys.argv) > 4:
+        print("Usage: python sync_determine_operation.py <basename> <language> [target_coverage]")
         sys.exit(1)
     
     basename = sys.argv[1]
     language = sys.argv[2]
+    target_coverage = float(sys.argv[3]) if len(sys.argv) == 4 else 90.0
     
-    decision = sync_determine_operation(basename, language, target_coverage=90.0)
+    decision = sync_determine_operation(basename, language, target_coverage)
     
     print(f"Operation: {decision.operation}")
     print(f"Reason: {decision.reason}")
