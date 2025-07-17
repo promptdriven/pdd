@@ -8,8 +8,8 @@ contexts:
   regression:
     paths: ["*/staging/sync_regression_*", "**/staging/sync_regression_*", "*sync_regression_*", "sync_regression_*"]
     defaults:
-      generate_output_path: "pdd/"
-      test_output_path: "tests/"
+      # generate_output_path: "pdd/" # Temporarily commented for env var test
+      # test_output_path: "tests/" # Temporarily commented for env var test
       example_output_path: "examples/"
       default_language: "python"
       target_coverage: 10.0
@@ -22,8 +22,8 @@ contexts:
   pdd_cli:
     paths: ["pdd/**", "*.py", "prompts/**", "tests/**"]
     defaults:
-      generate_output_path: "pdd/"
-      test_output_path: "tests/"
+      # generate_output_path: "pdd/" # Temporarily commented for env var test
+      # test_output_path: "tests/" # Temporarily commented for env var test
       example_output_path: "examples/"
       default_language: "python"
       target_coverage: 90.0
@@ -102,7 +102,7 @@ contexts:
   default:
     defaults:
       generate_output_path: "./"
-      test_output_path: "tests/"
+      # test_output_path: "tests/" # Temporarily commented for env var test
       example_output_path: "examples/"
       default_language: "python"
       target_coverage: 10.0
