@@ -1192,4 +1192,3 @@ fi
 cd .. # Go back to original directory if needed
 
 exit 0 # Ensure script exits successfully if all steps pass
-exit 0 # Ensure script exits successfully if all steps pass
