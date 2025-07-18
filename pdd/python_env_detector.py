@@ -59,7 +59,7 @@ def detect_host_python_executable() -> str:
                 return str(conda_python)
             
             # Windows
-            conda_python = Path(conda_prefix) / python_name + '.exe'
+            conda_python = Path(conda_prefix) / f'{python_name}.exe'
             if conda_python.is_file():
                 return str(conda_python)
     
