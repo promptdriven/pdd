@@ -30,7 +30,14 @@
       "Bash(make:*)",
       "Bash(bash:*)",
       "Bash(pdd sync:*)",
-      "Bash(pdd:*)"
+      "Bash(pdd:*)",
+      "Bash(pkill:*)",
+      "Bash(kill:*)",
+      "Bash(source .env)",
+      "Bash(tests/sync_regression.sh:*)",
+      "Bash(export OPENAI_API_KEY=\"\")",
+      "Bash(unset:*)",
+      "Bash(timeout:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
