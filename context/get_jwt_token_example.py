@@ -12,6 +12,7 @@ async def main():
     Demonstrates how to use the get_jwt_token function to authenticate with Firebase using GitHub Device Flow.
     """
     print("Starting authentication process...")
+    token = None  # Initialize token variable
 
     try:
         # Attempt to get a valid Firebase ID token
@@ -28,15 +29,24 @@ async def main():
         print(f"Authentication failed: {e}")
         if isinstance(e, UserCancelledError):
             print("The authentication process was cancelled by the user.")
+        return  # Exit early on auth failure
     except NetworkError as e:
         print(f"Network error: {e}")
         print("Please check your internet connection and try again.")
+        return  # Exit early on network failure
     except TokenError as e:
         print(f"Token error: {e}")
         print("There was an issue with token exchange or refresh. Please try re-authenticating.")
+        return  # Exit early on token failure
     except RateLimitError as e:
         print(f"Rate limit exceeded: {e}")
         print("Too many authentication attempts. Please try again later.")
+        return  # Exit early on rate limit failure
+
+    # Only proceed if we have a valid token
+    if token is None:
+        print("Failed to obtain token. Exiting.")
+        return
 
     # Replace the JWT_TOKEN in .env with the token generated here
     env_file_path = ".env"
