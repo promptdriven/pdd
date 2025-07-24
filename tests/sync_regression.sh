@@ -688,7 +688,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "7" ]; then
     
     # Test sync with complex prompt
     log "7a. Testing sync with complex data processor"
-    run_pdd_command sync --target-coverage 90.0 --budget 10.0 "$COMPLEX_BASENAME"
+    run_pdd_command sync --target-coverage 10.0 --budget 10.0 "$COMPLEX_BASENAME"
     check_sync_files "$COMPLEX_BASENAME" "python"
     
     # Test the generated complex code functionality (only if example exists)

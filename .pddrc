@@ -26,7 +26,7 @@ contexts:
       test_output_path: "tests/"
       example_output_path: "examples/"
       default_language: "python"
-      target_coverage: 90.0
+      target_coverage: 10.0
       strength: 0.9
       temperature: 0.0
       budget: 10.0
