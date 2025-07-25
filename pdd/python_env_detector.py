@@ -65,14 +65,14 @@ def detect_host_python_executable() -> str:
     
     # Use PATH resolution as fallback (respects shell's PATH modifications)
     which_python = shutil.which('python')
-    if which_python and which_python != sys.executable:
+    if which_python and Path(which_python).resolve() != Path(sys.executable).resolve():
         # Only use if it's different from the current sys.executable
         # This helps detect when we're in a different environment
         return which_python
     
     # Try python3 as well
     which_python3 = shutil.which('python3')
-    if which_python3 and which_python3 != sys.executable:
+    if which_python3 and Path(which_python3).resolve() != Path(sys.executable).resolve():
         return which_python3
     
     # Final fallback to current executable
