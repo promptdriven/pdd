@@ -654,14 +654,17 @@ def _check_example_success_history(basename: str, language: str) -> bool:
     meta_dir = get_meta_dir()
     
     # Strategy 1: Check if there's a fingerprint with 'verify' command (indicates successful example run)
+    # Cache fingerprint and run report to avoid redundant I/O operations
     fingerprint = read_fingerprint(basename, language)
+    current_run_report = read_run_report(basename, language)
+    
+    # Strategy 1: Check if there's a fingerprint with 'verify' command (indicates successful example run)
     if fingerprint and fingerprint.command == 'verify':
         return True
     
     # Strategy 2: Check current run report for successful runs (exit_code == 0)
     # Note: We check the current run report for successful history since it's updated
     # This allows for a simple check of recent success
-    current_run_report = read_run_report(basename, language)
     if current_run_report and current_run_report.exit_code == 0:
         return True
     
