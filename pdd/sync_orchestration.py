@@ -144,11 +144,13 @@ def _execute_tests_and_create_run_report(test_file: Path, basename: str, languag
         python_executable = detect_host_python_executable()
         
         # Determine coverage target based on module location
-        # Check if this is in the pdd package structure
-        cov_target = f'pdd.{module_name}'
-        if not (test_file.parent / 'pdd' / f'{module_name}.py').exists():
-            # Try direct module name if not in pdd package
-            cov_target = module_name
+        if base_package:
+            cov_target = f'{base_package}.{module_name}'
+        else:
+            # Dynamically discover package structure based on test file location
+            relative_path = test_file.parent.relative_to(Path.cwd())
+            package_path = str(relative_path).replace(os.sep, '.')
+            cov_target = f'{package_path}.{module_name}' if package_path else module_name
         
         result = subprocess.run([
             python_executable, '-m', 'pytest', 
