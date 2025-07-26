@@ -49,7 +49,7 @@ We recommend installing PDD using the `uv <https://github.com/astral-sh/uv>`_ pa
 .. code-block:: console
 
    # Install uv if you haven't already
-   curl -sSf https://astral.sh/uv/install.sh | sh
+   curl -LsSf https://astral.sh/uv/install.sh | sh
 
    # Install PDD using uv tool install
    uv tool install pdd-cli
