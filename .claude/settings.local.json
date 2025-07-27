@@ -37,7 +37,9 @@
       "Bash(tests/sync_regression.sh:*)",
       "Bash(export OPENAI_API_KEY=\"\")",
       "Bash(unset:*)",
-      "Bash(timeout:*)"
+      "Bash(timeout:*)",
+      "Bash(echo:*)",
+      "Bash(chmod:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

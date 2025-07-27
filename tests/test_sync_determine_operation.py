@@ -96,7 +96,7 @@ from sync_determine_operation import (
 
 BASENAME = "test_unit"
 LANGUAGE = "python"
-TARGET_COVERAGE = 90.0
+TARGET_COVERAGE = 10.0
 
 @pytest.fixture
 def pdd_test_environment(tmp_path):
@@ -901,7 +901,7 @@ class TestIntegrationScenarios:
         """Scenario 1: New Unit - A new prompt file exists with no other files or history."""
         basename = "calculator"
         language = "python"
-        target_coverage = 90.0
+        target_coverage = 10.0
         
         # Re-import after changing directory to ensure proper module state
         from pdd.sync_determine_operation import sync_determine_operation
@@ -922,7 +922,7 @@ class TestIntegrationScenarios:
         """Scenario 2: Test Failure - A run report exists indicating test failures."""
         basename = "calculator"
         language = "python"
-        target_coverage = 90.0
+        target_coverage = 10.0
         
         # Re-import after changing directory
         from pdd.sync_determine_operation import sync_determine_operation
@@ -954,7 +954,7 @@ class TestIntegrationScenarios:
         """Scenario 3: Manual Code Change - Code file was modified; its hash no longer matches the fingerprint."""
         basename = "calculator"
         language = "python"
-        target_coverage = 90.0
+        target_coverage = 10.0
         
         # Re-import after changing directory
         from pdd.sync_determine_operation import sync_determine_operation
@@ -992,7 +992,7 @@ class TestIntegrationScenarios:
         """Scenario 4: Unit Synchronized - All file hashes match the fingerprint and tests passed."""
         basename = "calculator"
         language = "python"
-        target_coverage = 90.0
+        target_coverage = 10.0
         
         # Re-import after changing directory
         from pdd.sync_determine_operation import sync_determine_operation

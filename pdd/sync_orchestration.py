@@ -446,6 +446,27 @@ def sync_orchestration(
                             })
                             break
 
+                # Detect consecutive fix operations (infinite fix loop protection)
+                if operation == 'fix':
+                    # Count consecutive fix operations
+                    consecutive_fixes = 0
+                    for i in range(len(operation_history) - 1, -1, -1):
+                        if operation_history[i] == 'fix':
+                            consecutive_fixes += 1
+                        else:
+                            break
+                    
+                    MAX_CONSECUTIVE_FIXES = 5  # Allow up to 5 consecutive fix attempts
+                    if consecutive_fixes >= MAX_CONSECUTIVE_FIXES:
+                        errors.append(f"Detected {consecutive_fixes} consecutive fix operations. Breaking infinite fix loop.")
+                        errors.append("The test failures may not be resolvable by automated fixes in this environment.")
+                        log_sync_event(basename, language, "cycle_detected", {
+                            "cycle_type": "consecutive-fix",
+                            "consecutive_count": consecutive_fixes,
+                            "operation_history": operation_history[-10:]  # Last 10 operations
+                        })
+                        break
+
                 if operation in ['all_synced', 'nothing', 'fail_and_request_manual_merge', 'error', 'analyze_conflict']:
                     current_function_name_ref[0] = "synced" if operation in ['all_synced', 'nothing'] else "conflict"
                     
