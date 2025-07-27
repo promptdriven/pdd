@@ -79,11 +79,7 @@ import time as time_module # Alias to avoid conflict with 'time' parameter
 from pdd import DEFAULT_LLM_MODEL
 
 # Opt-in to future pandas behavior regarding downcasting
-try:
-    pd.set_option('future.no_silent_downcasting', True)
-except pd._config.config.OptionError:
-    # Skip if option doesn't exist in older pandas versions
-    pass
+pd.set_option('future.no_silent_downcasting', True)
 
 
 def _is_wsl_environment() -> bool:
@@ -156,8 +152,8 @@ if PDD_PATH_ENV:
 
 if PROJECT_ROOT is None: # If PDD_PATH wasn't set or was invalid
     try:
-        # Start from the directory containing this script
-        current_dir = Path(__file__).resolve().parent
+        # Start from the current working directory (where user is running PDD)
+        current_dir = Path.cwd().resolve()
         # Look for project markers (e.g., .git, pyproject.toml, data/, .env)
         # Go up a maximum of 5 levels to prevent infinite loops
         for _ in range(5):
@@ -168,7 +164,7 @@ if PROJECT_ROOT is None: # If PDD_PATH wasn't set or was invalid
 
             if has_git or has_pyproject or has_data or has_dotenv:
                 PROJECT_ROOT = current_dir
-                logger.debug(f"Determined PROJECT_ROOT by marker search: {PROJECT_ROOT}")
+                logger.debug(f"Determined PROJECT_ROOT by marker search from CWD: {PROJECT_ROOT}")
                 break
 
             parent_dir = current_dir.parent
@@ -176,10 +172,8 @@ if PROJECT_ROOT is None: # If PDD_PATH wasn't set or was invalid
                 break
             current_dir = parent_dir
 
-    except NameError: # __file__ might not be defined (e.g., interactive session)
-        warnings.warn("__file__ not defined. Cannot automatically detect project root from script location.")
     except Exception as e: # Catch potential permission errors etc.
-        warnings.warn(f"Error during project root auto-detection: {e}")
+        warnings.warn(f"Error during project root auto-detection from current working directory: {e}")
 
 if PROJECT_ROOT is None: # Fallback to CWD if no method succeeded
     PROJECT_ROOT = Path.cwd().resolve()
