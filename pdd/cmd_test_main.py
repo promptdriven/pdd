@@ -155,6 +155,15 @@ def cmd_test_main(
         print("[bold red]Error: Output file path could not be determined.[/bold red]")
         ctx.exit(1)
         return "", 0.0, ""
+    
+    # Check if unit_test content is empty
+    if not unit_test or not unit_test.strip():
+        print(f"[bold red]Error: Generated unit test content is empty or whitespace-only.[/bold red]")
+        print(f"[bold yellow]Debug: unit_test length: {len(unit_test) if unit_test else 0}[/bold yellow]")
+        print(f"[bold yellow]Debug: unit_test content preview: {repr(unit_test[:100]) if unit_test else 'None'}[/bold yellow]")
+        ctx.exit(1)
+        return "", 0.0, ""
+    
     try:
         with open(output_file, "w", encoding="utf-8") as file_handle:
             file_handle.write(unit_test)
