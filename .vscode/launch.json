@@ -153,6 +153,35 @@
                 "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/pdd:${env:PYTHONPATH}"
             },
             "justMyCode": false
+        },
+        {
+            "name": "PDD CLI: Sync Regression Simple Math",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pdd.cli",
+            "console": "integratedTerminal",
+            "args": [
+                "--force",
+                "--output-cost",
+                "/Users/gregtanaka/Documents/pdd_cloud/pdd/staging/sync_regression_20250715_220958/sync_regression_cost.csv",
+                "--strength",
+                "0.75",
+                "--temperature",
+                "0.0",
+                "--verbose",
+                "sync",
+                "--budget",
+                "15.0",
+                "--target-coverage",
+                "10.0",
+                "simple_math"
+            ],
+            "cwd": "/Users/gregtanaka/Documents/pdd_cloud/pdd/staging/sync_regression_20250715_220958",
+            "env": {
+                "CONDA_DEFAULT_ENV": "pdd",
+                "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/pdd:${env:PYTHONPATH}"
+            },
+            "justMyCode": false
         }
     ]
 }
