@@ -614,7 +614,9 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "6" ]; then
       else
           log_error "Program still failed after crash command."
           log_timestamped "Validation failed: Program still failed after crash command."
-          exit 1 # Treat this as a failure
+          log "Note: According to README, crash command should fix both code module and calling program"
+          log "This indicates the crash command may not be working as specified"
+          exit 1 # Treat this as a failure since crash should fix the issue
       fi
   fi
 

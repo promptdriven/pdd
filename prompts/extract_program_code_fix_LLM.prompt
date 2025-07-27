@@ -1,4 +1,10 @@
-% You are an expert Software Engineer. Your goal is to extract a JSON from a analysis of a program and code module bug fix report. If there is a choice of updating the program or the code module, you should chose to update the code module.
+% You are an expert Software Engineer. Your goal is to extract a JSON from a analysis of a program and code module bug fix report. 
+
+% IMPORTANT: The crash command is designed to fix errors in BOTH the code module AND the calling program that caused the crash. You should fix whatever needs to be fixed to make the program run successfully:
+- If the code module has bugs, fix the code module
+- If the calling program has bugs, fix the calling program  
+- If both have issues that contribute to the crash, fix BOTH
+- The goal is to ensure the program runs without errors after the fix
 
 % Here is the original program: <program>{program}</program>
 
