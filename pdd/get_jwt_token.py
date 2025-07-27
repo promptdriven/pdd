@@ -2,7 +2,20 @@ import asyncio
 import time
 from typing import Dict, Optional, Tuple
 
-import keyring
+# Cross-platform keyring import with fallback for WSL compatibility
+try:
+    import keyring
+    KEYRING_AVAILABLE = True
+except ImportError:
+    try:
+        import keyrings.alt.file
+        keyring = keyrings.alt.file.PlaintextKeyring()
+        KEYRING_AVAILABLE = True
+        print("Warning: Using alternative keyring (PlaintextKeyring) - tokens stored in plaintext")
+    except ImportError:
+        keyring = None
+        KEYRING_AVAILABLE = False
+        print("Warning: No keyring available - token storage disabled")
 import requests
 
 # Custom exception classes for better error handling
@@ -128,20 +141,39 @@ class FirebaseAuthenticator:
 
     def _store_refresh_token(self, refresh_token: str):
         """Stores the Firebase refresh token in the system keyring."""
-        keyring.set_password(self.keyring_service_name, self.keyring_user_name, refresh_token)
+        if not KEYRING_AVAILABLE or keyring is None:
+            print("Warning: No keyring available, refresh token not stored")
+            return
+        try:
+            keyring.set_password(self.keyring_service_name, self.keyring_user_name, refresh_token)
+        except Exception as e:
+            print(f"Warning: Failed to store refresh token in keyring: {e}")
 
     def _get_stored_refresh_token(self) -> Optional[str]:
         """Retrieves the Firebase refresh token from the system keyring."""
-        return keyring.get_password(self.keyring_service_name, self.keyring_user_name)
+        if not KEYRING_AVAILABLE or keyring is None:
+            return None
+        try:
+            return keyring.get_password(self.keyring_service_name, self.keyring_user_name)
+        except Exception as e:
+            print(f"Warning: Failed to retrieve refresh token from keyring: {e}")
+            return None
 
     def _delete_stored_refresh_token(self):
         """Deletes the stored Firebase refresh token from the keyring."""
+        if not KEYRING_AVAILABLE or keyring is None:
+            print("No keyring available. Token deletion skipped.")
+            return
         try:
             keyring.delete_password(self.keyring_service_name, self.keyring_user_name)
-        except keyring.errors.NoKeyringError:
-            print("No keyring found. Token deletion skipped.")
-        except keyring.errors.PasswordDeleteError:
-            print("Failed to delete token from keyring.")
+        except Exception as e:
+            # Handle both keyring.errors and generic exceptions for cross-platform compatibility
+            if "NoKeyringError" in str(type(e)) or "no keyring" in str(e).lower():
+                print("No keyring found. Token deletion skipped.")
+            elif "PasswordDeleteError" in str(type(e)) or "delete" in str(e).lower():
+                print("Failed to delete token from keyring.")
+            else:
+                print(f"Warning: Error deleting token from keyring: {e}")
 
     async def _refresh_firebase_token(self, refresh_token: str) -> str:
         """
