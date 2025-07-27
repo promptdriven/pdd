@@ -96,7 +96,7 @@ from sync_determine_operation import (
 
 BASENAME = "test_unit"
 LANGUAGE = "python"
-TARGET_COVERAGE = 10.0
+TARGET_COVERAGE = 90.0
 
 @pytest.fixture
 def pdd_test_environment(tmp_path):
