@@ -30,7 +30,14 @@
       "Bash(make:*)",
       "Bash(bash:*)",
       "Bash(pdd sync:*)",
-      "Bash(pdd:*)"
+      "Bash(pdd:*)",
+      "Bash(rm:*)",
+      "Bash(chmod:*)",
+      "Bash(rg:*)",
+      "Bash(cat:*)",
+      "Bash(timeout:*)",
+      "Bash(git stash push:*)",
+      "Bash(git stash:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
