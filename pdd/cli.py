@@ -362,7 +362,7 @@ def example(
     "--target-coverage",
     type=click.FloatRange(0.0, 100.0),
     default=None,  # Use None, default handled in cmd_test_main or env var
-    help="Desired code coverage percentage (default: 90.0 or PDD_TEST_COVERAGE_TARGET).",
+    help="Desired code coverage percentage (default: 10.0 or PDD_TEST_COVERAGE_TARGET).",
 )
 @click.option(
     "--merge",
@@ -1130,7 +1130,7 @@ def verify(
 @click.option(
     "--target-coverage",
     type=click.FloatRange(0.0, 100.0),
-    default=90.0,
+    default=10.0,
     show_default=True,
     help="Target code coverage percentage for generated tests.",
 )

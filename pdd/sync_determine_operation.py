@@ -56,7 +56,8 @@ LOCKS_DIR = get_locks_dir()
 
 # Export constants for other modules
 __all__ = ['PDD_DIR', 'META_DIR', 'LOCKS_DIR', 'Fingerprint', 'RunReport', 'SyncDecision', 
-           'sync_determine_operation', 'analyze_conflict_with_llm']
+           'sync_determine_operation', 'analyze_conflict_with_llm', 'read_run_report', 'get_pdd_file_paths',
+           '_check_example_success_history']
 
 
 @dataclass
@@ -84,12 +85,12 @@ class RunReport:
 @dataclass
 class SyncDecision:
     """Represents a decision about what PDD operation to run next."""
-    operation: str  # 'auto-deps', 'generate', 'example', 'crash', 'verify', 'test', 'fix', 'update', 'analyze_conflict', 'nothing'
-    reason: str
-    details: Dict[str, Any] = field(default_factory=dict)
-    estimated_cost: float = 0.0
-    confidence: float = 1.0
-    prerequisites: List[str] = field(default_factory=list)
+    operation: str  # 'auto-deps', 'generate', 'example', 'crash', 'verify', 'test', 'fix', 'update', 'analyze_conflict', 'nothing', 'all_synced', 'error', 'fail_and_request_manual_merge'
+    reason: str  # A human-readable explanation for the decision
+    confidence: float = 1.0  # Confidence level in the decision, 0.0 to 1.0, default 1.0 for deterministic decisions
+    estimated_cost: float = 0.0  # Estimated cost for the operation in dollars, default 0.0
+    details: Optional[Dict[str, Any]] = None  # Extra context for logging and debugging, default None
+    prerequisites: Optional[List[str]] = None  # List of operations that should be completed first, default None
 
 
 class SyncLock:
@@ -428,6 +429,26 @@ def get_git_diff(file_path: Path) -> str:
         return ""
 
 
+def estimate_operation_cost(operation: str, language: str = "python") -> float:
+    """Returns estimated cost in dollars for each operation based on typical LLM usage."""
+    cost_map = {
+        'auto-deps': 0.10,
+        'generate': 0.50,
+        'example': 0.30,
+        'crash': 0.40,
+        'verify': 0.35,
+        'test': 0.60,
+        'fix': 0.45,
+        'update': 0.25,
+        'analyze_conflict': 0.20,
+        'nothing': 0.0,
+        'all_synced': 0.0,
+        'error': 0.0,
+        'fail_and_request_manual_merge': 0.0
+    }
+    return cost_map.get(operation, 0.0)
+
+
 def validate_expected_files(fingerprint: Optional[Fingerprint], paths: Dict[str, Path]) -> Dict[str, bool]:
     """
     Validate that files expected to exist based on fingerprint actually exist.
@@ -492,17 +513,27 @@ def _handle_missing_expected_files(
                 return SyncDecision(
                     operation='auto-deps',
                     reason='Code file missing, prompt has dependencies - regenerate from auto-deps',
-                    details={'missing_files': missing_files, 'prompt_path': str(paths['prompt'])},
-                    estimated_cost=0.5,
-                    confidence=0.85
+                    confidence=1.0,
+                    estimated_cost=estimate_operation_cost('auto-deps'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'missing_files': missing_files, 
+                        'prompt_path': str(paths['prompt']),
+                        'has_dependencies': True
+                    }
                 )
             else:
                 return SyncDecision(
                     operation='generate',
                     reason='Code file missing - regenerate from prompt',
-                    details={'missing_files': missing_files, 'prompt_path': str(paths['prompt'])},
-                    estimated_cost=1.0,
-                    confidence=0.90
+                    confidence=1.0,
+                    estimated_cost=estimate_operation_cost('generate'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'missing_files': missing_files, 
+                        'prompt_path': str(paths['prompt']),
+                        'has_dependencies': False
+                    }
                 )
     
     elif 'example' in missing_files and paths['code'].exists():
@@ -510,9 +541,13 @@ def _handle_missing_expected_files(
         return SyncDecision(
             operation='example',
             reason='Example file missing - regenerate example',
-            details={'missing_files': missing_files, 'code_path': str(paths['code'])},
-            estimated_cost=0.5,
-            confidence=0.85
+            confidence=1.0,
+            estimated_cost=estimate_operation_cost('example'),
+            details={
+                'decision_type': 'heuristic',
+                'missing_files': missing_files, 
+                'code_path': str(paths['code'])
+            }
         )
     
     elif 'test' in missing_files and paths['code'].exists() and paths['example'].exists():
@@ -522,26 +557,37 @@ def _handle_missing_expected_files(
             return SyncDecision(
                 operation='nothing',
                 reason='Test file missing but --skip-tests specified - workflow complete',
-                details={'missing_files': missing_files, 'skip_tests': True},
-                estimated_cost=0.0,
-                confidence=1.0
+                confidence=1.0,
+                estimated_cost=estimate_operation_cost('nothing'),
+                details={
+                    'decision_type': 'heuristic',
+                    'missing_files': missing_files, 
+                    'skip_tests': True
+                }
             )
         else:
             return SyncDecision(
                 operation='test',
                 reason='Test file missing - regenerate tests',
-                details={'missing_files': missing_files, 'code_path': str(paths['code'])},
-                estimated_cost=1.0,
-                confidence=0.85
+                confidence=1.0,
+                estimated_cost=estimate_operation_cost('test'),
+                details={
+                    'decision_type': 'heuristic',
+                    'missing_files': missing_files, 
+                    'code_path': str(paths['code'])
+                }
             )
     
     # Fallback - regenerate everything
     return SyncDecision(
         operation='generate',
         reason='Multiple files missing - regenerate from prompt',
-        details={'missing_files': missing_files},
-        estimated_cost=2.0,
-        confidence=0.80
+        confidence=1.0,
+        estimated_cost=estimate_operation_cost('generate'),
+        details={
+            'decision_type': 'heuristic',
+            'missing_files': missing_files
+        }
     )
 
 
@@ -592,6 +638,59 @@ def check_for_dependencies(prompt_content: str) -> bool:
     has_explicit_deps = any(indicator in prompt_lower for indicator in explicit_dependency_indicators)
     
     return has_xml_deps or has_explicit_deps
+
+
+def _check_example_success_history(basename: str, language: str) -> bool:
+    """
+    Check if the example has run successfully before by examining historical fingerprints and run reports.
+    
+    Args:
+        basename: The base name for the PDD unit
+        language: The programming language
+    
+    Returns:
+        True if the example has run successfully before, False otherwise
+    """
+    meta_dir = get_meta_dir()
+    
+    # Strategy 1: Check if there's a fingerprint with 'verify' command (indicates successful example run)
+    # Cache fingerprint and run report to avoid redundant I/O operations
+    fingerprint = read_fingerprint(basename, language)
+    current_run_report = read_run_report(basename, language)
+    
+    # Strategy 1: Check if there's a fingerprint with 'verify' command (indicates successful example run)
+    if fingerprint and fingerprint.command == 'verify':
+        return True
+    
+    # Strategy 2: Check current run report for successful runs (exit_code == 0)
+    # Note: We check the current run report for successful history since it's updated
+    # This allows for a simple check of recent success
+    if current_run_report and current_run_report.exit_code == 0:
+        return True
+    
+    # Strategy 2b: Look for historical run reports with exit_code == 0
+    # Check all run report files in the meta directory that match the pattern
+    run_report_pattern = f"{basename}_{language}_run"
+    for file in meta_dir.glob(f"{run_report_pattern}*.json"):
+        try:
+            with open(file, 'r') as f:
+                data = json.load(f)
+            
+            # If we find any historical run with exit_code == 0, the example has run successfully
+            if data.get('exit_code') == 0:
+                return True
+        except (json.JSONDecodeError, KeyError, IOError):
+            continue
+    
+    # Strategy 3: Check if fingerprint has example_hash and was created after successful operations
+    # Commands that indicate example was working: 'example', 'verify', 'test', 'fix'
+    if fingerprint and fingerprint.example_hash:
+        successful_commands = {'example', 'verify', 'test', 'fix'}
+        if fingerprint.command in successful_commands:
+            # If the fingerprint was created after these commands, the example likely worked
+            return True
+    
+    return False
 
 
 def sync_determine_operation(basename: str, language: str, target_coverage: float, budget: float = 10.0, log_mode: bool = False, prompts_dir: str = "prompts", skip_tests: bool = False, skip_verify: bool = False) -> SyncDecision:
@@ -658,29 +757,63 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
             return SyncDecision(
                 operation='fix',
                 reason=f'Test failures detected: {run_report.tests_failed} failed tests',
-                details={'tests_failed': run_report.tests_failed},
-                estimated_cost=1.5,
-                confidence=0.90
+                confidence=0.90,
+                estimated_cost=estimate_operation_cost('fix'),
+                details={
+                    'decision_type': 'heuristic',
+                    'tests_failed': run_report.tests_failed,
+                    'exit_code': run_report.exit_code,
+                    'coverage': run_report.coverage
+                }
+            )
+        
+        # Check if we just completed a crash operation and need verification
+        if fingerprint and fingerprint.command == 'crash' and not skip_verify:
+            return SyncDecision(
+                operation='verify',
+                reason='Previous crash operation completed - verify example runs correctly',
+                confidence=0.90,
+                estimated_cost=estimate_operation_cost('verify'),
+                details={
+                    'decision_type': 'heuristic',
+                    'previous_command': 'crash',
+                    'current_exit_code': run_report.exit_code,
+                    'fingerprint_command': fingerprint.command
+                }
             )
         
         # Then check for runtime crashes (only if no test failures)
         if run_report.exit_code != 0:
-            # Check if this was from a crash fix that needs verification
-            if fingerprint and fingerprint.command == 'crash':
+            # Context-aware decision: prefer 'fix' over 'crash' when example has run successfully before
+            has_example_run_successfully = _check_example_success_history(basename, language)
+            
+            if has_example_run_successfully:
                 return SyncDecision(
-                    operation='verify',
-                    reason='Previous crash was fixed - verify example runs correctly',
-                    details={'previous_command': 'crash', 'previous_exit_code': run_report.exit_code},
-                    estimated_cost=0.7,
-                    confidence=0.90
+                    operation='fix',
+                    reason='Runtime error detected but example has run successfully before - prefer fix over crash',
+                    confidence=0.90,
+                    estimated_cost=estimate_operation_cost('fix'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'exit_code': run_report.exit_code,
+                        'timestamp': run_report.timestamp,
+                        'example_success_history': True,
+                        'decision_rationale': 'prefer_fix_over_crash'
+                    }
                 )
             else:
                 return SyncDecision(
                     operation='crash',
-                    reason='Runtime error detected in last run',
-                    details={'exit_code': run_report.exit_code},
-                    estimated_cost=2.0,
-                    confidence=0.95
+                    reason='Runtime error detected in last run - no successful example history',
+                    confidence=0.95,
+                    estimated_cost=estimate_operation_cost('crash'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'exit_code': run_report.exit_code,
+                        'timestamp': run_report.timestamp,
+                        'example_success_history': False,
+                        'decision_rationale': 'crash_without_history'
+                    }
                 )
         
         if run_report.coverage < target_coverage:
@@ -690,17 +823,29 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
                 return SyncDecision(
                     operation='all_synced',
                     reason=f'Coverage {run_report.coverage:.1f}% below target {target_coverage:.1f}% but tests skipped',
-                    details={'current_coverage': run_report.coverage, 'target_coverage': target_coverage, 'tests_skipped': True},
-                    estimated_cost=0.0,
-                    confidence=0.90
+                    confidence=0.90,
+                    estimated_cost=estimate_operation_cost('all_synced'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'current_coverage': run_report.coverage,
+                        'target_coverage': target_coverage,
+                        'tests_skipped': True,
+                        'skip_tests': True
+                    }
                 )
             else:
                 return SyncDecision(
                     operation='test',
                     reason=f'Coverage {run_report.coverage:.1f}% below target {target_coverage:.1f}%',
-                    details={'current_coverage': run_report.coverage, 'target_coverage': target_coverage},
-                    estimated_cost=1.0,
-                    confidence=0.85
+                    confidence=0.85,
+                    estimated_cost=estimate_operation_cost('test'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'current_coverage': run_report.coverage,
+                        'target_coverage': target_coverage,
+                        'tests_passed': run_report.tests_passed,
+                        'tests_failed': run_report.tests_failed
+                    }
                 )
     
     # 2. Analyze File State
@@ -716,25 +861,39 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
                 return SyncDecision(
                     operation='auto-deps',
                     reason='New prompt with dependencies detected',
-                    details={'prompt_path': str(paths['prompt'])},
-                    estimated_cost=0.5,
-                    confidence=0.80
+                    confidence=0.80,
+                    estimated_cost=estimate_operation_cost('auto-deps'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'prompt_path': str(paths['prompt']),
+                        'fingerprint_found': False,
+                        'has_dependencies': True
+                    }
                 )
             else:
                 return SyncDecision(
                     operation='generate',
                     reason='New prompt ready for code generation',
-                    details={'prompt_path': str(paths['prompt'])},
-                    estimated_cost=1.0,
-                    confidence=0.90
+                    confidence=0.90,
+                    estimated_cost=estimate_operation_cost('generate'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'prompt_path': str(paths['prompt']),
+                        'fingerprint_found': False,
+                        'has_dependencies': False
+                    }
                 )
         else:
             return SyncDecision(
                 operation='nothing',
                 reason='No prompt file and no history - nothing to do',
-                details={},
-                estimated_cost=0.0,
-                confidence=1.0
+                confidence=1.0,
+                estimated_cost=estimate_operation_cost('nothing'),
+                details={
+                    'decision_type': 'heuristic',
+                    'prompt_exists': False,
+                    'fingerprint_found': False
+                }
             )
     
     # CRITICAL FIX: Validate expected files exist before hash comparison
@@ -771,9 +930,14 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
             return SyncDecision(
                 operation='nothing',
                 reason=f'All required files synchronized (skip_tests={skip_tests}, skip_verify={skip_verify})',
-                details={'skip_tests': skip_tests, 'skip_verify': skip_verify},
-                estimated_cost=0.0,
-                confidence=1.0
+                confidence=1.0,
+                estimated_cost=estimate_operation_cost('nothing'),
+                details={
+                    'decision_type': 'heuristic',
+                    'skip_tests': skip_tests,
+                    'skip_verify': skip_verify,
+                    'workflow_complete': True
+                }
             )
         
         # Progress workflow considering skip flags
@@ -781,20 +945,80 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
             return SyncDecision(
                 operation='example',
                 reason='Code exists but example missing - progress workflow',
-                details={'code_path': str(paths['code'])},
-                estimated_cost=0.5,
-                confidence=0.85
+                confidence=0.85,
+                estimated_cost=estimate_operation_cost('example'),
+                details={
+                    'decision_type': 'heuristic',
+                    'code_path': str(paths['code']),
+                    'code_exists': True,
+                    'example_exists': False
+                }
             )
         
         if (paths['code'].exists() and paths['example'].exists() and 
             not skip_tests and not paths['test'].exists()):
-            return SyncDecision(
-                operation='test',
-                reason='Code and example exist but test missing - progress workflow',
-                details={'code_path': str(paths['code']), 'example_path': str(paths['example'])},
-                estimated_cost=1.0,
-                confidence=0.85
-            )
+            
+            # Check if example has been crash-tested and verified before allowing test generation
+            run_report = read_run_report(basename, language)
+            if not run_report:
+                # No run report exists - need to test the example first
+                return SyncDecision(
+                    operation='crash',
+                    reason='Example exists but needs runtime testing before test generation',
+                    confidence=0.85,
+                    estimated_cost=estimate_operation_cost('crash'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'code_path': str(paths['code']),
+                        'example_path': str(paths['example']),
+                        'no_run_report': True,
+                        'workflow_stage': 'crash_validation'
+                    }
+                )
+            elif run_report.exit_code != 0:
+                # Example crashed - fix it before proceeding
+                return SyncDecision(
+                    operation='crash',
+                    reason='Example crashes - fix runtime errors before test generation',
+                    confidence=0.90,
+                    estimated_cost=estimate_operation_cost('crash'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'exit_code': run_report.exit_code,
+                        'workflow_stage': 'crash_fix'
+                    }
+                )
+            elif fingerprint and fingerprint.command != 'verify' and not skip_verify:
+                # Example runs but hasn't been verified yet
+                return SyncDecision(
+                    operation='verify',
+                    reason='Example runs but needs verification before test generation',
+                    confidence=0.85,
+                    estimated_cost=estimate_operation_cost('verify'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'exit_code': run_report.exit_code,
+                        'last_command': fingerprint.command,
+                        'workflow_stage': 'verify_validation'
+                    }
+                )
+            else:
+                # Example runs and is verified (or verify is skipped) - now safe to generate tests
+                return SyncDecision(
+                    operation='test',
+                    reason='Example validated - ready for test generation',
+                    confidence=0.85,
+                    estimated_cost=estimate_operation_cost('test'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'code_path': str(paths['code']),
+                        'example_path': str(paths['example']),
+                        'code_exists': True,
+                        'example_exists': True,
+                        'test_exists': False,
+                        'workflow_stage': 'test_generation'
+                    }
+                )
         
         # Some files are missing but no changes detected
         if not paths['code'].exists():
@@ -804,17 +1028,27 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
                     return SyncDecision(
                         operation='auto-deps',
                         reason='Missing code file, prompt has dependencies',
-                        details={'prompt_path': str(paths['prompt'])},
-                        estimated_cost=0.5,
-                        confidence=0.80
+                        confidence=0.80,
+                        estimated_cost=estimate_operation_cost('auto-deps'),
+                        details={
+                            'decision_type': 'heuristic',
+                            'prompt_path': str(paths['prompt']),
+                            'code_exists': False,
+                            'has_dependencies': True
+                        }
                     )
                 else:
                     return SyncDecision(
                         operation='generate',
                         reason='Missing code file - generate from prompt',
-                        details={'prompt_path': str(paths['prompt'])},
-                        estimated_cost=1.0,
-                        confidence=0.90
+                        confidence=0.90,
+                        estimated_cost=estimate_operation_cost('generate'),
+                        details={
+                            'decision_type': 'heuristic',
+                            'prompt_path': str(paths['prompt']),
+                            'code_exists': False,
+                            'has_dependencies': False
+                        }
                     )
     
     elif len(changes) == 1:
@@ -827,44 +1061,66 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
                 return SyncDecision(
                     operation='auto-deps',
                     reason='Prompt changed and dependencies need updating',
-                    details={'changed_file': 'prompt'},
-                    estimated_cost=0.5,
-                    confidence=0.85
+                    confidence=0.85,
+                    estimated_cost=estimate_operation_cost('auto-deps'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'changed_file': 'prompt',
+                        'has_dependencies': True,
+                        'prompt_changed': True
+                    }
                 )
             else:
                 return SyncDecision(
                     operation='generate',
                     reason='Prompt changed - regenerate code',
-                    details={'changed_file': 'prompt'},
-                    estimated_cost=1.0,
-                    confidence=0.90
+                    confidence=0.90,
+                    estimated_cost=estimate_operation_cost('generate'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'changed_file': 'prompt',
+                        'has_dependencies': False,
+                        'prompt_changed': True
+                    }
                 )
         
         elif change == 'code':
             return SyncDecision(
                 operation='update',
                 reason='Code changed - update prompt to reflect changes',
-                details={'changed_file': 'code'},
-                estimated_cost=0.8,
-                confidence=0.85
+                confidence=0.85,
+                estimated_cost=estimate_operation_cost('update'),
+                details={
+                    'decision_type': 'heuristic',
+                    'changed_file': 'code',
+                    'code_changed': True
+                }
             )
         
         elif change == 'test':
             return SyncDecision(
                 operation='test',
                 reason='Test changed - run new tests',
-                details={'changed_file': 'test'},
-                estimated_cost=0.5,
-                confidence=0.80
+                confidence=0.80,
+                estimated_cost=estimate_operation_cost('test'),
+                details={
+                    'decision_type': 'heuristic',
+                    'changed_file': 'test',
+                    'test_changed': True
+                }
             )
         
         elif change == 'example':
             return SyncDecision(
                 operation='verify',
                 reason='Example changed - verify new example',
-                details={'changed_file': 'example'},
-                estimated_cost=0.7,
-                confidence=0.80
+                confidence=0.80,
+                estimated_cost=estimate_operation_cost('verify'),
+                details={
+                    'decision_type': 'heuristic',
+                    'changed_file': 'example',
+                    'example_changed': True
+                }
             )
     
     else:
@@ -872,18 +1128,27 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
         return SyncDecision(
             operation='analyze_conflict',
             reason='Multiple files changed - requires conflict analysis',
-            details={'changed_files': changes},
-            estimated_cost=2.0,
-            confidence=0.70
+            confidence=0.70,
+            estimated_cost=estimate_operation_cost('analyze_conflict'),
+            details={
+                'decision_type': 'heuristic',
+                'changed_files': changes,
+                'num_changes': len(changes)
+            }
         )
     
     # Fallback - should not reach here normally
     return SyncDecision(
         operation='nothing',
         reason='No clear operation determined',
-        details={'fingerprint_exists': fingerprint is not None, 'changes': changes},
-        estimated_cost=0.0,
-        confidence=0.50
+        confidence=0.50,
+        estimated_cost=estimate_operation_cost('nothing'),
+        details={
+            'decision_type': 'heuristic',
+            'fingerprint_exists': fingerprint is not None,
+            'changes': changes,
+            'fallback': True
+        }
     )
 
 
@@ -910,9 +1175,13 @@ def analyze_conflict_with_llm(basename: str, language: str, fingerprint: Fingerp
             return SyncDecision(
                 operation='fail_and_request_manual_merge',
                 reason='LLM analysis template not found - manual merge required',
-                details={'error': 'Template not available'},
-                estimated_cost=0.0,
-                confidence=0.0
+                confidence=0.0,
+                estimated_cost=estimate_operation_cost('fail_and_request_manual_merge'),
+                details={
+                    'decision_type': 'llm',
+                    'error': 'Template not available',
+                    'changed_files': changed_files
+                }
             )
         
         # 2. Gather file paths and diffs
@@ -974,9 +1243,14 @@ def analyze_conflict_with_llm(basename: str, language: str, fingerprint: Fingerp
                 return SyncDecision(
                     operation='fail_and_request_manual_merge',
                     reason=f'LLM confidence too low ({confidence:.2f}) - manual merge required',
-                    details={'llm_response': llm_result, 'changed_files': changed_files},
+                    confidence=confidence,
                     estimated_cost=response.get('cost', 0.0),
-                    confidence=confidence
+                    details={
+                        'decision_type': 'llm',
+                        'llm_response': llm_result,
+                        'changed_files': changed_files,
+                        'confidence_threshold': 0.75
+                    }
                 )
             
             # Extract operation and details
@@ -988,14 +1262,15 @@ def analyze_conflict_with_llm(basename: str, language: str, fingerprint: Fingerp
             return SyncDecision(
                 operation=operation,
                 reason=f"LLM analysis: {reason}",
+                confidence=confidence,
+                estimated_cost=response.get('cost', 0.0),
                 details={
+                    'decision_type': 'llm',
                     'llm_response': llm_result,
                     'changed_files': changed_files,
                     'merge_strategy': merge_strategy,
                     'follow_up_operations': follow_up_operations
                 },
-                estimated_cost=response.get('cost', 0.0),
-                confidence=confidence,
                 prerequisites=follow_up_operations
             )
             
@@ -1004,9 +1279,15 @@ def analyze_conflict_with_llm(basename: str, language: str, fingerprint: Fingerp
             return SyncDecision(
                 operation='fail_and_request_manual_merge',
                 reason=f'Invalid LLM response: {e} - manual merge required',
-                details={'error': str(e), 'raw_response': response.get('result', ''), 'changed_files': changed_files},
+                confidence=0.0,
                 estimated_cost=response.get('cost', 0.0),
-                confidence=0.0
+                details={
+                    'decision_type': 'llm',
+                    'error': str(e),
+                    'raw_response': response.get('result', ''),
+                    'changed_files': changed_files,
+                    'llm_error': True
+                }
             )
     
     except Exception as e:
@@ -1014,22 +1295,28 @@ def analyze_conflict_with_llm(basename: str, language: str, fingerprint: Fingerp
         return SyncDecision(
             operation='fail_and_request_manual_merge',
             reason=f'Error during LLM analysis: {e} - manual merge required',
-            details={'error': str(e), 'changed_files': changed_files},
-            estimated_cost=0.0,
-            confidence=0.0
+            confidence=0.0,
+            estimated_cost=estimate_operation_cost('fail_and_request_manual_merge'),
+            details={
+                'decision_type': 'llm',
+                'error': str(e),
+                'changed_files': changed_files,
+                'llm_error': True
+            }
         )
 
 
 if __name__ == "__main__":
     # Example usage
-    if len(sys.argv) != 3:
-        print("Usage: python sync_determine_operation.py <basename> <language>")
+    if len(sys.argv) < 3 or len(sys.argv) > 4:
+        print("Usage: python sync_determine_operation.py <basename> <language> [target_coverage]")
         sys.exit(1)
     
     basename = sys.argv[1]
     language = sys.argv[2]
+    target_coverage = float(sys.argv[3]) if len(sys.argv) == 4 else 90.0
     
-    decision = sync_determine_operation(basename, language, target_coverage=90.0)
+    decision = sync_determine_operation(basename, language, target_coverage)
     
     print(f"Operation: {decision.operation}")
     print(f"Reason: {decision.reason}")

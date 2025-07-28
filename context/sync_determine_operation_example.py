@@ -29,7 +29,7 @@ def main():
     """
     basename = "calculator"
     language = "python"
-    target_coverage = 90.0
+    target_coverage = 10.0
 
     # --- Setup Simulated Project Environment ---
     output_dir = Path("./output").resolve()

@@ -30,6 +30,7 @@ Create a module with the following main function:
 ```python
 def sync_orchestration(
     basename: str,
+    target_coverage: float = 90.0,
     language: str = "python",
     prompts_dir: str = "prompts",
     code_dir: str = "src",
@@ -39,7 +40,6 @@ def sync_orchestration(
     budget: float = 10.0,
     skip_verify: bool = False,
     skip_tests: bool = False,
-    target_coverage: float = 90.0,
     log: bool = False,
     force: bool = False,
     strength: float = 0.5,
@@ -75,7 +75,6 @@ def sync_orchestration(
     - 'final_state': Dict with final file states
     - 'errors': List of any errors encountered
     - 'log_entries': List of log entries (when log=True)
-    - 'model_name': str name of the model used for operations
     """
 ```
 
@@ -122,7 +121,23 @@ Here are examples of how to use the internal functions:
 
 The module should implement the PDD workflow as described in the whitepaper:
 
-1. **Log Mode Check**: If `--log` flag is set, display sync log and return
+1. **Log Mode Check**: If `--log` flag is set, display sync log and return. The log display should show:
+   - **Normal Mode**: Concise format showing timestamp, operation, reason, cost comparison, success status, and duration
+     ```
+     [2024-01-15 10:30:45] generate    | Code file does not exist | ✓ $0.47 (est: $0.50) | 17.3s
+     [2024-01-15 10:31:03] test        | Progress the workflow    | ✓ $0.62 (est: $0.60) | 23.1s
+     [2024-01-15 10:31:27] fix         | 2 tests failed           | ✗ Error: Budget exceeded
+     ```
+   - **Verbose Mode**: Detailed format including confidence, decision type, model, and details
+     ```
+     [2024-01-15 10:30:45] generate    | Code file does not exist
+       Decision Type: heuristic | Confidence: 1.0
+       Cost: $0.47 (estimated: $0.50) | Model: claude-3-5-sonnet
+       Duration: 17.3s | Budget Remaining: $9.53
+       Details: {"prompt_exists": true, "code_exists": false}
+     ```
+   - Clear indication if no log exists or log is empty
+   - Handle special event entries (lock_acquired, budget_warning, etc.)
 2. **Single Instance Enforcement**: Use `sync_determine_operation` to acquire lock and prevent concurrent runs
 3. **Initial Analysis**: Analyze current file state to determine starting point
 4. **Operation Loop**: Execute operations in sequence until synchronized
@@ -143,6 +158,58 @@ The orchestrator should execute these operations in order as determined by `sync
 6. **test**: Generate comprehensive unit tests (unless --skip-tests)
 7. **fix**: Resolve any bugs found by unit tests
 8. **update**: Back-propagate any learnings to the prompt file
+
+### Sync Log Format
+
+The sync log should be stored at `.pdd/meta/{basename}_{language}_sync.log` as a JSONL file (one JSON object per line). Each log entry represents a complete operation with both decision and result information:
+
+**Complete Operation Entry**:
+```json
+{
+  "timestamp": "2024-01-15T10:30:45.123Z",
+  "operation": "generate",
+  "reason": "Code file does not exist",
+  "decision_type": "heuristic",
+  "confidence": 1.0,
+  "estimated_cost": 0.50,
+  "actual_cost": 0.47,
+  "success": true,
+  "model": "claude-3-5-sonnet-20241022",
+  "duration": 17.3,
+  "error": null,
+  "details": {
+    "prompt_exists": true,
+    "code_exists": false,
+    "prompt_hash": "abc123...",
+    "fingerprint_found": false,
+    "budget_remaining": 9.53
+  }
+}
+```
+
+**Special Event Entries** (for system events):
+```json
+{
+  "timestamp": "2024-01-15T10:30:44.000Z",
+  "event": "lock_acquired",
+  "details": {"pid": 12345}
+}
+```
+
+The `decision_type` field distinguishes between:
+- `"heuristic"`: Deterministic decisions based on file states
+- `"llm"`: Decisions made using LLM analysis for complex conflicts
+
+This enables users to understand:
+- What operations were performed during each sync
+- Why each operation was chosen with confidence levels
+- The decision-making process (heuristic vs LLM-based)
+- Actual cost vs estimated cost comparison for budget analysis
+- Which models were used for each operation
+- Success/failure status with error details
+- Performance metrics (duration)
+- Budget tracking throughout the sync process
+- Detailed context for debugging complex scenarios
 
 ### Handling Skipped Operations
 If `--skip-verify` or `--skip-tests` flags are used, the orchestrator should not simply ignore the step. To ensure the state machine progresses correctly, it should:
@@ -172,12 +239,41 @@ The module should:
 
 For each operation:
 
-1. **Determine Next Step**: Call `sync_determine_operation`.
-2. **Update Animation**: Set `function_name_ref` to the current operation.
-3. **Execute Command**: Run the appropriate PDD `*_main` function.
-4. **Track Results**: Update cost, file paths, and status colors.
-5. **Persist State**: **If the operation was successful, save a new `Fingerprint` to disk.** This updates the state so the next call to `sync_determine_operation` can make a new decision.
-6. **Handle Errors**: Implement retry logic up to `max_attempts` or break the loop on a definitive failure.
+1. **Determine Next Step**: Call `sync_determine_operation` which returns a `SyncDecision` object containing:
+   - `operation`: The operation to perform ('generate', 'test', 'verify', etc.)
+   - `reason`: Human-readable explanation of why this operation was chosen
+   - `confidence`: Float (0.0-1.0) indicating confidence in the decision
+   - `estimated_cost`: Float representing estimated cost in dollars
+   - `details`: Optional dict with additional context about the decision
+2. **Create Log Entry**: Create initial log entry with:
+   ```python
+   log_entry = create_sync_log_entry(decision, budget - current_cost_ref[0])
+   ```
+3. **Update Animation**: Set `function_name_ref` to the current operation.
+4. **Execute Command**: Run the appropriate PDD `*_main` function, tracking start time.
+5. **Update Log Entry**: After execution, update the entry with actual results:
+   ```python
+   duration = time.time() - start_time
+   update_sync_log_entry(log_entry, {
+       'success': success,
+       'cost': actual_cost,      # Extracted from command result
+       'model': model_name,      # Extracted from command result
+       'error': error_message if not success else None
+   }, duration)
+   append_sync_log(basename, language, log_entry)
+   ```
+6. **Track Results**: Update cost, file paths, and status colors.
+7. **Persist State**: **If the operation was successful, save a new `Fingerprint` to disk.** This updates the state so the next call to `sync_determine_operation` can make a new decision.
+8. **Handle Errors**: Implement retry logic up to `max_attempts` or break the loop on a definitive failure.
+
+### Special Event Logging
+
+The orchestrator should also log important system events:
+
+- **Lock Events**: When sync lock is acquired/released
+- **Budget Warnings**: When budget is running low (< 20% remaining)
+- **Cycle Detection**: When crash-verify loops are detected and broken
+- **Skip Events**: When operations are skipped due to flags
 
 ### State and Path Management
 
@@ -197,14 +293,18 @@ The orchestrator should:
 
 Implement robust error handling:
 
+- **Path Construction Validation**: Validate file paths early and exit gracefully on failures with clear error messages
 - **Lock Acquisition Failure**: Exit immediately with clear message if another sync is running
 - **Budget Constraints**: Stop if total cost exceeds budget
 - **File Validation**: Validate required files exist before operations (especially for crash operations that need both code and example files)
+- **LLM Error Recovery**: Handle LLM failures gracefully, skipping operations when appropriate (e.g., "LLM returned None" errors)
+- **Subprocess Timeout Handling**: Implement timeouts for test execution and example runs to prevent hanging
 - **Actual Error Capture**: For fix operations, capture real test failure information by re-running tests and capturing stdout/stderr output to provide meaningful error context
 - **Return Value Handling**: Handle different return formats from command functions:
   - Dictionary format: Extract 'success', 'cost', and 'model' fields directly
   - Tuple format: Treat as successful if no exceptions, extract cost from second-to-last element and model from last element
   - Ensure fingerprint state is saved after successful operations regardless of return format
+- **Enhanced Cycle Detection**: Detect and break crash-verify cycles with configurable repeat limits (e.g., MAX_CYCLE_REPEATS = 2)
 - **Graceful Degradation**: Continue workflow even if non-critical steps fail
 - **User Feedback**: Provide clear error messages through animation
 - **Lock Cleanup**: Always release lock, even on exceptions or early exits
@@ -242,7 +342,7 @@ from typing import Dict, Any, Optional, List
 from dataclasses import asdict
 
 import click
-from rich.console import Console
+# Note: rich.console.Console not used in current implementation
 ```
 
 ### Command Execution Pattern
@@ -254,6 +354,9 @@ For each PDD operation, construct appropriate arguments based on the up-to-date 
 The orchestrator should implement these helper functions for proper state management:
 
 - **load_sync_log(basename, language)**: Load sync log entries from the metadata directory
+- **create_sync_log_entry(decision, budget_remaining)**: Create initial log entry from decision with all fields (actual results set to None initially)
+- **update_sync_log_entry(entry, result, duration)**: Update log entry with execution results (actual_cost, success, model, duration, error)
+- **append_sync_log(basename, language, entry)**: Append completed log entry to the sync log file
 - **save_run_report(report, basename, language)**: Save RunReport data to enable state progression
 - **_save_operation_fingerprint(basename, language, operation, paths, cost, model)**: Save fingerprint state after successful operations to update the workflow state machine
 
@@ -262,6 +365,14 @@ The orchestrator should implement these helper functions for proper state manage
 The orchestrator should include test execution functionality to create proper RunReports:
 
 - **_execute_tests_and_create_run_report(test_file, basename, language, target_coverage)**: Execute pytest with coverage reporting and parse results into RunReport objects. This enables the state machine to detect test failures and trigger fix operations in subsequent sync runs.
+
+### Post-Operation Validation
+
+After successful operations, the orchestrator should validate results:
+
+- **After 'crash' operations**: Re-run the example program to verify the crash is fixed and update run reports with actual execution results
+- **After 'fix' operations**: Execute tests to verify fixes worked and update run reports with current test status
+- **After 'test' operations**: Execute generated tests to create initial run reports for failure detection in subsequent sync runs
 
 ### Output Format
 
@@ -280,8 +391,7 @@ Return comprehensive results:
         'test': {'exists': True, 'path': '...', 'status': 'passing'}
     },
     'errors': [],
-    'skipped_operations': ['verify'] if skip_verify else [],
-    'model_name': 'gpt-4'
+    'skipped_operations': ['verify'] if skip_verify else []
 }
 ```
 
@@ -298,6 +408,8 @@ Return comprehensive results:
 9. **Return Format Compatibility**: Handle both dictionary and tuple return values from command functions
 10. **Error Recovery**: Handle operation failures gracefully and break workflow loop on definitive failures
 11. **State Persistence**: Always save fingerprint state after successful operations to enable workflow progression
+12. **Version Handling**: Import PDD version dynamically using `from . import __version__` and use it when creating Fingerprint objects for the pdd_version field instead of hardcoding version strings
+13. **Debug Output**: Debug print statements may be included during development but should be configurable or removable for production use
 
 ## Dependencies
 
@@ -375,13 +487,27 @@ def sync_orchestration(..., log=False, verbose=False):
                 # 3. Determine the next operation
                 decision = sync_determine_operation(...)
                 
-                # 4. Execute the operation
-                # ...
+                # 4. Create log entry with decision info
+                log_entry = create_sync_log_entry(decision, budget - current_cost_ref[0])
                 
-                # 5. Save new state (fingerprint) on success
+                # 5. Execute the operation and track timing
+                start_time = time.time()
+                # ... execute operation ...
+                
+                # 6. Update log entry with execution results and save
+                duration = time.time() - start_time
+                update_sync_log_entry(log_entry, {
+                    'success': success,
+                    'cost': actual_cost,
+                    'model': model_name,
+                    'error': error_message if not success else None
+                }, duration)
+                append_sync_log(basename, language, log_entry)
+                
+                # 7. Save new state (fingerprint) on success
                 # ...
 
-                # 6. Break loop if finished, in conflict, or on error
+                # 8. Break loop if finished, in conflict, or on error
                 if decision.operation in ['nothing', 'fail_and_request_manual_merge']:
                     break
     
