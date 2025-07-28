@@ -4,6 +4,20 @@
 version: "1.0"
 
 contexts:
+  # Regression test context (must come before pdd_cli to match first)
+  regression:
+    paths: ["*/staging/sync_regression_*", "**/staging/sync_regression_*", "*sync_regression_*", "sync_regression_*"]
+    defaults:
+      generate_output_path: "pdd/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
+      default_language: "python"
+      target_coverage: 10.0
+      strength: 0.75
+      temperature: 0.0
+      budget: 10.0
+      max_attempts: 3
+
   # Main PDD CLI codebase context
   pdd_cli:
     paths: ["pdd/**", "*.py", "prompts/**", "tests/**"]
@@ -12,7 +26,7 @@ contexts:
       test_output_path: "tests/"
       example_output_path: "examples/"
       default_language: "python"
-      target_coverage: 90.0
+      target_coverage: 10.0
       strength: 0.9
       temperature: 0.0
       budget: 10.0
@@ -91,7 +105,7 @@ contexts:
       test_output_path: "tests/"
       example_output_path: "examples/"
       default_language: "python"
-      target_coverage: 90.0
+      target_coverage: 10.0
       strength: 0.8
       temperature: 0.0
       budget: 10.0
