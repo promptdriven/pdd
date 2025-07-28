@@ -20,7 +20,7 @@ We recommend installing PDD using the [uv package manager](https://github.com/as
 
 ```bash
 # Install uv if you haven't already 
-curl -sSf https://astral.sh/uv/install.sh | sh
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Install PDD using uv tool install
 uv tool install pdd-cli
@@ -161,7 +161,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.43
+Current version: 0.0.44
 
 To check your installed version, run:
 ```
