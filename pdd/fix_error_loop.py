@@ -46,7 +46,26 @@ def run_pytest_on_file(test_file: str) -> tuple[int, int, int, str]:
         
         # Parse the JSON output from stdout
         try:
-            output = json.loads(result.stdout)
+            # Extract just the JSON part from stdout (handles CLI contamination)
+            stdout_clean = result.stdout
+            json_start = stdout_clean.find('{')
+            if json_start == -1:
+                raise json.JSONDecodeError("No JSON found in output", stdout_clean, 0)
+            
+            # Find the end of the JSON object by counting braces
+            brace_count = 0
+            json_end = json_start
+            for i, char in enumerate(stdout_clean[json_start:], json_start):
+                if char == '{':
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        json_end = i + 1
+                        break
+            
+            json_str = stdout_clean[json_start:json_end]
+            output = json.loads(json_str)
             test_results = output.get('test_results', [{}])[0]
             
             # Check pytest's return code first
