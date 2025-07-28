@@ -40,12 +40,12 @@ Create the following `dataclasses` to structure the data:
     -   `tests_failed: int`
     -   `coverage: float`
 -   `SyncDecision`:
-    -   `operation: str` (e.g., 'auto-deps', 'generate', 'example', 'crash', 'verify', 'test', 'fix', 'update', 'analyze_conflict', 'nothing')
+    -   `operation: str` (e.g., 'auto-deps', 'generate', 'example', 'crash', 'verify', 'test', 'fix', 'update', 'analyze_conflict', 'nothing', 'all_synced', 'error', 'fail_and_request_manual_merge')
     -   `reason: str` (A human-readable explanation for the decision)
-    -   `details: Dict[str, Any]` (Optional extra info for the orchestrator)
-    -   `estimated_cost: float` (Estimated cost for the operation, default 0.0)
-    -   `confidence: float` (Confidence level in the decision, default 1.0)
-    -   `prerequisites: List[str]` (List of operations that should be completed first)
+    -   `confidence: float` (Confidence level in the decision, 0.0 to 1.0, default 1.0 for deterministic decisions)
+    -   `estimated_cost: float` (Estimated cost for the operation in dollars, default 0.0)
+    -   `details: Optional[Dict[str, Any]]` (Extra context for logging and debugging, default None)
+    -   `prerequisites: Optional[List[str]]` (List of operations that should be completed first, default None)
 
 #### 2. Locking Mechanism
 
@@ -76,6 +76,17 @@ Implement the following helper functions:
 -   `read_fingerprint(basename: str, language: str) -> Optional[Fingerprint]`: Reads and validates the JSON fingerprint file. Returns `None` if it doesn't exist or is invalid.
 -   `read_run_report(basename: str, language: str) -> Optional[RunReport]`: Reads and validates the JSON run report file.
 -   `calculate_current_hashes(paths: Dict[str, Path]) -> Dict[str, Optional[str]]`: Computes the hashes for all current files on disk.
+-   `estimate_operation_cost(operation: str, language: str = "python") -> float`: Returns estimated cost in dollars for each operation based on typical LLM usage:
+    - 'auto-deps': 0.10
+    - 'generate': 0.50
+    - 'example': 0.30
+    - 'crash': 0.40
+    - 'verify': 0.35
+    - 'test': 0.60
+    - 'fix': 0.45
+    - 'update': 0.25
+    - 'analyze_conflict': 0.20
+    - Others ('nothing', 'all_synced', 'error', etc.): 0.0
 
 #### 4. The Main `sync_determine_operation` Function
 
@@ -102,9 +113,11 @@ else:
 Log mode performs the complete analysis (reading fingerprints, calculating hashes, checking run reports, and applying decision logic) but without any file modifications or lock coordination.
 2.  **Check Runtime Signals First**:
     -   Read the latest `RunReport`.
-    -   If the report exists and `exit_code != 0`, return a decision to run `crash`.
+    -   If the report exists and `exit_code != 0`:
+        -   Check the last `Fingerprint` - if the previous command was `crash`, return a decision to run `verify` (to verify the crash fix worked)
+        -   Otherwise, return a decision to run `crash`
     -   If `tests_failed > 0`, return a decision to run `fix`.
-    -   If `coverage < target_coverage` and `skip_tests=False`, return a decision to run `test` to improve coverage. If `skip_tests=True`, consider workflow complete despite low coverage.
+    -   If `coverage < target_coverage` and `skip_tests=False`, return a decision to run `test` to improve coverage. If `skip_tests=True`, return `all_synced` indicating workflow is complete despite low coverage.
     -   If any of these conditions are met, the analysis stops here, as fixing a broken state is the highest priority.
 3.  **Analyze File State**:
     -   Read the last saved `Fingerprint`.
@@ -126,14 +139,56 @@ Log mode performs the complete analysis (reading fingerprints, calculating hashe
     
     -   **No Fingerprint (New or Untracked Unit):**
         -   If a `prompt` file exists:
-            -   Check if prompt has `include` xml tags or references to other modules -> **`auto-deps`**. (Reason: Need to inject dependencies before generating).
-            -   Otherwise -> **`generate`**. (Reason: A prompt is ready for a new unit).
-        -   Otherwise -> **`nothing`**. (Reason: No prompt and no history means there's nothing to do).
+            -   Check if prompt has `include` xml tags or references to other modules -> Return:
+                ```python
+                SyncDecision(
+                    operation='auto-deps',
+                    reason='Need to inject dependencies before generating',
+                    confidence=1.0,
+                    estimated_cost=estimate_operation_cost('auto-deps'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'prompt_exists': True, 
+                        'fingerprint_found': False, 
+                        'has_includes': True
+                    }
+                )
+                ```
+            -   Otherwise -> Return:
+                ```python
+                SyncDecision(
+                    operation='generate',
+                    reason='A prompt is ready for a new unit',
+                    confidence=1.0,
+                    estimated_cost=estimate_operation_cost('generate'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'prompt_exists': True, 
+                        'code_exists': False, 
+                        'fingerprint_found': False
+                    }
+                )
+                ```
+        -   Otherwise -> Return:
+            ```python
+            SyncDecision(
+                operation='nothing',
+                reason='No prompt and no history means there\'s nothing to do',
+                confidence=1.0,
+                estimated_cost=0.0,
+                details={
+                    'decision_type': 'heuristic',
+                    'prompt_exists': False, 
+                    'fingerprint_found': False
+                }
+            )
+            ```
     -   **No Changes (Hashes Match Fingerprint):**
         -   If `code` exists but `example` does not -> **`example`**. (Reason: Progress the workflow).
         -   If `code` and `example` exist but `test` does not and `skip_tests=False` -> **`test`**. (Reason: Progress the workflow).
         -   If all required files exist considering skip flags -> **`nothing`**. (Reason: All files are synchronized according to current workflow configuration).
         -   **Skip Flag Considerations**: When `skip_tests=True`, test files are not required for workflow completion. When `skip_verify=True`, verification operations are not required.
+        -   **Note on operation names**: Use `nothing` when no action is needed and files are in sync. Use `all_synced` when workflow is complete but with caveats (e.g., tests skipped, low coverage accepted).
     -   **Simple Changes (Single File Modified)**:
         -   If only the `prompt_hash` differs:
             -   Check if dependencies need updating -> **`auto-deps`**.
@@ -143,7 +198,18 @@ Log mode performs the complete analysis (reading fingerprints, calculating hashe
         -   If only the `example_hash` differs -> **`verify`** (to run the new example).
     -   **Complex Changes (Multiple Files Modified / Conflicts)**:
         -   Return a decision to run **`analyze_conflict`**. The calling orchestrator will handle this.
-5.  **Return the Decision**: The function must always return a `SyncDecision` object with the recommended operation and a clear reason.
+5.  **Return the Decision**: The function must always return a `SyncDecision` object with:
+    - `operation`: The recommended operation
+    - `reason`: A clear, human-readable explanation
+    - `confidence`: 1.0 for deterministic decisions, lower for LLM-based decisions
+    - `estimated_cost`: Use the `estimate_operation_cost` helper function
+    - `details`: A dictionary containing relevant context such as:
+        - `decision_type`: "heuristic" for deterministic decisions, "llm" for LLM-based decisions
+        - File existence states (`prompt_exists`, `code_exists`, etc.)
+        - Hash comparisons (`prompt_changed`, `code_changed`, etc.)
+        - Fingerprint state (`fingerprint_found`, `last_command`)
+        - Run report details (`tests_failed`, `coverage`, `exit_code`)
+        - Any other relevant diagnostic information for debugging and logging
 
 #### 5. References: Here is how to use the internal modules that are available and must be used in this implementation:
     <internal_modules>
@@ -193,9 +259,37 @@ Implement a second function `analyze_conflict_with_llm` to resolve complex sync 
 4.  **Invoke LLM**: Call `llm_invoke` with the fully formatted prompt. The call must be made deterministic by using a cache, ensuring that the same input always produces the same output recommendation.
 5.  **Parse Response**: The LLM will respond with a JSON object. Parse this string into a dictionary.
 6.  **Validate and Return**:
-    -   Validate the JSON response to ensure it contains the required keys (`next_operation`, `reason`, etc.).
-    -   If the LLM response is valid, construct and return a `SyncDecision` object based on the LLM's recommendation.
-    -   If the LLM response is not valid JSON or if the confidence is low (e.g., < 0.75), return a default `fail_and_request_manual_merge` decision as a safety measure.
+    -   Validate the JSON response to ensure it contains the required keys (`next_operation`, `reason`, `confidence`, etc.).
+    -   If the LLM response is valid, construct and return a `SyncDecision` object:
+        ```python
+        SyncDecision(
+            operation=llm_response.get('next_operation'),
+            reason=llm_response.get('reason'),
+            confidence=llm_response.get('confidence', 0.8),
+            estimated_cost=estimate_operation_cost(llm_response.get('next_operation')),
+            details={
+                'decision_type': 'llm',
+                'llm_analysis': True,
+                'changed_files': changed_files,
+                'last_command': fingerprint.command if fingerprint else None,
+                **llm_response.get('details', {})
+            }
+        )
+        ```
+    -   If the LLM response is not valid JSON or if the confidence is low (e.g., < 0.75), return:
+        ```python
+        SyncDecision(
+            operation='fail_and_request_manual_merge',
+            reason='Complex conflict requires manual resolution',
+            confidence=0.5,
+            estimated_cost=0.0,
+            details={
+                'decision_type': 'llm',
+                'llm_error': True, 
+                'changed_files': changed_files
+            }
+        )
+        ```
 
 The final Python script should be well-structured with clear functions, type hints, and docstrings, containing all the logic described above.
 
@@ -217,4 +311,19 @@ The sync_determine_operation function provides single-unit analysis while sync_o
 
 **Note on Implementation**: The orchestration layer may pass additional parameters (like `prompts_dir`) to help locate prompt files in different project structures. The `get_pdd_file_paths` function should be flexible enough to accept such parameters.
 
-Define the PDD_DIR, META_DIR, LOCKS_DIR constants so that other modules can use them.
+Define path resolution functions or constants for PDD_DIR, META_DIR, LOCKS_DIR that resolve paths dynamically relative to the current working directory. This ensures correct path resolution regardless of where the command is executed. For example:
+- `get_pdd_dir()` - Returns `.pdd` directory relative to current working directory
+- `get_meta_dir()` - Returns `.pdd/meta` directory
+- `get_locks_dir()` - Returns `.pdd/locks` directory
+
+### Logging Requirements
+
+The `SyncDecision` object returned by this function will be logged by the orchestration layer to `.pdd/meta/{basename}_{language}_sync.log`. Therefore, ensure that:
+
+1. **All decisions include complete information**: Every `SyncDecision` must have meaningful values for all fields
+2. **Confidence levels are accurate**: Use 1.0 for deterministic decisions, lower values for LLM-based or uncertain decisions
+3. **Cost estimates are realistic**: Use the `estimate_operation_cost` helper to provide consistent estimates
+4. **Details provide debugging context**: Include relevant state information that would help understand why a decision was made
+5. **Reasons are user-friendly**: Write clear, concise explanations that non-technical users can understand
+
+This enables users to run `pdd sync --log` to understand the complete decision history and troubleshoot any issues.

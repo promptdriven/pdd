@@ -2,6 +2,7 @@ import os
 import shutil
 import subprocess
 import datetime
+import sys
 from pathlib import Path
 from typing import Dict, Tuple, Any, Optional
 from xml.sax.saxutils import escape
@@ -25,6 +26,7 @@ except ImportError:
         )
 
 from . import DEFAULT_TIME # Import DEFAULT_TIME
+from .python_env_detector import detect_host_python_executable
 
 # Initialize Rich Console for pretty printing
 console = Console()
@@ -49,19 +51,30 @@ def _run_program(
     if not program_path.is_file():
         return -1, f"Error: Program file not found at {program_path}"
 
-    command = ["python", str(program_path)]
+    command = [detect_host_python_executable(), str(program_path)]
     if args:
         command.extend(args)
 
     try:
+        # Run from staging root directory instead of examples/ directory
+        # This allows imports from both pdd/ and examples/ subdirectories
+        staging_root = program_path.parent.parent  # Go up from examples/ to staging root
+        
         result = subprocess.run(
             command,
             capture_output=True,
             text=True,
             timeout=timeout,
             check=False,  # Don't raise exception for non-zero exit codes
+            env=os.environ.copy(),  # Pass current environment variables
+            cwd=staging_root  # Set working directory to staging root
         )
         combined_output = result.stdout + result.stderr
+        
+        # Check for syntax errors
+        if result.returncode != 0 and "SyntaxError" in result.stderr:
+            return result.returncode, f"SYNTAX_ERROR: {combined_output}"
+        
         return result.returncode, combined_output
     except FileNotFoundError:
         return -1, f"Error: Python interpreter not found or '{program_path}' not found."

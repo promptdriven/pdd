@@ -79,7 +79,11 @@ import time as time_module # Alias to avoid conflict with 'time' parameter
 from pdd import DEFAULT_LLM_MODEL
 
 # Opt-in to future pandas behavior regarding downcasting
-pd.set_option('future.no_silent_downcasting', True)
+try:
+    pd.set_option('future.no_silent_downcasting', True)
+except pd._config.config.OptionError:
+    # Skip if option doesn't exist in older pandas versions
+    pass
 
 
 def _is_wsl_environment() -> bool:
