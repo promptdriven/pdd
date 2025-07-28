@@ -631,15 +631,12 @@ EOF
           log "Program ran successfully after crash command."
           log_timestamped "Validation success: Program ran successfully after crash command."
       else
-          # Check if it's a known validation error that might be acceptable
-          if tail -n 10 "$LOG_FILE" | grep -q -E "TypeError.*(numbers|operand)"; then
-              log "Program failed with input validation error - may be correct behavior"
-              log_timestamped "Info: Program has validation error after crash command (non-fatal)"
-          else
-              log "Program failed with unexpected error after crash command (non-fatal)"
-              log_timestamped "Warning: Unexpected program failure after crash command"
-          fi
-          # Don't exit - let test continue
+
+          log_error "Program still failed after crash command."
+          log_timestamped "Validation failed: Program still failed after crash command."
+          log "Note: According to README, crash command should fix both code module and calling program"
+          log "This indicates the crash command may not be working as specified"
+          exit 1 # Treat this as a failure since crash should fix the issue
       fi
   fi
 

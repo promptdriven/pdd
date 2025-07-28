@@ -31,6 +31,13 @@
       "Bash(bash:*)",
       "Bash(pdd sync:*)",
       "Bash(pdd:*)",
+      "Bash(rm:*)",
+      "Bash(chmod:*)",
+      "Bash(rg:*)",
+      "Bash(cat:*)",
+      "Bash(timeout:*)",
+      "Bash(git stash push:*)",
+      "Bash(git stash:*)"
       "Bash(pkill:*)",
       "Bash(kill:*)",
       "Bash(source .env)",
@@ -64,6 +71,7 @@
       "Bash(if [ $FAILED -eq 0 ])",
       "Bash(then echo \"✅ All 9 files copied successfully!\")",
       "Bash(else echo \"❌ Some files failed to copy properly\")"
+
     ]
   },
   "enableAllProjectMcpServers": true,
