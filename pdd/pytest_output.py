@@ -3,9 +3,11 @@ import json
 import io
 import sys
 import pytest
+import subprocess
 from rich.console import Console
 from rich.pretty import pprint
 import os
+from .python_env_detector import detect_host_python_executable
 
 console = Console()
 
@@ -80,27 +82,77 @@ def run_pytest_and_capture_output(test_file: str) -> dict:
         )
         return {}
 
-    collector = TestResultCollector()
+    # Use environment-aware Python executable for pytest execution
+    python_executable = detect_host_python_executable()
+    
     try:
-        collector.capture_logs()
-        result = pytest.main([test_file], plugins=[collector])
-    finally:
-        stdout, stderr = collector.get_logs()
-
-    return {
-        "test_file": test_file,
-        "test_results": [
-            {
-                "standard_output": stdout,
-                "standard_error": stderr,
-                "return_code": int(result),
-                "warnings": collector.warnings,
-                "errors": collector.errors,
-                "failures": collector.failures,
-                "passed": collector.passed,
-            }
-        ],
-    }
+        # Run pytest using subprocess with the detected Python executable
+        result = subprocess.run(
+            [python_executable, "-m", "pytest", test_file, "-v"],
+            capture_output=True,
+            text=True,
+            timeout=300
+        )
+        
+        stdout = result.stdout
+        stderr = result.stderr
+        return_code = result.returncode
+        
+        # Parse the output to extract test results
+        # Count passed, failed, and skipped tests from the output
+        passed = stdout.count(" PASSED")
+        failures = stdout.count(" FAILED") + stdout.count(" ERROR")
+        errors = 0  # Will be included in failures for subprocess execution
+        warnings = stdout.count("warning")
+        
+        # If return code is 2, it indicates a pytest error
+        if return_code == 2:
+            errors = 1
+        
+        return {
+            "test_file": test_file,
+            "test_results": [
+                {
+                    "standard_output": stdout,
+                    "standard_error": stderr,
+                    "return_code": return_code,
+                    "warnings": warnings,
+                    "errors": errors,
+                    "failures": failures,
+                    "passed": passed,
+                }
+            ],
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "test_file": test_file,
+            "test_results": [
+                {
+                    "standard_output": "",
+                    "standard_error": "Test execution timed out",
+                    "return_code": -1,
+                    "warnings": 0,
+                    "errors": 1,
+                    "failures": 0,
+                    "passed": 0,
+                }
+            ],
+        }
+    except Exception as e:
+        return {
+            "test_file": test_file,
+            "test_results": [
+                {
+                    "standard_output": "",
+                    "standard_error": f"Error running pytest: {str(e)}",
+                    "return_code": -1,
+                    "warnings": 0,
+                    "errors": 1,
+                    "failures": 0,
+                    "passed": 0,
+                }
+            ],
+        }
 
 def save_output_to_json(output: dict, output_file: str = "pytest.json"):
     """

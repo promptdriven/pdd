@@ -78,6 +78,13 @@ def increase_tests(
             time=time,
             verbose=verbose
         )
+        
+        # Debug: Check LLM response
+        console.print(f"[blue]DEBUG increase_tests: LLM response type: {type(llm_response)}[/blue]")
+        console.print(f"[blue]DEBUG increase_tests: LLM response keys: {llm_response.keys() if isinstance(llm_response, dict) else 'Not a dict'}[/blue]")
+        console.print(f"[blue]DEBUG increase_tests: LLM result type: {type(llm_response.get('result', 'No result key'))}[/blue]")
+        console.print(f"[blue]DEBUG increase_tests: LLM result length: {len(llm_response['result']) if 'result' in llm_response and llm_response['result'] else 0}[/blue]")
+        console.print(f"[blue]DEBUG increase_tests: LLM result preview: {repr(llm_response['result'][:300]) if 'result' in llm_response and llm_response['result'] else 'Empty or no result'}[/blue]")
 
         increase_test_function, total_cost, model_name = postprocess(
             llm_response['result'], 

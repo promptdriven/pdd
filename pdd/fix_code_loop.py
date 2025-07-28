@@ -3,7 +3,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Tuple
+from typing import Tuple, Optional, Union
 from . import DEFAULT_TIME # Added DEFAULT_TIME
 
 # Use Rich for pretty printing to the console
@@ -38,7 +38,7 @@ def fix_code_loop(
     error_log_file: str,
     verbose: bool = False,
     time: float = DEFAULT_TIME,
-) -> Tuple[bool, str, str, int, float, str | None]:
+) -> Tuple[bool, str, str, int, float, Optional[str]]:
     """
     Attempts to fix errors in a code module through multiple iterations.
 
