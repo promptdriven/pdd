@@ -689,27 +689,77 @@ def sync_orchestration(
                                     crash_log_content += f"Error running example program: {str(e)}\n"
                                     crash_log_content += f"Program path: {pdd_files['example']}\n"
                             else:
-                                # No crash detected, skip crash operation
-                                print("No crash detected in run report, skipping crash fix")
-                                skipped_operations.append('crash')
+                                # No crash detected in run report, but let's verify by testing the example file directly
+                                print("No crash detected in run report, testing example file directly...")
                                 
-                                # Update log entry for skipped operation
-                                update_sync_log_entry(log_entry, {
-                                    'success': True,
-                                    'cost': 0.0,
-                                    'model': 'skipped',
-                                    'error': None
-                                }, time.time() - start_time)
-                                log_entry['details']['skip_reason'] = 'no_crash'
-                                append_sync_log(basename, language, log_entry)
+                                # Test the example file directly to catch syntax errors and runtime failures
+                                example_crash_detected = False
+                                direct_test_crash_log = ""
                                 
-                                report_data = RunReport(
-                                    timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                                    exit_code=0, tests_passed=0, tests_failed=0, coverage=0.0
-                                )
-                                save_run_report(asdict(report_data), basename, language)
-                                _save_operation_fingerprint(basename, language, 'crash', pdd_files, 0.0, 'no_crash')
-                                continue
+                                try:
+                                    example_result = subprocess.run(
+                                        ['python', str(pdd_files['example'])],
+                                        capture_output=True,
+                                        text=True,
+                                        timeout=30,  # Shorter timeout for direct testing
+                                        env=os.environ.copy(),
+                                        cwd=str(pdd_files['example'].parent)
+                                    )
+                                    
+                                    if example_result.returncode != 0:
+                                        example_crash_detected = True
+                                        direct_test_crash_log = f"Direct example test failed with exit code: {example_result.returncode}\n\n"
+                                        
+                                        if example_result.stdout:
+                                            direct_test_crash_log += f"STDOUT:\n{example_result.stdout}\n\n"
+                                        if example_result.stderr:
+                                            direct_test_crash_log += f"STDERR:\n{example_result.stderr}\n"
+                                        
+                                        # Check for syntax errors specifically
+                                        if "SyntaxError" in example_result.stderr:
+                                            direct_test_crash_log = f"SYNTAX ERROR DETECTED:\n\n{direct_test_crash_log}"
+                                        
+                                        print(f"Direct test detected crash in example file: exit_code={example_result.returncode}")
+                                    else:
+                                        print("Direct test: example file runs successfully")
+                                        
+                                except subprocess.TimeoutExpired:
+                                    example_crash_detected = True
+                                    direct_test_crash_log = "Direct example test timed out after 30 seconds\n"
+                                    direct_test_crash_log += "This may indicate an infinite loop or the program is waiting for input.\n"
+                                    print("Direct test: example file timed out")
+                                except Exception as e:
+                                    example_crash_detected = True
+                                    direct_test_crash_log = f"Error during direct example test: {str(e)}\n"
+                                    direct_test_crash_log += f"Program path: {pdd_files['example']}\n"
+                                    print(f"Direct test: error testing example file: {e}")
+                                
+                                # If direct testing revealed a crash, proceed with crash operation
+                                if example_crash_detected:
+                                    print("Direct testing detected crash, proceeding with crash fix")
+                                    crash_log_content = direct_test_crash_log
+                                else:
+                                    # No crash detected even with direct testing, skip crash operation
+                                    print("No crash detected in run report or direct testing, skipping crash fix")
+                                    skipped_operations.append('crash')
+                                    
+                                    # Update log entry for skipped operation
+                                    update_sync_log_entry(log_entry, {
+                                        'success': True,
+                                        'cost': 0.0,
+                                        'model': 'skipped',
+                                        'error': None
+                                    }, time.time() - start_time)
+                                    log_entry['details']['skip_reason'] = 'no_crash'
+                                    append_sync_log(basename, language, log_entry)
+                                    
+                                    report_data = RunReport(
+                                        timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                                        exit_code=0, tests_passed=0, tests_failed=0, coverage=0.0
+                                    )
+                                    save_run_report(asdict(report_data), basename, language)
+                                    _save_operation_fingerprint(basename, language, 'crash', pdd_files, 0.0, 'no_crash')
+                                    continue
                             
                             # Write actual error content or fallback
                             if not crash_log_content:
