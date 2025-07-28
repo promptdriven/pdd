@@ -26,11 +26,23 @@ def run_pytest_on_file(test_file: str) -> tuple[int, int, int, str]:
     Returns a tuple: (failures, errors, warnings, logs)
     """
     try:
-        # Include "--json-only" to ensure only valid JSON is printed.
-        # Use environment-aware Python executable for pytest execution
-        python_executable = detect_host_python_executable()
-        cmd = [python_executable, "-m", "pdd.pytest_output", "--json-only", test_file]
+        # Try using the pdd pytest-output command first (works with uv tool installs)
+        cmd = ["pdd", "pytest-output", "--json-only", test_file]
         result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        # If pdd command failed, try fallback approaches
+        if result.returncode != 0 and ("command not found" in result.stderr.lower() or "not found" in result.stderr.lower()):
+            # Fallback 1: Try direct function call (fastest for development)
+            try:
+                from .pytest_output import run_pytest_and_capture_output
+                pytest_output = run_pytest_and_capture_output(test_file)
+                result_stdout = json.dumps(pytest_output)
+                result = type('MockResult', (), {'stdout': result_stdout, 'stderr': '', 'returncode': 0})()
+            except ImportError:
+                # Fallback 2: Try python -m approach for development installs where pdd isn't in PATH
+                python_executable = detect_host_python_executable()
+                cmd = [python_executable, "-m", "pdd.pytest_output", "--json-only", test_file]
+                result = subprocess.run(cmd, capture_output=True, text=True)
         
         # Parse the JSON output from stdout
         try:
