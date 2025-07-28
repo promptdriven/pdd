@@ -880,12 +880,14 @@ def test_construct_paths_sync_discovery_context_detection(tmpdir):
     empty_context = {}
     
     # Mock all context detection to ensure no .pddrc is found
+
     # Also mock Path.cwd() to return a directory with no prompt files to test default logic
     mock_cwd = Path("/test/empty/directory")
     with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths), \
          patch('pdd.construct_paths._find_pddrc_file', return_value=None), \
          patch('pdd.construct_paths._get_context_config', return_value=empty_context), \
          patch('pdd.construct_paths.Path.cwd', return_value=mock_cwd):
+
         
         resolved_config, _, _, _ = construct_paths(
             input_file_paths, force, quiet, command, command_options
@@ -908,6 +910,7 @@ def test_construct_paths_sync_discovery_context_detection(tmpdir):
          patch('pdd.construct_paths._detect_context', return_value='test'), \
          patch('pdd.construct_paths._get_context_config', return_value=context_with_output_path), \
          patch('pdd.construct_paths.Path.cwd', return_value=mock_cwd):
+
         
         resolved_config_context, _, _, _ = construct_paths(
             input_file_paths, force, quiet, command, command_options
@@ -930,6 +933,7 @@ def test_construct_paths_sync_discovery_context_detection(tmpdir):
          patch('pdd.construct_paths._detect_context', return_value='test'), \
          patch('pdd.construct_paths._get_context_config', return_value=context_without_output_path), \
          patch('pdd.construct_paths.Path.cwd', return_value=mock_cwd):
+
         
         resolved_config_no_output, _, _, _ = construct_paths(
             input_file_paths, force, quiet, command, command_options
