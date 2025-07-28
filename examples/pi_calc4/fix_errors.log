@@ -1,0 +1,2 @@
+Could not capture test failures: Command '['/Users/gregtanaka/opt/anaconda3/envs/pdd/bin/python', '-m', 'pytest', '/Users/gregtanaka/Documents/pdd_cloud/pdd/examples/pi_calc4/tests/test_pi_calc.py', '-v', '--tb=short']' timed out after 300 seconds
+Using simulated test failures

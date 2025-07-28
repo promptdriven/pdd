@@ -1,0 +1,12 @@
+<InitialState timestamp="2025-07-15T11:20:18.006512">
+  <ProgramFile>/Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py</ProgramFile>
+  <CodeFile>/Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/pdd/hello.py</CodeFile>
+  <ExitCode>0</ExitCode>
+  <Output>Calling the `hello` function...
+hello
+...function call complete.
+</Output>
+</InitialState>
+<FinalActions>
+  <Action>Process finished successfully on initial check.</Action>
+</FinalActions>
