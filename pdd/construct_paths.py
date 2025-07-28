@@ -497,11 +497,15 @@ def construct_paths(
     for key, path_str in input_file_paths.items():
         try:
             path = Path(path_str).expanduser()
-            # Resolve non-error files strictly first
+            # Resolve non-error files strictly first, but be more lenient for sync command
             if key != "error_file":
-                 # Let FileNotFoundError propagate naturally if path doesn't exist
-                 resolved_path = path.resolve(strict=True)
-                 input_paths[key] = resolved_path
+                 # For sync command, be more tolerant of non-existent files since we're just determining paths
+                 if command == "sync":
+                     input_paths[key] = path.resolve()
+                 else:
+                     # Let FileNotFoundError propagate naturally if path doesn't exist
+                     resolved_path = path.resolve(strict=True)
+                     input_paths[key] = resolved_path
             else:
                  # Resolve error file non-strictly, existence checked later
                  input_paths[key] = path.resolve()
@@ -531,9 +535,14 @@ def construct_paths(
 
         # Check existence again, especially for error_file which might have been created
         if not path.exists():
-             # This case should ideally be caught by resolve(strict=True) earlier for non-error files
-             # Raise standard FileNotFoundError
-             raise FileNotFoundError(f"{path}")
+             # For sync command, be more tolerant of non-existent files since we're just determining paths
+             if command == "sync":
+                 # Skip reading content for non-existent files in sync mode
+                 continue
+             else:
+                 # This case should ideally be caught by resolve(strict=True) earlier for non-error files
+                 # Raise standard FileNotFoundError
+                 raise FileNotFoundError(f"{path}")
 
         if path.is_file(): # Read only if it's a file
              try:
