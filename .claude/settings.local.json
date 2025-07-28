@@ -63,7 +63,14 @@
       "Bash(else echo \"SUCCESS: $file matches\")",
       "Bash(if [ $FAILED -eq 0 ])",
       "Bash(then echo \"✅ All 9 files copied successfully!\")",
-      "Bash(else echo \"❌ Some files failed to copy properly\")"
+      "Bash(else echo \"❌ Some files failed to copy properly\")",
+      "Bash(timeout 30 pdd:*)",
+      "Bash(timeout 60 pdd:*)",
+      "Bash(touch:*)",
+      "Bash(rm:*)",
+      "Bash(source .env)",
+      "Bash(echo:*)",
+      "Bash(strace:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
