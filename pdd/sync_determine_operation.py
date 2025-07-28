@@ -236,7 +236,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             input_file_paths=input_file_paths,
             force=True,  # Use force=True to avoid interactive prompts during sync
             quiet=True,
-            command="generate",
+            command="sync",  # Use sync command to get more tolerant path handling
             command_options={}
         )
         
@@ -275,12 +275,16 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 )
                 example_path = Path(example_output_paths.get('output', f"{basename}_example.{get_extension(language)}"))
                 
-                # Get test path using test command  
-                _, _, test_output_paths, _ = construct_paths(
-                    input_file_paths={"prompt_file": prompt_path, "code_file": code_path},
-                    force=True, quiet=True, command="test", command_options={}
-                )
-                test_path = Path(test_output_paths.get('output', f"test_{basename}.{get_extension(language)}"))
+                # Get test path using test command - handle case where test file doesn't exist yet
+                try:
+                    _, _, test_output_paths, _ = construct_paths(
+                        input_file_paths={"prompt_file": prompt_path, "code_file": code_path},
+                        force=True, quiet=True, command="sync", command_options={}
+                    )
+                    test_path = Path(test_output_paths.get('output', f"test_{basename}.{get_extension(language)}"))
+                except FileNotFoundError:
+                    # Test file doesn't exist yet - create default path
+                    test_path = Path(f"test_{basename}.{get_extension(language)}")
                 
             finally:
                 # Clean up temporary file if we created it
@@ -304,11 +308,15 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 )
                 example_path = Path(example_output_paths.get('output', f"{basename}_example.{get_extension(language)}"))
                 
-                _, _, test_output_paths, _ = construct_paths(
-                    input_file_paths={"prompt_file": prompt_path},
-                    force=True, quiet=True, command="test", command_options={}
-                )
-                test_path = Path(test_output_paths.get('output', f"test_{basename}.{get_extension(language)}"))
+                try:
+                    _, _, test_output_paths, _ = construct_paths(
+                        input_file_paths={"prompt_file": prompt_path},
+                        force=True, quiet=True, command="sync", command_options={}
+                    )
+                    test_path = Path(test_output_paths.get('output', f"test_{basename}.{get_extension(language)}"))
+                except Exception:
+                    # If test path construction fails, use default naming
+                    test_path = Path(f"test_{basename}.{get_extension(language)}")
                 
             except Exception:
                 # Final fallback to deriving from code path if all else fails
