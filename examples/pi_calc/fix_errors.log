@@ -1,1 +1,2 @@
-Simulated test failures
+Could not capture test failures: Command '['python', '-m', 'pytest', '/Users/gregtanaka/Documents/pdd_cloud/pdd/examples/pi_calc/tests/test_pi_calc.py', '-v', '--tb=short']' timed out after 300 seconds
+Using simulated test failures

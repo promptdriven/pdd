@@ -23,8 +23,12 @@ def pi_calc(n_terms: int = 100000) -> float:
 
 if __name__ == "__main__":
     print("--- Demonstrating the pi_calc function ---")
-    print(f"Value of math.pi for comparison: {math.pi}")
+    # This line has a syntax error - unterminated f-string
+    print(f"Value of math.pi for comparison: {math.pi}
+")
     
     print("1. Calculating Pi with default number of terms (100,000):")
     pi_approximation_default = pi_calc()
-    print(f"   Approximation: {pi_approximation_default}\n")
+    # Another syntax error - unterminated f-string  
+    print(f"   Approximation: {pi_approximation_default}
+")

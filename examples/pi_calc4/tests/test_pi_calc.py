@@ -1,5 +1,16 @@
 # test_pi_calc.py
 
+# NOTE ON PYTEST WARNING:
+# A `PytestConfigWarning` for an "Unknown config option: asyncio_default_fixture_loop_scope"
+# may appear when running these tests. This is not an error in the code or the tests
+# themselves, but rather an issue with the pytest configuration file (e.g., pytest.ini).
+#
+# Root Cause: This option was used by older versions of the pytest-asyncio plugin
+# and has since been deprecated.
+#
+# Solution: To fix the warning, remove the line `asyncio_default_fixture_loop_scope = ...`
+# from your pytest configuration file.
+
 import pytest
 import math
 
@@ -60,6 +71,12 @@ from pi_calc import pi_calc
 #         more accurate than the default.
 #       - Rationale: Confirms the series continues to converge correctly for
 #         very large inputs.
+#    9. `test_convergence_improves`:
+#       - Input: Compare `pi_calc(1000)` and `pi_calc(10000)`.
+#       - Expected Outcome: The error of the 10,000-term approximation should
+#         be smaller than the error of the 1,000-term approximation.
+#       - Rationale: Directly verifies that increasing the number of terms
+#         improves the result's accuracy, a key property of convergence.
 #
 # II. Formal Verification (using Z3)
 #
@@ -72,24 +89,20 @@ from pi_calc import pi_calc
 #       - Property: For any `n_terms >= 1`, `pi_calc(n_terms)` should be
 #         greater than 3.
 #       - Method: Model the function's logic in Z3. Assert `n >= 1` and check
-#         if the solver can find a counterexample to `pi_calc(n) <= 3`.
+#         if the solver can find a counterexample to `pi_calc(n) > 3`.
 #         The expected result is `unsat`, proving the property.
 #       - Rationale: The Nilakantha series starts at 3 and the first term is
 #         positive, with subsequent subtractions being smaller in magnitude.
 #         This property should always hold.
-#    2. `test_z3_term_magnitude_decreases`:
-#       - Property: The absolute magnitude of the terms added or subtracted
-#         in the series should monotonically decrease. Formally:
-#         `|term(n+1)| < |term(n)|` for `n >= 1`.
-#       - Method: Model the denominators of the n-th and (n+1)-th terms in Z3.
-#         Assert that the denominator for term n is greater than or equal to
-#         the denominator for term n+1. The expected result is `unsat`,
-#         proving the property.
-#       - Rationale: For an alternating series, proving that the terms
-#         monotonically decrease in magnitude is a key part of proving
-#         convergence (via the Alternating Series Test). This is a more
-#         tractable property for a solver to prove than direct error
-#         convergence, yet it still provides a strong formal guarantee.
+#    2. `test_z3_monotonic_convergence`:
+#       - Property: The approximation error should decrease or stay the same as
+#         `n_terms` increases. Formally:
+#         `abs(pi_calc(n + 1) - PI) <= abs(pi_calc(n) - PI)` for `n >= 0`.
+#       - Method: Model the function and the property in Z3. Check if the
+#         solver can find a counterexample. The expected result is `unsat`.
+#       - Rationale: This is the core definition of a converging series.
+#         Proving it formally provides a strong guarantee about the algorithm's
+#         correctness.
 #
 
 # --- Unit Tests ---
@@ -162,6 +175,10 @@ def test_convergence_improves():
 
 # --- Formal Verification with Z3 ---
 
+# The original pi_calc_z3_model is removed as it causes a RecursionError
+# with symbolic variables. We now define the function's properties directly
+# in the solver using Z3's Function and ForAll constructs.
+
 @pytest.mark.skipif(not Z3_AVAILABLE, reason="Z3 solver not installed")
 def test_z3_is_always_greater_than_three():
     """
@@ -170,73 +187,79 @@ def test_z3_is_always_greater_than_three():
     s = z3.Solver()
     n = z3.Int('n') # n represents n_terms
 
-    # Define the recursive function for the pi approximation using Z3's capabilities
-    pi_approx = z3.RecFunction('pi_approx', z3.IntSort(), z3.RealSort())
-    i = z3.Int('i') # A dummy variable for the function definition
+    # We define a recursive function pi_approx(i) in Z3 to model the calculation.
+    # pi_approx(Int) -> Real
+    pi_approx = z3.Function('pi_approx', z3.IntSort(), z3.RealSort())
 
-    # Define the i-th term symbolically
+    # Define a variable 'i' for the quantifier
+    i = z3.Int('i')
     i_real = z3.ToReal(i)
+
+    # Define the i-th term of the Nilakantha series
     denominator = (2 * i_real) * (2 * i_real + 1) * (2 * i_real + 2)
     sign = z3.If(i % 2 == 1, z3.RealVal(1), z3.RealVal(-1))
-    nth_term = sign * (z3.RealVal(4) / denominator)
+    ith_term = sign * (z3.RealVal(4) / denominator)
 
-    # Add the recursive definition as an axiom for the solver.
-    z3.RecAddDefinition(pi_approx, i,
-        z3.If(i == 0,
-              z3.RealVal(3),
-              pi_approx(i - 1) + nth_term
-        )
-    )
+    # Define the behavior of our Z3 function
+    # Base case: pi_approx(0) = 3
+    s.add(pi_approx(0) == 3)
+    # Recursive step: for all i >= 1, pi_approx(i) = pi_approx(i-1) + ith_term
+    s.add(z3.ForAll([i], z3.Implies(i >= 1, pi_approx(i) == pi_approx(i - 1) + ith_term)))
 
     # Constraint: n must be a non-negative integer >= 1
     s.add(n >= 1)
 
-    # Model the function call using the axiomatically-defined function
-    pi_approximation = pi_approx(n)
-
     # Negation of the property we want to prove:
     # Is it possible for the result to be less than or equal to 3?
-    s.add(pi_approximation <= 3)
+    s.add(pi_approx(n) <= 3)
 
     # If the solver finds a model (sat), it's a counterexample.
     # If it's unsat, no counterexample exists, and the property is proven.
     assert s.check() == z3.unsat, "Z3 found a counterexample where pi_calc(n) <= 3 for n >= 1"
 
 @pytest.mark.skipif(not Z3_AVAILABLE, reason="Z3 solver not installed")
-def test_z3_term_magnitude_decreases():
+def test_z3_monotonic_convergence():
     """
-    Formally verifies that the absolute magnitude of the terms in the series
-    is monotonically decreasing for n >= 1. This is a key condition for the
-    convergence of an alternating series and prevents test timeouts.
+    Formally verifies that the error decreases as n_terms increases.
+    |pi_calc(n+1) - PI| <= |pi_calc(n) - PI|
     """
     s = z3.Solver()
     n = z3.Int('n')
 
-    # We want to prove that for n >= 1, |term(n+1)| < |term(n)|.
-    # The i-th term's denominator is (2*i)*(2*i+1)*(2*i+2).
-    
-    # Constraint: n must be a positive integer.
-    s.add(n >= 1)
+    # Define the recursive function pi_approx(i) in Z3, same as the test above.
+    pi_approx = z3.Function('pi_approx', z3.IntSort(), z3.RealSort())
+    i = z3.Int('i')
+    i_real = z3.ToReal(i)
+    denominator = (2 * i_real) * (2 * i_real + 1) * (2 * i_real + 2)
+    sign = z3.If(i % 2 == 1, z3.RealVal(1), z3.RealVal(-1))
+    ith_term = sign * (z3.RealVal(4) / denominator)
+    s.add(pi_approx(0) == 3)
+    s.add(z3.ForAll([i], z3.Implies(i >= 1, pi_approx(i) == pi_approx(i - 1) + ith_term)))
 
-    # Define the denominators for the n-th and (n+1)-th terms as Reals.
-    n_real = z3.ToReal(n)
-    
-    # Denominator for the n-th term.
-    denom_n = (2 * n_real) * (2 * n_real + 1) * (2 * n_real + 2)
-    
-    # Denominator for the (n+1)-th term.
-    denom_n_plus_1 = (2 * (n_real + 1)) * (2 * (n_real + 1) + 1) * (2 * (n_real + 1) + 2)
+    # Use a high-precision value for Pi as a Z3 Real constant
+    PI = z3.RealVal(math.pi)
 
-    # The property |term(n+1)| < |term(n)| is equivalent to
-    # 4.0 / denom_n_plus_1 < 4.0 / denom_n.
-    # Since denominators are positive for n>=1, this is equivalent to
-    # denom_n < denom_n_plus_1.
+    # Constraint: n must be a non-negative integer
+    s.add(n >= 0)
 
-    # Negation of the property: Is it possible for the magnitude to increase
-    # or stay the same? This is equivalent to denom_n >= denom_n_plus_1.
-    s.add(denom_n >= denom_n_plus_1)
+    # Model the function for n and n+1
+    pi_n = pi_approx(n)
+    pi_n_plus_1 = pi_approx(n + 1)
 
-    # If the solver finds a model (sat), it's a counterexample.
-    # If it's unsat, no counterexample exists, and the property is proven.
+    # Define the absolute error for n and n+1
+    # Z3 doesn't have a built-in abs, so we use If(x < 0, -x, x)
+    def z3_abs(x):
+        return z3.If(x < 0, -x, x)
+
+    error_n = z3_abs(pi_n - PI)
+    error_n_plus_1 = z3_abs(pi_n_plus_1 - PI)
+
+    # Negation of the property:
+    # Is it possible for the error to INCREASE?
+    s.add(error_n_plus_1 > error_n)
+
+    # Check for a counterexample. `unsat` proves the property.
+    # Note: This is a complex non-linear problem. Z3 may be slow or return `unknown`.
+    # For the Nilakantha series, this property holds, and Z3 should prove it.
     result = s.check()
-    assert result == z3.unsat, f"Z3 found a counterexample where term magnitude did not decrease: {s.model() if result == z3.sat else 'unknown'}"
+    assert result == z3.unsat, f"Z3 found a counterexample to monotonic convergence: {s.model() if result == z3.sat else 'unknown'}"
