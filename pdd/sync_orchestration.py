@@ -836,29 +836,38 @@ def sync_orchestration(
                             merge=False
                         )
                         
-                        # After successful test generation, execute the tests and create run report
-                        # This enables the next sync iteration to detect test failures and trigger fix
+                        # After test generation, check if the test file was actually created
+                        test_file = pdd_files['test']
+                        test_generation_successful = False
+                        
                         if isinstance(result, dict) and result.get('success', False):
+                            test_generation_successful = True
+                        elif isinstance(result, tuple) and len(result) >= 3:
+                            # For tuple format, check if the test file actually exists rather than assuming success
+                            test_generation_successful = test_file.exists()
+                        
+                        if test_generation_successful and test_file.exists():
                             try:
-                                test_file = pdd_files['test']
-                                if test_file.exists():
-                                    _execute_tests_and_create_run_report(
-                                        test_file, basename, language, target_coverage
-                                    )
+                                _execute_tests_and_create_run_report(
+                                    test_file, basename, language, target_coverage
+                                )
                             except Exception as e:
                                 # Don't fail the entire operation if test execution fails
                                 # Just log it - the test file generation was successful
                                 print(f"Warning: Test execution failed: {e}")
-                        elif isinstance(result, tuple) and len(result) >= 3:
-                            # Handle tuple return format - assume success and execute tests
-                            try:
-                                test_file = pdd_files['test']
-                                if test_file.exists():
-                                    _execute_tests_and_create_run_report(
-                                        test_file, basename, language, target_coverage
-                                    )
-                            except Exception as e:
-                                print(f"Warning: Test execution failed: {e}")
+                        else:
+                            # Test generation failed or test file was not created
+                            error_msg = f"Test generation failed - test file not created: {test_file}"
+                            print(f"Error: {error_msg}")
+                            update_sync_log_entry(log_entry, {
+                                'success': False,
+                                'cost': 0.0,
+                                'model': 'N/A',
+                                'error': error_msg
+                            }, 0.0)
+                            append_sync_log(basename, language, log_entry)
+                            errors.append(error_msg)
+                            break
                     elif operation == 'fix':
                         # Create error file with actual test failure information
                         error_file_path = Path("fix_errors.log")
