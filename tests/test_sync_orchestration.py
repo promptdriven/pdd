@@ -55,7 +55,8 @@ def orchestration_fixture(tmp_path):
          patch('pdd.sync_orchestration.update_main') as mock_update, \
          patch('pdd.sync_orchestration.save_run_report') as mock_save_report, \
          patch('pdd.sync_orchestration._display_sync_log') as mock_display_log, \
-         patch('pdd.sync_orchestration._save_operation_fingerprint') as mock_save_fp:
+         patch('pdd.sync_orchestration._save_operation_fingerprint') as mock_save_fp, \
+         patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths:
 
         # Configure return values
         mock_lock.return_value.__enter__.return_value = mock_lock
@@ -69,6 +70,23 @@ def orchestration_fixture(tmp_path):
         mock_fix.return_value = {'success': True, 'cost': 0.15, 'model': 'mock-model'}
         mock_update.return_value = {'success': True, 'cost': 0.04, 'model': 'mock-model'}
         mock_display_log.return_value = {'success': True, 'log_entries': ['log entry']}
+        
+        # Configure path mocks to return expected paths
+        mock_get_paths.return_value = {
+            'prompt': tmp_path / 'prompts' / 'calculator_python.prompt',
+            'code': tmp_path / 'src' / 'calculator.py',
+            'example': tmp_path / 'examples' / 'calculator_example.py',
+            'test': tmp_path / 'tests' / 'test_calculator.py'
+        }
+        
+        # Create the test file so validation passes when sync_orchestration checks for it
+        def create_test_file(*args, **kwargs):
+            """Mock function that creates the test file and returns success"""
+            test_file = tmp_path / 'tests' / 'test_calculator.py'
+            test_file.write_text("# Mock test file created by fixture")
+            return {'success': True, 'cost': 0.06, 'model': 'mock-model'}
+        
+        mock_test.side_effect = create_test_file
 
         yield {
             'sync_determine_operation': mock_determine,
@@ -85,6 +103,7 @@ def orchestration_fixture(tmp_path):
             'save_run_report': mock_save_report,
             '_display_sync_log': mock_display_log,
             '_save_operation_fingerprint': mock_save_fp,
+            'get_pdd_file_paths': mock_get_paths,
         }
 
 
@@ -274,9 +293,9 @@ def test_final_state_reporting(orchestration_fixture, tmp_path):
         SyncDecision(operation='all_synced', reason='Done'),
     ]
     
-    # Mock the command to actually create the file
-    pdd_files = get_pdd_file_paths("calculator", "python")
-    code_path = pdd_files['code']
+    # Mock the command to actually create the file using our mocked paths
+    mock_paths = orchestration_fixture['get_pdd_file_paths'].return_value
+    code_path = mock_paths['code']
     def create_file_and_succeed(*args, **kwargs):
         code_path.parent.mkdir(parents=True, exist_ok=True)
         code_path.touch()
