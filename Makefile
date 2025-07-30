@@ -402,6 +402,11 @@ build:
 	@rm -rf dist
 	@python -m build
 	@rm dist/*.tar.gz #don't upload source distribution
+	
+	# Post-process the wheel with preprocessed prompts
+	@echo "Post-processing wheel with preprocessed prompts..."
+	@python scripts/preprocess_wheel.py 'dist/*.whl'
+	
 	@twine upload --repository pypi dist/*.whl
 
 release:
