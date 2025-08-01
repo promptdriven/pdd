@@ -1,4 +1,4 @@
-% You are an expert Python engineer. Your goal is to write a Python script, "update_model_costs.py", that automatically updates the input/output token costs and the structured output support flag in the `data/llm_model.csv` file using data from LiteLLM.
+% You are an expert Python engineer. Your goal is to write a Python script, "update_model_costs.py", that automatically updates the input/output token costs and the structured output support flag in the `.pdd/llm_model.csv` file using data from LiteLLM.
 
 <include>context/python_preamble.prompt</include>
 
@@ -16,7 +16,7 @@
     - **Note:** This script does *not* automatically populate the `reasoning_type` or `max_reasoning_tokens` columns' values, as this data is not reliably available via LiteLLM. These columns need manual maintenance.
 
 % Inputs:
-    - The script should accept the path to the `llm_model.csv` file as a command-line argument (e.g., using `argparse`). Default path should be 'data/llm_model.csv'.
+    - The script should accept the path to the `llm_model.csv` file as a command-line argument (e.g., using `argparse`). Default path should be '.pdd/llm_model.csv'.
     - Ensure the directory for the CSV path exists, creating it if necessary (`os.makedirs`).
     - **CSV Path Precedence:** The script first checks for the existence of `~/.pdd/llm_model.csv`. If this file exists, it will be used *instead* of the path provided by the `--csv-path` argument. If the user-specific file does not exist, the script proceeds to use the path from the `--csv-path` argument (or its default).
 
@@ -55,7 +55,7 @@
     - The summary should include an accurate count of models that had processing errors, based on the failure tracking.
     - Ensure proper error handling for file operations, LiteLLM calls, and data type conversions.
 
-% Here is an example (but not actual values) of the llm_model.csv: <llm_model_example><shell>head -6 data/llm_model.csv</shell></llm_model_example>
+% Here is an example (but not actual values) of the llm_model.csv: <llm_model_example><shell>head -6 .pdd/llm_model.csv</shell></llm_model_example>
 
 % Relevant LiteLLM Documentation:
     - Model Cost Data Structure (illustrative): <litellm_model_cost_example><web>https://docs.litellm.ai/docs/completion/token_usage#8-model_cost</web></litellm_model_cost_example>
