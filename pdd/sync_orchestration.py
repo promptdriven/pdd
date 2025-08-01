@@ -875,7 +875,7 @@ def sync_orchestration(
                         # Try to get actual test failure details from latest run
                         try:
                             run_report = read_run_report(basename, language)
-                            if run_report and run_report.tests_failed > 0:
+                            if run_report and run_report.tests_failed > 0 and pdd_files['test'].exists():
                                 # Run the tests again to capture actual error output
                                 # Use environment-aware Python executable for pytest execution
                                 python_executable = detect_host_python_executable()
