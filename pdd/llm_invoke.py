@@ -5,6 +5,7 @@ import os
 import pandas as pd
 import litellm
 import logging # ADDED FOR DETAILED LOGGING
+import importlib.resources
 
 # --- Configure Standard Python Logging ---
 logger = logging.getLogger("pdd.llm_invoke")
@@ -79,7 +80,11 @@ import time as time_module # Alias to avoid conflict with 'time' parameter
 from pdd import DEFAULT_LLM_MODEL
 
 # Opt-in to future pandas behavior regarding downcasting
-pd.set_option('future.no_silent_downcasting', True)
+try:
+    pd.set_option('future.no_silent_downcasting', True)
+except pd._config.config.OptionError:
+    # Skip if option doesn't exist in older pandas versions
+    pass
 
 
 def _is_wsl_environment() -> bool:
@@ -186,12 +191,20 @@ ENV_PATH = PROJECT_ROOT / ".env"
 user_pdd_dir = Path.home() / ".pdd"
 user_model_csv_path = user_pdd_dir / "llm_model.csv"
 
+# Check in order: user-specific, project-specific, package default
 if user_model_csv_path.is_file():
     LLM_MODEL_CSV_PATH = user_model_csv_path
     logger.info(f"Using user-specific LLM model CSV: {LLM_MODEL_CSV_PATH}")
 else:
-    LLM_MODEL_CSV_PATH = PROJECT_ROOT / "data" / "llm_model.csv"
-    logger.info(f"Using project LLM model CSV: {LLM_MODEL_CSV_PATH}")
+    # Check project-specific location (.pdd directory)
+    project_model_csv_path = PROJECT_ROOT / ".pdd" / "llm_model.csv"
+    if project_model_csv_path.is_file():
+        LLM_MODEL_CSV_PATH = project_model_csv_path
+        logger.info(f"Using project-specific LLM model CSV: {LLM_MODEL_CSV_PATH}")
+    else:
+        # Neither exists, we'll use a marker path that _load_model_data will handle
+        LLM_MODEL_CSV_PATH = None
+        logger.info("No local LLM model CSV found, will use package default")
 # ---------------------------------
 
 # Load environment variables from .env file
@@ -352,12 +365,41 @@ litellm.success_callback = [_litellm_success_callback]
 
 # --- Helper Functions ---
 
-def _load_model_data(csv_path: Path) -> pd.DataFrame:
-    """Loads and preprocesses the LLM model data from CSV."""
-    if not csv_path.exists():
-        raise FileNotFoundError(f"LLM model CSV not found at {csv_path}")
+def _load_model_data(csv_path: Optional[Path]) -> pd.DataFrame:
+    """Loads and preprocesses the LLM model data from CSV.
+    
+    Args:
+        csv_path: Path to CSV file, or None to use package default
+        
+    Returns:
+        DataFrame with model configuration data
+    """
+    # If csv_path is provided, try to load from it
+    if csv_path is not None:
+        if not csv_path.exists():
+            logger.warning(f"Specified LLM model CSV not found at {csv_path}, trying package default")
+            csv_path = None
+        else:
+            try:
+                df = pd.read_csv(csv_path)
+                logger.debug(f"Loaded model data from {csv_path}")
+                # Continue with the rest of the function...
+            except Exception as e:
+                logger.warning(f"Failed to load CSV from {csv_path}: {e}, trying package default")
+                csv_path = None
+    
+    # If csv_path is None or loading failed, use package default
+    if csv_path is None:
+        try:
+            # Use importlib.resources to load the packaged CSV
+            csv_data = importlib.resources.files('pdd').joinpath('data/llm_model.csv').read_text()
+            import io
+            df = pd.read_csv(io.StringIO(csv_data))
+            logger.info("Loaded model data from package default")
+        except Exception as e:
+            raise FileNotFoundError(f"Failed to load default LLM model CSV from package: {e}")
+    
     try:
-        df = pd.read_csv(csv_path)
         # Basic validation and type conversion
         required_cols = ['provider', 'model', 'input', 'output', 'coding_arena_elo', 'api_key', 'structured_output', 'reasoning_type']
         for col in required_cols:
