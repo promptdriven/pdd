@@ -404,8 +404,8 @@ def main():
     parser.add_argument(
         "--csv-path",
         type=str,
-        default="data/llm_model.csv",
-        help="Path to the llm_model.csv file (default: data/llm_model.csv)"
+        default=".pdd/llm_model.csv",
+        help="Path to the llm_model.csv file (default: .pdd/llm_model.csv)"
     )
     args = parser.parse_args()
 
