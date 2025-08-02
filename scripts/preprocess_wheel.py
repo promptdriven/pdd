@@ -53,17 +53,22 @@ def preprocess_wheel(wheel_path):
                 print(f"  Preprocessing {prompt_file.name}...")
                 temp_output = prompt_file.with_suffix('.tmp')
                 
+                # Build preprocess command
+                cmd = ['pdd', '--force', 'preprocess', '--output', str(temp_output)]
+                
+                # Add special flags for auto_include_LLM.prompt
+                if prompt_file.name == 'auto_include_LLM.prompt':
+                    cmd.extend(['--double', '--exclude', "['input_prompt','available_include']"])
+                
+                cmd.append(str(prompt_file))
+                
                 # Run pdd preprocess
-                result = subprocess.run([
-                    'pdd', 'preprocess', #'--recursive',
-                    '--output', str(temp_output),
-                    str(prompt_file)
-                ], capture_output=True, text=True)
+                result = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL)
                 
                 if result.returncode == 0:
                     # Replace original with preprocessed version
                     temp_output.replace(prompt_file)
-                    print(f"    ✓ Successfully preprocessed")
+                    print("    ✓ Successfully preprocessed")
                 else:
                     print(f"    ✗ Failed to preprocess {prompt_file.name}")
                     print(f"      Error: {result.stderr}")
