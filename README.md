@@ -117,7 +117,8 @@ When keys are missing, PDD will prompt for them interactively and securely store
 PDD uses a CSV file to configure model selection and capabilities. This configuration is loaded from:
 
 1. User-specific configuration: `~/.pdd/llm_model.csv` (takes precedence if it exists)
-2. Project-specific configuration: `<PROJECT_ROOT>/data/llm_model.csv`
+2. Project-specific configuration: `<PROJECT_ROOT>/.pdd/llm_model.csv`
+3. Package default: Bundled with PDD installation (fallback when no local configurations exist)
 
 The CSV includes columns for:
 - `provider`: The LLM provider (e.g., "openai", "anthropic", "google")
@@ -161,7 +162,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.44
+Current version: 0.0.46
 
 To check your installed version, run:
 ```
@@ -527,6 +528,14 @@ The sync command automatically detects what files exist and executes the appropr
 - **Run Reports**: Tracks test results, coverage, and execution status  
 - **Lock Management**: Prevents race conditions with file-descriptor based locking
 - **Git Integration**: Leverages version control for change detection and rollback safety
+
+**The `.pdd` Directory**:
+PDD uses a `.pdd` directory in your project root to store various metadata and configuration files:
+- `.pdd/meta/` - Contains fingerprint files, run reports, and sync logs
+- `.pdd/locks/` - Stores lock files to prevent concurrent operations
+- `.pdd/llm_model.csv` - Project-specific LLM model configuration (optional)
+
+This directory should typically be added to version control (except for lock files), as it contains important project state information.
 
 **Environment Variables**:
 All existing PDD output path environment variables are respected, allowing the sync command to save files in the appropriate locations for your project structure.
@@ -1336,9 +1345,10 @@ The `.pddrc` approach is recommended for team projects as it ensures consistent 
 PDD uses a CSV file (`llm_model.csv`) to store information about available AI models, their costs, capabilities, and required API key names. When running commands locally (e.g., using the `update_model_costs.py` utility or potentially local execution modes if implemented), PDD determines which configuration file to use based on the following priority:
 
 1.  **User-specific:** `~/.pdd/llm_model.csv` - If this file exists, it takes precedence over any project-level configuration. This allows users to maintain a personal, system-wide model configuration.
-2.  **Project-specific:** `<PROJECT_ROOT>/data/llm_model.csv` - If the user-specific file is not found, PDD looks for the file within the `data` directory of the determined project root (based on `PDD_PATH` or auto-detection).
+2.  **Project-specific:** `<PROJECT_ROOT>/.pdd/llm_model.csv` - If the user-specific file is not found, PDD looks for the file within the `.pdd` directory of the determined project root (based on `PDD_PATH` or auto-detection).
+3.  **Package default:** If neither of the above exist, PDD falls back to the default configuration bundled with the package installation.
 
-This tiered approach allows for both shared project configurations and individual user overrides.
+This tiered approach allows for both shared project configurations and individual user overrides, while ensuring PDD works out-of-the-box without requiring manual configuration.
 *Note: This file-based configuration primarily affects local operations and utilities. Cloud execution modes likely rely on centrally managed configurations.*
 
 
@@ -1604,7 +1614,7 @@ The `pdd-mcp-server` (`utils/mcp`) acts as a bridge using the Model Context Prot
 
 ### Update LLM Model Data (`pdd/update_model_costs.py`)
 
-This script automatically updates the `llm_model.csv` file. **It prioritizes updating the user-specific configuration at `~/.pdd/llm_model.csv` if it exists.** Otherwise, it targets the file specified by the `--csv-path` argument (defaulting to `<PROJECT_ROOT>/data/llm_model.csv`).
+This script automatically updates the `llm_model.csv` file. **It prioritizes updating the user-specific configuration at `~/.pdd/llm_model.csv` if it exists.** Otherwise, it targets the file specified by the `--csv-path` argument (defaulting to `<PROJECT_ROOT>/.pdd/llm_model.csv`).
 
 It uses the `litellm` library to:
 *   Fetch and fill in missing input/output costs for listed models (converting per-token costs to per-million-token costs).

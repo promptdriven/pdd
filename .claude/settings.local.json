@@ -10,6 +10,8 @@
       "Bash(python -m pytest tests/test_fix_error_loop.py -v)",
       "Bash(ls:*)",
       "Bash(unzip:*)"
+      "Bash(grep:*)",
+      "Bash(python:*)"
     ],
     "deny": []
   }
