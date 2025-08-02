@@ -517,6 +517,8 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "4" ]; then
   git init -b main > /dev/null 2>&1
   git config --local user.email "test@example.com"
   git config --local user.name "Test User"
+  # Copy data directory for LLM model CSV access
+  cp -r "$PDD_BASE_DIR/data" .
   cp "../$ORIGINAL_MATH_SCRIPT" "$MATH_SCRIPT" # Copy original version
   cp "$PROMPTS_PATH/$MATH_PROMPT" .
   git add "$MATH_SCRIPT" "$MATH_PROMPT"
