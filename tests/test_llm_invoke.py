@@ -4,6 +4,7 @@ import pytest
 import os
 import pandas as pd
 import json # Added for Pydantic parsing tests
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 from pydantic import BaseModel, ValidationError
 from collections import namedtuple
@@ -425,4 +426,119 @@ def test_llm_invoke_load_models_file_not_found(mock_set_llm_cache):
         input_json = {"topic": "cats"}
         with pytest.raises(FileNotFoundError, match="LLM model CSV not found at /fake/path/llm_model.csv"):
             llm_invoke(prompt=prompt, input_json=input_json)
-        mock_load.assert_called_once() 
+        mock_load.assert_called_once()
+
+
+# CSV Path Resolution Tests
+# These tests verify the correct hierarchy:
+#   - User-specific: ~/.pdd/llm_model.csv
+#   - Project-specific: PROJECT_ROOT/.pdd/llm_model.csv  
+#   - Package default: via importlib.resources
+
+
+def test_llm_invoke_csv_path_hierarchy(mock_set_llm_cache, monkeypatch, tmp_path):
+    """Test that CSV path resolution follows the correct hierarchy:
+    1. User-specific: ~/.pdd/llm_model.csv
+    2. Project-specific: PROJECT_ROOT/.pdd/llm_model.csv
+    3. Package default: via importlib.resources
+    """
+    # Set up paths
+    fake_home = tmp_path / "fake_home"
+    fake_home.mkdir()
+    user_csv = fake_home / ".pdd" / "llm_model.csv"
+    project_csv = tmp_path / ".pdd" / "llm_model.csv"
+    
+    # Set PDD_PATH to control PROJECT_ROOT determination
+    monkeypatch.setenv('PDD_PATH', str(tmp_path))
+    
+    # Mock Path.home() to control user CSV location
+    with patch('pdd.llm_invoke.Path.home', return_value=fake_home):
+            # Test 1: User-specific CSV exists - should use it
+            def mock_is_file_user(self):
+                if str(self) == str(user_csv):
+                    return True
+                return False
+                
+            with patch.object(Path, 'is_file', mock_is_file_user):
+                # Re-import to trigger module-level path determination
+                import importlib
+                import pdd.llm_invoke
+                importlib.reload(pdd.llm_invoke)
+                
+                assert pdd.llm_invoke.LLM_MODEL_CSV_PATH == user_csv
+                
+            # Test 2: Only project-specific CSV exists - should use it
+            def mock_is_file_project(self):
+                if str(self) == str(user_csv):
+                    return False
+                elif str(self) == str(project_csv):
+                    return True
+                return False
+                
+            with patch.object(Path, 'is_file', mock_is_file_project):
+                importlib.reload(pdd.llm_invoke)
+                # Should now check PROJECT_ROOT/.pdd/llm_model.csv
+                assert pdd.llm_invoke.LLM_MODEL_CSV_PATH == project_csv
+
+
+def test_llm_invoke_packaged_csv_fallback_needed(mock_set_llm_cache, monkeypatch, tmp_path):
+    """Test that when no local CSV files exist, _load_model_data falls back to 
+    the packaged CSV instead of raising FileNotFoundError.
+    """
+    # Create an isolated test directory
+    test_dir = tmp_path / "isolated_test"
+    test_dir.mkdir()
+    
+    # Mock the path resolution to simulate installed package scenario
+    from pdd.llm_invoke import _load_model_data
+    
+    # Create a path that doesn't exist
+    nonexistent_csv = test_dir / "data" / "llm_model.csv"
+    
+    # This should now successfully load from the packaged CSV
+    df = _load_model_data(nonexistent_csv)
+    
+    # Verify we got valid data
+    assert not df.empty
+    assert 'model' in df.columns
+    assert 'provider' in df.columns
+    assert len(df) > 0  # Should have at least one model
+
+
+def test_llm_invoke_project_pdd_directory(mock_set_llm_cache, tmp_path, monkeypatch):
+    """Test that project-specific CSV is looked for in PROJECT_ROOT/.pdd/ not PROJECT_ROOT/data/"""
+    # Create fake home directory
+    fake_home = tmp_path / "fake_home"
+    fake_home.mkdir()
+    
+    # Create the .pdd directory structure
+    pdd_dir = tmp_path / ".pdd"
+    pdd_dir.mkdir(exist_ok=True)
+    
+    # Create a CSV file in .pdd directory
+    csv_path = pdd_dir / "llm_model.csv"
+    csv_data = pd.DataFrame({
+        'provider': ['OpenAI'],
+        'model': ['gpt-4.1-nano'],
+        'input': [0.1],
+        'output': [0.4],
+        'coding_arena_elo': [1249],
+        'api_key': ['OPENAI_API_KEY'],
+        'structured_output': [True],
+        'reasoning_type': ['none'],
+        'max_reasoning_tokens': [0]
+    })
+    csv_data.to_csv(csv_path, index=False)
+    
+    # Set PDD_PATH to control PROJECT_ROOT
+    monkeypatch.setenv('PDD_PATH', str(tmp_path))
+    
+    # Mock home directory to ensure user CSV doesn't exist
+    with patch('pdd.llm_invoke.Path.home', return_value=fake_home):
+            # Re-import to trigger path determination
+            import importlib
+            import pdd.llm_invoke
+            importlib.reload(pdd.llm_invoke)
+            
+            # Should find tmp_path/.pdd/llm_model.csv
+            assert pdd.llm_invoke.LLM_MODEL_CSV_PATH == csv_path 
