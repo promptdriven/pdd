@@ -3,15 +3,21 @@ import os
 import shutil
 import zipfile
 import sys
+import glob
 
 # Define paths
-wheel_path = "/Users/gregtanaka/Documents/pdd_cloud/pdd/dist/pdd_cli-0.0.44-py3-none-any.whl"
+dist_dir = "/Users/gregtanaka/Documents/pdd_cloud/pdd/dist"
 extract_path = "/Users/gregtanaka/Documents/pdd_cloud/pdd/dist/extracted"
 
-# Check if wheel file exists
-if not os.path.exists(wheel_path):
-    print(f"Error: Wheel file not found at {wheel_path}")
+# Find wheel file
+wheel_files = glob.glob(os.path.join(dist_dir, "pdd_cli-*.whl"))
+if not wheel_files:
+    print(f"Error: No wheel files found in {dist_dir}")
     sys.exit(1)
+
+# Use the most recent wheel file if multiple exist
+wheel_path = max(wheel_files, key=os.path.getctime)
+print(f"Using wheel file: {wheel_path}")
 
 # Remove existing extracted directory
 if os.path.exists(extract_path):
