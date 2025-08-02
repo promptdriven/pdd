@@ -34,6 +34,7 @@ from .fix_main import fix_main
 from .fix_verification_main import fix_verification_main
 from .install_completion import install_completion, get_local_pdd_path
 from .preprocess_main import preprocess_main
+from .pytest_output import run_pytest_and_capture_output
 from .split_main import split_main
 from .sync_main import sync_main
 from .trace_main import trace_main
@@ -1174,6 +1175,47 @@ def sync(
     except Exception as exception:
         handle_error(exception, "sync", ctx.obj.get("quiet", False))
         return None
+
+
+@cli.command("pytest-output")
+@click.argument("test_file", type=click.Path(exists=True, dir_okay=False))
+@click.option(
+    "--json-only",
+    is_flag=True,
+    default=False,
+    help="Output only JSON to stdout for programmatic use.",
+)
+@click.pass_context
+# No @track_cost since this is a utility command
+def pytest_output_cmd(ctx: click.Context, test_file: str, json_only: bool) -> None:
+    """Run pytest on a test file and capture structured output.
+    
+    This is a utility command used internally by PDD for capturing pytest results
+    in a structured format. It can also be used directly for debugging test issues.
+    
+    Examples:
+        pdd pytest-output tests/test_example.py
+        pdd pytest-output tests/test_example.py --json-only
+    """
+    command_name = "pytest-output"
+    quiet_mode = ctx.obj.get("quiet", False)
+
+    try:
+        import json
+        pytest_output = run_pytest_and_capture_output(test_file)
+        
+        if json_only:
+            # Print only valid JSON to stdout for programmatic use
+            print(json.dumps(pytest_output))
+        else:
+            # Pretty print the output for interactive use
+            if not quiet_mode:
+                console.print(f"Running pytest on: [blue]{test_file}[/blue]")
+                from rich.pretty import pprint
+                pprint(pytest_output, console=console)
+                
+    except Exception as e:
+        handle_error(e, command_name, quiet_mode)
 
 
 @cli.command("install_completion")

@@ -1,4 +1,4 @@
-.. image:: https://img.shields.io/badge/pdd--cli-v0.0.43-blue
+.. image:: https://img.shields.io/badge/pdd--cli-v0.0.46-blue
    :alt: PDD-CLI Version
 
 .. image:: https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white&link=https://discord.gg/Yp4RTh8bG7
@@ -49,7 +49,7 @@ We recommend installing PDD using the `uv <https://github.com/astral-sh/uv>`_ pa
 .. code-block:: console
 
    # Install uv if you haven't already
-   curl -sSf https://astral.sh/uv/install.sh | sh
+   curl -LsSf https://astral.sh/uv/install.sh | sh
 
    # Install PDD using uv tool install
    uv tool install pdd-cli
@@ -75,7 +75,7 @@ After installation, verify:
 
    pdd --version
 
-You'll see the current PDD version (e.g., 0.0.43).
+You'll see the current PDD version (e.g., 0.0.46).
 
 Getting Started with Examples
 -----------------------------

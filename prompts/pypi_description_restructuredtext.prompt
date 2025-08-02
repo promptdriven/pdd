@@ -11,5 +11,5 @@
 
 % Here is the patent filing for pdd:
     <pdd-patent>
-        <include>context/patent.md</include>
+        <include>../docs/patents/first_patent_app.md</include>
     </pdd-patent>

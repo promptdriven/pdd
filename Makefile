@@ -400,9 +400,14 @@ install:
 build:
 	@echo "Building pdd"
 	@rm -rf dist
-	@python -m build
+	@conda run -n pdd --no-capture-output python -m build
 	@rm dist/*.tar.gz #don't upload source distribution
-	@twine upload --repository pypi dist/*.whl
+	
+	# Post-process the wheel with preprocessed prompts
+	@echo "Post-processing wheel with preprocessed prompts..."
+	@conda run -n pdd --no-capture-output python scripts/preprocess_wheel.py 'dist/*.whl'
+	
+	@conda run -n pdd --no-capture-output twine upload --repository pypi dist/*.whl
 
 release:
 	@echo "Bumping version with commitizen"
