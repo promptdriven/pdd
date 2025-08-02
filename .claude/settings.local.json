@@ -1,19 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python -m pytest tests/test_change_main.py::test_change_main_csv_output_dir_slash_saves_individual_files -xvs)",
-      "Bash(python3:*)",
+      "Bash(do echo \"Checking $file:\")",
+      "Bash(if diff -q \"$file\" \"/Users/gregtanaka/.local/share/uv/tools/pdd-cli/lib/python3.12/site-packages/pdd/$file\")",
+      "Bash(then echo \"  IDENTICAL\")",
+      "Bash(else echo \"  DIFFERENT\")",
+      "Bash(BACKUP_DIR=\"/tmp/pdd_backup_$(date +%Y%m%d_%H%M%S)\")",
+      "Bash(BACKUP_DIR=\"/tmp/pdd_backup_$(date +%Y%m%d_%H%M%S)\")",
+      "Bash(python -m pytest tests/test_fix_error_loop.py -v)",
       "Bash(ls:*)",
-      "Bash(./pdd-local:*)",
-      "Bash(echo $PATH)",
-      "Bash(echo $PYTHONPATH)",
-      "Bash(pip show:*)",
-      "Bash(dos2unix:*)",
-      "Bash(sed:*)",
-      "Bash(echo $PDD_PATH)",
-      "Bash(pytest:*)",
-      "Bash(bash pdd-local --help)",
-      "Bash(find:*)",
+      "Bash(unzip:*)"
       "Bash(grep:*)",
       "Bash(mkdir:*)",
       "Bash(../pdd-local sync simple_test)",

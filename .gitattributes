@@ -1,0 +1,22 @@
+# Ensure shell scripts always use LF line endings
+*.sh text eol=lf
+tests/*.sh text eol=lf
+pdd-local.sh text eol=lf
+
+# Python files should use LF line endings  
+*.py text eol=lf
+
+# Ensure other text files use appropriate line endings
+*.md text
+*.txt text
+*.json text
+*.csv text
+*.prompt text
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary

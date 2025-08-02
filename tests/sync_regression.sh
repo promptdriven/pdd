@@ -395,6 +395,42 @@ fi
 log "Creating directory structure for .pddrc configuration"
 mkdir -p pdd examples tests context
 
+# Create placeholder test files for multi-language calculator (required by multi-language sync)
+log "Creating placeholder test files for multi-language projects"
+cat << EOF > "tests/test_calculator.py"
+# Placeholder test file for calculator module
+# This will be generated/updated by the sync process
+import pytest
+
+def test_placeholder():
+    """Placeholder test - will be replaced by sync process"""
+    pass
+EOF
+
+cat << EOF > "tests/test_calculator.js"
+// Placeholder test file for calculator module
+// This will be generated/updated by the sync process
+const { describe, it, expect } = require('@jest/globals');
+
+describe('Calculator placeholder tests', () => {
+    it('should be a placeholder test - will be replaced by sync process', () => {
+        expect(true).toBe(true);
+    });
+});
+EOF
+
+cat << EOF > "tests/test_calculator.ts"
+// Placeholder test file for calculator module
+// This will be generated/updated by the sync process
+import { describe, it, expect } from '@jest/globals';
+
+describe('Calculator placeholder tests', () => {
+    it('should be a placeholder test - will be replaced by sync process', () => {
+        expect(true).toBe(true);
+    });
+});
+EOF
+
 # Create context files needed by tests
 log "Creating context files for sync tests"
 cat << EOF > "context/test.prompt"

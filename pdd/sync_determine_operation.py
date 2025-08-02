@@ -760,22 +760,8 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
     
     run_report = read_run_report(basename, language)
     if run_report:
-        # Check test failures first (higher priority than exit code)
-        if run_report.tests_failed > 0:
-            return SyncDecision(
-                operation='fix',
-                reason=f'Test failures detected: {run_report.tests_failed} failed tests',
-                confidence=0.90,
-                estimated_cost=estimate_operation_cost('fix'),
-                details={
-                    'decision_type': 'heuristic',
-                    'tests_failed': run_report.tests_failed,
-                    'exit_code': run_report.exit_code,
-                    'coverage': run_report.coverage
-                }
-            )
-        
-        # Check if we just completed a crash operation and need verification
+        # Check if we just completed a crash operation and need verification FIRST
+        # This takes priority over test failures because we need to verify the crash fix worked
         if fingerprint and fingerprint.command == 'crash' and not skip_verify:
             return SyncDecision(
                 operation='verify',
@@ -787,6 +773,21 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
                     'previous_command': 'crash',
                     'current_exit_code': run_report.exit_code,
                     'fingerprint_command': fingerprint.command
+                }
+            )
+        
+        # Check test failures (after crash verification check)
+        if run_report.tests_failed > 0:
+            return SyncDecision(
+                operation='fix',
+                reason=f'Test failures detected: {run_report.tests_failed} failed tests',
+                confidence=0.90,
+                estimated_cost=estimate_operation_cost('fix'),
+                details={
+                    'decision_type': 'heuristic',
+                    'tests_failed': run_report.tests_failed,
+                    'exit_code': run_report.exit_code,
+                    'coverage': run_report.coverage
                 }
             )
         
