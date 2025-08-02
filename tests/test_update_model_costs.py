@@ -811,7 +811,7 @@ def test_main_default_path(mocker, capsys_rich):
     mock_update = mocker.patch("pdd.update_model_costs.update_model_data")
     mocker.patch('sys.argv', ['update_model_costs.py']) # No --csv-path, uses default
 
-    default_path_str = "data/llm_model.csv" # Default path in argparse
+    default_path_str = ".pdd/llm_model.csv" # Default path in argparse
     resolved_default_path_obj_str = str(Path(default_path_str).resolve())
 
     # Mock for Path.home() chain
