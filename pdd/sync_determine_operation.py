@@ -216,16 +216,63 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         prompt_filename = f"{basename}_{language}.prompt"
         prompt_path = str(Path(prompts_dir) / prompt_filename)
         
-        # Check if prompt file exists - if not, we can't proceed with construct_paths
+        # Check if prompt file exists - if not, we still need configuration-aware paths
         if not Path(prompt_path).exists():
-            # Fall back to default path construction if prompt doesn't exist
+            # Use construct_paths with minimal inputs to get configuration-aware paths
+            # even when prompt doesn't exist
             extension = get_extension(language)
-            return {
-                'prompt': Path(prompt_path),
-                'code': Path(f"{basename}.{extension}"),
-                'example': Path(f"{basename}_example.{extension}"),
-                'test': Path(f"test_{basename}.{extension}")
-            }
+            try:
+                # Call construct_paths with empty input_file_paths to get configured output paths
+                resolved_config, _, output_paths, _ = construct_paths(
+                    input_file_paths={},  # Empty dict since files don't exist yet
+                    force=True,
+                    quiet=True,
+                    command="sync",
+                    command_options={"basename": basename, "language": language}
+                )
+                
+                # Extract configured paths from the output
+                # Use resolved_config which contains the paths from .pddrc
+                test_path = resolved_config.get('test_output_path', f"test_{basename}.{extension}")
+                example_path = resolved_config.get('example_output_path', f"{basename}_example.{extension}")
+                code_path = resolved_config.get('generate_output_path', f"{basename}.{extension}")
+                
+                # Convert to Path objects, handling directory paths appropriately
+                if test_path.endswith('/'):
+                    test_path = Path(test_path) / f"test_{basename}.{extension}"
+                else:
+                    test_path = Path(test_path)
+                    
+                if example_path.endswith('/'):
+                    example_path = Path(example_path) / f"{basename}_example.{extension}"
+                else:
+                    example_path = Path(example_path)
+                    
+                if code_path.endswith('/'):
+                    code_path = Path(code_path) / f"{basename}.{extension}"
+                else:
+                    code_path = Path(code_path)
+                
+                result = {
+                    'prompt': Path(prompt_path),
+                    'code': code_path,
+                    'example': example_path,
+                    'test': test_path
+                }
+                logger.debug(f"get_pdd_file_paths returning (prompt missing): test={test_path}")
+                return result
+            except Exception as e:
+                # If construct_paths fails, fall back to current directory paths
+                # This maintains backward compatibility
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.debug(f"construct_paths failed for non-existent prompt, using defaults: {e}")
+                return {
+                    'prompt': Path(prompt_path),
+                    'code': Path(f"{basename}.{extension}"),
+                    'example': Path(f"{basename}_example.{extension}"),
+                    'test': Path(f"test_{basename}.{extension}")
+                }
         
         input_file_paths = {
             "prompt_file": prompt_path
@@ -236,7 +283,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             input_file_paths=input_file_paths,
             force=True,  # Use force=True to avoid interactive prompts during sync
             quiet=True,
-            command="generate",
+            command="sync",  # Use sync command to get more tolerant path handling
             command_options={}
         )
         
@@ -275,12 +322,16 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 )
                 example_path = Path(example_output_paths.get('output', f"{basename}_example.{get_extension(language)}"))
                 
-                # Get test path using test command  
-                _, _, test_output_paths, _ = construct_paths(
-                    input_file_paths={"prompt_file": prompt_path, "code_file": code_path},
-                    force=True, quiet=True, command="test", command_options={}
-                )
-                test_path = Path(test_output_paths.get('output', f"test_{basename}.{get_extension(language)}"))
+                # Get test path using test command - handle case where test file doesn't exist yet
+                try:
+                    _, _, test_output_paths, _ = construct_paths(
+                        input_file_paths={"prompt_file": prompt_path, "code_file": code_path},
+                        force=True, quiet=True, command="sync", command_options={}
+                    )
+                    test_path = Path(test_output_paths.get('output', f"test_{basename}.{get_extension(language)}"))
+                except FileNotFoundError:
+                    # Test file doesn't exist yet - create default path
+                    test_path = Path(f"test_{basename}.{get_extension(language)}")
                 
             finally:
                 # Clean up temporary file if we created it
@@ -304,11 +355,15 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 )
                 example_path = Path(example_output_paths.get('output', f"{basename}_example.{get_extension(language)}"))
                 
-                _, _, test_output_paths, _ = construct_paths(
-                    input_file_paths={"prompt_file": prompt_path},
-                    force=True, quiet=True, command="test", command_options={}
-                )
-                test_path = Path(test_output_paths.get('output', f"test_{basename}.{get_extension(language)}"))
+                try:
+                    _, _, test_output_paths, _ = construct_paths(
+                        input_file_paths={"prompt_file": prompt_path},
+                        force=True, quiet=True, command="sync", command_options={}
+                    )
+                    test_path = Path(test_output_paths.get('output', f"test_{basename}.{get_extension(language)}"))
+                except Exception:
+                    # If test path construction fails, use default naming
+                    test_path = Path(f"test_{basename}.{get_extension(language)}")
                 
             except Exception:
                 # Final fallback to deriving from code path if all else fails
