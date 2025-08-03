@@ -345,11 +345,27 @@ def test_decision_verify_after_crash_fix(mock_construct, pdd_test_environment):
 
 @patch('sync_determine_operation.construct_paths')
 def test_decision_fix_on_test_failures(mock_construct, pdd_test_environment):
+    # Create prompt file so get_pdd_file_paths can work properly
+    prompts_dir = pdd_test_environment / "prompts"
+    prompts_dir.mkdir(exist_ok=True)
+    create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", "Test prompt")
+    
+    # Create test file so test_file.exists() check passes
+    test_file = pdd_test_environment / f"test_{BASENAME}.py"
+    create_file(test_file, "def test_dummy(): pass")
+    
+    # Mock construct_paths to return the test file path
+    mock_construct.return_value = (
+        {}, {},
+        {'test_file': str(test_file)},
+        LANGUAGE
+    )
+    
     rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
     create_run_report_file(rr_path, {
         "timestamp": "t", "exit_code": 0, "tests_passed": 5, "tests_failed": 2, "coverage": 80.0
     })
-    decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE)
+    decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
     assert decision.operation == 'fix'
     assert "Test failures detected" in decision.reason
 
@@ -866,13 +882,29 @@ def test_skip_flags_parameter_propagation(mock_construct, pdd_test_environment):
 @patch('sync_determine_operation.construct_paths')
 def test_skip_flags_dont_interfere_with_crash_fix(mock_construct, pdd_test_environment):
     """Test that skip flags don't interfere with crash/fix operations."""
+    # Create prompt file so get_pdd_file_paths can work properly
+    prompts_dir = pdd_test_environment / "prompts"
+    prompts_dir.mkdir(exist_ok=True)
+    create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", "Test prompt")
+    
+    # Create test file so test_file.exists() check passes
+    test_file = pdd_test_environment / f"test_{BASENAME}.py"
+    create_file(test_file, "def test_dummy(): pass")
+    
+    # Mock construct_paths to return the test file path
+    mock_construct.return_value = (
+        {}, {},
+        {'test_file': str(test_file)},
+        LANGUAGE
+    )
+    
     # Create run report with test failures (fix should still trigger)
     rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
     create_run_report_file(rr_path, {
         "timestamp": "t", "exit_code": 0, "tests_passed": 5, "tests_failed": 2, "coverage": 80.0
     })
     
-    decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, skip_tests=True, skip_verify=True)
+    decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir), skip_tests=True, skip_verify=True)
     assert decision.operation == 'fix'  # Should still trigger fix despite skip flags
     assert "Test failures detected" in decision.reason
 
@@ -1571,6 +1603,7 @@ contexts:
             (tmp_path / "prompts").mkdir()
             (tmp_path / "tests").mkdir()
             (tmp_path / "examples").mkdir()
+            (tmp_path / ".pdd" / "meta").mkdir(parents=True)
             
             # Create the files that exist after verify completes
             (tmp_path / "prompts" / "simple_math_python.prompt").write_text("Create add function")
@@ -1592,43 +1625,30 @@ contexts:
             # The test file should be in tests/ directory according to .pddrc
             # but the error shows it's being looked for in current directory
             
-            # Import get_pdd_file_paths locally to ensure proper context
-            from pdd.sync_determine_operation import get_pdd_file_paths
+            # Use the already imported get_pdd_file_paths to avoid module conflicts
+            # get_pdd_file_paths was imported at the top of the file
             
-            # Get file paths - this should respect .pddrc but currently doesn't
+            # Get file paths - this should respect .pddrc
             paths = get_pdd_file_paths("simple_math", "python", "prompts")
             
             # This demonstrates the bug: trying to check if test file exists
             # in the wrong location would cause the error
             test_path = paths['test']
             
-            # Check if the path is correct (with the fix) or incorrect (without the fix)
-            # When running in isolation vs with all tests, the environment may differ
-            if str(test_path) == "tests/test_simple_math.py":
-                # Fix is working - verify the file lookup fails with correct path
-                try:
-                    with open(test_path, 'r') as f:
-                        f.read()
-                    assert False, "Should have raised FileNotFoundError"
-                except FileNotFoundError as e:
-                    error_msg = str(e)
-                    assert "tests/test_simple_math.py" in error_msg or "tests\\test_simple_math.py" in error_msg, \
-                        f"Expected error to reference 'tests/test_simple_math.py', but got: {error_msg}"
-            else:
-                # Without the fix, we get the wrong path
-                assert str(test_path) == "test_simple_math.py", \
-                    f"Without fix, expected 'test_simple_math.py', but got: {test_path}"
-                
-                # This demonstrates the regression - file would be looked for in wrong location
-                try:
-                    with open(test_path, 'r') as f:
-                        f.read()
-                    assert False, "Should have raised FileNotFoundError"
-                except FileNotFoundError as e:
-                    error_msg = str(e)
-                    # Without fix, error shows wrong path
-                    assert "test_simple_math.py" in error_msg and "tests/" not in error_msg, \
-                        f"Expected error to show wrong path 'test_simple_math.py', but got: {error_msg}"
+            # The fix is now in place, so we should always get the correct path
+            # Verify that the path respects the .pddrc configuration
+            assert "tests/test_simple_math.py" in str(test_path) or "tests\\test_simple_math.py" in str(test_path), \
+                f"Expected test path to be in tests/ subdirectory as per .pddrc, but got: {test_path}"
+            
+            # Verify the file lookup fails with the correct path (file doesn't exist)
+            try:
+                with open(test_path, 'r') as f:
+                    f.read()
+                assert False, "Should have raised FileNotFoundError"
+            except FileNotFoundError as e:
+                error_msg = str(e)
+                assert "tests/test_simple_math.py" in error_msg or "tests\\test_simple_math.py" in error_msg, \
+                    f"Expected error to reference 'tests/test_simple_math.py', but got: {error_msg}"
                 
             # After fix, the path should be 'tests/test_simple_math.py'
             # and this error wouldn't occur if the file existed there
