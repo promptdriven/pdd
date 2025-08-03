@@ -211,10 +211,15 @@ def get_extension(language: str) -> str:
 
 def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts") -> Dict[str, Path]:
     """Returns a dictionary mapping file types to their expected Path objects."""
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"get_pdd_file_paths called: basename={basename}, language={language}, prompts_dir={prompts_dir}")
+    
     try:
         # Use construct_paths to get configuration-aware paths
         prompt_filename = f"{basename}_{language}.prompt"
         prompt_path = str(Path(prompts_dir) / prompt_filename)
+        logger.info(f"Checking prompt_path={prompt_path}, exists={Path(prompt_path).exists()}")
         
         # Check if prompt file exists - if not, we still need configuration-aware paths
         if not Path(prompt_path).exists():
@@ -231,27 +236,37 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     command_options={"basename": basename, "language": language}
                 )
                 
-                # Extract configured paths from the output
-                # Use resolved_config which contains the paths from .pddrc
-                test_path = resolved_config.get('test_output_path', f"test_{basename}.{extension}")
-                example_path = resolved_config.get('example_output_path', f"{basename}_example.{extension}")
-                code_path = resolved_config.get('generate_output_path', f"{basename}.{extension}")
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.info(f"resolved_config: {resolved_config}")
+                logger.info(f"output_paths: {output_paths}")
                 
-                # Convert to Path objects, handling directory paths appropriately
-                if test_path.endswith('/'):
-                    test_path = Path(test_path) / f"test_{basename}.{extension}"
-                else:
-                    test_path = Path(test_path)
-                    
-                if example_path.endswith('/'):
-                    example_path = Path(example_path) / f"{basename}_example.{extension}"
-                else:
-                    example_path = Path(example_path)
-                    
-                if code_path.endswith('/'):
-                    code_path = Path(code_path) / f"{basename}.{extension}"
-                else:
-                    code_path = Path(code_path)
+                # Extract directory configuration from resolved_config
+                test_dir = resolved_config.get('test_output_path', 'tests/')
+                example_dir = resolved_config.get('example_output_path', 'examples/')
+                code_dir = resolved_config.get('generate_output_path', './')
+                
+                logger.info(f"Extracted dirs - test: {test_dir}, example: {example_dir}, code: {code_dir}")
+                
+                # Ensure directories end with /
+                if test_dir and not test_dir.endswith('/'):
+                    test_dir = test_dir + '/'
+                if example_dir and not example_dir.endswith('/'):
+                    example_dir = example_dir + '/'
+                if code_dir and not code_dir.endswith('/'):
+                    code_dir = code_dir + '/'
+                
+                # Construct the full paths
+                test_path = f"{test_dir}test_{basename}.{extension}"
+                example_path = f"{example_dir}{basename}_example.{extension}"
+                code_path = f"{code_dir}{basename}.{extension}"
+                
+                logger.debug(f"Final paths: test={test_path}, example={example_path}, code={code_path}")
+                
+                # Convert to Path objects
+                test_path = Path(test_path)
+                example_path = Path(example_path)
+                code_path = Path(code_path)
                 
                 result = {
                     'prompt': Path(prompt_path),
@@ -278,29 +293,28 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             "prompt_file": prompt_path
         }
         
-        # Only call construct_paths if the prompt file exists
+        # Call construct_paths to get configuration-aware paths
         resolved_config, input_strings, output_file_paths, detected_language = construct_paths(
             input_file_paths=input_file_paths,
             force=True,  # Use force=True to avoid interactive prompts during sync
             quiet=True,
             command="sync",  # Use sync command to get more tolerant path handling
-            command_options={}
+            command_options={"basename": basename, "language": language}
         )
         
-        # Extract paths from config as specified in the spec
-        # The spec shows: return { 'prompt': Path(config['prompt_file']), ... }
-        # But we need to map the output_file_paths keys to our expected structure
-        
-        # For generate command, construct_paths returns these in output_file_paths:
-        # - 'output' or 'code_file' for the generated code
-        # For other commands, we need to construct the full set of paths
-        
-        # Get the code file path from output_file_paths
-        code_path = output_file_paths.get('output', output_file_paths.get('code_file', ''))
+        # For sync command, output_file_paths contains the configured paths
+        # Extract the code path from output_file_paths
+        code_path = output_file_paths.get('generate_output_path', '')
         if not code_path:
-            # Fallback to constructing from basename
+            # Try other possible keys
+            code_path = output_file_paths.get('output', output_file_paths.get('code_file', ''))
+        if not code_path:
+            # Fallback to constructing from basename with configuration
             extension = get_extension(language)
-            code_path = f"{basename}.{extension}"
+            code_dir = resolved_config.get('generate_output_path', './')
+            if code_dir and not code_dir.endswith('/'):
+                code_dir = code_dir + '/'
+            code_path = f"{code_dir}{basename}.{extension}"
         
         # Get configured paths for example and test files using construct_paths
         # Note: construct_paths requires files to exist, so we need to handle the case
@@ -326,7 +340,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 try:
                     _, _, test_output_paths, _ = construct_paths(
                         input_file_paths={"prompt_file": prompt_path, "code_file": code_path},
-                        force=True, quiet=True, command="sync", command_options={}
+                        force=True, quiet=True, command="test", command_options={}
                     )
                     test_path = Path(test_output_paths.get('output', f"test_{basename}.{get_extension(language)}"))
                 except FileNotFoundError:
@@ -358,7 +372,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 try:
                     _, _, test_output_paths, _ = construct_paths(
                         input_file_paths={"prompt_file": prompt_path},
-                        force=True, quiet=True, command="sync", command_options={}
+                        force=True, quiet=True, command="test", command_options={}
                     )
                     test_path = Path(test_output_paths.get('output', f"test_{basename}.{get_extension(language)}"))
                 except Exception:
@@ -374,9 +388,15 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 example_path = code_dir / f"{code_stem}_example{code_ext}"
                 test_path = code_dir / f"test_{code_stem}{code_ext}"
         
+        # Ensure all paths are Path objects
+        if isinstance(code_path, str):
+            code_path = Path(code_path)
+        
+        # Keep paths as they are (absolute or relative as returned by construct_paths)
+        # This ensures consistency with how construct_paths expects them
         return {
             'prompt': Path(prompt_path),
-            'code': Path(code_path),
+            'code': code_path,
             'example': example_path,
             'test': test_path
         }
@@ -825,18 +845,38 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
         
         # Check test failures (after crash verification check)
         if run_report.tests_failed > 0:
-            return SyncDecision(
-                operation='fix',
-                reason=f'Test failures detected: {run_report.tests_failed} failed tests',
-                confidence=0.90,
-                estimated_cost=estimate_operation_cost('fix'),
-                details={
-                    'decision_type': 'heuristic',
-                    'tests_failed': run_report.tests_failed,
-                    'exit_code': run_report.exit_code,
-                    'coverage': run_report.coverage
-                }
-            )
+            # First check if the test file actually exists
+            pdd_files = get_pdd_file_paths(basename, language, prompts_dir)
+            test_file = pdd_files.get('test')
+            
+            # Only suggest 'fix' if test file exists
+            if test_file and test_file.exists():
+                return SyncDecision(
+                    operation='fix',
+                    reason=f'Test failures detected: {run_report.tests_failed} failed tests',
+                    confidence=0.90,
+                    estimated_cost=estimate_operation_cost('fix'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'tests_failed': run_report.tests_failed,
+                        'exit_code': run_report.exit_code,
+                        'coverage': run_report.coverage
+                    }
+                )
+            # If test file doesn't exist but we have test failures in run report,
+            # we need to generate the test first
+            else:
+                return SyncDecision(
+                    operation='test',
+                    reason='Test failures reported but test file missing - need to generate tests',
+                    confidence=0.85,
+                    estimated_cost=estimate_operation_cost('test'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'run_report_shows_failures': True,
+                        'test_file_exists': False
+                    }
+                )
         
         # Then check for runtime crashes (only if no test failures)
         if run_report.exit_code != 0:
