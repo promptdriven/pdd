@@ -354,6 +354,11 @@ def sync_orchestration(
     # --- Initialize State and Paths ---
     try:
         pdd_files = get_pdd_file_paths(basename, language, prompts_dir)
+        # Debug: Print the paths we got
+        print(f"DEBUG: get_pdd_file_paths returned:")
+        print(f"  test: {pdd_files.get('test', 'N/A')}")
+        print(f"  code: {pdd_files.get('code', 'N/A')}")
+        print(f"  example: {pdd_files.get('example', 'N/A')}")
     except FileNotFoundError as e:
         # Check if it's specifically the test file that's missing
         if "test_config.py" in str(e) or "tests/test_" in str(e):
@@ -877,6 +882,14 @@ def sync_orchestration(
                         )
                     elif operation == 'test':
                         # First, generate the test file
+                        # Ensure the test directory exists
+                        test_path = pdd_files['test']
+                        if isinstance(test_path, Path):
+                            # Debug logging
+                            if not quiet:
+                                print(f"Creating test directory: {test_path.parent}")
+                            test_path.parent.mkdir(parents=True, exist_ok=True)
+                        
                         result = cmd_test_main(
                             ctx, 
                             prompt_file=str(pdd_files['prompt']), 
@@ -928,7 +941,8 @@ def sync_orchestration(
                         # Try to get actual test failure details from latest run
                         try:
                             run_report = read_run_report(basename, language)
-                            if run_report and run_report.tests_failed > 0 and pdd_files['test'].exists():
+                            test_file = pdd_files.get('test')
+                            if run_report and run_report.tests_failed > 0 and test_file and test_file.exists():
                                 # Run the tests again to capture actual error output
                                 # Use environment-aware Python executable for pytest execution
                                 python_executable = detect_host_python_executable()

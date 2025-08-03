@@ -169,7 +169,7 @@ run_pdd_command_base() {
     shift
     local args=("$@") # Capture remaining args in an array
 
-    local cmd_array=("$PDD_SCRIPT" "--force")
+    local cmd_array=("$PDD_SCRIPT" "--force" "--local")
 
     # Always add cost tracking
     cmd_array+=("--output-cost" "$REGRESSION_DIR/$COST_FILE")

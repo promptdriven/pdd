@@ -3,6 +3,7 @@ Main entry point for the 'test' command.
 """
 from __future__ import annotations
 import click
+from pathlib import Path
 # pylint: disable=redefined-builtin
 from rich import print
 
@@ -165,6 +166,10 @@ def cmd_test_main(
         return "", 0.0, ""
     
     try:
+        # Ensure parent directory exists
+        output_path = Path(output_file)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
         with open(output_file, "w", encoding="utf-8") as file_handle:
             file_handle.write(unit_test)
         print(f"[bold green]Unit tests saved to:[/bold green] {output_file}")
