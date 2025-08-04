@@ -23,10 +23,12 @@ from .sync_determine_operation import (
     sync_determine_operation,
     get_pdd_file_paths,
     RunReport,
+    SyncDecision,
     PDD_DIR,
     META_DIR,
     SyncLock,
     read_run_report,
+    estimate_operation_cost,
 )
 from .auto_deps_main import auto_deps_main
 from .code_generator_main import code_generator_main
@@ -459,6 +461,32 @@ def sync_orchestration(
                 
                 # Track operation history
                 operation_history.append(operation)
+                
+                # Detect auto-deps infinite loops (CRITICAL FIX)
+                if len(operation_history) >= 3:
+                    recent_auto_deps = [op for op in operation_history[-3:] if op == 'auto-deps']
+                    if len(recent_auto_deps) >= 2:
+                        errors.append("Detected auto-deps infinite loop. Force advancing to generate operation.")
+                        log_sync_event(basename, language, "cycle_detected", {
+                            "cycle_type": "auto-deps-infinite",
+                            "consecutive_auto_deps": len(recent_auto_deps),
+                            "operation_history": operation_history[-10:]  # Last 10 operations
+                        })
+                        
+                        # Force generate operation to break the cycle
+                        operation = 'generate'
+                        decision = SyncDecision(
+                            operation='generate',
+                            reason='Forced generate to break auto-deps infinite loop',
+                            confidence=1.0,
+                            estimated_cost=estimate_operation_cost('generate'),
+                            details={
+                                'decision_type': 'cycle_breaker',
+                                'forced_operation': True,
+                                'original_operation': 'auto-deps'
+                            }
+                        )
+                        log_entry = create_sync_log_entry(decision, budget_remaining)
                 
                 # Detect crash-verify cycles
                 if len(operation_history) >= 4:
