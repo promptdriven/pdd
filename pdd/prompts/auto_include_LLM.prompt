@@ -63,57 +63,31 @@ Here are some examples of how to do this:
                 Step 3. Return the success status, list of modified prompts, total cost, and model name.
         </example_input_prompt>
         <example_available_includes>
-            context/DSPy_example.py
-            context/anthropic_counter_example.py
-            context/autotokenizer_example.py
-            context/bug_to_unit_test_example.py
-            context/bug_to_unit_test_failure_example.py
-            context/change_example.py
-            context/cli_example.py
-            context/cli_python_preprocessed.prompt
-            context/click_example.py
-            context/cloud_function_call.py
-            context/code_generator_example.py
-            context/comment_line_example.py
-            context/conflicts_in_prompts_example.py
-            context/conflicts_in_prompts_python.prompt
-            context/construct_paths_example.py
-            context/context_generator_example.py
-            context/continue_generation_example.py
-            context/detect_change_example.py
-            context/execute_bug_to_unit_test_failure.py
-            context/final_llm_output.py
-            context/find_section_example.py
-            context/fix_code_module_errors_example.py
-            context/fix_error_loop_example.py
-            context/fix_errors_from_unit_tests_example.py
-            context/generate_output_paths_example.py
-            context/generate_test_example.py
-            context/get_comment_example.py
-            context/get_extension_example.py
-            context/get_language_example.py
-            context/git_update_example.py
-            context/langchain_lcel_example.py
-            context/llm_selector_example.py
-            context/llm_token_counter_example.py
-            context/postprocess_0_example.py
-            context/postprocess_example.py
-            context/postprocessed_runnable_llm_output.py
-            context/preprocess_example.py
-            context/process_csv_change_example.py
-            context/prompt_caching.ipynb
-            context/split_example.py
-            context/tiktoken_example.py
-            context/trace_example.py
-            context/unfinished_prompt_example.py
-            context/unrunnable_raw_llm_output.py
-            context/update_prompt_example.py
-            context/xml_tagger_example.py
+            File: utils/csv_parser.py
+            Summary: Utility functions for parsing and processing CSV files with pandas
+            File: utils/file_processor.py
+            Summary: Generic file processing utilities for reading and writing various formats
+            File: core/change_handler.py
+            Summary: Main function for applying changes to code files with validation
+            File: models/data_validator.py
+            Summary: Pydantic models and validation functions for input data
+            File: cli/command_interface.py
+            Summary: Click-based command line interface utilities
+            File: database/connection.py
+            Summary: Database connection and query utilities
+            File: api/http_client.py
+            Summary: HTTP client for making API requests with retry logic
+            File: processing/text_analyzer.py
+            Summary: Text analysis and natural language processing functions
+            File: config/settings.py
+            Summary: Configuration management and environment variable handling
+            File: logging/logger.py
+            Summary: Centralized logging configuration and utilities
         </example_available_includes>
         <example_string_of_includes>
             % Here are examples of how to use internal modules:
             <internal_example_modules>
-                % Here is an example of the change function that will be used: <change_example><include>context/change_example.py</include></change_example>
+                % Here is an example of the change function that will be used: <change_example><include>core/change_handler.py</include></change_example>
             </internal_example_modules>
         </example_string_of_includes>
     </example_1>
@@ -155,67 +129,41 @@ Here are some examples of how to do this:
                 Step 7. Return the unit_test, total_cost and model_name
         </example_input_prompt>
         <example_available_includes>
-            context/DSPy_example.py
-            context/anthropic_counter_example.py
-            context/autotokenizer_example.py
-            context/bug_to_unit_test_example.py
-            context/bug_to_unit_test_failure_example.py
-            context/change_example.py
-            context/cli_example.py
-            context/cli_python_preprocessed.prompt
-            context/click_example.py
-            context/cloud_function_call.py
-            context/code_generator_example.py
-            context/comment_line_example.py
-            context/conflicts_in_prompts_example.py
-            context/conflicts_in_prompts_python.prompt
-            context/construct_paths_example.py
-            context/context_generator_example.py
-            context/continue_generation_example.py
-            context/detect_change_example.py
-            context/execute_bug_to_unit_test_failure.py
-            context/final_llm_output.py
-            context/find_section_example.py
-            context/fix_code_module_errors_example.py
-            context/fix_error_loop_example.py
-            context/fix_errors_from_unit_tests_example.py
-            context/generate_output_paths_example.py
-            context/generate_test_example.py
-            context/get_comment_example.py
-            context/get_extension_example.py
-            context/get_language_example.py
-            context/git_update_example.py
-            context/langchain_lcel_example.py
-            context/llm_selector_example.py
-            context/llm_token_counter_example.py
-            context/postprocess_0_example.py
-            context/postprocess_example.py
-            context/postprocessed_runnable_llm_output.py
-            context/preprocess_example.py
-            context/process_csv_change_example.py
-            context/prompt_caching.ipynb
-            context/split_example.py
-            context/tiktoken_example.py
-            context/trace_example.py
-            context/unfinished_prompt_example.py
-            context/unrunnable_raw_llm_output.py
-            context/update_prompt_example.py
-            context/xml_tagger_example.py
+            File: frameworks/langchain_utils.py
+            Summary: LangChain LCEL utilities and chain composition helpers
+            File: llm/model_selector.py
+            Summary: Dynamic LLM model selection based on task requirements
+            File: llm/token_counter.py
+            Summary: Token counting utilities for various LLM providers
+            File: processing/prompt_processor.py
+            Summary: Prompt preprocessing and template management functions
+            File: testing/test_generator.py
+            Summary: Automated unit test generation from code and prompts
+            File: processing/completion_detector.py
+            Summary: Functions to detect incomplete LLM outputs and continue generation
+            File: processing/output_postprocessor.py
+            Summary: Post-processing utilities for cleaning and formatting LLM outputs
+            File: utils/file_reader.py
+            Summary: Safe file reading utilities with encoding detection
+            File: config/environment.py
+            Summary: Environment variable management and project path resolution
+            File: markdown/renderer.py
+            Summary: Rich markdown rendering and formatting utilities
         </example_available_includes>
         <example_string_of_includes>
-            % Here is an example of a LangChain Expression Language (LCEL) program: <lcel_example><include>context/langchain_lcel_example.py</include></lcel_example>
+            % Here is an example of a LangChain Expression Language (LCEL) program: <lcel_example><include>frameworks/langchain_utils.py</include></lcel_example>
 
             % Here are examples of how to use internal modules:
             <internal_example_modules>
-                % Here is an example how to preprocess the prompt from a file: <preprocess_example><include>./context/preprocess_example.py</include></preprocess_example>
+                % Here is an example how to preprocess the prompt from a file: <preprocess_example><include>processing/prompt_processor.py</include></preprocess_example>
 
-                % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>./context/llm_selector_example.py</include></llm_selector_example>
+                % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>llm/model_selector.py</include></llm_selector_example>
 
-                % Example usage of the unfinished_prompt function: <unfinished_prompt_example><include>./context/unfinished_prompt_example.py</include></unfinished_prompt_example>
+                % Example usage of the unfinished_prompt function: <unfinished_prompt_example><include>processing/completion_detector.py</include></unfinished_prompt_example>
 
-                % Here is an example how to continue the generation of a model output: <continue_generation_example><include>context/continue_generation_example.py</include></continue_generation_example>
+                % Here is an example how to continue the generation of a model output: <continue_generation_example><include>processing/completion_detector.py</include></continue_generation_example>
 
-                % Here is an example how to postprocess the model output result: <postprocess_example><include>context/postprocess_example.py</include></postprocess_example>
+                % Here is an example how to postprocess the model output result: <postprocess_example><include>processing/output_postprocessor.py</include></postprocess_example>
             </internal_example_modules>
         </example_string_of_includes>
     </example_2>
