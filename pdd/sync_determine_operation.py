@@ -1119,6 +1119,22 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
         # Some files are missing but no changes detected
         if not paths['code'].exists():
             if paths['prompt'].exists():
+                # CRITICAL FIX: Check if auto-deps was just completed to prevent infinite loop
+                if fingerprint and fingerprint.command == 'auto-deps':
+                    return SyncDecision(
+                        operation='generate',
+                        reason='Auto-deps completed, now generate missing code file',
+                        confidence=0.90,
+                        estimated_cost=estimate_operation_cost('generate'),
+                        details={
+                            'decision_type': 'heuristic',
+                            'prompt_path': str(paths['prompt']),
+                            'code_exists': False,
+                            'auto_deps_completed': True,
+                            'previous_command': fingerprint.command
+                        }
+                    )
+                
                 prompt_content = paths['prompt'].read_text(encoding='utf-8', errors='ignore')
                 if check_for_dependencies(prompt_content):
                     return SyncDecision(
