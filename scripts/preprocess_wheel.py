@@ -43,7 +43,7 @@ def preprocess_wheel(wheel_path):
             print(f"Error: prompts directory not found in wheel")
             sys.exit(1)
             
-        exclude = {'example_generator_LLM.prompt', 'generate_test_LLM.prompt'}
+        exclude = {'example_generator_LLM.prompt', 'generate_test_LLM.prompt', 'auto_include_LLM.prompt'}
         
         llm_prompts = list(prompts_dir.glob('*_LLM.prompt'))
         print(f"Found {len(llm_prompts)} LLM prompt files")
