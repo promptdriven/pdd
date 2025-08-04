@@ -1073,7 +1073,154 @@ class TestIntegrationScenarios:
         assert "All required files synchronized" in decision.reason
 
 
-# --- Part 6: Edge Cases and Helper Function Tests ---
+# --- Part 6: Auto-deps Infinite Loop Regression Tests ---
+
+class TestAutoDepsInfiniteLoopFix:
+    """Test the auto-deps infinite loop fix implemented to prevent continuous auto-deps operations."""
+    
+    def test_auto_deps_to_generate_progression(self, pdd_test_environment):
+        """Test that after auto-deps completes, sync decides to run generate (not auto-deps again)."""
+        
+        # Create prompt file with dependencies
+        prompts_dir = pdd_test_environment / "prompts"
+        prompts_dir.mkdir(exist_ok=True)
+        prompt_content = """Create a YouTube client function.
+
+<include>src/config.py</include>
+<include>src/models.py</include>
+
+Requirements:
+- Function should discover new videos from YouTube channels
+- Use the config and models from included dependencies
+"""
+        prompt_hash = create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", prompt_content)
+        
+        # Create fingerprint showing auto-deps was just completed
+        fingerprint_data = {
+            "pdd_version": "0.0.46",
+            "timestamp": "2025-08-04T05:22:58.044203+00:00",
+            "command": "auto-deps",  # This is the key - auto-deps was last completed
+            "prompt_hash": prompt_hash,  # Use actual calculated hash
+            "code_hash": None,  # Code file doesn't exist yet
+            "example_hash": None,
+            "test_hash": None
+        }
+        fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
+        create_fingerprint_file(fp_path, fingerprint_data)
+        
+        # Test the decision logic
+        decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
+        
+        # CRITICAL: Should decide 'generate', not 'auto-deps' again
+        assert decision.operation == 'generate'
+        assert 'Auto-deps completed, now generate missing code file' in decision.reason
+        assert decision.details['auto_deps_completed'] == True
+        assert decision.details['previous_command'] == 'auto-deps'
+        assert decision.details['code_exists'] == False
+    
+    def test_auto_deps_infinite_loop_before_fix_scenario(self, pdd_test_environment):
+        """Test the exact scenario that caused infinite loop before the fix."""
+        
+        # Create prompt file with dependencies (like youtube_client_python.prompt)
+        prompts_dir = pdd_test_environment / "prompts"
+        prompts_dir.mkdir(exist_ok=True)
+        prompt_content = """YouTube Client Module
+
+This module discovers new videos from configured YouTube channels.
+
+### Dependencies
+
+<config_dependency_example>
+<include>src/config.py</include>
+</config_dependency_example>
+
+<models_dependency_example>
+<include>src/models.py</include>
+</models_dependency_example>
+
+Requirements:
+- Discover new videos from YouTube channels
+- Process metadata for each video
+"""
+        prompt_hash = create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", prompt_content)
+        
+        # Simulate the exact state from the sync log: auto-deps completed but code file missing
+        fingerprint_data = {
+            "pdd_version": "0.0.46", 
+            "timestamp": "2025-08-04T05:07:29.753906+00:00",
+            "command": "auto-deps",
+            "prompt_hash": prompt_hash,  # Use actual calculated hash
+            "code_hash": None,  # This is the key issue - no code file exists
+            "example_hash": None,
+            "test_hash": None
+        }
+        fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
+        create_fingerprint_file(fp_path, fingerprint_data)
+        
+        # Before the fix: this would return 'auto-deps' and cause infinite loop
+        # After the fix: this should return 'generate'
+        decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
+        
+        # Verify the fix
+        assert decision.operation == 'generate', f"Expected 'generate', got '{decision.operation}' - infinite loop fix failed"
+        assert decision.operation != 'auto-deps', "Should not return auto-deps again (infinite loop)"
+        assert 'Auto-deps completed' in decision.reason
+        assert decision.confidence == 0.90  # High confidence since this is deterministic
+    
+    def test_auto_deps_without_dependencies_still_works(self, pdd_test_environment):
+        """Test that normal auto-deps logic still works when prompt has no dependencies."""
+        
+        # Create prompt file WITHOUT dependencies
+        prompts_dir = pdd_test_environment / "prompts"
+        prompts_dir.mkdir(exist_ok=True)
+        prompt_content = """Create a simple calculator function.
+
+Requirements:
+- Function name: add
+- Parameters: a, b (both numbers)
+- Return: sum of a and b
+"""
+        create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", prompt_content)
+        
+        # No fingerprint (new unit scenario)
+        # Code file doesn't exist
+        
+        decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
+        
+        # Should go directly to generate since no dependencies detected
+        assert decision.operation == 'generate'
+        assert 'New prompt ready' in decision.reason
+        assert decision.details.get('has_dependencies', True) == False  # No dependencies
+    
+    def test_auto_deps_first_time_with_dependencies(self, pdd_test_environment):
+        """Test that auto-deps is correctly chosen for new prompts with dependencies."""
+        
+        # Create prompt file WITH dependencies
+        prompts_dir = pdd_test_environment / "prompts"
+        prompts_dir.mkdir(exist_ok=True)
+        prompt_content = """Create a data processor.
+
+<include>context/database_example.py</include>
+<web>https://example.com/api-docs</web>
+
+Requirements:
+- Process data using included database example
+- Fetch API documentation from web
+"""
+        create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", prompt_content)
+        
+        # No fingerprint (new unit scenario)
+        # Code file doesn't exist
+        
+        decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
+        
+        # Should choose auto-deps for first time with dependencies
+        assert decision.operation == 'auto-deps'
+        assert 'New prompt with dependencies detected' in decision.reason
+        assert decision.details['has_dependencies'] == True
+        assert decision.details['fingerprint_found'] == False
+
+# --- Part 7: Edge Cases and Helper Function Tests ---
 # These tests were consolidated from test_sync_edge_cases.py
 
 class TestValidateExpectedFiles:
