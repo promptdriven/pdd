@@ -1588,7 +1588,7 @@ contexts:
         finally:
             os.chdir(original_cwd)
     
-    def test_file_path_lookup_regression(self, tmp_path):
+    def test_file_path_lookup_regression(self, tmp_path, monkeypatch):
         """Test the exact regression scenario: file lookup after verify completes.
         
         This test simulates the exact error seen in sync regression where
@@ -1596,8 +1596,71 @@ contexts:
         from the current directory instead of 'tests/test_simple_math.py'.
         """
         original_cwd = os.getcwd()
+        
+        # Store original module constants to restore them later
+        pdd_module = sys.modules['sync_determine_operation']
+        original_pdd_dir = pdd_module.PDD_DIR
+        original_meta_dir = pdd_module.META_DIR
+        original_locks_dir = pdd_module.LOCKS_DIR
+        
         try:
             os.chdir(tmp_path)
+            
+            # Set PDD_PATH environment variable for get_language function
+            monkeypatch.setenv("PDD_PATH", str(tmp_path))
+            
+            # Create language mapping CSV files that get_language function needs
+            language_csv_content = """extension,language
+.py,python
+.js,javascript
+.java,java
+.cpp,cpp
+.c,c
+.go,go
+.rs,rust
+.rb,ruby
+.php,php
+.ts,typescript
+.swift,swift
+.kt,kotlin
+.scala,scala
+.clj,clojure
+.hs,haskell
+.ml,ocaml
+.fs,fsharp
+.ex,elixir
+.erl,erlang
+.pl,perl
+.lua,lua
+.r,r
+.m,matlab
+.jl,julia
+.dart,dart
+.groovy,groovy
+.sh,bash
+.ps1,powershell
+.bat,batch
+.cmd,batch
+.vb,vb
+.cs,csharp
+.f,fortran
+.f90,fortran
+.pas,pascal
+.asm,assembly
+.s,assembly
+.sol,solidity
+.move,move
+"""
+            (tmp_path / "language_extension_mapping.csv").write_text(language_csv_content)
+            
+            # Create data directory and language_format.csv
+            (tmp_path / "data").mkdir()
+            (tmp_path / "data" / "language_format.csv").write_text(language_csv_content)
+            
+            # Update module constants after changing directory
+            pdd_module.PDD_DIR = pdd_module.get_pdd_dir()
+            pdd_module.META_DIR = pdd_module.get_meta_dir()
+            pdd_module.LOCKS_DIR = pdd_module.get_locks_dir()
             
             # Create directory structure matching regression test
             (tmp_path / "prompts").mkdir()
@@ -1655,3 +1718,8 @@ contexts:
             
         finally:
             os.chdir(original_cwd)
+            
+            # Restore original module constants
+            pdd_module.PDD_DIR = original_pdd_dir
+            pdd_module.META_DIR = original_meta_dir
+            pdd_module.LOCKS_DIR = original_locks_dir
