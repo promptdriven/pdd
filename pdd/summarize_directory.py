@@ -142,6 +142,11 @@ def summarize_directory(
         file_mod_times = {f: os.path.getmtime(f) for f in files}
 
         for file_path in track(files, description="Processing files..."):
+            # Skip directories
+            if os.path.isdir(file_path):
+                if verbose:
+                    print(f"[yellow]Skipping directory: {file_path}[/yellow]")
+                continue
             try:
                 relative_path = os.path.relpath(file_path)
                 normalized_path = normalize_path(relative_path)

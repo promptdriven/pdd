@@ -622,7 +622,7 @@ def sync_orchestration(
                         result = auto_deps_main(
                             ctx, 
                             prompt_file=str(pdd_files['prompt']), 
-                            directory_path=examples_dir,
+                            directory_path=f"{examples_dir}/*",
                             auto_deps_csv_path="project_dependencies.csv",
                             output=temp_output,
                             force_scan=False  # Don't force scan every time
