@@ -1,5 +1,4 @@
 # TODO
-- [ ] reasoning support, allow strength to go above 1 to allocate more thinking tokens via time parameter
 
 
 ## On Deck
@@ -32,7 +31,6 @@
 - [ ] agentic prompt to code
 - [ ] re-ranker for the example using a LLM
 - [ ] syncing Makefile
-- [ ] uv support, handle the ask the user to upgrade situation for uv
 - [ ] integrate the csv llm model check into the cli and have it say the strength of the models
 - [ ] Use codex for agentic mode
 - [ ] add tests vs. writing overthem if test file exists
@@ -40,15 +38,12 @@
 
 
 ## Bugs
-- [ ] jwt token issue when not signed in
-- [ ] GCS bucket issue
+
 - [ ] should print out after authentication is successful with github
 - [ ] .env where PDD_PATH is instead of where the user runs the command
 
 ## Improvements
-- [ ] update prompt for makefile
 - [ ] fix make file production and prepopulate
-- [ ] have fix remember what was the closest code passing and start from that to hill climb
 - [ ] fix quiet vs. verbose ambiguity
 - [ ] have a link from includes to the files for the vscode prompt extension
 - [ ] have update touch the source file py so that the Make file doesn't go into infinite loop
