@@ -29,6 +29,9 @@ log "Running tests: $TARGET_TEST"
 # Set PDD_AUTO_UPDATE to false to prevent interference
 export PDD_AUTO_UPDATE=false
 
+# Force local execution by unsetting GitHub client ID
+unset GITHUB_CLIENT_ID
+
 # Define base variables
 # Set PDD base directory as the script's location (two directories up from this script)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

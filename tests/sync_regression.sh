@@ -70,6 +70,9 @@ log "Running sync tests: $TARGET_TEST"
 # Set PDD_AUTO_UPDATE to false to prevent interference
 export PDD_AUTO_UPDATE=false
 
+# Force local execution by unsetting GitHub client ID
+unset GITHUB_CLIENT_ID
+
 # Define base variables
 # Set PDD base directory as the script's location (two directories up from this script)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -169,7 +172,7 @@ run_pdd_command_base() {
     shift
     local args=("$@") # Capture remaining args in an array
 
-    local cmd_array=("$PDD_SCRIPT" "--force" "--local")
+    local cmd_array=("$PDD_SCRIPT" "--force")
 
     # Always add cost tracking
     cmd_array+=("--output-cost" "$REGRESSION_DIR/$COST_FILE")
@@ -434,15 +437,22 @@ mkdir -p pdd examples tests context
 # Create context files needed by tests
 log "Creating context files for sync tests"
 cat << EOF > "context/test.prompt"
-For functions defined in prompt files, ensure the test imports are correctly structured.
-Use proper import statements based on the module name and function definitions.
+CRITICAL: For test imports, always use the exact basename as the module name:
+- For basename "simple_math": use "from simple_math import add"
+- For basename "calculator": use "from calculator import add, subtract, multiply, divide"  
+- For basename "data_processor": use "from data_processor import DataProcessor"
+Never use shortened names like "calc" or function names like "add" as module names.
+The module name is always the same as the basename parameter passed to PDD.
 EOF
 
 cat << EOF > "context/example.prompt"
-For functions defined in prompt files, ensure examples demonstrate practical usage.
-Include appropriate import statements and realistic function calls.
-- When importing from the generated module, use the exact basename as the module name (e.g., for data_processor.py, use "from data_processor import ClassName")
-- Do not add suffixes like "_module" to the import statement
+For functions defined in prompt files, ensure examples demonstrate practical usage with correct imports.
+CRITICAL IMPORT RULES:
+- Always use the exact basename as the module name (e.g., for data_processor.py, use "from data_processor import ClassName")  
+- Never use shortened names or aliases in import statements
+- Never use function names as module names
+- Show the import statement explicitly in examples when demonstrating usage
+- The generated module name will always match the basename parameter
 EOF
 
 # Create test prompt files
@@ -461,6 +471,7 @@ Requirements:
 - Add docstring explaining the function
 
 Example usage:
+from simple_math import add
 result = add(5, 3)  # Should return 8
 EOF
 
@@ -477,6 +488,7 @@ Requirements:
 - Add detailed docstrings
 
 Example usage:
+from data_processor import DataProcessor
 processor = DataProcessor()
 stats = processor.process_data([1, 2, 3, 4, 5])
 EOF
@@ -492,8 +504,9 @@ Requirements:
 - Comprehensive docstrings
 
 Example:
-calc.add(10, 5)  # Returns 15
-calc.divide(10, 0)  # Raises ValueError
+from calculator import add, subtract, multiply, divide
+result = add(10, 5)  # Returns 15
+divide(10, 0)  # Raises ValueError
 EOF
 
 cat << EOF > "prompts/$MULTI_LANG_JS_PROMPT"
@@ -506,8 +519,9 @@ Requirements:
 - Export all functions
 
 Example:
-calculator.add(10, 5);  // Returns 15
-calculator.divide(10, 0);  // Throws Error
+const { add, subtract, multiply, divide } = require('./calculator');
+const result = add(10, 5);  // Returns 15
+divide(10, 0);  // Throws Error
 EOF
 
 cat << EOF > "prompts/$MULTI_LANG_TS_PROMPT"
@@ -520,7 +534,8 @@ Requirements:
 - Export all functions with proper types
 
 Example:
-add(10, 5);  // Returns 15
+import { add, subtract, multiply, divide } from './calculator';
+const result: number = add(10, 5);  // Returns 15
 divide(10, 0);  // Throws Error
 EOF
 
