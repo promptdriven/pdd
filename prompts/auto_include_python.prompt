@@ -6,11 +6,11 @@
     Inputs: 
         'input_prompt' - A string that contains the prompt that requires the includes to be selected.
         'directory_path' - The directory string of the dependencies (e.g. 'context/c*.py').
-        'csv_file' - A string representing the contents of the csv file.
-        'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
-        'temperature' - A float between 0 and 1 that is the temperature of the LLM model to use.
+        'csv_file' - Optional[str] - A string containing existing CSV content to be updated by summarize_directory. Default is None.
+        'strength' - A float between 0 and 1 that is the strength of the LLM model to use. Default is DEFAULT_STRENGTH.
+        'temperature' - A float between 0 and 1 that is the temperature of the LLM model to use. Default is 0.0.
         'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
-        'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
+        'verbose' - A boolean that indicates whether to print progress for each step with visual indicators and display final results summary. Default is False.
     Outputs as a tuple: 
         'dependencies' - A string that contains the dependencies.
         'csv_output' - A string that contains the updated csv file.
@@ -37,7 +37,7 @@
 
 % This program will do the following:
     Step 1. Load the 'auto_include_LLM' and 'extract_auto_include_LLM' prompt templates.
-    Step 2. Use csv_file to run summarize_directory to get the csv_output. The full_path and file_summary columns of csv_output becomes available_includes.
+    Step 2. Run summarize_directory with directory_path and csv_file (if provided) to get the csv_output. Format each row from csv_output as 'File: {full_path}\nSummary: {file_summary}' to create the available_includes list.
     Step 3. Run the auto_include_LLM prompt through llm_invoke, passing the strength, temperature, and time parameters:
         3a. Pass the following string parameters to the prompt during invoke:
             - 'input_prompt' - A string that contains the prompt that requires the includes to be selected.
@@ -48,3 +48,9 @@
         4b. The Pydantic output will include the key 'string_of_includes' to be accessed.
     Step 5. Assign the value of key 'string_of_includes' to form the 'dependencies'.
     Step 6. Return the tuple containing 'dependencies', 'csv_output', 'total_cost', and 'model_name'.
+
+% Error Handling:
+    - Validate input parameters (strength and temperature must be between 0 and 1)
+    - Handle failures in prompt loading gracefully (raise ValueError if templates cannot be loaded)
+    - If extraction fails, return empty string for dependencies with error message
+    - Propagate exceptions with meaningful error messages for debugging
