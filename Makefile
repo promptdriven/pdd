@@ -440,6 +440,9 @@ release:
 		docs/whitepaper_with_benchmarks/creation_report/pdd_avg_cost_per_module_dist.png \
 		docs/whitepaper_with_benchmarks/creation_report/claude_cost_per_run_dist.png \
 		staging/public/pdd/docs/whitepaper_with_benchmarks/creation_report/
+	@echo "Copying VS Code extension to public repo"
+	@mkdir -p staging/public/pdd/utils
+	@cp -r ./utils/vscode_prompt staging/public/pdd/utils/
 	@cd staging/public/pdd/ && git add . && git commit -m "Bump version" && git push
 	
 analysis:
