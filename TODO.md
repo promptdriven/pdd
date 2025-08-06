@@ -35,12 +35,13 @@
 - [ ] Use codex for agentic mode
 - [ ] add tests vs. writing overthem if test file exists
 - [ ] update without need prior version of code
+- [ ] have auto include to compare the file size to see if the example or code file is smaller and use the smaller one to save on tokens
 
 
 ## Bugs
-
 - [ ] should print out after authentication is successful with github
 - [ ] .env where PDD_PATH is instead of where the user runs the command
+- [ ] even after the code file changes, sync didn't update the prompt file
 
 ## Improvements
 - [ ] fix make file production and prepopulate
