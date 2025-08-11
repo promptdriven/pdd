@@ -1870,3 +1870,49 @@ contexts:
             pdd_module.PDD_DIR = original_pdd_dir
             pdd_module.META_DIR = original_meta_dir
             pdd_module.LOCKS_DIR = original_locks_dir
+
+
+# --- Regression: Output path resolution under sync (integrated) ---
+
+def _write_pddrc_here() -> None:
+    content = (
+        "contexts:\n"
+        "  default:\n"
+        "    defaults:\n"
+        "      generate_output_path: pdd/\n"
+        "      example_output_path: examples/\n"
+        "      test_output_path: tests/\n"
+    )
+    Path(".pdd").mkdir(parents=True, exist_ok=True)
+    Path(".pddrc").write_text(content, encoding="utf-8")
+
+
+def _write_simple_prompt(basename: str = "simple_math", language: str = "python") -> None:
+    prompts_dir = Path("prompts")
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+    (prompts_dir / f"{basename}_{language}.prompt").write_text(
+        """
+Write a simple add(a, b) function that returns a + b.
+Also include a subtract(a, b) that returns a - b.
+""".strip(),
+        encoding="utf-8",
+    )
+
+
+def test_get_pdd_file_paths_respects_pddrc_without_PDD_PATH(pdd_test_environment, monkeypatch):
+    _write_pddrc_here()
+    _write_simple_prompt()
+    monkeypatch.delenv("PDD_PATH", raising=False)
+    paths = get_pdd_file_paths(basename="simple_math", language="python", prompts_dir="prompts")
+    assert paths["code"].as_posix().endswith("pdd/simple_math.py"), f"Got: {paths['code']}"
+
+
+def test_get_pdd_file_paths_respects_pddrc_with_PDD_PATH(pdd_test_environment, monkeypatch):
+    _write_pddrc_here()
+    _write_simple_prompt()
+    repo_root = Path(__file__).parent.parent
+    monkeypatch.setenv("PDD_PATH", str(repo_root))
+    paths = get_pdd_file_paths(basename="simple_math", language="python", prompts_dir="prompts")
+    assert paths["code"].as_posix().endswith("pdd/simple_math.py")
+    assert paths["example"].as_posix().endswith("examples/simple_math_example.py")
+    assert paths["test"].as_posix().endswith("tests/test_simple_math.py")
