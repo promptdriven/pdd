@@ -748,3 +748,38 @@ def test_unexpected_exception_during_generation(
     assert printed_error
     assert printed_traceback
     mock_local_generator_fixture.side_effect = None 
+
+
+# Regression: output provided as directory should not be treated as file
+def test_generate_with_output_directory_path_uses_resolved_file_and_succeeds(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_local_generator_fixture, mock_env_vars
+):
+    """
+    Intended behavior: when --output is a directory, use the resolved file path
+    from construct_paths and write successfully.
+    """
+    mock_ctx.obj['local'] = True
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "dir_output_prompt_python.prompt"
+    create_file(prompt_file_path, "Prompt content for dir output")
+
+    resolved_output_file = temp_dir_setup["output_dir"] / "dir_output.py"
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "Prompt content for dir output"},
+        {"output": str(resolved_output_file)},
+        "python",
+    )
+
+    # Pass the directory as --output; command main should use resolved file
+    raw_output_arg_dir = str(temp_dir_setup["output_dir"])  # directory path
+    code, incremental, cost, model = code_generator_main(
+        mock_ctx, str(prompt_file_path), raw_output_arg_dir, None, False
+    )
+
+    # Expect success and file written to resolved_output_file
+    assert code == DEFAULT_MOCK_GENERATED_CODE
+    assert model != "error"
+    assert not incremental
+    assert resolved_output_file.exists()
+    assert resolved_output_file.read_text() == DEFAULT_MOCK_GENERATED_CODE

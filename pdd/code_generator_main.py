@@ -165,8 +165,19 @@ def code_generator_main(
             command_options=command_options,
         )
         prompt_content = input_strings["prompt_file"]
-        # Prioritize orchestration output path over construct_paths result
-        output_path = output or output_file_paths.get("output")
+        # Determine final output path: if user passed a directory, use resolved file path
+        resolved_output = output_file_paths.get("output")
+        if output is None:
+            output_path = resolved_output
+        else:
+            try:
+                is_dir_hint = output.endswith(os.path.sep) or output.endswith("/")
+            except Exception:
+                is_dir_hint = False
+            if is_dir_hint or os.path.isdir(output):
+                output_path = resolved_output
+            else:
+                output_path = output
 
     except FileNotFoundError as e:
         console.print(f"[red]Error: Input file not found: {e.filename}[/red]")
