@@ -147,8 +147,20 @@ def cmd_test_main(
             ctx.exit(1)
             return "", 0.0, ""
 
-    # Handle output - prioritize orchestration output path over construct_paths result
-    output_file = output or output_file_paths["output"]
+    # Handle output - if output is a directory, use resolved file path from construct_paths
+    resolved_output = output_file_paths["output"]
+    if output is None:
+        output_file = resolved_output
+    else:
+        try:
+            is_dir_hint = output.endswith('/')
+        except Exception:
+            is_dir_hint = False
+        # Prefer resolved file if user passed a directory path
+        if is_dir_hint or (Path(output).exists() and Path(output).is_dir()):
+            output_file = resolved_output
+        else:
+            output_file = output
     if merge and existing_tests:
         output_file = existing_tests
 

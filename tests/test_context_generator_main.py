@@ -148,3 +148,33 @@ def test_context_generator_main_verbose_mode(mock_ctx):
         # Assertions
         assert result == (MOCK_EXAMPLE_CODE, MOCK_TOTAL_COST, MOCK_MODEL_NAME)
         mock_file().write.assert_called_once_with(MOCK_EXAMPLE_CODE)
+
+
+def test_context_generator_main_output_directory_path_uses_resolved_file(mock_ctx, tmp_path):
+    """
+    Intended behavior: when --output is a directory path, the main should write
+    to the resolved file from construct_paths, not treat the directory as a file.
+    """
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    with patch('pdd.context_generator_main.construct_paths') as mock_construct_paths, \
+         patch('pdd.context_generator_main.context_generator') as mock_context_generator, \
+         patch('builtins.open', mock_open()) as m_open:
+
+        resolved_file = out_dir / "example_code.py"
+        mock_construct_paths.return_value = (
+            {},
+            {"prompt_file": MOCK_PROMPT_CONTENT, "code_file": MOCK_CODE_CONTENT},
+            {"output": str(resolved_file)},
+            None,
+        )
+        mock_context_generator.return_value = (MOCK_EXAMPLE_CODE, MOCK_TOTAL_COST, MOCK_MODEL_NAME)
+
+        result = context_generator_main(mock_ctx, "prompts/test_prompt.prompt", "src/test_code.py", str(out_dir))
+
+        # Should succeed and write to the resolved file path
+        assert result == (MOCK_EXAMPLE_CODE, MOCK_TOTAL_COST, MOCK_MODEL_NAME)
+        m_open.assert_called_once_with(str(resolved_file), 'w')
+        handle = m_open()
+        handle.write.assert_called_once_with(MOCK_EXAMPLE_CODE)

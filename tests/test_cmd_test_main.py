@@ -346,3 +346,43 @@ def test_cmd_test_main_merge_existing_tests(mock_ctx_fixture, mock_files_fixture
         m_file.assert_called_once_with(mock_files_fixture["existing_tests"], "w", encoding="utf-8")
         handle = m_file()
         handle.write.assert_called_once_with("merged_code")
+
+
+def test_cmd_test_main_output_directory_path_uses_resolved_file(mock_ctx_fixture, mock_files_fixture, tmp_path):
+    """
+    Intended behavior: when output is a directory path, cmd should write to the
+    resolved file from construct_paths, not exit.
+    """
+    out_dir = tmp_path / "tests_out"
+    out_dir.mkdir()
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.cmd_test_main.generate_test") as mock_generate_test, \
+         patch("builtins.open", mock_open()) as m_open:
+
+        resolved_file = out_dir / "unit_test_file.py"
+        mock_construct_paths.return_value = (
+            {},
+            {"prompt_file": "prompt_contents", "code_file": "code_contents"},
+            {"output": str(resolved_file)},
+            "python",
+        )
+        mock_generate_test.return_value = ("unit_test_code", 0.10, "model_v1")
+
+        # Pass directory path via output; command should use resolved file
+        result = cmd_test_main(
+            ctx=mock_ctx_fixture,
+            prompt_file=mock_files_fixture["prompt_file"],
+            code_file=mock_files_fixture["code_file"],
+            output=str(out_dir),
+            language=None,
+            coverage_report=None,
+            existing_tests=None,
+            target_coverage=None,
+            merge=False,
+        )
+
+        assert result == ("unit_test_code", 0.10, "model_v1")
+        m_open.assert_called_once_with(str(resolved_file), "w", encoding="utf-8")
+        handle = m_open()
+        handle.write.assert_called_once_with("unit_test_code")
