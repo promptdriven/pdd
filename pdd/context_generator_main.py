@@ -1,5 +1,6 @@
 import sys
 from typing import Tuple, Optional
+from pathlib import Path
 import click
 from rich import print as rprint
 
@@ -51,11 +52,19 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
             verbose=ctx.obj.get('verbose', False)
         )
 
-        # Save results - prioritize orchestration output path over construct_paths result
-        final_output_path = output or output_file_paths["output"]
-        print(f"DEBUG: output param = {output}")
-        print(f"DEBUG: output_file_paths['output'] = {output_file_paths['output']}")
-        print(f"DEBUG: final_output_path = {final_output_path}")
+        # Save results - if output is a directory, use resolved file path from construct_paths
+        resolved_output = output_file_paths["output"]
+        if output is None:
+            final_output_path = resolved_output
+        else:
+            try:
+                is_dir_hint = output.endswith('/')
+            except Exception:
+                is_dir_hint = False
+            if is_dir_hint or (Path(output).exists() and Path(output).is_dir()):
+                final_output_path = resolved_output
+            else:
+                final_output_path = output
         if final_output_path and example_code is not None:
             with open(final_output_path, 'w') as f:
                 f.write(example_code)
