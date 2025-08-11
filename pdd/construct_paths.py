@@ -181,47 +181,29 @@ def _candidate_prompt_path(input_files: Dict[str, Path]) -> Path | None:
 
 # New helper function to check if a language is known
 def _is_known_language(language_name: str) -> bool:
-    """Checks if a language name is present in the language_format.csv."""
+    """Return True if the language is recognized.
+
+    Prefer CSV in PDD_PATH if available; otherwise fall back to a built-in set
+    so basename/language inference does not fail when PDD_PATH is unset.
+    """
+    language_name_lower = (language_name or "").lower()
+    if not language_name_lower:
+        return False
+
+    builtin_languages = {
+        'python', 'javascript', 'typescript', 'java', 'cpp', 'c', 'go', 'ruby', 'rust',
+        'kotlin', 'swift', 'csharp', 'php', 'scala', 'r', 'lua', 'perl', 'bash', 'shell',
+        'powershell', 'sql', 'prompt', 'html', 'css', 'makefile'
+    }
+
     pdd_path_str = os.getenv('PDD_PATH')
     if not pdd_path_str:
-        # Consistent with get_extension, raise ValueError if PDD_PATH is not set.
-        # Or, for an internal helper, we might decide to log and return False,
-        # but raising an error for missing config is generally safer.
-        # However, _determine_language (the caller) already raises ValueError
-        # if language cannot be found, so this path might not be strictly necessary
-        # if we assume PDD_PATH is validated earlier or by other get_extension/get_language calls.
-        # For robustness here, let's keep a check but perhaps make it less severe if called internally.
-        # For now, align with how get_extension might handle it.
-        # console.print("[error]PDD_PATH environment variable is not set. Cannot validate language.", style="error")
-        # return False # Or raise error
-        # Given this is internal and other functions (get_extension) already depend on PDD_PATH,
-        # we can assume if those ran, PDD_PATH is set. If not, they'd fail first.
-        # So, we can simplify or rely on that pre-condition.
-        # Let's assume PDD_PATH will be set if other language functions are working.
-        # If it's critical, an explicit check and raise ValueError is better.
-        # For now, let's proceed assuming PDD_PATH is available if this point is reached.
-        pass # Assuming PDD_PATH is checked by get_extension/get_language if they are called
-
-    # If PDD_PATH is not set, this will likely fail earlier if get_extension/get_language are used.
-    # If we want this helper to be fully independent, it needs robust PDD_PATH handling.
-    # Let's assume for now, PDD_PATH is available if this point is reached through normal flow.
-    
-    # Re-evaluate: PDD_PATH is critical for this function. Let's keep the check.
-    if not pdd_path_str:
-        # This helper might be called before get_extension in some logic paths
-        # if _determine_language prioritizes suffix checking first.
-        # So, it needs its own PDD_PATH check.
-        # Raise ValueError to be consistent with get_extension's behavior.
-        raise ValueError("PDD_PATH environment variable is not set. Cannot validate language.")
+        return language_name_lower in builtin_languages
 
     csv_file_path = Path(pdd_path_str) / 'data' / 'language_format.csv'
-    
     if not csv_file_path.is_file():
-        # Raise FileNotFoundError if CSV is missing, consistent with get_extension
-        raise FileNotFoundError(f"The language format CSV file does not exist: {csv_file_path}")
-            
-    language_name_lower = language_name.lower()
-    
+        return language_name_lower in builtin_languages
+
     try:
         with open(csv_file_path, mode='r', encoding='utf-8', newline='') as csvfile:
             reader = csv.DictReader(csvfile)
@@ -229,10 +211,10 @@ def _is_known_language(language_name: str) -> bool:
                 if row.get('language', '').lower() == language_name_lower:
                     return True
     except csv.Error as e:
-        # Log and return False or raise a custom error
         console.print(f"[error]CSV Error reading {csv_file_path}: {e}", style="error")
-        return False # Indicates language could not be confirmed due to CSV issue
-    return False
+        return language_name_lower in builtin_languages
+
+    return language_name_lower in builtin_languages
 
 
 def _strip_language_suffix(path_like: os.PathLike[str]) -> str:
@@ -354,7 +336,7 @@ def _determine_language(
 
     # 4 - Special handling for detect command - default to prompt for LLM prompts
     if command == "detect" and "change_file" in input_file_paths:
-        return "prompt"  # Default to prompt for detect command
+        return "prompt"
 
     # 5 - If no language determined, raise error
     raise ValueError("Could not determine language from input files or options.")
@@ -607,7 +589,23 @@ def construct_paths(
                 style="warning"
             )
 
-    file_extension = get_extension(language) # Pass determined language
+    
+    # Try to get extension from CSV; fallback to built-in mapping if PDD_PATH/CSV unavailable
+    try:
+        file_extension = get_extension(language)  # Pass determined language
+        if not file_extension and (language or '').lower() != 'prompt':
+            raise ValueError('empty extension')
+    except Exception:
+        builtin_ext_map = {
+            'python': '.py', 'javascript': '.js', 'typescript': '.ts', 'java': '.java',
+            'cpp': '.cpp', 'c': '.c', 'go': '.go', 'ruby': '.rb', 'rust': '.rs',
+            'kotlin': '.kt', 'swift': '.swift', 'csharp': '.cs', 'php': '.php',
+            'scala': '.scala', 'r': '.r', 'lua': '.lua', 'perl': '.pl', 'bash': '.sh',
+            'shell': '.sh', 'powershell': '.ps1', 'sql': '.sql', 'html': '.html', 'css': '.css',
+            'prompt': '.prompt', 'makefile': ''
+        }
+        file_extension = builtin_ext_map.get(language.lower(), f".{language.lower()}" if language else '')
+
 
 
     # ------------- Step 3b: build output paths ---------------
