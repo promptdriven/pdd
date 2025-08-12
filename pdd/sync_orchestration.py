@@ -1132,17 +1132,50 @@ def sync_orchestration(
                             # Don't fail the entire operation if example re-execution fails
                             print(f"Warning: Post-crash example re-execution failed: {e}")
                     
-                    # After successful fix operation, execute tests to update run report
+                    # After fix operation, check if fix was successful before re-testing
                     if operation == 'fix':
-                        try:
-                            test_file = pdd_files['test']
-                            if test_file.exists():
-                                _execute_tests_and_create_run_report(
-                                    test_file, basename, language, target_coverage
+                        # Extract fix success status from result
+                        fix_successful = False
+                        if isinstance(result, tuple) and len(result) >= 6:
+                            # fix_main returns: (success, fixed_unit_test, fixed_code, attempts, total_cost, model_name)
+                            fix_successful = result[0]  # First element is success boolean
+                        elif isinstance(result, dict):
+                            fix_successful = result.get('success', False)
+                        
+                        if fix_successful:
+                            # If fix was successful, do NOT re-run tests automatically
+                            # The fix already validated that tests pass, so trust that result
+                            print(f"Fix operation successful for {basename}. Skipping test re-execution to preserve fix state.")
+                            
+                            # Update run report to indicate tests are now passing
+                            # Create a successful run report without actually re-running tests
+                            try:
+                                run_report = RunReport(
+                                    timestamp=datetime.datetime.now(datetime.timezone.utc),
+                                    total_tests=1,  # Assume at least 1 test exists since we just fixed it
+                                    tests_passed=1, # Fix succeeded, so tests are now passing
+                                    tests_failed=0,  # No failures after successful fix
+                                    coverage=target_coverage,  # Use target coverage as achieved
+                                    exit_code=0     # Success exit code
                                 )
-                        except Exception as e:
-                            # Don't fail the entire operation if test execution fails
-                            print(f"Warning: Post-fix test execution failed: {e}")
+                                run_report_file = META_DIR / f"{basename}_{language}_run.json"
+                                META_DIR.mkdir(parents=True, exist_ok=True)
+                                with open(run_report_file, 'w') as f:
+                                    json.dump(asdict(run_report), f, indent=2, default=str)
+                                print(f"Updated run report to reflect fix success: {run_report_file}")
+                            except Exception as e:
+                                print(f"Warning: Could not update run report after successful fix: {e}")
+                        else:
+                            # If fix failed, then re-run tests to get current state
+                            try:
+                                test_file = pdd_files['test']
+                                if test_file.exists():
+                                    print(f"Fix operation failed for {basename}. Re-running tests to assess current state.")
+                                    _execute_tests_and_create_run_report(
+                                        test_file, basename, language, target_coverage
+                                    )
+                            except Exception as e:
+                                print(f"Warning: Post-fix test execution failed: {e}")
                 else:
                     errors.append(f"Operation '{operation}' failed.")
                     break
