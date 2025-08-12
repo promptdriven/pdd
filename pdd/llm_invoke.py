@@ -1109,7 +1109,8 @@ def llm_invoke(
                                         **time_kwargs
                                     )
                                     # Re-enable cache - restore original configured cache
-                                    litellm.cache = configured_cache
+                                    if configured_cache is not None:
+                                        litellm.cache = configured_cache
                                     # Extract result from retry
                                     retry_raw_result = retry_response.choices[0].message.content
                                     if retry_raw_result is not None:
