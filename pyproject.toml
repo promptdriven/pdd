@@ -44,7 +44,7 @@ dependencies = [
     "pandas==2.2.3",
     "psutil==5.9.0",
     "pydantic==2.11.2",
-    "litellm",
+    "litellm[caching]",
     "rich==14.0.0",
     "semver==3.0.2",
     "setuptools",
