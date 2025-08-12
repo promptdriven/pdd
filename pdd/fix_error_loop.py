@@ -281,7 +281,15 @@ def fix_error_loop(unit_test_file: str,
                 elog.write(format_log_for_output(log_structure))
             
             # Set success to True (already determined)
-            # No need to read the files - keep empty strings for passing cases
+            # Read the actual fixed files to return the successful state
+            try:
+                with open(unit_test_file, "r") as f:
+                    final_unit_test = f.read()
+                with open(code_file, "r") as f:  
+                    final_code = f.read()
+            except Exception as e:
+                rprint(f"[yellow]Warning: Could not read fixed files: {e}[/yellow]")
+                # Keep empty strings as fallback
             break
         
         iteration_header = f"=== Attempt iteration {iteration} ==="
