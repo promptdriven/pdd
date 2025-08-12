@@ -5,7 +5,7 @@ def pi_calc(n_terms: int = 100000) -> float:
     The Nilakantha series is an infinite series for calculating Pi which converges
     more quickly than other methods like the Leibniz formula. The formula is:
     
-    Pi = 3 + 4/(2*3*4) - 4/(4*5*6) + 4/(6*7*8) - 4/(8*9*10) + ...
+ = 3 + 4/(2*3*4) - 4/(4*5*6) + 4/(6*7*8) - 4/(8*9*10) + ...
 
     The accuracy of the result improves as the number of terms increases.
 

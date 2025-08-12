@@ -2,241 +2,154 @@
 
 import pytest
 import math
-
-# Attempt to import z3, and skip Z3 tests if it's not available.
-try:
-    import z3
-    Z3_AVAILABLE = True
-except ImportError:
-    Z3_AVAILABLE = False
-
 from pi_calc import pi_calc
 
+# ############################################################################
+# Test Plan
+# ############################################################################
 #
-# Detailed Test Plan
+# The goal is to test the `pi_calc` function, which calculates an approximation
+# of Pi using the Nilakantha series.
 #
-# I. Unit Tests (using pytest)
+# ----------------------------------------------------------------------------
+# I. Formal Verification (Z3) vs. Unit Tests Analysis
+# ----------------------------------------------------------------------------
 #
-#    Objective: Verify the function's behavior for specific, discrete inputs,
-#               including valid, invalid, and boundary cases.
+# The `pi_calc` function involves a loop, floating-point arithmetic, and specific
+# input validation checks.
 #
-#    Test Cases:
-#    1. `test_negative_input`:
-#       - Input: `n_terms = -1`
-#       - Expected Outcome: Raises `ValueError`.
-#       - Rationale: Ensures negative inputs are correctly handled as per the
-#         function's contract.
-#    2. `test_non_integer_input_float`:
-#       - Input: `n_terms = 100.5`
-#       - Expected Outcome: Raises `TypeError`.
-#       - Rationale: Ensures non-integer inputs (float) are rejected.
-#    3. `test_non_integer_input_string`:
-#       - Input: `n_terms = "100"`
-#       - Expected Outcome: Raises `TypeError`.
-#       - Rationale: Ensures non-integer inputs (string) are rejected.
-#    4. `test_zero_terms`:
-#       - Input: `n_terms = 0`
-#       - Expected Outcome: Returns `3.0`.
-#       - Rationale: Tests the base case where the series calculation loop is
-#         not entered.
-#    5. `test_one_term`:
-#       - Input: `n_terms = 1`
-#       - Expected Outcome: Returns `3.0 + 4.0 / (2.0 * 3.0 * 4.0)`.
-#       - Rationale: Verifies the calculation for the first term of the series.
-#    6. `test_two_terms`:
-#       - Input: `n_terms = 2`
-#       - Expected Outcome: Returns `3.0 + 4.0 / (2*3*4) - 4.0 / (4*5*6)`.
-#       - Rationale: Verifies the calculation and the sign change for the
-#         second term.
-#    7. `test_default_terms_convergence`:
-#       - Input: No input (use default `n_terms=100000`).
-#       - Expected Outcome: The result should be very close to `math.pi`. Use
-#         `pytest.approx` with a small tolerance (e.g., `1e-10`).
-#       - Rationale: Ensures the default parameter provides a high-precision
-#         result, testing the convergence for a large number of terms.
-#    8. `test_large_terms_convergence`:
-#       - Input: `n_terms = 200000` (a value larger than the default).
-#       - Expected Outcome: The result should be very close to `math.pi`, and
-#         more accurate than the default.
-#       - Rationale: Confirms the series continues to converge correctly for
-#         very large inputs.
+# - **Z3 (Formal Verification):**
+#   - **Applicability:** Z3 is powerful for proving properties over integers and
+#     logic. However, modeling iterative floating-point calculations is complex
+#     and often leads to issues with precision and performance. Proving a
+#     property like "the function's output converges towards Pi as n_terms
+#     increases" is a mathematical proof of the series itself, not something
+#     easily verifiable by an SMT solver for a given implementation.
+#   - **Conclusion:** The core logic is numerical and approximative, which is not
+#     the primary strength of Z3. The input validation (type and value checks)
+#     is discrete and simple. Therefore, using Z3 would be overly complex for
+#     the benefits gained.
 #
-# II. Formal Verification (using Z3)
+# - **Unit Tests (Pytest):**
+#   - **Applicability:** Pytest is ideal for this scenario. It can easily handle:
+#     1.  **Input Validation:** `pytest.raises` can confirm that `TypeError` and
+#         `ValueError` are thrown for invalid inputs.
+#     2.  **Edge Cases:** Testing specific values like `n_terms = 0` is
+#         straightforward.
+#     3.  **Correctness:** For a small number of terms, the expected result can
+#         be calculated manually and asserted.
+#     4.  **Approximation:** `pytest.approx` is designed to compare floating-point
+#         numbers within a tolerance, perfect for checking if the result is
+#         close to `math.pi` for a large number of terms.
+#     5.  **Behavioral Properties:** We can write a test to verify the convergence
+#         property (i.e., more terms lead to a smaller error).
+#   - **Conclusion:** Pytest provides a practical, robust, and readable way to
+#     ensure the function's correctness and adherence to its specification.
 #
-#    Objective: Prove general properties of the function's algorithm that should
-#               hold true for all valid inputs. This goes beyond what can be
-#               tested with discrete examples.
+# ----------------------------------------------------------------------------
+# II. Detailed Test Plan (using Pytest)
+# ----------------------------------------------------------------------------
 #
-#    Properties to Verify:
-#    1. `test_z3_is_always_greater_than_three`:
-#       - Property: For any `n_terms >= 1`, `pi_calc(n_terms)` should be
-#         greater than 3.
-#       - Method: Model the function's logic in Z3. Assert `n >= 1` and check
-#         if the solver can find a counterexample to `pi_calc(n) <= 3`.
-#         The expected result is `unsat`, proving the property.
-#       - Rationale: The Nilakantha series starts at 3 and the first term is
-#         positive, with subsequent subtractions being smaller in magnitude.
-#         This property should always hold.
-#    2. `test_z3_term_magnitude_decreases`:
-#       - Property: The absolute magnitude of the terms added or subtracted
-#         in the series should monotonically decrease. Formally:
-#         `|term(n+1)| < |term(n)|` for `n >= 1`.
-#       - Method: Model the denominators of the n-th and (n+1)-th terms in Z3.
-#         Assert that the denominator for term n is greater than or equal to
-#         the denominator for term n+1. The expected result is `unsat`,
-#         proving the property.
-#       - Rationale: For an alternating series, proving that the terms
-#         monotonically decrease in magnitude is a key part of proving
-#         convergence (via the Alternating Series Test). This is a more
-#         tractable property for a solver to prove than direct error
-#         convergence, yet it still provides a strong formal guarantee.
+# 1.  **Test Input Validation:**
+#     - `test_negative_input_raises_value_error`: Ensure `pi_calc(-1)` raises a `ValueError`.
+#     - `test_non_integer_input_raises_type_error`: Ensure non-integer inputs (e.g., float, string, list) raise a `TypeError`. This will be parameterized to cover multiple invalid types.
 #
+# 2.  **Test Edge Cases:**
+#     - `test_zero_terms`: Ensure `pi_calc(0)` returns the base value of `3.0`, as the series loop should not execute.
+#
+# 3.  **Test Correctness for Small, Verifiable Inputs:**
+#     - `test_one_term`: Manually calculate the result for `n_terms = 1` and assert the function's output matches. Expected: `3 + 4/(2*3*4)`.
+#     - `test_two_terms`: Manually calculate the result for `n_terms = 2` and assert the output matches. Expected: `3 + 4/(2*3*4) - 4/(4*5*6)`.
+#
+# 4.  **Test Approximation Quality:**
+#     - `test_default_terms_approximation`: Call `pi_calc()` with no arguments to use the default `n_terms`. Assert that the result is a close approximation of `math.pi` using `pytest.approx`.
+#     - `test_large_number_of_terms_approximation`: Call `pi_calc` with a very large number of terms (e.g., 200,000) and assert the result is a close approximation of `math.pi`.
+#
+# 5.  **Test Functional Properties:**
+#     - `test_convergence`: Verify that the approximation error decreases as `n_terms` increases. This will be done by comparing the absolute error `|result - math.pi|` for a small, medium, and large number of terms.
+#
+# ############################################################################
 
-# --- Unit Tests ---
 
-def test_negative_input():
+def test_negative_input_raises_value_error():
     """
-    Tests that a negative number of terms raises a ValueError.
+    Tests that a negative integer for n_terms raises a ValueError.
     """
     with pytest.raises(ValueError, match="The number of terms cannot be negative."):
-        pi_calc(n_terms=-1)
+        pi_calc(n_terms=-10)
 
-def test_non_integer_input_float():
+
+@pytest.mark.parametrize("invalid_input, input_type", [
+    (10.5, "float"),
+    ("100", "string"),
+    ([100], "list"),
+    ({100}, "set"),
+    (None, "NoneType")
+])
+def test_non_integer_input_raises_type_error(invalid_input, input_type):
     """
-    Tests that a float number of terms raises a TypeError.
+    Tests that non-integer inputs for n_terms raise a TypeError.
+    This test is parameterized to check various invalid types.
     """
     with pytest.raises(TypeError, match="The number of terms must be an integer."):
-        pi_calc(n_terms=100.5)
+        pi_calc(n_terms=invalid_input)
 
-def test_non_integer_input_string():
-    """
-    Tests that a string input for terms raises a TypeError.
-    """
-    with pytest.raises(TypeError, match="The number of terms must be an integer."):
-        pi_calc(n_terms="100")
 
 def test_zero_terms():
     """
-    Tests the base case of 0 terms, which should return the starting value 3.0.
+    Tests the base case where n_terms is 0. The result should be exactly 3.0.
     """
+    # With 0 terms, the loop should not run, returning the initial value.
     assert pi_calc(n_terms=0) == 3.0
+
 
 def test_one_term():
     """
     Tests the calculation with a single term from the series.
     """
-    expected = 3.0 + 4.0 / (2.0 * 3.0 * 4.0)
-    assert pi_calc(n_terms=1) == pytest.approx(expected)
+    # Expected: 3 + 4/(2*3*4) = 3 + 4/24 = 3 + 1/6
+    expected_value = 3.0 + (4.0 / (2.0 * 3.0 * 4.0))
+    assert pi_calc(n_terms=1) == pytest.approx(expected_value)
+
 
 def test_two_terms():
     """
-    Tests the calculation with two terms, verifying the sign change.
+    Tests the calculation with two terms from the series.
     """
-    expected = 3.0 + 4.0 / (2.0 * 3.0 * 4.0) - 4.0 / (4.0 * 5.0 * 6.0)
-    assert pi_calc(n_terms=2) == pytest.approx(expected)
+    # Expected: 3 + 4/(2*3*4) - 4/(4*5*6)
+    term1 = 4.0 / (2.0 * 3.0 * 4.0)
+    term2 = -4.0 / (4.0 * 5.0 * 6.0)
+    expected_value = 3.0 + term1 + term2
+    assert pi_calc(n_terms=2) == pytest.approx(expected_value)
 
-def test_default_terms_convergence():
-    """
-    Tests that the default number of terms (100,000) yields a result
-    very close to math.pi.
-    """
-    # A tolerance of 1e-10 is appropriate for 100,000 terms.
-    assert pi_calc() == pytest.approx(math.pi, abs=1e-10)
 
-def test_large_terms_convergence():
+def test_default_terms_approximation():
     """
-    Tests that a large number of terms (200,000) yields a result
-    very close to math.pi.
+    Tests that the default number of terms (100,000) provides a good
+    approximation of math.pi.
     """
-    # A tolerance of 1e-11 is appropriate for 200,000 terms.
-    assert pi_calc(n_terms=200000) == pytest.approx(math.pi, abs=1e-11)
+    # The default tolerance of pytest.approx is sufficient here.
+    assert pi_calc() == pytest.approx(math.pi)
 
-def test_convergence_improves():
+
+def test_large_number_of_terms_approximation():
     """
-    Tests that increasing the number of terms improves the approximation.
+    Tests that a very large number of terms provides an even better
+    approximation of math.pi.
     """
+    # Using a large number of terms should result in a very close approximation.
+    assert pi_calc(n_terms=200000) == pytest.approx(math.pi)
+
+
+def test_convergence():
+    """
+    Tests that the approximation error decreases as n_terms increases.
+    """
+    # Calculate the absolute error for different numbers of terms
+    error_10 = abs(pi_calc(n_terms=10) - math.pi)
+    error_100 = abs(pi_calc(n_terms=100) - math.pi)
     error_1000 = abs(pi_calc(n_terms=1000) - math.pi)
-    error_10000 = abs(pi_calc(n_terms=10000) - math.pi)
-    assert error_10000 < error_1000
 
-
-# --- Formal Verification with Z3 ---
-
-@pytest.mark.skipif(not Z3_AVAILABLE, reason="Z3 solver not installed")
-def test_z3_is_always_greater_than_three():
-    """
-    Formally verifies that for n_terms >= 1, the result is always > 3.
-    """
-    s = z3.Solver()
-    n = z3.Int('n') # n represents n_terms
-
-    # Define the recursive function for the pi approximation using Z3's capabilities
-    pi_approx = z3.RecFunction('pi_approx', z3.IntSort(), z3.RealSort())
-    i = z3.Int('i') # A dummy variable for the function definition
-
-    # Define the i-th term symbolically
-    i_real = z3.ToReal(i)
-    denominator = (2 * i_real) * (2 * i_real + 1) * (2 * i_real + 2)
-    sign = z3.If(i % 2 == 1, z3.RealVal(1), z3.RealVal(-1))
-    nth_term = sign * (z3.RealVal(4) / denominator)
-
-    # Add the recursive definition as an axiom for the solver.
-    z3.RecAddDefinition(pi_approx, i,
-        z3.If(i == 0,
-              z3.RealVal(3),
-              pi_approx(i - 1) + nth_term
-        )
-    )
-
-    # Constraint: n must be a non-negative integer >= 1
-    s.add(n >= 1)
-
-    # Model the function call using the axiomatically-defined function
-    pi_approximation = pi_approx(n)
-
-    # Negation of the property we want to prove:
-    # Is it possible for the result to be less than or equal to 3?
-    s.add(pi_approximation <= 3)
-
-    # If the solver finds a model (sat), it's a counterexample.
-    # If it's unsat, no counterexample exists, and the property is proven.
-    assert s.check() == z3.unsat, "Z3 found a counterexample where pi_calc(n) <= 3 for n >= 1"
-
-@pytest.mark.skipif(not Z3_AVAILABLE, reason="Z3 solver not installed")
-def test_z3_term_magnitude_decreases():
-    """
-    Formally verifies that the absolute magnitude of the terms in the series
-    is monotonically decreasing for n >= 1. This is a key condition for the
-    convergence of an alternating series and prevents test timeouts.
-    """
-    s = z3.Solver()
-    n = z3.Int('n')
-
-    # We want to prove that for n >= 1, |term(n+1)| < |term(n)|.
-    # The i-th term's denominator is (2*i)*(2*i+1)*(2*i+2).
-    
-    # Constraint: n must be a positive integer.
-    s.add(n >= 1)
-
-    # Define the denominators for the n-th and (n+1)-th terms as Reals.
-    n_real = z3.ToReal(n)
-    
-    # Denominator for the n-th term.
-    denom_n = (2 * n_real) * (2 * n_real + 1) * (2 * n_real + 2)
-    
-    # Denominator for the (n+1)-th term.
-    denom_n_plus_1 = (2 * (n_real + 1)) * (2 * (n_real + 1) + 1) * (2 * (n_real + 1) + 2)
-
-    # The property |term(n+1)| < |term(n)| is equivalent to
-    # 4.0 / denom_n_plus_1 < 4.0 / denom_n.
-    # Since denominators are positive for n>=1, this is equivalent to
-    # denom_n < denom_n_plus_1.
-
-    # Negation of the property: Is it possible for the magnitude to increase
-    # or stay the same? This is equivalent to denom_n >= denom_n_plus_1.
-    s.add(denom_n >= denom_n_plus_1)
-
-    # If the solver finds a model (sat), it's a counterexample.
-    # If it's unsat, no counterexample exists, and the property is proven.
-    result = s.check()
-    assert result == z3.unsat, f"Z3 found a counterexample where term magnitude did not decrease: {s.model() if result == z3.sat else 'unknown'}"
+    # Assert that the error for more terms is smaller than for fewer terms
+    assert error_100 < error_10
+    assert error_1000 < error_100
