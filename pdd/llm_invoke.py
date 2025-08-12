@@ -1333,7 +1333,7 @@ if __name__ == "__main__":
         response = llm_invoke(
             prompt="Tell me a short joke about {topic}.",
             input_json={"topic": "programmers"},
-            strength=0.5, # Use base model (gpt-4.1-nano)
+            strength=0.5, # Use base model (gpt-5-nano)
             temperature=0.7,
             verbose=True
         )
@@ -1414,7 +1414,7 @@ if __name__ == "__main__":
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": "What is the capital of France?"}
         ]
-        # Strength 0.5 should select gpt-4.1-nano
+        # Strength 0.5 should select gpt-5-nano
         response_messages = llm_invoke(
             messages=custom_messages,
             strength=0.5,
