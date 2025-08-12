@@ -34,7 +34,7 @@ def mock_load_models():
     with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
         mock_data = [
             MockModelInfoData( # Base model
-                provider='OpenAI', model='gpt-4.1-nano', input=0.02, output=0.03, # avg_cost=0.025
+                provider='OpenAI', model='gpt-5-nano', input=0.02, output=0.03, # avg_cost=0.025
                 coding_arena_elo=1500, structured_output=True, base_url="", api_key="OPENAI_API_KEY",
                 max_tokens="", max_completion_tokens="", reasoning_type='none', max_reasoning_tokens=0
             ),
@@ -127,7 +127,7 @@ def test_llm_invoke_valid_input(mock_load_models, mock_set_llm_cache):
     with patch.dict(os.environ, {first_model_key_name: "fake_key_value"}):
         with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
             mock_response_content = "Mocked LLM response"
-            mock_response = create_mock_litellm_response(mock_response_content, model_name='gpt-4.1-nano')
+            mock_response = create_mock_litellm_response(mock_response_content, model_name='gpt-5-nano')
             mock_completion.return_value = mock_response
             mock_cost = 0.0001
             with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
@@ -137,12 +137,12 @@ def test_llm_invoke_valid_input(mock_load_models, mock_set_llm_cache):
                      0.5, 
                      0.7, False
                  )
-                 assert response['model_name'] == 'gpt-4.1-nano'
+                 assert response['model_name'] == 'gpt-5-nano'
                  assert response['result'] == mock_response_content
                  assert response['cost'] == mock_cost
                  mock_completion.assert_called_once()
                  call_args, call_kwargs = mock_completion.call_args
-                 assert call_kwargs['model'] == 'gpt-4.1-nano'
+                 assert call_kwargs['model'] == 'gpt-5-nano'
                  assert call_kwargs['messages'] == [{"role": "user", "content": "Valid prompt about cats"}]
 
 def test_llm_invoke_missing_prompt():
@@ -221,7 +221,7 @@ def test_llm_invoke_output_pydantic_supported(mock_load_models, mock_set_llm_cac
     with patch.dict(os.environ, {model_key_name: "fake_key_value"}):
         with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
             expected_result = SampleOutputModel(field1="value1", field2=123)
-            mock_response = create_mock_litellm_response(expected_result, model_name='gpt-4.1-nano')
+            mock_response = create_mock_litellm_response(expected_result, model_name='gpt-5-nano')
             mock_completion.return_value = mock_response
             mock_cost = 0.00015
             with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 5}):
@@ -232,11 +232,11 @@ def test_llm_invoke_output_pydantic_supported(mock_load_models, mock_set_llm_cac
                     output_pydantic=SampleOutputModel
                 )
                 assert response['result'] == expected_result
-                assert response['model_name'] == 'gpt-4.1-nano'
+                assert response['model_name'] == 'gpt-5-nano'
                 assert response['cost'] == mock_cost
                 mock_completion.assert_called_once()
                 call_args, call_kwargs = mock_completion.call_args
-                assert call_kwargs['model'] == 'gpt-4.1-nano'
+                assert call_kwargs['model'] == 'gpt-5-nano'
                 assert call_kwargs['response_format'] == SampleOutputModel
 
 def test_llm_invoke_output_pydantic_unsupported_parses(mock_load_models, mock_set_llm_cache):
@@ -326,7 +326,7 @@ def test_llm_invoke_auth_error_new_key_retry(mock_load_models, mock_set_llm_cach
     mock_headers.get.return_value = None 
     mock_response_obj.headers = mock_headers
     auth_error = openai.AuthenticationError(message="Invalid API Key", response=mock_response_obj, body=None)
-    mock_successful_response = create_mock_litellm_response("Success after retry", model_name='gpt-4.1-nano')
+    mock_successful_response = create_mock_litellm_response("Success after retry", model_name='gpt-5-nano')
     mock_completion.side_effect = [auth_error, mock_successful_response]
 
     with patch('builtins.input', mock_input), \
@@ -338,7 +338,7 @@ def test_llm_invoke_auth_error_new_key_retry(mock_load_models, mock_set_llm_cach
         try:
             response = llm_invoke(prompt=prompt, input_json=input_json, strength=0.5, verbose=True) 
             assert response['result'] == "Success after retry"
-            assert response['model_name'] == 'gpt-4.1-nano'
+            assert response['model_name'] == 'gpt-5-nano'
             assert mock_input.call_count == 2
             assert mock_completion.call_count == 2
             assert os.environ.get(model_key_name) == "good_key_later"
@@ -356,7 +356,7 @@ def test_llm_invoke_verbose(mock_load_models, mock_set_llm_cache, caplog): # Cha
             time_value = 0.25 
             mock_thinking_output = "This is a mock thinking process."
             mock_response = create_mock_litellm_response(
-                "Mocked LLM response", model_name='gpt-4.1-nano',
+                "Mocked LLM response", model_name='gpt-5-nano',
                 prompt_tokens=15, completion_tokens=25,
                 thinking_output=mock_thinking_output
             )
@@ -375,17 +375,17 @@ def test_llm_invoke_verbose(mock_load_models, mock_set_llm_cache, caplog): # Cha
 
             log_output = caplog.text 
 
-            assert "[ATTEMPT] Trying model: gpt-4.1-nano" in log_output
+            assert "[ATTEMPT] Trying model: gpt-5-nano" in log_output
             assert "Candidate models selected and ordered (with strength):" in log_output # Corrected
-            assert "'gpt-4.1-nano'" in log_output
+            assert "'gpt-5-nano'" in log_output
             assert "'claude-3'" in log_output
             assert "'gemini-pro'" in log_output
             assert "'cheap-model'" in log_output
             assert f"Strength: {strength}, Temperature: {temperature}, Time: {time_value}" in log_output # Corrected
             assert "Input JSON:" in log_output # Corrected
             assert repr({"topic": "cats"}) in log_output 
-            assert "[SUCCESS] Invocation successful for gpt-4.1-nano" in log_output
-            assert "[RESULT] Model Used: gpt-4.1-nano" in log_output
+            assert "[SUCCESS] Invocation successful for gpt-5-nano" in log_output
+            assert "[RESULT] Model Used: gpt-5-nano" in log_output
             assert "[RESULT] Cost (Input): $0.02/M tokens" in log_output 
             assert "[RESULT] Cost (Output): $0.03/M tokens" in log_output 
             assert "[RESULT] Tokens (Prompt): 15" in log_output 
@@ -399,12 +399,12 @@ def test_llm_invoke_verbose(mock_load_models, mock_set_llm_cache, caplog): # Cha
 def test_llm_invoke_with_env_variables(mock_load_models, mock_set_llm_cache):
     target_model_key_name = "OPENAI_API_KEY" 
     with patch.dict(os.environ, {
-        'PDD_MODEL_DEFAULT': 'gpt-4.1-nano',
+        'PDD_MODEL_DEFAULT': 'gpt-5-nano',
         'PDD_PATH': '/fake/path',
         target_model_key_name: 'fake_key_value' 
     }):
         with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
-            mock_response = create_mock_litellm_response("Mocked LLM response", model_name='gpt-4.1-nano')
+            mock_response = create_mock_litellm_response("Mocked LLM response", model_name='gpt-5-nano')
             mock_completion.return_value = mock_response
             mock_cost = 0.0001
             with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 5}):
@@ -413,11 +413,11 @@ def test_llm_invoke_with_env_variables(mock_load_models, mock_set_llm_cache):
                 response = llm_invoke(prompt=prompt, input_json=input_json) 
                 mock_load_models.assert_called_once()
                 assert response['result'] == "Mocked LLM response"
-                assert response['model_name'] == 'gpt-4.1-nano'
+                assert response['model_name'] == 'gpt-5-nano'
                 assert response['cost'] == mock_cost
                 mock_completion.assert_called_once()
                 call_args, call_kwargs = mock_completion.call_args
-                assert call_kwargs['model'] == 'gpt-4.1-nano'
+                assert call_kwargs['model'] == 'gpt-5-nano'
 
 
 def test_llm_invoke_load_models_file_not_found(mock_set_llm_cache): 
@@ -519,7 +519,7 @@ def test_llm_invoke_project_pdd_directory(mock_set_llm_cache, tmp_path, monkeypa
     csv_path = pdd_dir / "llm_model.csv"
     csv_data = pd.DataFrame({
         'provider': ['OpenAI'],
-        'model': ['gpt-4.1-nano'],
+        'model': ['gpt-5-nano'],
         'input': [0.1],
         'output': [0.4],
         'coding_arena_elo': [1249],

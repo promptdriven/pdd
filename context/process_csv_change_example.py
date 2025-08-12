@@ -64,7 +64,7 @@ pprint(list_of_jsons, compact=True)
 # === Returned values ==================================
 # success      : True
 # total_cost   : 0.0054053
-# model_name   : gpt-4.1-nano
+# model_name   : gpt-5-nano
 # list_of_jsons:
 # [{'file_name': 'factorial_python.prompt',
 #   'modified_prompt': 'Write a test for the factorial function.\n'
