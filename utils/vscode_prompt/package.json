@@ -1,0 +1,31 @@
+{
+  "name": "prompt",
+  "displayName": "prompt",
+  "description": "For Prompt Driven Development",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [{
+      "id": "prompt",
+      "aliases": ["PDD Prompt", "prompt"],
+      "extensions": [".prompt"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "prompt",
+      "scopeName": "text.prompt",
+      "path": "./syntaxes/prompt.tmLanguage.json"
+    }]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gltanaka/pdd.git",
+    "directory": "prompt"
+  },
+  "publisher": "gltanaka"
+}
