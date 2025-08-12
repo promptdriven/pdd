@@ -10,6 +10,14 @@ The handpaint example demonstrates how PDD can be used to create and modify a pa
 - The process of iteratively refining code through PDD
 - A comparison between traditional development and PDD-assisted development
 
+### Hello World
+The hello_world example demonstrates how PDD can be used to generate code for a simple Python function that prints "hello". This example shows:
+- How PDD can be used to generate code for a simple Python function via the sync command
+
+### Pi Calc
+The pi_calc example demonstrates how PDD can be used to generate code for a simple Python function that calculates the value of Pi. This example shows:
+- How PDD can be used to generate code for a simple Python function using the sync command
+
 More examples will be added to this directory as they are developed.
 
 ## Purpose
