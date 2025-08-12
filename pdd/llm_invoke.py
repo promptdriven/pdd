@@ -1108,9 +1108,8 @@ def llm_invoke(
                                         max_completion_tokens=max_tokens,
                                         **time_kwargs
                                     )
-                                    # Re-enable cache - restore original configured cache
-                                    if configured_cache is not None:
-                                        litellm.cache = configured_cache
+                                    # Re-enable cache - restore original configured cache (restore to original state, even if None)
+                                    litellm.cache = configured_cache
                                     # Extract result from retry
                                     retry_raw_result = retry_response.choices[0].message.content
                                     if retry_raw_result is not None:
