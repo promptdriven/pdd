@@ -181,8 +181,10 @@ def test_add():
         )
 
     assert success is True
-    assert final_test == ""  # Should be empty when no fixes needed
-    assert final_code == ""  # Should be empty when no fixes needed
+    assert final_test != ""  # Should return actual file contents when already passing
+    assert final_code != ""  # Should return actual file contents when already passing
+    assert "from add_functions import add" in final_test  # Verify test content is returned
+    assert "def add(a, b): return a + b" in final_code    # Verify code content is returned
     assert attempts == 0     # No fix attempts should be made
     assert cost == 0.0       # No cost incurred
     assert model == ""       # No model used

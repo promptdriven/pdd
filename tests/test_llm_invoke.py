@@ -88,7 +88,7 @@ def mock_load_models():
 
 @pytest.fixture
 def mock_set_llm_cache():
-    with patch('litellm.Cache') as mock_cache_class:
+    with patch('litellm.caching.caching.Cache') as mock_cache_class:
          yield mock_cache_class
 
 # --- Helper Function to Create Mock LiteLLM Response ---

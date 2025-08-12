@@ -6,6 +6,7 @@ import pandas as pd
 import litellm
 import logging # ADDED FOR DETAILED LOGGING
 import importlib.resources
+from litellm.caching.caching import Cache  # Fix for LiteLLM v1.49.3+
 
 # --- Configure Standard Python Logging ---
 logger = logging.getLogger("pdd.llm_invoke")
@@ -234,6 +235,7 @@ if GCS_HMAC_SECRET_ACCESS_KEY:
     GCS_HMAC_SECRET_ACCESS_KEY = GCS_HMAC_SECRET_ACCESS_KEY.strip()
 
 cache_configured = False
+configured_cache = None  # Store the configured cache instance for restoration
 
 if GCS_BUCKET_NAME and GCS_HMAC_ACCESS_KEY_ID and GCS_HMAC_SECRET_ACCESS_KEY:
     # Store original AWS credentials before overwriting for GCS cache setup
@@ -247,12 +249,13 @@ if GCS_BUCKET_NAME and GCS_HMAC_ACCESS_KEY_ID and GCS_HMAC_SECRET_ACCESS_KEY:
         os.environ['AWS_SECRET_ACCESS_KEY'] = GCS_HMAC_SECRET_ACCESS_KEY
         # os.environ['AWS_REGION_NAME'] = GCS_REGION_NAME  # Uncomment if needed
 
-        litellm.cache = litellm.Cache(
+        configured_cache = Cache(
             type="s3",
             s3_bucket_name=GCS_BUCKET_NAME,
             s3_region_name=GCS_REGION_NAME, # Pass region explicitly to cache
             s3_endpoint_url=GCS_ENDPOINT_URL,
         )
+        litellm.cache = configured_cache
         logger.info(f"LiteLLM cache configured for GCS bucket (S3 compatible): {GCS_BUCKET_NAME}")
         cache_configured = True
 
@@ -281,7 +284,8 @@ if not cache_configured:
     try:
         # Try SQLite-based cache as a fallback
         sqlite_cache_path = PROJECT_ROOT / "litellm_cache.sqlite"
-        litellm.cache = litellm.Cache(type="sqlite", cache_path=str(sqlite_cache_path))
+        configured_cache = Cache(type="sqlite", cache_path=str(sqlite_cache_path))
+        litellm.cache = configured_cache
         logger.info(f"LiteLLM SQLite cache configured at {sqlite_cache_path}")
         cache_configured = True
     except Exception as e2:
@@ -1104,8 +1108,8 @@ def llm_invoke(
                                         max_completion_tokens=max_tokens,
                                         **time_kwargs
                                     )
-                                    # Re-enable cache
-                                    litellm.cache = Cache()
+                                    # Re-enable cache - restore original configured cache
+                                    litellm.cache = configured_cache
                                     # Extract result from retry
                                     retry_raw_result = retry_response.choices[0].message.content
                                     if retry_raw_result is not None:
