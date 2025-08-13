@@ -543,7 +543,7 @@ def sync_orchestration(
                         else:
                             break
                     
-                    MAX_CONSECUTIVE_TESTS = 3  # Allow up to 3 consecutive test attempts
+                    # Use module-level constant for max consecutive test attempts
                     if consecutive_tests >= MAX_CONSECUTIVE_TESTS:
                         errors.append(f"Detected {consecutive_tests} consecutive test operations. Breaking infinite test loop.")
                         errors.append("Coverage target may not be achievable with additional test generation.")
