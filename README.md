@@ -102,7 +102,7 @@ export PROVIDER_API_KEY=your_api_key_here
 
 Add these to your `.bashrc`, `.zshrc`, or equivalent for persistence.
 
-PDD's local mode uses LiteLLM for interacting with language models, providing:
+PDD's local mode uses LiteLLM (version 1.75.5 or higher) for interacting with language models, providing:
 
 - Support for multiple model providers (OpenAI, Anthropic, Google/Vertex AI, and more)
 - Automatic model selection based on strength settings
@@ -162,7 +162,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.48
+Current version: 0.0.47
 
 To check your installed version, run:
 ```

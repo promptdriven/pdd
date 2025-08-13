@@ -6,7 +6,7 @@ import pandas as pd
 import litellm
 import logging # ADDED FOR DETAILED LOGGING
 import importlib.resources
-from litellm.caching.caching import Cache  # Fix for LiteLLM v1.49.3+
+from litellm.caching.caching import Cache  # Fix for LiteLLM v1.75.5+
 
 # --- Configure Standard Python Logging ---
 logger = logging.getLogger("pdd.llm_invoke")
@@ -280,16 +280,22 @@ if GCS_BUCKET_NAME and GCS_HMAC_ACCESS_KEY_ID and GCS_HMAC_SECRET_ACCESS_KEY:
         elif 'AWS_REGION_NAME' in os.environ:
             pass # Or just leave it if the temporary setting wasn't done/needed
 
+# Check if caching is disabled via environment variable
+if os.getenv("LITELLM_CACHE_DISABLE") == "1":
+    logger.info("LiteLLM caching disabled via LITELLM_CACHE_DISABLE=1")
+    litellm.cache = None
+    cache_configured = True
+
 if not cache_configured:
     try:
-        # Try SQLite-based cache as a fallback
+        # Try disk-based cache as a fallback
         sqlite_cache_path = PROJECT_ROOT / "litellm_cache.sqlite"
-        configured_cache = Cache(type="sqlite", cache_path=str(sqlite_cache_path))
+        configured_cache = Cache(type="disk", disk_cache_dir=str(sqlite_cache_path))
         litellm.cache = configured_cache
-        logger.info(f"LiteLLM SQLite cache configured at {sqlite_cache_path}")
+        logger.info(f"LiteLLM disk cache configured at {sqlite_cache_path}")
         cache_configured = True
     except Exception as e2:
-        warnings.warn(f"Failed to configure LiteLLM SQLite cache: {e2}. Caching is disabled.")
+        warnings.warn(f"Failed to configure LiteLLM disk cache: {e2}. Caching is disabled.")
         litellm.cache = None
 
 if not cache_configured:
@@ -1103,10 +1109,7 @@ def llm_invoke(
                                     retry_response = litellm.completion(
                                         model=model_name_litellm,
                                         messages=retry_messages,
-                                        temperature=temperature,
-                                        response_format=response_format,
-                                        max_completion_tokens=max_tokens,
-                                        **time_kwargs
+                                        temperature=temperature
                                     )
                                     # Re-enable cache - restore original configured cache (restore to original state, even if None)
                                     litellm.cache = configured_cache
