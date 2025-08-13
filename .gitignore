@@ -12,8 +12,6 @@ __pycache__/
 # Test sync folder
 test_sync/
 
-# PDD metadata files
-.pdd/meta/
 
 # langchain cache
 .langchain.db
