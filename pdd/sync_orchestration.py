@@ -533,6 +533,27 @@ def sync_orchestration(
                         })
                         break
 
+                # Detect consecutive test operations (infinite test loop protection)
+                if operation == 'test':
+                    # Count consecutive test operations
+                    consecutive_tests = 0
+                    for i in range(len(operation_history) - 1, -1, -1):
+                        if operation_history[i] == 'test':
+                            consecutive_tests += 1
+                        else:
+                            break
+                    
+                    MAX_CONSECUTIVE_TESTS = 3  # Allow up to 3 consecutive test attempts
+                    if consecutive_tests >= MAX_CONSECUTIVE_TESTS:
+                        errors.append(f"Detected {consecutive_tests} consecutive test operations. Breaking infinite test loop.")
+                        errors.append("Coverage target may not be achievable with additional test generation.")
+                        log_sync_event(basename, language, "cycle_detected", {
+                            "cycle_type": "consecutive-test",
+                            "consecutive_count": consecutive_tests,
+                            "operation_history": operation_history[-10:]  # Last 10 operations
+                        })
+                        break
+
                 if operation in ['all_synced', 'nothing', 'fail_and_request_manual_merge', 'error', 'analyze_conflict']:
                     current_function_name_ref[0] = "synced" if operation in ['all_synced', 'nothing'] else "conflict"
                     
@@ -1024,10 +1045,14 @@ def sync_orchestration(
                         success = result.get('success', False)
                         current_cost_ref[0] += result.get('cost', 0.0)
                     elif isinstance(result, tuple) and len(result) >= 3:
-                        # Tuple return (e.g., from code_generator_main, context_generator_main)
-                        # For tuples, success is determined by no exceptions and valid return content
-                        # Check if the first element (generated content) is None, which indicates failure
-                        success = result[0] is not None
+                        # Tuple return (e.g., from code_generator_main, context_generator_main, cmd_test_main)
+                        # For test operations, use file existence as success criteria to match local detection
+                        if operation == 'test':
+                            success = pdd_files['test'].exists()
+                        else:
+                            # For other operations, success is determined by valid return content
+                            # Check if the first element (generated content) is None, which indicates failure
+                            success = result[0] is not None
                         # Extract cost from tuple (usually second-to-last element)
                         cost = result[-2] if len(result) >= 2 and isinstance(result[-2], (int, float)) else 0.0
                         current_cost_ref[0] += cost
@@ -1152,7 +1177,6 @@ def sync_orchestration(
                             try:
                                 run_report = RunReport(
                                     timestamp=datetime.datetime.now(datetime.timezone.utc),
-                                    total_tests=1,  # Assume at least 1 test exists since we just fixed it
                                     tests_passed=1, # Fix succeeded, so tests are now passing
                                     tests_failed=0,  # No failures after successful fix
                                     coverage=target_coverage,  # Use target coverage as achieved
