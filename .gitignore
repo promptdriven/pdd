@@ -12,6 +12,7 @@ __pycache__/
 # Test sync folder
 test_sync/
 
+
 # langchain cache
 .langchain.db
 *.pckl
@@ -183,3 +184,4 @@ cython_debug/
 # Ignore nested repositories
 edit-file-tool/
 
+staging/

@@ -930,3 +930,78 @@ def test_auto_deps_normal_workflow_logic():
     
     # The key insight: only REPEATED auto-deps operations should trigger cycle detection
     # Normal workflows with single auto-deps should proceed normally
+
+
+def test_test_operation_success_detection_prevents_infinite_loop(orchestration_fixture):
+    """
+    Test that test operations are properly marked as successful to prevent infinite loops.
+    
+    This test replicates the exact scenario that caused the infinite loop:
+    1. cmd_test_main returns a tuple where result[0] might be None/empty
+    2. But the test file gets created successfully (file existence = success)
+    3. Without the fix: main success detection fails, operation not marked complete
+    4. With the fix: success detection uses file existence for test operations
+    """
+    mocks = orchestration_fixture
+    mock_determine = mocks['sync_determine_operation']
+    mock_test = mocks['cmd_test_main']
+    mock_code_gen = mocks['code_generator_main']
+    mock_context_gen = mocks['context_generator_main']
+    mock_verify = mocks['fix_verification_main']
+    mock_save_fingerprint = mocks['_save_operation_fingerprint']
+    
+    # Mock cmd_test_main to return a tuple with None as first element (replicating the bug)
+    # but still create the test file successfully
+    def mock_test_main_with_none_result(*args, **kwargs):
+        # Simulate the problematic return pattern: (None, cost, model)
+        # This is what was causing the infinite loop - result[0] is None but file gets created
+        test_file_path = Path("tests/test_calculator.py")
+        test_file_path.parent.mkdir(exist_ok=True)
+        test_file_path.write_text("# Generated test content")
+        return (None, 0.05, "chatgpt-4o-latest")  # result[0] is None!
+    
+    mock_test.side_effect = mock_test_main_with_none_result
+    
+    # Set up sync decision sequence: generate -> example -> verify -> test -> all_synced
+    mock_determine.side_effect = [
+        SyncDecision(operation='generate', reason='Generate code'),
+        SyncDecision(operation='example', reason='Generate example'),
+        SyncDecision(operation='verify', reason='Verify example'), 
+        SyncDecision(operation='test', reason='Generate tests'),
+        SyncDecision(operation='all_synced', reason='All done')  # Should reach this
+    ]
+    
+    # Mock other operations to return successful results
+    mock_code_gen.return_value = ("generated_code", 0.01, "model1") 
+    mock_context_gen.return_value = ("example_code", 0.02, "model2")
+    mock_verify.return_value = {"success": True, "cost": 0.03, "model": "model3"}
+    
+    # Run sync orchestration
+    result = sync_orchestration(
+        basename="calculator",
+        language="python", 
+        budget=1.0,
+        max_attempts=2  # Limit attempts to prevent actual infinite loop in test
+    )
+    
+    # Verify that sync completed successfully (no infinite loop)
+    assert result['success'] == True, "Sync should complete successfully with the fix"
+    
+    # Verify test operation was called exactly once (not in infinite loop)
+    assert mock_test.call_count == 1, "Test operation should be called exactly once, not infinitely"
+    
+    # Verify that operations were marked as completed (including 'test')
+    completed_ops = result.get('operations_completed', [])
+    assert 'test' in completed_ops, "Test operation should be marked as completed"
+    
+    # Verify sync_determine_operation was called the expected number of times
+    # Should be: generate, example, verify, test, final all_synced check
+    assert mock_determine.call_count == 5, f"Expected 5 decision calls, got {mock_determine.call_count}"
+    
+    # Verify no budget exceeded error (would happen in infinite loop)
+    assert "Budget" not in str(result.get('errors', [])), "Should not exceed budget with proper fix"
+    
+    # Verify fingerprint was saved for test operation (proof it was marked successful)
+    test_fingerprint_calls = [call for call in mock_save_fingerprint.call_args_list 
+                             if len(call[0]) >= 3 and call[0][2] == 'test']
+    assert len(test_fingerprint_calls) == 1, "Test operation fingerprint should be saved exactly once"
