@@ -50,7 +50,8 @@ dependencies = [
     "setuptools",
     "pytest",
     "boto3==1.35.99",
-    "python-Levenshtein"]
+    "python-Levenshtein",
+    "openai>=1.99.5"]
 requires-python = ">=3.12"
 
 [project.urls]

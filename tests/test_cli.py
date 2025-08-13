@@ -874,6 +874,12 @@ sys.exit(0 if test_result.wasSuccessful() else 1)
     # Change working directory to tmp_path so imports work correctly
     original_cwd = os.getcwd()
     os.chdir(tmp_path)
+    
+    # Set PDD_PATH to the project root so prompt templates can be found
+    # Get the project root dynamically from the current test file location
+    original_pdd_path = os.getenv('PDD_PATH')
+    project_root = Path(__file__).parent.parent  # Go up from tests/ to project root
+    os.environ['PDD_PATH'] = str(project_root)
 
     try:
         # Call fix_main directly - with no mock this time
@@ -971,6 +977,9 @@ sys.exit(0 if test_result.wasSuccessful() else 1)
     finally:
         # Change back to the original directory
         os.chdir(original_cwd)
+        # Restore PDD_PATH if it was set
+        if original_pdd_path is not None:
+            os.environ['PDD_PATH'] = original_pdd_path
 
 
 @patch('pdd.cli.auto_update') # Patch auto_update
@@ -1248,6 +1257,12 @@ if __name__ == "__main__":
     # Change working directory to tmp_path so imports work correctly
     original_cwd = os.getcwd()
     os.chdir(tmp_path)
+    
+    # Set PDD_PATH to the project root so prompt templates can be found
+    # Get the project root dynamically from the current test file location
+    original_pdd_path = os.getenv('PDD_PATH')
+    project_root = Path(__file__).parent.parent  # Go up from tests/ to project root
+    os.environ['PDD_PATH'] = str(project_root)
 
     try:
         # Call fix_verification_main directly - with minimal mocking
@@ -1302,3 +1317,6 @@ if __name__ == "__main__":
     finally:
         # Change back to the original directory
         os.chdir(original_cwd)
+        # Restore PDD_PATH if it was set
+        if original_pdd_path is not None:
+            os.environ['PDD_PATH'] = original_pdd_path
