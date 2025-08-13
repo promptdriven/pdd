@@ -1,7 +1,8 @@
 #!/bin/bash
 
 # Set the PDD_PATH environment variable
-export PDD_PATH=/Users/gregtanaka/Documents/pdd
+# Set the PDD_PATH environment variable to the script's directory if not already set
+export PDD_PATH="${PDD_PATH:-$(cd "$(dirname "$0")" && pwd)}"
 
 # Activate conda environment
 source /opt/anaconda3/etc/profile.d/conda.sh
