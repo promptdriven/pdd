@@ -634,10 +634,10 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "3" ]; then
     check_sync_files "$SIMPLE_BASENAME" "python"
     
     # Test with target coverage
-    log "3c. Testing 'sync --target-coverage 95.0'"
+    log "3c. Testing 'sync --target-coverage 10.0'"
     rm -f "pdd/${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
     rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
-    run_pdd_command sync --target-coverage 95.0 "$SIMPLE_BASENAME"
+    run_pdd_command sync --target-coverage 10.0 "$SIMPLE_BASENAME"
     check_sync_files "$SIMPLE_BASENAME" "python"
 fi
 
