@@ -183,3 +183,4 @@ cython_debug/
 # Ignore nested repositories
 edit-file-tool/
 
+staging/
