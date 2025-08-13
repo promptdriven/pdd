@@ -858,6 +858,10 @@ def llm_invoke(
     # --- 3. Iterate Through Candidates and Invoke LLM ---
     last_exception = None
     newly_acquired_keys: Dict[str, bool] = {} # Track keys obtained in this run
+    
+    # Initialize variables for retry section
+    response_format = None
+    time_kwargs = {}
 
     for model_info in candidate_models:
         model_name_litellm = model_info['model']
@@ -970,7 +974,8 @@ def llm_invoke(
                         logger.info(f"[INFO] Requesting structured output (Pydantic: {output_pydantic.__name__}) for {model_name_litellm}")
                     # Pass the Pydantic model directly if supported, else use json_object
                     # LiteLLM handles passing Pydantic models for supported providers
-                    litellm_kwargs["response_format"] = output_pydantic
+                    response_format = output_pydantic
+                    litellm_kwargs["response_format"] = response_format
                     # As a fallback, one could use:
                     # litellm_kwargs["response_format"] = {"type": "json_object"}
                     # And potentially enable client-side validation:
@@ -992,7 +997,9 @@ def llm_invoke(
                             # Currently known: Anthropic uses 'thinking'
                             # Model name comparison is more robust than provider string
                             if provider == 'anthropic': # Check provider column instead of model prefix
-                                litellm_kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
+                                thinking_param = {"type": "enabled", "budget_tokens": budget}
+                                litellm_kwargs["thinking"] = thinking_param
+                                time_kwargs["thinking"] = thinking_param
                                 if verbose:
                                     logger.info(f"[INFO] Requesting Anthropic thinking (budget type) with budget: {budget} tokens for {model_name_litellm}")
                             else:
@@ -1012,6 +1019,7 @@ def llm_invoke(
                         effort = "medium"
                     # Use the common 'reasoning_effort' param LiteLLM provides
                     litellm_kwargs["reasoning_effort"] = effort
+                    time_kwargs["reasoning_effort"] = effort
                     if verbose:
                         logger.info(f"[INFO] Requesting reasoning_effort='{effort}' (effort type) for {model_name_litellm} based on time={time}")
 
@@ -1109,7 +1117,10 @@ def llm_invoke(
                                     retry_response = litellm.completion(
                                         model=model_name_litellm,
                                         messages=retry_messages,
-                                        temperature=temperature
+                                        temperature=temperature,
+                                        response_format=response_format,
+                                        max_completion_tokens=max_tokens,
+                                        **time_kwargs
                                     )
                                     # Re-enable cache - restore original configured cache (restore to original state, even if None)
                                     litellm.cache = configured_cache
