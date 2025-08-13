@@ -6,7 +6,7 @@ import pandas as pd
 import litellm
 import logging # ADDED FOR DETAILED LOGGING
 import importlib.resources
-from litellm.caching.caching import Cache  # Fix for LiteLLM v1.49.3+
+from litellm.caching.caching import Cache  # Fix for LiteLLM v1.75.5+
 
 # --- Configure Standard Python Logging ---
 logger = logging.getLogger("pdd.llm_invoke")
@@ -280,16 +280,22 @@ if GCS_BUCKET_NAME and GCS_HMAC_ACCESS_KEY_ID and GCS_HMAC_SECRET_ACCESS_KEY:
         elif 'AWS_REGION_NAME' in os.environ:
             pass # Or just leave it if the temporary setting wasn't done/needed
 
+# Check if caching is disabled via environment variable
+if os.getenv("LITELLM_CACHE_DISABLE") == "1":
+    logger.info("LiteLLM caching disabled via LITELLM_CACHE_DISABLE=1")
+    litellm.cache = None
+    cache_configured = True
+
 if not cache_configured:
     try:
-        # Try SQLite-based cache as a fallback
+        # Try disk-based cache as a fallback
         sqlite_cache_path = PROJECT_ROOT / "litellm_cache.sqlite"
-        configured_cache = Cache(type="sqlite", cache_path=str(sqlite_cache_path))
+        configured_cache = Cache(type="disk", disk_cache_dir=str(sqlite_cache_path))
         litellm.cache = configured_cache
-        logger.info(f"LiteLLM SQLite cache configured at {sqlite_cache_path}")
+        logger.info(f"LiteLLM disk cache configured at {sqlite_cache_path}")
         cache_configured = True
     except Exception as e2:
-        warnings.warn(f"Failed to configure LiteLLM SQLite cache: {e2}. Caching is disabled.")
+        warnings.warn(f"Failed to configure LiteLLM disk cache: {e2}. Caching is disabled.")
         litellm.cache = None
 
 if not cache_configured:
@@ -852,6 +858,10 @@ def llm_invoke(
     # --- 3. Iterate Through Candidates and Invoke LLM ---
     last_exception = None
     newly_acquired_keys: Dict[str, bool] = {} # Track keys obtained in this run
+    
+    # Initialize variables for retry section
+    response_format = None
+    time_kwargs = {}
 
     for model_info in candidate_models:
         model_name_litellm = model_info['model']
@@ -964,7 +974,8 @@ def llm_invoke(
                         logger.info(f"[INFO] Requesting structured output (Pydantic: {output_pydantic.__name__}) for {model_name_litellm}")
                     # Pass the Pydantic model directly if supported, else use json_object
                     # LiteLLM handles passing Pydantic models for supported providers
-                    litellm_kwargs["response_format"] = output_pydantic
+                    response_format = output_pydantic
+                    litellm_kwargs["response_format"] = response_format
                     # As a fallback, one could use:
                     # litellm_kwargs["response_format"] = {"type": "json_object"}
                     # And potentially enable client-side validation:
@@ -986,7 +997,9 @@ def llm_invoke(
                             # Currently known: Anthropic uses 'thinking'
                             # Model name comparison is more robust than provider string
                             if provider == 'anthropic': # Check provider column instead of model prefix
-                                litellm_kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
+                                thinking_param = {"type": "enabled", "budget_tokens": budget}
+                                litellm_kwargs["thinking"] = thinking_param
+                                time_kwargs["thinking"] = thinking_param
                                 if verbose:
                                     logger.info(f"[INFO] Requesting Anthropic thinking (budget type) with budget: {budget} tokens for {model_name_litellm}")
                             else:
@@ -1006,6 +1019,7 @@ def llm_invoke(
                         effort = "medium"
                     # Use the common 'reasoning_effort' param LiteLLM provides
                     litellm_kwargs["reasoning_effort"] = effort
+                    time_kwargs["reasoning_effort"] = effort
                     if verbose:
                         logger.info(f"[INFO] Requesting reasoning_effort='{effort}' (effort type) for {model_name_litellm} based on time={time}")
 
