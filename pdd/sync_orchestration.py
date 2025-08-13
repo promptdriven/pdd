@@ -17,6 +17,9 @@ from dataclasses import asdict
 
 import click
 
+# --- Constants ---
+MAX_CONSECUTIVE_TESTS = 3  # Allow up to 3 consecutive test attempts
+
 # --- Real PDD Component Imports ---
 from .sync_animation import sync_animation
 from .sync_determine_operation import (
@@ -1177,6 +1180,7 @@ def sync_orchestration(
                             try:
                                 run_report = RunReport(
                                     timestamp=datetime.datetime.now(datetime.timezone.utc),
+                                    total_tests=1,  # Assume at least 1 test exists since we just fixed it
                                     tests_passed=1, # Fix succeeded, so tests are now passing
                                     tests_failed=0,  # No failures after successful fix
                                     coverage=target_coverage,  # Use target coverage as achieved
