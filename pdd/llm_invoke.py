@@ -26,6 +26,16 @@ litellm_logger = logging.getLogger("litellm")
 litellm_log_level = os.getenv("LITELLM_LOG_LEVEL", "WARNING" if PRODUCTION_MODE else "INFO")
 litellm_logger.setLevel(getattr(logging, litellm_log_level, logging.WARNING))
 
+# Ensure LiteLLM drops provider-unsupported params instead of erroring
+# This prevents failures like UnsupportedParamsError for OpenAI gpt-5-* when
+# passing generic params (e.g., reasoning_effort) not accepted by that API path.
+try:
+    _drop_params_env = os.getenv("LITELLM_DROP_PARAMS", "true")
+    litellm.drop_params = str(_drop_params_env).lower() in ("1", "true", "yes", "on")
+except Exception:
+    # Be conservative: default to True even if env parsing fails
+    litellm.drop_params = True
+
 # Add a console handler if none exists
 if not logger.handlers:
     console_handler = logging.StreamHandler()
@@ -71,7 +81,7 @@ import json
 # from rich import print as rprint # Replaced with logger
 from dotenv import load_dotenv
 from pathlib import Path
-from typing import Optional, Dict, List, Any, Type, Union
+from typing import Optional, Dict, List, Any, Type, Union, Tuple
 from pydantic import BaseModel, ValidationError
 import openai  # Import openai for exception handling as LiteLLM maps to its types
 from langchain_core.prompts import PromptTemplate
@@ -333,29 +343,49 @@ def _litellm_success_callback(
         cost_val = litellm.completion_cost(completion_response=completion_response)
         calculated_cost = cost_val if cost_val is not None else 0.0
     except Exception as e1:
-        # Attempt 2: If response object failed (e.g., missing provider in model name),
-        # try again using explicit model from kwargs and tokens from usage.
-        # This is often needed for batch completion items.
+        # Attempt 2: Compute via tokens and model mapping. If LiteLLM mapping is
+        # missing or API differs, fall back to CSV rates in _MODEL_RATE_MAP.
         logger.debug(f"Attempting cost calculation with fallback method: {e1}")
         try:
-            model_name = kwargs.get("model") # Get original model name from input kwargs
+            model_name = kwargs.get("model")
             if model_name and usage:
-                prompt_tokens = getattr(usage, 'prompt_tokens', 0)
-                completion_tokens = getattr(usage, 'completion_tokens', 0)
-                cost_val = litellm.completion_cost(
-                    model=model_name,
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens
-                )
-                calculated_cost = cost_val if cost_val is not None else 0.0
+                in_tok = getattr(usage, 'prompt_tokens', None)
+                out_tok = getattr(usage, 'completion_tokens', None)
+                # Some providers may use 'input_tokens'/'output_tokens'
+                if in_tok is None:
+                    in_tok = getattr(usage, 'input_tokens', 0)
+                if out_tok is None:
+                    out_tok = getattr(usage, 'output_tokens', 0)
+
+                # Try LiteLLM helper (arg names vary across versions)
+                try:
+                    cost_val = litellm.completion_cost(
+                        model=model_name,
+                        prompt_tokens=in_tok,
+                        completion_tokens=out_tok,
+                    )
+                    calculated_cost = cost_val if cost_val is not None else 0.0
+                except TypeError:
+                    # Older/newer versions may require input/output token names
+                    try:
+                        cost_val = litellm.completion_cost(
+                            model=model_name,
+                            input_tokens=in_tok,
+                            output_tokens=out_tok,
+                        )
+                        calculated_cost = cost_val if cost_val is not None else 0.0
+                    except Exception as e3:
+                        # Final fallback: compute using CSV rates
+                        rates = _MODEL_RATE_MAP.get(str(model_name))
+                        if rates is not None:
+                            in_rate, out_rate = rates
+                            calculated_cost = (float(in_tok or 0) * in_rate + float(out_tok or 0) * out_rate) / 1_000_000.0
+                        else:
+                            calculated_cost = 0.0
+                        logger.debug(f"Cost calculation failed with LiteLLM token API; used CSV rates if available. Detail: {e3}")
             else:
-                # If we can't get model name or usage, fallback to 0
                 calculated_cost = 0.0
-                # Optional: Log the original error e1 if needed
-                # logger.warning(f"[Callback WARN] Failed to calculate cost with response object ({e1}) and fallback failed.")
         except Exception as e2:
-            # Optional: Log secondary error e2 if needed
-            # logger.warning(f"[Callback WARN] Failed to calculate cost with fallback method: {e2}")
             calculated_cost = 0.0 # Default to 0 on any error
             logger.debug(f"Cost calculation failed with fallback method: {e2}")
 
@@ -372,6 +402,23 @@ def _litellm_success_callback(
 
 # Register the callback with LiteLLM
 litellm.success_callback = [_litellm_success_callback]
+
+# --- Cost Mapping Support (CSV Rates) ---
+# Populate from CSV inside llm_invoke; used by callback fallback
+_MODEL_RATE_MAP: Dict[str, Tuple[float, float]] = {}
+
+def _set_model_rate_map(df: pd.DataFrame) -> None:
+    global _MODEL_RATE_MAP
+    try:
+        _MODEL_RATE_MAP = {
+            str(row['model']): (
+                float(row['input']) if pd.notna(row['input']) else 0.0,
+                float(row['output']) if pd.notna(row['output']) else 0.0,
+            )
+            for _, row in df.iterrows()
+        }
+    except Exception:
+        _MODEL_RATE_MAP = {}
 
 # --- Helper Functions ---
 
@@ -716,6 +763,49 @@ def _format_messages(prompt: str, input_data: Union[Dict[str, Any], List[Dict[st
     except Exception as e:
         raise ValueError(f"Error formatting prompt: {e}") from e
 
+# --- JSON Extraction Helpers ---
+import re
+
+def _extract_fenced_json_block(text: str) -> Optional[str]:
+    try:
+        m = re.search(r"```json\s*(\{[\s\S]*?\})\s*```", text, flags=re.IGNORECASE)
+        if m:
+            return m.group(1)
+        return None
+    except Exception:
+        return None
+
+def _extract_balanced_json_objects(text: str) -> List[str]:
+    results: List[str] = []
+    brace_stack = 0
+    start_idx = -1
+    in_string = False
+    escape = False
+    for i, ch in enumerate(text):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        else:
+            if ch == '"':
+                in_string = True
+                continue
+            if ch == '{':
+                if brace_stack == 0:
+                    start_idx = i
+                brace_stack += 1
+            elif ch == '}':
+                if brace_stack > 0:
+                    brace_stack -= 1
+                    if brace_stack == 0 and start_idx != -1:
+                        results.append(text[start_idx:i+1])
+                        start_idx = -1
+    return results
+
 # --- Main Function ---
 
 def llm_invoke(
@@ -862,6 +952,12 @@ def llm_invoke(
     # Initialize variables for retry section
     response_format = None
     time_kwargs = {}
+
+    # Update global rate map for callback cost fallback
+    try:
+        _set_model_rate_map(model_df)
+    except Exception:
+        pass
 
     for model_info in candidate_models:
         model_name_litellm = model_info['model']
@@ -1017,11 +1113,32 @@ def llm_invoke(
                         effort = "high"
                     elif time > 0.3:
                         effort = "medium"
-                    # Use the common 'reasoning_effort' param LiteLLM provides
-                    litellm_kwargs["reasoning_effort"] = effort
-                    time_kwargs["reasoning_effort"] = effort
-                    if verbose:
-                        logger.info(f"[INFO] Requesting reasoning_effort='{effort}' (effort type) for {model_name_litellm} based on time={time}")
+
+                    # Map effort parameter per-provider/model family
+                    model_lower = str(model_name_litellm).lower()
+                    provider_lower = str(provider).lower()
+
+                    if provider_lower == 'openai' and model_lower.startswith('gpt-5'):
+                        # OpenAI 5-series uses Responses API with nested 'reasoning'
+                        reasoning_obj = {"effort": effort, "summary": "auto"}
+                        litellm_kwargs["reasoning"] = reasoning_obj
+                        time_kwargs["reasoning"] = reasoning_obj
+                        if verbose:
+                            logger.info(f"[INFO] Requesting OpenAI reasoning.effort='{effort}' for {model_name_litellm} (Responses API)")
+
+                    elif provider_lower == 'openai' and model_lower.startswith('o') and 'mini' not in model_lower:
+                        # Historical o* models may use LiteLLM's generic reasoning_effort param
+                        litellm_kwargs["reasoning_effort"] = effort
+                        time_kwargs["reasoning_effort"] = effort
+                        if verbose:
+                            logger.info(f"[INFO] Requesting reasoning_effort='{effort}' for {model_name_litellm}")
+
+                    else:
+                        # Fallback to LiteLLM generic param when supported by provider adapter
+                        litellm_kwargs["reasoning_effort"] = effort
+                        time_kwargs["reasoning_effort"] = effort
+                        if verbose:
+                            logger.info(f"[INFO] Requesting generic reasoning_effort='{effort}' for {model_name_litellm}")
 
                 elif reasoning_type == 'none':
                     if verbose:
@@ -1052,6 +1169,136 @@ def llm_invoke(
                 else:
                     logger.debug("NOT ENABLING CACHING: litellm.cache is None at call time")
 
+
+                # Route OpenAI gpt-5* models through Responses API to support 'reasoning'
+                model_lower_for_call = str(model_name_litellm).lower()
+                provider_lower_for_call = str(provider).lower()
+
+                if (
+                    not use_batch_mode
+                    and provider_lower_for_call == 'openai'
+                    and model_lower_for_call.startswith('gpt-5')
+                ):
+                    if verbose:
+                        logger.info(f"[INFO] Calling OpenAI Responses API for {model_name_litellm}...")
+                    try:
+                        # Build input text from messages
+                        if isinstance(formatted_messages, list) and formatted_messages and isinstance(formatted_messages[0], dict):
+                            input_text = "\n\n".join(f"{m.get('role','user')}: {m.get('content','')}" for m in formatted_messages)
+                        else:
+                            # Fallback: string cast
+                            input_text = str(formatted_messages)
+
+                        # Derive effort mapping already computed in time_kwargs
+                        reasoning_param = time_kwargs.get("reasoning")
+
+                        # Optional text settings; keep simple
+                        text_block = {"format": {"type": "text"}}
+
+                        # If structured output requested, attempt JSON schema via Pydantic
+                        responses_kwargs = {
+                            "model": model_name_litellm,
+                            "input": input_text,
+                            "temperature": temperature,
+                            "text": text_block,
+                        }
+                        if reasoning_param is not None:
+                            responses_kwargs["reasoning"] = reasoning_param
+
+                        if output_pydantic:
+                            try:
+                                schema = output_pydantic.model_json_schema()
+                                responses_kwargs["response_format"] = {
+                                    "type": "json_schema",
+                                    "json_schema": {
+                                        "name": output_pydantic.__name__,
+                                        "schema": schema,
+                                        "strict": True,
+                                    },
+                                }
+                                # When enforcing JSON schema, omit text formatting
+                                responses_kwargs.pop("text", None)
+                            except Exception as schema_e:
+                                logger.warning(f"[WARN] Failed to derive JSON schema from Pydantic: {schema_e}. Proceeding without structured response_format.")
+
+                        # Initialize OpenAI client with explicit key if provided
+                        try:
+                            from openai import OpenAI as _OpenAIClient
+                        except Exception:
+                            _OpenAIClient = None
+                        if _OpenAIClient is None:
+                            raise RuntimeError("OpenAI SDK not available to call Responses API.")
+
+                        api_key_to_use = litellm_kwargs.get("api_key") or os.getenv("OPENAI_API_KEY")
+                        client = _OpenAIClient(api_key=api_key_to_use) if api_key_to_use else _OpenAIClient()
+
+                        # Make the Responses API call, with graceful fallback if SDK
+                        # doesn't support certain newer kwargs (e.g., response_format)
+                        try:
+                            resp = client.responses.create(**responses_kwargs)
+                        except TypeError as te:
+                            msg = str(te)
+                            if 'response_format' in responses_kwargs and ('unexpected keyword argument' in msg or 'got an unexpected keyword argument' in msg):
+                                logger.warning("[WARN] OpenAI SDK doesn't support response_format; retrying without it.")
+                                responses_kwargs.pop('response_format', None)
+                                resp = client.responses.create(**responses_kwargs)
+                            else:
+                                raise
+
+                        # Extract text result
+                        result_text = getattr(resp, "output_text", None)
+                        if result_text is None:
+                            try:
+                                # Fallback parse
+                                outputs = getattr(resp, "output", []) or getattr(resp, "outputs", [])
+                                if outputs:
+                                    first = outputs[0]
+                                    content = getattr(first, "content", [])
+                                    if content and hasattr(content[0], "text"):
+                                        result_text = content[0].text
+                            except Exception:
+                                result_text = None
+
+                        # Calculate cost using usage + CSV rates
+                        usage = getattr(resp, "usage", None)
+                        total_cost = 0.0
+                        if usage is not None:
+                            in_tok = getattr(usage, "input_tokens", 0) or 0
+                            out_tok = getattr(usage, "output_tokens", 0) or 0
+                            in_rate = model_info.get('input', 0.0) or 0.0
+                            out_rate = model_info.get('output', 0.0) or 0.0
+                            total_cost = (in_tok * in_rate + out_tok * out_rate) / 1_000_000.0
+
+                        final_result = None
+                        if output_pydantic and result_text:
+                            try:
+                                final_result = output_pydantic.model_validate_json(result_text)
+                            except Exception as e:
+                                logger.error(f"[ERROR] Pydantic parse failed on Responses output: {e}")
+                                final_result = result_text
+                        else:
+                            final_result = result_text
+
+                        if verbose:
+                            logger.info(f"[RESULT] Model Used: {model_name_litellm}")
+                            logger.info(f"[RESULT] Total Cost (estimated): ${total_cost:.6g}")
+
+                        return {
+                            'result': final_result,
+                            'cost': total_cost,
+                            'model_name': model_name_litellm,
+                            'thinking_output': None,
+                        }
+                    except Exception as e:
+                        last_exception = e
+                        logger.error(f"[ERROR] OpenAI Responses call failed for {model_name_litellm}: {e}")
+                        # Remove 'reasoning' key to avoid OpenAI Chat API unknown param errors
+                        if "reasoning" in litellm_kwargs:
+                            try:
+                                litellm_kwargs.pop("reasoning", None)
+                            except Exception:
+                                pass
+                        # Fall through to LiteLLM path as a fallback
 
                 if use_batch_mode:
                     if verbose:
@@ -1163,26 +1410,39 @@ def llm_invoke(
                                 elif isinstance(raw_result, str):
                                     json_string_to_parse = raw_result # Start with the raw string
                                     try:
-                                        # Look for first { and last }
-                                        start_brace = json_string_to_parse.find('{')
-                                        end_brace = json_string_to_parse.rfind('}')
-                                        if start_brace != -1 and end_brace != -1 and end_brace > start_brace:
-                                            potential_json = json_string_to_parse[start_brace:end_brace+1]
-                                            # Basic check if it looks like JSON
-                                            if potential_json.strip().startswith('{') and potential_json.strip().endswith('}'):
-                                                if verbose:
-                                                    logger.debug(f"[DEBUG] Attempting to parse extracted JSON block: '{potential_json}'")
-                                                parsed_result = output_pydantic.model_validate_json(potential_json)
-                                            else:
-                                                # If block extraction fails, try cleaning markdown next
-                                                raise ValueError("Extracted block doesn't look like JSON")
+                                        # 1) Prefer fenced ```json blocks
+                                        fenced = _extract_fenced_json_block(raw_result)
+                                        candidates: List[str] = []
+                                        if fenced:
+                                            candidates.append(fenced)
                                         else:
-                                             # If no braces found, try cleaning markdown next
-                                            raise ValueError("Could not find enclosing {}")
+                                            # 2) Fall back to scanning for balanced JSON objects
+                                            candidates.extend(_extract_balanced_json_objects(raw_result))
+
+                                        if not candidates:
+                                            raise ValueError("No JSON-like content found")
+
+                                        parse_err: Optional[Exception] = None
+                                        for cand in candidates:
+                                            try:
+                                                if verbose:
+                                                    logger.debug(f"[DEBUG] Attempting to parse candidate JSON block: {cand}")
+                                                parsed_result = output_pydantic.model_validate_json(cand)
+                                                json_string_to_parse = cand
+                                                parse_err = None
+                                                break
+                                            except (json.JSONDecodeError, ValidationError, ValueError) as pe:
+                                                parse_err = pe
+
+                                        if parsed_result is None:
+                                            # If none of the candidates parsed, raise last error
+                                            if parse_err is not None:
+                                                raise parse_err
+                                            raise ValueError("Unable to parse any JSON candidates")
                                     except (json.JSONDecodeError, ValidationError, ValueError) as extraction_error:
                                         if verbose:
-                                            logger.debug(f"[DEBUG] JSON block extraction/validation failed ('{extraction_error}'). Trying markdown cleaning.")
-                                        # Fallback: Clean markdown fences and retry JSON validation
+                                            logger.debug(f"[DEBUG] JSON extraction/validation failed ('{extraction_error}'). Trying fence cleaning.")
+                                        # Last resort: strip any leading/trailing code fences and retry
                                         cleaned_result_str = raw_result.strip()
                                         if cleaned_result_str.startswith("```json"):
                                             cleaned_result_str = cleaned_result_str[7:]
@@ -1191,15 +1451,13 @@ def llm_invoke(
                                         if cleaned_result_str.endswith("```"):
                                             cleaned_result_str = cleaned_result_str[:-3]
                                         cleaned_result_str = cleaned_result_str.strip()
-                                        # Check again if it looks like JSON before parsing
                                         if cleaned_result_str.startswith('{') and cleaned_result_str.endswith('}'):
                                             if verbose:
-                                                logger.debug(f"[DEBUG] Attempting parse after cleaning markdown fences. Cleaned string: '{cleaned_result_str}'")
-                                            json_string_to_parse = cleaned_result_str # Update string for error reporting
+                                                logger.debug(f"[DEBUG] Attempting parse after generic fence cleaning. Cleaned string: '{cleaned_result_str}'")
+                                            json_string_to_parse = cleaned_result_str
                                             parsed_result = output_pydantic.model_validate_json(json_string_to_parse)
                                         else:
-                                            # If still doesn't look like JSON, raise error
-                                            raise ValueError("Content after cleaning markdown doesn't look like JSON")
+                                            raise ValueError("Content after cleaning doesn't look like JSON")
 
 
                                 # Check if any parsing attempt succeeded
