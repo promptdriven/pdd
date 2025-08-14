@@ -1,0 +1,17 @@
+..................................                                       [100%]
+=============================== warnings summary ===============================
+../../../opt/anaconda3/lib/python3.9/site-packages/_pytest/config/__init__.py:1441
+  /Users/gregtanaka/opt/anaconda3/lib/python3.9/site-packages/_pytest/config/__init__.py:1441: PytestConfigWarning: Unknown config option: asyncio_default_fixture_loop_scope
+  
+    self._warn_or_fail_if_strict(f"Unknown config option: {key}\n")
+
+../../../opt/anaconda3/lib/python3.9/site-packages/pandas/core/computation/expressions.py:21
+  /Users/gregtanaka/opt/anaconda3/lib/python3.9/site-packages/pandas/core/computation/expressions.py:21: UserWarning: Pandas requires version '2.8.4' or newer of 'numexpr' (version '2.8.3' currently installed).
+    from pandas.core.computation.check import NUMEXPR_INSTALLED
+
+../../../opt/anaconda3/lib/python3.9/site-packages/pandas/core/arrays/masked.py:60
+  /Users/gregtanaka/opt/anaconda3/lib/python3.9/site-packages/pandas/core/arrays/masked.py:60: UserWarning: Pandas requires version '1.3.6' or newer of 'bottleneck' (version '1.3.5' currently installed).
+    from pandas.core import (
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+34 passed, 3 warnings in 0.75s

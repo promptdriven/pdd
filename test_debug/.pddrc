@@ -1,0 +1,7 @@
+version: "1.0"
+contexts:
+  regression:
+    paths: ["**"]
+    defaults:
+      test_output_path: "tests/"
+      example_output_path: "examples/"
