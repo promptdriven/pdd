@@ -1,4 +1,5 @@
 from typing import Tuple
+import logging
 from rich.console import Console
 from rich.syntax import Syntax
 from pydantic import BaseModel, Field
@@ -9,6 +10,10 @@ from .unfinished_prompt import unfinished_prompt
 from . import EXTRACTION_STRENGTH, DEFAULT_TIME
 
 console = Console()
+logger = logging.getLogger(__name__)
+
+# Maximum number of generation loops to prevent infinite loops
+MAX_GENERATION_LOOPS = 100
 
 class TrimResultsStartOutput(BaseModel):
     explanation: str = Field(description="The explanation of how you determined what to cut out")
@@ -84,10 +89,16 @@ def continue_generation(
         code_block = trim_start_response['result'].code_block
 
         # Step 4: Continue generation loop
-        while True:
+        while loop_count < MAX_GENERATION_LOOPS:
             loop_count += 1
             if verbose:
                 console.print(f"[cyan]Generation loop {loop_count}[/cyan]")
+            
+            # Check for maximum loops reached
+            if loop_count >= MAX_GENERATION_LOOPS:
+                logger.warning(f"Reached maximum generation loops ({MAX_GENERATION_LOOPS}), terminating")
+                console.print(f"[yellow]Warning: Reached maximum generation loops ({MAX_GENERATION_LOOPS}), terminating[/yellow]")
+                break
 
             # Generate continuation
             continue_response = llm_invoke(
@@ -119,6 +130,7 @@ def continue_generation(
 
             if not is_finished:
                 code_block += continue_result
+                # Continue to next iteration
             else:
                 # Trim and append final continuation
                 trim_response = llm_invoke(
