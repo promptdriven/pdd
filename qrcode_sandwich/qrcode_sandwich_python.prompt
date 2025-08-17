@@ -1,0 +1,28 @@
+<note>
+This prompt is designed to guide code generation for a ControlNet-based image synthesis pipeline. It instructs the model to generate Python code that overlays a QR code pointing to "https://PromptDriven.ai" into a realistic sandwich image using ControlNet QR conditioning. Do not install `xformers`, as it is not compatible with macOS.
+</note>
+
+<example_qr_generator>
+<web>https://huggingface.co/DionTimmer/controlnet_qrcode-control_v1p_sd15</web>
+</example_qr_generator>
+
+Use Python to generate an image where a QR code linking to https://PromptDriven.ai is visually embedded into a photorealistic sandwich. The QR code should be integrated into the textures of the sandwich bread and fillings, such that it's still scannable but blends organically with the image. Use a random seed for generating the image.
+
+Use the ControlNet model hosted at https://huggingface.co/DionTimmer/controlnet_qrcode-control_v1p_sd15 to condition image generation based on the QR code. 
+
+Use the scraped code examples and usage snippets from the web content to structure the model loading and image generation. The QR code should link to https://PromptDriven.ai and be clearly visible.
+
+
+The text prompt for the image should be:
+"A delicious stacked sandwich with embedded QR code textures in bread and fillings. Use the face of the sandwich and blend the qr code into the toppings of the sandwich. Have the sandwich use darker and lighter colors to make the QR code stand out."
+
+Include logic to:
+- Generate or load the QR code.
+- Resize it to match model input (typically 512x512).
+- Use it as a conditioning input for the ControlNet pipeline.
+- Generate and save the resulting image.
+
+Ensure compatibility with macOS by excluding `xformers` from the installation or code.
+On Apple Silicon (M1/M2) use the Metal Performance Shaders (MPS) backend instead of CUDA.  
+Do not call `enable_model_cpu_offload()`. Instead, automatically detect and set the device with:  
+`device = "mps" if torch.backends.mps.is_available() else "cpu"; pipe = pipe.to(device)`
