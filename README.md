@@ -14,6 +14,36 @@ For a detailed explanation of the concepts, architecture, and benefits of Prompt
 
 ## Installation
 
+### Prerequisites for macOS
+
+On macOS, you'll need to install some prerequisites before installing PDD:
+
+1. **Install Xcode Command Line Tools** (required for Python compilation):
+   ```bash
+   xcode-select --install
+   ```
+
+2. **Install Homebrew** (recommended package manager for macOS):
+   ```bash
+   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+   ```
+   
+   After installation, add Homebrew to your PATH:
+   ```bash
+   echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile && eval "$(/opt/homebrew/bin/brew shellenv)"
+   ```
+
+3. **Install Python** (if not already installed):
+   ```bash
+   # Check if Python is installed
+   python3 --version
+   
+   # If Python is not found, install it via Homebrew
+   brew install python
+   ```
+   
+   **Note**: macOS comes with Python 2.7 by default (deprecated), but PDD requires Python 3.8 or higher. The `brew install python` command installs the latest Python 3 version.
+
 ### Recommended Method: uv
 
 We recommend installing PDD using the [uv package manager](https://github.com/astral-sh/uv) for better dependency management and automatic environment configuration:
@@ -159,6 +189,14 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
    # Install with user permissions
    pip install --user pdd-cli
    ```
+
+3. **macOS-specific issues**
+   - **Xcode Command Line Tools not found**: Run `xcode-select --install` to install the required development tools
+   - **Homebrew not found**: Install Homebrew using the command in the prerequisites section above
+   - **Python not found or wrong version**: Install Python 3 via Homebrew: `brew install python`
+   - **Permission denied during compilation**: Ensure Xcode Command Line Tools are properly installed and you have write permissions to the installation directory
+   - **uv installation fails**: Try installing uv through Homebrew: `brew install uv`
+   - **Python version conflicts**: If you have multiple Python versions, ensure `python3` points to Python 3.8+: `which python3 && python3 --version`
 
 ## Version
 
