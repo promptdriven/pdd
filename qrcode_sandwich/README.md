@@ -10,7 +10,7 @@ This PDD example generates Python code that creates QR codes embedded in realist
 
 Here's what the generated code produces - a QR code that looks like it's part of a sandwich:
 
-![QR Code Sandwich](sandwich_with_qr_code.png)
+![QR Code Sandwich](qrcode_sandwich.png)
 
 ---
 
