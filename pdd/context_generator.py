@@ -95,6 +95,7 @@ def context_generator(
                 strength=0.5,
                 temperature=temperature,
                 time=time,
+                language=language,
                 verbose=verbose
             )
         except Exception as e:
@@ -112,6 +113,7 @@ def context_generator(
                 strength=strength,
                 temperature=temperature,
                 time=time,
+                language=language,
                 verbose=verbose
             )
             total_cost = llm_response['cost'] + unfinished_cost + continue_cost
