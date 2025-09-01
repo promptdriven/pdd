@@ -60,7 +60,7 @@
    4. **Analyze Conflicts**:
       - Call the `conflicts_in_prompts` function with the contents of the prompt files, along with the necessary parameters (e.g., strength, temperature, time, verbose).
       - Capture the returned conflicts list, total cost, and model name.
-      - Important: Use `ctx.obj.get('strength', 0.9)`, `ctx.obj.get('temperature', 0)`, and `ctx.obj.get('time', DEFAULT_TIME)` to get these values.
+      - Important: Use `ctx.obj.get('strength', DEFAULT_STRENGTH)`, `ctx.obj.get('temperature', 0)`, and `ctx.obj.get('time', DEFAULT_TIME)` to get these values.
       - Pass the verbose parameter to control detailed output during analysis.
 
    5. **Replace prompt1 and prompt2 with the actual file paths**:

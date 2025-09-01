@@ -23,6 +23,7 @@ from unittest.mock import patch, MagicMock
 # Assuming 'pdd' package is in PYTHONPATH or installed.
 # The 'postprocess' module is expected to be at pdd/postprocess.py
 from pdd.postprocess import postprocess, ExtractedCode # ExtractedCode is needed for the mock
+from pdd import DEFAULT_STRENGTH
 
 def main():
     """
@@ -92,11 +93,11 @@ But we are only interested in Python.
     # This mode uses an LLM via `llm_invoke` to perform a more sophisticated extraction.
     # It requires a prompt template (`extract_code_LLM.prompt`).
     # For this example, `load_prompt_template` and `llm_invoke` are mocked.
-    print("\n[bold cyan]Scenario 2: LLM-based Extraction (strength = 0.9)[/bold cyan]")
+    print(f"\n[bold cyan]Scenario 2: LLM-based Extraction (strength = {DEFAULT_STRENGTH})[/bold cyan]")
     print("Demonstrates extracting code using an LLM (mocked).")
     print(f"  Input LLM Output: (same as above)")
     print(f"  Target Language: '{target_language}'")
-    print(f"  Strength: 0.9 (activates LLM-based extraction)")
+    print(f"  Strength: {DEFAULT_STRENGTH} (activates LLM-based extraction)")
     print(f"  Temperature: 0.0 (LLM creativity, 0-1 scale)")
     print(f"  Time: 0.5 (LLM thinking effort, 0-1 scale, influences model choice/cost)")
     print(f"  Verbose: True\n")
@@ -137,7 +138,7 @@ print(result)
             extracted_code_llm, cost_llm, model_llm = postprocess(
                 llm_output=llm_output_text_with_code,
                 language=target_language,
-                strength=0.9,
+                strength=DEFAULT_STRENGTH,
                 temperature=0.0,
                 time=0.5,
                 verbose=True
@@ -161,7 +162,7 @@ print(result)
                 "llm_output": llm_output_text_with_code,
                 "language": target_language
             }
-            assert call_args_to_llm_invoke['strength'] == 0.9
+            assert call_args_to_llm_invoke['strength'] == DEFAULT_STRENGTH
             assert call_args_to_llm_invoke['temperature'] == 0.0
             assert call_args_to_llm_invoke['time'] == 0.5
             assert call_args_to_llm_invoke['verbose'] is True

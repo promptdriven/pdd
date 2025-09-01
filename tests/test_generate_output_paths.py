@@ -2,6 +2,7 @@ import os
 import sys
 import pytest
 from pathlib import Path
+from pdd import DEFAULT_STRENGTH
 
 # Assume the code under test is in pdd/generate_output_paths.py
 # Adjust the import path if necessary based on your project structure
@@ -426,7 +427,7 @@ def test_sync_orchestration_example_scenario():
         'example_output_path': 'examples/',
         'default_language': 'python',
         'target_coverage': 90.0,
-        'strength': 0.9,
+        'strength': DEFAULT_STRENGTH,
         'temperature': 0.0,
         'budget': 10.0,
         'max_attempts': 3
