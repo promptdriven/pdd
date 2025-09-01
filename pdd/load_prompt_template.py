@@ -23,18 +23,39 @@ def load_prompt_template(prompt_name: str) -> Optional[str]:
         print_formatted("[red]Unexpected error loading prompt template[/red]")
         return None
 
-    # Step 1: Get project path from environment variable
-    project_path = os.getenv('PDD_PATH')
-    if not project_path:
-        print_formatted("[red]PDD_PATH environment variable is not set[/red]")
-        return None
+    # Step 1: Get project path from environment variable (preferred),
+    # else fall back to auto-detect based on this module's location or CWD.
+    project_path_env = os.getenv('PDD_PATH')
+    candidate_paths = []
+    if project_path_env:
+        candidate_paths.append(Path(project_path_env))
 
-    # Construct the full path to the prompt file
-    prompt_path = Path(project_path) / 'prompts' / f"{prompt_name}.prompt"
+    # Fallback 1: repository root inferred from this module (pdd/ => repo root)
+    try:
+        module_root = Path(__file__).resolve().parent  # pdd/
+        repo_root = module_root.parent                 # repo root
+        candidate_paths.append(repo_root)
+    except Exception:
+        pass
+
+    # Fallback 2: current working directory
+    candidate_paths.append(Path.cwd())
+
+    # Build candidate prompt paths to try in order
+    prompt_candidates = [cp / 'prompts' / f"{prompt_name}.prompt" for cp in candidate_paths]
 
     # Step 2: Load and return the prompt template
-    if not prompt_path.exists():
-        print_formatted(f"[red]Prompt file not found: {prompt_path}[/red]")
+    prompt_path: Optional[Path] = None
+    for candidate in prompt_candidates:
+        if candidate.exists():
+            prompt_path = candidate
+            break
+
+    if prompt_path is None:
+        tried = "\n".join(str(c) for c in prompt_candidates)
+        print_formatted(
+            f"[red]Prompt file not found in any candidate locations for '{prompt_name}'. Tried:\n{tried}[/red]"
+        )
         return None
 
     try:

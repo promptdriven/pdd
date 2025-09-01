@@ -14,7 +14,7 @@ DEFAULT_TEMPERATURE = 0.0
 DEFAULT_TIME = 0.25
 
 # Define constants used across the package
-DEFAULT_LLM_MODEL = "gpt-5-nano"
+DEFAULT_LLM_MODEL = "gpt-5-mini"
 # When going to production, set the following constants:
 # REACT_APP_FIREBASE_API_KEY
 # GITHUB_CLIENT_ID
