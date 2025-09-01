@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, Optional
 import logging
 from rich.console import Console
 from rich.syntax import Syntax
@@ -29,6 +29,7 @@ def continue_generation(
     strength: float,
     temperature: float,
     time: float = DEFAULT_TIME,
+    language: Optional[str] = None,
     verbose: bool = False
 ) -> Tuple[str, float, str]:
     """
@@ -124,6 +125,7 @@ def continue_generation(
                 strength=0.5,
                 temperature=0,
                 time=time,
+                language=language,
                 verbose=verbose
             )
             total_cost += check_cost
