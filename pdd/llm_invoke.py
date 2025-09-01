@@ -601,11 +601,26 @@ def _select_model_candidates(
         # Try finding base model in the *original* df in case it was filtered out
         original_base = model_df[model_df['model'] == base_model_name]
         if not original_base.empty:
-             raise ValueError(f"Base model '{base_model_name}' found in CSV but requires API key '{original_base.iloc[0]['api_key']}' which might be missing or invalid configuration.")
-        else:
-             raise ValueError(f"Specified base model '{base_model_name}' not found in the LLM model CSV.")
-
-    base_model = base_model_row.iloc[0]
+            # Base exists but may be misconfigured (e.g., missing API key). Keep erroring loudly.
+            raise ValueError(
+                f"Base model '{base_model_name}' found in CSV but requires API key '{original_base.iloc[0]['api_key']}' which might be missing or invalid configuration."
+            )
+        # Option A': Soft fallback – choose a reasonable surrogate base and continue
+        # Strategy (simplified and deterministic): pick the first available model
+        # from the CSV as the surrogate base. This mirrors typical CSV ordering
+        # expectations and keeps behavior predictable across environments.
+        try:
+            base_model = available_df.iloc[0]
+            logger.warning(
+                f"Base model '{base_model_name}' not found in CSV. Falling back to surrogate base '{base_model['model']}' (Option A')."
+            )
+        except Exception:
+            # If any unexpected error occurs during fallback, raise a clear error
+            raise ValueError(
+                f"Specified base model '{base_model_name}' not found and fallback selection failed. Check your LLM model CSV."
+            )
+    else:
+        base_model = base_model_row.iloc[0]
 
     # 3. Determine Target and Sort
     candidates = []
@@ -616,9 +631,10 @@ def _select_model_candidates(
         # Sort remaining by ELO descending as fallback
         available_df['sort_metric'] = -available_df['coding_arena_elo'] # Negative for descending sort
         candidates = available_df.sort_values(by='sort_metric').to_dict('records')
-        # Ensure base model is first if it exists
-        if any(c['model'] == base_model_name for c in candidates):
-            candidates.sort(key=lambda x: 0 if x['model'] == base_model_name else 1)
+        # Ensure effective base model is first if it exists (supports surrogate base)
+        effective_base_name = str(base_model['model']) if isinstance(base_model, pd.Series) else base_model_name
+        if any(c['model'] == effective_base_name for c in candidates):
+            candidates.sort(key=lambda x: 0 if x['model'] == effective_base_name else 1)
         target_metric_value = f"Base Model ELO: {base_model['coding_arena_elo']}"
 
     elif strength < 0.5:
