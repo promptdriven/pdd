@@ -43,6 +43,9 @@ help:
 	@echo "  make staging                 - Copy files to staging"
 	@echo "  make production              - Copy files from staging to pdd"
 	@echo "  make update-extension        - Update VS Code extension"
+ 
+# Public repo paths (override via env if needed)
+PUBLIC_PDD_REPO_DIR ?= staging/public/pdd
 
 # Python files
 PY_PROMPTS := $(wildcard $(PROMPTS_DIR)/*_python.prompt)
@@ -414,14 +417,16 @@ release:
 	@python -m commitizen bump --increment PATCH
 	@echo "Building and uploading package"
 	@$(MAKE) build
-	@echo "Copying public README.md to project root"
-	@cp ./README.md staging/public/pdd/README.md
+	@echo "Ensuring public repo directory exists: $(PUBLIC_PDD_REPO_DIR)"
+	@mkdir -p $(PUBLIC_PDD_REPO_DIR)
+	@echo "Copying README to public repo"
+	@cp ./README.md $(PUBLIC_PDD_REPO_DIR)/README.md
 	@echo "Copying examples to public repo"
-	@cp -r ./examples staging/public/pdd/
-	@echo "Copying whitepaper and its assets to public repo"
-	@mkdir -p staging/public/pdd/docs/whitepaper_with_benchmarks/analysis_report
-	@mkdir -p staging/public/pdd/docs/whitepaper_with_benchmarks/creation_report
-	@cp "docs/whitepaper_with_benchmarks/whitepaper_w_benchmarks.md" staging/public/pdd/docs/whitepaper_with_benchmarks/
+	@cp -r ./examples $(PUBLIC_PDD_REPO_DIR)/
+	@echo "Copying specific whitepaper files to public repo"
+	@mkdir -p $(PUBLIC_PDD_REPO_DIR)/docs/whitepaper_with_benchmarks/analysis_report
+	@mkdir -p $(PUBLIC_PDD_REPO_DIR)/docs/whitepaper_with_benchmarks/creation_report
+	@cp "docs/whitepaper_with_benchmarks/whitepaper_w_benchmarks.md" $(PUBLIC_PDD_REPO_DIR)/docs/whitepaper_with_benchmarks/
 	@cp \
 		docs/whitepaper_with_benchmarks/analysis_report/overall_success_rate.png \
 		docs/whitepaper_with_benchmarks/analysis_report/overall_avg_execution_time.png \
@@ -433,17 +438,45 @@ release:
 		docs/whitepaper_with_benchmarks/analysis_report/success_rate_by_edit_type.png \
 		docs/whitepaper_with_benchmarks/analysis_report/avg_api_cost_by_edit_type.png \
 		docs/whitepaper_with_benchmarks/analysis_report/avg_execution_time_by_edit_type.png \
-		staging/public/pdd/docs/whitepaper_with_benchmarks/analysis_report/
+		$(PUBLIC_PDD_REPO_DIR)/docs/whitepaper_with_benchmarks/analysis_report/
 	@cp \
 		docs/whitepaper_with_benchmarks/creation_report/total_cost_comparison.png \
 		docs/whitepaper_with_benchmarks/creation_report/total_time_comparison.png \
 		docs/whitepaper_with_benchmarks/creation_report/pdd_avg_cost_per_module_dist.png \
 		docs/whitepaper_with_benchmarks/creation_report/claude_cost_per_run_dist.png \
-		staging/public/pdd/docs/whitepaper_with_benchmarks/creation_report/
+		$(PUBLIC_PDD_REPO_DIR)/docs/whitepaper_with_benchmarks/creation_report/
 	@echo "Copying VS Code extension to public repo"
-	@mkdir -p staging/public/pdd/utils
-	@cp -r ./utils/vscode_prompt staging/public/pdd/utils/
-	@cd staging/public/pdd/ && git add . && git commit -m "Bump version" && git push
+	@mkdir -p $(PUBLIC_PDD_REPO_DIR)/utils
+	@cp -r ./utils/vscode_prompt $(PUBLIC_PDD_REPO_DIR)/utils/
+	@echo "Copying package-data files defined in pyproject.toml to public repo"
+	@mkdir -p $(PUBLIC_PDD_REPO_DIR)/pdd
+	@PUBLIC_DIR=$(PUBLIC_PDD_REPO_DIR) conda run -n pdd --no-capture-output python - <<'PY'
+import os, glob, shutil
+import tomllib
+
+project_root = os.getcwd()
+public_dir = os.environ["PUBLIC_DIR"]
+
+with open(os.path.join(project_root, 'pyproject.toml'), 'rb') as f:
+    cfg = tomllib.load(f)
+
+patterns = cfg.get('tool',{}).get('setuptools',{}).get('package-data',{}).get('pdd', [])
+base = 'pdd'
+
+copied = 0
+for pattern in patterns:
+    for src in glob.glob(os.path.join(base, pattern)):
+        rel = os.path.relpath(src, base)
+        dest = os.path.join(public_dir, 'pdd', rel)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        shutil.copy2(src, dest)
+        print(f"  Copied {src} -> {dest}")
+        copied += 1
+
+print(f"Total files copied from pyproject package-data: {copied}")
+PY
+	@echo "Committing and pushing updates in public repo"
+	@cd $(PUBLIC_PDD_REPO_DIR) && git add . && git commit -m "Bump version" && git push || true
 	
 analysis:
 	@echo "Running regression analysis"

@@ -6,10 +6,10 @@
     Inputs: 
         'prompt' - A string containing the prompt that generated the code file to be processed.
         'code' - A string containing the code to generate a unit test from.
-        'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
-        'temperature' - A float that is the temperature of the LLM model to use.
+        'strength' - A float between 0 and 1 that is the strength of the LLM model to use. Default is DEFAULT_STRENGTH.
+        'temperature' - A float that is the temperature of the LLM model to use. Default is 0.0.
         'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
-        'language' - A string that is the language of the unit test to be generated.
+        'language' - A string that is the language of the unit test to be generated. Default is 'python'.
         'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
     Outputs as a tuple: 
         'unit_test'- A string that is the generated unit test code.
@@ -51,18 +51,26 @@
 
 % This program will do the following:
     Step 1. Load the 'generate_test_LLM' prompt template.
-    Step 2. Preprocess the Step 1 prompt template using the preprocess function without recursion or doubling of the curly brackets.
+    Step 2. Preprocess both the Step 1 prompt template and the original 'prompt' using the preprocess function without recursion or doubling of the curly brackets.
     Step 3. Run the inputs through the model using llm_invoke, passing the 'time' parameter to the llm_invoke function.
         3a. Pass the following string parameters to the prompt during invoke:
-            - 'prompt_that_generated_code': preprocess the prompt using the preprocess function without recursion or doubling of the curly brackets.
+            - 'prompt_that_generated_code': preprocess the original prompt using the preprocess function without recursion or doubling of the curly brackets.
             - 'code'
             - 'language'
-        3b. If verbose is True, pretty print a message letting the user know it is running and how many tokens are in the prompt and the cost.
-    Step 4. If verbose is True, pretty print the markdown formatting that is present in the result via the rich Markdown function. Also pretty print the number of tokens in the result and the cost.
-    Step 4. Detect if the generation is incomplete using the unfinished_prompt function (strength .7) by passing in the last 600 characters of the output of Step 2.
-        - a. If incomplete, call the continue_generation function to complete the generation.
-        - b. Else, if complete, postprocess the model output result using the postprocess function with a strength of 0.7.
-    Step 5. If verbose is True, print out the total_cost including the input and output tokens and functions that incur cost (e.g. postprocessing).
-    Step 6. Return the unit_test, total_cost and model_name.
+        3b. Forward 'strength', 'temperature', and 'time' to llm_invoke as provided.
+        3c. If verbose is True, print a short message that generation is running and the estimated cost (include token counts if available).
+    Step 4. If verbose is True, pretty print the markdown formatting that is present in the Step 3 result via the rich Markdown function. Also print the initial cost (include token counts if available).
+    Step 5. Detect if the generation is incomplete using the unfinished_prompt function by passing in the last 600 characters of the Step 3 LLM result.
+        - Use the provided 'strength' and also pass 'temperature', 'time', and 'language' as needed.
+        - If the last 600 characters are empty after stripping whitespace, consider the generation complete without calling unfinished_prompt.
+        - a. If incomplete, call the continue_generation function to complete the generation; update the result, aggregate the cost, and update the model name.
+    Step 6. Postprocess the final result (initial or continued) using the postprocess function with a strength of EXTRACTION_STRENGTH. Aggregate the postprocessing cost.
+        - If postprocess fails, fall back to extracting a fenced code block from the result (prefer substantial blocks that contain 'def test_' or 'import'); if none found, use the raw result.
+    Step 7. If verbose is True, print out the total_cost accumulated across the steps (include per-function costs and token counts if available).
+    Step 8. Return the unit_test, total_cost and model_name.
 
-% Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses.
+% Parameter passing and defaults:
+    - Pass 'language', 'temperature', and 'time' through to helper functions where applicable.
+    - Defaults: language='python', temperature=0.0, strength=DEFAULT_STRENGTH, time=DEFAULT_TIME, verbose=False.
+
+% Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses. Validate inputs early (non-empty strings, numeric ranges) and provide informative error messages.

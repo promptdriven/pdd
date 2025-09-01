@@ -1,4 +1,5 @@
 from typing import Tuple, Optional
+import ast
 from pydantic import BaseModel, Field
 from rich import print as rprint
 from .load_prompt_template import load_prompt_template
@@ -48,6 +49,40 @@ def unfinished_prompt(
         
         if not 0 <= temperature <= 1:
             raise ValueError("Temperature must be between 0 and 1")
+
+        # Step 0: Fast syntactic completeness check for Python tails
+        # Apply when language explicitly 'python' or when the text likely looks like Python.
+        def _looks_like_python(text: str) -> bool:
+            lowered = text.strip().lower()
+            py_signals = (
+                "def ", "class ", "import ", "from ",
+            )
+            if any(sig in lowered for sig in py_signals):
+                return True
+            # Heuristic: has 'return ' without JS/TS markers
+            if "return " in lowered and not any(tok in lowered for tok in ("function", "=>", ";", "{", "}")):
+                return True
+            # Heuristic: colon-introduced blocks and indentation
+            if ":\n" in text or "\n    " in text:
+                return True
+            return False
+
+        should_try_python_parse = (language or "").lower() == "python" or _looks_like_python(prompt_text)
+        if should_try_python_parse:
+            try:
+                ast.parse(prompt_text)
+                reasoning = "Syntactic Python check passed (ast.parse succeeded); treating as finished."
+                if verbose:
+                    rprint("[green]" + reasoning + "[/green]")
+                return (
+                    reasoning,
+                    True,
+                    0.0,
+                    "syntactic_check"
+                )
+            except SyntaxError:
+                # Fall through to LLM-based judgment
+                pass
 
         # Step 1: Load the prompt template
         if verbose:
