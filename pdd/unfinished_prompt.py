@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, Optional
 from pydantic import BaseModel, Field
 from rich import print as rprint
 from .load_prompt_template import load_prompt_template
@@ -14,6 +14,7 @@ def unfinished_prompt(
     strength: float = DEFAULT_STRENGTH,
     temperature: float = 0,
     time: float = DEFAULT_TIME,
+    language: Optional[str] = None,
     verbose: bool = False
 ) -> Tuple[str, bool, float, str]:
     """
@@ -58,6 +59,9 @@ def unfinished_prompt(
 
         # Step 2: Prepare input and invoke LLM
         input_json = {"PROMPT_TEXT": prompt_text}
+        # Optionally pass a language hint to the prompt
+        if language:
+            input_json["LANGUAGE"] = language
         
         if verbose:
             rprint("[blue]Invoking LLM model...[/blue]")

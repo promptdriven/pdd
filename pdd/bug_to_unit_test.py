@@ -108,6 +108,7 @@ def bug_to_unit_test(  # pylint: disable=too-many-arguments, too-many-locals
             strength=0.89,
             temperature=temperature,
             time=time,
+            language=language,
             verbose=False,
         )
 
@@ -121,6 +122,7 @@ def bug_to_unit_test(  # pylint: disable=too-many-arguments, too-many-locals
                 strength=strength,
                 temperature=temperature,
                 time=time,
+                language=language,
                 verbose=True,
             )
             total_cost += continued_cost

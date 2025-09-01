@@ -83,6 +83,7 @@ def code_generator(
             strength=0.5,
             temperature=0.0,
             time=time,
+            language=language,
             verbose=verbose
         )
         total_cost += check_cost
@@ -97,6 +98,7 @@ def code_generator(
                 strength=strength,
                 temperature=temperature,
                 time=time,
+                language=language,
                 verbose=verbose
             )
             total_cost += continue_cost
