@@ -136,6 +136,7 @@
         - If calling the model fails, retry with the next highest ELO model.
     - Use base model when strength is 0.5. If calling the model fails, retry with the next highest ELO model (using ELO from CSV).
     - Sort the final candidate models by how close they match the target cost (for strength < 0.5, using CSV costs) or target ELO (for strength > 0.5, using CSV ELO).
+    - If the configured base model is not present in the CSV, apply a soft fallback (Option A'): choose a surrogate base as the first available model from the CSV (preserving CSV order). Log a clear warning noting the fallback and the chosen surrogate base. Continue selection using this surrogate base.
     - For test environments (where `api_key` is `EXISTING_KEY`), skip prompting for a key; no additional special LiteLLM parameters are applied.
     - Ensure proper error handling for file operations and LiteLLM calls.
 
