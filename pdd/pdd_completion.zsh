@@ -349,7 +349,7 @@ _pdd_bug() {
 #   --force-scan
 # Args:
 #   1: PROMPT_FILE
-#   2: DIRECTORY_PATH
+#   2: DIRECTORY_PATH (directory or glob pattern)
 _pdd_auto_deps() {
   _arguments -s \
     $_pdd_global_opts \
@@ -357,7 +357,7 @@ _pdd_auto_deps() {
     '--csv=[CSV file for dependency info (default: project_dependencies.csv).]:filename:_files' \
     '--force-scan[Force rescanning of all potential dependency files.]' \
     '1:prompt-file:_files' \
-    '2:directory:_files -/' \
+    '2:directory-or-glob:_files -/' \
     '*:filename:_files'
 }
 
@@ -410,7 +410,7 @@ _pdd() {
     'crash:Fix errors in a code module and its calling program'
     'trace:Find the prompt file line number associated with a code line'
     'bug:Generate a unit test based on incorrect vs desired outputs'
-    'auto-deps:Analyze a prompt file and directory for needed dependencies'
+    'auto-deps:Analyze a prompt and include deps from a directory or glob'
     'verify:Verify functional correctness using LLM judgment and iteratively fix'
   )
 

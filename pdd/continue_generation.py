@@ -118,8 +118,14 @@ def continue_generation(
             model_name = continue_response['model_name']
             continue_result = continue_response['result']
 
-            # Check if generation is complete
-            last_chunk = code_block[-600:] if len(code_block) > 600 else code_block
+            # If the model produced no continuation, avoid an endless loop
+            if not isinstance(continue_result, str) or not continue_result.strip():
+                logger.warning("Empty continuation received; stopping to avoid loop.")
+                break
+
+            # Build prospective new block and check completeness on the updated tail
+            new_code_block = code_block + continue_result
+            last_chunk = new_code_block[-600:] if len(new_code_block) > 600 else new_code_block
             _, is_finished, check_cost, _ = unfinished_prompt(
                 prompt_text=last_chunk,
                 strength=0.5,
@@ -131,7 +137,7 @@ def continue_generation(
             total_cost += check_cost
 
             if not is_finished:
-                code_block += continue_result
+                code_block = new_code_block
                 # Continue to next iteration
             else:
                 # Trim and append final continuation
