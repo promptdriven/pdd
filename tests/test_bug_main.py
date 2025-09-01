@@ -4,6 +4,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 from click.testing import CliRunner
 from rich.console import Console
+from pdd import DEFAULT_STRENGTH
 
 # Import the module under test
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'pdd')))
@@ -13,7 +14,7 @@ from pdd.bug_main import bug_main
 def mock_ctx():
     """Fixture to create a mock context object."""
     ctx = MagicMock()
-    ctx.obj = {'force': False, 'quiet': False, 'strength': 0.9, 'temperature': 0}
+    ctx.obj = {'force': False, 'quiet': False, 'strength': DEFAULT_STRENGTH, 'temperature': 0}
     # Note: 'time' is not in ctx.obj, so bug_main will use DEFAULT_TIME for time_budget
     return ctx
 

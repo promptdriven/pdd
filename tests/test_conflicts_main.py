@@ -3,6 +3,7 @@ from unittest.mock import patch, MagicMock, mock_open
 from typing import List, Dict, Tuple, Optional
 
 from pdd.conflicts_main import conflicts_main
+from pdd import DEFAULT_STRENGTH
 
 @pytest.fixture
 def mock_ctx():
@@ -11,7 +12,7 @@ def mock_ctx():
     ctx.obj = {
         'force': False,
         'quiet': False,
-        'strength': 0.9,
+        'strength': DEFAULT_STRENGTH,
         'temperature': 0
     }
     return ctx
@@ -80,7 +81,7 @@ def test_success_with_output(mock_file, mock_rprint, mock_construct_paths, mock_
     mock_conflicts_in_prompts.assert_called_once_with(
         'Content of prompt1',
         'Content of prompt2',
-        0.9,
+        DEFAULT_STRENGTH,
         0,
         0.25,
         False
@@ -176,7 +177,7 @@ def test_success_without_output(
     mock_conflicts_in_prompts.assert_called_once_with(
         'Content of prompt1',
         'Content of prompt2',
-        0.9,
+        DEFAULT_STRENGTH,
         0,
         0.25,
         False
@@ -302,7 +303,7 @@ def test_quiet_mode(mock_rprint, mock_construct_paths, mock_conflicts_in_prompts
     mock_conflicts_in_prompts.assert_called_once_with(
         'Content of prompt1',
         'Content of prompt2',
-        0.9,
+        DEFAULT_STRENGTH,
         0,
         0.25,
         False
@@ -378,7 +379,7 @@ def test_force_option(mock_file, mock_rprint, mock_construct_paths, mock_conflic
     mock_conflicts_in_prompts.assert_called_once_with(
         'Content of prompt1',
         'Content of prompt2',
-        0.9,
+        DEFAULT_STRENGTH,
         0,
         0.25,
         False
@@ -448,7 +449,7 @@ def test_replace_prompt_names(mock_rprint, mock_construct_paths, mock_conflicts_
     mock_conflicts_in_prompts.assert_called_once_with(
         'Content of prompt1',
         'Content of prompt2',
-        0.9,
+        DEFAULT_STRENGTH,
         0,
         0.25,
         False
@@ -515,7 +516,7 @@ def test_verbose_mode(mock_dict_writer, mock_file, mock_rprint, mock_construct_p
     mock_conflicts_in_prompts.assert_called_once_with(
         'Verbose prompt1 content',
         'Verbose prompt2 content',
-        0.9,
+        DEFAULT_STRENGTH,
         0,
         0.25,
         True

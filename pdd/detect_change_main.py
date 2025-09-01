@@ -6,7 +6,7 @@ from rich import print as rprint
 
 from .construct_paths import construct_paths
 from .detect_change import detect_change
-from . import DEFAULT_TIME
+from . import DEFAULT_TIME, DEFAULT_STRENGTH
 
 def detect_change_main(
     ctx: click.Context,
@@ -54,7 +54,7 @@ def detect_change_main(
         prompt_contents = [input_strings[f"prompt_file_{i}"] for i in range(len(prompt_files))]
 
         # Get model parameters from context
-        strength = ctx.obj.get('strength', 0.9)
+        strength = ctx.obj.get('strength', DEFAULT_STRENGTH)
         temperature = ctx.obj.get('temperature', 0)
         time_budget = ctx.obj.get('time', DEFAULT_TIME)
 

@@ -3,6 +3,7 @@ from unittest.mock import patch, MagicMock
 from pdd import EXTRACTION_STRENGTH
 from pdd.code_generator import code_generator
 from pathlib import Path
+from pdd import DEFAULT_STRENGTH
 
 # Define constants for mock returns
 MOCK_PROCESSED_PROMPT = "processed prompt"
@@ -113,7 +114,7 @@ def test_code_generator_valid_input_incomplete(
     runnable_code, total_cost, model_name = code_generator(
         prompt="Generate a Python function to multiply two numbers.",
         language="python",
-        strength=0.9,
+        strength=DEFAULT_STRENGTH,
         temperature=0.7,
         verbose=False
     )
@@ -123,7 +124,7 @@ def test_code_generator_valid_input_incomplete(
     mock_llm_invoke.assert_called_once_with(
         prompt=MOCK_PROCESSED_PROMPT,
         input_json={},
-        strength=0.9,
+        strength=DEFAULT_STRENGTH,
         temperature=0.7,
         time=None,
         verbose=False
@@ -139,7 +140,7 @@ def test_code_generator_valid_input_incomplete(
     mock_continue_generation.assert_called_once_with(
         formatted_input_prompt=MOCK_PROCESSED_PROMPT,
         llm_output=MOCK_INITIAL_RESPONSE['result'],
-        strength=0.9,
+        strength=DEFAULT_STRENGTH,
         temperature=0.7,
         time=None,
         language="python",
@@ -378,7 +379,7 @@ def test_generate_loops_when_unfinished_never_true(monkeypatch):
     monkeypatch.setattr(cont_mod, "llm_invoke", cont_llm_invoke_stub, raising=False)
 
     # Postprocess: bypass LLM and return the combined code directly
-    def postprocess_passthrough(llm_output, language, strength=0.9, temperature=0.0, time=None, verbose=False):
+    def postprocess_passthrough(llm_output, language, strength=DEFAULT_STRENGTH, temperature=0.0, time=None, verbose=False):
         return (llm_output, 0.0, "mock")
 
     monkeypatch.setattr(code_gen_mod, "postprocess", postprocess_passthrough, raising=False)

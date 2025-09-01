@@ -1,6 +1,7 @@
 import os
 from rich.console import Console
 from pdd.bug_to_unit_test import bug_to_unit_test
+from pdd import DEFAULT_STRENGTH
 
 console = Console()
 
@@ -49,7 +50,7 @@ Model used: gpt-4o-2024-08-06"""
     # load program used to run code under tests from a file
     with open(f"context/{module}_example.py", "r") as file:
         program_used_to_run_code_under_test = file.read()
-    strength = 0.9  # Strength of the LLM model (0 to 1)
+    strength = DEFAULT_STRENGTH  # Strength of the LLM model (0 to 1)
     temperature = 0  # Temperature for the LLM model
     language = "Python"
 

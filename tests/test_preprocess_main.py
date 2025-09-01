@@ -11,7 +11,7 @@ from unittest.mock import patch, MagicMock, mock_open
 
 # Import the function under test from the corresponding module.
 from pdd.preprocess_main import preprocess_main
-from pdd import DEFAULT_TIME
+from pdd import DEFAULT_TIME, DEFAULT_STRENGTH
 
 @pytest.fixture
 def basic_click_context():
@@ -92,7 +92,7 @@ def test_preprocess_main_with_xml(basic_click_context):
     """
     # Override the default context to make verbose=True, so it passes
     # into xml_tagger as well.
-    basic_click_context.obj["strength"] = 0.9
+    basic_click_context.obj["strength"] = DEFAULT_STRENGTH
     basic_click_context.obj["temperature"] = 0.6
     basic_click_context.obj["verbose"] = True
 
@@ -142,7 +142,7 @@ def test_preprocess_main_with_xml(basic_click_context):
         # xml_tagger should be called
         mock_xml_tagger.assert_called_once_with(
             "fake prompt content for xml",
-            0.9,     # strength
+            DEFAULT_STRENGTH,     # strength
             0.6,     # temperature
             True,    # verbose
             time=DEFAULT_TIME

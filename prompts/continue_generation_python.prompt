@@ -36,7 +36,7 @@
     Step 2. Preprocess the prompts from Step 1 using the preprocess function (with recursive but no doubling of curly brackets) using the preprocess module.
     Step 3. Run the trim_results_start_LLM prompt through llm_invoke:
         - a. Pass the following string parameters: 'LLM_OUTPUT': llm_output
-        - b. Use strength=0.9, temperature=0, and the input 'time' parameter
+        - b. Use strength=DEFAULT_STRENGTH, temperature=0, and the input 'time' parameter
         - c. Extract the 'code_block' from the Pydantic output
     Step 3. Enter a loop for continuing generation:
         a. Run the continue_generation_LLM prompt through llm_invoke:
@@ -49,7 +49,7 @@
              * Run trim_results_LLM prompt through llm_invoke with:
                - 'CONTINUED_GENERATION': continue_result
                - 'GENERATED_RESULTS': last 200 chars of code_block
-               - strength=0.9, temperature=0, and the input 'time' parameter
+               - strength=DEFAULT_STRENGTH, temperature=0, and the input 'time' parameter
              * Extract 'trimmed_continued_generation' from Pydantic output
              * Append to code_block and break loop
         c. Print loop count if verbose is True

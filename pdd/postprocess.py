@@ -3,7 +3,7 @@ from rich import print
 from pydantic import BaseModel, Field
 from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
-from . import DEFAULT_TIME
+from . import DEFAULT_TIME, DEFAULT_STRENGTH
 
 class ExtractedCode(BaseModel):
     """Pydantic model for the extracted code."""
@@ -36,7 +36,7 @@ def postprocess_0(text: str) -> str:
 def postprocess(
     llm_output: str,
     language: str,
-    strength: float = 0.9,
+    strength: float = DEFAULT_STRENGTH,
     temperature: float = 0,
     time: float = DEFAULT_TIME,
     verbose: bool = False
