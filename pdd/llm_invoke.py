@@ -214,24 +214,80 @@ if PROJECT_ROOT is None: # Fallback to CWD if no method succeeded
 
 ENV_PATH = PROJECT_ROOT / ".env"
 # --- Determine LLM_MODEL_CSV_PATH ---
-# Prioritize ~/.pdd/llm_model.csv
+# Prioritize ~/.pdd/llm_model.csv, then a project .pdd from the current CWD,
+# then PROJECT_ROOT (which may be set from PDD_PATH), else fall back to package.
 user_pdd_dir = Path.home() / ".pdd"
 user_model_csv_path = user_pdd_dir / "llm_model.csv"
 
-# Check in order: user-specific, project-specific, package default
+def _detect_project_root_from_cwd(max_levels: int = 5) -> Path:
+    """Search upwards from the current working directory for common project markers.
+
+    This intentionally ignores PDD_PATH to support CLI invocations that set
+    PDD_PATH to the installed package location. We want to honor a real project
+    checkout's .pdd/llm_model.csv when running inside it.
+    """
+    try:
+        current_dir = Path.cwd().resolve()
+        for _ in range(max_levels):
+            if (
+                (current_dir / ".git").exists()
+                or (current_dir / "pyproject.toml").exists()
+                or (current_dir / "data").is_dir()
+                or (current_dir / ".env").exists()
+            ):
+                return current_dir
+            parent = current_dir.parent
+            if parent == current_dir:
+                break
+            current_dir = parent
+    except Exception:
+        pass
+    return Path.cwd().resolve()
+
+# Resolve candidates
+project_root_from_cwd = _detect_project_root_from_cwd()
+project_csv_from_cwd = project_root_from_cwd / ".pdd" / "llm_model.csv"
+project_csv_from_env = PROJECT_ROOT / ".pdd" / "llm_model.csv"
+
+# Detect whether PDD_PATH points to the installed package directory. If so,
+# don't prioritize it over the real project from CWD.
+try:
+    _installed_pkg_root = importlib.resources.files('pdd')
+    # importlib.resources.files returns a Traversable; get a FS path string if possible
+    try:
+        _installed_pkg_root_path = Path(str(_installed_pkg_root))
+    except Exception:
+        _installed_pkg_root_path = None
+except Exception:
+    _installed_pkg_root_path = None
+
+def _is_env_path_package_dir(env_path: Path) -> bool:
+    try:
+        if _installed_pkg_root_path is None:
+            return False
+        env_path = env_path.resolve()
+        pkg_path = _installed_pkg_root_path.resolve()
+        # Treat equal or subpath as package dir
+        return env_path == pkg_path or str(env_path).startswith(str(pkg_path))
+    except Exception:
+        return False
+
+# Selection order
 if user_model_csv_path.is_file():
     LLM_MODEL_CSV_PATH = user_model_csv_path
     logger.info(f"Using user-specific LLM model CSV: {LLM_MODEL_CSV_PATH}")
+elif (not _is_env_path_package_dir(PROJECT_ROOT)) and project_csv_from_env.is_file():
+    # Honor an explicitly-set PDD_PATH pointing to a real project directory
+    LLM_MODEL_CSV_PATH = project_csv_from_env
+    logger.info(f"Using project-specific LLM model CSV (from PDD_PATH): {LLM_MODEL_CSV_PATH}")
+elif project_csv_from_cwd.is_file():
+    # Otherwise, prefer the project relative to the current working directory
+    LLM_MODEL_CSV_PATH = project_csv_from_cwd
+    logger.info(f"Using project-specific LLM model CSV (from CWD): {LLM_MODEL_CSV_PATH}")
 else:
-    # Check project-specific location (.pdd directory)
-    project_model_csv_path = PROJECT_ROOT / ".pdd" / "llm_model.csv"
-    if project_model_csv_path.is_file():
-        LLM_MODEL_CSV_PATH = project_model_csv_path
-        logger.info(f"Using project-specific LLM model CSV: {LLM_MODEL_CSV_PATH}")
-    else:
-        # Neither exists, we'll use a marker path that _load_model_data will handle
-        LLM_MODEL_CSV_PATH = None
-        logger.info("No local LLM model CSV found, will use package default")
+    # Neither exists, we'll use a marker path that _load_model_data will handle
+    LLM_MODEL_CSV_PATH = None
+    logger.info("No local LLM model CSV found, will use package default")
 # ---------------------------------
 
 # Load environment variables from .env file
@@ -1067,10 +1123,32 @@ def llm_invoke(
             elif verbose: # No api_key_name_from_csv in CSV for this model
                 logger.info(f"[INFO] No API key name specified in CSV for model '{model_name_litellm}'. LiteLLM will use its default authentication mechanisms (e.g., standard provider env vars or ADC for Vertex AI).")
 
-            # Add api_base if present in CSV
+            # Add base_url/api_base override if present in CSV
             api_base = model_info.get('base_url')
             if pd.notna(api_base) and api_base:
+                # LiteLLM prefers `base_url`; some older paths accept `api_base`.
+                litellm_kwargs["base_url"] = str(api_base)
                 litellm_kwargs["api_base"] = str(api_base)
+
+            # Provider-specific defaults (e.g., LM Studio)
+            model_name_lower = str(model_name_litellm).lower()
+            provider_lower_for_model = provider.lower()
+            is_lm_studio = model_name_lower.startswith('lm_studio/') or provider_lower_for_model == 'lm_studio'
+            if is_lm_studio:
+                # Ensure base_url is set (fallback to env LM_STUDIO_API_BASE or localhost)
+                if not litellm_kwargs.get("base_url"):
+                    lm_studio_base = os.getenv("LM_STUDIO_API_BASE", "http://localhost:1234/v1")
+                    litellm_kwargs["base_url"] = lm_studio_base
+                    litellm_kwargs["api_base"] = lm_studio_base
+                    if verbose:
+                        logger.info(f"[INFO] Using LM Studio base_url: {lm_studio_base}")
+
+                # Ensure a non-empty api_key; LM Studio accepts any non-empty token (e.g., 'lm-studio')
+                if not litellm_kwargs.get("api_key"):
+                    lm_studio_key = os.getenv("LM_STUDIO_API_KEY") or "lm-studio"
+                    litellm_kwargs["api_key"] = lm_studio_key
+                    if verbose:
+                        logger.info("[INFO] Using LM Studio api_key placeholder (set LM_STUDIO_API_KEY to customize).")
 
             # Handle Structured Output (JSON Mode / Pydantic)
             if output_pydantic:
