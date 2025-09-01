@@ -7,11 +7,12 @@ import git
 # Absolute import based on the provided directory structure
 from pdd.git_update import git_update, DEFAULT_TIME
 from rich.panel import Panel
+from pdd import DEFAULT_STRENGTH
 
 # Sample data for tests
 INPUT_PROMPT = "Please add two numbers and return the sum."
 MODIFIED_CODE_FILE = "/path/to/modified_code.py"
-STRENGTH = 0.9
+STRENGTH = DEFAULT_STRENGTH
 TEMPERATURE = 0.5
 ORIGINAL_CODE = "def add(a, b): return a + b"
 MODIFIED_CODE = "def add(a, b): return a + b + 1"

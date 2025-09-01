@@ -6,6 +6,8 @@ __pycache__/
 
 .vscode/settings.json
 
+pdd/litellm_cache.sqlite/cache.db
+
 # Claude folder
 .claude/
 

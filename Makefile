@@ -43,6 +43,18 @@ help:
 	@echo "  make staging                 - Copy files to staging"
 	@echo "  make production              - Copy files from staging to pdd"
 	@echo "  make update-extension        - Update VS Code extension"
+ 
+# Public repo paths (override via env if needed)
+PUBLIC_PDD_REPO_DIR ?= staging/public/pdd
+# Top-level files to publish if present
+PUBLIC_ROOT_FILES ?= LICENSE CHANGELOG.md CONTRIBUTING.md requirements.txt pyproject.toml .env.example
+# Include core unit tests by default
+PUBLIC_COPY_TESTS ?= 1
+PUBLIC_TEST_INCLUDE ?= tests/test_*.py tests/__init__.py
+PUBLIC_TEST_EXCLUDE ?= tests/regression* tests/sync_regression* tests/**/regression* tests/**/sync_regression* tests/**/*.ipynb tests/csv/**
+PUBLIC_COPY_CONTEXT ?= 1
+PUBLIC_CONTEXT_INCLUDE ?= context/*_example.py
+PUBLIC_CONTEXT_EXCLUDE ?= context/**/__pycache__ context/**/*.log context/**/*.csv
 
 # Python files
 PY_PROMPTS := $(wildcard $(PROMPTS_DIR)/*_python.prompt)
@@ -414,14 +426,16 @@ release:
 	@python -m commitizen bump --increment PATCH
 	@echo "Building and uploading package"
 	@$(MAKE) build
-	@echo "Copying public README.md to project root"
-	@cp ./README.md staging/public/pdd/README.md
+	@echo "Ensuring public repo directory exists: $(PUBLIC_PDD_REPO_DIR)"
+	@mkdir -p $(PUBLIC_PDD_REPO_DIR)
+	@echo "Copying README to public repo"
+	@cp ./README.md $(PUBLIC_PDD_REPO_DIR)/README.md
 	@echo "Copying examples to public repo"
-	@cp -r ./examples staging/public/pdd/
-	@echo "Copying whitepaper and its assets to public repo"
-	@mkdir -p staging/public/pdd/docs/whitepaper_with_benchmarks/analysis_report
-	@mkdir -p staging/public/pdd/docs/whitepaper_with_benchmarks/creation_report
-	@cp "docs/whitepaper_with_benchmarks/whitepaper_w_benchmarks.md" staging/public/pdd/docs/whitepaper_with_benchmarks/
+	@cp -r ./examples $(PUBLIC_PDD_REPO_DIR)/
+	@echo "Copying specific whitepaper files to public repo"
+	@mkdir -p $(PUBLIC_PDD_REPO_DIR)/docs/whitepaper_with_benchmarks/analysis_report
+	@mkdir -p $(PUBLIC_PDD_REPO_DIR)/docs/whitepaper_with_benchmarks/creation_report
+	@cp "docs/whitepaper_with_benchmarks/whitepaper_w_benchmarks.md" $(PUBLIC_PDD_REPO_DIR)/docs/whitepaper_with_benchmarks/
 	@cp \
 		docs/whitepaper_with_benchmarks/analysis_report/overall_success_rate.png \
 		docs/whitepaper_with_benchmarks/analysis_report/overall_avg_execution_time.png \
@@ -433,17 +447,48 @@ release:
 		docs/whitepaper_with_benchmarks/analysis_report/success_rate_by_edit_type.png \
 		docs/whitepaper_with_benchmarks/analysis_report/avg_api_cost_by_edit_type.png \
 		docs/whitepaper_with_benchmarks/analysis_report/avg_execution_time_by_edit_type.png \
-		staging/public/pdd/docs/whitepaper_with_benchmarks/analysis_report/
+		$(PUBLIC_PDD_REPO_DIR)/docs/whitepaper_with_benchmarks/analysis_report/
 	@cp \
 		docs/whitepaper_with_benchmarks/creation_report/total_cost_comparison.png \
 		docs/whitepaper_with_benchmarks/creation_report/total_time_comparison.png \
 		docs/whitepaper_with_benchmarks/creation_report/pdd_avg_cost_per_module_dist.png \
 		docs/whitepaper_with_benchmarks/creation_report/claude_cost_per_run_dist.png \
-		staging/public/pdd/docs/whitepaper_with_benchmarks/creation_report/
+		$(PUBLIC_PDD_REPO_DIR)/docs/whitepaper_with_benchmarks/creation_report/
 	@echo "Copying VS Code extension to public repo"
-	@mkdir -p staging/public/pdd/utils
-	@cp -r ./utils/vscode_prompt staging/public/pdd/utils/
-	@cd staging/public/pdd/ && git add . && git commit -m "Bump version" && git push
+	@mkdir -p $(PUBLIC_PDD_REPO_DIR)/utils
+	@cp -r ./utils/vscode_prompt $(PUBLIC_PDD_REPO_DIR)/utils/
+	@echo "Copying selected top-level files to public repo (if present): $(PUBLIC_ROOT_FILES)"
+	@set -e; for f in $(PUBLIC_ROOT_FILES); do \
+		if [ -f "$$f" ]; then \
+			echo "  -> $$f"; \
+			cp "$$f" $(PUBLIC_PDD_REPO_DIR)/; \
+		fi; \
+	done
+	@if [ "$(PUBLIC_COPY_TESTS)" = "1" ]; then \
+		echo "Copying core unit tests to public repo"; \
+		conda run -n pdd --no-capture-output python scripts/copy_package_data_to_public.py \
+			--dest $(PUBLIC_PDD_REPO_DIR) \
+			--copy-tests \
+			$(foreach pat,$(PUBLIC_TEST_INCLUDE),--tests-include $(pat)) \
+			$(foreach xpat,$(PUBLIC_TEST_EXCLUDE),--tests-exclude $(xpat)); \
+	else \
+		echo "Skipping tests copy (PUBLIC_COPY_TESTS=$(PUBLIC_COPY_TESTS))"; \
+	fi
+	@if [ "$(PUBLIC_COPY_CONTEXT)" = "1" ]; then \
+		echo "Copying context examples to public repo"; \
+		conda run -n pdd --no-capture-output python scripts/copy_package_data_to_public.py \
+			--dest $(PUBLIC_PDD_REPO_DIR) \
+			--copy-context \
+			$(foreach pat,$(PUBLIC_CONTEXT_INCLUDE),--context-include $(pat)) \
+			$(foreach xpat,$(PUBLIC_CONTEXT_EXCLUDE),--context-exclude $(xpat)); \
+	else \
+		echo "Skipping context copy (PUBLIC_COPY_CONTEXT=$(PUBLIC_COPY_CONTEXT))"; \
+	fi
+		@echo "Copying package-data files defined in pyproject.toml to public repo"
+		@mkdir -p $(PUBLIC_PDD_REPO_DIR)/pdd
+		@conda run -n pdd --no-capture-output python scripts/copy_package_data_to_public.py --dest $(PUBLIC_PDD_REPO_DIR)
+	@echo "Committing and pushing updates in public repo"
+	@cd $(PUBLIC_PDD_REPO_DIR) && git add . && git commit -m "Bump version" && git push || true
 	
 analysis:
 	@echo "Running regression analysis"

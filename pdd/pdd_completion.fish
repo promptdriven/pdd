@@ -27,7 +27,7 @@ complete -c pdd -n "__fish_use_subcommand" -a conflicts -d "Analyze conflicts be
 complete -c pdd -n "__fish_use_subcommand" -a crash -d "Fix code causing program crash"
 complete -c pdd -n "__fish_use_subcommand" -a trace -d "Trace code line to prompt"
 complete -c pdd -n "__fish_use_subcommand" -a bug -d "Generate unit test from bug report"
-complete -c pdd -n "__fish_use_subcommand" -a auto-deps -d "Analyze and insert dependencies"
+complete -c pdd -n "__fish_use_subcommand" -a auto-deps -d "Analyze and insert dependencies from directory or glob"
 complete -c pdd -n "__fish_use_subcommand" -a verify -d "Verify functional correctness using LLM judgment"
 
 # Command-specific completions

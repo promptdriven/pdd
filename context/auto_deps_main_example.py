@@ -1,11 +1,12 @@
 import click
 from pathlib import Path
 from pdd.auto_deps_main import auto_deps_main
+from pdd import DEFAULT_STRENGTH
 
 @click.command('auto-deps')
 @click.option('--force', is_flag=True, help='Force file overwrites')
 @click.option('--quiet', is_flag=True, help='Suppress output messages')
-@click.option('--strength', default=0.9, help='Strength parameter for dependency analysis')
+@click.option('--strength', default=DEFAULT_STRENGTH, help='Strength parameter for dependency analysis')
 @click.option('--temperature', default=0.0, help='Temperature parameter for dependency analysis')
 @click.option('--prompt-file', default='prompts/get_extension_python.prompt', help='Path to the input prompt file')
 @click.option('--directory-path', default='context/*_example.py', help='Path to directory containing potential dependency files')

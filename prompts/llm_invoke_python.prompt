@@ -7,7 +7,9 @@
 
 % Startup Behavior:
     - Upon initialization or first call, the function should attempt to load environment variables from a `.env` file located at the project root.
-    - The project root is determined by: 1. Checking the `$PDD_PATH` environment variable. 2. If not set or invalid, searching upwards from the script's directory for project markers (like `.git`, `pyproject.toml`, `data/`, `.env`). 3. If no markers are found, defaulting to the current working directory.
+    - Project root detection and CSV resolution:
+        * Determine project root by: (1) checking `$PDD_PATH` and using it if it points to a real project directory; (2) otherwise, search upwards from the current working directory (cwd) for project markers (like `.git`, `pyproject.toml`, `data/`, `.env`); (3) if no markers are found, default to the cwd.
+        * Resolve `llm_model.csv` in this priority order: (a) `~/.pdd/llm_model.csv` if present; (b) `<PROJECT_ROOT>/.pdd/llm_model.csv` when `$PDD_PATH` points to a real project (not the installed package path); (c) `<cwd>/.pdd/llm_model.csv`; (d) otherwise use the packaged `pdd/data/llm_model.csv`.
 
 % Logging Configuration:
     - Use Python's standard logging module with a hierarchical logger structure.
@@ -24,6 +26,7 @@
     - Replace all print/rprint statements with appropriate logger calls (logger.debug, logger.info, logger.warning, logger.error)
     - In production environments, use WARNING level by default to reduce log output
     - For development, use more verbose INFO level by default
+    - Drop unsupported provider params: set `litellm.drop_params` based on environment variable `LITELLM_DROP_PARAMS` (default: true) to gracefully ignore provider-unsupported parameters (e.g., `reasoning_effort`).
 
 % Here are the inputs and outputs of the function:
     Input:
@@ -45,7 +48,7 @@
     1. **Configure Logging:** Initialize loggers (pdd.llm_invoke and litellm) with appropriate levels based on environment variables and the verbose flag.
     2. **Load Environment:** Load `.env` file using `dotenv.load_dotenv()`.
     3. **Input Handling:** Determine if using provided `messages` or generating from `prompt` + `input_json`.
-    4. **Model Selection:** Based on `strength`, filter models from CSV (checking `api_key` env var *existence only initially*), calculate target cost/ELO, sort candidates, and select the top candidate.
+    4. **Model Selection:** Based on `strength`, filter models from CSV (retain rows where `api_key` is not NaN; do not pre-check env presence here), calculate target cost/ELO, sort candidates, and select the top candidate. Actual environment presence of the key is handled in Step 5.
     5. **API Key Check & Acquisition (CRITICAL):**
         a. Get the required API key environment variable *name* (e.g., "OPENAI_API_KEY") from the `api_key` column in the CSV for the selected model.
         b. Check if `os.getenv(key_name)` returns a value (i.e., if the key is actually set in the environment).
@@ -68,12 +71,14 @@
         c. If `reasoning_type` is 'budget':
             i. If `max_reasoning_tokens` is a positive integer:
                 1. Calculate `budget_tokens = int(time * max_reasoning_tokens)`.
-                2. If `budget_tokens > 0`, add the appropriate provider-specific parameter to `model_specific_params` (e.g., for Anthropic, `model_specific_params['thinking'] = {'type': 'enabled', 'budget_tokens': budget_tokens}`). Log this action if verbose.
+                2. If `budget_tokens > 0`, add the appropriate provider-specific parameter: for Anthropic, set `thinking = {'type': 'enabled', 'budget_tokens': budget_tokens}`; for unknown providers, omit if no known adapter mapping exists. Log this action if verbose.
         d. Else if `reasoning_type` is 'effort':
             i. Map `time` to a qualitative category: "low" (0.0-0.3), "medium" (>0.3-0.7), "high" (>0.7-1.0).
-            ii. Add this category to `model_specific_params` using the relevant key (e.g., `model_specific_params['reasoning_effort'] = mapped_category`). Log this action if verbose.
+            ii. Provider mappings: for OpenAI gpt-5* (Responses API), set `reasoning = {'effort': mapped_category, 'summary': 'auto'}`; otherwise use `reasoning_effort = mapped_category` when supported by the provider adapter. Log this action if verbose.
         e. If `reasoning_type` is 'none' or conditions for 'budget'/'effort' are not met, no reasoning-specific parameters are added.
-    6. **LLM Invocation:** Call `litellm.completion` or `litellm.batch_completion` with the selected model, formatted messages, other parameters, and any `model_specific_params` derived from the `time` parameter.
+    6. **LLM Invocation:**
+        - For OpenAI gpt-5* models, call the OpenAI Responses API (not LiteLLM completion) to support reasoning parameters. Responses API does not accept `temperature`; log when it is skipped.
+        - Otherwise, call `litellm.completion` or `litellm.batch_completion` with the selected model, formatted messages, other parameters, and any `model_specific_params` derived from the `time` parameter.
     7. **Retry Logic:** 
         a. **On Invocation Failure:** If the call in Step 5 fails:
             i. **Check for Authentication Error:** If the exception is an `openai.AuthenticationError` (LiteLLM maps errors to OpenAI types) AND the "newly acquired" flag for the current `key_name` is true:
@@ -84,6 +89,8 @@
                 - Get the next candidate model from the sorted list generated in Step 3.
                 - If no more candidate models exist, raise the last encountered exception.
                 - If a next model exists, **go back to Step 4.a** to check/acquire the API key for this *new* model.
+        b. **Special diagnostics:** In WSL environments, detect and warn on authentication errors likely caused by stray carriage returns in API keys; suggest re-entering/sanitizing keys.
+        c. **Cache-bypass retry for corrupted content:** If a successful response contains `None` content (likely corrupted cache), retry once with a slightly modified prompt to bypass cache; restore cache afterward.
     8. **Response Handling:** Process the LiteLLM response, extract results, cost, tokens, etc.
         a. **Thinking Output:** Extract reasoning/thinking output if available. **Check common locations within the LiteLLM response object, such as `response._hidden_params['thinking']` or potentially within `response.choices[0].message` attributes (like `reasoning_content`), handling potential `AttributeError` or `KeyError` exceptions gracefully.**
     9. **Return Output:** Return the standard output dictionary.
@@ -129,7 +136,8 @@
         - If calling the model fails, retry with the next highest ELO model.
     - Use base model when strength is 0.5. If calling the model fails, retry with the next highest ELO model (using ELO from CSV).
     - Sort the final candidate models by how close they match the target cost (for strength < 0.5, using CSV costs) or target ELO (for strength > 0.5, using CSV ELO).
-    - For test environments (where api_key is "EXISTING_KEY"), use a special logic that respects the mock model setup, potentially by passing specific parameters to LiteLLM.
+    - If the configured base model is not present in the CSV, apply a soft fallback (Option A'): choose a surrogate base as the first available model from the CSV (preserving CSV order). Log a clear warning noting the fallback and the chosen surrogate base. Continue selection using this surrogate base.
+    - For test environments (where `api_key` is `EXISTING_KEY`), skip prompting for a key; no additional special LiteLLM parameters are applied.
     - Ensure proper error handling for file operations and LiteLLM calls.
 
 % Pass necessary parameters to `litellm.completion()` (or `litellm.batch_completion()` if `use_batch_mode` is True):
@@ -140,10 +148,10 @@
     - `max_tokens`: **Do not set this.** Allow LiteLLM and the underlying provider to use the default maximum completion tokens based on the model and input prompt length.
     - **Thinking/Reasoning (`time` parameter)**: Use the `reasoning_type` and `max_reasoning_tokens` columns from the CSV to determine how to handle the `time` parameter (0-1):
         - **If `reasoning_type` is 'none'**: Ignore `time`, pass no reasoning parameters.
-        - **If `reasoning_type` is 'budget'**: Check if `max_reasoning_tokens` > 0. If so, calculate `budget = int(time * max_reasoning_tokens)`. If `budget > 0`, pass the provider-specific parameter(s) via LiteLLM (e.g., Anthropic's `thinking` requires `{\"type\": \"enabled\", \"budget_tokens\": budget}`).
-        - **If `reasoning_type` is 'effort'**: Map `time` to a category (\"low\": 0-0.3, \"medium\": >0.3-0.7, \"high\": >0.7-1.0). Pass this category to the `reasoning_effort` parameter in LiteLLM.
+        - **If `reasoning_type` is 'budget'**: Check if `max_reasoning_tokens` > 0. If so, calculate `budget = int(time * max_reasoning_tokens)`. If `budget > 0`, pass the provider-specific parameter(s): Anthropic uses `thinking={\"type\":\"enabled\",\"budget_tokens\":budget}`; omit for providers without a known mapping.
+        - **If `reasoning_type` is 'effort'**: Map `time` to a category (\"low\": 0-0.3, \"medium\": >0.3-0.7, \"high\": >0.7-1.0). Prefer provider-specific handling: for OpenAI gpt-5* use Responses API `reasoning={\"effort\": category, \"summary\": \"auto\"}`; otherwise pass `reasoning_effort=category` when supported.
         - Default `time` is 0.25.
-    - **Structured Output**: If `output_pydantic` is provided, check the `structured_output` flag from the CSV. If `True`, use LiteLLM's mechanism for structured output (e.g., passing the Pydantic model to `response_format` or similar). If `False`, or if the initial structured response fails validation, fallback parsing logic should be used: **attempt to extract a JSON block (e.g., finding the first `{` and last `}`), clean potential markdown fences (like ```json ... ```), and re-attempt Pydantic validation on the cleaned string.**
+    - **Structured Output**: If `output_pydantic` is provided, check the `structured_output` flag from the CSV. If `True`, use LiteLLM's mechanism for structured output (e.g., passing the Pydantic model to `response_format` or similar). For OpenAI gpt-5* via Responses API, if the installed SDK supports `response_format`, pass a Pydantic-derived JSON schema; otherwise validate client-side. If `False` (or validation fails), use fallback parsing: **attempt to extract a JSON block (e.g., finding the first `{` and last `}`), clean potential markdown fences (like ```json ... ```), and re-attempt Pydantic validation on the cleaned string.**
     - **Batch Mode**: If `use_batch_mode` is True, use `litellm.batch_completion` and adapt input/output handling for lists.
 
 % Provider-Level Prompt Caching Note:
@@ -152,7 +160,7 @@
     - For explicit caching providers (requiring syntax like `cache_control`), the caller **must provide the fully constructed `messages` list** as input to this function, already containing the necessary provider-specific syntax. This function will not inject explicit caching syntax when generating messages from `prompt` and `input_json`.
 
 % CRITICAL: When handling model token limits:
-    - **The function will NOT pass a `max_tokens` parameter to LiteLLM.** Rely on the default maximum completion tokens set by the provider for the specific model.
+    - **The function will NOT pass any `max_tokens`/`max_completion_tokens` parameter.** Rely on provider defaults for maximum completion tokens, including in all retry paths.
 
 % If verbose is set to True, print the following information:
     - **The ordered list of candidate models selected based on strength/ELO and availability (before attempting invocation).**
@@ -175,7 +183,7 @@
         2. Default tokens to 0 if `usage` is not available.
         3. Capture the `finish_reason` from `completion_response.choices[0].finish_reason` if available.
         4. Store or log this information as needed by the application.
-        4. Calculate the cost primarily using `litellm.completion_cost(completion_response=...)`. **If this fails (e.g., due to missing provider info in the response object, common in batch results), attempt calculation again using the `model` from the original `kwargs` and token counts from the `usage` object.**
+        4. Calculate the cost primarily using `litellm.completion_cost(completion_response=...)`. **If this fails (e.g., due to missing provider info in the response object, common in batch results), attempt calculation again using the `model` from the original `kwargs` and token counts from the `usage` object; if still unavailable, fall back to computing cost using CSV per-million rates for the selected model.**
         5. Store or log this information (tokens, cost, finish reason) as needed by the application.
 
 % Deployment Considerations:
@@ -185,4 +193,16 @@
     - Ensure all print/rprint statements are replaced with appropriate logger calls.
     - Consider the performance impact of excessive debug logging in production.
 
-% Ensure LiteLLM response caching is configured appropriately for S3/GCS (e.g., setting `litellm.cache = litellm.Cache(type='s3', s3_bucket_name=..., s3_region_name=..., s3_endpoint_url=...)` with GCS details).
+% Caching Configuration and Usage:
+    - Configure LiteLLM cache if environment variables are provided:
+        * Prefer S3-compatible cache targeting GCS using HMAC keys (`GCS_HMAC_ACCESS_KEY_ID`, `GCS_HMAC_SECRET_ACCESS_KEY`, `GCS_BUCKET_NAME`, `GCS_REGION_NAME`, endpoint `https://storage.googleapis.com`).
+        * If not available, fall back to a disk-based SQLite cache at `<PROJECT_ROOT>/litellm_cache.sqlite`.
+        * Respect `LITELLM_CACHE_DISABLE=1` to disable caching entirely.
+    - Enable per-call caching by passing `caching=True` only when a cache is configured.
+    - For suspected cache-corruption (e.g., `None` content), temporarily disable cache to retry, then restore the configured cache.
+
+% Test Environments:
+    - If the CSV `api_key` column is `EXISTING_KEY`, skip interactive prompting for API keys. No additional special handling or mock parameters are applied to LiteLLM.
+
+% WSL Diagnostics:
+    - Sanitize API keys by trimming whitespace and control characters. In WSL environments, detect and warn about authentication errors caused by stray carriage returns (Illegal header value) and suggest re-entering/sanitizing keys.

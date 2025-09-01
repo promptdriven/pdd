@@ -1,4 +1,5 @@
-from typing import Tuple
+from typing import Tuple, Optional
+import logging
 from rich.console import Console
 from rich.syntax import Syntax
 from pydantic import BaseModel, Field
@@ -9,6 +10,10 @@ from .unfinished_prompt import unfinished_prompt
 from . import EXTRACTION_STRENGTH, DEFAULT_TIME
 
 console = Console()
+logger = logging.getLogger(__name__)
+
+# Maximum number of generation loops to prevent infinite loops
+MAX_GENERATION_LOOPS = 20
 
 class TrimResultsStartOutput(BaseModel):
     explanation: str = Field(description="The explanation of how you determined what to cut out")
@@ -24,6 +29,7 @@ def continue_generation(
     strength: float,
     temperature: float,
     time: float = DEFAULT_TIME,
+    language: Optional[str] = None,
     verbose: bool = False
 ) -> Tuple[str, float, str]:
     """
@@ -84,10 +90,16 @@ def continue_generation(
         code_block = trim_start_response['result'].code_block
 
         # Step 4: Continue generation loop
-        while True:
+        while loop_count < MAX_GENERATION_LOOPS:
             loop_count += 1
             if verbose:
                 console.print(f"[cyan]Generation loop {loop_count}[/cyan]")
+            
+            # Check for maximum loops reached
+            if loop_count >= MAX_GENERATION_LOOPS:
+                logger.warning(f"Reached maximum generation loops ({MAX_GENERATION_LOOPS}), terminating")
+                console.print(f"[yellow]Warning: Reached maximum generation loops ({MAX_GENERATION_LOOPS}), terminating[/yellow]")
+                break
 
             # Generate continuation
             continue_response = llm_invoke(
@@ -106,19 +118,47 @@ def continue_generation(
             model_name = continue_response['model_name']
             continue_result = continue_response['result']
 
-            # Check if generation is complete
-            last_chunk = code_block[-600:] if len(code_block) > 600 else code_block
-            _, is_finished, check_cost, _ = unfinished_prompt(
+            if verbose:
+                try:
+                    preview = (continue_result[:160] + '...') if isinstance(continue_result, str) and len(continue_result) > 160 else continue_result
+                except Exception:
+                    preview = "<non-str>"
+                console.print(f"[blue]Continue model:[/blue] {model_name}")
+                console.print(f"[blue]Continue preview:[/blue] {preview!r}")
+
+            # If the model produced no continuation, avoid an endless loop
+            if not isinstance(continue_result, str) or not continue_result.strip():
+                logger.warning("Empty continuation received; stopping to avoid loop.")
+                break
+
+            # Build prospective new block and check completeness on the updated tail
+            new_code_block = code_block + continue_result
+            last_chunk = new_code_block[-600:] if len(new_code_block) > 600 else new_code_block
+            reasoning, is_finished, check_cost, check_model = unfinished_prompt(
                 prompt_text=last_chunk,
                 strength=0.5,
                 temperature=0,
                 time=time,
+                language=language,
                 verbose=verbose
             )
             total_cost += check_cost
 
+            if verbose:
+                console.print(f"[magenta]Tail length:[/magenta] {len(last_chunk)}")
+                # Show a safe, shortened representation of the tail
+                try:
+                    tail_preview = (last_chunk[-200:] if len(last_chunk) > 200 else last_chunk)
+                except Exception:
+                    tail_preview = "<unprintable tail>"
+                console.print(f"[magenta]Tail preview (last 200 chars):[/magenta]\n{tail_preview}")
+                console.print(f"[magenta]Unfinished check model:[/magenta] {check_model}")
+                console.print(f"[magenta]is_finished:[/magenta] {is_finished}")
+                console.print(f"[magenta]Reasoning:[/magenta] {reasoning}")
+
             if not is_finished:
-                code_block += continue_result
+                code_block = new_code_block
+                # Continue to next iteration
             else:
                 # Trim and append final continuation
                 trim_response = llm_invoke(

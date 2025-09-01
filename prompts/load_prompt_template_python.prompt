@@ -4,10 +4,21 @@
 
 % Here are the inputs and outputs of the function:
     Input:
-        'prompt_name' - A string containing the filename of the prompt to load. The default prompt extension is '.prompt'.
+        'prompt_name' - The logical name of the prompt to load, without an extension. The function must append the default '.prompt' extension automatically.
     Returns:
-        str: The prompt template text
+        Optional[str]: The prompt template text, or None on error/missing file
 
 % This function will do the following:
-    Step 1. Use $PDD_PATH environment variable to get the path to the project. 
-    Step 2. Load the prompt_name using the above path
+    Step 0. Validate input type: if 'prompt_name' is not a str, print a formatted error and return None.
+    Step 1. Build an ordered list of candidate project roots:
+        1) If $PDD_PATH is set, use that path first.
+        2) The repository root inferred from this module (the parent directory of the module's folder).
+        3) The current working directory.
+    Step 2. For each candidate root, form a candidate file path at '<root>/prompts/{prompt_name}.prompt'.
+    Step 3. Select the first candidate path that exists; if none exist, print a formatted error that includes all tried paths and return None.
+    Step 4. Read the file contents as UTF-8 and return the text. On success, print a brief formatted success message. On I/O or unexpected errors, print a formatted error and return None.
+
+% Notes/constraints:
+    - 'prompt_name' must not include an extension; the function always appends '.prompt'.
+    - All diagnostic messages should be printed (no exceptions raised) and the function should return None on failure.
+    - The prompts are expected to live under a 'prompts/' subdirectory within each candidate project root.

@@ -98,6 +98,7 @@ def generate_test(
                 strength=strength,
                 temperature=temperature,
                 time=time,
+                language=language,
                 verbose=verbose
             )
         total_cost += check_cost
@@ -112,6 +113,7 @@ def generate_test(
                 strength=strength,
                 temperature=temperature,
                 time=time,
+                language=language,
                 verbose=verbose
             )
             total_cost += continue_cost
