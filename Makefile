@@ -448,33 +448,9 @@ release:
 	@echo "Copying VS Code extension to public repo"
 	@mkdir -p $(PUBLIC_PDD_REPO_DIR)/utils
 	@cp -r ./utils/vscode_prompt $(PUBLIC_PDD_REPO_DIR)/utils/
-	@echo "Copying package-data files defined in pyproject.toml to public repo"
-	@mkdir -p $(PUBLIC_PDD_REPO_DIR)/pdd
-	@PUBLIC_DIR=$(PUBLIC_PDD_REPO_DIR) conda run -n pdd --no-capture-output python - <<'PY'
-import os, glob, shutil
-import tomllib
-
-project_root = os.getcwd()
-public_dir = os.environ["PUBLIC_DIR"]
-
-with open(os.path.join(project_root, 'pyproject.toml'), 'rb') as f:
-    cfg = tomllib.load(f)
-
-patterns = cfg.get('tool',{}).get('setuptools',{}).get('package-data',{}).get('pdd', [])
-base = 'pdd'
-
-copied = 0
-for pattern in patterns:
-    for src in glob.glob(os.path.join(base, pattern)):
-        rel = os.path.relpath(src, base)
-        dest = os.path.join(public_dir, 'pdd', rel)
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        shutil.copy2(src, dest)
-        print(f"  Copied {src} -> {dest}")
-        copied += 1
-
-print(f"Total files copied from pyproject package-data: {copied}")
-PY
+		@echo "Copying package-data files defined in pyproject.toml to public repo"
+		@mkdir -p $(PUBLIC_PDD_REPO_DIR)/pdd
+		@conda run -n pdd --no-capture-output python scripts/copy_package_data_to_public.py --dest $(PUBLIC_PDD_REPO_DIR)
 	@echo "Committing and pushing updates in public repo"
 	@cd $(PUBLIC_PDD_REPO_DIR) && git add . && git commit -m "Bump version" && git push || true
 	
