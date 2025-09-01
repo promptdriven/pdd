@@ -52,6 +52,9 @@ PUBLIC_ROOT_FILES ?= LICENSE CHANGELOG.md CONTRIBUTING.md requirements.txt pypro
 PUBLIC_COPY_TESTS ?= 1
 PUBLIC_TEST_INCLUDE ?= tests/test_*.py tests/__init__.py
 PUBLIC_TEST_EXCLUDE ?= tests/regression* tests/sync_regression* tests/**/regression* tests/**/sync_regression* tests/**/*.ipynb tests/csv/**
+PUBLIC_COPY_CONTEXT ?= 1
+PUBLIC_CONTEXT_INCLUDE ?= context/*_example.py
+PUBLIC_CONTEXT_EXCLUDE ?= context/**/__pycache__ context/**/*.log context/**/*.csv
 
 # Python files
 PY_PROMPTS := $(wildcard $(PROMPTS_DIR)/*_python.prompt)
@@ -470,6 +473,16 @@ release:
 			$(foreach xpat,$(PUBLIC_TEST_EXCLUDE),--tests-exclude $(xpat)); \
 	else \
 		echo "Skipping tests copy (PUBLIC_COPY_TESTS=$(PUBLIC_COPY_TESTS))"; \
+	fi
+	@if [ "$(PUBLIC_COPY_CONTEXT)" = "1" ]; then \
+		echo "Copying context examples to public repo"; \
+		conda run -n pdd --no-capture-output python scripts/copy_package_data_to_public.py \
+			--dest $(PUBLIC_PDD_REPO_DIR) \
+			--copy-context \
+			$(foreach pat,$(PUBLIC_CONTEXT_INCLUDE),--context-include $(pat)) \
+			$(foreach xpat,$(PUBLIC_CONTEXT_EXCLUDE),--context-exclude $(xpat)); \
+	else \
+		echo "Skipping context copy (PUBLIC_COPY_CONTEXT=$(PUBLIC_COPY_CONTEXT))"; \
 	fi
 		@echo "Copying package-data files defined in pyproject.toml to public repo"
 		@mkdir -p $(PUBLIC_PDD_REPO_DIR)/pdd
