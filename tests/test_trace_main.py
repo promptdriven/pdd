@@ -461,7 +461,7 @@ def test_trace_main_missing_strength_temperature(mock_rprint, mock_trace, mock_c
         "Missing params code content.",
         code_line,
         "Missing params prompt content.",
-        0.9,  # Default strength from mock_ctx
+        0.75,  # Default strength from mock_ctx
         0.0,   # Default temperature from mock_ctx
         time=0.25
     )
