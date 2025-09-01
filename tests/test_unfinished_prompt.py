@@ -328,3 +328,71 @@ def test_unfinished_prompt_llm_marks_complete_python_as_finished_integration():
         f"Reason: {reasoning}"
     )
 
+ 
+
+
+@pytest.mark.skipif(
+    os.getenv("PDD_RUN_LLM_TESTS") != "1",
+    reason="Integration test requires live LLM access; set PDD_RUN_LLM_TESTS=1 to run.",
+)
+def test_unfinished_prompt_marks_tail_with_closing_fence_as_finished():
+    """
+    Integration test: a logically complete Python tail that ends with a closing
+    code fence (```\n) should be treated as finished. Reproduces the scenario
+    where continue_generation inspects a tail containing fence artifacts.
+    """
+    # Ensure prompts resolve from the package prompts dir
+    repo_root = Path(__file__).resolve().parents[1]
+    os.environ.setdefault("PDD_PATH", str(repo_root / "pdd"))
+
+    from pdd.unfinished_prompt import unfinished_prompt
+
+    # Tail fragment: valid concluding line followed by closing fence
+    sample_tail = "    return a + b\n```\n"
+
+    reasoning, is_finished, cost, model = unfinished_prompt(
+        prompt_text=sample_tail,
+        strength=0.5,
+        temperature=0.0,
+        time=0.0,
+        language="python",
+        verbose=False,
+    )
+
+    assert is_finished is True, (
+        f"Expected tail with closing fence to be considered finished; got {is_finished}. "
+        f"Reason: {reasoning}"
+    )
+
+
+@pytest.mark.skipif(
+    os.getenv("PDD_RUN_LLM_TESTS") != "1",
+    reason="Integration test requires live LLM access; set PDD_RUN_LLM_TESTS=1 to run.",
+)
+def test_unfinished_prompt_marks_mid_block_tail_without_dangling_as_finished():
+    """
+    Integration test: a mid-block tail that ends cleanly (no dangling tokens
+    like 'return a +' or trailing comma) should be considered finished, even
+    without full module context.
+    """
+    repo_root = Path(__file__).resolve().parents[1]
+    os.environ.setdefault("PDD_PATH", str(repo_root / "pdd"))
+
+    from pdd.unfinished_prompt import unfinished_prompt
+
+    # Mid-block tail that is a complete statement on its own
+    sample_tail = "    return a + b\n"
+
+    reasoning, is_finished, cost, model = unfinished_prompt(
+        prompt_text=sample_tail,
+        strength=0.5,
+        temperature=0.0,
+        time=0.0,
+        language="python",
+        verbose=False,
+    )
+
+    assert is_finished is True, (
+        f"Expected clean mid-block tail to be considered finished; got {is_finished}. "
+        f"Reason: {reasoning}"
+    )
