@@ -131,6 +131,20 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         help="Glob pattern of test files to exclude (can be repeated)",
     )
+    # Optional: copy context examples
+    parser.add_argument("--copy-context", action="store_true", help="Copy context example files to public repo")
+    parser.add_argument(
+        "--context-include",
+        action="append",
+        default=[],
+        help="Glob pattern of context files to include (can be repeated)",
+    )
+    parser.add_argument(
+        "--context-exclude",
+        action="append",
+        default=[],
+        help="Glob pattern of context files to exclude (can be repeated)",
+    )
     args = parser.parse_args(argv)
 
     pyproject_path = os.path.join(args.project_root, "pyproject.toml")
@@ -192,6 +206,38 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  Copied {src} -> {dest}")
             copied_tests += 1
         print(f"Total test files copied: {copied_tests}")
+
+    # Optionally copy context example files
+    if args.copy_context:
+        candidates: set[str] = set()
+        include_patterns = args.context_include or []
+        if not include_patterns:
+            include_patterns = [
+                "context/*_example.py",
+            ]
+        for pat in include_patterns:
+            for path in glob.glob(os.path.join(args.project_root, pat), recursive=True):
+                if os.path.isfile(path):
+                    candidates.add(path)
+
+        def is_ctx_excluded(path: str) -> bool:
+            rel = os.path.relpath(path, args.project_root)
+            for xpat in args.context_exclude or []:
+                if fnmatch.fnmatch(rel, xpat) or fnmatch.fnmatch(path, xpat):
+                    return True
+            return False
+
+        copied_ctx = 0
+        for src in sorted(candidates):
+            if is_ctx_excluded(src):
+                continue
+            rel = os.path.relpath(src, args.project_root)
+            dest = os.path.join(args.dest, rel)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            shutil.copy2(src, dest)
+            print(f"  Copied {src} -> {dest}")
+            copied_ctx += 1
+        print(f"Total context files copied: {copied_ctx}")
     return 0
 
 

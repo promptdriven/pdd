@@ -11,10 +11,13 @@
     - `output` (`Optional[str]`): Path to save the trace analysis results.
 
     Outputs:
-    - Returns a tuple containing (`str`, `float`, `str`):
-      - `str`: The line number in the prompt file corresponding to the code line.
+    - Returns a tuple containing (`int`, `float`, `str`):
+      - `int`: The line number in the prompt file corresponding to the code line.
       - `float`: The total cost of the operation.
       - `str`: The name of the model used.
+
+    Notes:
+    - If no matching prompt line is found (or an error occurs), the function prints an error message (unless `--quiet`) and exits via `ctx.exit(1)`; it does not return `None`.
 
 <examples>
    % Here is how to use the Python Click library to create a command line program:
@@ -31,36 +34,7 @@
 
       - Here is an example of how to use the `trace` function:
       <trace_example>
-      ```python
-      from pdd.trace import trace # Assuming pdd.trace is the correct module path
-
-      # Example usage of the trace function
-      code_content = """
-      def hello_world():
-          print("Hello, PDD!") # Line 2
-      """
-      code_line_to_trace = 2
-      prompt_content = """
-      % Create a Python function that prints "Hello, PDD!".
-      """
-      strength = 0.5
-      temperature = 0.0
-      time_limit = 60.0 # Example time limit in seconds, e.g., DEFAULT_TIME
-
-      try:
-          # Assuming the trace function signature is now trace(code, code_line, prompt, strength, temperature, time)
-          prompt_line, total_cost, model_name = trace(
-              code_content, code_line_to_trace, prompt_content, strength, temperature, time_limit
-          )
-          if prompt_line:
-              print(f"The code on line {code_line_to_trace} corresponds to prompt line: {prompt_line}")
-              print(f"Total cost: ${total_cost:.6f}")
-              print(f"Model used: {model_name}")
-          else:
-              print("Could not trace the code line to the prompt.")
-      except Exception as e:
-          print(f"An error occurred: {e}")
-      ```
+         <include>context/trace_example.py</include>
       </trace_example>
    </internal_example_modules>
 </examples>
@@ -71,24 +45,39 @@
       - Ensure that existing files are handled appropriately based on the `--force` and `--quiet` options.
 
    2. **Load Input Files**:
-      - Read the contents of `prompt_file` and `code_file`.
+      - Use `construct_paths` to both resolve the file paths and read their contents.
+      - Access contents via `input_strings`, e.g., `prompt_content = input_strings["prompt_file"]` and `code_content = input_strings["code_file"]`.
       - Handle any file reading exceptions and provide informative error messages.
 
    3. **Perform Trace Analysis**:
-      - Retrieve `strength = ctx.obj.get('strength', DEFAULT_STRENGTH)`, `temperature = ctx.obj.get('temperature', DEFAULT_TEMPERATURE)`, and `time = ctx.obj.get('time', DEFAULT_TIME)`. (Assuming DEFAULT_STRENGTH, DEFAULT_TEMPERATURE, and DEFAULT_TIME are defined constants or will be handled by Click).
-      - Call the `trace` function with the contents of the code and prompt files, along with the `code_line`, `prompt_content`, `strength`, `temperature`, and `time`.
-      - Capture the returned prompt line (`str`), total cost (`float`), and model name (`str`).
+      - Retrieve `strength = ctx.obj.get('strength', DEFAULT_STRENGTH)`, `temperature = ctx.obj.get('temperature', DEFAULT_TEMPERATURE)`, and `time = ctx.obj.get('time', DEFAULT_TIME)`.
+      - Call `trace` as: `prompt_line, total_cost, model_name = trace(code_content, code_line, prompt_content, strength, temperature, time=time)`.
+      - Capture the returned prompt line (`int`), total cost (`float`), and model name (`str`).
+      - Do not pass a `verbose` flag to `trace`; CLI messaging uses Rich and respects `--quiet`.
 
    4. **Save Results**:
-      - Write the trace analysis results to a file if `output` is specified.
-      - Include the total cost and model name in the output.
+      - If `output` is specified, use `output_file_paths["output"]` from `construct_paths`.
+      - Ensure the output directory exists (create it if necessary).
+      - Write a plain-text file containing:
+        - `Prompt Line: {prompt_line}`
+        - `Total Cost: ${total_cost:.6f}`
+        - `Model Used: {model_name}`
 
    5. **Provide User Feedback**:
-      - Use `rprint` from the Rich library to display messages to the user, indicating success or failure.
-      - Respect the verbosity levels determined by the `--quiet` option.
+      - Use `rprint` from the Rich library to display messages.
+      - Respect `--quiet`.
+      - On success, print:
+        - "Trace Analysis Complete"
+        - "Corresponding prompt line: {prompt_line}"
+        - "Total cost: ${total_cost:.6f}"
+        - "Model used: {model_name}"
+      - If `prompt_line` is not found, print "Trace analysis failed" and exit via `ctx.exit(1)`.
 
    6. **Error Handling**:
       - Wrap the main logic in a `try-except` block.
-      - Catch exceptions, display error messages using `rprint`, and exit gracefully using `ctx.exit(1)` if necessary.
+      - Handle specific errors and exit via `ctx.exit(1)`:
+        - `FileNotFoundError`: print "File not found: ..."
+        - `ValueError` (invalid inputs to `trace`): print "Invalid input: ..."
+        - Other exceptions: print "An unexpected error occurred: ..."
 
-% Ensure that the function adheres to the existing codebase's coding style, including proper typing annotations, docstrings, and exception handling.
+% Ensure that the function adheres to the existing codebase's coding style, including proper typing annotations, docstrings, and exception handling. Import defaults as `from pdd import DEFAULT_STRENGTH, DEFAULT_TEMPERATURE, DEFAULT_TIME`.
