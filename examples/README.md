@@ -18,6 +18,12 @@ The hello_world example demonstrates how PDD can be used to generate code for a 
 The pi_calc example demonstrates how PDD can be used to generate code for a simple Python function that calculates the value of Pi. This example shows:
 - How PDD can be used to generate code for a simple Python function using the sync command
 
+### QR Code Sandwich
+The qrcode_sandwich example demonstrates how PDD can be used to generate code that produces scannable QR codes embedded within photorealistic images using ControlNet QR conditioning. This example shows:
+- Creating a QR code that blends into a realistic image while remaining scannable
+- Leveraging ControlNet QR conditioning in a generated Python script
+- Iterating with PDD to refine parameters and results
+
 More examples will be added to this directory as they are developed.
 
 ## Purpose
