@@ -46,6 +46,8 @@ help:
  
 # Public repo paths (override via env if needed)
 PUBLIC_PDD_REPO_DIR ?= staging/public/pdd
+# Top-level files to publish if present
+PUBLIC_ROOT_FILES ?= LICENSE CHANGELOG.md CONTRIBUTING.md requirements.txt pyproject.toml
 
 # Python files
 PY_PROMPTS := $(wildcard $(PROMPTS_DIR)/*_python.prompt)
@@ -448,6 +450,13 @@ release:
 	@echo "Copying VS Code extension to public repo"
 	@mkdir -p $(PUBLIC_PDD_REPO_DIR)/utils
 	@cp -r ./utils/vscode_prompt $(PUBLIC_PDD_REPO_DIR)/utils/
+	@echo "Copying selected top-level files to public repo (if present): $(PUBLIC_ROOT_FILES)"
+	@set -e; for f in $(PUBLIC_ROOT_FILES); do \
+		if [ -f "$$f" ]; then \
+			echo "  -> $$f"; \
+			cp "$$f" $(PUBLIC_PDD_REPO_DIR)/; \
+		fi; \
+	done
 		@echo "Copying package-data files defined in pyproject.toml to public repo"
 		@mkdir -p $(PUBLIC_PDD_REPO_DIR)/pdd
 		@conda run -n pdd --no-capture-output python scripts/copy_package_data_to_public.py --dest $(PUBLIC_PDD_REPO_DIR)
