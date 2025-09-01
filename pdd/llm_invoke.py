@@ -124,6 +124,22 @@ def _is_wsl_environment() -> bool:
         return False
 
 
+def _openai_responses_supports_response_format() -> bool:
+    """Detect if current OpenAI Python SDK supports `response_format` on Responses.create.
+
+    Returns True if the installed SDK exposes a `response_format` parameter on
+    `openai.resources.responses.Responses.create`, else False. This avoids
+    sending unsupported kwargs and triggering TypeError at runtime.
+    """
+    try:
+        import inspect
+        from openai.resources.responses import Responses
+        sig = inspect.signature(Responses.create)
+        return "response_format" in sig.parameters
+    except Exception:
+        return False
+
+
 def _get_environment_info() -> Dict[str, str]:
     """
     Get environment information for debugging and error reporting.
@@ -1196,28 +1212,34 @@ def llm_invoke(
                         text_block = {"format": {"type": "text"}}
 
                         # If structured output requested, attempt JSON schema via Pydantic
+                        # GPT-5 Responses API does not support temperature; omit it here.
                         responses_kwargs = {
                             "model": model_name_litellm,
                             "input": input_text,
-                            "temperature": temperature,
                             "text": text_block,
                         }
+                        if verbose and temperature not in (None, 0, 0.0):
+                            logger.info("[INFO] Skipping 'temperature' for OpenAI GPT-5 Responses call (unsupported by API).")
                         if reasoning_param is not None:
                             responses_kwargs["reasoning"] = reasoning_param
 
                         if output_pydantic:
                             try:
                                 schema = output_pydantic.model_json_schema()
-                                responses_kwargs["response_format"] = {
-                                    "type": "json_schema",
-                                    "json_schema": {
-                                        "name": output_pydantic.__name__,
-                                        "schema": schema,
-                                        "strict": True,
-                                    },
-                                }
-                                # When enforcing JSON schema, omit text formatting
-                                responses_kwargs.pop("text", None)
+                                if _openai_responses_supports_response_format():
+                                    responses_kwargs["response_format"] = {
+                                        "type": "json_schema",
+                                        "json_schema": {
+                                            "name": output_pydantic.__name__,
+                                            "schema": schema,
+                                            "strict": True,
+                                        },
+                                    }
+                                    # When enforcing JSON schema, omit text formatting
+                                    responses_kwargs.pop("text", None)
+                                else:
+                                    if verbose:
+                                        logger.info("[INFO] OpenAI SDK lacks Responses.response_format; will validate JSON client-side with Pydantic.")
                             except Exception as schema_e:
                                 logger.warning(f"[WARN] Failed to derive JSON schema from Pydantic: {schema_e}. Proceeding without structured response_format.")
 
