@@ -131,8 +131,21 @@ def summarize_directory(
                 raise ValueError("Invalid CSV file format.")
             existing_data = parse_existing_csv(csv_file, verbose)
 
+        # Expand directory_path: support plain directories or glob patterns
+        try:
+            normalized_input = normalize_path(directory_path)
+        except Exception:
+            normalized_input = directory_path
+
+        if os.path.isdir(normalized_input):
+            # Recursively include all files under the directory
+            search_pattern = os.path.join(normalized_input, "**", "*")
+        else:
+            # Treat as a glob pattern (may be a single file path too)
+            search_pattern = directory_path
+
         # Get list of files first to ensure consistent order
-        files = sorted(glob.glob(directory_path, recursive=True))
+        files = sorted(glob.glob(search_pattern, recursive=True))
         if not files:
             if verbose:
                 print("[yellow]No files found.[/yellow]")
