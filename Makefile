@@ -47,7 +47,7 @@ help:
 # Public repo paths (override via env if needed)
 PUBLIC_PDD_REPO_DIR ?= staging/public/pdd
 # Top-level files to publish if present
-PUBLIC_ROOT_FILES ?= LICENSE CHANGELOG.md CONTRIBUTING.md requirements.txt pyproject.toml
+PUBLIC_ROOT_FILES ?= LICENSE CHANGELOG.md CONTRIBUTING.md requirements.txt pyproject.toml .env.example
 # Include core unit tests by default
 PUBLIC_COPY_TESTS ?= 1
 PUBLIC_TEST_INCLUDE ?= tests/test_*.py tests/__init__.py
