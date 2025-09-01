@@ -183,6 +183,69 @@ def trace(
                         f"[yellow]Low-confidence match selected (ratio={highest_ratio:.3f}).[/yellow]"
                     )
 
+        # Step 7b: Multi-line window matching (sizes 2 and 3) if no strong single-line match
+        if (best_match is None) or (highest_ratio < primary_threshold):
+            if verbose:
+                console.print("[blue]No strong single-line match; trying multi-line windows...[/blue]")
+
+            win_best_ratio = 0.0
+            win_best_idx: Optional[int] = None
+            win_best_size = 0
+
+            for window_size in (2, 3):
+                if len(prompt_lines) < window_size:
+                    continue
+                for start_idx in range(1, len(prompt_lines) - window_size + 2):
+                    window_lines = prompt_lines[start_idx - 1 : start_idx - 1 + window_size]
+                    window_text = " ".join(window_lines)
+                    normalized_window = normalize_text(window_text).casefold()
+                    seg_len = len(normalized_window)
+                    if seg_len == 0:
+                        continue
+
+                    ratio = difflib.SequenceMatcher(None, normalized_search, normalized_window).ratio()
+
+                    # Containment boost under similar length condition
+                    shorter = min(len(normalized_search), seg_len)
+                    longer = max(len(normalized_search), seg_len)
+                    length_ratio = (shorter / longer) if longer else 0.0
+                    if (
+                        normalized_search
+                        and seg_len >= 8
+                        and length_ratio >= 0.4
+                        and (
+                            normalized_search in normalized_window
+                            or normalized_window in normalized_search
+                        )
+                    ):
+                        ratio = max(ratio, 0.999)
+
+                    if verbose:
+                        console.print(
+                            f"Window {start_idx}-{start_idx+window_size-1}: ratio={ratio}"
+                        )
+
+                    # Track best window, prefer higher ratio; tie-breaker: larger window, then longer segment
+                    if ratio > win_best_ratio + 1e-6 or (
+                        abs(ratio - win_best_ratio) < 1e-6
+                        and (window_size > win_best_size or (window_size == win_best_size and seg_len > 0))
+                    ):
+                        win_best_ratio = ratio
+                        win_best_idx = start_idx
+                        win_best_size = window_size
+
+            if win_best_idx is not None and win_best_ratio > highest_ratio:
+                if win_best_ratio >= primary_threshold:
+                    best_match = win_best_idx
+                    highest_ratio = win_best_ratio
+                elif win_best_ratio >= fallback_threshold and best_match is None:
+                    best_match = win_best_idx
+                    highest_ratio = win_best_ratio
+                    if verbose:
+                        console.print(
+                            f"[yellow]Low-confidence multi-line match selected (ratio={win_best_ratio:.3f}).[/yellow]"
+                        )
+
         # Step 8: Return results
         if verbose:
             console.print(f"[green]Found matching line: {best_match}[/green]")

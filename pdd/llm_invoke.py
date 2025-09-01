@@ -1466,7 +1466,6 @@ def llm_invoke(
                                         messages=retry_messages,
                                         temperature=temperature,
                                         response_format=response_format,
-                                        max_completion_tokens=max_tokens,
                                         **time_kwargs
                                     )
                                     # Re-enable cache - restore original configured cache (restore to original state, even if None)
