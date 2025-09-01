@@ -44,9 +44,9 @@ def test_load_prompt_template_missing_pdd_path(monkeypatch, capsys):
     # Assert that the function returns None
     assert result is None
 
-    # Capture the printed error message
+    # Capture the printed error message (should list tried candidate locations)
     captured = capsys.readouterr()
-    assert "PDD_PATH environment variable is not set" in captured.out
+    assert "Prompt file not found in any candidate locations" in captured.out
 
 # Test Case 3: Prompt file does not exist
 def test_load_prompt_template_file_not_found(monkeypatch, capsys):
@@ -64,12 +64,13 @@ def test_load_prompt_template_file_not_found(monkeypatch, capsys):
         # Assert that the function returns None
         assert result is None
         
-        # Assert that Path.exists was called correctly
-        mock_exists.assert_called_once_with()
+        # Assert that Path.exists was called for each candidate root (PDD_PATH, repo root, CWD)
+        assert mock_exists.call_count == 3
         
-        # Capture the printed error message
+        # Capture the printed error message and ensure it includes the PDD_PATH-based candidate
         captured = capsys.readouterr()
-        assert f"Prompt file not found: {prompt_path}" in captured.out
+        assert "Prompt file not found in any candidate locations" in captured.out
+        assert str(prompt_path) in captured.out
 
 # Test Case 4: IOError when reading the prompt file
 def test_load_prompt_template_io_error(monkeypatch, capsys):
