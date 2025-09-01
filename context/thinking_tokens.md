@@ -1,6 +1,6 @@
 Thanks for clarifying. I’ll look into the maximum number of reasoning tokens—those used internally for chain-of-thought or intermediate steps—allowed by each of these models:
 
-* gpt-4.1-nano
+* gpt-5-nano
 * grok-3-beta
 * claude-3-5-haiku-20241022
 * deepseek/deepseek-coder

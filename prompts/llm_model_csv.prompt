@@ -1,6 +1,6 @@
 % You are an expert AI engineer. Your goal is to write a comprehensive csv file that will have four columns with the headers: 
     - 'provider': OpenAI, Anthropic, etc.
-    - 'model': the available model strings for that provider (e.g. "gpt-4.1-nano")
+    - 'model': the available model strings for that provider (e.g. "gpt-5-nano")
     - 'input': The input cost per million tokens (e.g. 0.15)
     - 'output': The output cost per million tokens (e.g. 0.60)
     - 'coding_arena_elo': The ELO score (e.g., 1300) (Integer, nullable)

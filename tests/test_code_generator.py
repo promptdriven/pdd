@@ -2,6 +2,8 @@ import pytest
 from unittest.mock import patch, MagicMock
 from pdd import EXTRACTION_STRENGTH
 from pdd.code_generator import code_generator
+from pathlib import Path
+from pdd import DEFAULT_STRENGTH
 
 # Define constants for mock returns
 MOCK_PROCESSED_PROMPT = "processed prompt"
@@ -80,6 +82,7 @@ def test_code_generator_valid_input_complete(
         strength=0.5,
         temperature=0.0,
         time=None,
+        language="python",
         verbose=True
     )
     mock_continue_generation.assert_not_called()
@@ -111,7 +114,7 @@ def test_code_generator_valid_input_incomplete(
     runnable_code, total_cost, model_name = code_generator(
         prompt="Generate a Python function to multiply two numbers.",
         language="python",
-        strength=0.9,
+        strength=DEFAULT_STRENGTH,
         temperature=0.7,
         verbose=False
     )
@@ -121,7 +124,7 @@ def test_code_generator_valid_input_incomplete(
     mock_llm_invoke.assert_called_once_with(
         prompt=MOCK_PROCESSED_PROMPT,
         input_json={},
-        strength=0.9,
+        strength=DEFAULT_STRENGTH,
         temperature=0.7,
         time=None,
         verbose=False
@@ -131,14 +134,16 @@ def test_code_generator_valid_input_incomplete(
         strength=0.5,
         temperature=0.0,
         time=None,
+        language="python",
         verbose=False
     )
     mock_continue_generation.assert_called_once_with(
         formatted_input_prompt=MOCK_PROCESSED_PROMPT,
         llm_output=MOCK_INITIAL_RESPONSE['result'],
-        strength=0.9,
+        strength=DEFAULT_STRENGTH,
         temperature=0.7,
         time=None,
+        language="python",
         verbose=False
     )
     mock_postprocess.assert_called_once_with(
@@ -292,6 +297,7 @@ def test_code_generator_edge_case_exact_600_chars(
         strength=0.5,
         temperature=0.0,
         time=None,
+        language="python",
         verbose=False
     )
     mock_continue_generation.assert_not_called()
@@ -306,3 +312,91 @@ def test_code_generator_edge_case_exact_600_chars(
     assert runnable_code == "runnable_code_here"
     assert total_cost == 0.05 + 0.01 + 0.02
     assert model_name == "model_v1"
+
+def test_generate_loops_when_unfinished_never_true(monkeypatch):
+    """
+    Replicates the loop by forcing unfinished_prompt to always return False.
+    This simulates the case where a syntactically complete Python snippet is
+    (incorrectly) judged as unfinished, causing continue_generation to loop
+    until its MAX_GENERATION_LOOPS guard kicks in.
+    """
+    # Ensure PDD_PATH is set so load_prompt_template can find prompts
+    repo_root = Path(__file__).resolve().parents[1]
+    pdd_dir = repo_root / "pdd"
+    monkeypatch.setenv("PDD_PATH", str(pdd_dir))
+
+    # Import targets after env is set
+    from pdd.code_generator import code_generator as cg_func
+    import pdd.code_generator as code_gen_mod
+    import pdd.continue_generation as cont_mod
+
+    # Keep MAX loops small so test runs quickly
+    monkeypatch.setattr(cont_mod, "MAX_GENERATION_LOOPS", 3, raising=False)
+
+    # Count how many times unfinished is called (initial + loop checks)
+    call_counts = {"unfinished": 0}
+
+    def always_unfinished_stub(*args, **kwargs):
+        # unfinished_prompt returns: (reasoning: str, is_finished: bool, total_cost: float, model_name: str)
+        call_counts["unfinished"] += 1
+        return ("mock reasoning", False, 0.0, "mock-model")
+
+    # Patch both the reference used in code_generator and in continue_generation
+    monkeypatch.setattr(code_gen_mod, "unfinished_prompt", always_unfinished_stub, raising=False)
+    monkeypatch.setattr(cont_mod, "unfinished_prompt", always_unfinished_stub, raising=False)
+
+    # Initial model call during code_generator to produce first output
+    initial_code = "def add(a, b):\n    return a + b\n"
+
+    def code_gen_llm_invoke_stub(*args, **kwargs):
+        # Return an initial LLM output resembling a complete python function
+        return {"result": initial_code, "cost": 0.0, "model_name": "mock"}
+
+    # Continue/trimming LLM calls inside continue_generation
+    def cont_llm_invoke_stub(*, prompt, input_json, strength, temperature, time, verbose=False, output_pydantic=None):
+        text_prompt = str(prompt)
+        # Trim start prompt (typed output)
+        if "expert editor and JSON creator" in text_prompt:
+            result = cont_mod.TrimResultsStartOutput(explanation="trim start", code_block=initial_code)
+            return {"result": result, "cost": 0.0, "model_name": "mock"}
+        # Continue prompt (string output)
+        if "continue, by outputting only the rest of the code" in text_prompt:
+            return {"result": "\n# cont", "cost": 0.0, "model_name": "mock"}
+        # Trim overlap prompt (typed output)
+        if "expert JSON editor" in text_prompt and output_pydantic is cont_mod.TrimResultsOutput:
+            result = cont_mod.TrimResultsOutput(explanation="trim", trimmed_continued_generation="# cont")
+            return {"result": result, "cost": 0.0, "model_name": "mock"}
+        # Default: behave like no-op
+        if output_pydantic is not None:
+            # Generic typed response: create an instance with permissive defaults if possible
+            field_names = list(output_pydantic.model_fields.keys())
+            values = {field_names[0]: "ok"}
+            return {"result": output_pydantic(**values), "cost": 0.0, "model_name": "mock"}
+        return {"result": "", "cost": 0.0, "model_name": "mock"}
+
+    # Patch llm_invoke in both modules
+    monkeypatch.setattr(code_gen_mod, "llm_invoke", code_gen_llm_invoke_stub, raising=False)
+    monkeypatch.setattr(cont_mod, "llm_invoke", cont_llm_invoke_stub, raising=False)
+
+    # Postprocess: bypass LLM and return the combined code directly
+    def postprocess_passthrough(llm_output, language, strength=DEFAULT_STRENGTH, temperature=0.0, time=None, verbose=False):
+        return (llm_output, 0.0, "mock")
+
+    monkeypatch.setattr(code_gen_mod, "postprocess", postprocess_passthrough, raising=False)
+
+    # Run generator with the simple math prompt content
+    prompt_text = (repo_root / "prompts" / "simple_math_python.prompt").read_text()
+    final_code, total_cost, model_name = cg_func(
+        prompt=prompt_text,
+        language="python",
+        strength=0.6,
+        temperature=0.0,
+        time=0.0,
+        preprocess_prompt=True,
+    )
+
+    # Assert: unfinished was called multiple times (initial + loop checks)
+    assert call_counts["unfinished"] >= 2, f"Expected multiple unfinished checks, got {call_counts['unfinished']}"
+
+    # Assert: final code includes the continuation at least once (loop happened)
+    assert "# cont" in final_code

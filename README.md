@@ -1100,7 +1100,7 @@ pdd [GLOBAL OPTIONS] bug --output tests/test_factorial_calculator_bug.py factori
 
 ### 15. auto-deps
 
-Analyze a prompt file and a directory of potential dependencies to determine and insert needed dependencies into the prompt.
+Analyze a prompt file and search a directory or glob pattern for potential dependencies/examples to determine and insert into the prompt.
 
 ```
 pdd [GLOBAL OPTIONS] auto-deps [OPTIONS] PROMPT_FILE DIRECTORY_PATH
@@ -1108,7 +1108,7 @@ pdd [GLOBAL OPTIONS] auto-deps [OPTIONS] PROMPT_FILE DIRECTORY_PATH
 
 Arguments:
 - `PROMPT_FILE`: Filename of the prompt file that needs dependencies analyzed and inserted.
-- `DIRECTORY_PATH`: Path to the directory containing potential dependency files (should include glob patterns, e.g., "context/*_example.py").
+- `DIRECTORY_PATH`: Directory path or glob pattern to search for dependency/example files. Supports wildcards like `*.py` and `**/*.py`. You can pass a plain directory (e.g., `examples/`) or a glob (e.g., `examples/**/*.py`). If you pass a plain directory (no wildcards), it is scanned recursively by default (equivalent to `examples/**/*`).
 
 Options:
 - `--output LOCATION`: Specify where to save the modified prompt file with dependencies inserted. The default file name is `<basename>_with_deps.prompt`. If an environment variable `PDD_AUTO_DEPS_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
@@ -1120,9 +1120,16 @@ The command maintains a CSV file with the following columns:
 - `file_summary`: A concise summary of the file's content and purpose
 - `date`: Timestamp of when the file was last analyzed
 
-Example:
+Examples:
 ```
-pdd [GLOBAL OPTIONS] auto-deps --output prompts/data_pipeline_with_deps.prompt --csv project_deps.csv data_processing_pipeline_python.prompt "context/*_example.py"
+# Search all Python files in examples (recursive)
+pdd [GLOBAL OPTIONS] auto-deps --output prompts/data_pipeline_with_deps.prompt --csv project_deps.csv data_processing_pipeline_python.prompt "examples/**/*.py"
+
+# Search example stubs following a naming convention
+pdd [GLOBAL OPTIONS] auto-deps data_processing_pipeline_python.prompt "context/*_example.py"
+
+# Search an entire directory (non-recursive)
+pdd [GLOBAL OPTIONS] auto-deps data_processing_pipeline_python.prompt "examples/*"
 ```
 
 ### 16. verify

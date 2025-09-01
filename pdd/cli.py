@@ -1001,7 +1001,14 @@ def auto_deps(
     auto_deps_csv_path: Optional[str],
     force_scan: bool,
 ) -> Optional[Tuple[str, float, str]]: # Modified return type
-    """Analyze prompt and insert dependencies from a directory."""
+    """Analyze a prompt and insert dependencies from a directory or glob.
+
+    DIRECTORY_PATH accepts either a directory path or a glob pattern and is
+    expanded recursively when you use patterns like `**/*.py`. Examples:
+      - examples/**/*.py
+      - context/*_example.py
+      - examples/*
+    """
     quiet = ctx.obj.get("quiet", False)
     command_name = "auto-deps"
     try:

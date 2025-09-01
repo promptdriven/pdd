@@ -6,7 +6,7 @@
     Inputs:
         'llm_output' - A string containing a mix of text and code sections.
         'language' - A string specifying the programming language of the code to be extracted.
-        'strength' - A float between 0 and 1 that represents the strength of the LLM model to use. Default is 0.9.
+        'strength' - A float between 0 and 1 that represents the strength of the LLM model to use. Default is DEFAULT_STRENGTH.
         'temperature' - A float between 0 and 1 that represents the temperature parameter for the LLM model. Default is 0.
         'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
         'verbose' - A boolean that indicates whether to print detailed processing information. Default is False.

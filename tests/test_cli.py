@@ -107,7 +107,7 @@ def test_cli_global_options_explicit(mock_construct, mock_main, mock_auto_update
 
     result = runner.invoke(cli.cli, [
         "--force",
-        "--strength", "0.9",
+        "--strength", f"{DEFAULT_STRENGTH}",
         "--temperature", "0.5",
         "--verbose",
         "--output-cost", "./output/costs.csv",
@@ -129,7 +129,7 @@ def test_cli_global_options_explicit(mock_construct, mock_main, mock_auto_update
     ctx = mock_main.call_args.kwargs.get('ctx')
     assert ctx is not None
     assert ctx.obj['force'] is True
-    assert ctx.obj['strength'] == 0.9
+    assert ctx.obj['strength'] == DEFAULT_STRENGTH
     assert ctx.obj['temperature'] == 0.5
     assert ctx.obj['verbose'] is True # Not overridden by quiet
     assert ctx.obj['quiet'] is False

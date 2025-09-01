@@ -784,6 +784,25 @@ def test_construct_paths_sync_discovery_mode(tmpdir):
     assert language == ""
 
 
+def test_construct_paths_sync_discovery_requires_basename(tmpdir):
+    """
+    In sync discovery mode (no inputs), a 'basename' in command_options is required.
+    The function should raise a ValueError if it is missing.
+    """
+    input_file_paths = {}
+    force = False
+    quiet = True
+    command = 'sync'
+    command_options = {}  # No basename provided
+
+    with pytest.raises(ValueError) as excinfo:
+        construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+
+    assert 'Basename must be provided' in str(excinfo.value)
+
+
 def test_construct_paths_sync_discovery_prompts_dir_bug_fix(tmpdir):
     """
     Test that the sync discovery mode correctly calculates prompts_dir path

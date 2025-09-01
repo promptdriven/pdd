@@ -5,7 +5,7 @@ import os
 import logging
 from .construct_paths import construct_paths
 from .trace import trace
-from . import DEFAULT_TIME, DEFAULT_STRENGTH
+from . import DEFAULT_TIME, DEFAULT_STRENGTH, DEFAULT_TEMPERATURE
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ def trace_main(ctx: click.Context, prompt_file: str, code_file: str, code_line: 
 
         # Perform trace analysis
         strength = ctx.obj.get('strength', DEFAULT_STRENGTH)
-        temperature = ctx.obj.get('temperature', 0.0)
+        temperature = ctx.obj.get('temperature', DEFAULT_TEMPERATURE)
         time = ctx.obj.get('time', DEFAULT_TIME)
         try:
             prompt_line, total_cost, model_name = trace(

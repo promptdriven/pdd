@@ -21,8 +21,8 @@ def main():
     temperature = 1
     verbose = False
     
-    strength = 0.5
-    while strength <= 0.5:
+    strength = 0.0
+    while strength <= 1:
         print(f"\nStrength: {strength}")
         
         # Example 1: Unstructured Output

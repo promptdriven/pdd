@@ -59,13 +59,13 @@
 
 # IV. Default Parameter Values
 #   34. test_default_parameters: Call `postprocess` with only `llm_output` and `language`.
-#       Mock `llm_invoke` to check if it receives default `strength=0.9`, `temperature=0`, `time=DEFAULT_TIME`, `verbose=False`.
+#       Mock `llm_invoke` to check if it receives default `strength=DEFAULT_STRENGTH`, `temperature=0`, `time=DEFAULT_TIME`, `verbose=False`.
 
 import pytest
 from unittest.mock import patch, MagicMock, call
 
 from pdd.postprocess import postprocess, ExtractedCode
-from pdd import DEFAULT_TIME # Corrected import
+from pdd import DEFAULT_TIME, DEFAULT_STRENGTH # Corrected import
 
 
 # I. Input Validation Tests
@@ -402,7 +402,7 @@ def test_default_parameters(mock_llm_invoke, mock_load_template):
     
     assert kwargs['prompt'] == "default_prompt"
     assert kwargs['input_json'] == {"llm_output": llm_output_val, "language": language_val}
-    assert kwargs['strength'] == 0.9  # Default strength
+    assert kwargs['strength'] == DEFAULT_STRENGTH  # Default strength
     assert kwargs['temperature'] == 0    # Default temperature
     assert kwargs['time'] == DEFAULT_TIME # Default time
     assert kwargs['verbose'] == False   # Default verbose

@@ -51,12 +51,14 @@
 
 % This function will do the following:
     Step 1. Load and preprocess (with parameters recursive=False and double_curly_brackets=False) the 'example_generator_LLM' prompt template.
-    Step 2. Run the code through the model using llm_invoke, passing the 'time' parameter. 
-        2a. Pass the following string parameters to the prompt during invoke:
-            - 'code_module'
-            - 'processed_prompt' (preprocess with parameters recursive=True and double_curly_brackets=True the input prompt)
-            - 'language'
-    Step 3. Detect if the generation is incomplete using the unfinished_prompt function (strength .5) by passing in the last 600 characters of the output of Step 2.
-        - a. If incomplete, call the continue_generation function to complete the generation.
-        - b. Else, if complete, postprocess the model output result using the postprocess function with a strength of 0.9.
-    Step 4. Return the example_code, total_cost, and model_name.
+    Step 2. Preprocess the input 'prompt' with parameters recursive=True and double_curly_brackets=True to produce 'processed_prompt'.
+    Step 3. Run the processed template through the model using llm_invoke, passing:
+        - input_json with keys: 'code_module', 'processed_prompt', and 'language'
+        - the provided 'strength', 'temperature', 'time', and 'verbose' parameters.
+    Step 4. Detect if the generation is incomplete using the unfinished_prompt function (strength 0.5) by passing the last 600 characters of the output of Step 3. Also pass 'temperature', 'time', 'language', and 'verbose'.
+        - a. If incomplete, call the continue_generation function with 'formatted_input_prompt' set to the processed template from Step 1 and 'llm_output' set to the result from Step 3. Also pass 'strength', 'temperature', 'time', 'language', and 'verbose'.
+        - b. Else, use the Step 3 result as the final LLM output.
+    Step 5. Postprocess the final LLM output using the postprocess function with strength EXTRACTION_STRENGTH. Also pass 'temperature', 'time', 'language', and 'verbose'.
+    Step 6. Return the example_code, total_cost, and model_name, where:
+        - total_cost = sum of costs from llm_invoke + unfinished_prompt + (continue_generation if run) + postprocess
+        - model_name = the model that produced the final LLM output before postprocess (continue_generation's model if run, else llm_invoke's).

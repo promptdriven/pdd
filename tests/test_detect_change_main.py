@@ -3,8 +3,7 @@ import click
 from click.testing import CliRunner
 from unittest.mock import patch, MagicMock
 from pdd.detect_change_main import detect_change_main
-import csv
-import os
+from pdd import DEFAULT_STRENGTH
 
 @pytest.fixture
 def mock_construct_paths():
@@ -42,7 +41,7 @@ def test_detect_change_main_success(mock_construct_paths, mock_detect_change, mo
     """
     # Setup mock data
     mock_ctx = MagicMock(spec=click.Context)
-    mock_ctx.obj = {'strength': 0.9, 'temperature': 0, 'force': False, 'quiet': False, 'time': None}
+    mock_ctx.obj = {'strength': DEFAULT_STRENGTH, 'temperature': 0, 'force': False, 'quiet': False, 'time': None}
     mock_ctx.scope_depth = 0
     mock_ctx.params = {}
     mock_ctx.parent = None
@@ -93,7 +92,7 @@ def test_detect_change_main_success(mock_construct_paths, mock_detect_change, mo
     mock_detect_change.assert_called_once_with(
         ['prompt1.prompt', 'prompt2.prompt'],
         'change content',
-        0.9,
+        DEFAULT_STRENGTH,
         0,
         None,
         verbose=True
@@ -113,7 +112,7 @@ def test_detect_change_main_no_changes(mock_construct_paths, mock_detect_change,
     """
     # Setup mock data
     mock_ctx = MagicMock(spec=click.Context)
-    mock_ctx.obj = {'strength': 0.9, 'temperature': 0, 'force': False, 'quiet': False, 'time': None}
+    mock_ctx.obj = {'strength': DEFAULT_STRENGTH, 'temperature': 0, 'force': False, 'quiet': False, 'time': None}
     mock_ctx.scope_depth = 0
     mock_ctx.params = {}
     mock_ctx.parent = None
@@ -143,7 +142,7 @@ def test_detect_change_main_no_changes(mock_construct_paths, mock_detect_change,
     mock_detect_change.assert_called_once_with(
         ['prompt1.prompt'],
         'change content',
-        0.9,
+        DEFAULT_STRENGTH,
         0,
         None,
         verbose=True
@@ -156,7 +155,7 @@ def test_detect_change_main_error(mock_construct_paths, mock_rprint, mock_sys_ex
     """
     # Setup mock data
     mock_ctx = MagicMock(spec=click.Context)
-    mock_ctx.obj = {'strength': 0.9, 'temperature': 0, 'force': False, 'quiet': False, 'time': None}
+    mock_ctx.obj = {'strength': DEFAULT_STRENGTH, 'temperature': 0, 'force': False, 'quiet': False, 'time': None}
     mock_ctx.scope_depth = 0
     mock_ctx.params = {}
     mock_ctx.parent = None
@@ -184,7 +183,7 @@ def test_detect_change_main_quiet_mode(mock_construct_paths, mock_detect_change,
     """
     # Setup mock data
     mock_ctx = MagicMock(spec=click.Context)
-    mock_ctx.obj = {'strength': 0.9, 'temperature': 0, 'force': False, 'quiet': True, 'time': None}
+    mock_ctx.obj = {'strength': DEFAULT_STRENGTH, 'temperature': 0, 'force': False, 'quiet': True, 'time': None}
     mock_ctx.scope_depth = 0
     mock_ctx.params = {}
     mock_ctx.parent = None
@@ -213,7 +212,7 @@ def test_detect_change_main_quiet_mode(mock_construct_paths, mock_detect_change,
     mock_detect_change.assert_called_once_with(
         ['prompt1.prompt'],
         'change content',
-        0.9,
+        DEFAULT_STRENGTH,
         0,
         None,
         verbose=False
@@ -226,7 +225,7 @@ def test_detect_change_main_csv_output(mock_construct_paths, mock_detect_change,
     """
     # Setup mock data
     mock_ctx = MagicMock(spec=click.Context)
-    mock_ctx.obj = {'strength': 0.9, 'temperature': 0, 'force': False, 'quiet': False, 'time': None}
+    mock_ctx.obj = {'strength': DEFAULT_STRENGTH, 'temperature': 0, 'force': False, 'quiet': False, 'time': None}
     mock_ctx.scope_depth = 0
     mock_ctx.params = {}
     mock_ctx.parent = None
@@ -259,7 +258,7 @@ def test_detect_change_main_csv_output(mock_construct_paths, mock_detect_change,
     mock_detect_change.assert_called_once_with(
         ['prompt1.prompt'],
         'change content',
-        0.9,
+        DEFAULT_STRENGTH,
         0,
         None,
         verbose=True

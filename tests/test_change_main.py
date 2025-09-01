@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch, mock_open, call
 from click import Context
 from pdd.change_main import change_main
+from pdd import DEFAULT_STRENGTH
 
 # Helper function to create a mocked Click context
 def create_mock_context(params: dict = None, obj: dict = None):
@@ -31,7 +32,7 @@ def create_mock_context(params: dict = None, obj: dict = None):
     # Ensure default values are present if not provided
     mock_ctx.obj.setdefault('quiet', False)
     mock_ctx.obj.setdefault('force', False)
-    mock_ctx.obj.setdefault('strength', 0.9)
+    mock_ctx.obj.setdefault('strength', DEFAULT_STRENGTH)
     mock_ctx.obj.setdefault('temperature', 0)
     mock_ctx.obj.setdefault('language', 'python')
     mock_ctx.obj.setdefault('extension', '.py')
@@ -176,7 +177,7 @@ def test_change_main_batch_mode(mock_process_csv, setup_environment, caplog, mon
             ctx_instance = create_mock_context(
                 params={"force": True},
                 obj={
-                    "strength": 0.9, "temperature": 0, "budget": 10.0,
+                    "strength": DEFAULT_STRENGTH, "temperature": 0, "budget": 10.0,
                     "verbose": False, "language": "python", "extension": ".py"
                 }
             )
@@ -198,7 +199,7 @@ def test_change_main_batch_mode(mock_process_csv, setup_environment, caplog, mon
     # Verify that process_csv_change was called correctly
     mock_process_csv.assert_called_once_with(
         csv_file=env["batch_changes_csv"],
-        strength=0.9,
+        strength=DEFAULT_STRENGTH,
         temperature=0,
         time=0.25,
         code_directory=env["code_directory"],
