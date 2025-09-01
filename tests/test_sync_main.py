@@ -13,6 +13,7 @@ import pytest
 from click.testing import CliRunner
 
 from pdd.sync_main import sync_main
+from pdd import DEFAULT_STRENGTH
 
 # Test Plan
 #
@@ -356,7 +357,7 @@ def test_sync_cli_overrides_defaults(mock_project_dir, mock_construct_paths, moc
     mock_sync_orchestration.return_value = {"success": True, "total_cost": 0.1}
 
     # Simulate strength and temperature being set via CLI
-    ctx = create_mock_context({"strength": 0.9, "temperature": 0.5, "_cli_set": ["strength", "temperature"]})
+    ctx = create_mock_context({"strength": DEFAULT_STRENGTH, "temperature": 0.5, "_cli_set": ["strength", "temperature"]})
     
     sync_main(
         ctx, "cli_app", max_attempts=5, budget=20.0, skip_verify=True, skip_tests=True, target_coverage=95.0, log=False
@@ -364,7 +365,7 @@ def test_sync_cli_overrides_defaults(mock_project_dir, mock_construct_paths, moc
 
     mock_sync_orchestration.assert_called_once()
     call_args = mock_sync_orchestration.call_args.kwargs
-    assert call_args["strength"] == 0.9
+    assert call_args["strength"] == DEFAULT_STRENGTH
     assert call_args["temperature"] == 0.5
     assert call_args["max_attempts"] == 5
     assert call_args["budget"] == 20.0

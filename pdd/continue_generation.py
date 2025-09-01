@@ -13,7 +13,7 @@ console = Console()
 logger = logging.getLogger(__name__)
 
 # Maximum number of generation loops to prevent infinite loops
-MAX_GENERATION_LOOPS = 100
+MAX_GENERATION_LOOPS = 20
 
 class TrimResultsStartOutput(BaseModel):
     explanation: str = Field(description="The explanation of how you determined what to cut out")
