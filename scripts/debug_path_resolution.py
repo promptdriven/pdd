@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test script to debug path resolution issue"""
+"""Debug script to debug path resolution issue"""
 
 import sys
 import os

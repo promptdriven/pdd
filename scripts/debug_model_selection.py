@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test script to check which model PDD would select"""
+"""Debug script to check which model PDD would select"""
 
 import os
 import sys

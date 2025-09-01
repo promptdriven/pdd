@@ -243,6 +243,20 @@ run_pdd_expect_fail() {
     fi
 }
 
+# --- Portable Timeout Helper ---
+# Prefer GNU timeout if available (macOS installs it as gtimeout via coreutils)
+TIMEOUT_CMD="$(command -v timeout || command -v gtimeout || true)"
+run_with_timeout() {
+    local duration="$1"; shift
+    if [ -n "$TIMEOUT_CMD" ]; then
+        "$TIMEOUT_CMD" "$duration" "$@"
+    else
+        # No timeout available; run command without enforcing a timeout
+        log "No timeout command found; running without timeout: $*"
+        "$@"
+    fi
+}
+
 wait_for_sync_completion() {
     local basename="$1"
     local timeout="${2:-30}" # Default 30 seconds timeout
@@ -861,13 +875,13 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "10" ]; then
     # Test sync lock mechanism (simplified)
     log "10a. Testing sync lock mechanism"
     # Start a background sync with timeout - direct command execution
-    timeout 30s "$PDD_SCRIPT" --force --output-cost "$REGRESSION_DIR/$COST_FILE" --strength "$STRENGTH" --temperature "$TEMPERATURE" sync "$SIMPLE_BASENAME" >> "$LOG_FILE" 2>&1 &
+    run_with_timeout 30s "$PDD_SCRIPT" --force --output-cost "$REGRESSION_DIR/$COST_FILE" --strength "$STRENGTH" --temperature "$TEMPERATURE" sync "$SIMPLE_BASENAME" >> "$LOG_FILE" 2>&1 &
     BACKGROUND_PID=$!
     
     # Try to run another sync immediately (should be blocked or handle gracefully)
     sleep 2
     log "Testing concurrent sync execution..."
-    timeout 15s "$PDD_SCRIPT" --force --output-cost "$REGRESSION_DIR/$COST_FILE" --strength "$STRENGTH" --temperature "$TEMPERATURE" sync "$SIMPLE_BASENAME" >> "$LOG_FILE" 2>&1
+    run_with_timeout 15s "$PDD_SCRIPT" --force --output-cost "$REGRESSION_DIR/$COST_FILE" --strength "$STRENGTH" --temperature "$TEMPERATURE" sync "$SIMPLE_BASENAME" >> "$LOG_FILE" 2>&1
     CONCURRENT_EXIT_CODE=$?
     
     if [ $CONCURRENT_EXIT_CODE -eq 0 ]; then
