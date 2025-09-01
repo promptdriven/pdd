@@ -48,6 +48,10 @@ help:
 PUBLIC_PDD_REPO_DIR ?= staging/public/pdd
 # Top-level files to publish if present
 PUBLIC_ROOT_FILES ?= LICENSE CHANGELOG.md CONTRIBUTING.md requirements.txt pyproject.toml
+# Include core unit tests by default
+PUBLIC_COPY_TESTS ?= 1
+PUBLIC_TEST_INCLUDE ?= tests/test_*.py tests/__init__.py
+PUBLIC_TEST_EXCLUDE ?= tests/regression* tests/sync_regression* tests/**/regression* tests/**/sync_regression* tests/**/*.ipynb tests/csv/**
 
 # Python files
 PY_PROMPTS := $(wildcard $(PROMPTS_DIR)/*_python.prompt)
@@ -457,6 +461,16 @@ release:
 			cp "$$f" $(PUBLIC_PDD_REPO_DIR)/; \
 		fi; \
 	done
+	@if [ "$(PUBLIC_COPY_TESTS)" = "1" ]; then \
+		echo "Copying core unit tests to public repo"; \
+		conda run -n pdd --no-capture-output python scripts/copy_package_data_to_public.py \
+			--dest $(PUBLIC_PDD_REPO_DIR) \
+			--copy-tests \
+			$(foreach pat,$(PUBLIC_TEST_INCLUDE),--tests-include $(pat)) \
+			$(foreach xpat,$(PUBLIC_TEST_EXCLUDE),--tests-exclude $(xpat)); \
+	else \
+		echo "Skipping tests copy (PUBLIC_COPY_TESTS=$(PUBLIC_COPY_TESTS))"; \
+	fi
 		@echo "Copying package-data files defined in pyproject.toml to public repo"
 		@mkdir -p $(PUBLIC_PDD_REPO_DIR)/pdd
 		@conda run -n pdd --no-capture-output python scripts/copy_package_data_to_public.py --dest $(PUBLIC_PDD_REPO_DIR)
