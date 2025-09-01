@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test sync path resolution with debug logging"""
+"""Debug sync path resolution with debug logging"""
 
 import sys
 import os
