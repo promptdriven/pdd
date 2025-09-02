@@ -1,0 +1,332 @@
+% You are an expert Software Engineer. Your goal is to extract a JSON (containing keys that have the entire updated code under test and/or unit test) from an analysis of a unit test bug fix report. If there is a choice of updating the unit test or the code under test to resolve the problem, you should chose to update the code under test.
+
+% Here is the original unit test code: <unit_test>{unit_test}</unit_test>
+
+% Here is the original code under test: <code_under_test>{code}</code_under_test>
+
+% Here is the unit test bug fix report: <fix_report>{unit_test_fix}</fix_report>
+
+% Sometimes the fix report may only contain partial code snippet(s) of the unit test and/or code under test. In these cases, you need to incorporate the partial fix(es) into the original unit test and/or original code under test so the test and code files are always complete. Read the text around the code block to determine this. Also, often this is signified by comments in the code like:
+    - `# Rest of the code remains the same`, 
+    - `# Other tests remain unchanged`
+    - `# ... [remaining test functions remain unchanged]` or 
+    - `# ... rest of the test file remains unchanged ...` at the end of code snippets. 
+
+% Here are examples of inputs and proper outputs of this prompt:
+    <examples>
+        <example_1>
+            <input_example>
+                <unit_test_example>
+                    import pytest
+                    from auth_service import AuthService
+
+                    @pytest.fixture
+                    def auth_service():
+                        return AuthService()
+
+                    def test_valid_login(auth_service):
+                        result = auth_service.login("user@example.com", "password123")
+                        assert result.success
+                        assert result.token is not None
+
+                    def test_invalid_password(auth_service):
+                        result = auth_service.login("user@example.com", "wrongpass")
+                        assert not result.success
+                        assert result.token is None
+                </unit_test_example>
+
+                <fix_report_example>
+                    ```python
+                    # Code above this line remains the same
+                    def test_invalid_email_format(auth_service):
+                        result = auth_service.login("invalid-email", "password123")
+                        assert not result.success
+                        assert result.error == "Invalid email format"
+
+                    def test_empty_credentials(auth_service):
+                        result = auth_service.login("", "")
+                        assert not result.success
+                        assert result.error == "Email and password required"
+                    ```
+                </fix_report_example>
+            </input_example>
+
+            <output_example>
+                <fixed_unit_test_example>
+                import pytest
+                from auth_service import AuthService
+
+                @pytest.fixture
+                def auth_service():
+                    return AuthService()
+
+                def test_valid_login(auth_service):
+                    result = auth_service.login("user@example.com", "password123")
+                    assert result.success
+                    assert result.token is not None
+
+                def test_invalid_password(auth_service):
+                    result = auth_service.login("user@example.com", "wrongpass")
+                    assert not result.success
+                    assert result.token is None
+
+                def test_invalid_email_format(auth_service):
+                    result = auth_service.login("invalid-email", "password123")
+                    assert not result.success
+                    assert result.error == "Invalid email format"
+
+                def test_empty_credentials(auth_service):
+                    result = auth_service.login("", "")
+                    assert not result.success
+                    assert result.error == "Email and password required"
+                </fixed_unit_test_example>
+            <output_example>
+        </example_1>
+
+        <example_2>
+            <input_example>
+                <unit_test_example>
+                    import pytest
+                    from auth_service import AuthService
+
+                    @pytest.fixture
+                    def auth_service():
+                        return AuthService()
+
+                    def test_valid_login(auth_service):
+                        result = auth_service.login("user@example.com", "password123")
+                        assert result.success
+                        assert result.token is not None
+
+                    def test_invalid_password(auth_service):
+                        result = auth_service.login("user@example.com", "wrongpass")
+                        assert not result.success
+                        assert result.token is None
+                </unit_test_example>
+
+                <fix_report_example>
+                    ```python
+                    import pytest
+                    from auth_service import AuthService                    
+
+                    # ... [other tests] ...
+
+                    def test_invalid_email_format(auth_service):
+                        result = auth_service.login("invalid-email", "password123")
+                        assert not result.success
+                        assert result.error == "Invalid email format"
+
+                    def test_empty_credentials(auth_service):
+                        result = auth_service.login("", "")
+                        assert not result.success
+                        assert result.error == "Email and password required"
+                    ```
+                </fix_report_example>
+            </input_example>
+
+            <output_example>
+                <fixed_unit_test_example>
+                import pytest
+                from auth_service import AuthService
+
+                @pytest.fixture
+                def auth_service():
+                    return AuthService()
+
+                def test_valid_login(auth_service):
+                    result = auth_service.login("user@example.com", "password123")
+                    assert result.success
+                    assert result.token is not None
+
+                def test_invalid_password(auth_service):
+                    result = auth_service.login("user@example.com", "wrongpass")
+                    assert not result.success
+                    assert result.token is None
+
+                def test_invalid_email_format(auth_service):
+                    result = auth_service.login("invalid-email", "password123")
+                    assert not result.success
+                    assert result.error == "Invalid email format"
+
+                def test_empty_credentials(auth_service):
+                    result = auth_service.login("", "")
+                    assert not result.success
+                    assert result.error == "Email and password required"
+                </fixed_unit_test_example>
+            <output_example>
+        </example_2>
+
+        <example_3>
+            <input_example>
+                <unit_test_example>
+                    import pytest
+                    from calculator import Calculator
+
+                    @pytest.fixture
+                    def calc():
+                        return Calculator()
+
+                    def test_add(calc):
+                        assert calc.add(2, 3) == 5
+                        assert calc.add(-1, 1) == 0
+
+                    def test_subtract(calc):
+                        assert calc.subtract(5, 3) == 2
+                        assert calc.subtract(1, 1) == 0
+                </unit_test_example>
+
+                <fix_report_example>
+                    ```python                
+                    import pytest
+                    from calculator import Calculator
+
+                    @pytest.fixture
+                    def calc():
+                        return Calculator()
+
+                    def test_add(calc):
+                        assert calc.add(2, 3) == 5
+                        assert calc.add(-1, 1) == 0
+
+                    def test_subtract(calc):
+                        assert calc.subtract(5, 3) == 2
+                        assert calc.subtract(1, 1) == 0
+
+                    @pytest.mark.parametrize("a,b,expected", [
+                        (0.1, 0.2, 0.3),
+                        (-0.5, 0.5, 0.0),
+                    ])
+                    def test_add_floating_point(calc, a, b, expected):
+                        assert pytest.approx(calc.add(a, b)) == expected
+
+                    @pytest.mark.parametrize("a,b,expected", [
+                        (0.3, 0.1, 0.2),
+                        (1.0, 0.5, 0.5),
+                    ])
+                    def test_subtract_floating_point(calc, a, b, expected):
+                        assert pytest.approx(calc.subtract(a, b)) == expected
+                    ```
+                </fix_report_example>
+            </input_example>
+
+            <output_example>
+                <fixed_unit_test_example>
+                    import pytest
+                    from calculator import Calculator
+
+                    @pytest.fixture
+                    def calc():
+                        return Calculator()
+
+                    def test_add(calc):
+                        assert calc.add(2, 3) == 5
+                        assert calc.add(-1, 1) == 0
+
+                    def test_subtract(calc):
+                        assert calc.subtract(5, 3) == 2
+                        assert calc.subtract(1, 1) == 0
+
+                    @pytest.mark.parametrize("a,b,expected", [
+                        (0.1, 0.2, 0.3),
+                        (-0.5, 0.5, 0.0),
+                    ])
+                    def test_add_floating_point(calc, a, b, expected):
+                        assert pytest.approx(calc.add(a, b)) == expected
+
+                    @pytest.mark.parametrize("a,b,expected", [
+                        (0.3, 0.1, 0.2),
+                        (1.0, 0.5, 0.5),
+                    ])
+                    def test_subtract_floating_point(calc, a, b, expected):
+                        assert pytest.approx(calc.subtract(a, b)) == expected
+                </fixed_unit_test_example>
+            </output_example>
+        </example_3>
+
+        <example_4>
+            <input_example>
+                <unit_test_example>
+                    import pytest
+                    from calculator import Calculator
+
+                    @pytest.fixture
+                    def calc():
+                        return Calculator()
+
+                    def test_add(calc):
+                        assert calc.add(2, 3) == 5
+                        assert calc.add(-1, 1) == 0
+
+                    def test_subtract(calc):
+                        assert calc.subtract(5, 3) == 2
+                        assert calc.subtract(1, 1) == 0
+
+                    @pytest.mark.parametrize("a,b,expected", [
+                        (0.1, 0.2, 0.3),
+                        (-0.5, 0.5, 0.0),
+                    ])
+                    def test_add_floating_point(calc, a, b, expected):
+                        assert pytest.approx(calc.add(a, b)) == expected
+
+                    @pytest.mark.parametrize("a,b,expected", [
+                        (0.3, 0.1, 0.2),
+                        (1.0, 0.5, 0.5),
+                    ])
+                    def test_subtract_floating_point(calc, a, b, expected):
+                        assert pytest.approx(calc.subtract(a, b)) == expected
+                </unit_test_example>
+
+                <fix_report_example>
+                    ```python
+                    # Code above this line remains the same
+
+                    @pytest.mark.parametrize("a,b,expected", [
+                        (0.5, 0.3, 0.2),
+                        (-0.5, 0.7, 0.2),
+                    ])
+                    # Rest of the test cases remain the same...
+                    ```
+                </fix_report_example>
+            </input_example>
+
+            <output_example>
+                <fixed_unit_test_example>
+                    import pytest
+                    from calculator import Calculator
+
+                    @pytest.fixture
+                    def calc():
+                        return Calculator()
+
+                    def test_add(calc):
+                        assert calc.add(2, 3) == 5
+                        assert calc.add(-1, 1) == 0
+
+                    def test_subtract(calc):
+                        assert calc.subtract(5, 3) == 2
+                        assert calc.subtract(1, 1) == 0
+
+                    @pytest.mark.parametrize("a,b,expected", [
+                        (0.5, 0.3, 0.2),
+                        (-0.5, 0.7, 0.2),
+                    ])
+                    def test_add_floating_point(calc, a, b, expected):
+                        assert pytest.approx(calc.add(a, b)) == expected
+
+                    @pytest.mark.parametrize("a,b,expected", [
+                        (0.3, 0.1, 0.2),
+                        (1.0, 0.5, 0.5),
+                    ])
+                    def test_subtract_floating_point(calc, a, b, expected):
+                        assert pytest.approx(calc.subtract(a, b)) == expected
+                </fixed_unit_test_example>
+            </output_example>
+        </example_4>
+    </examples>
+
+% Output a JSON object with the following keys:
+    - 'explanation': String explanation of whether the code under test needs to be fix and/or if the unit test needs to be fixed. Also, explain whether only a fragment of code was provided and the entire unit test and/or code under test needs to be reassembled from the original code and/or unit test.
+    - 'update_unit_test': Boolean indicating whether the unit test needs to be updated.
+    - 'update_code': Boolean indicating whether the code under test needs to be updated.
+    - 'fixed_unit_test': The entire updated unit test code or empty String if no update is needed. Don't lose prior comments in the unit test unless they are no longer valid.
+    - 'fixed_code': The entire updated code under test or empty String if no update is needed. Don't lose prior comments in the code under test unless they are no longer valid.

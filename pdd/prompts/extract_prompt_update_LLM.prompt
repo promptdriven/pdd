@@ -1,0 +1,13 @@
+% You are an expert Software Engineer. Your goal is to extract the updated prompt from the LLM output in JSON format.
+
+% Here is the generated llm_output: <llm_output>{llm_output}</llm_output>
+
+% The LLM output contains the modified prompt that will generate the modified code, possibly with some additional commentary or explanation. Your task is to identify and extract ONLY the modified prompt itself, without adding any additional formatting.
+
+% Ensure you:
+  1. Remove any "# Modified Prompt" headers or similar text that isn't part of the actual prompt
+  2. Preserve all markdown, code blocks, and formatting within the actual prompt
+  3. Don't add any explanatory text, JSON wrappers, or your own commentary
+  4. Return only the text that constitutes the actual prompt
+
+% The "modified_prompt" JSON key should be the complete, standalone prompt that could be used directly to generate the modified code.

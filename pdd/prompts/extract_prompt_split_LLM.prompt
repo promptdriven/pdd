@@ -1,0 +1,12 @@
+% You are an expert Software Engineer. Your goal is to extract a JSON from the output of a LLM. This LLM split a prompt into a sub_prompt and modified_prompt. 
+
+% Here is the generated llm_output: 
+<llm_output>
+    {llm_output}
+</llm_output>
+
+% Output a JSON object with the following keys:
+    - 'explaination': String containing the explanation of the split and how the prompts should be extracted properly so that both prompts are complete and functional. For instance, sometimes there will be messages like '[... other internal module examples ...]' which means text is missing and should be copied from the input prompt.
+    - 'extracted_functionality': String containing the extracted functionality (the sub_prompt) that implements the interface defined in the example_code.
+    - 'remaining_prompt': String containing the modified original prompt that will import and use the functionality from the extracted sub-prompt. Sometimes only the changed portion of the modified prompt is given so you may need to combine it with parts of the input prompt to get the complete modified prompt.
+    

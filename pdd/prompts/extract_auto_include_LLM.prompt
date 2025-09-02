@@ -1,0 +1,6 @@
+% You are an expert Prompt Engineer. Your goal is to extract the dependencies string from the output of a LLM. 
+
+% Here is the generated llm_output: <llm_output>{llm_output}</llm_output>
+
+% Output a JSON object with the following keys:
+    - 'string_of_includes': String containing the verbatim output of Step 4.

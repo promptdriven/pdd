@@ -1,0 +1,65 @@
+% You are an expert prompt engineer. You will be given a list of LLM prompts and a change description. Your task is to analyze which prompts need to be changed based on the change description, and provide detailed instructions on how they should be changed.
+
+% Here are the inputs:
+<input>
+    <prompt_list>
+    {PROMPT_LIST}
+    </prompt_list>
+
+    <change_description>
+    {CHANGE_DESCRIPTION}
+    </change_description>
+</input>
+ 
+
+% Here is an example of an output for a given input:
+<example>
+    <input_example>
+        <prompt_list_example>
+        <include>context/detect_change/2/prompt_list.json</include>
+        </prompt_list_example>
+
+        <change_description_example>
+        <include>context/detect_change/2/change.prompt</include>
+        </change_description_example>
+    </input_example>
+
+    <output_example>
+        <include>context/detect_change/2/detect_change_output.txt</include>
+    </output_example>
+</example>
+
+% Follow these steps to complete the task:
+<task>
+    Step 1. Carefully read and analyze the change description. Consider its implications and how it might affect different types of prompts.
+    Step 2. Review each prompt in the prompt list. For each prompt, determine if it needs to be changed based on the change description. Some prompts maybe unaffected by the change description or already have the changes applied.
+    Step 3. In your analysis, consider the following:
+        - How does the change description impact each prompt?
+        - Are there any potential issues or conflicts that might arise from implementing the change?
+        - What are different ways the change could be implemented for affected prompts?
+        - Where is the best place to implement the change to minimize issues and maximize effectiveness?
+    Step 4. Prepare your response in the following format:
+        <analysis>
+        1. Provide a detailed description of the impact of the change and potential issues.
+        2. Generate at least three different possible implementation plans. Discuss the pros and cons of each plan.
+        3. Analyze the potential issues and the different plans. Explain step by step which plan is the best and why.
+        4. For each prompt explain if it needs to be changed based on the selected plan.
+        5. List the prompts that need to be changed based on the selected plan. For each prompt that needs to be changed, include:
+            a. The prompt's name
+            b. Detail and complete instructions for a LLM of how the prompt should be changed. Everything that is needed to know how to change the prompt effectively should be included here.
+                - When instructing to include content from another file vs. actually intending to include file contents:
+                    1. Mention the filename that should be included.
+                    2. Describe where in the prompt the file's contents should be inserted.
+                    3. Do not use XML-like syntax (such as angle brackets) when referring to includes, as this may interfere with preprocessing that will happen later.
+                    For example:
+                    "Insert the contents of the file './context/python_preamble.prompt' immediately after the role and goal statement using 'include' XML tags. The format for this is 'include' in angle brackets, followed by the file path then closed with 'include' in angle brackets."
+                - If multiple files need to be included, list each one separately with clear instructions on where each should be placed.
+                - When actually intending to include file contents use the include XML tags. This is common when the include will be replacing existing content.
+                - Provide instructions on which parts of the existing prompt should be removed, modified, or retained. Focus on describing the changes conceptually rather than referencing specific text that might be altered by preprocessing.
+                - Ensure that any unique instructions or logic specific to the prompt being modified are retained and remain clear.
+                - Remember to include any other relevant instructions for modifying the prompt that are not related to file inclusions.
+                - When finished, review the instructions to ensure they will make sense after any preprocessing steps that may occur.
+        </analysis>
+</task>
+
+% Remember to be thorough in your analysis and clear in your explanations. Consider all aspects of the change description and its potential impacts on the prompts.

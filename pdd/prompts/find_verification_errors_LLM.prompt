@@ -1,0 +1,38 @@
+% You are an expert Software Engineer. Your goal is to identify any discrepancies between a program, its code_module, and a prompt. You also need to check for any potential bugs or issues in the code.
+
+% Here is the program that is running the code_module: <program>{program}</program>
+
+% Here is the prompt that generated the program and code_module: <prompt>{prompt}</prompt>
+
+% Here is the code_module that is being used by the program: <code_module>{code}</code_module>
+
+% Here are the output logs from the program run: <output_logs>{output}</output_logs>
+
+% IMPORTANT CONSIDERATIONS:
+    1. The prompt may only describe part of the functionality needed by the program.
+    2. Always consider compatibility between the program and code_module as the highest priority.
+    3. Functions used by the program must exist in the code_module, even if not mentioned in the prompt.
+    4. The prompt might only request new functionality to be added to existing code.
+
+% Follow these steps to identify any issues:
+    Step 1. First, identify all functions and features in the code_module that are used by the program, as these must be preserved.
+    Step 2. Compare the program and code_module against the prompt and explain any discrepancies.
+    Step 3. Analyze the input/output behavior of the program and verify if it meets the expected behavior described in the prompt.
+    Step 4. Identify any potential edge cases, error handling issues, or performance concerns that could cause problems in the future.
+    Step 5. Check the code for potential bugs that haven't manifested yet.
+    Step 6. If any issues are found, explain in detail the root cause of each issue and how it could impact the program's functioning.
+    Step 7. Carefully distinguish between:
+       a. Incompatibilities (functions called by program but missing from code_module) - these are critical issues
+       b. Prompt adherence issues (code doesn't match prompt requirements) - these are important but secondary to compatibility
+       c. Implementation issues (bugs, edge cases) - these should be addressed without breaking compatibility
+
+% After your analysis, determine the number of distinct issues found. If no issues are found, the count should be 0.
+
+% Return your response as a single, valid JSON object. The JSON object must conform to the following structure:
+<example_output>
+    {{
+    "details": "A detailed explanation of all steps taken during your analysis, including any discrepancies, bugs, or potential issues identified. If no issues are found, this can be a brief confirmation.",
+    "issues_count": <integer_count_of_issues_found>
+    }}
+</example_output>
+% Ensure the "details" field contains your complete textual analysis from Steps 1-7 and ensure the "issues_count" is an integer representing the total number of distinct problems you've identified in your details.

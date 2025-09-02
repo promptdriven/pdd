@@ -1,0 +1,102 @@
+[build-system]
+requires = [
+    "setuptools>=43.0.0",
+    "wheel"
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pdd-cli"
+version = "0.0.50"
+description = "PDD (Prompt-Driven Development) Command Line Interface"
+readme = {file = "pypi_description.rst", content-type = "text/x-rst"}
+authors = [
+    { name = "Greg Tanaka"}, {email = "glt@alumni.caltech.edu" }
+]
+license = { text = "MIT" }
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Code Generators",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence"
+]
+keywords = [
+    "prompt-driven development",
+    "code generation",
+    "AI",
+    "LLM",
+    "unit testing",
+    "software development"
+]
+dependencies = [
+    "GitPython==3.1.44",
+    "Requests==2.32.3",
+    "aiofiles==24.1.0",
+    "click==8.1.7",
+    "firecrawl-py",
+    "firebase_admin==6.6.0",
+    "keyring==25.6.0",
+    "langchain_core==0.3.56",
+    "nest_asyncio==1.6.0",
+    "pandas==2.2.3",
+    "psutil==5.9.0",
+    "pydantic==2.11.2",
+    "litellm[caching]>=1.75.5",
+    "rich==14.0.0",
+    "semver==3.0.2",
+    "setuptools",
+    "pytest",
+    "boto3==1.35.99",
+    "python-Levenshtein",
+    "openai>=1.99.5"]
+requires-python = ">=3.12"
+
+[project.urls]
+Homepage = "https://github.com/promptdriven/pdd.git"
+Repository = "https://github.com/promptdriven/pdd.git"
+Issue-Tracker = "https://github.com/promptdriven/pdd/issues"
+
+[project.scripts]
+pdd = "pdd.cli:cli"
+
+[tool.setuptools.packages.find]
+include = ["pdd*"]
+
+[tool.setuptools.package-data]
+"pdd" = [
+    "prompts/*_LLM.prompt",
+    "data/*",
+    "mcp_config.json",
+    "*.zsh",
+    "*.fish",
+    "*.sh"
+]
+
+[project.optional-dependencies]
+dev = [
+    "commitizen",
+    "pytest-cov",
+    "pytest-mock",
+    "pytest-asyncio",
+    "z3-solver",
+    "build",
+    "twine"
+]
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+version = "0.0.50"
+tag_format = "v$version"
+version_files = [
+    "pyproject.toml:version",
+    "pdd/__init__.py:__version__",
+    "README.md:Current version: (.*?)$",
+    "pdd/pdd_completion.sh:# Version: (.*?)",
+    "pypi_description.rst:.. image:: https://img.shields.io/badge/pdd--cli-v(.*?)-blue",
+    "pypi_description.rst:You'll see the current PDD version \\(e\\.g\\., (.*?)\\)\\."
+]
+changelog_file = "CHANGELOG.md"
+update_changelog_on_bump = true

@@ -1,0 +1,7 @@
+% You are an expert Software Engineer. Your goal is to extract a JSON from the output of a LLM. This LLM changed a input_prompt into a modified_prompt. 
+
+% Here is the generated llm_output: ```{llm_output}```
+
+% Output a JSON object with the following keys:
+    - 'modified_prompt': String containing the modified prompt from input_prompt via the change_prompt.
+    

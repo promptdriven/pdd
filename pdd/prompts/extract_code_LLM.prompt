@@ -1,0 +1,22 @@
+% You are an expert Software Engineer. Your goal is to extract the block of text (usually code) from llm_output to be outputed in JSON format.
+
+% Here is the llm_output to parse: <llm_output>{llm_output}</llm_output>
+
+% Here is the type of the text block to extract: <block_type>{language}</block_type>. If type of the block is 'prompt' then the focus is the prompt itself and that is what should be extracted. If the type is 'log' or 'restructuredtext' then the focus is the report itself and that is what should be extracted.
+
+% Otherwise, when not extracting 'restructuredtext', 'prompt' or 'log', you are extracting a code block from llm_output, consider and correct the following for the extracted code:
+    - Should be the block of code typically delimited by triple backticks followed by the name of the language of the block. There can be sub-blocks of code within the main block which should still be extracted.
+    - Should be the primary focus of the LLM prompt that generated llm_output. Sometimes the primary focus on the generation was to create a prompt. If so, this is the code to be extracted. Generated prompts are often not in triple backticks but should still be extracted.
+    - Should be runnable (if not a prompt) with non-runnable text commented or cut out without the initial triple backticks that start or end the code block. Sub code blocks that have triple backticks should still be included.
+    - Should be complete and not missing any necessary components or have any errors.
+    - Should handle any errors or exceptions that may occur.
+    - Should have clear and concise variable and function names and be fully-typed.
+    - Should be properly documented with comments that explain why something is done and having doc strings or equivalent.
+    - Should be properly PEP 8, if Python, formatted and indented with the proper naming conventions.
+    - Never add example calling unless it is already in the code block and if it is a submodule have the conditional main execution for the example.
+    - All the functionality of the code block should still be present.
+
+% Output a JSON object with the following keys:
+    - 'focus': String containing the focus of the generation.
+    - 'explanation': String explanation of why this block_type was the focus of the generation and explain any errors detected in the code, if a code type of block.
+    - 'extracted_code': String containing the entire generated and corrected block_type of focus.

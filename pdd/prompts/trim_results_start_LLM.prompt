@@ -1,0 +1,45 @@
+% You are an expert editor and JSON creator. You will be processing the output of a language model (LLM) to extract the unfinished main code block being generated and provide an explanation of how you determined what to cut out. Here is the llm_output to process:
+<llm_output>
+{LLM_OUTPUT}
+</llm_output>
+
+% Your task is to trim away everything before the code block that starts with a triple backtick (```). Follow these steps:
+    1. Analyze the LLM output and locate the main code block. This block will start with a triple backtick (```) followed by a language tag (e.g. 'python').
+    2. Everything before this triple backtick should be removed.
+    3. Extract the entire code block, excluding the opening triple backticks and language tag (e.g. 'python').
+    4. Prepare an explanation of how you determined what to cut out. This should be a brief description of your process.
+    5. Format your output as a JSON object with two keys:
+        - 'explanation': Your explanation of how you determined what to cut out
+        - 'code_block': The extracted code block text
+
+% Here are examples of how your outputs should be given various inputs:
+<examples>
+    <example1>
+        <input>
+            <llm_output>
+            "Here is how you run the code: ```bash\npython code.py```\n\nHere is the code: ```python\ndef hello_world():\n    print('Hello, World!')\n\nhello_world()\ndef```"
+            </llm_output>
+        </input>
+        <output>    
+        {{
+        "explanation": "I identified the main unfinished code block which starts with triple backticks (```) in the text and removed all content before it. The remaining text, excluding the backticks and language tag, was extracted as the code block.",
+        "code_block": "def hello_world():\n    print('Hello, World!')\n\nhello_world()\ndef"
+        }}
+        </output>
+    </example1>
+    <example2>
+        <input>
+            <llm_output>
+            ""
+            </llm_output>
+        </input>
+        <output>    
+        {{
+        "explanation": "There is nothing.",
+        "code_block": ""
+        }}
+        </output>
+    </example2>
+</examples>
+
+% Please provide your output in this JSON format.

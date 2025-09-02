@@ -1,0 +1,95 @@
+    <pdd>
+    % Here are some examples of splitting prompts:
+<examples>
+
+        <example_1>
+        <1_input_prompt><include>./context/split/1/initial_pdd_python.prompt</include></1_input_prompt>
+        <1_input_code><include>./context/split/1/pdd.py</include></1_input_code>
+        <1_example_code><include>./context/split/1/split_get_extension.py</include></1_example_code>
+        <1_sub_prompt><include>./context/split/1/sub_pdd_python.prompt</include></1_sub_prompt>
+        <1_modified_prompt><include>./context/split/1/final_pdd_python.prompt</include></1_modified_prompt>
+        </example_1>
+
+        <example_2>
+        <2_input_prompt><include>./context/split/2/initial_pdd_python.prompt</include></2_input_prompt>
+        <2_input_code><include>./context/split/2/pdd.py</include></2_input_code>
+        <2_example_code><include>./context/split/2/split_pdd_construct_output_path.py</include></2_example_code>
+        <2_sub_prompt><include>./context/split/2/sub_pdd_python.prompt</include></2_sub_prompt>
+        <2_modified_prompt><include>./context/split/2/final_pdd_python.prompt</include></2_modified_prompt>
+        </example_2>
+
+        <example_3>
+        <3_input_prompt><include>./context/split/3/initial_postprocess_python.prompt</include></3_input_prompt>
+        <3_input_code><include>./context/split/3/postprocess.py</include></3_input_code>
+        <3_example_code><include>./context/split/3/split_postprocess_find_section.py</include></3_example_code>
+        <3_sub_prompt><include>./context/split/3/sub_postprocess_python.prompt</include></3_sub_prompt>
+        <3_modified_prompt><include>./context/split/3/final_postprocess_python.prompt</include></3_modified_prompt>
+        </example_3>
+
+        <example_4>
+        <4_input_prompt><include>./context/split/4/initial_construct_paths_python.prompt</include></4_input_prompt>
+        <4_input_code><include>./context/split/4/construct_paths.py</include></4_input_code>
+        <4_example_code><include>./context/split/4/split_construct_paths_generate_output_filename.py</include></4_example_code>
+        <4_sub_prompt><include>./context/split/4/sub_construct_paths_python.prompt</include></4_sub_prompt>
+        <4_modified_prompt><include>./context/split/4/final_construct_paths_python.prompt</include></4_modified_prompt>
+        </example_4>
+
+        <example_5>
+        <5_input_prompt><include>context/split/5/cli_python.prompt</include></5_input_prompt>
+        <5_input_code><include>context/split/5/cli.py</include></5_input_code>
+        <5_example_code><include>context/split/5/split_track_cost.py</include></5_example_code>
+        <5_sub_prompt><include>context/split/5/track_cost_python.prompt</include></5_sub_prompt>
+        <5_modified_prompt><include>context/split/5/modified_cli_python.prompt</include></5_modified_prompt>
+        </example_5>
+
+
+    <example_6>
+    <6_input_prompt><include>context/split/6/cli_python.prompt</include></6_input_prompt>
+    <6_input_code><include>context/split/6/cli.py</include></6_input_code>
+    <6_example_code><include>context/split/6/split_conflicts.py</include></6_example_code>
+    <6_sub_prompt><include>context/split/6/conflicts_main_python.prompt</include></6_sub_prompt>
+    <6_modified_prompt><include>context/split/6/modified_cli_python.prompt</include></6_modified_prompt>
+    </example_6>
+
+    <example_7>
+    <7_input_prompt><include>context/split/7/cli_python.prompt</include></7_input_prompt>
+    <7_input_code><include>context/split/7/cli.py</include></7_input_code>
+    <7_example_code><include>context/split/7/split_trace_main.py</include></7_example_code>
+    <7_sub_prompt><include>context/split/7/trace_main_python.prompt</include></7_sub_prompt>
+    <7_modified_prompt><include>context/split/7/modified_cli_python.prompt</include></7_modified_prompt>
+    </example_7>
+</examples>
+</pdd>
+
+<context>
+% You are an expert LLM Prompt Engineer. Your goal is to split the input_prompt (a larger prompt) into a sub_prompt and modified_prompt (two smaller prompts) with no loss of functionality. This is to make it easier to generate and test the modules easier.
+
+% Here are the inputs and outputs of this prompt:
+    <input_definitions>
+    Input: 
+        'input_prompt' - A string contains the prompt that will be split into a sub_prompt and modified_prompt.
+        'input_code' - A string that contains the code that was generated from the input_prompt.
+        'example_code' - A string that contains an interface defining the specific functionality to extract into the sub_prompt. The sub_prompt will generate code that implements this interface.
+    </input_definitions>
+    <output_definitions>
+    Output: 
+        'sub_prompt' - A string that contains the extracted functionality as defined by the example_code interface that was split from the input_prompt.
+        'modified_prompt' - A string that contains the modified original prompt that will import and use the functionality defined in the sub_prompt.
+    </output_definitions>
+</context>
+
+<inputs>
+    <input_prompt>{input_prompt}</input_prompt>
+    <input_code>{input_code}</input_code>
+    <example_code>{example_code}</example_code>
+</inputs>
+
+<instructions>
+% Follow these instructions:
+    1. Write several paragraphs to explain based on the example_code how the input_prompt could be split into a sub_prompt and modified_prompt.
+    2. Write out several paragraphs in detail all the functionality of the sub_prompt by looking at the input_prompt and input_code.
+    3. Write out what are the possible difficulties in splitting the prompt according to the input example_code. For each difficulty write several paragraphs
+    4. Write out how to overcome the difficulties. Write several paragraphs for each difficulty.
+    5. Write the sub_prompt which would generate the code that could be used by the example_code. This prompt should carefully consider all the prior steps and ensure enough detail is provided to generate the code properly. Internal modules need to be imported using include and other appropriate xml tags in the same style as the input_prompt. 
+    6. Write the complete modified_prompt which would incorporate the sub_prompt without any duplications or conflicting functionalities.
+</instructions>

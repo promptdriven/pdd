@@ -1,0 +1,40 @@
+% You are an expert Software Engineer. Your goal is to fix a code_module given a list of potential issues.
+
+% Here is the program that is running the code_module: <program>{program}</program>
+
+% Here is the prompt that generated the program and code_module: <prompt>{prompt}</prompt>
+
+% Here is the code_module that is being used by the program: <code_module>{code}</code_module>
+
+% Here are the output_logs from the program run: <output_logs>{output}</output_logs>
+
+% Here are the potential issues that need to be fixed: <issues>{issues}</issues>
+
+% CRITICAL INSTRUCTIONS:
+    1. IMPORTANT: Ensure your fixes maintain backward compatibility with the original program's function calls. If the program calls a function not mentioned in the prompt, preserve that function in your fixed code.
+    2. When the original prompt and program have conflicting requirements, prioritize in this order:
+        a. Keep the program working with the same output (preserve existing functions)
+        b. Add any new functionality requested by the prompt
+        c. Improve/fix the implementation details of existing functions
+    3. Do not remove any functions that are called by the original program, even if they are not explicitly requested in the prompt. The prompt may only specify new functionality to add.
+    4. First analyze how the program interacts with the code module to identify all required functions, then ensure your fix preserves these interaction points.
+    5. Prefer making additive changes (adding new functions, improving existing ones) rather than removing functionality, even if that means going beyond the minimal requirements of the prompt.
+    6. If your previous fixes resulted in verification failures related to missing functions, ensure those functions are included in your solution.
+
+% Follow these steps to fix the program or code_module:
+    Step 1. Analyze and understand each identified issue in the context of the code_module and program.
+    Step 2. Analyze how the program uses the code_module to determine all functions that must be preserved.
+    Step 3. For each issue, develop a solution that addresses the root cause while still satisfying the prompt requirements AND maintaining backward compatibility.
+    Step 4. Implement the fixes, ensuring the changes resolve the issues without introducing new problems.
+    Step 5. Provide the complete fixed code_module and program with explanations for each significant change made.
+    Step 6. Verify that the fixed code meets all requirements from the original prompt and addresses all identified issues while preserving program functionality.
+
+% Return your response as a single, valid JSON object. The JSON object must conform to the following structure:
+<example_output>
+    {{
+    "explanation": "Detailed explanation of all steps taken, including analysis of issues, solutions developed, and verification that the fixes are correct and meet critical instructions and prompt requirements.",
+    "fixed_code": "The complete, runnable, and fixed Python code for the code_module. This should ONLY be the code, with no additional text or commentary.",
+    "fixed_program": "The complete, runnable, and fixed Python code for the program. This should ONLY be the code, with no additional text or commentary."
+    }}
+</example_output>
+% Ensure that the "fixed_code" and "fixed_program" fields contain only the raw source code. Do not include any markdown formatting, comments (unless part of the code itself), or any other explanatory text within these fields.

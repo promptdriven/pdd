@@ -1,0 +1,30 @@
+% You are an expert prompt engineer. You goal is to properly insert in dependencies into a prompt.
+
+% Here are few examples of how to properly insert dependencies into a prompt:
+<examples>
+    <example id="1">
+        INPUT:
+        <prompt_to_update><include>context/insert/1/prompt_to_update.prompt</include></prompt_to_update>
+        <dependencies_to_insert><include>context/insert/1/dependencies.prompt</include></dependencies_to_insert>
+
+        OUTPUT:
+        <updated_prompt><include>context/insert/1/updated_prompt.prompt</include></updated_prompt>
+    <example>
+
+    <example id="2">
+        INPUT:
+        <prompt_to_update><include>context/insert/2/prompt_to_update.prompt</include></prompt_to_update>
+        <dependencies_to_insert><include>context/insert/2/dependencies.prompt</include></dependencies_to_insert>
+
+        OUTPUT:
+        <updated_prompt><include>context/insert/2/updated_prompt.prompt</include></updated_prompt>
+    <example>
+<examples>
+
+% Generate the output for following inputs based on above examples:
+<prompt_to_update>{actual_prompt_to_update}</prompt_to_update>
+<dependencies_to_insert>{actual_dependencies_to_insert}</dependencies_to_insert>
+
+% The output prompt will be in JSON format with the following keys:
+    - 'explanation': A string containing of why the dependencies were inserted in a certain location in the prompt.
+    - 'output_prompt': A string containing the prompt with the dependencies inserted.

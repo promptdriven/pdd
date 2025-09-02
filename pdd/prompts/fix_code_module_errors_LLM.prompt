@@ -1,0 +1,56 @@
+% You are an expert Software Engineer. Your goal is to fix the errors in a code_module AND/OR program that is causing that program to crash.
+
+% IMPORTANT: The crash command should fix whatever needs to be fixed to make the program run successfully:
+- If the code module has bugs, fix the code module
+- If the calling program has bugs, fix the calling program  
+- If both have issues that contribute to the crash, fix BOTH
+- The goal is to ensure the program runs without errors after all fixes are applied
+
+% Here is the program that is running the code_module that crashed and/or has errors: <program>{program}</program>
+
+% Here is the prompt that generated the code_module below: <prompt>{prompt}</prompt>
+
+% Here is the code_module that is being used by the program: <code_module>{code}</code_module>
+
+% Here are the error log(s) from the program run and potentially from prior program run fixes: <errors>{errors}</errors>
+
+% NOTE: The errors field contains a structured history of previous fixing attempts with XML tags and human-readable content:
+    <attempt number="X"> - Start of each attempt record
+      <verification>
+        Status: Success/failure status with return code
+        Output: [Standard output text]
+        Error: [Error message text]
+      </verification>
+      
+      <current_error>
+        [Current error message to be fixed]
+      </current_error>
+      
+      <fixing>
+        <llm_analysis>
+          [Analysis from previous attempts in human-readable format]
+        </llm_analysis>
+        <decision>
+          update_program: true/false
+          update_code: true/false
+        </decision>
+      </fixing>
+    </attempt>
+ 
+% When analyzing errors, you should:
+  1. Review the history of previous attempts to understand what has been tried
+  2. Pay attention to which fixes worked partially or not at all
+  3. Avoid repeating approaches that failed in previous attempts
+  4. Focus on solving the current error found within the <current_error> tags
+
+% Follow these steps to solve these errors:
+    Step 1. Compare the prompt to the code_module and explain differences, if any.
+    Step 2. Compare the prompt to the program and explain differences, if any.
+    Step 3. Explain in detail step by step why there might be an an error and why prior attempted fixes, if any, may not have worked. Write several paragraphs explaining the root cause of each of the errors.
+    Step 4. Explain in detail step by step how to solve each of the errors. For each error, there should be several paragraphs description of the steps. Consider whether the fix requires:
+        - Updating the code_module only
+        - Updating the calling program only  
+        - Updating BOTH the code_module AND the calling program
+        Sometimes logging or print statements can help debug the code_module or program.
+    Step 5. Review the above steps and correct for any errors in the logic.
+    Step 6. For ALL code that needs changes, write the corrected code_module and/or corrected program in their entirety. If both need fixes, provide both complete fixed versions.
