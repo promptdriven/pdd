@@ -48,6 +48,7 @@ help:
  
 # Public repo paths (override via env if needed)
 PUBLIC_PDD_REPO_DIR ?= staging/public/pdd
+PUBLIC_PDD_REMOTE ?= https://github.com/promptdriven/pdd.git
 # Top-level files to publish if present
 PUBLIC_ROOT_FILES ?= LICENSE CHANGELOG.md CONTRIBUTING.md requirements.txt pyproject.toml .env.example
 # Include core unit tests by default
@@ -463,6 +464,17 @@ update-extension:
 	@cd utils/vscode_prompt && vsce package
 	@code --install-extension utils/vscode_prompt/prompt-0.0.1.vsix --force
 publish-public:
+	@# Ensure target directory is a Git repo (clone if empty and not a repo)
+	@if [ ! -d "$(PUBLIC_PDD_REPO_DIR)/.git" ]; then \
+		if [ ! -d "$(PUBLIC_PDD_REPO_DIR)" ] || [ -z "$$(/bin/ls -A "$(PUBLIC_PDD_REPO_DIR)" 2>/dev/null)" ]; then \
+			echo "Cloning public repo $(PUBLIC_PDD_REMOTE) into $(PUBLIC_PDD_REPO_DIR)"; \
+			mkdir -p "$(dir $(PUBLIC_PDD_REPO_DIR))"; \
+			git clone "$(PUBLIC_PDD_REMOTE)" "$(PUBLIC_PDD_REPO_DIR)"; \
+		else \
+			echo "Warning: $(PUBLIC_PDD_REPO_DIR) exists and is not a Git repo."; \
+			echo "Set PUBLIC_PDD_REPO_DIR to a clone of $(PUBLIC_PDD_REMOTE) or remove the directory and re-run."; \
+		fi; \
+	fi
 	@echo "Ensuring public repo directory exists: $(PUBLIC_PDD_REPO_DIR)"
 	@mkdir -p $(PUBLIC_PDD_REPO_DIR)
 	@echo "Copying README to public repo"
@@ -525,4 +537,8 @@ publish-public:
 		@mkdir -p $(PUBLIC_PDD_REPO_DIR)/pdd
 		@conda run -n pdd --no-capture-output python scripts/copy_package_data_to_public.py --dest $(PUBLIC_PDD_REPO_DIR)
 	@echo "Committing and pushing updates in public repo"
-	@cd $(PUBLIC_PDD_REPO_DIR) && git add . && git commit -m "Bump version" && git push || true
+	@if git -C "$(PUBLIC_PDD_REPO_DIR)" rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
+		cd "$(PUBLIC_PDD_REPO_DIR)" && git add . && git commit -m "Bump version" && git push; \
+	else \
+		echo "Skip commit: $(PUBLIC_PDD_REPO_DIR) is not a Git repo. Set PUBLIC_PDD_REPO_DIR to a clone of $(PUBLIC_PDD_REMOTE)."; \
+	fi
