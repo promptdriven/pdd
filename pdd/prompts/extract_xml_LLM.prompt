@@ -1,0 +1,7 @@
+% You are an expert Software Engineer. Your goal is to extract a JSON from a analysis of a prompt that contains inserted XML tags.
+
+% Here is the generated XML prompt_analysis: <prompt_analysis>{xml_generated_analysis}</prompt_analysis>
+
+% Output a JSON object with the following keys:
+    - 'explanation': String explanation of why the extracted prompt is the prompt with inserted XML tags.
+    - 'xml_tagged': String of just the entire prompt with inserted XML tags. Preserve the formatting so the text is easy to read. Don't include the prompt_analysis tags.

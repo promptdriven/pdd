@@ -14,6 +14,36 @@ For a detailed explanation of the concepts, architecture, and benefits of Prompt
 
 ## Installation
 
+### Prerequisites for macOS
+
+On macOS, you'll need to install some prerequisites before installing PDD:
+
+1. **Install Xcode Command Line Tools** (required for Python compilation):
+   ```bash
+   xcode-select --install
+   ```
+
+2. **Install Homebrew** (recommended package manager for macOS):
+   ```bash
+   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+   ```
+   
+   After installation, add Homebrew to your PATH:
+   ```bash
+   echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile && eval "$(/opt/homebrew/bin/brew shellenv)"
+   ```
+
+3. **Install Python** (if not already installed):
+   ```bash
+   # Check if Python is installed
+   python3 --version
+   
+   # If Python is not found, install it via Homebrew
+   brew install python
+   ```
+   
+   **Note**: macOS comes with Python 2.7 by default (deprecated), but PDD requires Python 3.8 or higher. The `brew install python` command installs the latest Python 3 version.
+
 ### Recommended Method: uv
 
 We recommend installing PDD using the [uv package manager](https://github.com/astral-sh/uv) for better dependency management and automatic environment configuration:
@@ -129,6 +159,8 @@ The CSV includes columns for:
 - `structured_output`: Whether the model supports structured JSON output
 - `reasoning_type`: Support for reasoning capabilities ("none", "budget", or "effort")
 
+For a concrete, up-to-date reference of supported models and example rows, see the bundled CSV in this repository: [pdd/data/llm_model.csv](pdd/data/llm_model.csv).
+
 For proper model identifiers to use in your custom configuration, refer to the [LiteLLM Model List](https://docs.litellm.ai/docs/providers) documentation. LiteLLM typically uses model identifiers in the format `provider/model_name` (e.g., "openai/gpt-4", "anthropic/claude-3-opus-20240229").
 
 ## Post-Installation Setup
@@ -160,9 +192,17 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
    pip install --user pdd-cli
    ```
 
+3. **macOS-specific issues**
+   - **Xcode Command Line Tools not found**: Run `xcode-select --install` to install the required development tools
+   - **Homebrew not found**: Install Homebrew using the command in the prerequisites section above
+   - **Python not found or wrong version**: Install Python 3 via Homebrew: `brew install python`
+   - **Permission denied during compilation**: Ensure Xcode Command Line Tools are properly installed and you have write permissions to the installation directory
+   - **uv installation fails**: Try installing uv through Homebrew: `brew install uv`
+   - **Python version conflicts**: If you have multiple Python versions, ensure `python3` points to Python 3.8+: `which python3 && python3 --version`
+
 ## Version
 
-Current version: 0.0.49
+Current version: 0.0.50
 
 To check your installed version, run:
 ```
@@ -1062,7 +1102,7 @@ pdd [GLOBAL OPTIONS] bug --output tests/test_factorial_calculator_bug.py factori
 
 ### 15. auto-deps
 
-Analyze a prompt file and a directory of potential dependencies to determine and insert needed dependencies into the prompt.
+Analyze a prompt file and search a directory or glob pattern for potential dependencies/examples to determine and insert into the prompt.
 
 ```
 pdd [GLOBAL OPTIONS] auto-deps [OPTIONS] PROMPT_FILE DIRECTORY_PATH
@@ -1070,7 +1110,7 @@ pdd [GLOBAL OPTIONS] auto-deps [OPTIONS] PROMPT_FILE DIRECTORY_PATH
 
 Arguments:
 - `PROMPT_FILE`: Filename of the prompt file that needs dependencies analyzed and inserted.
-- `DIRECTORY_PATH`: Path to the directory containing potential dependency files (should include glob patterns, e.g., "context/*_example.py").
+- `DIRECTORY_PATH`: Directory path or glob pattern to search for dependency/example files. Supports wildcards like `*.py` and `**/*.py`. You can pass a plain directory (e.g., `examples/`) or a glob (e.g., `examples/**/*.py`). If you pass a plain directory (no wildcards), it is scanned recursively by default (equivalent to `examples/**/*`).
 
 Options:
 - `--output LOCATION`: Specify where to save the modified prompt file with dependencies inserted. The default file name is `<basename>_with_deps.prompt`. If an environment variable `PDD_AUTO_DEPS_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
@@ -1082,9 +1122,16 @@ The command maintains a CSV file with the following columns:
 - `file_summary`: A concise summary of the file's content and purpose
 - `date`: Timestamp of when the file was last analyzed
 
-Example:
+Examples:
 ```
-pdd [GLOBAL OPTIONS] auto-deps --output prompts/data_pipeline_with_deps.prompt --csv project_deps.csv data_processing_pipeline_python.prompt "context/*_example.py"
+# Search all Python files in examples (recursive)
+pdd [GLOBAL OPTIONS] auto-deps --output prompts/data_pipeline_with_deps.prompt --csv project_deps.csv data_processing_pipeline_python.prompt "examples/**/*.py"
+
+# Search example stubs following a naming convention
+pdd [GLOBAL OPTIONS] auto-deps data_processing_pipeline_python.prompt "context/*_example.py"
+
+# Search an entire directory (non-recursive)
+pdd [GLOBAL OPTIONS] auto-deps data_processing_pipeline_python.prompt "examples/*"
 ```
 
 ### 16. verify

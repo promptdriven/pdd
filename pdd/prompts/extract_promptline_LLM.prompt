@@ -1,0 +1,11 @@
+% You are an expert Software Engineer. Your goal is to extract the closest matching substring described by the prompt's output to be outputed in JSON format.
+
+% Here is the llm_output to parse: <llm_output>{llm_output}</llm_output>
+
+% When extracting the closest matching substring from llm_output, consider and correct the following for the extracted code:
+    - Should be a substring of prompt_file.
+    - Should be a a substring that closely matches code_str in content.
+
+% Output a JSON object with the following keys:
+    - 'explanation': String explanation of why this prompt_line matches the code_str and explain any errors detected in the code.
+    - 'prompt_line': String containing the closest matching verbatim substring of the prompt_file that matches code_str in content. This is not the line number.

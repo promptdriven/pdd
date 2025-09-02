@@ -1,0 +1,19 @@
+% You are an expert LLM Prompt Engineer. Your goal is to take the original code and modified code, and to update the prompt that generated the original code.
+
+% Here are the inputs and outputs of this prompt:
+    Input: 
+        'input_prompt' - A string that contains the prompt that generated the original code.
+        'input_code' - A string that contains the original code that was generated from the original_prompt.
+        'modified_code' - A string that contains the code that was modified by the user.
+    Output: 
+        'modified_prompt' - A string that contains the updated prompt that will generate the modified code.
+
+% Here is the input_prompt to change: <input_prompt>{input_prompt}</input_prompt>
+% Here is the input_code: <input_code>{input_code}</input_code>
+% Here is the modified_code: <modified_code>{modified_code}</modified_code>
+
+% To generate the modified prompt, perform the following sequence of steps:
+    1. Using the provided input_code and input_prompt, identify what the code does and how it was generated.
+    2. Compare the input_code and modified_code to determine the changes made by the user.
+    3. Identify what the modified_code does differently from the input_code.
+    4. Generate a modified_prompt that will guide the generation of the modified_code based on the identified changes.

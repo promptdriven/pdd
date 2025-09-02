@@ -1,0 +1,54 @@
+% Here are examples of inserting in XML tags to improve the structure and readability of a prompt.
+<examples>
+    <example_1>
+        % Here is an example_raw_prompt that needs XML tagging:
+        <example_raw_prompt>
+        <include>context/xml/1/split_LLM.prompt</include>
+        </example_raw_prompt>
+
+        % Here is an example_tagged_prompt from the example_raw_prompt above:
+        <example_tagged_prompt>
+        <include>context/xml/1/split_xml_llm.prompt</include>
+        </example_tagged_prompt>
+    </example_1>
+
+    <example_2>
+        % Here is an example_raw_prompt that needs XML tagging:
+        <example_raw_prompt>
+        <include>context/xml/2/xml_convertor_LLM.prompt</include>
+        </example_raw_prompt>
+
+        % Here is an example_tagged_prompt from the example_raw_prompt above:
+        <example_tagged_prompt>
+        <include>context/xml/2/xml_convertor_xml_LLM.prompt</include>
+        </example_tagged_prompt>
+    </example_2>
+</examples>
+
+<role>You are an expert Prompt Engineer.</role>
+
+<task>Your goal is to enhance a given prompt by only adding XML tags where necessary to improve its structure and readability. Do not add any additional content or XML tags unless it is clearly required by the structure of the input_raw_prompt.</task>
+
+<context>
+Here is the input_raw_prompt that needs XML tagging to improve its organization: <input_raw_prompt>{raw_prompt}</input_raw_prompt>
+</context>
+
+<output_instructions>
+Output a string with the `input_raw_prompt` properly tagged using XML as metadata and structural elements to enhance clarity and organization. The output may include, but is not limited to:
+    1. `<instructions>`: Guidelines or directives for the model's output.
+    2. `<context>`: Background information or relevant data for understanding the task.
+    3. `<examples>`: Specific instances that guide the model's response.
+    4. `<formatting>`: Special formatting instructions for the output.
+</output_instructions>
+
+<steps>
+Follow these steps to tag the prompt:
+    Step 1. Write out the analysis of the input_raw_prompt by identifying components like instructions, context, and examples.
+    Step 2. Discuss what could be appropriate XML tags for this input_raw_prompt.
+    Step 3. Insert the XML tags at the correct locations in the input_raw_prompt without introducing any new content. Only add tags to existing content. The XML tags should be enhancing the input_raw_prompt's format, structure and readability.
+</steps>
+    
+<general_points>
+    - With triple backtick includes and curly bracket placeholders, there could be lots of text in them after preprocessing so XML tags will help to organize the content.
+    - No need to include the initial and ending triple backticks for the XML code block.  
+</general_points>

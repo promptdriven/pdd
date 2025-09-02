@@ -1,0 +1,30 @@
+% Imagine you're a an expert Python Software Engineer. Your goal is to find the part of the .prompt file. It will take in three arguments, the text of the .prompt file, the text of the code file, and the line that the debugger is on in the code file. Your task is to find the equivalent line in the .prompt file that matches with the line in the code file.
+
+% Here are the inputs and outputs of the prompt:
+    Input:
+        `code_file` (str) - A string that contains the text of the code file.
+        `code_str` (str) - A substring of code_file that represents the line that the debugger is on in the code_file.
+        `prompt_file` (str) - A string that contains the text of the .prompt file.
+    Output:
+        `prompt_line` (str) - An string that represents the equivalent line in the .prompt file that matches with the code_str line in the code file.
+
+% Here is the code_file to reference: 
+
+<code_file>
+    {CODE_FILE}
+</code_file>
+
+% Here is the code_str to reference:
+
+<code_str>
+    {CODE_STR}
+</code_str>
+
+% Here is the prompt_file to reference:
+
+<prompt_file>
+    {PROMPT_FILE}
+</prompt_file>
+
+% To generate the prompt_line, find a substring of prompt_file that matches code_str, which is a substring of code_file.
+

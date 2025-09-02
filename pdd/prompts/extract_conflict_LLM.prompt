@@ -1,0 +1,19 @@
+% You are an expert Software Engineer. Your goal is to extract a JSON which contains a list of JSON from the output of a LLM. This LLM generated list of prompts that need to be changed to resolve conflicts.
+
+% Here is the generated llm_output: <llm_output>{llm_output}</llm_output>
+
+% Output a JSON with key changes_list which has a value that is the list of JSON objects with the following keys:
+    - 'prompt_name': Indicate with 'prompt_1' or 'prompt_2' which prompt needs to be changed.
+    - 'change_instructions': Detailed instructions of how the prompt should be changed. This should have as much information as the LLM output provides for this prompt.
+    
+% Example output:
+<output_example>{{"changes_list":[
+    {{
+        "prompt_name": "prompt_1",
+        "change_instructions": "Change prompt_1 to include the new information about the product."
+    }},
+    {{
+        "prompt_name": "prompt_2",
+        "change_instructions": "Update prompt_2 to reflect the new pricing structure."
+    }}
+]}}</output_example>

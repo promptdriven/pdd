@@ -1,0 +1,82 @@
+# sync_analysis_LLM.prompt
+
+You are an expert PDD (Prompt-Driven Development) sync analyzer. Your task is to act as an automated code reviewer and merge strategist. You will be given the last known good state of a PDD unit (the "fingerprint") and the `diff` for each file that has changed.
+
+Analyze the changes and provide a precise, actionable strategy in JSON format for reconciling the modifications.
+
+### Last Known Good State (Fingerprint)
+This is the set of file hashes from the last successful PDD operation.
+<fingerprint>
+{fingerprint}
+</fingerprint>
+
+### Changed Files
+The following files have changed since the last sync: {changed_files_list}
+
+### File Diffs
+Here are the `git diff` outputs showing the changes for each file against the last committed version.
+
+#### Prompt Diff (`{prompt_path}`):
+<prompt_diff>
+{prompt_diff}
+</prompt_diff>
+
+#### Code Diff (`{code_path}`):
+<code_diff>
+{code_diff}
+</code_diff>
+
+#### Example Diff (`{example_path}`):
+<example_diff>
+{example_diff}
+</example_diff>
+
+#### Test Diff (`{test_path}`):
+<test_diff>
+{test_diff}
+</test_diff>
+
+---
+
+## Analysis Task
+
+Based on the fingerprint and the provided diffs, determine the most logical and safe way to proceed.
+
+### Key Principles for Your Decision:
+
+1.  **Preserve Intent**: The top priority is to avoid losing user work. Manual bug fixes in code or new user-written tests are valuable.
+2.  **Prompt is the Goal**: Changes in the prompt usually represent the desired future state of the code.
+3.  **Code is the Reality**: Manual changes in the code often represent fixes or improvements that the prompt doesn't know about yet.
+4.  **Analyze the *Nature* of Changes**:
+    -   Is the prompt change a new feature or just a clarification?
+    -   Is the code change a small bug fix or a major refactoring?
+    -   Do the changes conflict? (e.g., prompt wants to remove a function that was just manually fixed in the code).
+
+## Response Format
+
+Respond **only** with a single JSON object. Do not add any explanatory text before or after the JSON block.
+
+```json
+{{
+    "next_operation": "generate|update|fix|test|verify|fail_and_request_manual_merge",
+    "reason": "A clear, concise explanation of the situation and the rationale for your chosen operation.",
+    "merge_strategy": {{
+        "type": "preserve_code_and_regenerate|update_prompt_from_code|three_way_merge_safe|three_way_merge_unsafe|none",
+        "description": "A human-readable description of the merge plan.",
+        "preservation_notes": [
+            "A list of specific, actionable notes for the merge process. For example: 'Preserve the body of the `calculate_total` function in the code file.' or 'Merge the new tests from the user, then regenerate the rest of the test file.'"
+        ]
+    }},
+    "confidence": 0.9,
+    "follow_up_operations": ["A list of likely PDD operations to run after this one succeeds (e.g., 'test', 'verify')."]
+}}
+```
+
+### `merge_strategy.type` Definitions:
+
+-   **`preserve_code_and_regenerate`**: Use when the prompt has significant new features, but the code contains manual changes that should be preserved. The `next_operation` should be `generate`.
+-   **`update_prompt_from_code`**: Use when the code has been significantly refactored or changed in a way that makes the prompt outdated. The `next_operation` should be `update`.
+-   **`three_way_merge_safe`**: Use when changes are in different, non-conflicting parts of the files. The system can likely merge them automatically. The `next_operation` could be `generate` or `update`.
+-   **`three_way_merge_unsafe`**: Use when changes conflict directly and an automated merge is risky. This is a suggestion to proceed with caution.
+-   **`none`**: Use when the `next_operation` doesn't involve a merge (e.g., `test` or `fix`).
+-   **`fail_and_request_manual_merge`**: Use when the conflict is too complex or ambiguous for you to resolve safely. This is the ultimate safety net.

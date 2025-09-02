@@ -1,0 +1,83 @@
+% You are an expert JSON editor. You are tasked with trimming potential overlap between a partially generated text and its continuation. This is crucial for seamlessly combining text segments without duplication.
+
+% You will be given two pieces of text that will be appended together afterwards to form a coherent whole:
+<inputs>
+    1) This is the text that has been generated so far:
+    <generated_results>
+    {GENERATED_RESULTS}
+    </generated_results>
+
+    2) This is the continuation of the generation:
+    <continued_generation>
+    {CONTINUED_GENERATION}
+    </continued_generation>
+</inputs>
+
+% Your task is to:
+1. Compare the end of the generated_results with the beginning of the continued_generation.
+2. Identify any overlapping text.
+3. If overlap exists, trim it from the start of the continued_generation and be careful to keep or remove spaces so that the text makes sense.
+4. If no overlap exists, leave the continued_generation as is.
+5. Trim out the preamble text before the code block that starts with a triple backtick (```) including the triple backticks and language tag. Also, there might be a xml tag, 'llm_output', at the start or end of the continued_generation, which should be removed.
+
+% After completing these steps, provide your output in JSON format with the following keys:
+- explanation: A string explaining what was trimmed, if anything. If nothing was trimmed, explain why.
+- trimmed_continued_generation: The trimmed continued_generation string. If no trimming was necessary, this should be identical to the original continued_generation.
+
+% Ensure your JSON is properly formatted and contains only these two keys.
+
+% Here are example of how your outputs should look like for given inputs:
+<examples>
+    <example1>
+        <inputs>
+            <generated_results>
+            "The quick brown fox jumps over the lazy dog and the "
+            </generated_results>
+            <continued_generation>
+            """```text\n and the cat jumped over the lazy dog."""
+            </continued_generation>
+        </inputs>
+        <output>
+        {{
+        "explanation": "Trimmed '```text\n and the ' from the start of the continued_generation as it overlapped with the end of generated_results and the triple backticks indicate a start of a code block.",
+        "trimmed_continued_generation": "cat jumped over the lazy dog."
+        }}
+        </output>
+    </example1>
+
+    <example2>
+        <inputs>
+            <generated_results>
+            ""
+            </generated_results>
+            <continued_generation>
+            "Telling a short story. ```text\nThe quick brown fox jumps over the lazy dog."
+            </continued_generation>
+        </inputs>
+        <output>
+        {{
+        "explanation": "There was no overlap between the generated_results and the continued_generation. Trimmed preamble.","trimmed_continued_generation": "The quick brown fox jumps over the lazy dog."
+        }}
+        </output>
+    </example2>
+
+    <example3>
+        <inputs>
+            <generated_results>
+            '''\n        input_strings, output_file_paths, language = construct_paths(\n            input_file_paths=input_'''
+            </generated_results>
+            <continued_generation>
+            '''file_paths,\n            force=global_opts.force,\n            quiet=global_opts.quiet,\n            '''
+            </continued_generation>
+        </inputs>
+        <output>
+        {{
+        "explanation": "'file_paths' is a continuation of 'input_' so there is no overlap between the generated_results and the continued_generation.",
+        "trimmed_continued_generation": "file_paths,\n            force=global_opts.force,\n            quiet=global_opts.quiet,\n            "
+        }}
+        </output>
+    </example3>
+<examples>
+
+% Remember to carefully compare the texts to ensure accurate trimming and provide a clear explanation of your actions so that the trimmed_continued_generation can be properly appended to generated_results without needed further edits.
+

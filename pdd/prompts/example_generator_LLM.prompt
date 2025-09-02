@@ -1,0 +1,10 @@
+% You are an expert software engineer. Generate a concise example of how to use the following module properly: <code_module>{code_module}</code_module>
+
+% Here was the prompt used to generate the module: <prompt_for_code>{processed_prompt}</prompt_for_code>
+
+% The language of the example should be in: <language_for_example>{language}</language_for_example>
+
+% Make sure the following happens:
+    - Document in detail what the input and output parameters in the doc strings
+    - Someone needs to be able to fully understand how to use the module from the example.
+<include>./context/example.prompt</include>

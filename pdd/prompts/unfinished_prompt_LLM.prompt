@@ -1,0 +1,102 @@
+% You are tasked with determining whether a given prompt has finished outputting everything or if it still needs to continue. This is crucial for ensuring that all necessary information has been provided before proceeding with further actions. You will often be provided the last few hundred characters of the prompt_text to analyze and determine if it appears to be complete or if it seems to be cut off or unfinished. You are just looking at the prompt_text and not the entire prompt file. The beginning part of the prompt_text is not always provided, so you will need to make a judgment based on the text you are given.
+
+% IMPORTANT:
+%  - The prompt_text may contain code in various languages without Markdown fences.
+%  - Do NOT require triple backticks for completeness; judge the code/text itself.
+%  - Prefer concrete syntactic signals of completeness over stylistic ones.
+
+% Here is the prompt text to analyze:
+<prompt_text>
+    {PROMPT_TEXT}
+</prompt_text>
+
+% Optional language hint (may be empty or missing). If not provided, infer the language from the text:
+<language>
+    {LANGUAGE}
+</language>
+
+% Carefully examine the provided prompt text and determine if it appears to be complete or if it seems to be cut off or unfinished. Consider the following factors:
+    1. Sentence structure: Are all sentences grammatically complete?
+    2. Content flow: Does the text end abruptly or does it have a natural conclusion?
+    3. Context: Based on the content, does it seem like all necessary information has been provided?
+    4. Formatting: Are there any unclosed parentheses, quotation marks, or other formatting issues that suggest incompleteness?
+
+% Multi-language code completeness heuristics (apply when text looks like code):
+    - If the text forms a syntactically complete module/snippet for the language, treat it as finished (even without Markdown fences).
+    - Generic signals across languages:
+        * Balanced delimiters: (), [], {{}}, quotes, and block comments are closed.
+        * No mid-token/mid-statement tail: it does not end on `return a +`, `a =`, `def foo(`, `function f(`, trailing `.`, `->`, `::`, trailing `,`, or a line-continuation like `\\`.
+        * Block closure: constructs that open a block are closed (e.g., Python indentation after `:`, or matching `{{}}` in C/Java/JS/TS/Go).
+    - Language specifics (use LANGUAGE if given; otherwise infer from the text):
+        * Python: colon-introduced blocks closed; indentation consistent; triple-quoted strings balanced.
+        * JS/TS: braces and parentheses balanced; no dangling `export`/`import` without a following specifier; `/* ... */` comments closed.
+        * Java/C/C++/C#: braces and parentheses balanced; string/char literals closed; block comments closed.
+        * Go: braces balanced; no dangling keyword indicating an unfinished clause.
+        * HTML/XML: tags properly nested/closed; attributes properly quoted; no unfinished `<tag` or dangling `</`.
+    - If this is only the tail of a longer file, mark finished when the tail itself is syntactically complete and does not indicate a dangling continuation.
+
+% Provide your reasoning for why you believe the prompt is complete or incomplete.
+
+% Output a JSON object with two keys:
+    1. "reasoning": A string containing your structured reasoning
+    2. "is_finished": A boolean value (true if the prompt is complete, false if it's incomplete)
+
+% Examples (concise):
+<examples>
+  <example1>
+    <input>
+      <prompt_text>
+        def add(a, b):\n    return a + b\n
+      </prompt_text>
+    </input>
+    <output>
+      {{"reasoning": "Python code parses; blocks and quotes are closed; ends on a complete return statement.", "is_finished": true}}
+    </output>
+  </example1>
+  <example2>
+    <input>
+      <prompt_text>
+        def add(a, b):\n    return a +
+      </prompt_text>
+    </input>
+    <output>
+      {{"reasoning": "Ends mid-expression (`return a +`), indicates unfinished statement.", "is_finished": false}}
+    </output>
+  </example2>
+  <example3>
+    <input>
+      <prompt_text>
+        function add(a, b) {{\n  return a + b;\n}}\n
+      </prompt_text>
+      <language>
+        JavaScript
+      </language>
+    </input>
+    <output>
+      {{"reasoning": "JS braces and parentheses balanced; ends at a statement boundary; no dangling tokens.", "is_finished": true}}
+    </output>
+  </example3>
+  <example4>
+    <input>
+      <prompt_text>
+        <div class=\"box\">Hello
+      </prompt_text>
+      <language>
+        HTML
+      </language>
+    </input>
+    <output>
+      {{"reasoning": "HTML tag not closed (missing </div>); attribute quotes OK but element is unclosed.", "is_finished": false}}
+    </output>
+  </example4>
+  <example5>
+    <input>
+      <prompt_text>
+        class C:\n            def f(self):\n                x = 1\n
+      </prompt_text>
+    </input>
+    <output>
+      {{"reasoning": "All blocks properly indented and closed in the visible tail; no dangling colon blocks or open delimiters; tail is syntactically complete.", "is_finished": true}}
+    </output>
+  </example5>
+</examples>

@@ -1,0 +1,11 @@
+% Review the input string and provide a summary of its contents in about 200 words. 
+
+% Here are the Inputs/Outputs:
+    - input:
+        'file_contents': A string containing the contents of the file to summarize.
+    - output: JSON output with the following key:
+        'file_summary': A string containing the summary of the file.
+
+<file_contents>
+    {file_contents}
+</file_contents>

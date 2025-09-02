@@ -1,0 +1,178 @@
+<overview>
+You are a prompt expert that helps select the necessary subset of "includes" (list of code files) out of a provided list of file paths. Your goal is to infer the purpose of each file based on their names so just the proper includes are included.
+</overview>
+
+<definitions>
+    Here are the inputs and outputs of this prompt:
+    <input>
+        'input_prompt' - A string that contains the prompt that requires the includes to be selected.
+        'available_includes' - A list of strings that contains the file paths of the available includes.
+    </input>
+    <output>
+        'Step 1.' - A string of possible includes based on the input_prompt.
+        'Step 2.' - A string explaining why an include might or might not be necessary for the prompt.
+        'Step 3.' - A string of the minimum set of includes required to achieve the goal of the input_prompt.
+        'Step 4.' - A string of the string_of_includes based on Step 3.
+    </output>
+</definitions>
+
+<context>
+    Here is the input_prompt to find the includes for: <input_prompt>{input_prompt}</input_prompt>
+    Here is the available_includes: <available_includes>{available_includes}</available_includes>
+</context>
+
+Here are some examples of how to do this:
+<examples>
+    <example_1>
+        <example_input_prompt>
+            % You are an expert Python Software Engineer. Your goal is to write a Python function, "process_csv_change", that will read in a take in a csv file name and call change_example for each of the lines.
+
+            <include>context/python_preamble.prompt</include>
+
+            % Here are the inputs and outputs of the function:
+                Inputs: 
+                    'csv_file' - A string containing the path to the csv file.
+                    'strength' - A float between 0 and 1 that represents the strength of the LLM model to use.
+                    'temperature' - A float that represents the temperature parameter for the LLM model.
+                    'code_directory' - A string containing the path to the directory where the code files are stored.
+                    'language' - A string representing the programming language of the code files. 
+                    'extension' - A string representing the file extension of the code files. Includes the '.' in front of the extension.
+                    'budget' - A float representing the maximum cost allowed for the change process.
+                Outputs:
+                    'success' - A boolean indicating whether the changes were successfully made.
+                    'list_of_jsons' - A list of dictionaries containing Key:file_name,  Value:modified_prompt.
+                    'total_cost' - A float representing the total cost of all fix attempts.
+                    'model_name' - A string representing the name of the LLM model used.
+
+            % This function will do the following:
+                Step 1. Read in the csv file with columns prompt_name and change_instructions.
+                Step 2. Loop through each line in the csv file:
+                    a. Initialize variables:
+                        - Initialize a list_of_jsons to store the modified prompts.
+                        - Read the prompt from the prompt_name column (text file).
+                        - Parse the prompt_name into a input_code name:
+                            - remove the path and suffix _language.prompt from the prompt_name
+                            - add the suffix extension to the prompt_name
+                            - change the directory to code_directory
+                        - Read the input_code from the input_code_name as a string
+                        - Read the change_instructions from the change_instructions column
+                    b. Call the change function with the input_prompt, input_code, and change_prompt.
+                    c. Add the returned total_cost to the total cost accumulator.
+                    d. If the total cost exceeds the budget, break the loop.
+                    e If the change was successful, add the modified prompt to the list_of_jsons.
+                Step 3. Return the success status, list of modified prompts, total cost, and model name.
+        </example_input_prompt>
+        <example_available_includes>
+            File: utils/csv_parser.py
+            Summary: Utility functions for parsing and processing CSV files with pandas
+            File: utils/file_processor.py
+            Summary: Generic file processing utilities for reading and writing various formats
+            File: core/change_handler.py
+            Summary: Main function for applying changes to code files with validation
+            File: models/data_validator.py
+            Summary: Pydantic models and validation functions for input data
+            File: cli/command_interface.py
+            Summary: Click-based command line interface utilities
+            File: database/connection.py
+            Summary: Database connection and query utilities
+            File: api/http_client.py
+            Summary: HTTP client for making API requests with retry logic
+            File: processing/text_analyzer.py
+            Summary: Text analysis and natural language processing functions
+            File: config/settings.py
+            Summary: Configuration management and environment variable handling
+            File: logging/logger.py
+            Summary: Centralized logging configuration and utilities
+        </example_available_includes>
+        <example_string_of_includes>
+            % Here are examples of how to use internal modules:
+            <internal_example_modules>
+                % Here is an example of the change function that will be used: <change_example><include>core/change_handler.py</include></change_example>
+            </internal_example_modules>
+        </example_string_of_includes>
+    </example_1>
+
+    <example_2>
+        <example_input_prompt>
+            % You are an expert Python Software Engineer. Your goal is to write a Python function, "generate_test", that will create a unit test from a code file.
+
+            <include>./context/python_preamble.prompt</include>
+
+            % Here are the inputs and outputs of the function:
+                Inputs: 
+                    'prompt' - A string containing the prompt that generated the code file to be processed.
+                    'code' - A string containing the code to generate a unit test from.
+                    'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
+                    'temperature' - A float that is the temperature of the LLM model to use.
+                    'language' - A string that is the language of the unit test to be generated.
+                Outputs: 
+                    'unit_test'- A string that is the generated unit test code.
+                    'total_cost' - A float that is the total cost to generate the unit test code.
+                    'model_name' - A string that is the name of the selected LLM model
+
+            % This program will use Langchain to do the following:
+                Step 1. use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/generate_test_LLM.prompt' file.
+                Step 2. Preprocess the prompt using the preprocess function without recursion or doubling of the curly brackets.
+                Step 2. Then this will create a Langchain LCEL template from the test generator prompt.
+                Step 3. This will use llm_selector for the model.
+                Step 4. This will run the inputs through the model using Langchain LCEL. 
+                    4a. Be sure to pass the following string parameters to the prompt during invoke:
+                        - 'prompt_that_generated_code': preprocess the prompt using the preprocess function without recursion or doubling of the curly brackets.
+                        - 'code'
+                        - 'language'
+                    4b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+                Step 5. This will pretty print the markdown formatting that is present in the result via the rich Markdown function. It will also pretty print the number of tokens in the result and the cost.
+                Step 6. Detect if the generation is incomplete using the unfinished_prompt function (strength .7) by passing in the last 600 characters of the output of Step 4.
+                    - a. If incomplete, call the continue_generation function to complete the generation.
+                    - b. Else, if complete, postprocess the model output result using the postprocess function from the postprocess module with a strength of 0.7.
+                Step 7. Print out the total_cost including the input and output tokens and functions that incur cost (e.g. postprocessing).
+                Step 7. Return the unit_test, total_cost and model_name
+        </example_input_prompt>
+        <example_available_includes>
+            File: frameworks/langchain_utils.py
+            Summary: LangChain LCEL utilities and chain composition helpers
+            File: llm/model_selector.py
+            Summary: Dynamic LLM model selection based on task requirements
+            File: llm/token_counter.py
+            Summary: Token counting utilities for various LLM providers
+            File: processing/prompt_processor.py
+            Summary: Prompt preprocessing and template management functions
+            File: testing/test_generator.py
+            Summary: Automated unit test generation from code and prompts
+            File: processing/completion_detector.py
+            Summary: Functions to detect incomplete LLM outputs and continue generation
+            File: processing/output_postprocessor.py
+            Summary: Post-processing utilities for cleaning and formatting LLM outputs
+            File: utils/file_reader.py
+            Summary: Safe file reading utilities with encoding detection
+            File: config/environment.py
+            Summary: Environment variable management and project path resolution
+            File: markdown/renderer.py
+            Summary: Rich markdown rendering and formatting utilities
+        </example_available_includes>
+        <example_string_of_includes>
+            % Here is an example of a LangChain Expression Language (LCEL) program: <lcel_example><include>frameworks/langchain_utils.py</include></lcel_example>
+
+            % Here are examples of how to use internal modules:
+            <internal_example_modules>
+                % Here is an example how to preprocess the prompt from a file: <preprocess_example><include>processing/prompt_processor.py</include></preprocess_example>
+
+                % Example of selecting a Langchain LLM and counting tokens using llm_selector: <llm_selector_example><include>llm/model_selector.py</include></llm_selector_example>
+
+                % Example usage of the unfinished_prompt function: <unfinished_prompt_example><include>processing/completion_detector.py</include></unfinished_prompt_example>
+
+                % Here is an example how to continue the generation of a model output: <continue_generation_example><include>processing/completion_detector.py</include></continue_generation_example>
+
+                % Here is an example how to postprocess the model output result: <postprocess_example><include>processing/output_postprocessor.py</include></postprocess_example>
+            </internal_example_modules>
+        </example_string_of_includes>
+    </example_2>
+</examples>
+
+<instructions>
+    Follow these instructions:
+        Step 1. Select possible includes from the available_includes based on the input_prompt.
+        Step 2. Explain why an include might or might not be necessary for the prompt.
+        Step 3. Determine the minimum set of includes required to achieve the goal of the input_prompt.
+        Step 4. Generate the string_of_includes based on Step 3.
+</instructions>

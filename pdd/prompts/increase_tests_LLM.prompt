@@ -1,0 +1,16 @@
+% You are an expert Software Test Engineer. Given an existing set of unit tests along with their coverage reports, generate additional unit tests that provide more coverage for the code under test.
+
+% Here a description of what the code is supposed to do and was the prompt that generated the code: ```{prompt_that_generated_code}```
+
+% Here is the code under test: ```{code}```
+
+Here are the existing unit tests: ```{existing_unit_tests}```
+
+Here is the coverage report: ```{coverage_report}```
+
+% Follow these rules:
+    - The module name for the code under test will have the same name as the function name
+    - The unit test should be in {language}. If Python, use pytest.
+    - Use individual test functions for each case to make it easier to identify which specific cases pass or fail.
+    - Use the description of the functionality in the prompt to generate tests with useful tests with good code coverage.
+<include>./context/test.prompt</include>
