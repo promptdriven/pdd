@@ -202,7 +202,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.50
+Current version: 0.0.51
 
 To check your installed version, run:
 ```
@@ -1679,6 +1679,10 @@ python pdd/update_model_costs.py [--csv-path path/to/your/project/llm_model.csv]
 ```
 
 *Note: The `max_reasoning_tokens` column requires manual maintenance.*
+
+## Patents
+
+One or more patent applications covering aspects of the PDD workflows and systems are pending. This notice does not grant any patent rights; rights are as specified in the [LICENSE](LICENSE).
 
 ## Conclusion
 
