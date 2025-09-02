@@ -46,6 +46,15 @@ You can also run tests with coverage reporting:
 pytest --cov=pdd
 ```
 
+### Adding/Updating Tests (Strongly Encouraged)
+
+When fixing a bug or adding a feature, please add or update tests under `tests/` to prove the change works and prevent regressions.
+
+- Test location: put tests in `tests/` using `pytest` style (`test_*.py`).
+- Red/green flow: ideally commit a failing test that reproduces the issue, then the fix that makes it pass.
+- Regression focus: for bug fixes, ensure the test fails without your change and passes with it.
+- Coverage: aim to exercise the public API and edge cases related to your change.
+
 ## Building the Package
 
 If you need to build the distributable package files (wheel and source distribution):
@@ -86,6 +95,7 @@ This section is primarily for project maintainers.
 1. Ensure any install or build dependencies are removed before committing.
 2. Update the `README.md` with details of changes to the interface, this includes new environment variables, exposed ports, useful file locations, and container parameters.
 3. Increase the version numbers in `pyproject.toml` and the `README.md` to the new version that this Pull Request would represent. The versioning scheme we use is [SemVer](http://semver.org/).
-4. You may merge the Pull Request in once you have the sign-off of two other developers, or if you do not have permission to do that, you may request the second reviewer to merge it for you.
+4. Include tests: add or update tests in `tests/` that demonstrate the issue/feature and verify the fix or behavior. PRs that change behavior without tests may be asked to add them.
+5. You may merge the Pull Request in once you have the sign-off of two other developers, or if you do not have permission to do that, you may request the second reviewer to merge it for you.
 
 Thank you for your contributions!
