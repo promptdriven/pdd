@@ -159,6 +159,8 @@ The CSV includes columns for:
 - `structured_output`: Whether the model supports structured JSON output
 - `reasoning_type`: Support for reasoning capabilities ("none", "budget", or "effort")
 
+For a concrete, up-to-date reference of supported models and example rows, see the bundled CSV in this repository: [pdd/data/llm_model.csv](pdd/data/llm_model.csv).
+
 For proper model identifiers to use in your custom configuration, refer to the [LiteLLM Model List](https://docs.litellm.ai/docs/providers) documentation. LiteLLM typically uses model identifiers in the format `provider/model_name` (e.g., "openai/gpt-4", "anthropic/claude-3-opus-20240229").
 
 ## Post-Installation Setup
