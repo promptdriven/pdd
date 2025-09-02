@@ -39,6 +39,8 @@ help:
 	@echo "Build & Deployment:"
 	@echo "  make install                 - Install pdd"
 	@echo "  make build                   - Build pdd package"
+	@echo "  make publish                 - Build & upload current version"
+	@echo "  make publish-public          - Copy artifacts to public repo only"
 	@echo "  make release                 - Bump version and build package"
 	@echo "  make staging                 - Copy files to staging"
 	@echo "  make production              - Copy files from staging to pdd"
@@ -77,7 +79,7 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory
 EXAMPLE_FILES := $(wildcard $(CONTEXT_DIR)/*_example.py)
 
-.PHONY: all clean test requirements production coverage staging regression sync-regression all-regression install build analysis fix crash update-extension generate run-examples verify detect change lint
+.PHONY: all clean test requirements production coverage staging regression sync-regression all-regression install build analysis fix crash update-extension generate run-examples verify detect change lint publish publish-public
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -421,11 +423,46 @@ build:
 	
 	@conda run -n pdd --no-capture-output twine upload --repository pypi dist/*.whl
 
-release:
-	@echo "Bumping version with commitizen"
-	@python -m commitizen bump --increment PATCH
+publish:
 	@echo "Building and uploading package"
 	@$(MAKE) build
+	@$(MAKE) publish-public
+
+release:
+	@echo "Preparing release"
+	@CURRENT_VERSION=$$(sed -n '1,120s/^version[[:space:]]*=[[:space:]]*"\([0-9.]*\)"/\1/p' pyproject.toml | head -n1); \
+	CURRENT_TAG="v$$CURRENT_VERSION"; \
+	if git tag --points-at HEAD | grep -qx "$$CURRENT_TAG"; then \
+		echo "HEAD already at $$CURRENT_TAG; skipping bump and publishing current version."; \
+		$(MAKE) publish; \
+	else \
+		echo "Bumping version with commitizen"; \
+		python -m commitizen bump --increment PATCH --yes; \
+		echo "Publishing new version"; \
+		$(MAKE) publish; \
+	fi
+
+analysis:
+	@echo "Running regression analysis"
+	@LATEST_REGRESSION_DIR=$$(ls -td -- "staging/regression_"* 2>/dev/null | head -n 1); \
+	if [ -d "$$LATEST_REGRESSION_DIR" ]; then \
+		echo "Using latest regression directory: $$LATEST_REGRESSION_DIR"; \
+		ANALYSIS_FILE="$$LATEST_REGRESSION_DIR/regression_analysis.md"; \
+		PYTHONPATH=$(PDD_DIR):$$PYTHONPATH REGRESSION_TARGET_DIR=$$LATEST_REGRESSION_DIR pdd --strength .9 --local generate --output "$$ANALYSIS_FILE" prompts/regression_analysis_log.prompt; \
+		echo "Analysis results:"; \
+		python -c "from rich.console import Console; from rich.syntax import Syntax; console = Console(); content = open('$$ANALYSIS_FILE').read(); syntax = Syntax(content, 'python', theme='monokai', line_numbers=True); console.print(syntax)"; \
+	else \
+		echo "No regression directory found. Please run 'make regression' first."; \
+		exit 1; \
+	fi
+
+# Update VS Code extension
+update-extension:
+	@echo "Updating VS Code extension"
+	@pdd --strength .865 --verbose --force generate --output utils/vscode_prompt/syntaxes/prompt.tmLanguage.json prompts/prompt.tmLanguage_json.prompt
+	@cd utils/vscode_prompt && vsce package
+	@code --install-extension utils/vscode_prompt/prompt-0.0.1.vsix --force
+publish-public:
 	@echo "Ensuring public repo directory exists: $(PUBLIC_PDD_REPO_DIR)"
 	@mkdir -p $(PUBLIC_PDD_REPO_DIR)
 	@echo "Copying README to public repo"
@@ -469,8 +506,8 @@ release:
 		conda run -n pdd --no-capture-output python scripts/copy_package_data_to_public.py \
 			--dest $(PUBLIC_PDD_REPO_DIR) \
 			--copy-tests \
-			$(foreach pat,$(PUBLIC_TEST_INCLUDE),--tests-include $(pat)) \
-			$(foreach xpat,$(PUBLIC_TEST_EXCLUDE),--tests-exclude $(xpat)); \
+			$(foreach pat,$(PUBLIC_TEST_INCLUDE),--tests-include '$(pat)') \
+			$(foreach xpat,$(PUBLIC_TEST_EXCLUDE),--tests-exclude '$(xpat)'); \
 	else \
 		echo "Skipping tests copy (PUBLIC_COPY_TESTS=$(PUBLIC_COPY_TESTS))"; \
 	fi
@@ -479,8 +516,8 @@ release:
 		conda run -n pdd --no-capture-output python scripts/copy_package_data_to_public.py \
 			--dest $(PUBLIC_PDD_REPO_DIR) \
 			--copy-context \
-			$(foreach pat,$(PUBLIC_CONTEXT_INCLUDE),--context-include $(pat)) \
-			$(foreach xpat,$(PUBLIC_CONTEXT_EXCLUDE),--context-exclude $(xpat)); \
+			$(foreach pat,$(PUBLIC_CONTEXT_INCLUDE),--context-include '$(pat)') \
+			$(foreach xpat,$(PUBLIC_CONTEXT_EXCLUDE),--context-exclude '$(xpat)'); \
 	else \
 		echo "Skipping context copy (PUBLIC_COPY_CONTEXT=$(PUBLIC_COPY_CONTEXT))"; \
 	fi
@@ -489,24 +526,3 @@ release:
 		@conda run -n pdd --no-capture-output python scripts/copy_package_data_to_public.py --dest $(PUBLIC_PDD_REPO_DIR)
 	@echo "Committing and pushing updates in public repo"
 	@cd $(PUBLIC_PDD_REPO_DIR) && git add . && git commit -m "Bump version" && git push || true
-	
-analysis:
-	@echo "Running regression analysis"
-	@LATEST_REGRESSION_DIR=$$(ls -td -- "staging/regression_"* 2>/dev/null | head -n 1); \
-	if [ -d "$$LATEST_REGRESSION_DIR" ]; then \
-		echo "Using latest regression directory: $$LATEST_REGRESSION_DIR"; \
-		ANALYSIS_FILE="$$LATEST_REGRESSION_DIR/regression_analysis.md"; \
-		PYTHONPATH=$(PDD_DIR):$$PYTHONPATH REGRESSION_TARGET_DIR=$$LATEST_REGRESSION_DIR pdd --strength .9 --local generate --output "$$ANALYSIS_FILE" prompts/regression_analysis_log.prompt; \
-		echo "Analysis results:"; \
-		python -c "from rich.console import Console; from rich.syntax import Syntax; console = Console(); content = open('$$ANALYSIS_FILE').read(); syntax = Syntax(content, 'python', theme='monokai', line_numbers=True); console.print(syntax)"; \
-	else \
-		echo "No regression directory found. Please run 'make regression' first."; \
-		exit 1; \
-	fi
-
-# Update VS Code extension
-update-extension:
-	@echo "Updating VS Code extension"
-	@pdd --strength .865 --verbose --force generate --output utils/vscode_prompt/syntaxes/prompt.tmLanguage.json prompts/prompt.tmLanguage_json.prompt
-	@cd utils/vscode_prompt && vsce package
-	@code --install-extension utils/vscode_prompt/prompt-0.0.1.vsix --force

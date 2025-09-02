@@ -1,4 +1,6 @@
-## v0.0.50 (2025-09-01)
+## v0.0.50 (2025-09-01) 
+
+- Many thanks to Rudi Cilibrasi (cilibrar@gmail.com) for your work on the GPT-5 support
 
 ## v0.0.49 (2025-08-13)
 
