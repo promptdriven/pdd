@@ -81,7 +81,9 @@ dev = [
     "pytest-cov",
     "pytest-mock",
     "pytest-asyncio",
-    "z3-solver"
+    "z3-solver",
+    "build",
+    "twine"
 ]
 
 [tool.commitizen]
