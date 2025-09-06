@@ -1,24 +1,91 @@
 ## v0.0.52 (2025-09-05)
 
+- Models: update Google model naming in `.pdd/llm_model.csv` and `data/llm_model.csv` to correct naming convention
+
 ## v0.0.51 (2025-09-01)
 
-## v0.0.50 (2025-09-01) 
+- Dependencies: add `google-cloud-aiplatform>=1.3`
+- Dev dependencies: add `build` and `twine`
+
+## v0.0.50 (2025-09-01)
 
 - Many thanks to Rudi Cilibrasi (cilibrar@gmail.com) for your work on the GPT-5 support
+- README: add reference to bundled CSV of supported models and example rows
 
 ## v0.0.49 (2025-08-13)
 
+- CONTRIBUTING:
+  - Add section on adding/updating tests and why it matters
+  - Specify test locations and the red/green workflow
+  - Emphasize regression focus and coverage goals
+
 ## v0.0.48 (2025-08-12)
+
+- Examples: add "Hello World" and "Pi Calc" examples with prompts, generated modules, example runners, and tests; update examples README
+- Core CLI: refactor output path handling in code generator and command modules; improve language validation and output path resolution in `construct_paths.py`
+- Orchestration/Invoke: enhance error handling and fix validation in `sync_orchestration.py` and `llm_invoke.py`
+- Prompts/Docs: update `prompts/auto_include_python.prompt`; expand README with new example references
 
 ## v0.0.47 (2025-08-04)
 
+- CLI/Test Integration:
+  - Add `pytest-output` command to capture structured pytest results
+  - Improve JSON parsing for pytest output handling
+- Sync Workflow:
+  - Enhance path resolution and missing-file error handling in sync command
+  - Improve `get_pdd_file_paths` and test file path management
+  - Fix decision logic to prioritize `verify` after `crash`
+  - Resolve sync regression scenario ("4a") and strengthen decision tests
+  - Improve directory summarization in `summarize_directory`
+- Auto-Deps:
+  - Add cycle detection and safeguards to prevent infinite loops
+  - Add regression tests for loop prevention
+- Model Config & Paths:
+  - Refactor LLM model CSV path resolution and loading
+  - Update README and tests to reflect new CSV path structure
+- Prompts/Docs:
+  - Update `prompts/auto_include_LLM.prompt` with new structure and examples
+- Repo/Build:
+  - Add `.gitattributes`; update local settings with helpful Bash snippets
+
 ## v0.0.46 (2025-08-02)
+
+- Build/Release:
+  - Update Makefile to use conda for build and upload workflows
+  - Add `scripts/extract_wheel.py`; enhance `scripts/preprocess_wheel.py` to dynamically locate and extract wheel files
+- Docs: refresh README and PyPI description for the release
 
 ## v0.0.45 (2025-07-29)
 
+- Release LLM prompt files in the PyPi release
+
 ## v0.0.44 (2025-07-28)
 
+- Sync & Orchestration:
+  - Improve sync orchestration with enhanced logging, loop control, and output management
+  - Refine decision logic for crash handling and test generation
+  - Add verification program parameter; enhance coverage reporting in tests
+  - Improve directory summarization and context-aware decision logic
+- Environment & Tooling:
+  - Add `pdd/python_env_detector.py` and corresponding prompt; detect Python env for subprocess calls
+  - Replace `pdd-local` helper with `pdd-local.sh`; update `.gitignore`, `.pddrc`, and VS Code launch configs
+- Data & Models:
+  - Add JSONL format to `data/language_format.csv`
+  - Update `data/llm_model.csv`; add example lockfile `.pdd/locks/simple_math_python.lock`
+- Prompts/Docs:
+  - Update prompts for code fixing and orchestration
+  - README: installation updates
+- Tests:
+  - Add `test_model_selection.py`
+  - Enhance `construct_paths` context detection test
+
 ## v0.0.43 (2025-07-12)
+
+- Paths & Discovery:
+  - Fix `prompts_dir` calculation and refine prompt directory resolution in `construct_paths.py`
+  - Enhance sync discovery logic; add regression test for path calculation
+- Release Assets:
+  - Include additional whitepaper assets in the release process
 
 ## v0.0.42 (2025-07-11)
 
