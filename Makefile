@@ -477,10 +477,11 @@ publish-public:
 	fi
 	@echo "Ensuring public repo directory exists: $(PUBLIC_PDD_REPO_DIR)"
 	@mkdir -p $(PUBLIC_PDD_REPO_DIR)
-	@echo "Copying README to public repo"
-	@cp ./README.md $(PUBLIC_PDD_REPO_DIR)/README.md
 	@echo "Copying examples to public repo"
 	@cp -r ./examples $(PUBLIC_PDD_REPO_DIR)/
+	@echo "Copying doctrine doc to public repo"
+	@mkdir -p $(PUBLIC_PDD_REPO_DIR)/docs
+	@cp docs/prompt-driven-development-doctrine.md $(PUBLIC_PDD_REPO_DIR)/docs/
 	@echo "Copying specific whitepaper files to public repo"
 	@mkdir -p $(PUBLIC_PDD_REPO_DIR)/docs/whitepaper_with_benchmarks/analysis_report
 	@mkdir -p $(PUBLIC_PDD_REPO_DIR)/docs/whitepaper_with_benchmarks/creation_report
