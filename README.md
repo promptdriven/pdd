@@ -1,5 +1,7 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
+![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.52-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+
 ## Introduction
 
 PDD (Prompt-Driven Development) is a versatile tool for generating code, creating examples, running unit tests, and managing prompt files. It leverages AI models to streamline the development process, allowing developers to work more efficiently with prompt-driven code generation.
@@ -11,6 +13,8 @@ The primary command is **`sync`**, which automatically executes the complete PDD
 For a detailed explanation of the concepts, architecture, and benefits of Prompt-Driven Development, please refer to our full whitepaper. This document provides an in-depth look at the PDD philosophy, its advantages over traditional development, and includes benchmarks and case studies.
 
 [Read the Full Whitepaper with Benchmarks](docs/whitepaper_with_benchmarks/whitepaper_w_benchmarks.md)
+
+Also see the Prompt‑Driven Development Doctrine for core principles and practices: [docs/prompt-driven-development-doctrine.md](docs/prompt-driven-development-doctrine.md)
 
 ## Installation
 
@@ -560,7 +564,7 @@ The sync command automatically detects what files exist and executes the appropr
 - Detects which files already exist and are up-to-date
 - Skips unnecessary steps (e.g., won't regenerate code if prompt hasn't changed)
 - Uses git integration to detect changes and determine incremental vs full regeneration
-- Accumulates tests over time rather than replacing them
+- Accumulates tests over time rather than replacing them (in a single test file per target)
 - Automatically handles dependencies between steps
 
 **Robust State Management**:
@@ -690,6 +694,11 @@ Arguments:
 Options:
 - `--output LOCATION`: Specify where to save the generated example code. The default file name is `<basename>_example.<language_file_extension>`. If an environment variable `PDD_EXAMPLE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 
+Where used:
+- Dependency references: Examples serve as lightweight (token efficient) interface references for other prompts and can be included as dependencies of a generate target.
+- Sanity checks: The example program is typically used as the runnable program for `crash` and `verify`, providing a quick end-to-end sanity check that the generated code runs and behaves as intended.
+- Auto-deps integration: The `auto-deps` command can scan example files (e.g., `examples/**/*.py`) and insert relevant references into prompts. Based on each example’s content (imports, API usage, filenames), it identifies useful development units to include as dependencies.
+
 **When to use**: Choose this command when creating reusable references that other prompts can efficiently import. This produces token-efficient examples that are easier to reuse across multiple prompts compared to including full implementations.
 
 Example:
@@ -700,6 +709,10 @@ pdd [GLOBAL OPTIONS] example --output examples/factorial_calculator_example.py f
 ### 4. test
 
 Generate or enhance unit tests for a given code file and its corresponding prompt file.
+
+Test organization:
+- For each target `<basename>`, PDD maintains a single test file (by default named `test_<basename>.<language_extension>` and typically placed under a tests directory).
+- New tests accumulate in that same file over time rather than being regenerated from scratch. When augmenting tests, PDD can merge additions into the existing file (see `--merge`).
 
 ```
 pdd [GLOBAL OPTIONS] test [OPTIONS] PROMPT_FILE CODE_FILE
