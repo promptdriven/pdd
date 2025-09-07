@@ -763,7 +763,7 @@ def test_regression_demonstrates_fix_prevents_pytest_on_missing_file():
         assert "file or directory not found" in result.stderr.lower()
 
 
-@pytest.mark.skip(reason="Only run manually to verify the actual bug exists")
+# @pytest.mark.skip(reason="Only run manually to verify the actual bug exists")
 def test_regression_reproduce_actual_errno2_manually():
     """
     MANUAL TEST: This attempts to reproduce the actual [Errno 2] from the log.
