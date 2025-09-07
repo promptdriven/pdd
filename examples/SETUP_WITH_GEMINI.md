@@ -138,7 +138,7 @@ hello
 ```
 
 ---
-## 7) (Optional) Sync
+## 7. (Optional) Sync
 
 After you’ve confirmed `generate` works:
 
