@@ -52,7 +52,7 @@ pdd --version
 
 ---
 
-## 2) Clone the repo
+## 2. Clone the repo
 
 ```bash
 git clone https://github.com/promptdriven/pdd.git
