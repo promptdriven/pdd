@@ -1,3 +1,5 @@
+## v0.0.54 (2025-09-07)
+
 ## v0.0.53 (2025-09-07)
 
 ### Docs
@@ -5,6 +7,7 @@
 - README: Clarify that `sync` commonly needs the global `--force` flag to overwrite generated files; update all `sync` examples accordingly.
 - README: Improve usage clarity and reporting notes for `sync`; add version badge and link to Prompt‑Driven Development Doctrine.
 - Doctrine: Add new doctrine document outlining core principles and workflow; referenced from README.
+- Examples: Add/setup Gemini guide (`examples/SETUP_WITH_GEMINI.md`) — thanks to @saisaiecho for the PR and contributions.
 
 ### CLI
 
