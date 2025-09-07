@@ -1,3 +1,5 @@
+## v0.0.53 (2025-09-07)
+
 ## v0.0.52 (2025-09-05)
 
 - Models: update Google model naming in `.pdd/llm_model.csv` and `data/llm_model.csv` to correct naming convention
