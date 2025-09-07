@@ -81,7 +81,7 @@ def handle_error(exception: Exception, command_name: str, quiet: bool):
     "--force",
     is_flag=True,
     default=False,
-    help="Overwrite existing files without asking for confirmation.",
+    help="Overwrite existing files without asking for confirmation (commonly used with 'sync' to update generated outputs).",
 )
 @click.option(
     "--strength",
@@ -1160,12 +1160,16 @@ def sync(
     target_coverage: float,
     log: bool,
 ) -> Optional[Tuple[Dict[str, Any], float, str]]:
-    """Automatically execute the complete PDD workflow loop for a given basename. 
-    
-    This command implements the entire synchronized cycle, intelligently determining 
-    what steps are needed and executing them in the correct order. It detects 
-    programming languages by scanning for prompt files matching the pattern 
+    """Automatically execute the complete PDD workflow loop for a given basename.
+
+    This command implements the entire synchronized cycle, intelligently determining
+    what steps are needed and executing them in the correct order. It detects
+    programming languages by scanning for prompt files matching the pattern
     {basename}_{language}.prompt in the prompts directory.
+
+    Note: Sync typically overwrites generated files to keep outputs up to date.
+    In most real runs, include the global ``--force`` flag (e.g., ``pdd --force sync BASENAME``)
+    to allow overwrites without interactive confirmation.
     """
     try:
         results, total_cost, model = sync_main(
