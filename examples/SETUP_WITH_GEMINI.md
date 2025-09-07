@@ -1,6 +1,6 @@
 # Getting Started with PDD using a Free Gemini API Key
 
-This example shows you how to set up **Prompt-Driven Development (PDD)** with a free Google **Google API key** and run the built-in **Hello** example.
+This example shows you how to set up **Prompt-Driven Development (PDD)** with a free **Gemini API key** and run the built-in **Hello** example.
 
 > **Goal:** By the end, you’ll have PDD installed, Gemini configured, and `pdd generate` running on the Hello example.
 
