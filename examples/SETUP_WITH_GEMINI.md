@@ -52,7 +52,14 @@ pdd --version
 
 ---
 
-## 2. Configure your Google API Key
+## 2) Clone the repo
+
+```bash
+git clone https://github.com/promptdriven/pdd.git
+cd pdd/examples/hello
+```
+
+## 3. Configure your Google API Key
 
 1. Go to [Google AI Studio](https://aistudio.google.com/app/apikey).  
 2. Log in with your Google account.  
@@ -78,7 +85,7 @@ echo $Env:GEMINI_API_KEY # Windows
 
 ---
 
-## 3. Create `~/.pdd/llm_model.csv`
+## 4. Create `~/.pdd/llm_model.csv`
 
 Add Gemini rows so PDD knows how to call the Google AI Studio models:
 
@@ -94,7 +101,7 @@ head -2 ~/.pdd/llm_model.csv
 
 ---
 
-## 4. Output locations (tests & examples)
+## 5. Output locations (tests & examples)
 
 By default, PDD writes generated files next to your source code.  
 To keep repos tidy, set these environment variables once (e.g., in `~/.zshrc` or `~/.bashrc`):
@@ -110,7 +117,7 @@ With these set, PDD will place outputs like so:
 
 ---
 
-## 5. Run the Hello Example
+## 6. Run the Hello Example
 
 From `pdd/examples/hello`:
 
@@ -131,8 +138,16 @@ hello
 ```
 
 ---
+## 7) (Optional) Sync
 
-## 6. What if nothing prints?
+After you’ve confirmed `generate` works:
+
+```bash
+pdd --force sync hello
+```
+---
+
+## 8. What if nothing prints?
 
 Sometimes the generated file only defines the function (e.g., `def hello(): print("hello")`) but doesn’t include the standard Python entry point:
 
