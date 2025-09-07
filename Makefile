@@ -25,8 +25,12 @@ help:
 	@echo "  make all-regression 		  - Run all regression test suites"
 	@echo "  make analysis                - Run regression analysis"
 	@echo "  make verify MODULE=name      - Verify code functionality against prompt intent"
-	@echo "  make lint                    - Run pylint for static code analysis"
-	@echo ""
+		@echo "  make lint                    - Run pylint for static code analysis"
+		@echo ""
+		@echo "Public repo helpers:"
+		@echo "  make public-update           - Ensure and update local public repo clone ($(PUBLIC_PDD_REPO_DIR))"
+		@echo "  make public-import ITEM=path - Copy file/dir from public clone into this repo (e.g., ITEM=pdd/examples/SETUP_WITH_GEMINI.md)"
+		@echo "  make public-diff ITEM=path   - Show diff between public clone file and local file (uses same ITEM rules)"
 	@echo "Fixing & Maintenance:"
 	@echo "  make fix [MODULE=name]       - Fix prompts command"
 	@echo "  make crash MODULE=name       - Fix crashes in code"
@@ -80,7 +84,7 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory
 EXAMPLE_FILES := $(wildcard $(CONTEXT_DIR)/*_example.py)
 
-.PHONY: all clean test requirements production coverage staging regression sync-regression all-regression install build analysis fix crash update-extension generate run-examples verify detect change lint publish publish-public
+.PHONY: all clean test requirements production coverage staging regression sync-regression all-regression install build analysis fix crash update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -540,6 +544,86 @@ publish-public:
 	@echo "Committing and pushing updates in public repo"
 	@if git -C "$(PUBLIC_PDD_REPO_DIR)" rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
 		cd "$(PUBLIC_PDD_REPO_DIR)" && git add . && git commit -m "Bump version" && git push; \
+		else \
+			echo "Skip commit: $(PUBLIC_PDD_REPO_DIR) is not a Git repo. Set PUBLIC_PDD_REPO_DIR to a clone of $(PUBLIC_PDD_REMOTE)."; \
+		fi
+
+# Ensure the public repo clone exists at $(PUBLIC_PDD_REPO_DIR)
+public-ensure:
+	@if [ ! -d "$(PUBLIC_PDD_REPO_DIR)/.git" ]; then \
+		if [ ! -d "$(PUBLIC_PDD_REPO_DIR)" ] || [ -z "$$(/bin/ls -A "$(PUBLIC_PDD_REPO_DIR)" 2>/dev/null)" ]; then \
+			echo "Cloning public repo $(PUBLIC_PDD_REMOTE) into $(PUBLIC_PDD_REPO_DIR)"; \
+			mkdir -p "$(dir $(PUBLIC_PDD_REPO_DIR))"; \
+			git clone "$(PUBLIC_PDD_REMOTE)" "$(PUBLIC_PDD_REPO_DIR)"; \
+		else \
+			echo "Warning: $(PUBLIC_PDD_REPO_DIR) exists and is not a Git repo."; \
+			echo "Set PUBLIC_PDD_REPO_DIR to a clone of $(PUBLIC_PDD_REMOTE) or remove the directory and re-run."; \
+			exit 1; \
+		fi; \
 	else \
-		echo "Skip commit: $(PUBLIC_PDD_REPO_DIR) is not a Git repo. Set PUBLIC_PDD_REPO_DIR to a clone of $(PUBLIC_PDD_REMOTE)."; \
+		echo "Public repo clone already present: $(PUBLIC_PDD_REPO_DIR)"; \
+	fi
+
+# Update the public repo clone to its default branch
+public-update: public-ensure
+	@echo "Updating public repo clone at $(PUBLIC_PDD_REPO_DIR)"
+	@if [ -d "$(PUBLIC_PDD_REPO_DIR)/.git" ]; then \
+		cd "$(PUBLIC_PDD_REPO_DIR)"; \
+		git fetch --all; \
+		DEFAULT_BRANCH=$$(git remote show origin | awk '/HEAD branch/ {print $$NF}'); \
+		if [ -z "$$DEFAULT_BRANCH" ]; then DEFAULT_BRANCH=main; fi; \
+		git checkout "$$DEFAULT_BRANCH"; \
+		git pull --rebase --autostash origin "$$DEFAULT_BRANCH"; \
+	else \
+		echo "Error: $(PUBLIC_PDD_REPO_DIR) is not a Git repo."; \
+		exit 1; \
+	fi
+
+# Import a file or directory from the public repo clone into this repo
+# Usage: make public-import ITEM=relative/path/in/public/repo
+public-import: public-update
+	@if [ -z "$(ITEM)" ]; then \
+		echo "Usage: make public-import ITEM=relative/path (e.g., ITEM=examples/SETUP_WITH_GEMINI.md)"; \
+		exit 1; \
+	fi
+	@SRC="$(PUBLIC_PDD_REPO_DIR)/$(ITEM)"; DST="$(ITEM)"; \
+	if [ ! -e "$$SRC" ]; then \
+		ALT_ITEM="$${ITEM#pdd/}"; \
+		ALT_SRC="$(PUBLIC_PDD_REPO_DIR)/$${ALT_ITEM}"; \
+		if [ "$$ALT_ITEM" != "$(ITEM)" ] && [ -e "$$ALT_SRC" ]; then \
+			SRC="$$ALT_SRC"; DST="$$ALT_ITEM"; \
+		else \
+			echo "Error: $$SRC not found in public repo clone."; \
+			exit 1; \
+		fi; \
+	fi; \
+	mkdir -p "$$(dirname "$$DST")"; \
+	cp -a "$$SRC" "$$DST"; \
+	echo "Imported $$SRC -> $$DST"
+
+# Show diff between the public clone file and the local file
+# Usage: make public-diff ITEM=relative/path/in/public/repo
+public-diff: public-update
+	@if [ -z "$(ITEM)" ]; then \
+		echo "Usage: make public-diff ITEM=relative/path (e.g., ITEM=examples/SETUP_WITH_GEMINI.md)"; \
+		exit 1; \
+	fi
+	@SRC="$(PUBLIC_PDD_REPO_DIR)/$(ITEM)"; DST="$(ITEM)"; \
+	if [ ! -e "$$SRC" ]; then \
+		ALT_ITEM="$${ITEM#pdd/}"; \
+		ALT_SRC="$(PUBLIC_PDD_REPO_DIR)/$${ALT_ITEM}"; \
+		if [ "$$ALT_ITEM" != "$(ITEM)" ] && [ -e "$$ALT_SRC" ]; then \
+			SRC="$$ALT_SRC"; DST="$$ALT_ITEM"; \
+		else \
+			echo "Error: $$SRC not found in public repo clone."; \
+			exit 1; \
+		fi; \
+	fi; \
+	if [ -e "$$DST" ]; then \
+		echo "Showing diff: local '$$DST' vs public '$$SRC'"; \
+		git --no-pager diff --no-index -- "$${DST}" "$${SRC}" || true; \
+	else \
+		echo "Local destination missing: $$DST"; \
+		echo "Diff against empty file:"; \
+		git --no-pager diff --no-index -- /dev/null "$${SRC}" || true; \
 	fi
