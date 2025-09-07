@@ -83,9 +83,8 @@ echo $Env:GOOGLE_API_KEY # Windows
 Add Gemini rows so PDD knows how to call the Google AI Studio models:
 
 ```csv
-name,provider,model,api_key_env,api_key,input,output,coding_arena_elo,structured_output,reasoning_type,max_tokens,max_reasoning_tokens,temperature,top_p,top_k,seed,supports_images,supports_json,supports_tools,cost_currency,weight,enabled
-gemini-1.5-flash,gemini,gemini-1.5-flash,GOOGLE_API_KEY,,0,0,0,false,none,8192,0,0.7,1,0,0,true,true,false,USD,1.0,true
-gemini-1.5-pro,gemini,gemini-1.5-pro,GOOGLE_API_KEY,,0,0,0,false,none,32768,0,0.7,1,0,0,true,true,false,USD,1.0,false
+provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type
+gemini,gemini/gemini-2.5-pro,0,0,0,,GEMINI_API_KEY,0,True,none
 ```
 
 Make sure the file exists:
@@ -132,5 +131,37 @@ hello
 ```
 
 ---
+
+## 6. What if nothing prints?
+
+Sometimes the generated file only defines the function (e.g., `def hello(): print("hello")`) but doesn’t include the standard Python entry point:
+
+```python
+if __name__ == "__main__":
+    hello()
+```
+
+In that case you have two options:
+
+### Option A — Run interactively
+```bash
+python -i examples/hello/hello.py
+>>> hello()
+hello
+```
+
+### Option B — Add a main guard
+Append this to the bottom of the file:
+```python
+if __name__ == "__main__":
+    hello()
+```
+Then re-run:
+```bash
+python examples/hello/hello.py
+# output:
+hello
+```
+
 
 ✅ That’s it! You’ve installed PDD, configured Gemini, set up the model CSV, and generated your first working example.
