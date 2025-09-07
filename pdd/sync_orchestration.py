@@ -416,6 +416,7 @@ def sync_orchestration(
     errors: List[str] = []
     start_time = time.time()
     animation_thread = None
+    last_model_name: str = ""
     
     # Track operation history for cycle detection
     operation_history: List[str] = []
@@ -1105,6 +1106,10 @@ def sync_orchestration(
                 }, duration)
                 append_sync_log(basename, language, log_entry)
 
+                # Track the most recent model used on a successful step
+                if success and isinstance(model_name, str) and model_name:
+                    last_model_name = model_name
+
                 if success:
                     operations_completed.append(operation)
                     # Extract cost and model from result based on format
@@ -1265,6 +1270,7 @@ def sync_orchestration(
         'total_time': total_time,
         'final_state': final_state,
         'errors': errors,
+        'model_name': last_model_name,
     }
 
 if __name__ == '__main__':
