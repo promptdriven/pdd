@@ -96,6 +96,7 @@ version_files = [
     "pyproject.toml:version",
     "pdd/__init__.py:__version__",
     "README.md:Current version: (.*?)$",
+    "README.md:https://img.shields.io/badge/pdd--cli-v(.*?)-blue",
     "pdd/pdd_completion.sh:# Version: (.*?)",
     "pypi_description.rst:.. image:: https://img.shields.io/badge/pdd--cli-v(.*?)-blue",
     "pypi_description.rst:You'll see the current PDD version \\(e\\.g\\., (.*?)\\)\\."

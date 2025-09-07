@@ -1,5 +1,29 @@
 ## v0.0.53 (2025-09-07)
 
+### Docs
+
+- README: Clarify that `sync` commonly needs the global `--force` flag to overwrite generated files; update all `sync` examples accordingly.
+- README: Improve usage clarity and reporting notes for `sync`; add version badge and link to Prompt‑Driven Development Doctrine.
+- Doctrine: Add new doctrine document outlining core principles and workflow; referenced from README.
+
+### CLI
+
+- `pdd --help`: Expand `--force` help to note it’s commonly used with `sync` to update outputs.
+- `pdd sync --help`: Add note recommending `pdd --force sync BASENAME` for typical runs.
+
+### Orchestration
+
+- Improve sync orchestration reporting and logic around handling missing examples.
+
+### Models
+
+- Update model configuration CSVs for Anthropic and improve temperature handling in `llm_invoke.py`.
+
+### Build/Tooling
+
+- Add `pytest-cov` dependency for coverage reporting.
+- Makefile: Enhance `publish-public` target to include copying the doctrine document.
+
 ## v0.0.52 (2025-09-05)
 
 - Models: update Google model naming in `.pdd/llm_model.csv` and `data/llm_model.csv` to correct naming convention
