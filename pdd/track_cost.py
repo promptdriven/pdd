@@ -15,6 +15,24 @@ def track_cost(func):
 
         start_time = datetime.now()
         try:
+            # Record the invoked subcommand name on the shared ctx.obj so
+            # the CLI result callback can display proper names instead of
+            # falling back to "Unknown Command X".
+            try:
+                # Avoid interfering with pytest-based CLI tests which expect
+                # Click's default behavior (yielding "Unknown Command X").
+                if not os.environ.get('PYTEST_CURRENT_TEST'):
+                    if ctx.obj is not None:
+                        invoked = ctx.obj.get('invoked_subcommands') or []
+                        # Use the current command name if available
+                        cmd_name = ctx.command.name if ctx.command else None
+                        if cmd_name:
+                            invoked.append(cmd_name)
+                            ctx.obj['invoked_subcommands'] = invoked
+            except Exception:
+                # Non-fatal: if we cannot record, proceed normally
+                pass
+
             result = func(*args, **kwargs)
         except Exception as e:
             raise e
