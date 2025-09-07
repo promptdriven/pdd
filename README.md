@@ -206,7 +206,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.52
+Current version: 0.0.53
 
 To check your installed version, run:
 ```
@@ -386,7 +386,7 @@ Here is a brief overview of the main commands provided by PDD. Click the command
 
 These options can be used with any command:
 
-- `--force`: Overwrite existing files without asking for confirmation.
+- `--force`: Overwrite existing files without asking for confirmation (commonly used with `sync`).
 - `--strength FLOAT`: Set the strength of the AI model (0.0 to 1.0, default is 0.5).
   - 0.0: Cheapest available model
   - 0.5: Default base model
@@ -504,6 +504,12 @@ Here are the main commands provided by PDD:
 pdd [GLOBAL OPTIONS] sync [OPTIONS] BASENAME
 ```
 
+Important: Sync frequently overwrites generated files to keep outputs up to date. In most real runs, include the global `--force` flag to allow overwrites without interactive confirmation:
+
+```
+pdd --force sync BASENAME
+```
+
 Arguments:
 - `BASENAME`: The base name for the prompt file (e.g., "factorial_calculator" for "factorial_calculator_python.prompt")
 
@@ -612,16 +618,16 @@ Use `--verbose` with `--log` to see detailed LLM reasoning for complex multi-fil
 Examples:
 ```bash
 # Complete workflow with progress animation and intelligent decision-making
-pdd sync factorial_calculator
+pdd --force sync factorial_calculator
 
 # Advanced sync with higher budget, custom coverage, and full visual feedback
-pdd sync --budget 15.0 --target-coverage 95.0 data_processor
+pdd --force sync --budget 15.0 --target-coverage 95.0 data_processor
 
 # Quick sync with animation showing real-time status updates
-pdd sync --skip-verify --budget 5.0 web_scraper
+pdd --force sync --skip-verify --budget 5.0 web_scraper
 
 # Multi-language sync with fingerprint-based change detection
-pdd sync multi_language_module
+pdd --force sync multi_language_module
 
 # View comprehensive sync log with decision analysis
 pdd sync --log factorial_calculator  
@@ -633,9 +639,9 @@ pdd --verbose sync --log factorial_calculator
 pdd sync --log calculator
 
 # Context-aware examples with automatic configuration detection
-cd backend && pdd sync calculator     # Uses backend context settings with animation
-cd frontend && pdd sync dashboard     # Uses frontend context with real-time feedback
-pdd --context backend sync calculator # Explicit context override with visual progress
+cd backend && pdd --force sync calculator     # Uses backend context settings with animation
+cd frontend && pdd --force sync dashboard     # Uses frontend context with real-time feedback
+pdd --context backend --force sync calculator # Explicit context override with visual progress
 ```
 
 ### 2. generate
@@ -1317,8 +1323,8 @@ PDD automatically detects the appropriate context based on:
 **Usage Examples**:
 ```bash
 # Auto-detect context from current directory
-cd backend && pdd sync calculator     # Uses backend context
-cd frontend && pdd sync dashboard     # Uses frontend context
+cd backend && pdd --force sync calculator     # Uses backend context
+cd frontend && pdd --force sync dashboard     # Uses frontend context
 
 # Explicit context override
 pdd --context backend sync calculator
