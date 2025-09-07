@@ -1,4 +1,4 @@
-# Getting Started with PDD using a Free Google API Key
+# Getting Started with PDD using a Free Gemini API Key
 
 This example shows you how to set up **Prompt-Driven Development (PDD)** with a free Google **Google API key** and run the built-in **Hello** example.
 
@@ -61,19 +61,19 @@ pdd --version
 
 **macOS/Linux (bash/zsh)**
 ```bash
-export GOOGLE_API_KEY="PASTE_YOUR_KEY_HERE"
+export GEMINI_API_KEY="PASTE_YOUR_KEY_HERE"
 ```
 
 **Windows (PowerShell)**
 ```powershell
-setx GOOGLE_API_KEY "PASTE_YOUR_KEY_HERE"
+setx GEMINI_API_KEY "PASTE_YOUR_KEY_HERE"
 ```
 
 Then close and reopen your terminal.  
 Check:
 ```bash
-echo $GOOGLE_API_KEY     # macOS/Linux
-echo $Env:GOOGLE_API_KEY # Windows
+echo $GEMINI_API_KEY     # macOS/Linux
+echo $Env:GEMINI_API_KEY # Windows
 ```
 
 ---
