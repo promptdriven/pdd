@@ -34,6 +34,12 @@ def runner():
     return CliRunner()
 
 # --- Basic CLI Tests ---
+def test_cli_list_contexts(runner):
+    """Test `pdd --list-contexts`."""
+    result = runner.invoke(cli.cli, ["--list-contexts"])
+    assert result.exit_code == 0
+    assert "default" in result.output
+
 
 def test_cli_version(runner):
     """Test `pdd --version`."""
