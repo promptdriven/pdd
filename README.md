@@ -94,6 +94,68 @@ source pdd-env/bin/activate
 pip install pdd-cli
 ```
 
+
+
+## Run Hello (with API Key + CSV)
+
+As of version **0.0.54**, cloud authentication is still waitlisted and the `sync` command is alpha.  
+👉 First-time users must configure an API key **and** create a local CSV file to run `generate`.
+
+### Step 1: Set an API key
+
+Pick one provider you already have access to:
+
+**Google Gemini (preferred):**
+```bash
+export GEMINI_API_KEY="YOUR_KEY_HERE"
+export GOOGLE_API_KEY="$GEMINI_API_KEY"   # keep for compatibility
+```
+
+**OpenAI:**
+```bash
+export OPENAI_API_KEY="YOUR_KEY_HERE"
+```
+
+### Step 2: Create `~/.pdd/llm_model.csv`
+
+**For Gemini:**
+```bash
+mkdir -p ~/.pdd
+cat > ~/.pdd/llm_model.csv <<'CSV'
+provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type
+Google,gemini/gemini-2.5-pro,1.25,10.0,1360,,GEMINI_API_KEY,0,True,none
+CSV
+```
+
+**For OpenAI:**
+```bash
+mkdir -p ~/.pdd
+cat > ~/.pdd/llm_model.csv <<'CSV'
+provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type
+OpenAI,gpt-4o-mini,0.15,0.60,1300,,OPENAI_API_KEY,0,True,none
+CSV
+```
+
+### Step 3: Clone repo and run generate
+
+```bash
+# Clone the repository (if not already)
+git clone https://github.com/promptdriven/pdd.git
+cd pdd/examples/hello
+
+# Generate hello.py from the prompt
+pdd --force generate hello_python.prompt
+
+# Run it with Python
+python hello.py
+```
+
+✅ Expected output:
+```
+hello
+```
+
+
 ## Cloud vs Local Execution
 
 PDD commands can be run either in the cloud or locally. By default, all commands run in the cloud mode, which provides several advantages:
