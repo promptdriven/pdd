@@ -1,7 +1,5 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.54-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
-
 ## Introduction
 
 PDD (Prompt-Driven Development) is a versatile tool for generating code, creating examples, running unit tests, and managing prompt files. It leverages AI models to streamline the development process, allowing developers to work more efficiently with prompt-driven code generation.
@@ -13,8 +11,6 @@ The primary command is **`sync`**, which automatically executes the complete PDD
 For a detailed explanation of the concepts, architecture, and benefits of Prompt-Driven Development, please refer to our full whitepaper. This document provides an in-depth look at the PDD philosophy, its advantages over traditional development, and includes benchmarks and case studies.
 
 [Read the Full Whitepaper with Benchmarks](docs/whitepaper_with_benchmarks/whitepaper_w_benchmarks.md)
-
-Also see the Prompt‑Driven Development Doctrine for core principles and practices: [docs/prompt-driven-development-doctrine.md](docs/prompt-driven-development-doctrine.md)
 
 ## Installation
 
@@ -97,6 +93,68 @@ source pdd-env/bin/activate
 # Install PDD
 pip install pdd-cli
 ```
+
+
+
+## Run Hello (with API Key + CSV)
+
+As of version **0.0.54**, cloud authentication is still waitlisted and the `sync` command is alpha.  
+👉 First-time users must configure an API key **and** create a local CSV file to run `generate`.
+
+### Step 1: Set an API key
+
+Pick one provider you already have access to:
+
+**Google Gemini (preferred):**
+```bash
+export GEMINI_API_KEY="YOUR_KEY_HERE"
+export GOOGLE_API_KEY="$GEMINI_API_KEY"   # keep for compatibility
+```
+
+**OpenAI:**
+```bash
+export OPENAI_API_KEY="YOUR_KEY_HERE"
+```
+
+### Step 2: Create `~/.pdd/llm_model.csv`
+
+**For Gemini:**
+```bash
+mkdir -p ~/.pdd
+cat > ~/.pdd/llm_model.csv <<'CSV'
+provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type
+Google,gemini/gemini-2.5-pro,1.25,10.0,1360,,GEMINI_API_KEY,0,True,none
+CSV
+```
+
+**For OpenAI:**
+```bash
+mkdir -p ~/.pdd
+cat > ~/.pdd/llm_model.csv <<'CSV'
+provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type
+OpenAI,gpt-4o-mini,0.15,0.60,1300,,OPENAI_API_KEY,0,True,none
+CSV
+```
+
+### Step 3: Clone repo and run generate
+
+```bash
+# Clone the repository (if not already)
+git clone https://github.com/promptdriven/pdd.git
+cd pdd/examples/hello
+
+# Generate hello.py from the prompt
+pdd --force generate hello_python.prompt
+
+# Run it with Python
+python hello.py
+```
+
+✅ Expected output:
+```
+hello
+```
+
 
 ## Cloud vs Local Execution
 
@@ -206,7 +264,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.54
+Current version: 0.0.51
 
 To check your installed version, run:
 ```
@@ -386,7 +444,7 @@ Here is a brief overview of the main commands provided by PDD. Click the command
 
 These options can be used with any command:
 
-- `--force`: Overwrite existing files without asking for confirmation (commonly used with `sync`).
+- `--force`: Overwrite existing files without asking for confirmation.
 - `--strength FLOAT`: Set the strength of the AI model (0.0 to 1.0, default is 0.5).
   - 0.0: Cheapest available model
   - 0.5: Default base model
@@ -504,12 +562,6 @@ Here are the main commands provided by PDD:
 pdd [GLOBAL OPTIONS] sync [OPTIONS] BASENAME
 ```
 
-Important: Sync frequently overwrites generated files to keep outputs up to date. In most real runs, include the global `--force` flag to allow overwrites without interactive confirmation:
-
-```
-pdd --force sync BASENAME
-```
-
 Arguments:
 - `BASENAME`: The base name for the prompt file (e.g., "factorial_calculator" for "factorial_calculator_python.prompt")
 
@@ -570,7 +622,7 @@ The sync command automatically detects what files exist and executes the appropr
 - Detects which files already exist and are up-to-date
 - Skips unnecessary steps (e.g., won't regenerate code if prompt hasn't changed)
 - Uses git integration to detect changes and determine incremental vs full regeneration
-- Accumulates tests over time rather than replacing them (in a single test file per target)
+- Accumulates tests over time rather than replacing them
 - Automatically handles dependencies between steps
 
 **Robust State Management**:
@@ -618,16 +670,16 @@ Use `--verbose` with `--log` to see detailed LLM reasoning for complex multi-fil
 Examples:
 ```bash
 # Complete workflow with progress animation and intelligent decision-making
-pdd --force sync factorial_calculator
+pdd sync factorial_calculator
 
 # Advanced sync with higher budget, custom coverage, and full visual feedback
-pdd --force sync --budget 15.0 --target-coverage 95.0 data_processor
+pdd sync --budget 15.0 --target-coverage 95.0 data_processor
 
 # Quick sync with animation showing real-time status updates
-pdd --force sync --skip-verify --budget 5.0 web_scraper
+pdd sync --skip-verify --budget 5.0 web_scraper
 
 # Multi-language sync with fingerprint-based change detection
-pdd --force sync multi_language_module
+pdd sync multi_language_module
 
 # View comprehensive sync log with decision analysis
 pdd sync --log factorial_calculator  
@@ -639,9 +691,9 @@ pdd --verbose sync --log factorial_calculator
 pdd sync --log calculator
 
 # Context-aware examples with automatic configuration detection
-cd backend && pdd --force sync calculator     # Uses backend context settings with animation
-cd frontend && pdd --force sync dashboard     # Uses frontend context with real-time feedback
-pdd --context backend --force sync calculator # Explicit context override with visual progress
+cd backend && pdd sync calculator     # Uses backend context settings with animation
+cd frontend && pdd sync dashboard     # Uses frontend context with real-time feedback
+pdd --context backend sync calculator # Explicit context override with visual progress
 ```
 
 ### 2. generate
@@ -700,11 +752,6 @@ Arguments:
 Options:
 - `--output LOCATION`: Specify where to save the generated example code. The default file name is `<basename>_example.<language_file_extension>`. If an environment variable `PDD_EXAMPLE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 
-Where used:
-- Dependency references: Examples serve as lightweight (token efficient) interface references for other prompts and can be included as dependencies of a generate target.
-- Sanity checks: The example program is typically used as the runnable program for `crash` and `verify`, providing a quick end-to-end sanity check that the generated code runs and behaves as intended.
-- Auto-deps integration: The `auto-deps` command can scan example files (e.g., `examples/**/*.py`) and insert relevant references into prompts. Based on each example’s content (imports, API usage, filenames), it identifies useful development units to include as dependencies.
-
 **When to use**: Choose this command when creating reusable references that other prompts can efficiently import. This produces token-efficient examples that are easier to reuse across multiple prompts compared to including full implementations.
 
 Example:
@@ -715,10 +762,6 @@ pdd [GLOBAL OPTIONS] example --output examples/factorial_calculator_example.py f
 ### 4. test
 
 Generate or enhance unit tests for a given code file and its corresponding prompt file.
-
-Test organization:
-- For each target `<basename>`, PDD maintains a single test file (by default named `test_<basename>.<language_extension>` and typically placed under a tests directory).
-- New tests accumulate in that same file over time rather than being regenerated from scratch. When augmenting tests, PDD can merge additions into the existing file (see `--merge`).
 
 ```
 pdd [GLOBAL OPTIONS] test [OPTIONS] PROMPT_FILE CODE_FILE
@@ -1323,8 +1366,8 @@ PDD automatically detects the appropriate context based on:
 **Usage Examples**:
 ```bash
 # Auto-detect context from current directory
-cd backend && pdd --force sync calculator     # Uses backend context
-cd frontend && pdd --force sync dashboard     # Uses frontend context
+cd backend && pdd sync calculator     # Uses backend context
+cd frontend && pdd sync dashboard     # Uses frontend context
 
 # Explicit context override
 pdd --context backend sync calculator
