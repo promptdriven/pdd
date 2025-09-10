@@ -6,7 +6,7 @@ PUBLISHER := $(shell node -p "require('./package.json').publisher")
 EXT_ID := $(PUBLISHER).$(NAME)
 VSIX := $(NAME)-$(VERSION).vsix
 
-.PHONY: help icon thumb package publish clean verify install uninstall reinstall vsix ovsx-publish ovsx-verify
+.PHONY: help icon thumb package publish clean verify install uninstall reinstall vsix
 
 help:
 	@echo "Targets:"
@@ -14,9 +14,7 @@ help:
 	@echo "  thumb     - Build images/video-thumb.png from YouTube cover"
 	@echo "  package   - Create $(VSIX) using vsce (or npx @vscode/vsce)"
 	@echo "  publish   - Publish to Marketplace (requires VSCODE_PAT)"
-	@echo "  ovsx-publish - Publish to Open VSX (requires OVSX_PAT)"
-	@echo "  ovsx-verify  - Verify Open VSX PAT and namespace"
-	@echo "  install   - Local install of $(VSIX) into VS Code (or Insiders/Codium/Cursor/Kiro/Windsurf/other OpenVSX-compatible IDEs)"
+	@echo "  install   - Local install of $(VSIX) into VS Code (or Insiders/Codium/Cursor)"
 	@echo "  uninstall - Remove installed extension ($(EXT_ID)) from local editor(s)"
 	@echo "  reinstall - Uninstall then install the built VSIX"
 	@echo "  verify    - Quick sanity check of package.json"
@@ -53,7 +51,7 @@ install: package
 	    exit 0; \
 	  fi; \
 	done; \
-	echo "No supported editor CLI found (code/code-insiders/codium/cursor/kiro/windsurf/other OpenVSX-compatible IDEs)."; \
+	echo "No supported editor CLI found (code/code-insiders/codium/cursor)."; \
 	exit 1
 
 uninstall:
@@ -87,22 +85,6 @@ publish: icon
 	  echo "vsce not found; using npx @vscode/vsce"; \
 	  npx @vscode/vsce publish; \
 	fi
-
-ovsx-publish: package
-	@if [ -z "$$OVSX_PAT" ]; then \
-	  echo "Error: OVSX_PAT env var is required to publish"; \
-	  echo "Create an Open VSX Personal Access Token and export OVSX_PAT, then re-run."; \
-	  exit 1; \
-	fi
-	npx ovsx publish $(VSIX) --pat "$$OVSX_PAT"
-
-ovsx-verify:
-	@if [ -z "$$OVSX_PAT" ]; then \
-	  echo "Error: OVSX_PAT env var is required to verify"; \
-	  echo "Create an Open VSX Personal Access Token and export OVSX_PAT, then re-run."; \
-	  exit 1; \
-	fi
-	npx ovsx verify-pat $(PUBLISHER) --pat "$$OVSX_PAT"
 
 verify:
 	node -e "JSON.parse(require('fs').readFileSync('package.json')); console.log('package.json OK')"

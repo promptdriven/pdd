@@ -1,7 +1,7 @@
 {
   "name": "prompt-highlighter",
   "displayName": "Prompt Driven Development",
-  "description": "For proper highlighting of .prompt files for Prompt Driven Development",
+  "description": "VS Code syntax highlighting for .prompt files (Prompt‑Driven Development, AI prompts)",
   "version": "0.0.1",
   "engines": {
     "vscode": "^1.96.0"
@@ -44,9 +44,21 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/promptdriven/pdd.git",
-    "directory": "prompt"
+    "directory": "utils/vscode_prompt"
   },
   "publisher": "PromptDriven",
+  "homepage": "https://github.com/promptdriven/pdd/tree/main/utils/vscode_prompt#readme",
+  "bugs": {
+    "url": "https://github.com/promptdriven/pdd/issues"
+  },
+  "license": "MIT",
+  "galleryBanner": {
+    "color": "#061c22",
+    "theme": "dark"
+  },
+  "extensionKind": [
+    "ui"
+  ],
   "keywords": [
     "prompt",
     "pdd",
@@ -54,10 +66,15 @@
     "prompt-driven development",
     "ai",
     "llm",
+    "syntax highlighting",
+    "language support",
+    "textmate",
+    "vs code",
+    "vscode",
+    "dsl",
+    "spec",
     "agent",
     "rag",
-    "spec",
-    "dsl",
     "openai",
     "anthropic",
     "gemini",
