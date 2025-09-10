@@ -1056,6 +1056,9 @@ def llm_invoke(
             logger.info(f"\n[ATTEMPT] Trying model: {model_name_litellm} (Provider: {provider})")
 
         retry_with_same_model = True
+        # Track per-model temperature adjustment attempt (avoid infinite loop)
+        current_temperature = temperature
+        temp_adjustment_done = False
         while retry_with_same_model:
             retry_with_same_model = False # Assume success unless auth error on new key
 
@@ -1070,7 +1073,8 @@ def llm_invoke(
             litellm_kwargs: Dict[str, Any] = {
                 "model": model_name_litellm,
                 "messages": formatted_messages,
-                "temperature": temperature,
+                # Use a local adjustable temperature to allow provider-specific fallbacks
+                "temperature": current_temperature,
             }
 
             api_key_name_from_csv = model_info.get('api_key') # From CSV
@@ -1423,6 +1427,16 @@ def llm_invoke(
 
 
                 else:
+                    # Anthropic requirement: when 'thinking' is enabled, temperature must be 1
+                    try:
+                        if provider.lower() == 'anthropic' and 'thinking' in litellm_kwargs:
+                            if litellm_kwargs.get('temperature') != 1:
+                                if verbose:
+                                    logger.info("[INFO] Anthropic thinking enabled: forcing temperature=1 for compliance.")
+                                litellm_kwargs['temperature'] = 1
+                                current_temperature = 1
+                    except Exception:
+                        pass
                     if verbose:
                         logger.info(f"[INFO] Calling litellm.completion for {model_name_litellm}...")
                     response = litellm.completion(**litellm_kwargs)
@@ -1480,7 +1494,7 @@ def llm_invoke(
                                     retry_response = litellm.completion(
                                         model=model_name_litellm,
                                         messages=retry_messages,
-                                        temperature=temperature,
+                                        temperature=current_temperature,
                                         response_format=response_format,
                                         **time_kwargs
                                     )
@@ -1675,10 +1689,40 @@ def llm_invoke(
                     Exception) as e: # Catch generic Exception last
                 last_exception = e
                 error_type = type(e).__name__
+                error_str = str(e)
+
+                # Provider-specific handling for Anthropic temperature + thinking rules.
+                # Two scenarios we auto-correct:
+                # 1) temperature==1 without thinking -> retry with 0.99
+                # 2) thinking enabled but temperature!=1 -> retry with 1
+                lower_err = error_str.lower()
+                if (not temp_adjustment_done) and ("temperature" in lower_err) and ("thinking" in lower_err):
+                    anthropic_thinking_sent = ('thinking' in litellm_kwargs) and (provider.lower() == 'anthropic')
+                    # Decide direction of adjustment based on whether thinking was enabled in the call
+                    if anthropic_thinking_sent:
+                        # thinking enabled -> force temperature=1
+                        adjusted_temp = 1
+                        logger.warning(
+                            f"[WARN] {model_name_litellm}: Anthropic with thinking requires temperature=1. "
+                            f"Retrying with temperature={adjusted_temp}."
+                        )
+                    else:
+                        # thinking not enabled -> avoid temperature=1
+                        adjusted_temp = 0.99
+                        logger.warning(
+                            f"[WARN] {model_name_litellm}: Provider rejected temperature=1 without thinking. "
+                            f"Retrying with temperature={adjusted_temp}."
+                        )
+                    current_temperature = adjusted_temp
+                    temp_adjustment_done = True
+                    retry_with_same_model = True
+                    if verbose:
+                        logger.debug(f"Retrying {model_name_litellm} with adjusted temperature {current_temperature}")
+                    continue
+
                 logger.error(f"[ERROR] Invocation failed for {model_name_litellm} ({error_type}): {e}. Trying next model.")
                 # Log more details in verbose mode
                 if verbose:
-                    # import traceback # Not needed if using exc_info=True
                     logger.debug(f"Detailed exception traceback for {model_name_litellm}:", exc_info=True)
                 break # Break inner loop, try next model candidate
 
