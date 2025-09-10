@@ -1,5 +1,9 @@
 ## v0.0.54 (2025-09-07)
 
+### CLI & Orchestration
+- Improve command tracking and reporting in the CLI (`pdd/cli.py`) and orchestration (`pdd/sync_orchestration.py`).
+- Refine cost tracking/reporting integration in `pdd/track_cost.py`.
+
 ## v0.0.53 (2025-09-07)
 
 ### Docs
