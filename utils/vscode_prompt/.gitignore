@@ -1,0 +1,15 @@
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# VS Code extension artifacts
+*.vsix
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
