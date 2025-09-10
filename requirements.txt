@@ -10,12 +10,14 @@ firecrawl_py==2.5.3
 httpx==0.28.1
 keyring==25.6.0
 langchain_core>=0.3.59
-litellm>=1.75.5
+litellm[caching]>=1.75.5
 nest_asyncio==1.6.0
 openai>=1.99.5
 pandas==2.2.3
+psutil>=7.0.0
 pydantic==2.11.4
 pytest==8.3.5
+pytest-cov==5.0.0
 python-dotenv==1.1.0
 rich==14.0.0
 semver==3.0.2

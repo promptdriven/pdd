@@ -1,10 +1,10 @@
-<InitialState timestamp="2025-07-15T11:20:18.006512">
+<InitialState timestamp="2025-09-07T15:42:22.389947">
   <ProgramFile>/Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py</ProgramFile>
   <CodeFile>/Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/pdd/hello.py</CodeFile>
   <ExitCode>0</ExitCode>
-  <Output>Calling the `hello` function...
+  <Output>About to call the function...
 hello
-...function call complete.
+...function call has finished.
 </Output>
 </InitialState>
 <FinalActions>

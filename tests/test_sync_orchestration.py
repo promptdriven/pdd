@@ -763,7 +763,7 @@ def test_regression_demonstrates_fix_prevents_pytest_on_missing_file():
         assert "file or directory not found" in result.stderr.lower()
 
 
-@pytest.mark.skip(reason="Only run manually to verify the actual bug exists")
+# @pytest.mark.skip(reason="Only run manually to verify the actual bug exists")
 def test_regression_reproduce_actual_errno2_manually():
     """
     MANUAL TEST: This attempts to reproduce the actual [Errno 2] from the log.
@@ -1005,3 +1005,37 @@ def test_test_operation_success_detection_prevents_infinite_loop(orchestration_f
     test_fingerprint_calls = [call for call in mock_save_fingerprint.call_args_list 
                              if len(call[0]) >= 3 and call[0][2] == 'test']
     assert len(test_fingerprint_calls) == 1, "Test operation fingerprint should be saved exactly once"
+
+
+def test_verify_skipped_when_example_missing_after_crash_skip(orchestration_fixture):
+    """
+    Regression safety net: if the example file is missing and crash is skipped due to
+    missing required files, the orchestrator should NOT run verify. Instead, it should
+    allow the decision logic to schedule example generation first.
+
+    Current behavior (bug): verify is attempted and fails when example path doesn't exist.
+    This test is marked xfail until the orchestrator adds a guard to skip verify when
+    the example artifact is missing.
+    """
+    mocks = orchestration_fixture
+    mock_determine = mocks['sync_determine_operation']
+
+    # Sequence that reproduces the problem:
+    # 1) crash (will be skipped due to missing example), 2) verify (should be avoided), 3) all_synced
+    mock_determine.side_effect = [
+        SyncDecision(operation='crash', reason='Missing example triggers crash skip'),
+        SyncDecision(operation='verify', reason='Incorrectly scheduled verify despite missing example'),
+        SyncDecision(operation='all_synced', reason='Done')
+    ]
+
+    # Fail fast if verify is called — orchestrator should skip it when example is missing
+    mocks['fix_verification_main'].side_effect = AssertionError("verify should not be called when example is missing")
+
+    # Run sync; with the fix, orchestrator should skip verify when example is missing
+    result = sync_orchestration(basename="calculator", language="python")
+
+    # Verify must not be called when example is missing
+    mocks['fix_verification_main'].assert_not_called()
+
+    # And there should be no orchestrator errors if verify was correctly skipped
+    assert not result.get('errors'), f"Unexpected errors: {result.get('errors')}"

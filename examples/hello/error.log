@@ -1,0 +1,375 @@
+2025-09-07 15:40:45,206 - pdd.llm_invoke - INFO - No local LLM model CSV found, will use package default
+2025-09-07 15:40:45,206 - INFO - No local LLM model CSV found, will use package default
+2025-09-07 15:40:45,243 - INFO - Found credentials in environment variables.
+2025-09-07 15:40:45,293 - pdd.llm_invoke - INFO - LiteLLM cache configured for GCS bucket (S3 compatible): litellm_cache
+2025-09-07 15:40:45,293 - INFO - LiteLLM cache configured for GCS bucket (S3 compatible): litellm_cache
+Checking for updates...
+2025-09-07 15:40:45,515 - INFO - Determined path for 'generate_output_path' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/pdd/hello.py
+2025-09-07 15:40:45,515 - INFO - Determined path for 'test_output_path' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/tests/test_hello.py
+2025-09-07 15:40:45,515 - INFO - Determined path for 'example_output_path' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+╭─ PDD Sync Starting ─╮
+│ Basename: hello     │
+│ Languages: python   │
+│ Budget: $10.00      │
+│ Max Attempts: 3     │
+╰─────────────────────╯
+
+🚀 Syncing for language: python...
+2025-09-07 15:40:45,525 - INFO - Determined path for 'generate_output_path' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/pdd/hello.py
+2025-09-07 15:40:45,525 - INFO - Determined path for 'test_output_path' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/tests/test_hello.py
+2025-09-07 15:40:45,525 - INFO - Determined path for 'example_output_path' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+2025-09-07 15:40:45,525 - INFO - get_pdd_file_paths called: basename=hello, language=python, prompts_dir=/Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello
+2025-09-07 15:40:45,525 - INFO - Checking prompt_path=/Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/hello_python.prompt, exists=True
+2025-09-07 15:40:45,528 - INFO - Determined path for 'generate_output_path' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/pdd/hello.py
+2025-09-07 15:40:45,529 - INFO - Determined path for 'test_output_path' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/tests/test_hello.py
+2025-09-07 15:40:45,529 - INFO - Determined path for 'example_output_path' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+2025-09-07 15:40:45,532 - INFO - Determined path for 'output' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+2025-09-07 15:40:45,535 - INFO - Determined path for 'output' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/tests/test_hello.py
+2025-09-07 15:40:45,537 - INFO - get_pdd_file_paths called: basename=hello, language=python, prompts_dir=/Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello
+2025-09-07 15:40:45,537 - INFO - Checking prompt_path=/Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/hello_python.prompt, exists=True
+2025-09-07 15:40:45,540 - INFO - Determined path for 'generate_output_path' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/pdd/hello.py
+2025-09-07 15:40:45,540 - INFO - Determined path for 'test_output_path' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/tests/test_hello.py
+2025-09-07 15:40:45,540 - INFO - Determined path for 'example_output_path' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+2025-09-07 15:40:45,543 - INFO - Determined path for 'output' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+2025-09-07 15:40:45,546 - INFO - Determined path for 'output' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/tests/test_hello.py
+DEBUG: get_pdd_file_paths returned:
+  test: /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/tests/test_hello.py
+  code: /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/pdd/hello.py
+  example: /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+Using .pddrc context: pdd_cli
+2025-09-07 15:40:45,550 - INFO - Determined path for 'output' (user): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/pdd/hello.py
+Input files:
+  prompt_file     /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/hello_python.prompt
+Output files:
+  output          /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/pdd/hello.py
+Detected language: python
+Basename: hello
+╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Starting prompt preprocessing                                                                                                               │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+Doubling curly brackets...
+╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Preprocessing complete                                                                                                                      │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+Cloud HTTP error (500): No response content. Falling back to local.
+╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Starting prompt preprocessing                                                                                                               │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+Doubling curly brackets...
+╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Preprocessing complete                                                                                                                      │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+2025-09-07 15:41:31,632 - pdd.llm_invoke - INFO - Loaded model data from package default
+2025-09-07 15:41:31,632 - INFO - Loaded model data from package default
+Successfully loaded prompt: unfinished_prompt_LLM
+2025-09-07 15:41:32,019 - pdd.llm_invoke - INFO - Loaded model data from package default
+2025-09-07 15:41:32,019 - INFO - Loaded model data from package default
+Successfully loaded prompt: extract_code_LLM
+2025-09-07 15:41:36,117 - pdd.llm_invoke - INFO - Loaded model data from package default
+2025-09-07 15:41:36,117 - INFO - Loaded model data from package default
+Generated code saved to: /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/pdd/hello.py
+2025-09-07 15:41:36,280 - INFO - get_pdd_file_paths called: basename=hello, language=python, prompts_dir=/Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello
+2025-09-07 15:41:36,280 - INFO - Checking prompt_path=/Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/hello_python.prompt, exists=True
+2025-09-07 15:41:36,284 - INFO - Determined path for 'generate_output_path' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/pdd/hello.py
+2025-09-07 15:41:36,284 - INFO - Determined path for 'test_output_path' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/tests/test_hello.py
+2025-09-07 15:41:36,284 - INFO - Determined path for 'example_output_path' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+2025-09-07 15:41:36,287 - INFO - Determined path for 'output' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+2025-09-07 15:41:36,290 - INFO - Determined path for 'output' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/tests/test_hello.py
+DEBUG SYNC: pdd_files['example'] = /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+DEBUG SYNC: str(pdd_files['example']) = /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+Using .pddrc context: pdd_cli
+2025-09-07 15:41:36,294 - INFO - Determined path for 'output' (user): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+Input files:
+  prompt_file     /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/hello_python.prompt
+  code_file       /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/pdd/hello.py
+Output files:
+  output          /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+Detected language: python
+Basename: hello
+Successfully loaded prompt: example_generator_LLM
+╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Starting prompt preprocessing                                                                                                               │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+Processing XML include: ././context/example.prompt
+Warning: File not found: ./context/example.prompt
+╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Preprocessing complete                                                                                                                      │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Starting prompt preprocessing                                                                                                               │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+Doubling curly brackets...
+╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Preprocessing complete                                                                                                                      │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+2025-09-07 15:41:36,296 - pdd.llm_invoke - INFO - Loaded model data from package default
+2025-09-07 15:41:36,296 - INFO - Loaded model data from package default
+Successfully loaded prompt: unfinished_prompt_LLM
+2025-09-07 15:41:36,459 - pdd.llm_invoke - INFO - Loaded model data from package default
+2025-09-07 15:41:36,459 - INFO - Loaded model data from package default
+Successfully loaded prompt: extract_code_LLM
+2025-09-07 15:41:40,470 - pdd.llm_invoke - INFO - Loaded model data from package default
+2025-09-07 15:41:40,470 - INFO - Loaded model data from package default
+Example code generated successfully.
+Model used: vertex_ai/gemini-2.5-pro
+Total cost: $0.019121
+Example code saved to: /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+Generated Example Code:
+# greeter.py
+
+def hello() -> None:
+  """Prints the string "hello" to the console.
+
+  This function demonstrates a simple procedure with a side effect (printing)
+  and no return value.
+  """
+  print("hello")
+
+# main.py
+
+# 1. Import the specific function 'hello' from the 'greeter' module (greeter.py).
+from greeter import hello
+
+def main() -> None:
+  """
+  Main function to demonstrate the usage of the imported 'hello' function.
+  """
+  print("About to call the imported function...")
+
+  # 2. Call the function. It takes no arguments.
+  #    The function will execute and print "hello" to the console.
+  hello()
+
+  print("...function call has finished.")
+
+
+if __name__ == "__main__":
+  main()
+2025-09-07 15:41:40,663 - INFO - get_pdd_file_paths called: basename=hello, language=python, prompts_dir=/Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello
+2025-09-07 15:41:40,663 - INFO - Checking prompt_path=/Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/hello_python.prompt, exists=True
+2025-09-07 15:41:40,671 - INFO - Determined path for 'generate_output_path' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/pdd/hello.py
+2025-09-07 15:41:40,671 - INFO - Determined path for 'test_output_path' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/tests/test_hello.py
+2025-09-07 15:41:40,671 - INFO - Determined path for 'example_output_path' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+2025-09-07 15:41:40,677 - INFO - Determined path for 'output' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+2025-09-07 15:41:40,682 - INFO - Determined path for 'output' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/tests/test_hello.py
+No run report exists, testing example for crashes
+Example crashes with exit code 1, proceeding with crash fix
+Using .pddrc context: pdd_cli
+2025-09-07 15:41:40,721 - INFO - Determined path for 'output' (user): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/pdd/hello.py
+2025-09-07 15:41:40,721 - INFO - Determined path for 'output_program' (user): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+Input files:
+  prompt_file     /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/hello_python.prompt
+  code_file       /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/pdd/hello.py
+  program_file    /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+  error_file      /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/crash.log
+Output files:
+  output          /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/pdd/hello.py
+  output_program  /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+Detected language: python
+Basename: hello
+
+Attempt 1/3...
+Verification failed with return code 1.
+Attempting to fix errors using LLM...
+Successfully loaded prompt: fix_code_module_errors_LLM
+Successfully loaded prompt: extract_program_code_fix_LLM
+2025-09-07 15:41:40,746 - pdd.llm_invoke - INFO - Loaded model data from package default
+2025-09-07 15:41:40,746 - INFO - Loaded model data from package default
+2025-09-07 15:41:41,008 - pdd.llm_invoke - INFO - Loaded model data from package default
+2025-09-07 15:41:41,008 - INFO - Loaded model data from package default
+Attempt Cost: $0.0056, Total Cost: $0.0056, Budget: $9.9550
+Updated code file: /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/pdd/hello.py
+
+Attempt 2/3...
+Verification failed with return code 1.
+Attempting to fix errors using LLM...
+Successfully loaded prompt: fix_code_module_errors_LLM
+Successfully loaded prompt: extract_program_code_fix_LLM
+2025-09-07 15:41:41,233 - pdd.llm_invoke - INFO - Loaded model data from package default
+2025-09-07 15:41:41,233 - INFO - Loaded model data from package default
+[92m15:41:41 - LiteLLM:INFO[0m: utils.py:3341 - 
+LiteLLM completion() model= gemini-2.5-pro; provider = vertex_ai
+2025-09-07 15:41:41,341 - INFO - 
+LiteLLM completion() model= gemini-2.5-pro; provider = vertex_ai
+[92m15:42:17 - LiteLLM:INFO[0m: utils.py:1274 - Wrapper: Completed Call, calling success_handler
+2025-09-07 15:42:17,241 - INFO - Wrapper: Completed Call, calling success_handler
+2025-09-07 15:42:17,248 - pdd.llm_invoke - INFO - Loaded model data from package default
+2025-09-07 15:42:17,248 - INFO - Loaded model data from package default
+[92m15:42:17 - LiteLLM:INFO[0m: utils.py:3341 - 
+LiteLLM completion() model= gemini-2.5-flash; provider = vertex_ai
+2025-09-07 15:42:17,358 - INFO - 
+LiteLLM completion() model= gemini-2.5-flash; provider = vertex_ai
+[92m15:42:22 - LiteLLM:INFO[0m: utils.py:1274 - Wrapper: Completed Call, calling success_handler
+2025-09-07 15:42:22,290 - INFO - Wrapper: Completed Call, calling success_handler
+Attempt Cost: $0.0396, Total Cost: $0.0452, Budget: $9.9550
+Updated verification program: /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+
+Attempt 3/3...
+Verification successful!
+Crash fix attempt completed.
+Model used: vertex_ai/gemini-2.5-pro
+Total attempts: 2
+Total cost: $0.05
+Fixed code saved to: /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/pdd/hello.py
+Fixed program saved to: /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+Re-ran example after crash fix: exit_code=0
+╭──────────────────────────────────────────────────────────────── PDD Verify ─────────────────────────────────────────────────────────────────╮
+│ Starting Verification Process for hello.py                                                                                                  │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+  Prompt: /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/hello_python.prompt
+  Code: /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/pdd/hello.py
+  Program: /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+  Mode: Iterative Loop
+  Verification Program: /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+  Max Attempts: 3
+  Budget: $9.91
+  Strength: 0.75, Temperature: 0.0
+Using .pddrc context: pdd_cli
+2025-09-07 15:42:22,367 - INFO - Determined path for 'output_results' (user): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/hello_verify_results.log
+2025-09-07 15:42:22,368 - INFO - Determined path for 'output_code' (user): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/pdd/hello.py
+2025-09-07 15:42:22,368 - INFO - Determined path for 'output_program' (user): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+Input files:
+  prompt_file     /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/hello_python.prompt
+  code_file       /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/pdd/hello.py
+  program_file    /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+  verification_program /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+Output files:
+  output_results  /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/hello_verify_results.log
+  output_code     /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/pdd/hello.py
+  output_program  /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+Detected language: python
+Basename: hello
+Running Iterative Verification (fix_verification_errors_loop)...
+Successfully loaded prompt: find_verification_errors_LLM
+Successfully loaded prompt: fix_verification_errors_LLM
+2025-09-07 15:42:22,392 - pdd.llm_invoke - INFO - Loaded model data from package default
+2025-09-07 15:42:22,392 - INFO - Loaded model data from package default
+[92m15:42:22 - LiteLLM:INFO[0m: utils.py:3341 - 
+LiteLLM completion() model= gemini-2.5-pro; provider = vertex_ai
+2025-09-07 15:42:22,511 - INFO - 
+LiteLLM completion() model= gemini-2.5-pro; provider = vertex_ai
+[92m15:42:42 - LiteLLM:INFO[0m: utils.py:1274 - Wrapper: Completed Call, calling success_handler
+2025-09-07 15:42:42,672 - INFO - Wrapper: Completed Call, calling success_handler
+Initial check found 0 verification issues. No fixing loop needed.
+
+--- Final Statistics ---
+Initial Issues: 0
+Final Issues: 0
+Best Iteration: 0 (Issues: 0)
+Improvement (Issues Reduced): 0
+Improvement (Percent Towards 0 Issues): 100.00%
+Overall Status: Success on initial check
+Total Attempts Made: 0
+Total Cost: $0.002057
+Model Used: vertex_ai/gemini-2.5-pro
+Successfully verified code saved to: /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/pdd/hello.py
+Successfully verified program saved to: /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+Verification results log (from loop) expected at: /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/hello_verify_results.log
+
+========================================
+╭─────────────────────────────────────────────────────────── Verification Complete ───────────────────────────────────────────────────────────╮
+│ Status: Success                                                                                                                             │
+│ Attempts: 0                                                                                                                                 │
+│ Total Cost: $0.002057                                                                                                                       │
+│ Model Used: vertex_ai/gemini-2.5-pro                                                                                                        │
+│ Verified Code Saved: /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/pdd/hello.py                                                  │
+│ Verified Program Saved: /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py                                  │
+│ Results Log Saved: /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/hello_verify_results.log                                        │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+2025-09-07 15:42:42,682 - INFO - get_pdd_file_paths called: basename=hello, language=python, prompts_dir=/Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello
+2025-09-07 15:42:42,682 - INFO - Checking prompt_path=/Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/hello_python.prompt, exists=True
+2025-09-07 15:42:42,685 - INFO - Determined path for 'generate_output_path' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/pdd/hello.py
+2025-09-07 15:42:42,686 - INFO - Determined path for 'test_output_path' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/tests/test_hello.py
+2025-09-07 15:42:42,686 - INFO - Determined path for 'example_output_path' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+2025-09-07 15:42:42,689 - INFO - Determined path for 'output' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+2025-09-07 15:42:42,692 - INFO - Determined path for 'output' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/tests/test_hello.py
+Creating test directory: /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/tests
+Using .pddrc context: pdd_cli
+2025-09-07 15:42:42,696 - INFO - Determined path for 'output' (user): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/tests/test_hello.py
+Input files:
+  prompt_file     /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/hello_python.prompt
+  code_file       /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/pdd/hello.py
+Output files:
+  output          /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/tests/test_hello.py
+Detected language: python
+Basename: hello
+Successfully loaded prompt: generate_test_LLM
+╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Starting prompt preprocessing                                                                                                               │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+Processing XML include: ././context/test.prompt
+Warning: File not found: ./context/test.prompt
+╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Preprocessing complete                                                                                                                      │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Starting prompt preprocessing                                                                                                               │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Preprocessing complete                                                                                                                      │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+2025-09-07 15:42:42,698 - pdd.llm_invoke - INFO - Loaded model data from package default
+2025-09-07 15:42:42,698 - INFO - Loaded model data from package default
+[92m15:42:42 - LiteLLM:INFO[0m: utils.py:3341 - 
+LiteLLM completion() model= gemini-2.5-pro; provider = vertex_ai
+2025-09-07 15:42:42,816 - INFO - 
+LiteLLM completion() model= gemini-2.5-pro; provider = vertex_ai
+[92m15:43:26 - LiteLLM:INFO[0m: utils.py:1274 - Wrapper: Completed Call, calling success_handler
+2025-09-07 15:43:26,420 - INFO - Wrapper: Completed Call, calling success_handler
+Successfully loaded prompt: unfinished_prompt_LLM
+2025-09-07 15:43:26,428 - pdd.llm_invoke - INFO - Loaded model data from package default
+2025-09-07 15:43:26,428 - INFO - Loaded model data from package default
+[92m15:43:26 - LiteLLM:INFO[0m: utils.py:3341 - 
+LiteLLM completion() model= gemini-2.5-pro; provider = vertex_ai
+2025-09-07 15:43:26,555 - INFO - 
+LiteLLM completion() model= gemini-2.5-pro; provider = vertex_ai
+[92m15:43:34 - LiteLLM:INFO[0m: utils.py:1274 - Wrapper: Completed Call, calling success_handler
+2025-09-07 15:43:34,295 - INFO - Wrapper: Completed Call, calling success_handler
+Successfully loaded prompt: extract_code_LLM
+2025-09-07 15:43:34,300 - pdd.llm_invoke - INFO - Loaded model data from package default
+2025-09-07 15:43:34,300 - INFO - Loaded model data from package default
+[92m15:43:34 - LiteLLM:INFO[0m: utils.py:3341 - 
+LiteLLM completion() model= gemini-2.5-flash; provider = vertex_ai
+2025-09-07 15:43:34,415 - INFO - 
+LiteLLM completion() model= gemini-2.5-flash; provider = vertex_ai
+[92m15:43:43 - LiteLLM:INFO[0m: utils.py:1274 - Wrapper: Completed Call, calling success_handler
+2025-09-07 15:43:43,866 - INFO - Wrapper: Completed Call, calling success_handler
+Unit tests saved to: /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/tests/test_hello.py
+2025-09-07 15:43:44,359 - INFO - get_pdd_file_paths called: basename=hello, language=python, prompts_dir=/Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello
+2025-09-07 15:43:44,359 - INFO - Checking prompt_path=/Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/hello_python.prompt, exists=True
+2025-09-07 15:43:44,363 - INFO - Determined path for 'generate_output_path' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/pdd/hello.py
+2025-09-07 15:43:44,363 - INFO - Determined path for 'test_output_path' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/tests/test_hello.py
+2025-09-07 15:43:44,363 - INFO - Determined path for 'example_output_path' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+2025-09-07 15:43:44,366 - INFO - Determined path for 'output' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/examples/hello_example.py
+2025-09-07 15:43:44,369 - INFO - Determined path for 'output' (context): /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/tests/test_hello.py
+                                                       ╭───────────────────────────────╮                                                       
+                                                       │     +xxxxxxxxxxxxxxx+         │                                                       
+                                                       │   xxxxxxxxxxxxxxxxxxxxx+      │                                                       
+                                                       │   xxx                 +xx+    │                                                       
+                                                       │   xxx      x+           xx+   │                                                       
+                                                       │   xxx        x+         xxx   │                                                       
+                                                       │   xxx         x+        xx+   │                                                       
+                                                       │   xxx        x+         xx+   │                                                       
+                                                       │   xxx      x+          xxx    │                                                       
+                                                       │   xxx                +xx+     │                                                       
+                                                       │   xxx     +xxxxxxxxxxx+       │                                                       
+                                                       │   xxx   +xx+                  │                                                       
+                                                       │   xxx  +xx+                   │                                                       
+                                                       │   xxx+xx+                     │                                                       
+                                                       │   xxxx+                       │                                                       
+                                                       │   xx+                         │                                                       
+                                                       ╰───────────────────────────────╯                                                       
+                PDD Sync Complete                
+┏━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━━┓
+┃ Language ┃ Status  ┃ Cost (USD) ┃ Details     ┃
+┡━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━━┩
+│ python   │ Success │    $0.1772 │ No details. │
+└──────────┴─────────┴────────────┴─────────────┘
+╭─────────────────────────────────────────────────────────────────────╮
+│ Total time: 179.92s | Total cost: $0.1772 | Overall status: Success │
+╰─────────────────────────────────────────────────────────────────────╯
+
+--- Command Chain Execution Summary ---
+  Step 1 (sync): Cost: $0.177243, Model: vertex_ai/gemini-2.5-pro
+Total Estimated Cost for Chain: $0.177243
+-------------------------------------
