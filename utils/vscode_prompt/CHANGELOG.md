@@ -1,9 +1,14 @@
 # Change Log
 
-All notable changes to the "prompt" extension will be documented in this file.
+All notable changes to the "prompt-highlighter" extension are documented here.
 
-Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
+This project follows the guidelines from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and aims to use [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.0.1] - 2025-09-09
 
-- Initial release
+### Added
+- Initial release of Prompt Driven Development syntax support.
+- TextMate grammar for `.prompt` files (syntax highlighting).
+- Language configuration (comments, brackets, editor behaviors).
+- Extension icon and basic branding.
+- README and quickstart documentation.
