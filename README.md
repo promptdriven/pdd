@@ -98,6 +98,59 @@ source pdd-env/bin/activate
 pip install pdd-cli
 ```
 
+
+
+## 🚀 Quickstart (Hello Example)
+
+If you’re brand new to PDD, follow these steps to see it in action.
+
+1. **Install prerequisites** (macOS/Linux):
+   ```bash
+   xcode-select --install      # macOS only
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   uv tool install pdd-cli
+   pdd --version
+   ```
+
+2. **Clone repo**
+
+   ```bash
+     # Clone the repository (if not already)
+    git clone https://github.com/promptdriven/pdd.git
+    cd pdd/examples/hello
+   ```
+
+3. **Set one API key** (choose your provider):
+   ```bash
+   export GEMINI_API_KEY="your-gemini-key"
+   # OR
+   export OPENAI_API_KEY="your-openai-key"
+   ```
+
+4. **Run the setup helper** (creates `~/.pdd/llm_model.csv` for you):
+   ```bash
+   cd examples/post_setup
+   python pdd-setup.py
+   ```
+
+   👉 If you prefer to configure things manually (without using `pdd-setup.py`),  
+see [examples/SETUP_WITH_GEMINI.md](examples/SETUP_WITH_GEMINI.md) for full instructions  
+on obtaining a Gemini API key and creating your own `~/.pdd/llm_model.csv`.
+
+5. **Run Hello**:
+   ```bash
+   cd ../hello
+   pdd --force generate hello_python.prompt
+   python3 hello.py
+   ```
+
+    ✅ Expected output:
+    ```
+    hello
+    ```
+
+
+
 ## Cloud vs Local Execution
 
 PDD commands can be run either in the cloud or locally. By default, all commands run in the cloud mode, which provides several advantages:
