@@ -1,7 +1,7 @@
 {
-  "name": "prompt",
+  "name": "prompt-highlighter",
   "displayName": "prompt",
-  "description": "For Prompt Driven Development",
+  "description": "For proper highlighting of .prompt files forPrompt Driven Development",
   "version": "0.0.1",
   "engines": {
     "vscode": "^1.96.0"
@@ -24,8 +24,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/gltanaka/pdd.git",
+    "url": "https://github.com/promptdriven/pdd.git",
     "directory": "prompt"
   },
-  "publisher": "gltanaka"
+  "publisher": "prompt-driven",
+  "scripts": {
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "icon": "images/icon.png"
 }
