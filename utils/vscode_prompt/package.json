@@ -1,36 +1,76 @@
 {
   "name": "prompt-highlighter",
-  "displayName": "prompt",
-  "description": "For proper highlighting of .prompt files forPrompt Driven Development",
+  "displayName": "Prompt Driven Development",
+  "description": "For proper highlighting of .prompt files for Prompt Driven Development",
   "version": "0.0.1",
   "engines": {
     "vscode": "^1.96.0"
   },
   "categories": [
-    "Programming Languages"
+    "Programming Languages",
+    "Machine Learning",
+    "Other"
   ],
   "contributes": {
-    "languages": [{
-      "id": "prompt",
-      "aliases": ["PDD Prompt", "prompt"],
-      "extensions": [".prompt"],
-      "configuration": "./language-configuration.json"
-    }],
-    "grammars": [{
-      "language": "prompt",
-      "scopeName": "text.prompt",
-      "path": "./syntaxes/prompt.tmLanguage.json"
-    }]
+    "languages": [
+      {
+        "id": "prompt",
+        "aliases": [
+          "PDD Prompt",
+          "prompt",
+          "Prompt",
+          "pdd",
+          "PromptDriven",
+          "Prompt-Driven Development",
+          "prompt driven development",
+          "Prompt Engineering",
+          "AI Prompt",
+          "LLM Prompt"
+        ],
+        "extensions": [
+          ".prompt"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "prompt",
+        "scopeName": "text.prompt",
+        "path": "./syntaxes/prompt.tmLanguage.json"
+      }
+    ]
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/promptdriven/pdd.git",
     "directory": "prompt"
   },
-  "publisher": "prompt-driven",
+  "publisher": "PromptDriven",
+  "keywords": [
+    "prompt",
+    "pdd",
+    "prompt engineering",
+    "prompt-driven development",
+    "ai",
+    "llm",
+    "agent",
+    "rag",
+    "spec",
+    "dsl",
+    "openai",
+    "anthropic",
+    "gemini",
+    "chatgpt"
+  ],
   "scripts": {
     "package": "vsce package",
-    "publish": "vsce publish"
+    "publish": "vsce publish",
+    "render-icon": "node scripts/render-icon.mjs",
+    "build-video-thumb": "node scripts/generate-video-thumb.mjs"
   },
-  "icon": "images/icon.png"
+  "icon": "images/icon.png",
+  "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2"
+  }
 }
