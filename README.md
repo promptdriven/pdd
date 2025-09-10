@@ -96,64 +96,55 @@ pip install pdd-cli
 
 
 
-## Run Hello (with API Key + CSV)
+## 🚀 Quickstart (Hello Example)
 
-As of version **0.0.54**, cloud authentication is still waitlisted and the `sync` command is alpha.  
-👉 First-time users must configure an API key **and** create a local CSV file to run `generate`.
+If you’re brand new to PDD, follow these steps to see it in action.
 
-### Step 1: Set an API key
+1. **Install prerequisites** (macOS/Linux):
+   ```bash
+   xcode-select --install      # macOS only
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   uv tool install pdd-cli
+   pdd --version
+   ```
 
-Pick one provider you already have access to:
+2. **Clone repo**
 
-**Google Gemini (preferred):**
-```bash
-export GEMINI_API_KEY="YOUR_KEY_HERE"
-export GOOGLE_API_KEY="$GEMINI_API_KEY"   # keep for compatibility
-```
+   ```bash
+     # Clone the repository (if not already)
+    git clone https://github.com/promptdriven/pdd.git
+    cd pdd/examples/hello
+   ```
 
-**OpenAI:**
-```bash
-export OPENAI_API_KEY="YOUR_KEY_HERE"
-```
+3. **Set one API key** (choose your provider):
+   ```bash
+   export GEMINI_API_KEY="your-gemini-key"
+   # OR
+   export OPENAI_API_KEY="your-openai-key"
+   ```
 
-### Step 2: Create `~/.pdd/llm_model.csv`
+4. **Run the setup helper** (creates `~/.pdd/llm_model.csv` for you):
+   ```bash
+   cd examples/post_setup
+   python pdd-setup.py
+   ```
 
-**For Gemini:**
-```bash
-mkdir -p ~/.pdd
-cat > ~/.pdd/llm_model.csv <<'CSV'
-provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type
-Google,gemini/gemini-2.5-pro,1.25,10.0,1360,,GEMINI_API_KEY,0,True,none
-CSV
-```
+   👉 If you prefer to configure things manually (without using `pdd-setup.py`),  
+see [examples/SETUP_WITH_GEMINI.md](examples/SETUP_WITH_GEMINI.md) for full instructions  
+on obtaining a Gemini API key and creating your own `~/.pdd/llm_model.csv`.
 
-**For OpenAI:**
-```bash
-mkdir -p ~/.pdd
-cat > ~/.pdd/llm_model.csv <<'CSV'
-provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type
-OpenAI,gpt-4o-mini,0.15,0.60,1300,,OPENAI_API_KEY,0,True,none
-CSV
-```
+5. **Run Hello**:
+   ```bash
+   cd ../hello
+   pdd --force generate hello_python.prompt
+   python3 hello.py
+   ```
 
-### Step 3: Clone repo and run generate
+    ✅ Expected output:
+    ```
+    hello
+    ```
 
-```bash
-# Clone the repository (if not already)
-git clone https://github.com/promptdriven/pdd.git
-cd pdd/examples/hello
-
-# Generate hello.py from the prompt
-pdd --force generate hello_python.prompt
-
-# Run it with Python
-python hello.py
-```
-
-✅ Expected output:
-```
-hello
-```
 
 
 ## Cloud vs Local Execution
