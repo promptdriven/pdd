@@ -19,14 +19,12 @@ Learn more:
 ## Why PDD vs. Spec-Driven and Vibe Coding
 
 - Spec-driven aims for spec → code. PDD inserts an explicit engineering layer: spec → prompts → code. Developers refine the partitioning into a suite of precise, version-controlled prompts (easier to tune than partitioning code), then regenerate artifacts deterministically.
-- Vibe coding is ad‑hoc prompting and auto‑accepting. PDD couples every prompt with automated validation; generated code is accepted only if tests pass. No surprise changes—reviewable diffs and test‑gated merges.
+- Vibe coding is ad‑hoc prompting and auto‑accepting of code patches. It is like throwing a grenade in the codebase: you never know what will be changed, deleted or duplicated. In contrast, PDD couples every prompt with automated validation; generated code is accepted only if tests pass. No surprise changes—reviewable diffs and test‑gated merges.
 - PDD is built for real projects: modular prompts, few‑shot context reuse, and regeneration that reduces drift. The whitepaper documents measurable benefits and benchmarks on non‑toy codebases.
 
 ## Further Reading
 
 - Whitepaper with Benchmarks: https://github.com/promptdriven/pdd/blob/main/docs/whitepaper_with_benchmarks/whitepaper_w_benchmarks.md
-- Getting started with PDD (Gemini setup): https://github.com/promptdriven/pdd/blob/main/examples/SETUP_WITH_GEMINI.md
-- PDD repository: https://github.com/promptdriven/pdd
 - LinkedIn thread announcing PDD and community discussion: https://www.linkedin.com/posts/gltanaka_ai-softwaredevelopment-devtools-activity-7366248249604648960-ylTA
 
 | Approach     | Source of truth        | Change process                   | Acceptance gate                 |
