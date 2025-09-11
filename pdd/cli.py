@@ -1022,7 +1022,8 @@ def auto_deps(
     quiet = ctx.obj.get("quiet", False)
     command_name = "auto-deps"
     try:
-        clean_directory_path = directory_path.strip('\"')
+        # Strip both single and double quotes from the provided path
+        clean_directory_path = directory_path.strip("'\"")
 
         modified_prompt, total_cost, model_name = auto_deps_main(
             ctx=ctx,
