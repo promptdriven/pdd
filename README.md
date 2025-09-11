@@ -366,7 +366,7 @@ pdd [GLOBAL OPTIONS] COMMAND [OPTIONS] [ARGS]...
 Here is a brief overview of the main commands provided by PDD. Click the command name to jump to its detailed section:
 
 - **[`sync`](#1-sync)**: **[PRIMARY COMMAND]** Automatically executes the complete PDD workflow loop for a given basename - from dependency injection through code generation, testing, and verification.
-- **[`generate`](#2-generate)**: Creates runnable code from a prompt file.
+- **[`generate`](#2-generate)**: Creates runnable code from a prompt file; supports parameterized prompts via `-e/--env`.
 - **[`example`](#3-example)**: Generates a compact example showing how to use functionality defined in a prompt.
 - **[`test`](#4-test)**: Generates or enhances unit tests for a code file and its prompt.
 - **[`preprocess`](#5-preprocess)**: Preprocesses prompt files, handling includes, comments, and other directives.
@@ -657,9 +657,50 @@ Arguments:
 - `PROMPT_FILE`: The filename of the prompt file used to generate the code.
 
 Options:
-- `--output LOCATION`: Specify where to save the generated code. The default file name is `<basename>.<language_file_extension>`. If an environment variable `PDD_GENERATE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output LOCATION`: Specify where to save the generated code. Supports `${VAR}`/`$VAR` expansion from `-e/--env`. The default file name is `<basename>.<language_file_extension>`. If an environment variable `PDD_GENERATE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--original-prompt FILENAME`: The original prompt file used to generate the existing code. If not specified, the command automatically uses the last committed version of the prompt file from git.
 - `--incremental`: Force incremental patching even if changes are significant. This option is only valid when an output location is specified and the file exists.
+
+**Parameter Variables (-e/--env)**:
+Pass key=value pairs to parameterize a prompt so one prompt can generate multiple variants (e.g., multiple files) by invoking `generate` repeatedly with different values.
+
+- Syntax: `-e KEY=VALUE` or `--env KEY=VALUE` (repeatable).
+- Docker-style env fallback: `-e KEY` reads `VALUE` from the current process environment variable `KEY`.
+- Scope: Applies to `generate`.
+- Precedence: Values passed with `-e/--env` override same‑named OS environment variables during template expansion for this command.
+
+**Templating**:
+Prompt files and `--output` values may reference variables using `$VAR` or `${VAR}`. Only variables explicitly provided via `-e/--env` (or via env fallback with `-e KEY`) are substituted; all other dollar-prefixed text is left unchanged. No escaping is required for ordinary `$` usage.
+
+- In prompt content: `$VAR` and `${VAR}` are replaced only when `VAR` was provided.
+- In output path: When using `--output`, PDD also expands `$VAR`/`${VAR}` using the same variable set.
+- Unknowns: Placeholders without a provided value are left unchanged. If you pass `-e KEY` (no value) and `KEY` exists in the OS environment, that environment value is used.
+
+Examples:
+```
+# Basic parameterized generation (Python module)
+pdd generate -e MODULE=orders --output 'src/${MODULE}.py' prompts/module_python.prompt
+
+# Generate multiple files from the same prompt
+pdd generate -e MODULE=orders   --output 'src/${MODULE}.py' prompts/module_python.prompt
+pdd generate -e MODULE=payments --output 'src/${MODULE}.py' prompts/module_python.prompt
+pdd generate -e MODULE=customers --output 'src/${MODULE}.py' prompts/module_python.prompt
+
+# Multiple variables
+pdd generate -e MODULE=orders -e PACKAGE=core --output 'src/${PACKAGE}/${MODULE}.py' prompts/module_python.prompt
+
+# Docker-style env fallback (reads MODULE from your shell env)
+export MODULE=orders
+pdd generate -e MODULE --output 'src/${MODULE}.py' prompts/module_python.prompt
+```
+
+Shell quoting options:
+- Quote `KEY=VALUE` if the value contains spaces or shell-special characters: `-e "DISPLAY_NAME=Order Processor"`.
+- PDD-side expansion (portable): prevent shell expansion and let PDD expand using `-e/--env` — e.g., `--output 'src/${MODULE}.py'`.
+- Shell-side expansion (familiar): set an env var and let the shell expand `--output`, while still passing `-e KEY` so prompts get the same value — e.g.,
+  - `export MODULE=orders && pdd generate -e MODULE --output "src/$MODULE.py" prompts/module_python.prompt`
+  - Or inline for POSIX shells: `MODULE=orders pdd generate -e MODULE --output "src/$MODULE.py" prompts/module_python.prompt`
+  - Note: PowerShell/Windows shells differ; PDD-side expansion is more portable across shells.
 
 **Git Integration**:
 - When the command detects changes between the current prompt and its last committed version, it automatically considers incremental generation if the output file exists.
