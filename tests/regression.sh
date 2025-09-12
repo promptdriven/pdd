@@ -59,6 +59,11 @@ fi
 PDD_PATH="$PDD_BASE_DIR/pdd"
 STAGING_PATH="$PDD_BASE_DIR/staging"
 PDD_SCRIPT="pdd" # Assumes pdd is in PATH
+# Always prefer local CLI script when present to test workspace code
+if [ -x "$PDD_BASE_DIR/pdd-local.sh" ]; then
+  log "Using local CLI script (pdd-local.sh) for regression tests"
+  PDD_SCRIPT="$PDD_BASE_DIR/pdd-local.sh"
+fi
 PROMPTS_PATH="$PDD_BASE_DIR/prompts"
 CONTEXT_PATH="$PDD_BASE_DIR/context"
 CONTEXT_PATH_GLOB="$CONTEXT_PATH/*.py" # Escaping might be needed depending on shell interpretation
@@ -834,6 +839,64 @@ EOSCRIPT
           log_timestamped "Validation failed: pdd verify failed with exit code $VERIFY_STATUS."
           # Decide if this is fatal, but script will likely exit due to set -e anyway if VERIFY_STATUS != 0
       fi
+  fi
+fi
+
+# 8. Parameterized generate (-e/--env)
+if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "8" ]; then
+  log "8. Testing parameterized 'generate' with -e/--env"
+
+  PARAM_PROMPT="param_module_python.prompt"
+  # Create a minimal prompt that doesn't depend on the variable value for correctness
+  cat > "$PARAM_PROMPT" << 'EOF'
+% You are an expert Python engineer. Create a simple Python module with at least one function.
+% Keep it small and runnable.
+
+Write a Python module that defines:
+- a function `whoami()` that returns a non-empty string.
+EOF
+
+  # Decide whether to use cloud or local for this step
+  EXTRA_ARGS=()
+  if { [ -n "${NEXT_PUBLIC_FIREBASE_API_KEY:-}" ] && [ -n "${GITHUB_CLIENT_ID:-}" ]; }; then
+    log "Using cloud for parameterized generate"
+  elif [ -n "${OPENAI_API_KEY:-}" ]; then
+    log "Using local for parameterized generate"
+    EXTRA_ARGS+=("--local")
+  else
+    log "Skipping parameterized generate: missing both cloud (NEXT_PUBLIC_FIREBASE_API_KEY+GITHUB_CLIENT_ID) and local (OPENAI_API_KEY) credentials"
+    # Skip this block without exiting the script
+    EXTRA_ARGS=("__SKIP__")
+  fi
+
+  # If the installed pdd CLI does not support -e/--env, skip this section
+  if ! $PDD_SCRIPT generate --help 2>&1 | grep -q -- "--env"; then
+    log "Skipping parameterized generate: current pdd CLI does not support -e/--env"
+    EXTRA_ARGS=("__SKIP__")
+  fi
+
+  # Case A: KEY=VALUE form; output path uses ${MODULE}
+  # Use PDD-side expansion to avoid shell expanding unset variables
+  if [ "${EXTRA_ARGS[0]:-}" != "__SKIP__" ]; then
+    run_pdd_command generate ${EXTRA_ARGS[@]:-} -e MODULE=orders --output 'param_${MODULE}.py' "$PARAM_PROMPT"
+    check_exists "param_orders.py" "Parameterized output (orders)"
+
+    # Case B: Bare KEY fallback to env; ensure shell env supplies it
+    export MODULE="payments"
+    run_pdd_command generate ${EXTRA_ARGS[@]:-} -e MODULE --output 'param_${MODULE}.py' "$PARAM_PROMPT"
+    check_exists "param_payments.py" "Parameterized output (payments)"
+
+    # Case C: Unknown placeholder in output path remains unchanged
+    run_pdd_command generate ${EXTRA_ARGS[@]:-} -e MODULE=customers --output 'param_${UNKNOWN}.py' "$PARAM_PROMPT"
+    if [ -e "param_${UNKNOWN}.py" ]; then
+      log "Unknown placeholder remained unchanged in output path as expected"
+      log_timestamped "Validation success: unknown placeholder in output path unchanged"
+    else
+      log_error "Expected literal file with \\"param_\${UNKNOWN}.py\\" name not found"
+      exit 1
+    fi
+  else
+    log "Skipping parameterized generate due to missing credentials"
   fi
 fi
 

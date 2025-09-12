@@ -287,6 +287,13 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
     default=False,
     help="Force incremental patching even if changes are significant (requires existing output).",
 )
+@click.option(
+    "-e",
+    "--env",
+    "env_kv",
+    multiple=True,
+    help="Set template variable (KEY=VALUE) or read KEY from env",
+)
 @click.pass_context
 @track_cost
 def generate(
@@ -295,15 +302,35 @@ def generate(
     output: Optional[str],
     original_prompt_file_path: Optional[str],
     incremental_flag: bool,
+    env_kv: Tuple[str, ...],
 ) -> Optional[Tuple[str, float, str]]:
     """Generate code from a prompt file."""
     try:
+        # Parse -e/--env arguments into a dict
+        env_vars: Dict[str, str] = {}
+        import os as _os
+        for item in env_kv or ():
+            if "=" in item:
+                key, value = item.split("=", 1)
+                key = key.strip()
+                if key:
+                    env_vars[key] = value
+            else:
+                key = item.strip()
+                if key:
+                    val = _os.environ.get(key)
+                    if val is not None:
+                        env_vars[key] = val
+                    else:
+                        if ctx.obj.get("verbose") and not ctx.obj.get("quiet"):
+                            console.print(f"[warning]-e {key} not found in environment; skipping[/warning]")
         generated_code, incremental, total_cost, model_name = code_generator_main(
             ctx=ctx,
             prompt_file=prompt_file,
             output=output,
             original_prompt_file_path=original_prompt_file_path,
             force_incremental_flag=incremental_flag,
+            env_vars=env_vars or None,
         )
         return generated_code, total_cost, model_name
     except Exception as exception:
