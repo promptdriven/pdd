@@ -281,11 +281,11 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
     help="Path to the original prompt file for incremental generation.",
 )
 @click.option(
-    "--force-incremental",
-    "force_incremental_flag",
+    "--incremental",
+    "incremental_flag",
     is_flag=True,
     default=False,
-    help="Force incremental generation even if full regeneration is suggested.",
+    help="Force incremental patching even if changes are significant (requires existing output).",
 )
 @click.pass_context
 @track_cost
@@ -294,7 +294,7 @@ def generate(
     prompt_file: str,
     output: Optional[str],
     original_prompt_file_path: Optional[str],
-    force_incremental_flag: bool,
+    incremental_flag: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """Generate code from a prompt file."""
     try:
@@ -303,7 +303,7 @@ def generate(
             prompt_file=prompt_file,
             output=output,
             original_prompt_file_path=original_prompt_file_path,
-            force_incremental_flag=force_incremental_flag,
+            force_incremental_flag=incremental_flag,
         )
         return generated_code, total_cost, model_name
     except Exception as exception:

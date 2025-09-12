@@ -73,6 +73,11 @@
         <code_generator_example>
         <include>context/code_generator_main_example.py</include>
         </code_generator_example>
+        - `generate` options:
+            - `--output LOCATION`: Where to save the generated code (file or directory). Defaults follow `construct_paths`.
+            - `--original-prompt FILENAME`: Original prompt for incremental generation; if omitted, auto-detect from git.
+            - `--incremental`: Force incremental patching even if the analyzer suggests full regeneration. Requires that `--output` points to an existing file; otherwise fall back to full generation with a warning.
+            - `-e/--env KEY=VALUE | -e KEY`: Provide template variables as described below.
 
         - `generate` command parameters for parameterized prompts:
             - Add a repeatable option `-e/--env` to accept template variables from the CLI. Support two forms:
