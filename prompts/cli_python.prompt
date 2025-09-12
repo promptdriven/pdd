@@ -74,6 +74,17 @@
         <include>context/code_generator_main_example.py</include>
         </code_generator_example>
 
+        - `generate` command parameters for parameterized prompts:
+            - Add a repeatable option `-e/--env` to accept template variables from the CLI. Support two forms:
+                - `KEY=VALUE` pairs (parsed on the first `=` only)
+                - Bare `KEY` (Docker-style): value is read from `os.environ[KEY]` if present; if not present, emit a non-fatal warning and skip the key
+            - Parsing rules and precedence:
+                - Only variables explicitly provided via `-e/--env` (including the bare-key env fallback) are used for template substitution
+                - Values provided via `-e/--env` override any same-named OS environment variables for this command’s template expansion
+                - Unknown placeholders are left unchanged; no error is raised
+            - Pass the parsed mapping to `code_generator_main` as `env_vars: Dict[str, str]`
+            - Apply the same variables to expand `$VAR`/`${VAR}` both in the prompt content and in the `--output` path
+
         - `example` command: To generate example code from a code file, use `context_generator_main`. Here is an example of how to generate an example from a code file:
         <context_generator_example>
         <include>context/context_generator_main_example.py</include>
@@ -150,6 +161,8 @@
         - Decorate LLM-using commands with `@track_cost` and return `(result, total_cost, model_name)`.
         - Local-only commands (e.g., `preprocess`) are not cost-tracked; return a dummy `("", 0.0, "local")` when needed for chain summaries.
         - `install_completion` returns `None` and prints its own status.
+        - For `generate`, implement `@click.option("-e", "--env", "env_kv", multiple=True, help="Set template variable (KEY=VALUE) or read KEY from env")` and parse it into `env_vars: Dict[str, str]` as described above, then pass `env_vars` into `code_generator_main`.
+        - Templating behavior for `generate`: `$VAR` and `${VAR}` in prompt content and `--output` path are replaced using only keys present in `env_vars`. Unknown placeholders remain unchanged.
         - Implement a centralized `handle_error()` that uses Rich with a custom Theme and formats exceptions (including `click.UsageError` and `MarkupError`).
         - When `--quiet` is active, suppress non-essential console output and chain summaries.
         - The `trace` command should exit non-zero on exceptions.
