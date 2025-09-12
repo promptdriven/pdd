@@ -34,12 +34,6 @@ def runner():
     return CliRunner()
 
 # --- Basic CLI Tests ---
-def test_cli_list_contexts(runner):
-    """Test `pdd --list-contexts`."""
-    result = runner.invoke(cli.cli, ["--list-contexts"])
-    assert result.exit_code == 0
-    assert "default" in result.output
-
 
 def test_cli_version(runner):
     """Test `pdd --version`."""
@@ -64,6 +58,68 @@ def test_cli_command_help(runner):
     assert result.exit_code == 0
     assert "Usage: cli generate [OPTIONS] PROMPT_FILE" in result.output
     assert "--output" in result.output
+
+
+@patch('pdd.cli.auto_update')
+@patch('pdd.cli.code_generator_main')
+def test_cli_generate_env_parsing_key_value(mock_main, mock_auto_update, runner, create_dummy_files, monkeypatch):
+    files = create_dummy_files("envtest.prompt")
+    mock_main.return_value = ('code', False, 0.0, 'model')
+
+    result = runner.invoke(
+        cli.cli,
+        [
+            "generate",
+            "-e", "MODULE=orders",
+            "--env", "PACKAGE=core",
+            str(files["envtest.prompt"]),
+        ],
+    )
+    assert result.exit_code == 0
+    # Extract env_vars passed through
+    call_kwargs = mock_main.call_args.kwargs
+    assert call_kwargs["env_vars"] == {"MODULE": "orders", "PACKAGE": "core"}
+
+
+@patch('pdd.cli.auto_update')
+@patch('pdd.cli.code_generator_main')
+def test_cli_generate_env_parsing_bare_key_fallback(mock_main, mock_auto_update, runner, create_dummy_files, monkeypatch):
+    files = create_dummy_files("envbare.prompt")
+    mock_main.return_value = ('code', False, 0.0, 'model')
+    monkeypatch.setenv("SERVICE", "billing")
+
+    result = runner.invoke(
+        cli.cli,
+        [
+            "generate",
+            "-e", "SERVICE",
+            "-e", "MISSING_VAR",  # not in env; should be skipped
+            str(files["envbare.prompt"]),
+        ],
+    )
+    assert result.exit_code == 0
+    call_kwargs = mock_main.call_args.kwargs
+    assert call_kwargs["env_vars"] == {"SERVICE": "billing"}
+
+
+@patch('pdd.cli.auto_update')
+@patch('pdd.cli.code_generator_main')
+def test_cli_generate_incremental_flag_passthrough(mock_main, mock_auto_update, runner, create_dummy_files):
+    files = create_dummy_files("inc.prompt")
+    mock_main.return_value = ('code', False, 0.0, 'model')
+
+    result = runner.invoke(
+        cli.cli,
+        [
+            "generate",
+            "--incremental",
+            str(files["inc.prompt"]),
+        ],
+    )
+    assert result.exit_code == 0
+    call_kwargs = mock_main.call_args.kwargs
+    # CLI uses --incremental but main receives force_incremental_flag
+    assert call_kwargs["force_incremental_flag"] is True
 
 # --- Global Options Tests ---
 

@@ -1,4 +1,5 @@
 import os
+import re
 import asyncio
 import json
 import pathlib
@@ -57,6 +58,25 @@ def is_git_repository(path: Optional[str] = None) -> bool:
             break
         current_path = parent
     return False
+
+
+def _expand_vars(text: str, vars_map: Optional[Dict[str, str]]) -> str:
+    """Replace $KEY and ${KEY} in text when KEY exists in vars_map. Leave others unchanged."""
+    if not text or not vars_map:
+        return text
+
+    def repl_braced(m: re.Match) -> str:
+        key = m.group(1)
+        return vars_map.get(key, m.group(0))
+
+    def repl_simple(m: re.Match) -> str:
+        key = m.group(1)
+        return vars_map.get(key, m.group(0))
+
+    # Replace ${KEY} first, then $KEY
+    text = re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", repl_braced, text)
+    text = re.sub(r"\$([A-Za-z_][A-Za-z0-9_]*)", repl_simple, text)
+    return text
 
 
 def get_git_content_at_ref(file_path: str, git_ref: str = "HEAD") -> Optional[str]:
@@ -131,6 +151,7 @@ def code_generator_main(
     output: Optional[str],
     original_prompt_file_path: Optional[str],
     force_incremental_flag: bool,
+    env_vars: Optional[Dict[str, str]] = None,
 ) -> Tuple[str, bool, float, str]:
     """
     CLI wrapper for generating code from prompts. Handles full and incremental generation,
@@ -189,6 +210,10 @@ def code_generator_main(
     can_attempt_incremental = False
     existing_code_content: Optional[str] = None
     original_prompt_content_for_incremental: Optional[str] = None
+
+    # Expand variables in output path if provided
+    if output_path:
+        output_path = _expand_vars(output_path, env_vars)
 
     if output_path and pathlib.Path(output_path).exists():
         try:
@@ -337,9 +362,18 @@ def code_generator_main(
                 if files_to_stage_for_rollback:
                     git_add_files(files_to_stage_for_rollback, verbose=verbose)
             
+            # Preprocess both prompts: expand includes, substitute vars, then double
+            orig_proc = pdd_preprocess(original_prompt_content_for_incremental, recursive=True, double_curly_brackets=False)
+            orig_proc = _expand_vars(orig_proc, env_vars)
+            orig_proc = pdd_preprocess(orig_proc, recursive=False, double_curly_brackets=True)
+
+            new_proc = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False)
+            new_proc = _expand_vars(new_proc, env_vars)
+            new_proc = pdd_preprocess(new_proc, recursive=False, double_curly_brackets=True)
+
             generated_code_content, was_incremental_operation, total_cost, model_name = incremental_code_generator_func(
-                original_prompt=original_prompt_content_for_incremental,
-                new_prompt=prompt_content,
+                original_prompt=orig_proc,
+                new_prompt=new_proc,
                 existing_code=existing_code_content,
                 language=language,
                 strength=strength,
@@ -347,7 +381,7 @@ def code_generator_main(
                 time=time_budget,
                 force_incremental=force_incremental_flag,
                 verbose=verbose,
-                preprocess_prompt=True
+                preprocess_prompt=False
             )
 
             if not was_incremental_operation:
@@ -364,8 +398,10 @@ def code_generator_main(
             
             if not current_execution_is_local:
                 if verbose: console.print("Attempting cloud code generation...")
-                
-                processed_prompt_for_cloud = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=True, exclude_keys=[])
+                # Expand includes, substitute vars, then double
+                processed_prompt_for_cloud = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False, exclude_keys=[])
+                processed_prompt_for_cloud = _expand_vars(processed_prompt_for_cloud, env_vars)
+                processed_prompt_for_cloud = pdd_preprocess(processed_prompt_for_cloud, recursive=False, double_curly_brackets=True, exclude_keys=[])
                 if verbose: console.print(Panel(Text(processed_prompt_for_cloud, overflow="fold"), title="[cyan]Preprocessed Prompt for Cloud[/cyan]", expand=False))
                 
                 jwt_token: Optional[str] = None
@@ -421,14 +457,18 @@ def code_generator_main(
             
             if current_execution_is_local:
                 if verbose: console.print("Executing code generator locally...")
+                # Expand includes, substitute vars, then double; pass to local generator with preprocess_prompt=False
+                local_prompt = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False, exclude_keys=[])
+                local_prompt = _expand_vars(local_prompt, env_vars)
+                local_prompt = pdd_preprocess(local_prompt, recursive=False, double_curly_brackets=True, exclude_keys=[])
                 generated_code_content, total_cost, model_name = local_code_generator_func(
-                    prompt=prompt_content,
+                    prompt=local_prompt,
                     language=language,
                     strength=strength,
                     temperature=temperature,
                     time=time_budget,
                     verbose=verbose,
-                    preprocess_prompt=True
+                    preprocess_prompt=False
                 )
                 was_incremental_operation = False
                 if verbose:
