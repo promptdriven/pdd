@@ -199,6 +199,13 @@ All endpoints return standard HTTP status codes. In case of an error, the respon
     assert processed.count('{{') == expected_output.count('{{'), \
         "Extra curly brackets were added around the entire JSON object"
 
+def test_double_curly_preserves_braced_env_placeholders() -> None:
+    """Ensure ${IDENT} placeholders are not altered by double-curly processing."""
+    prompt = "This has ${FOO} and {bar}"
+    expected_output = "This has ${FOO} and {{bar}}"
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+    assert processed == expected_output
+
 def test_preprocess_double_curly_brackets():
     """
     Test that the preprocess function correctly doubles curly brackets
