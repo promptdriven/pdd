@@ -1,4 +1,4 @@
-% You are an expert Python engineer. Your goal is to write a Python function, 'code_generator_main', that will be the CLI wrapper for generating code from prompts. This function will read a prompt file, generate code using the code_generator or incremental_code_generator function, and handle the output location.
+% You are an expert Python engineer. Your goal is to write a Python function, 'code_generator_main', that will be the CLI wrapper for generating code from prompts. This function will read a prompt file, support parameterized prompts via a variables map, generate code using the code_generator or incremental_code_generator function, and handle the output location.
 
 <include>./context/python_preamble.prompt</include>
 
@@ -9,6 +9,7 @@
       - 'output' - An optional string containing the path where to save the generated code. If None, uses default naming convention.
       - 'original_prompt' - An optional string containing the path to the original prompt file used for incremental generation. If None, attempts to use git to find the last committed version.
       - 'incremental' - A boolean that forces the use of incremental patching even if the diff analyzer suggests full regeneration. Default is False.
+      - 'env_vars' - An optional dictionary `Dict[str, str]` containing template variables passed from the CLI via `-e/--env`.
    Outputs:
       - Returns a tuple containing (`str`, `bool`, `float`, `str`):
             - `str`: The generated or updated code.
@@ -123,10 +124,12 @@
       <include>./README.md</include>
    </cli_command_readme>
 
-% Cloud vs Local Execution Strategy:
+% Cloud vs Local Execution Strategy (with parameter substitution):
    1. If the `--local` flag is explicitly provided, use local execution directly.
    2. Otherwise, attempt cloud execution first:
-      - Preprocess the prompt using the `preprocess` function with `recursive=True` and `double_curly_brackets=True`.
+      - Preprocess the prompt content to expand includes only: call `preprocess(prompt_text, recursive=True, double_curly_brackets=False)`.
+      - Apply variable substitution using `env_vars` to replace only `$KEY` and `${KEY}` where keys exist in `env_vars`. Leave unknown `$...` placeholders unchanged.
+      - After substitution, apply curly‑brace doubling if needed by downstream generators.
       - Obtain a JWT via `get_jwt_token` using `NEXT_PUBLIC_FIREBASE_API_KEY` and `GITHUB_CLIENT_ID`.
       - Use a request timeout of 400 seconds.
       - Send JSON payload with fields: `{ "promptContent": <processed prompt>, "language": <language>, "strength": <strength>, "temperature": <temperature>, "verbose": <verbose> }`.
@@ -135,7 +138,7 @@
       - Expected response fields: `generatedCode`, `totalCost`, `modelName`.
    3. If cloud execution fails (auth/network/HTTP/JSON errors, timeout, or missing code):
       - Log a warning and automatically fall back to local execution.
-   4. For local execution, call the local code generator with `preprocess_prompt=True`.
+   4. For local execution, call the local code generator with the already preprocessed and substituted prompt, and set `preprocess_prompt=False` on the generator call.
    5. For both modes, if `verbose` is true, print relevant execution information using Rich panels.
 
 % The function handles incremental code generation:
@@ -149,10 +152,15 @@
        - We can't get the original prompt (no --original-prompt and not in git)
        - The incremental_code_generator returns is_incremental=False indicating a full regeneration is needed
     4. Force incremental generation if the --incremental flag is set, but warn if no output file exists and do full generation
+    5. Parameterized prompts and incremental generation:
+       - Apply the same include expansion and variable substitution (using `env_vars`) to both the current prompt content and the original prompt content before diffing or passing to the incremental generator. This ensures like‑for‑like comparison and patching.
 
 % The function's implementation should include these key steps:
     1. Retrieve `strength`, `temperature`, and `time` from `ctx.obj` using defaults (e.g., `time = ctx.obj.get('time', DEFAULT_TIME)`).
-    2. Process the prompt_file (read content; for cloud, preprocess with `recursive=True` and `double_curly_brackets=True`; for local/incremental, let the generator handle preprocessing via `preprocess_prompt=True`).
+    2. Process the prompt_file:
+       - Read content; expand includes with `preprocess(prompt, recursive=True, double_curly_brackets=False)`.
+       - Apply variable substitution using `env_vars` (`$KEY` and `${KEY}` only when provided). Unknown placeholders remain unchanged.
+       - After substitution, apply curly‑brace doubling if appropriate.
     3. Determine the language using `construct_paths` (may infer from file extension, special cases, or filename suffix).
     4. Determine whether to use incremental generation or full generation:
        - Check if output is specified and file exists
@@ -160,14 +168,18 @@
        - If both conditions met, try incremental generation
     5. For incremental generation:
        - Read the existing code from the output file
-       - Read original prompt content (from specified file or git)
+       - Read original prompt content (from specified file or git); expand includes and apply the same variable substitution using `env_vars` as with the current prompt
        - Stage prompt_file and output file with git (if they aren't already staged/committed)
        - Call incremental_code_generator with appropriate parameters (including `strength`, `temperature`, and `time` from `ctx.obj`)
        - If incremental_code_generator returns is_incremental=False, fall back to full generation
     6. For full generation:
-       - Call code_generator (local version) with appropriate parameters (including `strength`, `temperature`, and `time` from `ctx.obj`). For cloud execution, ensure the `time` (or equivalent like `timeBudget`) is included in the API payload if supported.
-       - If cloud execution fails, automatically fall back to local execution with appropriate warnings
+       - Call code_generator (local version) with the preprocessed+substituted prompt and `preprocess_prompt=False` (including `strength`, `temperature`, and `time` from `ctx.obj`). For cloud execution, ensure the `processed prompt` includes include expansion and variable substitution before sending.
+        - If cloud execution fails, automatically fall back to local execution with appropriate warnings
     7. Write the final code to the output location:
        - If `--output` ends with a path separator or points to a directory, use the resolved default filename from `construct_paths`.
-       - If no output is provided, print the generated code to the console (when not in quiet mode).
+       - Before writing, expand `$KEY`/`${KEY}` in the final `output_path` string using only keys present in `env_vars`. Leave unknown placeholders unchanged.
+        - If no output is provided, print the generated code to the console (when not in quiet mode).
     8. Return the generated code, incremental flag, cost, and model name
+
+% Helper function expectations:
+    - Implement a small helper, e.g., `expand_vars(text: str, vars: Dict[str, str]) -> str`, that performs a single-pass substitution for `$KEY` and `${KEY}` only when `KEY in vars`. Unmatched placeholders remain unchanged; do not read from OS environment in this function.

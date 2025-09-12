@@ -37,6 +37,7 @@
     2. Properly handle nested curly brackets using case-by-case pattern matching
     3. Special handling for code blocks (JSON, JavaScript, TypeScript, Python) to ensure proper formatting
     4. Apply special handling for multiline variables with curly brackets
+    5. Do not alter or double the braces of `${IDENT}` tokens (match `${[A-Za-z_][A-Za-z0-9_]*}`); preserve them exactly so unknown placeholders remain unchanged for later substitution.
 
 % The program should resolve file paths using the current directory as the base path. Implement a function 'get_file_path' that takes a file name and returns the full path using './' as the base path.
 
