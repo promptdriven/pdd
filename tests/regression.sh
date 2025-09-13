@@ -888,7 +888,7 @@ EOF
 
     # Case C: Unknown placeholder in output path remains unchanged
     run_pdd_command generate ${EXTRA_ARGS[@]:-} -e MODULE=customers --output 'param_${UNKNOWN}.py' "$PARAM_PROMPT"
-    if [ -e "param_${UNKNOWN}.py" ]; then
+    if [ -e 'param_${UNKNOWN}.py' ]; then
       log "Unknown placeholder remained unchanged in output path as expected"
       log_timestamped "Validation success: unknown placeholder in output path unchanged"
     else

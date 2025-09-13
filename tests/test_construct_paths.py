@@ -998,6 +998,94 @@ def test_construct_paths_sync_discovery_current_directory(tmpdir):
     assert resolved_config["prompts_dir"] == str(tmp_path)
     assert resolved_config["code_dir"] == str(tmp_path)
 
+def test_construct_paths_sync_discovery_honors_pddrc_generate_output_path_override(tmpdir):
+    """
+    When generate_output_paths returns a default-root code path, construct_paths (sync discovery)
+    should still honor .pddrc context generate_output_path (e.g., 'pdd/') and place code under it.
+    """
+    input_file_paths = {}
+    force = False
+    quiet = True
+    command = 'sync'
+    command_options = {"basename": "simple_math"}
+
+    # Simulate generator returning a default (root) location for code
+    mocked_gen_paths = {
+        "generate_output_path": "/root/simple_math.py",
+        "test_output_path": "/root/tests/test_simple_math.py",
+        "example_output_path": "/root/examples/simple_math_example.py",
+    }
+
+    # .pddrc context config indicating code should go under 'pdd/'
+    context_cfg = {
+        "generate_output_path": "pdd/",
+        "test_output_path": "tests/",
+        "example_output_path": "examples/",
+    }
+
+    # Fix current working directory for absolute resolution
+    mock_cwd = Path("/project")
+
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mocked_gen_paths), \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=Path('/fake/.pddrc')), \
+         patch('pdd.construct_paths._load_pddrc_config', return_value={'contexts': {'regression': {'defaults': context_cfg}}}), \
+         patch('pdd.construct_paths._detect_context', return_value='regression'), \
+         patch('pdd.construct_paths._get_context_config', return_value=context_cfg), \
+         patch('pdd.construct_paths.Path.cwd', return_value=mock_cwd):
+
+        resolved_config, _, _, _ = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+
+    # Code dir should reflect the .pddrc setting (under /project/pdd), not /root
+    assert resolved_config["code_dir"] == str(mock_cwd / "pdd")
+    # Prompts directory should be root-level (sibling to pdd/)
+    assert resolved_config["prompts_dir"] == "prompts"
+
+def test_construct_paths_sync_with_prompt_honors_pddrc_generate_output_path_override(tmpdir):
+    """
+    In normal sync (with prompt_file given), ensure generate_output_path is overridden
+    to .pddrc's generate_output_path even if generator returns a default root path.
+    """
+    tmp_path = Path(str(tmpdir))
+    # Create a prompt file so language/basename resolve normally
+    prompt_file = tmp_path / 'simple_math_python.prompt'
+    prompt_file.write_text('Make simple math module')
+
+    input_file_paths = {"prompt_file": str(prompt_file)}
+    force = True
+    quiet = True
+    command = 'sync'
+    command_options = {"basename": "simple_math", "language": "python"}
+
+    mocked_gen_paths = {
+        "generate_output_path": "/root/simple_math.py",
+        "test_output_path": "/root/tests/test_simple_math.py",
+        "example_output_path": "/root/examples/simple_math_example.py",
+    }
+
+    context_cfg = {
+        "generate_output_path": "pdd/",
+        "test_output_path": "tests/",
+        "example_output_path": "examples/",
+    }
+
+    mock_cwd = Path("/project")
+
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mocked_gen_paths), \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=Path('/fake/.pddrc')), \
+         patch('pdd.construct_paths._load_pddrc_config', return_value={'contexts': {'regression': {'defaults': context_cfg}}}), \
+         patch('pdd.construct_paths._detect_context', return_value='regression'), \
+         patch('pdd.construct_paths._get_context_config', return_value=context_cfg), \
+         patch('pdd.construct_paths.Path.cwd', return_value=mock_cwd):
+
+        resolved_config, _, output_paths, language = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+
+    # Output path should have been overridden to /project/pdd/simple_math.py
+    assert Path(output_paths["generate_output_path"]).parent == mock_cwd / "pdd"
+    assert resolved_config["code_dir"] == str(mock_cwd / "pdd")
 
 def test_construct_paths_sync_discovery_fallback_to_context_logic(tmpdir):
     """
