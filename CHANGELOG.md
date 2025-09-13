@@ -1,26 +1,32 @@
 ## v0.0.55 (2025-09-12)
 
 ### CLI & Code Generation
+
 - Add environment variable support across CLI and code generation.
 - Refactor incremental generation options; clarify and document behavior.
 - Parameterize prompts and expand output options in CLI flows.
 
 ### Paths & Discovery
+
 - Improve `construct_paths` handling of `generate_output_path` during sync discovery.
 - Honor `.pddrc` `generate_output_path` in discovery logic.
 
 ### Docs
+
 - README: Document parameterized prompts, output expansion, and clarify PDD vs. “Vibe coding”.
 
 ### VS Code Extension
-- Initial release of the "prompt-highlighter" extension providing `.prompt` syntax highlighting, TextMate grammar, and language configuration. 
+
+- Initial release of the "prompt-highlighter" extension providing `.prompt` syntax highlighting, TextMate grammar, and language configuration.
 
 ### Build/Tooling
-- Add `.gitignore`.
+
+- Add `.gitignore`. Thanks cilibrar@gmail.com!
 
 ## v0.0.54 (2025-09-07)
 
 ### CLI & Orchestration
+
 - Improve command tracking and reporting in the CLI (`pdd/cli.py`) and orchestration (`pdd/sync_orchestration.py`).
 - Refine cost tracking/reporting integration in `pdd/track_cost.py`.
 
