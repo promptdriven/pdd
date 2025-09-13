@@ -11,6 +11,8 @@
     - `--output-cost`: Path, for CSV cost tracking.
     - `--review-examples`: Flag to review few-shot examples.
     - `--local`: Flag to run commands locally.
+    - `--context CONTEXT_NAME`: Override automatic context detection and use the specified context from `.pddrc`. Store the value in `ctx.obj['context']`.
+    - `--list-contexts`: List available contexts found in `.pddrc` (if any) and exit 0.
 % All these global options should be passed to the `cli` function and stored in `ctx.obj`.
 </context>
 
@@ -19,6 +21,7 @@
 % Call `get_local_pdd_path()` at the very start of `cli()` to ensure `PDD_PATH` is set (e.g., for UV installs).
 
 % Auto-update behavior: run `auto_update()` unless the environment variable `PDD_AUTO_UPDATE` equals `'false'` (case-insensitive).
+% If `--list-contexts` is provided, perform the listing and exit BEFORE auto-update or any subcommands.
 
 % Expose CLI version with `click.version_option(version=__version__, package_name='pdd-cli')`.
 
@@ -163,6 +166,13 @@
     </internal_example_modules>
 
     % Additional implementation notes:
+        - Context flags:
+            - Persist `--context` in `ctx.obj['context']` so subcommands that call `construct_paths` can pass it through as `context_override=ctx.obj['context']`.
+            - Implement `--list-contexts` as a global action inside `cli()`:
+                - Import `_find_pddrc_file` and `_load_pddrc_config` from `pdd.construct_paths` to avoid duplicating logic.
+                - Search upward for `.pddrc`; if found, load it and print the sorted list of context names; if not found, print `default`.
+                - Exit with code 0 immediately after printing (do not invoke auto-update or any commands).
+            - Optional early validation: if `--context` is provided and `.pddrc` exists but the name is unknown, raise `click.UsageError` listing available contexts. Otherwise, allow `construct_paths` to validate later.
         - Decorate LLM-using commands with `@track_cost` and return `(result, total_cost, model_name)`.
         - Local-only commands (e.g., `preprocess`) are not cost-tracked; return a dummy `("", 0.0, "local")` when needed for chain summaries.
         - `install_completion` returns `None` and prints its own status.
