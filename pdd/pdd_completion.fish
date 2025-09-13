@@ -34,6 +34,7 @@ complete -c pdd -n "__fish_use_subcommand" -a verify -d "Verify functional corre
 complete -c pdd -n "__fish_seen_subcommand_from generate" -l output -r -d "Output location for generated code"
 complete -c pdd -n "__fish_seen_subcommand_from generate" -l original-prompt -r -d "Original prompt file for incremental generation"
 complete -c pdd -n "__fish_seen_subcommand_from generate" -l incremental -d "Force incremental patching"
+complete -c pdd -n "__fish_seen_subcommand_from generate" -s e -l env -xa "(env | cut -d= -f1 | sed 's/$/=/' | sort -u)" -d "Set template variable (KEY=VALUE) or read KEY from env"
 complete -c pdd -n "__fish_seen_subcommand_from generate" -a "(__fish_complete_suffix .prompt)"
 
 complete -c pdd -n "__fish_seen_subcommand_from example" -l output -r -d "Output location for example code"
