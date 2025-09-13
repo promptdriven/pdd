@@ -16,7 +16,7 @@
 - Initial release of the "prompt-highlighter" extension providing `.prompt` syntax highlighting, TextMate grammar, and language configuration. 
 
 ### Build/Tooling
-- Add `.gitignore`.
+- Add `.gitignore`. Thanks cilibrar@gmail.com!
 
 ## v0.0.54 (2025-09-07)
 
