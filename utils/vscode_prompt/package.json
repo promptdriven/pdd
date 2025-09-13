@@ -1,31 +1,93 @@
 {
-  "name": "prompt",
-  "displayName": "prompt",
-  "description": "For Prompt Driven Development",
+  "name": "prompt-highlighter",
+  "displayName": "Prompt Driven Development",
+  "description": "VS Code syntax highlighting for .prompt files (Prompt‑Driven Development, AI prompts)",
   "version": "0.0.1",
   "engines": {
     "vscode": "^1.96.0"
   },
   "categories": [
-    "Programming Languages"
+    "Programming Languages",
+    "Machine Learning",
+    "Other"
   ],
   "contributes": {
-    "languages": [{
-      "id": "prompt",
-      "aliases": ["PDD Prompt", "prompt"],
-      "extensions": [".prompt"],
-      "configuration": "./language-configuration.json"
-    }],
-    "grammars": [{
-      "language": "prompt",
-      "scopeName": "text.prompt",
-      "path": "./syntaxes/prompt.tmLanguage.json"
-    }]
+    "languages": [
+      {
+        "id": "prompt",
+        "aliases": [
+          "PDD Prompt",
+          "prompt",
+          "Prompt",
+          "pdd",
+          "PromptDriven",
+          "Prompt-Driven Development",
+          "prompt driven development",
+          "Prompt Engineering",
+          "AI Prompt",
+          "LLM Prompt"
+        ],
+        "extensions": [
+          ".prompt"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "prompt",
+        "scopeName": "text.prompt",
+        "path": "./syntaxes/prompt.tmLanguage.json"
+      }
+    ]
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/gltanaka/pdd.git",
-    "directory": "prompt"
+    "url": "https://github.com/promptdriven/pdd.git",
+    "directory": "utils/vscode_prompt"
   },
-  "publisher": "gltanaka"
+  "publisher": "PromptDriven",
+  "homepage": "https://github.com/promptdriven/pdd/tree/main/utils/vscode_prompt#readme",
+  "bugs": {
+    "url": "https://github.com/promptdriven/pdd/issues"
+  },
+  "license": "MIT",
+  "galleryBanner": {
+    "color": "#061c22",
+    "theme": "dark"
+  },
+  "extensionKind": [
+    "ui"
+  ],
+  "keywords": [
+    "prompt",
+    "pdd",
+    "prompt engineering",
+    "prompt-driven development",
+    "ai",
+    "llm",
+    "syntax highlighting",
+    "language support",
+    "textmate",
+    "vs code",
+    "vscode",
+    "dsl",
+    "spec",
+    "agent",
+    "rag",
+    "openai",
+    "anthropic",
+    "gemini",
+    "chatgpt"
+  ],
+  "scripts": {
+    "package": "vsce package",
+    "publish": "vsce publish",
+    "render-icon": "node scripts/render-icon.mjs",
+    "build-video-thumb": "node scripts/generate-video-thumb.mjs"
+  },
+  "icon": "images/icon.png",
+  "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2"
+  }
 }

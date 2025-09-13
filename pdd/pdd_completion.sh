@@ -21,7 +21,7 @@ _pdd() {
     local commands="generate example test preprocess fix split change update detect conflicts crash trace bug auto-deps verify"
 
     # Command-specific options
-    local generate_opts="--output --original-prompt --incremental"
+    local generate_opts="--output --original-prompt --incremental --env -e"
     local example_opts="--output"
     local test_opts="--output --language --coverage-report --existing-tests --target-coverage --merge"
     local preprocess_opts="--output --xml --recursive --double --exclude"
@@ -46,6 +46,16 @@ _pdd() {
     # Complete command-specific options
     case ${words[1]} in
         generate)
+            # If completing the value for -e/--env, suggest environment variable names (with and without '=')
+            if [[ $prev == "-e" || $prev == "--env" ]]; then
+                local vars
+                vars=$(env | cut -d= -f1 | sort -u)
+                # Offer both KEY and KEY=
+                local vars_with_eq
+                vars_with_eq=$(printf '%s=\n' $vars)
+                COMPREPLY=($(compgen -W "$vars $vars_with_eq" -- "$cur"))
+                return
+            fi
             _complete_files ".prompt"
             COMPREPLY+=($(compgen -W "$generate_opts" -- "$cur"))
             ;;

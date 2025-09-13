@@ -65,6 +65,14 @@ _pdd_global_opts=(
 # Per-subcommand completion functions
 ##
 
+# Helper: suggest environment variables (KEY and KEY=)
+_pdd_env_vars() {
+  local -a envs envs_eq
+  envs=(${(f)"$(env | cut -d= -f1 | sort -u)"})
+  envs_eq=(${envs/%/=})
+  _describe -t envvars 'environment variables' envs_eq envs
+}
+
 # generate
 # Usage: pdd [GLOBAL OPTIONS] generate [OPTIONS] PROMPT_FILE
 # Options:
@@ -77,6 +85,7 @@ _pdd_generate() {
     '--output=[Specify where to save the generated code.]:filename:_files' \
     '--original-prompt=[The original prompt file used to generate existing code.]:filename:_files' \
     '--incremental[Force incremental patching even if changes are significant.]' \
+    '(-e --env)'{-e,--env}'[Set template variable (KEY=VALUE) or read KEY from env]:template variable:_pdd_env_vars' \
     '1:prompt-file:_files' \
     '*:filename:_files'
 }
