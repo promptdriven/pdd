@@ -1009,13 +1009,6 @@ def test_construct_paths_sync_discovery_honors_pddrc_generate_output_path_overri
     command = 'sync'
     command_options = {"basename": "simple_math"}
 
-    # Simulate generator returning a default (root) location for code
-    mocked_gen_paths = {
-        "generate_output_path": "/root/simple_math.py",
-        "test_output_path": "/root/tests/test_simple_math.py",
-        "example_output_path": "/root/examples/simple_math_example.py",
-    }
-
     # .pddrc context config indicating code should go under 'pdd/'
     context_cfg = {
         "generate_output_path": "pdd/",
@@ -1025,6 +1018,15 @@ def test_construct_paths_sync_discovery_honors_pddrc_generate_output_path_overri
 
     # Fix current working directory for absolute resolution
     mock_cwd = Path("/project")
+
+    # Simulate generator returning a CWD-root location for code (problematic case)
+    # Establish mock CWD for this test
+    mock_cwd = Path("/project")
+    mocked_gen_paths = {
+        "generate_output_path": str(mock_cwd / "simple_math.py"),
+        "test_output_path": str(mock_cwd / "tests" / "test_simple_math.py"),
+        "example_output_path": str(mock_cwd / "examples" / "simple_math_example.py"),
+    }
 
     with patch('pdd.construct_paths.generate_output_paths', return_value=mocked_gen_paths), \
          patch('pdd.construct_paths._find_pddrc_file', return_value=Path('/fake/.pddrc')), \
@@ -1058,10 +1060,12 @@ def test_construct_paths_sync_with_prompt_honors_pddrc_generate_output_path_over
     command = 'sync'
     command_options = {"basename": "simple_math", "language": "python"}
 
+    # Establish mock CWD for this test
+    mock_cwd = Path("/project")
     mocked_gen_paths = {
-        "generate_output_path": "/root/simple_math.py",
-        "test_output_path": "/root/tests/test_simple_math.py",
-        "example_output_path": "/root/examples/simple_math_example.py",
+        "generate_output_path": str(mock_cwd / "simple_math.py"),
+        "test_output_path": str(mock_cwd / "tests" / "test_simple_math.py"),
+        "example_output_path": str(mock_cwd / "examples" / "simple_math_example.py"),
     }
 
     context_cfg = {
@@ -1070,7 +1074,7 @@ def test_construct_paths_sync_with_prompt_honors_pddrc_generate_output_path_over
         "example_output_path": "examples/",
     }
 
-    mock_cwd = Path("/project")
+    # mock_cwd defined above
 
     with patch('pdd.construct_paths.generate_output_paths', return_value=mocked_gen_paths), \
          patch('pdd.construct_paths._find_pddrc_file', return_value=Path('/fake/.pddrc')), \
