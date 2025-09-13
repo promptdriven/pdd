@@ -115,7 +115,7 @@ If you’re brand new to PDD, follow these steps to see it in action.
 2. **Clone repo**
 
    ```bash
-     # Clone the repository (if not already)
+     # Clone the repository (if not already done)
     git clone https://github.com/promptdriven/pdd.git
     cd pdd/examples/hello
    ```
@@ -129,8 +129,8 @@ If you’re brand new to PDD, follow these steps to see it in action.
 
 4. **Run the setup helper** (creates `~/.pdd/llm_model.csv` for you):
    ```bash
-   cd examples/post_setup
-   python pdd-setup.py
+    cd utils/post_setup
+    python pdd-setup.py
    ```
 
    👉 If you prefer to configure things manually (without using `pdd-setup.py`),  
