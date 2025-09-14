@@ -26,7 +26,7 @@ from .cmd_test_main import cmd_test_main
 from .code_generator_main import code_generator_main
 from .conflicts_main import conflicts_main
 # Need to import construct_paths for tests patching pdd.cli.construct_paths
-from .construct_paths import construct_paths
+from .construct_paths import construct_paths, list_available_contexts
 from .context_generator_main import context_generator_main
 from .crash_main import crash_main
 from .detect_change_main import detect_change_main
@@ -134,6 +134,20 @@ def handle_error(exception: Exception, command_name: str, quiet: bool):
     default=False,
     help="Run commands locally instead of in the cloud.",
 )
+@click.option(
+    "--context",
+    "context_override",
+    type=str,
+    default=None,
+    help="Override automatic context detection and use the specified .pddrc context.",
+)
+@click.option(
+    "--list-contexts",
+    "list_contexts",
+    is_flag=True,
+    default=False,
+    help="List available contexts from .pddrc and exit.",
+)
 @click.version_option(version=__version__, package_name="pdd-cli")
 @click.pass_context
 def cli(
@@ -147,6 +161,8 @@ def cli(
     review_examples: bool,
     local: bool,
     time: Optional[float], # Type hint is Optional[float]
+    context_override: Optional[str],
+    list_contexts: bool,
 ):
     """
     Main entry point for the PDD CLI. Handles global options and initializes context.
@@ -166,10 +182,36 @@ def cli(
     ctx.obj["local"] = local
     # Use DEFAULT_TIME if time is not provided
     ctx.obj["time"] = time if time is not None else DEFAULT_TIME
+    # Persist context override for downstream calls
+    ctx.obj["context"] = context_override
 
     # Suppress verbose if quiet is enabled
     if quiet:
         ctx.obj["verbose"] = False
+
+    # If --list-contexts is provided, print and exit before any other actions
+    if list_contexts:
+        try:
+            names = list_available_contexts()
+        except Exception as exc:
+            # Surface config errors as usage errors
+            raise click.UsageError(f"Failed to load .pddrc: {exc}")
+        # Print one per line; avoid Rich formatting for portability
+        for name in names:
+            click.echo(name)
+        ctx.exit(0)
+
+    # Optional early validation for --context
+    if context_override:
+        try:
+            names = list_available_contexts()
+        except Exception as exc:
+            # If .pddrc is malformed, propagate as usage error
+            raise click.UsageError(f"Failed to load .pddrc: {exc}")
+        if context_override not in names:
+            raise click.UsageError(
+                f"Unknown context '{context_override}'. Available contexts: {', '.join(names)}"
+            )
 
     # Perform auto-update check unless disabled
     if os.getenv("PDD_AUTO_UPDATE", "true").lower() != "false":
