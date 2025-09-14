@@ -341,6 +341,7 @@ def sync_orchestration(
     review_examples: bool = False,
     local: bool = False,
     context_config: Optional[Dict[str, str]] = None,
+    context_override: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Orchestrates the complete PDD sync workflow with parallel animation.
@@ -358,7 +359,7 @@ def sync_orchestration(
 
     # --- Initialize State and Paths ---
     try:
-        pdd_files = get_pdd_file_paths(basename, language, prompts_dir)
+        pdd_files = get_pdd_file_paths(basename, language, prompts_dir, context_override=context_override)
         # Debug: Print the paths we got
         print(f"DEBUG: get_pdd_file_paths returned:")
         print(f"  test: {pdd_files.get('test', 'N/A')}")
@@ -457,7 +458,7 @@ def sync_orchestration(
                         "percentage": (budget_remaining / budget) * 100
                     })
 
-                decision = sync_determine_operation(basename, language, target_coverage, budget_remaining, False, prompts_dir, skip_tests, skip_verify)
+                decision = sync_determine_operation(basename, language, target_coverage, budget_remaining, False, prompts_dir, skip_tests, skip_verify, context_override)
                 operation = decision.operation
                 
                 # Create log entry with decision info
