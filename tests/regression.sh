@@ -463,11 +463,12 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "1" ]; then
   # Temporarily modify .pddrc to test environment variable precedence
   # Modify the nearest .pddrc (created in this regression directory by Test 0)
   PDDRC_PATH="./.pddrc"
-  PDDRC_BACKUP_PATH="$PDD_BASE_DIR/.pddrc.backup"
+  PDDRC_BACKUP_PATH="./.pddrc.backup"
   if [ -f "$PDDRC_PATH" ]; then
     cp "$PDDRC_PATH" "$PDDRC_BACKUP_PATH"
-    # Remove generate_output_path from pdd_cli context to test env var precedence
-    sed -i.tmp 's/generate_output_path: "pdd\/"/# generate_output_path: "pdd\/" # Temporarily commented for env var test/' "$PDDRC_PATH"
+    # Comment out any generate_output_path lines to test env var precedence
+    # This preserves the line content for easy restore via backup
+    sed -i.tmp -E 's/^([[:space:]]*)generate_output_path:[[:space:]]*"[^"]*"/\1# generate_output_path: "" # Temporarily commented for env var test/' "$PDDRC_PATH"
     log "Temporarily modified .pddrc to test environment variables"
   fi
   
