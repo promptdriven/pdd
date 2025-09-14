@@ -125,7 +125,8 @@ def test_fix_main_without_loop(
             'output_code': None,
             'output_results': None
         },
-        create_error_file=False # Explicitly check this argument
+        create_error_file=False, # Explicitly check this argument
+        context_override=None
     )
     assert success is True
     assert fixed_test == "Fixed unit test content"
@@ -221,7 +222,8 @@ def test_fix_main_with_loop(
             'output_code': None,
             'output_results': None
         },
-        create_error_file=True # Add this expected argument
+        create_error_file=True, # Add this expected argument
+        context_override=None
     )
     assert success is True
     assert fixed_test == "Iteratively fixed test"
