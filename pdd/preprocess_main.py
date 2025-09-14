@@ -33,6 +33,7 @@ def preprocess_main(
             quiet=ctx.obj.get("quiet", False),
             command="preprocess",
             command_options=command_options,
+            context_override=ctx.obj.get('context')
         )
 
         # Load prompt file

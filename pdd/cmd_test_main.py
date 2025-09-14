@@ -88,6 +88,7 @@ def cmd_test_main(
             quiet=ctx.obj["quiet"],
             command="test",
             command_options=command_options,
+            context_override=ctx.obj.get('context')
         )
     except Exception as exception:
         # Catching a general exception is necessary here to handle a wide range of
