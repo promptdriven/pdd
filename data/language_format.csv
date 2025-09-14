@@ -61,3 +61,4 @@ prompt,del,.prompt
 TOML,#,.toml
 Log,del,.log
 reStructuredText,del,.rst
+Text,del,.txt

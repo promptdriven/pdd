@@ -401,6 +401,44 @@ SPLIT_PROMPT="split_instruction_python.prompt"
 
 log_timestamped "======== Starting Regression Tests ========"
 
+# 0. CLI Globals: --list-contexts and --context override
+if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "0" ]; then
+  log "0. Testing global CLI flags: --list-contexts and --context"
+
+  # Create a local .pddrc to control contexts for this regression run
+  cat > .pddrc << 'EOF'
+contexts:
+  default:
+    defaults:
+      generate_output_path: "src_default/"
+      test_output_path: "tests_default/"
+      example_output_path: "examples_default/"
+  alt:
+    defaults:
+      generate_output_path: "src_alt/"
+      test_output_path: "tests_alt/"
+      example_output_path: "examples_alt/"
+EOF
+
+  # 0a. --list-contexts should print available contexts and exit 0
+  CONTEXTS_OUTPUT=$($PDD_SCRIPT --list-contexts 2>> "$LOG_FILE")
+  STATUS=$?
+  if [ $STATUS -ne 0 ]; then
+    log_error "--list-contexts exited with non-zero status: $STATUS"
+    exit 1
+  fi
+  echo "$CONTEXTS_OUTPUT" | grep -q "^default$" || { log_error "--list-contexts missing 'default'"; exit 1; }
+  echo "$CONTEXTS_OUTPUT" | grep -q "^alt$" || { log_error "--list-contexts missing 'alt'"; exit 1; }
+  log "--list-contexts returned expected contexts: $(echo "$CONTEXTS_OUTPUT" | tr '\n' ' ')"
+
+  # 0b. Unknown --context should raise a usage error (early validation)
+  run_pdd_expect_fail --context does_not_exist preprocess --output ctx_check.prompt "$COMPLEX_PROMPT"
+
+  # 0c. Known --context should pass through to subcommands; run a cheap command (preprocess)
+  run_pdd_command --context alt preprocess --output ctx_alt_preprocessed.prompt "$COMPLEX_PROMPT"
+  check_exists "ctx_alt_preprocessed.prompt" "'preprocess' with --context alt output"
+fi
+
 # 1. Generate
 if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "1" ]; then
   log "1. Testing 'generate' command"
@@ -423,7 +461,8 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "1" ]; then
   export PDD_GENERATE_OUTPUT_PATH="$ENV_OUT_DIR/" # Trailing slash indicates directory
   
   # Temporarily modify .pddrc to test environment variable precedence
-  PDDRC_PATH="$PDD_BASE_DIR/.pddrc"
+  # Modify the nearest .pddrc (created in this regression directory by Test 0)
+  PDDRC_PATH="./.pddrc"
   PDDRC_BACKUP_PATH="$PDD_BASE_DIR/.pddrc.backup"
   if [ -f "$PDDRC_PATH" ]; then
     cp "$PDDRC_PATH" "$PDDRC_BACKUP_PATH"
