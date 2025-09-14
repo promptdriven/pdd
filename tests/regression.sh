@@ -309,6 +309,26 @@ log "Temperature: $TEMPERATURE"
 log "Local Execution: $TEST_LOCAL"
 log "----------------------------------------"
 
+# Create a local .pddrc with test contexts up front
+cat > ./.pddrc << 'EOF'
+contexts:
+  default:
+    defaults:
+      default_language: "python"
+  alt:
+    defaults:
+      default_language: "python"
+  base:
+    defaults:
+      generate_output_path: "pdd/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
+      default_language: "python"
+  envonly:
+    defaults:
+      default_language: "python"
+EOF
+
 # Create context files needed by multiple tests
 log "Creating common context files (example.prompt, test.prompt)"
 mkdir -p context # Ensure context subdirectory exists
@@ -454,36 +474,16 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "1" ]; then
   run_pdd_command --local --strength $STRENGTH --temperature 1.5 generate --output "gen_high_temp.py" "$PROMPTS_PATH/$MATH_PROMPT"
   check_exists "gen_high_temp.py" "'generate' high temp output"
 
-  # 1b. Generate with env var output path
+  # 1b. Generate with env var output path (via envonly context)
   log "1b. Testing 'generate' with environment variable output path"
   ENV_OUT_DIR="env_out_generate"
   mkdir "$ENV_OUT_DIR"
   export PDD_GENERATE_OUTPUT_PATH="$ENV_OUT_DIR/" # Trailing slash indicates directory
-  
-  # Temporarily modify .pddrc to test environment variable precedence
-  # Modify the nearest .pddrc (created in this regression directory by Test 0)
-  PDDRC_PATH="./.pddrc"
-  PDDRC_BACKUP_PATH="./.pddrc.backup"
-  if [ -f "$PDDRC_PATH" ]; then
-    cp "$PDDRC_PATH" "$PDDRC_BACKUP_PATH"
-    # Comment out any generate_output_path lines to test env var precedence
-    # This preserves the line content for easy restore via backup
-    sed -i.tmp -E 's/^([[:space:]]*)generate_output_path:[[:space:]]*"[^"]*"/\1# generate_output_path: "" # Temporarily commented for env var test/' "$PDDRC_PATH"
-    log "Temporarily modified .pddrc to test environment variables"
-  fi
-  
-  run_pdd_command --local generate "$PROMPTS_PATH/$MATH_PROMPT" # No --output
+  # Use envonly context so env vars take precedence (no context paths)
+  run_pdd_command --local --context envonly generate "$PROMPTS_PATH/$MATH_PROMPT" # No --output
   # Default name is <basename>.<lang_ext> which should be simple_math.py
   check_exists "$ENV_OUT_DIR/$MATH_SCRIPT" "'generate' output via env var" # Check for the Python file, not the prompt
-  
-  # Restore .pddrc file
-  if [ -f "$PDDRC_BACKUP_PATH" ]; then
-    mv "$PDDRC_BACKUP_PATH" "$PDDRC_PATH"
-    # Clean up sed backup file
-    rm -f "$PDDRC_PATH.tmp"
-    log "Restored .pddrc file"
-  fi
-  
+
   unset PDD_GENERATE_OUTPUT_PATH
 fi
 
@@ -1025,34 +1025,17 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "8" ]; then
   log "Running merged tests..."
   python -m pytest "$MATH_TEST_SCRIPT" >> "$LOG_FILE" 2>&1 || log "Merged tests failed (non-fatal for script)."
 
-  # 8c. Test with env var output path
+  # 8c. Test with env var output path (via envonly context)
   log "8c. Testing 'test' with environment variable output path"
   ENV_OUT_DIR_TEST="env_out_test"
   mkdir -p "$ENV_OUT_DIR_TEST"
   export PDD_TEST_OUTPUT_PATH="$ENV_OUT_DIR_TEST/" # Trailing slash indicates directory
-  
-  # Temporarily modify the local .pddrc to test environment variable precedence
-  PDDRC_PATH="./.pddrc"
-  PDDRC_BACKUP_PATH="./.pddrc.backup"
-  if [ -f "$PDDRC_PATH" ]; then
-    cp "$PDDRC_PATH" "$PDDRC_BACKUP_PATH"
-    # Comment out any test_output_path lines to test env var precedence
-    sed -i.tmp -E 's/^([[:space:]]*)test_output_path:[[:space:]]*"[^"]*"/\1# test_output_path: "" # Temporarily commented for env var test/' "$PDDRC_PATH"
-    log "Temporarily modified .pddrc to test environment variables"
-  fi
-  
-  run_pdd_command test "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" # No --output
+
+  # Use envonly context so env vars take precedence (no context paths)
+  run_pdd_command --context envonly test "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" # No --output
   # Default name is test_<basename>.<lang_ext>
   check_exists "$ENV_OUT_DIR_TEST/$MATH_TEST_SCRIPT" "'test' output via env var"
-  
-  # Restore .pddrc file
-  if [ -f "$PDDRC_BACKUP_PATH" ]; then
-    mv "$PDDRC_BACKUP_PATH" "$PDDRC_PATH"
-    # Clean up sed backup file
-    rm -f "$PDDRC_PATH.tmp"
-    log "Restored .pddrc file"
-  fi
-  
+
   unset PDD_TEST_OUTPUT_PATH
 fi
 

@@ -65,7 +65,8 @@ def test_trace_main_success(mock_rprint, mock_trace, mock_construct_paths, mock_
         force=False,
         quiet=False,
         command="trace",
-        command_options={"output": output}
+        command_options={"output": output},
+        context_override=None
     )
     mock_trace.assert_called_once_with(
         "Code content here.",
@@ -224,7 +225,8 @@ def test_trace_main_no_output(mock_rprint, mock_trace, mock_construct_paths, moc
         force=False,
         quiet=False,
         command="trace",
-        command_options={"output": output}
+        command_options={"output": output},
+        context_override=None
     )
     mock_trace.assert_called_once_with(
         "Code content without output.",
@@ -283,7 +285,8 @@ def test_trace_main_quiet_mode(mock_rprint, mock_trace, mock_construct_paths, mo
         force=False,
         quiet=True,
         command="trace",
-        command_options={"output": output}
+        command_options={"output": output},
+        context_override=None
     )
     mock_trace.assert_called_once_with(
         "Quiet code content.",
@@ -339,7 +342,8 @@ def test_trace_main_force_overwrite(mock_rprint, mock_trace, mock_construct_path
         force=True,
         quiet=False,
         command="trace",
-        command_options={"output": output}
+        command_options={"output": output},
+        context_override=None
     )
     mock_trace.assert_called_once_with(
         "Force code content.",
@@ -395,7 +399,8 @@ def test_trace_main_zero_cost(mock_rprint, mock_trace, mock_construct_paths, moc
         force=False,
         quiet=False,
         command="trace",
-        command_options={"output": output}
+        command_options={"output": output},
+        context_override=None
     )
     mock_trace.assert_called_once_with(
         "Zero cost code content.",
@@ -455,7 +460,8 @@ def test_trace_main_missing_strength_temperature(mock_rprint, mock_trace, mock_c
         force=False,
         quiet=False,
         command="trace",
-        command_options={"output": output}
+        command_options={"output": output},
+        context_override=None
     )
     mock_trace.assert_called_once_with(
         "Missing params code content.",

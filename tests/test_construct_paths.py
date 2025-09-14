@@ -11,7 +11,7 @@ import os
 # Or mock within each test as currently done.
 
 # Import after potentially modifying sys.path
-from pdd.construct_paths import construct_paths
+from pdd.construct_paths import construct_paths, list_available_contexts
 
 # Helper to create absolute path for comparison
 def resolve_path(relative_path_str, base_dir):
@@ -596,6 +596,37 @@ def test_construct_paths_invalid_command(tmpdir):
                 input_file_paths, force, quiet, command, command_options
             )
     assert f"Unknown command '{command}'" in str(excinfo.value)
+
+
+# ---- Context listing tests (merged) ----
+
+def test_list_available_contexts_no_pddrc(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    names = list_available_contexts()
+    assert names == ["default"]
+
+
+def test_list_available_contexts_with_pddrc(tmp_path, monkeypatch):
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '  alt:\n'
+        '    paths: ["src/**"]\n'
+        '  dev:\n'
+        '    paths: ["dev/**"]\n'
+    )
+    monkeypatch.chdir(tmp_path)
+    names = list_available_contexts()
+    assert set(names) == {"default", "alt", "dev"}
+
+
+def test_list_available_contexts_malformed_pddrc(tmp_path, monkeypatch):
+    (tmp_path / ".pddrc").write_text('version: "1.0"\n')  # Missing contexts root
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ValueError):
+        list_available_contexts()
 
 
 def test_construct_paths_missing_command_options(tmpdir):
