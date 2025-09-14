@@ -35,7 +35,7 @@
 1. File Path Handling and Parameter Passing:
    - When calling `fix_verification_errors_loop`, pass the *content* of the `prompt_file`, the *path* to the `code_file`, the *path* to the `program_file`, the *path* to the `verification_program`, and the `llm_time` argument using the `time` value from `ctx.obj`. Also pass the path for the `verification_log_file` if provided. Do not pass output file paths to the loop.
    - When calling `fix_verification_errors`, read the contents of the files first and pass them as strings (including the combined program output), and pass the `time` value from `ctx.obj`.
-   - Use `construct_paths` to generate default output paths when not explicitly provided. If `construct_paths` raises an "invalid command" error for `verify`, fall back to manual handling: read input files and derive default paths, including `output_program`. For other `construct_paths` errors, print a formatted error and `sys.exit(1)`.
+   - Use `construct_paths` to generate default output paths when not explicitly provided. When calling `construct_paths`, pass `context_override=ctx.obj.get('context')` so a global `--context` is honored. If `construct_paths` raises an "invalid command" error for `verify`, fall back to manual handling: read input files and derive default paths, including `output_program`. For other `construct_paths` errors, print a formatted error and `sys.exit(1)`.
    - Ensure the final program content is written to the `output_program` path when one is resolved.
 
 2. Error Handling Requirements:

@@ -47,6 +47,7 @@
 % Here is the README for the cli command that has details of how the 'update' command and '--git' sub command work.
 % The `update_main` function should retrieve global options such as 'strength', 'temperature', 'verbose', 'quiet', 'force', and 'time' from the `ctx.obj` dictionary.
 % For 'time', retrieve it using `ctx.obj.get('time', DEFAULT_TIME)` and pass to `update_prompt` or `git_update` as a float (reasoning budget).
+% When calling `construct_paths`, pass `context_override=ctx.obj.get('context')` so a global `--context` is honored.
 % Note: If `--output` is not provided, `update_main` overwrites `input_prompt_file` in place rather than using a default-named file.
 % Note: If `--git` is used, do not provide `input_code_file`; if `--git` is not used, `input_code_file` must be provided.
    <cli_command_readme>

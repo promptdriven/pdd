@@ -68,7 +68,7 @@
           {"input_prompt": input_prompt_file, "input_code": input_code_file, "example_code": example_code_file}
         - Build `command_options` as:
           {"output_sub": output_sub, "output_modified": output_modified}
-        - Call `construct_paths(input_file_paths, force=ctx.obj.get('force', False), quiet=ctx.obj.get('quiet', False), command="split", command_options=command_options)` and capture `(resolved_config, input_strings, output_file_paths, _)`.
+        - Call `construct_paths(input_file_paths, force=ctx.obj.get('force', False), quiet=ctx.obj.get('quiet', False), command="split", command_options=command_options, context_override=ctx.obj.get('context'))` and capture `(resolved_config, input_strings, output_file_paths, _)`.
 
     2. Gather parameters and invoke split
         - Read `strength = ctx.obj.get('strength', 0.5)`, `temperature = ctx.obj.get('temperature', 0)`, `time = ctx.obj.get('time')`.

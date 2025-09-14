@@ -65,6 +65,7 @@
    3. **Construct File Paths**:
       - Prepare the `input_file_paths` dictionary for `construct_paths`. In CSV mode, only include `change_prompt_file`. In non-CSV mode, include `change_prompt_file`, `input_code`, and `input_prompt_file`.
       - Use `construct_paths` to load input file contents (except for `input_code` in CSV mode) and establish output file paths.
+      - When calling `construct_paths`, include `context_override=ctx.obj.get('context')` so a global `--context` is honored.
       - Pass `force`, `quiet`, `command="change"`, and `command_options` including the possibly provided `output` to `construct_paths`.
 
    4. **Perform Prompt Modification**:

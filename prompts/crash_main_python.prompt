@@ -37,6 +37,7 @@
     - On exceptions, print an error and exit the process with status code 1 (CLI behavior), rather than returning a tuple.
     - In non-loop mode, treat the operation as successful if the fixing routine completes without raising; success does not imply that files were modified.
     - When using `fix_code_loop`, map its return order `(success, final_program, final_code, attempts, total_cost, model)` to this function’s return order `(success, final_code, final_program, attempts, total_cost, model)`.
+    - When calling `construct_paths`, pass `context_override=ctx.obj.get('context')` so a global `--context` is honored.
 
 <examples>
    % Here is how to use the Python Click library to create a command line program:

@@ -161,7 +161,7 @@
        - Read content; expand includes with `preprocess(prompt, recursive=True, double_curly_brackets=False)`.
        - Apply variable substitution using `env_vars` (`$KEY` and `${KEY}` only when provided). Unknown placeholders remain unchanged.
        - After substitution, apply curly‑brace doubling if appropriate.
-    3. Determine the language using `construct_paths` (may infer from file extension, special cases, or filename suffix).
+    3. Determine the language using `construct_paths` (may infer from file extension, special cases, or filename suffix). When calling `construct_paths`, pass `context_override=ctx.obj.get('context')` so a global `--context` is honored.
     4. Determine whether to use incremental generation or full generation:
        - Check if output is specified and file exists
        - If original_prompt is specified, use it; otherwise try to get last committed version from git

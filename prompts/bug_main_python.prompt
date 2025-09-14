@@ -29,6 +29,7 @@
         - Load file contents into strings for generation.
         - Determine a default output path based on context/env/defaults.
         - Detect the `language` when the CLI `language` option is None.
+      When calling `construct_paths`, pass `context_override=ctx.obj.get('context')` so a global `--context` is honored.
     - Call `bug_to_unit_test` with parameters in this order:
         `(current_output_str, desired_output_str, prompt_str, code_str, program_str, strength, temperature, time, language)`.
     - Save to the resolved output path (creating parent directories if needed). Print model and cost when not quiet, and always print the generated unit test to the console. On failure, print an error (unless quiet) and exit with status code 1.

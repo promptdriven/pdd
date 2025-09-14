@@ -23,6 +23,7 @@
         • `command = "auto-deps"`
         • `command_options = {"output": output, "csv": auto_deps_csv_path}`
         • `force = ctx.obj.get('force', False)` and `quiet = ctx.obj.get('quiet', False)`
+        • `context_override = ctx.obj.get('context')` to honor a global `--context`
     - Resolve `csv_path` from `output_file_paths.get("csv", "project_dependencies.csv")`.
       Note: If the path constructor does not produce a `csv` entry, default to "project_dependencies.csv".
     - If `force_scan` is True and `Path(csv_path).exists()`, delete the CSV file before continuing.

@@ -49,7 +49,7 @@
     - When calling `fix_error_loop`, pass the original file paths (`code_file` and `unit_test_file`), `prompt` content, `verification_program`, `strength`, `temperature`, `max_attempts`, `budget`, `time`, `error_log_file` (from `output_file_paths`), and `verbose` directly.
     - When calling `fix_errors_from_unit_tests`, use the processed `input_strings` from `construct_paths` for `unit_test`, `code`, `prompt`, and `error`, and pass `error_file = output_file_paths['output_results']`, along with `strength`, `temperature`, `time`, and `verbose`.
     - In non-loop mode, pre‑validate the provided `error_file` exists before constructing paths; raise `FileNotFoundError` if missing.
-    - Call `construct_paths(..., create_error_file=loop)` so an empty error log is created only during loop mode.
+    - Call `construct_paths(..., create_error_file=loop, context_override=ctx.obj.get('context'))` so an empty error log is created only during loop mode and the global `--context` is honored.
     - Handle both fixing approaches appropriately based on the `--loop` parameter.
 
 3.  Error Handling Requirements:

@@ -24,6 +24,7 @@
 %      input_file_paths: {prompt_file, code_file, and optionally coverage_report, existing_tests}
 %      command_options: {output, language, merge, target_coverage}
 %      along with ctx.obj['force'], ctx.obj['quiet'], and command="test".
+%      When calling `construct_paths`, include `context_override=ctx.obj.get('context')` so a global `--context` is honored.
 %  - If 'coverage_report' is NOT provided: call `generate_test(prompt, code, strength, temperature, time, language, verbose)`.
 %  - If 'coverage_report' IS provided: require 'existing_tests'; otherwise print a Rich error and `ctx.exit(1)`. If provided, call
 %    `increase_tests(existing_unit_tests, coverage_report, code, prompt_that_generated_code, language, strength, temperature, time, verbose)`.
