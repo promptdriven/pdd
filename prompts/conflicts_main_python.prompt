@@ -56,24 +56,28 @@
 
    3. **Load Input Files**:
       - Read the contents of `prompt1` and `prompt2`.
+      - Use the `input_strings` returned by `construct_paths` to access file contents, for example: `prompt1_content = input_strings['prompt1']` and `prompt2_content = input_strings['prompt2']`.
 
    4. **Analyze Conflicts**:
-      - Call the `conflicts_in_prompts` function with the contents of the prompt files, along with the necessary parameters (e.g., strength, temperature, time, verbose).
+      - Call the `conflicts_in_prompts` function with the contents of the prompt files, along with the necessary parameters (strength, temperature, time, verbose).
+      - Explicit call signature: `conflicts, total_cost, model_name = conflicts_in_prompts(prompt1_content, prompt2_content, strength, temperature, time, verbose)`.
       - Capture the returned conflicts list, total cost, and model name.
       - Important: Use `ctx.obj.get('strength', DEFAULT_STRENGTH)`, `ctx.obj.get('temperature', 0)`, and `ctx.obj.get('time', DEFAULT_TIME)` to get these values.
-      - Pass the verbose parameter to control detailed output during analysis.
+      - Pass the `verbose` parameter provided to `conflicts_main` to control detailed output during analysis.
 
-   5. **Replace prompt1 and prompt2 with the actual file paths**:
-      - Replace the `prompt_1` and `prompt_2` strings with the actual file paths in the conflicts list for the 'prompt_name' column.
+   5. **Replace prompt1 and prompt2 with CLI paths**:
+      - Replace the `prompt_1` and `prompt_2` values with the CLI-supplied `prompt1` and `prompt2` paths in the conflicts list for the `prompt_name` field.
 
    6. **Save Results**:
       - Write the conflicts list to a CSV file using the `csv` module.
-      - Include headers and ensure proper formatting.
+      - Write to `output_file_paths['output']` returned by `construct_paths`.
+      - Include headers `['prompt_name', 'change_instructions']` and ensure proper formatting.
 
    7. **Provide User Feedback**:
       - Use `rprint` from Rich to display messages to the user, indicating success or failure.
-      - Respect the verbosity levels determined by the `--quiet` option.
+      - Gate success/status messages (completion, model used, total cost, results path) behind `not ctx.obj.get('quiet', False)`.
+      - Always print the final conflicts section (e.g., "Conflicts detected" and the list of conflicts), even when `--quiet` is enabled.
 
    8. **Error Handling**:
       - Wrap the main logic in a `try-except` block.
-      - Catch exceptions, display error messages, and exit gracefully using `sys.exit(1)` if necessary.
+      - Catch exceptions, display error messages (suppress the error text when `--quiet` is enabled), and exit gracefully using `sys.exit(1)` if necessary.

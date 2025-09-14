@@ -25,14 +25,18 @@
             - `str`: The name of the model used
 
 % Important implementation details:
-    - The function should track whether the code and program files were actually modified during the fixing process
-    - Only write output files if their contents have actually changed from the original
-    - Provide user feedback that accurately reflects which files were modified and saved
-    - Compare final contents with original contents to determine if updates occurred
-    - Update the feedback messages to only show save locations for files that were actually modified
-    - **Handle cases where the fixing process returns empty strings for the fixed code or program. If an empty string is returned, consider the file *not* updated, even if the original file was also empty.** This avoids incorrectly flagging a file as modified.
+    - The function should track whether the code and program files were actually modified during the fixing process.
+    - If output paths are provided, always write the output files. Additionally, compare the final contents with the originals to determine whether each file actually changed and report that status.
+    - Provide user feedback that accurately reflects which files were modified and saved. Always show save locations when output paths are provided; indicate per-file whether it was modified or not.
+    - Compare final contents with original contents to determine if updates occurred.
+    - **Handle cases where the fixing process returns empty strings for the fixed code or program. If an empty string is returned, consider the file not updated, even if the original file was also empty. If output paths are provided, write the original contents to those outputs but still report the file as not updated.**
+    - Use both `quiet` and `verbose` from the Click context. If `quiet` is True, suppress output. Otherwise, print a concise summary; if `verbose` is True, include detailed logs.
     - The default value of `strength` should use the `DEFAULT_STRENGTH` constant imported from the pdd module.
-    - Retrieve `time = ctx.obj.get('time', DEFAULT_TIME)` from the Click context, where `DEFAULT_TIME` is a constant (e.g., imported from the pdd module or defined appropriately, potentially as `None` if not set). This `time` variable should be passed to `fix_code_module_errors` or `fix_code_loop`.
+    - Retrieve `temperature = ctx.obj.get('temperature', DEFAULT_TEMPERATURE)` from the Click context, where `DEFAULT_TEMPERATURE` is imported from the pdd module.
+    - Retrieve `time = ctx.obj.get('time', DEFAULT_TIME)` from the Click context, where `DEFAULT_TIME` is a constant (imported from the pdd module). Pass `time` to `fix_code_module_errors` or `fix_code_loop`.
+    - On exceptions, print an error and exit the process with status code 1 (CLI behavior), rather than returning a tuple.
+    - In non-loop mode, treat the operation as successful if the fixing routine completes without raising; success does not imply that files were modified.
+    - When using `fix_code_loop`, map its return order `(success, final_program, final_code, attempts, total_cost, model)` to this function’s return order `(success, final_code, final_program, attempts, total_cost, model)`.
 
 <examples>
    % Here is how to use the Python Click library to create a command line program:
@@ -49,199 +53,12 @@
 
       - Here is an example of how to use the `fix_code_module_errors` function:
       <fix_code_module_errors_example>
-      ```python
-      from typing import Tuple, Optional
-      import datetime # Assuming datetime is used for the time parameter
-
-      # Assume DEFAULT_STRENGTH and DEFAULT_TEMPERATURE are defined elsewhere
-      # For example:
-      # DEFAULT_STRENGTH = 0.5
-      # DEFAULT_TEMPERATURE = 0.1
-      # DEFAULT_TIME = None # Or a specific default datetime object
-
-      def fix_code_module_errors(
-          program_content: str,
-          prompt_content: str,
-          code_content: str,
-          error_content: str,
-          strength: float,
-          temperature: float,
-          verbose: bool = False,
-          time: Optional[datetime.datetime] = None  # Added time parameter
-      ) -> Tuple[bool, bool, str, str, str, float, str]:
-          """
-          Fixes errors in a code module based on program errors.
-
-          Inputs:
-              - 'program_content' (str): Content of the program that called the code module.
-              - 'prompt_content' (str): Content of the prompt used to generate the code module.
-              - 'code_content' (str): Content of the code module with errors.
-              - 'error_content' (str): Error messages from the program run.
-              - 'strength' (float): Strength parameter for the LLM.
-              - 'temperature' (float): Temperature parameter for the LLM.
-              - 'verbose' (bool): If True, print detailed logs.
-              - 'time' (Optional[datetime.datetime]): Timestamp for the operation.
-
-          Outputs:
-              - 'update_program' (bool): Whether the program content was updated.
-              - 'update_code' (bool): Whether the code module content was updated.
-              - 'fixed_program' (str): The fixed program content.
-              - 'fixed_code' (str): The fixed code module content.
-              - 'program_code_fix' (str): LLM analysis or explanation of fixes.
-              - 'cost' (float): Cost of the LLM operation.
-              - 'model_name' (str): Name of the LLM used.
-          """
-          # Placeholder implementation
-          print(f"Fixing errors with strength={strength}, temperature={temperature}, verbose={verbose}, time={time}")
-          # Simulate LLM call and fixing logic
-          fixed_program_content = program_content # Placeholder
-          fixed_code_module_content = code_content # Placeholder
-          llm_analysis = "LLM analysis of fixes." # Placeholder
-          cost_of_operation = 0.01 # Placeholder
-          model_used = "gpt-4o-mini" # Placeholder
-          
-          # Determine if updates occurred (simplified)
-          program_updated = fixed_program_content != program_content
-          code_updated = fixed_code_module_content != code_content
-          
-          return program_updated, code_updated, fixed_program_content, fixed_code_module_content, llm_analysis, cost_of_operation, model_used
-
-      # Example usage:
-      if __name__ == "__main__":
-          current_time = datetime.datetime.now()
-          update_program, update_code, fixed_program, fixed_code, program_code_fix, cost, model_name = fix_code_module_errors(
-              program_content="def main():\n    result = my_module.add(1, 'a')\n    print(result)",
-              prompt_content="Create a Python module with an add function.",
-              code_content="def add(x, y):\n    return x + y",
-              error_content="TypeError: unsupported operand type(s) for +: 'int' and 'str'",
-              strength=0.7,
-              temperature=0.2,
-              verbose=True,
-              time=current_time
-          )
-          print(f"Program updated: {update_program}")
-          print(f"Code updated: {update_code}")
-          print(f"Fixed Program:\n{fixed_program}")
-          print(f"Fixed Code:\n{fixed_code}")
-          print(f"LLM Analysis:\n{program_code_fix}")
-          print(f"Cost: ${cost:.4f}")
-          print(f"Model: {model_name}")
-      ```
+      <include>context/fix_code_module_errors_example.py</include>
       </fix_code_module_errors_example>
 
       - Here is an example of how to use the `fix_code_loop` function:
       <fix_code_loop_example>
-      ```python
-      from typing import Tuple, Optional
-      import datetime # Assuming datetime is used for the time parameter
-
-      def fix_code_loop(
-          code_file_path: str,
-          prompt_content: str,
-          program_file_path: str,
-          strength: float,
-          temperature: float,
-          max_attempts: int,
-          budget: float,
-          error_file_path: str, # Path to the error log file
-          verbose: bool = False,
-          time: Optional[datetime.datetime] = None # Added time parameter
-      ) -> Tuple[bool, str, str, int, float, str]:
-          """
-          Iteratively attempts to fix errors in a code module.
-
-          Inputs:
-              - 'code_file_path' (str): Path to the code module file.
-              - 'prompt_content' (str): Content of the prompt used for generation.
-              - 'program_file_path' (str): Path to the program file that uses the module.
-              - 'strength' (float): LLM strength parameter.
-              - 'temperature' (float): LLM temperature parameter.
-              - 'max_attempts' (int): Maximum number of fix iterations.
-              - 'budget' (float): Maximum cost allowed for fixing.
-              - 'error_file_path' (str): Path to the file containing error messages from program execution.
-              - 'verbose' (bool): If True, print detailed logs.
-              - 'time' (Optional[datetime.datetime]): Timestamp for the operation.
-
-          Outputs:
-              - 'success' (bool): True if errors were fixed within budget/attempts.
-              - 'final_program_content' (str): Content of the fixed program.
-              - 'final_code_content' (str): Content of the fixed code module.
-              - 'attempts_made' (int): Number of iterations performed.
-              - 'total_cost' (float): Total cost incurred.
-              - 'model_name' (str): Name of the LLM used.
-          """
-          # Placeholder implementation for the example
-          print(f"Starting fix loop for {code_file_path} and {program_file_path} with time={time}")
-          print(f"Max attempts: {max_attempts}, Budget: ${budget:.2f}")
-          
-          # Simulate reading initial file contents
-          try:
-              with open(code_file_path, 'r') as f:
-                  current_code_content = f.read()
-              with open(program_file_path, 'r') as f:
-                  current_program_content = f.read()
-          except FileNotFoundError:
-              print("Error: One or more files not found.")
-              return False, "", "", 0, 0.0, "N/A"
-
-          attempts = 0
-          cumulative_cost = 0.0
-          
-          # This is a simplified loop for demonstration
-          # A real implementation would involve running the program, capturing errors,
-          # and calling an LLM to fix them.
-          for i in range(max_attempts):
-              attempts += 1
-              print(f"Attempt {attempts} at {time if time else datetime.datetime.now()}")
-              
-              # Simulate calling fix_code_module_errors or similar
-              # For this example, we'll just pretend a fix attempt was made
-              cost_of_this_attempt = 0.05 # Simulated cost
-              cumulative_cost += cost_of_this_attempt
-              
-              if cumulative_cost > budget:
-                  print("Budget exceeded.")
-                  return False, current_program_content, current_code_content, attempts, cumulative_cost, "model_placeholder"
-
-              # Simulate a successful fix after a few attempts
-              if attempts >= 2: 
-                  print("Simulated successful fix.")
-                  # Modify content slightly to show change
-                  current_code_content += "\n# Fixed by fix_code_loop"
-                  current_program_content += "\n# Verified by fix_code_loop"
-                  return True, current_program_content, current_code_content, attempts, cumulative_cost, "model_placeholder"
-          
-          print("Max attempts reached without a successful fix.")
-          return False, current_program_content, current_code_content, attempts, cumulative_cost, "model_placeholder"
-
-      # Example usage:
-      if __name__ == "__main__":
-          # Create dummy files for the example to run
-          with open("dummy_code.py", "w") as f:
-              f.write("def greet(name):\n    return f'Hell, {name}!' # Intentional typo")
-          with open("dummy_program.py", "w") as f:
-              f.write("import dummy_code\nprint(dummy_code.greet('World'))")
-          with open("dummy_error.log", "w") as f:
-              f.write("SyntaxError: invalid syntax on 'Hell,'")
-
-          current_time = datetime.datetime.now()
-          success, final_program, final_code, attempts, total_cost, model_name = fix_code_loop(
-              code_file_path="dummy_code.py",
-              prompt_content="A module to greet users.",
-              program_file_path="dummy_program.py",
-              strength=0.6,
-              temperature=0.3,
-              max_attempts=3,
-              budget=0.50,
-              error_file_path="dummy_error.log",
-              verbose=True,
-              time=current_time
-          )
-          print(f"\nLoop completed. Success: {success}")
-          print(f"Attempts: {attempts}, Total Cost: ${total_cost:.4f}, Model: {model_name}")
-          print(f"Final Program Content:\n{final_program}")
-          print(f"Final Code Content:\n{final_code}")
-      ```
+      <include>context/fix_code_loop_example.py</include>
       </fix_code_loop_example>
    </internal_example_modules>
 </examples>
@@ -251,4 +68,4 @@
    <include>./README.md</include>
    </cli_command_readme>
 
-% Note: The function should use the `verbose` parameter from the Click context to control the verbosity of the fixing process. If `verbose` is True, the function should output detailed information about the fixing process. This replaces the previous `quiet` parameter, which suppressed output when set to True.
+% Note: Respect both `quiet` and `verbose` from the Click context. If `quiet` is True, suppress output. Otherwise, print a summary; if `verbose` is True, include additional detail.

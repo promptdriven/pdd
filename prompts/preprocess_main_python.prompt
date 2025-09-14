@@ -1,4 +1,4 @@
-% You are an expert Python engineer. Your goal is to write a Python function, 'preprocess_main', that will be the CLI wrapper for preprocessing prompts. This function will read a prompt file, preprocess its contents using the preprocess function, and handle the output location.
+% You are an expert Python engineer. Your goal is to write a Python function, 'preprocess_main', that will be the CLI wrapper for preprocessing prompts. This function will read a prompt file, preprocess its contents using the preprocess function (or XML-tagging flow), and handle the output location.
 
 <include>./context/python_preamble.prompt</include>
 
@@ -8,6 +8,9 @@
         - 'prompt_file' - A string containing the path to the prompt file to preprocess.
         - 'output' - An optional string containing the path where to save the preprocessed prompt. If None, uses default naming convention.
         - 'xml' - A boolean that is True if XML delimiters should be automatically inserted for better structure. Default is False.
+        - 'recursive' - A boolean to recursively preprocess includes. Default is False.
+        - 'double' - A boolean to enable double-curly-brace doubling. Default is False.
+        - 'exclude' - An optional list of strings indicating keys to exclude from curly brace doubling.
     Outputs:
         - Returns a tuple containing (`str`, `float`, `str`):
             - `str`: The preprocessed prompt.
@@ -33,7 +36,7 @@
       </preprocess_example>
 
       - Here is an example of how to use the `xml_tagger` function.
-        Note: The `xml_tagger` function is expected to accept an additional `time: Optional[str]` parameter, representing a time budget for the tagging operation, alongside `raw_prompt`, `strength`, `temperature`, and `verbose`. The signature would be similar to: `xml_tagger(raw_prompt: str, strength: float, temperature: float, verbose: bool, time: Optional[str]) -> Tuple[str, float, str]`.
+        Note: The `xml_tagger` function accepts a `time: float` parameter (0.0–1.0) representing a time budget for the tagging operation, alongside `raw_prompt`, `strength`, `temperature`, and `verbose`. The signature is: `xml_tagger(raw_prompt: str, strength: float, temperature: float, verbose: bool, time: float = DEFAULT_TIME) -> Tuple[str, float, str]`. Internally, it may use a fixed `EXTRACTION_STRENGTH` for extraction.
       <xml_tagger_example>
       <include>context/xml_tagger_example.py</include>
       </xml_tagger_example>
@@ -42,20 +45,21 @@
 
 % Here is the README for the cli command that has details of how the 'preprocess' command and '--xml' sub command work.
 % The 'preprocess_main' function should implement the following logic:
-    1. Use `construct_paths` to determine input and output file paths.
-    2. Load the content of the `prompt_file`.
-    3. If the `xml` boolean input is True:
+    1. Use `construct_paths` to determine input and output file paths:
+        - Call `construct_paths` with `input_file_paths={"prompt_file": prompt_file}`, `command="preprocess"`, `command_options={"output": output}`, and pass through `force`/`quiet` from `ctx.obj`.
+    2. Load the content of the `prompt_file` from `input_strings["prompt_file"]`.
+    3. If `xml` is True:
         a. Retrieve global options from `ctx.obj`:
-            - `strength = ctx.obj.get("strength", 0.5)`
+            - `strength = ctx.obj.get("strength", DEFAULT_STRENGTH)`
             - `temperature = ctx.obj.get("temperature", 0.0)`
             - `verbose = ctx.obj.get("verbose", False)`
-            - `time = ctx.obj.get("time", "10m")` (use "10m" as DEFAULT_TIME if not provided)
-        b. Call the `xml_tagger` function, passing the loaded prompt content, and the retrieved `strength`, `temperature`, `verbose`, and `time` values.
-        c. The result from `xml_tagger` (tagged prompt, cost, model name) will be used as the output of `preprocess_main`.
-    4. If the `xml` boolean input is False:
-        a. Call the `preprocess` function with the loaded prompt content and other relevant parameters (`recursive`, `double`, `exclude` which should be passed to `preprocess_main` if they are CLI options for this command).
-        b. Set `total_cost` to 0.0 and `model_name` to "N/A".
-    5. Save the resulting preprocessed (or XML-tagged) prompt to the determined output file path.
+            - `time = ctx.obj.get("time", DEFAULT_TIME)`
+        b. Call `xml_tagger(prompt, strength, temperature, verbose, time=time)`.
+        c. Use the result from `xml_tagger` (tagged prompt, cost, model name).
+    4. If `xml` is False:
+        a. Call `preprocess(prompt, recursive=recursive, double_curly_brackets=double, exclude_keys=exclude)`.
+        b. Set `total_cost = 0.0` and `model_name = "N/A"`.
+    5. Save the resulting preprocessed (or XML-tagged) prompt to `output_file_paths["output"]`.
     6. Print success messages and cost/model information if not in `quiet` mode.
     7. Handle exceptions gracefully and exit with a non-zero status code if an error occurs.
    <cli_command_readme>

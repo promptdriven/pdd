@@ -2,6 +2,17 @@
 
 <include>context/python_preamble.prompt</include>
 
+% Function signature and contract (implementation-aligned):
+    Signature:
+        def split_main(
+            ctx: click.Context,
+            input_prompt_file: str,
+            input_code_file: str,
+            example_code_file: str,
+            output_sub: Optional[str],
+            output_modified: Optional[str],
+        ) -> Tuple[Dict[str, str], float, str]
+
 % Here are the inputs and outputs of the function:
     Inputs:
         - `ctx` (`click.Context`): The Click context object containing CLI options and parameters.
@@ -20,6 +31,13 @@
             - `float`: The total cost of the operation
             - `str`: The model name used
 
+% Context options consumed (from `ctx.obj`):
+    - `force` (bool, default False)
+    - `quiet` (bool, default False) – controls printing with Rich
+    - `strength` (float, default 0.5)
+    - `temperature` (float, default 0)
+    - `time` (Optional[str], default None)
+
 % Example for using the Python Click library:
         <click_example>
             <include>context/click_example.py</include>
@@ -27,88 +45,11 @@
 
 % Here is how to use the internal modules:
     <internal_modules>
-        For spltting prompts:
+        For splitting prompts:
         <split_example>
-```python
-# pdd/pdd/split_example.py (or equivalent content for the prompt)
-import os
-from rich import print as rprint
-
-# Assuming 'split' function is in 'pdd.split' or similar.
-# For this example, we might define a mock or refer to its expected signature.
-# Actual import would be: from pdd.split import split
-
-# Mock split function for demonstration of signature
-def split(input_prompt: str, input_code: str, example_code: str,
-          strength: float, temperature: float, verbose: bool = False, time: str = "30m"): # Added time
-    """
-    Mock function to simulate splitting a prompt, showing expected signature.
-    """
-    if verbose:
-        rprint(f"Mock split called with: strength={strength}, temp={temperature}, verbose={verbose}, time={time}")
-    # Simulate some processing
-    sub_prompt_content = f"<sub_prompt>\nBased on: {input_prompt[:30]}...\nAnd code: {input_code[:30]}...\n</sub_prompt>"
-    modified_prompt_content = f"<modified_prompt>\nOriginal prompt less the sub_prompt part.\nExample usage: {example_code[:30]}...\n</modified_prompt>"
-    total_cost_val = 0.00123 * strength + temperature * 0.0001 # Dummy cost
-    model_name_str = "mock_model_v1_with_time"
-
-    # Standardized return: ( (result_data_tuple), cost, model_name )
-    return (sub_prompt_content, modified_prompt_content), total_cost_val, model_name_str
-# --- End of Mock ---
-
-# Define dummy inputs for the example
-input_prompt_content = """
-You are a helpful AI assistant.
-Please write a Python function that adds two numbers.
-Also provide an example of how to use this function.
-"""
-input_code_content = """
-def add(a, b):
-    return a + b
-
-# Example usage:
-# result = add(5, 3)
-# print(result)
-"""
-example_code_content = """
-# Example of using the add function:
-sum_val = add(10, 20)
-print(f"The sum is: {sum_val}")
-"""
-strength_value = 0.5
-temperature_value = 0.0
-verbose_flag = True
-time_value = "1h" # Example time value for the split function
-
-# Simulate PDD_PATH if your actual split function needs it
-# os.environ['PDD_PATH'] = '.' # Example, if needed by the actual split
-
-try:
-    # Call the split function, now including the 'time' argument
-    # The split function is expected to return a tuple:
-    # ( (sub_prompt_content, modified_prompt_content), total_cost, model_name )
-    result_data, total_cost, model_name = split(
-        input_prompt=input_prompt_content,
-        input_code=input_code_content,
-        example_code=example_code_content,
-        strength=strength_value,
-        temperature=temperature_value,
-        verbose=verbose_flag,
-        time=time_value  # New time argument passed here
-    )
-
-    sub_prompt, modified_prompt = result_data # Unpack the result_data tuple
-
-    rprint("[bold green]Split successful (example)![/bold green]")
-    rprint(f"[bold]Sub Prompt:[/bold]\n{sub_prompt}")
-    rprint(f"[bold]Modified Prompt:[/bold]\n{modified_prompt}")
-    rprint(f"[bold]Total Cost:[/bold] ${total_cost:.6f}")
-    rprint(f"[bold]Model Name:[/bold] {model_name}")
-
-except Exception as e:
-    rprint(f"[bold red]An error occurred during split example:[/bold red] {e}")
-```
+            <include>context/split_example.py</include>
         </split_example>
+
 
         For constructing output paths:
         <construct_paths_example>
@@ -120,3 +61,29 @@ except Exception as e:
    <cli_command_readme>
    <include>./README.md</include>
    </cli_command_readme>
+
+% Implementation Steps:
+    1. Construct paths and read inputs
+        - Build `input_file_paths` as:
+          {"input_prompt": input_prompt_file, "input_code": input_code_file, "example_code": example_code_file}
+        - Build `command_options` as:
+          {"output_sub": output_sub, "output_modified": output_modified}
+        - Call `construct_paths(input_file_paths, force=ctx.obj.get('force', False), quiet=ctx.obj.get('quiet', False), command="split", command_options=command_options)` and capture `(resolved_config, input_strings, output_file_paths, _)`.
+
+    2. Gather parameters and invoke split
+        - Read `strength = ctx.obj.get('strength', 0.5)`, `temperature = ctx.obj.get('temperature', 0)`, `time = ctx.obj.get('time')`.
+        - Call `result_tuple, total_cost, model_name = split(input_prompt=input_strings["input_prompt"], input_code=input_strings["input_code"], example_code=input_strings["example_code"], strength=strength, temperature=temperature, time=time, verbose=not ctx.obj.get('quiet', False))`.
+        - Unpack `sub_prompt, modified_prompt = result_tuple`.
+
+    3. Persist outputs
+        - Write `sub_prompt` to `output_file_paths["output_sub"]`.
+        - Write `modified_prompt` to `output_file_paths["output_modified"]`.
+
+    4. User feedback (respect `quiet`)
+        - If not quiet, print success message, saved paths, model name, and total cost using Rich.
+
+    5. Return values
+        - Return `(result_data, total_cost, model_name)` where `result_data` is a dict with keys: `sub_prompt_content`, `modified_prompt_content`, `output_sub`, `output_modified`.
+
+    6. Error handling
+        - Wrap the main body in `try/except`. On exception, if not quiet, print an error message and add hint lines for common cases (`FileNotFoundError`, `IOError`, `ValueError`). Then `sys.exit(1)`.

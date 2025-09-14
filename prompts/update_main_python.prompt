@@ -7,14 +7,17 @@
         - `ctx` (`click.Context`): The Click context object containing CLI options and parameters. This object is expected to provide global options like 'strength', 'temperature', 'verbose', 'quiet', 'force', and 'time' via `ctx.obj.get(<option_name>, <default_value>)`.
         - `input_prompt_file` - A string containing the path to the original prompt file.
         - `modified_code_file` - A string containing the path to the modified code file.
-        - `input_code_file` - An optional string containing the path to the original code file. If not provided, Git history will be used to retrieve the original code.
-        - `output` - An optional string containing the path where to save the updated prompt. If None, uses default naming convention.
-        - `git` - A boolean that is True if Git history should be used to retrieve the original code. Default is False.
+        - `input_code_file` - An optional string containing the path to the original code file. If not provided, you must set `git=True` to retrieve the original code from Git; otherwise, this is an error.
+        - `output` - An optional string containing the path where to save the updated prompt. If None, the original prompt file is overwritten in place.
+        - `git` - A boolean that is True if Git history should be used to retrieve the original code. Default is False. If `git=True`, do not provide `input_code_file`. If `git=False`, `input_code_file` is required.
     Outputs:
         - Returns a tuple containing (`str`, `float`, `str`):
             - `str`: The updated prompt.
             - `float`: The total cost of the operation.
             - `str`: The name of the model used.
+
+% Error handling behavior:
+% - On invalid inputs or unexpected errors, the function prints a Rich-formatted error message (unless `--quiet`) and exits the process with status code 1 using `sys.exit(1)`.
 
 <examples>
    % Here is how to use the Python Click library to create a command line program:
@@ -29,98 +32,23 @@
       <include>context/construct_paths_example.py</include>
       </construct_paths_example>
 
-      - Here is an example of how to use the `update_prompt` function (now including the `time` parameter):
+      - Here is an example of how to use the `update_prompt` function:
       <update_prompt_example>
-      ```python
-from typing import Tuple, Optional
-# Assume update_prompt is defined elsewhere, e.g.:
-# def update_prompt(
-#     input_prompt: str,
-#     input_code: str,
-#     modified_code: str,
-#     strength: float,
-#     temperature: float,
-#     verbose: bool,
-#     time: Optional[str] = None  # New time parameter
-# ) -> Tuple[str, float, str]:
-#     # ... implementation ...
-#     print(f"update_prompt called with time: {time}")
-#     return "updated_prompt_example_content", 0.001, "gpt-4o-mini"
-
-def example_usage_update_prompt_with_time():
-    input_prompt_content = "Original prompt text..."
-    original_code_content = "def hello():\n  print('world')"
-    modified_code_content = "def hello_new():\n  print('new world')"
-    strength = 0.5
-    temperature = 0.0
-    verbose = True
-    time_period = "last 2 weeks" # Example time value
-
-    # updated_prompt_str, cost, model = update_prompt(
-    #     input_prompt=input_prompt_content,
-    #     input_code=original_code_content,
-    #     modified_code=modified_code_content,
-    #     strength=strength,
-    #     temperature=temperature,
-    #     verbose=verbose,
-    #     time=time_period # Pass the time argument
-    # )
-    # print(f"Updated prompt: {updated_prompt_str[:100]}...")
-    # print(f"Cost: {cost}")
-    # print(f"Model: {model}")
-    pass
-
-# example_usage_update_prompt_with_time()
-      ```
+      <include>context/update_prompt_example.py</include>
       </update_prompt_example>
 
-      - Here is an example of how to use the `git_update` function (now including the `time` parameter):
+      - Here is an example of how to use the `git_update` function:
       <git_update_example>
-      ```python
-from typing import Tuple, Optional
-# Assume git_update is defined elsewhere, e.g.:
-# def git_update(
-#     input_prompt: str,
-#     modified_code_file: str,
-#     strength: float,
-#     temperature: float,
-#     verbose: bool,
-#     time: Optional[str] = None  # New time parameter
-# ) -> Tuple[str, float, str]:
-#     # ... implementation ...
-#     print(f"git_update called for {modified_code_file} with time: {time}")
-#     return "git_updated_prompt_example_content", 0.002, "gpt-4o-mini"
-
-def example_usage_git_update_with_time():
-    input_prompt_content = "Original prompt text for git update..."
-    modified_code_filepath = "path/to/your/modified_code.py"
-    strength = 0.6
-    temperature = 0.1
-    verbose = False
-    time_since = "3 months ago" # Example time value
-
-    # updated_prompt_str, cost, model = git_update(
-    #     input_prompt=input_prompt_content,
-    #     modified_code_file=modified_code_filepath,
-    #     strength=strength,
-    #     temperature=temperature,
-    #     verbose=verbose,
-    #     time=time_since # Pass the time argument
-    # )
-    # print(f"Git Updated prompt: {updated_prompt_str[:100]}...")
-    # print(f"Cost: {cost}")
-    # print(f"Model: {model}")
-    pass
-
-# example_usage_git_update_with_time()
-      ```
+      <include>context/git_update_example.py</include>
       </git_update_example>
    </internal_example_modules>
 </examples>
 
 % Here is the README for the cli command that has details of how the 'update' command and '--git' sub command work.
 % The `update_main` function should retrieve global options such as 'strength', 'temperature', 'verbose', 'quiet', 'force', and 'time' from the `ctx.obj` dictionary.
-% For 'time', it should be retrieved using `ctx.obj.get('time', None)` (or a suitable default like "any" or "latest" if `None` is not appropriate for the underlying functions) and passed to `update_prompt` or `git_update`.
+% For 'time', retrieve it using `ctx.obj.get('time', DEFAULT_TIME)` and pass to `update_prompt` or `git_update` as a float (reasoning budget).
+% Note: If `--output` is not provided, `update_main` overwrites `input_prompt_file` in place rather than using a default-named file.
+% Note: If `--git` is used, do not provide `input_code_file`; if `--git` is not used, `input_code_file` must be provided.
    <cli_command_readme>
    <include>./README.md</include>
    </cli_command_readme>

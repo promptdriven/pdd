@@ -19,6 +19,15 @@
     Notes:
     - If no matching prompt line is found (or an error occurs), the function prints an error message (unless `--quiet`) and exits via `ctx.exit(1)`; it does not return `None`.
 
+% Function signature:
+    def trace_main(
+        ctx: click.Context,
+        prompt_file: str,
+        code_file: str,
+        code_line: int,
+        output: Optional[str]
+    ) -> Tuple[int, float, str]:
+
 <examples>
    % Here is how to use the Python Click library to create a command line program:
    <click_example>
@@ -36,6 +45,7 @@
       <trace_example>
          <include>context/trace_example.py</include>
       </trace_example>
+
    </internal_example_modules>
 </examples>
 
@@ -51,7 +61,7 @@
 
    3. **Perform Trace Analysis**:
       - Retrieve `strength = ctx.obj.get('strength', DEFAULT_STRENGTH)`, `temperature = ctx.obj.get('temperature', DEFAULT_TEMPERATURE)`, and `time = ctx.obj.get('time', DEFAULT_TIME)`.
-      - Call `trace` as: `prompt_line, total_cost, model_name = trace(code_content, code_line, prompt_content, strength, temperature, time=time)`.
+      - Invoke the `trace` function with the resolved code and prompt contents plus `strength`, `temperature`, and `time`, and capture `prompt_line`, `total_cost`, and `model_name`.
       - Capture the returned prompt line (`int`), total cost (`float`), and model name (`str`).
       - Do not pass a `verbose` flag to `trace`; CLI messaging uses Rich and respects `--quiet`.
 
@@ -66,12 +76,13 @@
    5. **Provide User Feedback**:
       - Use `rprint` from the Rich library to display messages.
       - Respect `--quiet`.
+      - Messages may use Rich markup for styling (colors, bold, etc.).
       - On success, print:
         - "Trace Analysis Complete"
         - "Corresponding prompt line: {prompt_line}"
         - "Total cost: ${total_cost:.6f}"
         - "Model used: {model_name}"
-      - If `prompt_line` is not found, print "Trace analysis failed" and exit via `ctx.exit(1)`.
+      - If `prompt_line` is `None` (no match), print "Trace analysis failed" and exit via `ctx.exit(1)`.
 
    6. **Error Handling**:
       - Wrap the main logic in a `try-except` block.
@@ -80,4 +91,4 @@
         - `ValueError` (invalid inputs to `trace`): print "Invalid input: ..."
         - Other exceptions: print "An unexpected error occurred: ..."
 
-% Ensure that the function adheres to the existing codebase's coding style, including proper typing annotations, docstrings, and exception handling. Import defaults as `from pdd import DEFAULT_STRENGTH, DEFAULT_TEMPERATURE, DEFAULT_TIME`.
+% Ensure that the function adheres to the existing codebase's coding style, including proper typing annotations, docstrings, and exception handling. Import defaults as either `from pdd import DEFAULT_STRENGTH, DEFAULT_TEMPERATURE, DEFAULT_TIME` or `from . import DEFAULT_STRENGTH, DEFAULT_TEMPERATURE, DEFAULT_TIME` depending on module context. Internal `logging` usage is acceptable as long as user-facing output still respects `--quiet`.
