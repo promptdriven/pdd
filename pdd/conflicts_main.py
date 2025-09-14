@@ -33,7 +33,8 @@ def conflicts_main(ctx: click.Context, prompt1: str, prompt2: str, output: Optio
             force=ctx.obj.get('force', False),
             quiet=ctx.obj.get('quiet', False),
             command="conflicts",
-            command_options=command_options
+            command_options=command_options,
+            context_override=ctx.obj.get('context')
         )
 
         # Load input files

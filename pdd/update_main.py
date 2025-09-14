@@ -48,6 +48,7 @@ def update_main(
             quiet=ctx.obj.get("quiet", False),
             command="update",
             command_options=command_options,
+            context_override=ctx.obj.get('context')
         )
 
         # Extract input strings

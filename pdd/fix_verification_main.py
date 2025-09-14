@@ -204,6 +204,7 @@ def fix_verification_main(
             quiet=quiet,
             command="verify",
             command_options=command_options,
+            context_override=ctx.obj.get('context')
         )
         output_code_path = output_file_paths.get("output_code")
         output_results_path = output_file_paths.get("output_results")

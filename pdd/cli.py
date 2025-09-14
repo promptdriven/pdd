@@ -76,7 +76,7 @@ def handle_error(exception: Exception, command_name: str, quiet: bool):
 
 
 # --- Main CLI Group ---
-@click.group(chain=True, help="PDD (Prompt-Driven Development) Command Line Interface.")
+@click.group(chain=True, invoke_without_command=True, help="PDD (Prompt-Driven Development) Command Line Interface.")
 @click.option(
     "--force",
     is_flag=True,
