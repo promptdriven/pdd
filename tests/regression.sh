@@ -480,7 +480,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "1" ]; then
   mkdir "$ENV_OUT_DIR"
   export PDD_GENERATE_OUTPUT_PATH="$ENV_OUT_DIR/" # Trailing slash indicates directory
   # Use envonly context so env vars take precedence (no context paths)
-  run_pdd_command --local --context envonly generate "$PROMPTS_PATH/$MATH_PROMPT" # No --output
+  run_pdd_command --local --context alt generate "$PROMPTS_PATH/$MATH_PROMPT" # No --output
   # Default name is <basename>.<lang_ext> which should be simple_math.py
   check_exists "$ENV_OUT_DIR/$MATH_SCRIPT" "'generate' output via env var" # Check for the Python file, not the prompt
 
@@ -1032,7 +1032,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "8" ]; then
   export PDD_TEST_OUTPUT_PATH="$ENV_OUT_DIR_TEST/" # Trailing slash indicates directory
 
   # Use envonly context so env vars take precedence (no context paths)
-  run_pdd_command --context envonly test "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" # No --output
+  run_pdd_command --context alt test "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" # No --output
   # Default name is test_<basename>.<lang_ext>
   check_exists "$ENV_OUT_DIR_TEST/$MATH_TEST_SCRIPT" "'test' output via env var"
 
