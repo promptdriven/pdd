@@ -15,7 +15,7 @@
             - str: The name of the model used
 
 % Implementation requirements and behavior alignment:
-    - Use `.construct_paths` with `command="detect"` to resolve input files and determine output paths.
+    - Use `.construct_paths` with `command="detect"` to resolve input files and determine output paths. When calling `construct_paths`, pass `context_override=ctx.obj.get('context')` so a global `--context` is honored.
       - Map inputs as: `{"change_file": change_file, **{f"prompt_file_{i}": pf for i, pf in enumerate(prompt_files)}}`.
       - Read the change description from `input_strings["change_file"]`.
       - Allow default output path generation (pattern `{basename}_detect.csv`) when `output` is not provided.

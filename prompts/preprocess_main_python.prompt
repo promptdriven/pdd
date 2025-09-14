@@ -46,7 +46,7 @@
 % Here is the README for the cli command that has details of how the 'preprocess' command and '--xml' sub command work.
 % The 'preprocess_main' function should implement the following logic:
     1. Use `construct_paths` to determine input and output file paths:
-        - Call `construct_paths` with `input_file_paths={"prompt_file": prompt_file}`, `command="preprocess"`, `command_options={"output": output}`, and pass through `force`/`quiet` from `ctx.obj`.
+        - Call `construct_paths` with `input_file_paths={"prompt_file": prompt_file}`, `command="preprocess"`, `command_options={"output": output}`, and pass through `force`/`quiet` from `ctx.obj`, plus `context_override=ctx.obj.get('context')` so a global `--context` is honored.
     2. Load the content of the `prompt_file` from `input_strings["prompt_file"]`.
     3. If `xml` is True:
         a. Retrieve global options from `ctx.obj`:

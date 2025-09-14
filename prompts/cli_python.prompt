@@ -169,10 +169,11 @@
         - Context flags:
             - Persist `--context` in `ctx.obj['context']` so subcommands that call `construct_paths` can pass it through as `context_override=ctx.obj['context']`.
             - Implement `--list-contexts` as a global action inside `cli()`:
-                - Import `_find_pddrc_file` and `_load_pddrc_config` from `pdd.construct_paths` to avoid duplicating logic.
-                - Search upward for `.pddrc`; if found, load it and print the sorted list of context names; if not found, print `default`.
-                - Exit with code 0 immediately after printing (do not invoke auto-update or any commands).
-            - Optional early validation: if `--context` is provided and `.pddrc` exists but the name is unknown, raise `click.UsageError` listing available contexts. Otherwise, allow `construct_paths` to validate later.
+                - Import `list_available_contexts` from `pdd.construct_paths` to avoid duplicating the listing logic.
+                - Call `list_available_contexts()` and print the sorted list it returns. If no `.pddrc` exists, it returns `["default"]`.
+                - Immediately call `ctx.exit(0)` after printing to avoid running auto-update or any subcommands.
+            - Optional early validation: if `--context` is provided and the name is not in `list_available_contexts()`, raise a `click.UsageError` listing available contexts and do not continue to command execution.
+            - Note: `construct_paths` also validates `context_override` and raises `ValueError` for unknown names. Early CLI validation prevents double-reporting by exiting before `construct_paths` is invoked when invalid.
         - Decorate LLM-using commands with `@track_cost` and return `(result, total_cost, model_name)`.
         - Local-only commands (e.g., `preprocess`) are not cost-tracked; return a dummy `("", 0.0, "local")` when needed for chain summaries.
         - `install_completion` returns `None` and prints its own status.

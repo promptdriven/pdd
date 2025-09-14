@@ -6,6 +6,9 @@ This implementation will be a robust system based on file "fingerprints" and rob
 
 **Note**: This function analyzes a single language unit (basename + language). The sync_main function handles multiple language detection and orchestration. This function is called once per language by the orchestration layer.
 
+Context override handling:
+- Accept a `context_override: Optional[str]` input (threaded from the CLI via `ctx.obj.get('context')`) or explicitly instruct callers to pass the override through to every call into `construct_paths`. All internal calls to `construct_paths` must pass `context_override=context_override` so a global `--context` is consistently honored.
+
 ### Core Principles:
 
 1.  **Authoritative Fingerprints**: The system's state is not tracked in a complex state machine. Instead, it's derived by comparing the current state of files against a version-controlled "fingerprint" file that contains hashes of the last known good state from a PDD operation.
@@ -67,9 +70,9 @@ Implement a `SyncLock` context manager:
 
 Implement the following helper functions:
 
--   `get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts") -> Dict[str, Path]`: Returns a dictionary mapping file types ('prompt', 'code', 'example', 'test') to their expected `pathlib.Path` objects. Use the project's internal `construct_paths` function (see included examples) to get configuration-aware paths based on .pddrc settings. The function should:
+-   `get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts", context_override: Optional[str] = None) -> Dict[str, Path]`: Returns a dictionary mapping file types ('prompt', 'code', 'example', 'test') to their expected `pathlib.Path` objects. Use the project's internal `construct_paths` function (see included examples) to get configuration-aware paths based on .pddrc settings. The function should:
     - Build the prompt file path from basename, language, and prompts_dir
-    - Call `construct_paths` with `command="sync"` to get config-aware paths
+    - Call `construct_paths` with `command="sync"` and `context_override=context_override` to get config-aware paths
     - Extract the code path from `output_file_paths['generate_output_path']` with fallbacks to `'output'` or `'code_file'`
     - Derive example and test paths by calling `construct_paths` with `command="example"` and `command="test"` respectively
     - When the code file does not exist, optionally create a temporary empty code file to allow `construct_paths` to resolve example/test locations, then remove it

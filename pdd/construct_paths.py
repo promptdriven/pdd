@@ -56,6 +56,23 @@ def _load_pddrc_config(pddrc_path: Path) -> Dict[str, Any]:
     except Exception as e:
         raise ValueError(f"Error loading .pddrc: {e}")
 
+def list_available_contexts(start_path: Optional[Path] = None) -> list[str]:
+    """Return sorted context names from the nearest .pddrc.
+
+    - Searches upward from `start_path` (or CWD) for a `.pddrc` file.
+    - If found, loads and validates it, then returns sorted context names.
+    - If no `.pddrc` exists, returns ["default"].
+    - Propagates ValueError for malformed `.pddrc` to allow callers to render
+      helpful errors.
+    """
+    pddrc = _find_pddrc_file(start_path)
+    if not pddrc:
+        return ["default"]
+    config = _load_pddrc_config(pddrc)
+    contexts = config.get("contexts", {})
+    names = sorted(contexts.keys()) if isinstance(contexts, dict) else []
+    return names or ["default"]
+
 def _detect_context(current_dir: Path, config: Dict[str, Any], context_override: Optional[str] = None) -> Optional[str]:
     """Detect the appropriate context based on current directory path."""
     if context_override:

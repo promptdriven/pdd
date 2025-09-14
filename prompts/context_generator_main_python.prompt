@@ -44,6 +44,7 @@
         * Read `prompt_file` and `code_file` contents into `input_strings`.
         * Determine `language` (pass through whatever is returned; it may be `None`).
         * Compute `output_file_paths` for the 'example' command.
+        * When calling `construct_paths`, pass `context_override=ctx.obj.get('context')` so a global `--context` is honored.
     - Output file handling:
         * If `output` is `None`, write to `output_file_paths["output"]`.
         * If `output` ends with "/" or refers to an existing directory, also write to `output_file_paths["output"]`.

@@ -51,7 +51,7 @@
 
 % The function should perform the following steps:
    1. **Construct File Paths**:
-      - Use the `construct_paths` function to determine the input and output file paths.
+      - Use the `construct_paths` function to determine the input and output file paths. When calling `construct_paths`, pass `context_override=ctx.obj.get('context')` so a global `--context` is honored.
       - Ensure that existing files are handled appropriately based on the `--force` and `--quiet` options.
 
    2. **Load Input Files**:
