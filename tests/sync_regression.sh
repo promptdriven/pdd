@@ -398,19 +398,26 @@ log "Temperature: $TEMPERATURE"
 log "Local Execution: $TEST_LOCAL"
 log "----------------------------------------"
 
-# Copy .pddrc configuration from project root to test directory
-log "Copying .pddrc configuration for proper directory structure"
-if [ -f "$PDD_BASE_DIR/.pddrc" ]; then
-    cp "$PDD_BASE_DIR/.pddrc" .
-    log "Copied .pddrc configuration to test directory"
-else
-    log_error ".pddrc file not found in project root: $PDD_BASE_DIR/.pddrc"
-    exit 1
-fi
+# Create a local .pddrc with explicit sync test contexts
+cat > ./.pddrc << 'EOF'
+contexts:
+  regression_root:
+    defaults:
+      generate_output_path: "./"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
+      default_language: "python"
+  regression_pdd:
+    defaults:
+      generate_output_path: "pdd/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
+      default_language: "python"
+EOF
 
-# Create directory structure expected by .pddrc configuration
-log "Creating directory structure for .pddrc configuration"
-mkdir -p pdd examples tests context
+# Create directory structure expected by contexts
+log "Creating directory structure for sync tests"
+mkdir -p pdd examples tests context prompts
 
 # Create placeholder test files for multi-language calculator (required by multi-language sync)
 # log "Creating placeholder test files for multi-language projects"
@@ -583,15 +590,15 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "2" ]; then
     
     # Test --skip-verify
     log "2a. Testing 'sync --skip-verify'"
-    run_pdd_command_noexit sync --skip-verify "$SIMPLE_BASENAME"
+    run_pdd_command_noexit sync --skip-verify --context regression_root "$SIMPLE_BASENAME"
     check_sync_files "$SIMPLE_BASENAME" "python" false
     
     # Test --skip-tests
     log "2b. Testing 'sync --skip-tests'"
     # Clean previous files AND metadata to test fresh generation
-    rm -f "pdd/${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
+    rm -f "pdd/${SIMPLE_BASENAME}.py" "${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
     rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
-    run_pdd_command_noexit sync --skip-tests "$SIMPLE_BASENAME"
+    run_pdd_command_noexit sync --skip-tests --context regression_pdd "$SIMPLE_BASENAME"
     # Check what was actually generated (sync may only generate code)
     if [ -f "pdd/${SIMPLE_BASENAME}.py" ]; then
         log "Code file generated with --skip-tests"
@@ -613,9 +620,9 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "2" ]; then
     
     # Test both skip options together
     log "2c. Testing 'sync --skip-verify --skip-tests'"
-    rm -f "pdd/${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py"
+    rm -f "pdd/${SIMPLE_BASENAME}.py" "${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py"
     rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
-    run_pdd_command_noexit sync --skip-verify --skip-tests "$SIMPLE_BASENAME"
+    run_pdd_command_noexit sync --skip-verify --skip-tests --context regression_pdd "$SIMPLE_BASENAME"
     check_exists "pdd/${SIMPLE_BASENAME}.py" "Generated code with both skip options"
     
     # Example file may or may not be generated

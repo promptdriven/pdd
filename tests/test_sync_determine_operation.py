@@ -1073,6 +1073,53 @@ class TestIntegrationScenarios:
         assert "All required files synchronized" in decision.reason
 
 
+def test_get_pdd_file_paths_respects_context_override(tmp_path, monkeypatch):
+    """When multiple contexts exist, context_override selects the correct directories."""
+    original_cwd = tmp_path.cwd() if hasattr(tmp_path, 'cwd') else None
+    try:
+        # Arrange directory structure
+        (tmp_path / "prompts").mkdir()
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "alt_tests").mkdir()
+        (tmp_path / "examples").mkdir()
+        (tmp_path / "alt_examples").mkdir()
+        (tmp_path / "pdd").mkdir()  # code dir
+        (tmp_path / "alt_code").mkdir()
+
+        # .pddrc with two contexts that differ in output directories
+        (tmp_path / ".pddrc").write_text(
+            'contexts:\n'
+            '  default:\n'
+            '    paths: ["**"]\n'
+            '    defaults:\n'
+            '      test_output_path: "tests/"\n'
+            '      example_output_path: "examples/"\n'
+            '      generate_output_path: "pdd/"\n'
+            '  alt:\n'
+            '    paths: ["**"]\n'
+            '    defaults:\n'
+            '      test_output_path: "alt_tests/"\n'
+            '      example_output_path: "alt_examples/"\n'
+            '      generate_output_path: "alt_code/"\n'
+        )
+        # Prompt file exists
+        (tmp_path / "prompts" / "simple_math_python.prompt").write_text("Prompt")
+
+        # Act
+        monkeypatch.chdir(tmp_path)
+        paths = get_pdd_file_paths(basename="simple_math", language="python", prompts_dir="prompts", context_override="alt")
+
+        # Assert: paths should use alt_* directories
+        assert paths["test"].as_posix().endswith("alt_tests/test_simple_math.py"), f"Got: {paths['test']}"
+        assert paths["example"].as_posix().endswith("alt_examples/simple_math_example.py"), f"Got: {paths['example']}"
+        assert paths["code"].as_posix().endswith("alt_code/simple_math.py"), f"Got: {paths['code']}"
+
+    finally:
+        # Restore if needed (pytest handles tmp_path chdir cleanup normally)
+        if original_cwd:
+            os.chdir(original_cwd)
+
+
 # --- Part 6: Auto-deps Infinite Loop Regression Tests ---
 
 class TestAutoDepsInfiniteLoopFix:

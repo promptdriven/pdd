@@ -433,3 +433,38 @@ def test_sync_orchestration_exception(mock_project_dir, mock_construct_paths, mo
     lang_result = results["results_by_language"]["python"]
     assert lang_result["success"] is False
     assert "Unexpected API error" in lang_result["error"]
+
+
+def test_sync_normal_flow_threads_context_override(mock_project_dir, mock_construct_paths, mock_sync_orchestration):
+    """Normal (non-log) sync should thread ctx.obj['context'] to construct_paths and sync_orchestration."""
+    # Create prompt for python
+    (mock_project_dir / "prompts" / "ctx_app_python.prompt").touch()
+
+    # Orchestrator returns success
+    mock_sync_orchestration.return_value = {"success": True, "total_cost": 0.2, "model_name": "gpt-x"}
+
+    # Build context with explicit override
+    ctx = create_mock_context({"context": "alt"})
+
+    results, total_cost, _ = sync_main(
+        ctx,
+        "ctx_app",
+        max_attempts=3,
+        budget=5.0,
+        skip_verify=False,
+        skip_tests=False,
+        target_coverage=90.0,
+        log=False,
+    )
+
+    # Verify sync_orchestration received the override
+    assert mock_sync_orchestration.called
+    orch_kwargs = mock_sync_orchestration.call_args.kwargs
+    assert orch_kwargs.get("context_override") == "alt"
+
+    # Verify all construct_paths calls also received the override
+    for _args, kw in mock_construct_paths.call_args_list:
+        assert kw.get("context_override") == "alt"
+
+    assert results["overall_success"] is True
+    assert total_cost == 0.2
