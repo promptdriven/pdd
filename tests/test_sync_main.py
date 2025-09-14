@@ -293,8 +293,30 @@ def test_sync_log_mode(mock_project_dir, mock_construct_paths, mock_sync_orchest
 
     assert mock_sync_orchestration.call_count == 2
     calls = [
-        call(basename='log_test', language='python', prompts_dir=str(mock_project_dir / 'prompts'), code_dir=str(mock_project_dir / 'src'), examples_dir=str(mock_project_dir / 'examples'), tests_dir=str(mock_project_dir / 'tests'), log=True, verbose=True, quiet=False),
-        call(basename='log_test', language='typescript', prompts_dir=str(mock_project_dir / 'prompts'), code_dir=str(mock_project_dir / 'src'), examples_dir=str(mock_project_dir / 'examples'), tests_dir=str(mock_project_dir / 'tests'), log=True, verbose=True, quiet=False)
+        call(
+            basename='log_test',
+            language='python',
+            prompts_dir=str(mock_project_dir / 'prompts'),
+            code_dir=str(mock_project_dir / 'src'),
+            examples_dir=str(mock_project_dir / 'examples'),
+            tests_dir=str(mock_project_dir / 'tests'),
+            log=True,
+            verbose=True,
+            quiet=False,
+            context_override=None,
+        ),
+        call(
+            basename='log_test',
+            language='typescript',
+            prompts_dir=str(mock_project_dir / 'prompts'),
+            code_dir=str(mock_project_dir / 'src'),
+            examples_dir=str(mock_project_dir / 'examples'),
+            tests_dir=str(mock_project_dir / 'tests'),
+            log=True,
+            verbose=True,
+            quiet=False,
+            context_override=None,
+        ),
     ]
     mock_sync_orchestration.assert_has_calls(calls, any_order=True)
 
