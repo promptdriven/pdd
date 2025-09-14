@@ -1,4 +1,4 @@
-% You are an expert Python engineer. Your goal is to write a Python function, 'detect_change_main', that will be the CLI wrapper for detecting which prompts need to be changed based on a change description. This function will analyze a list of prompt files and a change description file to determine which prompts need modifications. It should retrieve a `time` parameter from the Click context (`ctx.obj.get('time', DEFAULT_TIME)`) and pass it to the `detect_change` function.
+% You are an expert Python engineer. Your goal is to write a Python function, 'detect_change_main', that will be the CLI wrapper for detecting which prompts need to be changed based on a change description. This function will analyze a list of prompt files and a change description file to determine which prompts need modifications. It should retrieve a `time` parameter from the Click context (`ctx.obj.get('time', DEFAULT_TIME)`) and pass it to the `detect_change` function as a float time budget.
 
 <include>./context/python_preamble.prompt</include>
 
@@ -14,6 +14,19 @@
             - float: The total cost of the operation
             - str: The name of the model used
 
+% Implementation requirements and behavior alignment:
+    - Use `.construct_paths` with `command="detect"` to resolve input files and determine output paths.
+      - Map inputs as: `{"change_file": change_file, **{f"prompt_file_{i}": pf for i, pf in enumerate(prompt_files)}}`.
+      - Read the change description from `input_strings["change_file"]`.
+      - Allow default output path generation (pattern `{basename}_detect.csv`) when `output` is not provided.
+    - Retrieve parameters from `ctx.obj`:
+      - `strength = ctx.obj.get('strength', DEFAULT_STRENGTH)`
+      - `temperature = ctx.obj.get('temperature', 0.0)`
+      - `time_budget = ctx.obj.get('time', DEFAULT_TIME)` (float in [0.0, 1.0])
+    - Call `detect_change(prompt_files, change_description, strength, temperature, time_budget, verbose=not ctx.obj.get('quiet', False))`.
+    - Save CSV results to the resolved `output_file_paths["output"]` when available, with headers `prompt_name,change_instructions`.
+    - Unless `--quiet` is set, print a success summary (model used, total cost) and list detected changes. On error, print a Rich‑styled error and exit with status 1.
+
 <examples>
    % Here is how to use the Python Click library to create a command line program:
    <click_example>
@@ -27,77 +40,9 @@
       <include>context/construct_paths_example.py</include>
       </construct_paths_example>
 
-      - Here is an example of how to use the `detect_change` function (note the added `time` parameter):
+      - Here is an example of how to use the `detect_change` function (time is a float budget):
       <detect_change_example>
-      ```python
-      from typing import List, Tuple, Dict, Optional
-      from rich import print as rprint
-
-      # Assume DEFAULT_TIME is defined elsewhere, e.g., DEFAULT_TIME = None
-      # This example shows the signature detect_change_main will call.
-      def detect_change(
-          prompt_files: List[str], # List of prompt filenames
-          change_description: str,
-          strength: float,
-          temperature: float,
-          time: Optional[str], # New parameter from ctx.obj.get('time', DEFAULT_TIME)
-          verbose: bool = True
-      ) -> Tuple[List[Dict], float, str]:
-          """
-          Analyzes prompt files against a change description to identify necessary modifications.
-          'time' is an optional ISO 8601 timestamp string, influencing the change detection.
-          """
-          rprint(f"[detect_change_example] Called with strength={strength}, temp={temperature}, time={time}, verbose={verbose}")
-          # Dummy implementation for example purposes
-          results = []
-          if "urgent" in change_description and prompt_files:
-              results.append({
-                  "prompt_name": prompt_files[0],
-                  "change_instructions": f"Urgent update required for {prompt_files[0]} based on change description, considering time: {time or 'not specified'}."
-              })
-          elif prompt_files:
-              results.append({
-                  "prompt_name": prompt_files[0],
-                  "change_instructions": f"General review suggested for {prompt_files[0]}, considering time: {time or 'not specified'}."
-              })
-          
-          total_cost = 0.012 # Example cost
-          model_name = "example_model_v3" # Example model name
-          
-          if verbose:
-              rprint(f"[detect_change_example] Analysis complete. Found {len(results)} potential changes.")
-              rprint(f"[detect_change_example] Cost: ${total_cost:.6f}, Model: {model_name}")
-              
-          return results, total_cost, model_name
-
-      # Example of how detect_change might be used (e.g., in tests or by detect_change_main)
-      if __name__ == "__main__":
-          mock_prompt_files_list = ["project_alpha/prompt1.txt", "project_beta/prompt2.txt"]
-          mock_change_description_content = "Perform an urgent review of all API documentation prompts due to new regulations effective 2024-08-01."
-          mock_strength_value = 0.85
-          mock_temperature_value = 0.1
-          # Example time value that would be retrieved from ctx.obj in detect_change_main
-          mock_time_value = "2024-07-20T14:00:00Z" 
-          # Example with time not specified (would use DEFAULT_TIME, e.g., None)
-          # mock_time_value = None 
-
-          detected_changes, cost_of_detection, model_used = detect_change(
-              prompt_files=mock_prompt_files_list,
-              change_description=mock_change_description_content,
-              strength=mock_strength_value,
-              temperature=mock_temperature_value,
-              time=mock_time_value, # Pass the time value
-              verbose=True
-          )
-
-          rprint("\\n[detect_change_example] Main execution results:")
-          if detected_changes:
-              for item in detected_changes:
-                  rprint(f"  Prompt: {item['prompt_name']}, Instructions: {item['change_instructions']}")
-          else:
-              rprint("  No changes detected.")
-          rprint(f"  Total cost: ${cost_of_detection:.6f}, Model: {model_used}")
-      ```
+      <include>context/detect_change_example.py</include>
       </detect_change_example>
    </internal_example_modules>
 </examples>

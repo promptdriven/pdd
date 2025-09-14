@@ -10,7 +10,7 @@ This implementation will be a robust system based on file "fingerprints" and rob
 
 1.  **Authoritative Fingerprints**: The system's state is not tracked in a complex state machine. Instead, it's derived by comparing the current state of files against a version-controlled "fingerprint" file that contains hashes of the last known good state from a PDD operation.
 2.  **Robust Locking**: Use file-descriptor based locking (`fcntl` or `msvcrt`) to ensure that only one `pdd sync` process can operate on a given unit at a time, preventing race conditions. The lock must be re-entrant and handle stale lock files from crashed processes.
-3.  **Deterministic Logic First**: Decisions must be made based on a clear, deterministic algorithm. An LLM should only be invoked for complex conflict resolution (e.g., when both the prompt and the code have changed), and its use must be made deterministic through caching.
+3.  **Deterministic Logic First**: Decisions must be made based on a clear, deterministic algorithm. An LLM should only be invoked for complex conflict resolution (e.g., when both the prompt and the code have changed), and its use must be made deterministic through caching. Deterministic/heuristic branches may express confidence values in the 0.80–0.95 range rather than always 1.0.
 4.  **Runtime Signal Integration**: The decision logic must be aware of the results from previous test runs. A failing test suite or a crashing program is a high-priority signal that should be addressed before proceeding with other operations.
 
 ### File and Directory Structure:
@@ -61,6 +61,7 @@ Implement a `SyncLock` context manager:
     -   Write the current PID to the lock file.
 -   `release(self)`: Release the lock and delete the lock file.
 -   The class should be usable as a context manager (`with SyncLock(...) as lock:`).
+    -   Re-entrancy clarification: if the lock file already contains the current process PID, treat the lock as held (no reference counting needed for this context).
 
 #### 3. State Analysis Functions
 
@@ -68,10 +69,11 @@ Implement the following helper functions:
 
 -   `get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts") -> Dict[str, Path]`: Returns a dictionary mapping file types ('prompt', 'code', 'example', 'test') to their expected `pathlib.Path` objects. Use the project's internal `construct_paths` function (see included examples) to get configuration-aware paths based on .pddrc settings. The function should:
     - Build the prompt file path from basename, language, and prompts_dir
-    - Call `construct_paths` to get the output paths based on project configuration
-    - Extract the code path from the returned `output_file_paths`
-    - Derive example and test paths using construct_paths for different commands
-    - Provide robust fallback mechanisms when files don't exist yet
+    - Call `construct_paths` with `command="sync"` to get config-aware paths
+    - Extract the code path from `output_file_paths['generate_output_path']` with fallbacks to `'output'` or `'code_file'`
+    - Derive example and test paths by calling `construct_paths` with `command="example"` and `command="test"` respectively
+    - When the code file does not exist, optionally create a temporary empty code file to allow `construct_paths` to resolve example/test locations, then remove it
+    - Provide robust fallback mechanisms (derive directories from `resolved_config`; final fallback to defaults like `{basename}.{ext}`, `{basename}_example.{ext}`, `test_{basename}.{ext}`)
 -   `calculate_sha256(file_path: Path) -> Optional[str]`: Calculates the SHA256 hash of a file if it exists, otherwise returns `None`.
 -   `read_fingerprint(basename: str, language: str) -> Optional[Fingerprint]`: Reads and validates the JSON fingerprint file. Returns `None` if it doesn't exist or is invalid.
 -   `read_run_report(basename: str, language: str) -> Optional[RunReport]`: Reads and validates the JSON run report file.
@@ -111,18 +113,25 @@ else:
 ```
 
 Log mode performs the complete analysis (reading fingerprints, calculating hashes, checking run reports, and applying decision logic) but without any file modifications or lock coordination.
-2.  **Check Runtime Signals First**:
-    -   Read the latest `RunReport`.
-    -   If the report exists and `exit_code != 0`:
-        -   Check the last `Fingerprint` - if the previous command was `crash`, return a decision to run `verify` (to verify the crash fix worked)
-        -   Otherwise, return a decision to run `crash`
-    -   If `tests_failed > 0`, return a decision to run `fix`.
-    -   If `coverage < target_coverage` and `skip_tests=False`, return a decision to run `test` to improve coverage. If `skip_tests=True`, return `all_synced` indicating workflow is complete despite low coverage.
-    -   If any of these conditions are met, the analysis stops here, as fixing a broken state is the highest priority.
+2.  **Check Runtime Signals First (updated priority)**:
+    -   Read the latest `RunReport` and the last `Fingerprint`.
+    -   If the last fingerprint command was `crash` and `skip_verify=False`, return `verify` immediately (verify the crash fix) before other runtime checks.
+    -   If `tests_failed > 0`:
+        -   If a test file exists → return `fix`.
+        -   If the test file is missing → return `test` to (re)generate tests.
+    -   If `exit_code != 0` (runtime error):
+        -   If the example has previously run successfully (based on fingerprint/run reports history) → return `fix`.
+        -   Otherwise → return `crash`.
+    -   If `coverage < target_coverage` and `skip_tests=False` → return `test` to improve coverage.
+    -   If `coverage < target_coverage` and `skip_tests=True` → return `all_synced` to indicate workflow completion despite low coverage.
+    -   If any of these conditions are met, stop analysis here.
 3.  **Analyze File State**:
     -   Read the last saved `Fingerprint`.
     -   Calculate the hashes of the current files.
-    -   **Validate Expected Files**: Before comparing hashes, verify that files expected to exist based on the fingerprint actually exist. If expected files are missing, prioritize regenerating them rather than treating it as a complex conflict.
+    -   **Validate Expected Files (required)**: Before comparing hashes, verify that files expected to exist based on the fingerprint (any non-null hash) actually exist. If expected files are missing, prioritize regenerating them rather than treating it as a complex conflict:
+        -   Missing code and prompt exists → choose `auto-deps` or `generate` based on dependency heuristics
+        -   Missing example but code exists → `example`
+        -   Missing test but code and example exist → `test` (or `nothing` if `skip_tests=True`)
     -   Compare the current hashes with the hashes in the fingerprint for files that exist.
 4.  **Implement the Decision Tree**:
     
@@ -183,33 +192,40 @@ Log mode performs the complete analysis (reading fingerprints, calculating hashe
                 }
             )
             ```
-    -   **No Changes (Hashes Match Fingerprint):**
-        -   If `code` exists but `example` does not -> **`example`**. (Reason: Progress the workflow).
-        -   If `code` and `example` exist but `test` does not and `skip_tests=False` -> **`test`**. (Reason: Progress the workflow).
-        -   If all required files exist considering skip flags -> **`nothing`**. (Reason: All files are synchronized according to current workflow configuration).
-        -   **Skip Flag Considerations**: When `skip_tests=True`, test files are not required for workflow completion. When `skip_verify=True`, verification operations are not required.
-        -   **Note on operation names**: Use `nothing` when no action is needed and files are in sync. Use `all_synced` when workflow is complete but with caveats (e.g., tests skipped, low coverage accepted).
+    -   **No Changes (Hashes Match Fingerprint) with gating:**
+        -   If `code` exists but `example` does not → **`example`**.
+        -   If `code` and `example` exist but no `test` and `skip_tests=False` → apply runtime gating before `test`:
+            -   If no `RunReport` → **`crash`** (perform a runtime check of the example first)
+            -   If `RunReport.exit_code != 0` → **`crash`**
+            -   If last fingerprint command != `verify` and `skip_verify=False` → **`verify`**
+            -   Else → **`test`**
+        -   If all required files exist considering skip flags → **`nothing`**.
+        -   **Skip Flags**: When `skip_tests=True`, test files are not required. When `skip_verify=True`, verification operations are not required.
+        -   **Operation names**: Use `nothing` for in-sync; use `all_synced` specifically when coverage is below target but tests are skipped.
     -   **Simple Changes (Single File Modified)**:
         -   If only the `prompt_hash` differs:
-            -   Check if dependencies need updating -> **`auto-deps`**.
-            -   Otherwise -> **`generate`**.
+            -   Use expanded dependency heuristics (see below) → **`auto-deps`** when dependencies are detected
+            -   Otherwise → **`generate`**
         -   If only the `code_hash` differs -> **`update`**.
         -   If only the `test_hash` differs -> **`test`** (to run the new tests).
         -   If only the `example_hash` differs -> **`verify`** (to run the new example).
     -   **Complex Changes (Multiple Files Modified / Conflicts)**:
         -   Return a decision to run **`analyze_conflict`**. The calling orchestrator will handle this.
+
+    -   **Dependency Heuristics (expanded)**:
+        -   Treat these as dependency indicators: XML tags `<include>`, `<web>`, `<shell>` (case-sensitive) or phrases like “auto-deps”, “auto_deps”, “dependencies needed”, “requires dependencies”, “include dependencies” (case-insensitive)
 5.  **Return the Decision**: The function must always return a `SyncDecision` object with:
     - `operation`: The recommended operation
     - `reason`: A clear, human-readable explanation
     - `confidence`: 1.0 for deterministic decisions, lower for LLM-based decisions
     - `estimated_cost`: Use the `estimate_operation_cost` helper function
     - `details`: A dictionary containing relevant context such as:
-        - `decision_type`: "heuristic" for deterministic decisions, "llm" for LLM-based decisions
-        - File existence states (`prompt_exists`, `code_exists`, etc.)
+        - `decision_type`: "heuristic" for algorithmic/deterministic decisions, "llm" for LLM-based decisions
+        - File existence states (`prompt_exists`, `code_exists`, etc.) and paths
         - Hash comparisons (`prompt_changed`, `code_changed`, etc.)
-        - Fingerprint state (`fingerprint_found`, `last_command`)
-        - Run report details (`tests_failed`, `coverage`, `exit_code`)
-        - Any other relevant diagnostic information for debugging and logging
+        - Fingerprint state (`fingerprint_found`, `last_command`/`previous_command`)
+        - Run report details (`tests_failed`, `coverage`, `exit_code`, timestamps)
+        - Workflow markers like `workflow_stage` (e.g., `crash_validation`, `crash_fix`, `verify_validation`, `test_generation`), `auto_deps_completed`, `no_run_report`, `skip_tests`, `skip_verify`, `has_dependencies`
 
 #### 5. References: Here is how to use the internal modules that are available and must be used in this implementation:
     <internal_modules>
@@ -256,7 +272,7 @@ Implement a second function `analyze_conflict_with_llm` to resolve complex sync 
 1.  **Load LLM Prompt**: Use `load_prompt_template("sync_analysis_LLM")` to get the analysis prompt content.
 2.  **Gather Diffs**: For each file type in `changed_files` ('prompt', 'code', 'test', 'example'), generate a `git diff` of the current file against its last committed version (`HEAD`). You will need a helper function for this (e.g., `get_git_diff(file_path)`). If a diff cannot be generated (e.g., file is not in git), use an empty string.
 3.  **Format the Prompt**: Replace the placeholders in the loaded prompt template (`{fingerprint}`, `{changed_files_list}`, `{prompt_diff}`, etc.) with the actual data. The fingerprint should be formatted as a JSON string.
-4.  **Invoke LLM**: Call `llm_invoke` with the fully formatted prompt. The call must be made deterministic by using a cache, ensuring that the same input always produces the same output recommendation.
+4.  **Invoke LLM**: Call `llm_invoke` with the fully formatted prompt. Determinism is provided via the shared `llm_invoke`/LiteLLM caching layer; use temperature 0 and a constant strength to further reduce variance.
 5.  **Parse Response**: The LLM will respond with a JSON object. Parse this string into a dictionary.
 6.  **Validate and Return**:
     -   Validate the JSON response to ensure it contains the required keys (`next_operation`, `reason`, `confidence`, etc.).
@@ -266,7 +282,7 @@ Implement a second function `analyze_conflict_with_llm` to resolve complex sync 
             operation=llm_response.get('next_operation'),
             reason=llm_response.get('reason'),
             confidence=llm_response.get('confidence', 0.8),
-            estimated_cost=estimate_operation_cost(llm_response.get('next_operation')),
+            estimated_cost=response_cost_when_available_or_estimate,
             details={
                 'decision_type': 'llm',
                 'llm_analysis': True,
@@ -282,7 +298,7 @@ Implement a second function `analyze_conflict_with_llm` to resolve complex sync 
             operation='fail_and_request_manual_merge',
             reason='Complex conflict requires manual resolution',
             confidence=0.5,
-            estimated_cost=0.0,
+            estimated_cost=response_cost_when_available_or_0,
             details={
                 'decision_type': 'llm',
                 'llm_error': True, 
@@ -290,6 +306,8 @@ Implement a second function `analyze_conflict_with_llm` to resolve complex sync 
             }
         )
         ```
+
+Where `response_cost_when_available_or_estimate` means: prefer the actual `llm_invoke`-reported cost when available; otherwise fall back to `estimate_operation_cost(next_operation)`. For failure paths, prefer actual reported cost if available, else 0.
 
 The final Python script should be well-structured with clear functions, type hints, and docstrings, containing all the logic described above.
 
@@ -321,9 +339,17 @@ Define path resolution functions or constants for PDD_DIR, META_DIR, LOCKS_DIR t
 The `SyncDecision` object returned by this function will be logged by the orchestration layer to `.pdd/meta/{basename}_{language}_sync.log`. Therefore, ensure that:
 
 1. **All decisions include complete information**: Every `SyncDecision` must have meaningful values for all fields
-2. **Confidence levels are accurate**: Use 1.0 for deterministic decisions, lower values for LLM-based or uncertain decisions
+2. **Confidence levels are accurate**: Heuristic/deterministic decisions may use 0.80–0.95; use lower values for LLM-based or uncertain decisions
 3. **Cost estimates are realistic**: Use the `estimate_operation_cost` helper to provide consistent estimates
 4. **Details provide debugging context**: Include relevant state information that would help understand why a decision was made
 5. **Reasons are user-friendly**: Write clear, concise explanations that non-technical users can understand
+
+### Helper Utilities (required)
+
+Add and use these helpers in the implementation to reflect the above logic:
+- `validate_expected_files(fingerprint, paths) -> Dict[str, bool]`: Determine which files should exist based on non-null fingerprint hashes and whether they actually exist
+- `_handle_missing_expected_files(...) -> SyncDecision`: Map missing-file scenarios to the appropriate recovery operation (`generate`, `auto-deps`, `example`, `test`, or `nothing` if `--skip-tests`)
+- `_is_workflow_complete(paths, skip_tests, skip_verify) -> bool`: True when all required files for the current flags exist
+- `_check_example_success_history(basename, language) -> bool`: Whether the example has run successfully before (to prefer `fix` over `crash` on runtime errors)
 
 This enables users to run `pdd sync --log` to understand the complete decision history and troubleshoot any issues.

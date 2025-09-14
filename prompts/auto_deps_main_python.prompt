@@ -4,18 +4,41 @@
 
 % Here are the inputs and outputs of the function:
     Inputs:
-    - `ctx` (`click.Context`): The Click context object. This object is used to retrieve global CLI options, which include `strength`, `temperature`, and `time` (e.g., `ctx.obj.get('time', DEFAULT_TIME)` where `DEFAULT_TIME` is a predefined default value if `time` is not specified). It also provides access to other command parameters.
+    - `ctx` (`click.Context`): The Click context object. Read global options from `ctx.obj`, including `force`, `quiet`, `strength`, `temperature`, and `time` (e.g., `time = ctx.obj.get('time', DEFAULT_TIME)`). These are used for path construction and for LLM parameters.
     - `prompt_file` (`str`): Path to the input prompt file.
     - `directory_path` (`str`): Path to the directory containing potential dependency files (can include glob patterns, e.g., "context/*_example.py").
-    - `auto_deps_csv_path` (`Optional[str]`): Path to the CSV file containing auto-dependency information.
-    - `output` (`Optional[str]`): File path to save the modified prompt file with auto-dependencies.
-    - 'force_scan' (`Optional[bool]`): Flag to force a rescan of the directory. This is done by deleting the auto_deps_csv_path file if it exists.
+    - `auto_deps_csv_path` (`Optional[str]`): Preferred CSV file path for auto-dependency information (passed into path construction; may be overridden by resolved paths).
+    - `output` (`Optional[str]`): File path (or directory) to save the modified prompt file with auto-dependencies.
+    - 'force_scan' (`Optional[bool]`): Flag to force a rescan of the directory. This is done by deleting the resolved CSV file if it exists (see Behavior below).
 
     Outputs:
     - Returns a tuple containing (`str`, `float`, `str`):
       - `str`: The modified prompt with auto-dependencies added.
       - `float`: The total cost of the operation.
       - `str`: The name of the model used.
+
+% Behavior (aligns with current implementation):
+    - Use `construct_paths` with:
+        • `input_file_paths = {"prompt_file": prompt_file}`
+        • `command = "auto-deps"`
+        • `command_options = {"output": output, "csv": auto_deps_csv_path}`
+        • `force = ctx.obj.get('force', False)` and `quiet = ctx.obj.get('quiet', False)`
+    - Resolve `csv_path` from `output_file_paths.get("csv", "project_dependencies.csv")`.
+      Note: If the path constructor does not produce a `csv` entry, default to "project_dependencies.csv".
+    - If `force_scan` is True and `Path(csv_path).exists()`, delete the CSV file before continuing.
+    - Read LLM parameters from context with defaults: 
+        • `strength = ctx.obj.get('strength', DEFAULT_STRENGTH)`
+        • `temperature = ctx.obj.get('temperature', 0.0)`
+        • `time_budget = ctx.obj.get('time', DEFAULT_TIME)`
+      Compute verbosity as `verbose = not ctx.obj.get('quiet', False)` and pass to downstream calls.
+    - Call `insert_includes` as:
+        • `insert_includes(input_prompt=input_strings["prompt_file"], directory_path=directory_path, csv_filename=csv_path, strength=strength, temperature=temperature, time=time_budget, verbose=verbose)`
+      Capture `(modified_prompt, csv_output, total_cost, model_name)`.
+    - Save outputs:
+        • Write `modified_prompt` to `output_file_paths["output"]` (UTF-8).
+        • If `csv_output` is non-empty, write it to `csv_path` (UTF-8).
+    - Console output: Print success/cost/model and destinations unless `quiet` is set.
+    - Errors: On any exception, print a red error message unless `quiet` and call `sys.exit(1)`.
 
 <examples>
    % Here is how to use the Python Click library to create a command line program:
@@ -30,8 +53,9 @@
       <include>context/construct_paths_example.py</include>
       </construct_paths_example>
 
-      - The `auto_deps_main` function should retrieve global options such as `strength`, `temperature`, and `time` from the `ctx` object (e.g., `time = ctx.obj.get('time', DEFAULT_TIME)` where `DEFAULT_TIME` is an appropriate default value if `time` is not specified). This `time` parameter, along with `strength` and `temperature`, must be passed to the `insert_includes` function.
-      - Here is an example of how the `insert_includes` function is generally used (note: `insert_includes` itself would need to be capable of accepting and utilizing the `time` parameter):
+      - The `auto_deps_main` function should retrieve global options from `ctx.obj` (not `ctx.params`), including `force`, `quiet`, `strength`, `temperature`, and `time` (use `DEFAULT_TIME` when missing). Compute `verbose = not ctx.obj.get('quiet', False)` and pass `strength`, `temperature`, `time`, and `verbose` to `insert_includes`.
+      - Resolve `csv_path` from the constructed paths as `output_file_paths.get('csv', 'project_dependencies.csv')`. If `force_scan` is True and `csv_path` exists, delete it before proceeding.
+      - Here is an example of how the `insert_includes` function is generally used (note: it accepts and uses the `time` parameter):
       <insert_includes_example>
       <include>context/insert_includes_example.py</include>
       </insert_includes_example>

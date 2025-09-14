@@ -39,14 +39,17 @@
 1.  Parameter Retrieval:
     - Retrieve `strength = ctx.obj.get('strength', DEFAULT_STRENGTH)`.
     - Retrieve `temperature = ctx.obj.get('temperature', 0)`.
-    - Retrieve `time = ctx.obj.get('time', DEFAULT_TIME)`. (Ensure DEFAULT_TIME is imported or defined)
+    - Retrieve `time = ctx.obj.get('time')` (CLI sets DEFAULT_TIME when unset; no import needed here).
     - Retrieve `verbose = ctx.obj.get('verbose', False)`.
     - Retrieve `force = ctx.obj.get('force', False)`.
     - Retrieve `quiet = ctx.obj.get('quiet', False)`.
+    - It is fine to pass `force`/`quiet` directly to `construct_paths` without first storing locals.
 
 2.  File Path Handling and Function Calls:
     - When calling `fix_error_loop`, pass the original file paths (`code_file` and `unit_test_file`), `prompt` content, `verification_program`, `strength`, `temperature`, `max_attempts`, `budget`, `time`, `error_log_file` (from `output_file_paths`), and `verbose` directly.
-    - When calling `fix_errors_from_unit_tests`, use the processed input_strings from `construct_paths` for `unit_test`, `code`, `prompt`, and `error`. Pass `error_file` (from `output_file_paths`), `strength`, `temperature`, `time`, and `verbose`.
+    - When calling `fix_errors_from_unit_tests`, use the processed `input_strings` from `construct_paths` for `unit_test`, `code`, `prompt`, and `error`, and pass `error_file = output_file_paths['output_results']`, along with `strength`, `temperature`, `time`, and `verbose`.
+    - In non-loop mode, pre‑validate the provided `error_file` exists before constructing paths; raise `FileNotFoundError` if missing.
+    - Call `construct_paths(..., create_error_file=loop)` so an empty error log is created only during loop mode.
     - Handle both fixing approaches appropriately based on the `--loop` parameter.
 
 3.  Error Handling Requirements:
@@ -60,25 +63,26 @@
         * API submission errors.
         * Missing environment variables.
     - Exit with `sys.exit(1)` on critical errors.
+    - When printing any analysis output in verbose mode, show only a short preview and handle Rich `MarkupError` safely by escaping content when needed.
 
 4.  Auto-submit Functionality:
     When `auto_submit` is True and the fix is successful:
     a) Authentication:
         - Get JWT token using `get_jwt_token()`.
         - Required environment variables:
-            * `REACT_APP_FIREBASE_API_KEY`
+            * `NEXT_PUBLIC_FIREBASE_API_KEY` (or `REACT_APP_FIREBASE_API_KEY`)
             * `GITHUB_CLIENT_ID`
     b) Submission Payload:
         - Input files:
-            * prompts (content and filename)
+            * prompts (content and filename) — preprocess via `preprocess(..., recursive=False, double_curly_brackets=True)` for submission only
             * code (content and filename)
-            * tests (content and filename)
-            * errors (if available)
-            * verification program (if specified)
+            * test (content and filename)
+            * error (if available)
+            * verification program (if specified) under `input['example']`
         - Output files:
             * fixed code (content and filename)
             * fixed tests (content and filename)
-            * analysis (if available)
+            * analysis (if available). Prefer the results file at `output_file_paths['output_results']`; if unavailable, use in‑memory `analysis_results`.
         - Metadata:
             * title: "Auto-submitted fix for {filename}"
             * description: "Automatically submitted successful code fix"
@@ -117,118 +121,14 @@
       <include>context/construct_paths_example.py</include>
       </construct_paths_example>
 
-      - Here is an example of how to use the `fix_errors_from_unit_tests` function (updated to include `time`):
+      - Here is an example of how to use the `fix_errors_from_unit_tests` function:
       <fix_errors_example>
-      ```python
-      from typing import Tuple, Optional
-      from pdd.fix_errors_from_unit_tests import fix_errors_from_unit_tests # Assuming this is the correct import path
-
-      # Example usage of fix_errors_from_unit_tests
-      unit_test_content = """
-      def test_example_fail():
-          assert 1 == 0 # This will fail
-      """
-      code_content = """
-      def example_function():
-          return True
-      """
-      prompt_content = "Create a simple Python function and a test that fails."
-      error_content = "AssertionError: assert 1 == 0"
-      error_file_path = "temp_error_log.txt" # Path for the error log output by the function
-      strength = 0.8
-      temperature = 0.0
-      time_limit = 300 # Example time limit in seconds
-
-      try:
-          # Create a dummy error_file_path if it's read by the function initially
-          # or ensure the function handles its creation/appending.
-          # For this example, we assume error_file is for output.
-          
-          update_unit_test, update_code, fixed_unit_test, fixed_code, analysis_results, total_cost, model_name = fix_errors_from_unit_tests(
-              unit_test=unit_test_content,
-              code=code_content,
-              prompt=prompt_content,
-              error=error_content,
-              error_file=error_file_path, # This is where the function will write its analysis
-              strength=strength,
-              temperature=temperature,
-              time=time_limit, # Pass the time parameter
-              verbose=True
-          )
-
-          print(f"Update Unit Test: {update_unit_test}")
-          print(f"Update Code: {update_code}")
-          print(f"Fixed Unit Test:\n{fixed_unit_test}")
-          print(f"Fixed Code:\n{fixed_code}")
-          print(f"Analysis Results:\n{analysis_results}")
-          print(f"Total Cost: ${total_cost:.6f}")
-          print(f"Model Name: {model_name}")
-
-      except Exception as e:
-          print(f"An error occurred: {e}")
-      ```
+      <include>context/fix_errors_from_unit_tests_example.py</include>
       </fix_errors_example>
 
-      - Here is an example of how to use the `fix_error_loop` function (updated to include `time`):
+      - Here is an example of how to use the `fix_error_loop` function:
       <fix_loop_example>
-      ```python
-      from typing import Tuple, Optional
-      import os
-      import tempfile
-      from pdd.fix_error_loop import fix_error_loop # Assuming this is the correct import path
-
-      # Create dummy files for the example
-      temp_dir = tempfile.mkdtemp()
-      unit_test_file_path = os.path.join(temp_dir, "test_example.py")
-      code_file_path = os.path.join(temp_dir, "example_code.py")
-      verification_program_path = os.path.join(temp_dir, "verify.py")
-      error_log_path = os.path.join(temp_dir, "loop_error_log.txt")
-
-      with open(unit_test_file_path, "w") as f:
-          f.write("def test_always_fail():\n    assert False")
-      with open(code_file_path, "w") as f:
-          f.write("def my_function():\n    return 1")
-      with open(verification_program_path, "w") as f:
-          f.write("print('Verification successful')") # A simple verifier
-
-      prompt_content = "A Python function and a failing test."
-      time_limit_loop = 600 # Example time limit for the loop's LLM calls
-
-      try:
-          success, final_unit_test, final_code, attempts, total_cost, model_name = fix_error_loop(
-              unit_test_file=unit_test_file_path,
-              code_file=code_file_path,
-              prompt=prompt_content,
-              verification_program=verification_program_path,
-              strength=0.8,
-              temperature=0.1,
-              max_attempts=3, # Reduced for quick example
-              budget=1.0,     # Reduced for quick example
-              time=time_limit_loop, # Pass the time parameter
-              error_log_file=error_log_path,
-              verbose=True
-          )
-
-          print(f"Fix successful: {success}")
-          print(f"Final unit test:\n{final_unit_test}")
-          print(f"Final code:\n{final_code}")
-          print(f"Attempts: {attempts}")
-          print(f"Total cost: ${total_cost:.6f}")
-          print(f"Model name: {model_name}")
-          if os.path.exists(error_log_path):
-              with open(error_log_path, "r") as f_log:
-                  print(f"Error log contents:\n{f_log.read()}")
-
-      except Exception as e:
-          print(f"An error occurred during fix_error_loop example: {e}")
-      finally:
-          # Clean up dummy files
-          for p in [unit_test_file_path, code_file_path, verification_program_path, error_log_path]:
-              if os.path.exists(p):
-                  os.remove(p)
-          if os.path.exists(temp_dir):
-              os.rmdir(temp_dir)
-      ```
+      <include>context/fix_error_loop_example.py</include>
       </fix_loop_example>
 
       - Here is how to get the JWT token:
