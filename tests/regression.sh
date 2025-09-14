@@ -1031,13 +1031,13 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "8" ]; then
   mkdir -p "$ENV_OUT_DIR_TEST"
   export PDD_TEST_OUTPUT_PATH="$ENV_OUT_DIR_TEST/" # Trailing slash indicates directory
   
-  # Temporarily modify .pddrc to test environment variable precedence
-  PDDRC_PATH="$PDD_BASE_DIR/.pddrc"
-  PDDRC_BACKUP_PATH="$PDD_BASE_DIR/.pddrc.backup"
+  # Temporarily modify the local .pddrc to test environment variable precedence
+  PDDRC_PATH="./.pddrc"
+  PDDRC_BACKUP_PATH="./.pddrc.backup"
   if [ -f "$PDDRC_PATH" ]; then
     cp "$PDDRC_PATH" "$PDDRC_BACKUP_PATH"
-    # Remove test_output_path from pdd_cli context to test env var precedence
-    sed -i.tmp 's/test_output_path: "tests\/"/# test_output_path: "tests\/" # Temporarily commented for env var test/' "$PDDRC_PATH"
+    # Comment out any test_output_path lines to test env var precedence
+    sed -i.tmp -E 's/^([[:space:]]*)test_output_path:[[:space:]]*"[^"]*"/\1# test_output_path: "" # Temporarily commented for env var test/' "$PDDRC_PATH"
     log "Temporarily modified .pddrc to test environment variables"
   fi
   

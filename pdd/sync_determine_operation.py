@@ -1270,7 +1270,14 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
     )
 
 
-def analyze_conflict_with_llm(basename: str, language: str, fingerprint: Fingerprint, changed_files: List[str], prompts_dir: str = "prompts") -> SyncDecision:
+def analyze_conflict_with_llm(
+    basename: str,
+    language: str,
+    fingerprint: Fingerprint,
+    changed_files: List[str],
+    prompts_dir: str = "prompts",
+    context_override: Optional[str] = None,
+) -> SyncDecision:
     """
     Resolve complex sync conflicts using an LLM.
     

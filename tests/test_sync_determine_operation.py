@@ -1600,7 +1600,7 @@ contexts:
             (tmp_path / "examples").mkdir()
             
             # Mock construct_paths to return configured paths
-            def mock_construct_paths(input_file_paths, force, quiet, command, command_options):
+            def mock_construct_paths(input_file_paths, force, quiet, command, command_options, context_override=None):
                 # Simulate what construct_paths would return with .pddrc configuration
                 return (
                     {

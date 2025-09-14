@@ -71,6 +71,7 @@ def test_preprocess_main_no_xml(basic_click_context):
             quiet=False,
             command="preprocess",
             command_options={"output": None},
+            context_override=None
         )
         # Ensure preprocess was called with the correct arguments
         mock_preprocess.assert_called_once_with(
@@ -135,6 +136,7 @@ def test_preprocess_main_with_xml(basic_click_context):
             quiet=False,
             command="preprocess",
             command_options={"output": "/specified_output.prompt"},
+            context_override=None
         )
         # preprocess should NOT be called if xml=True
         mock_preprocess.assert_not_called()
