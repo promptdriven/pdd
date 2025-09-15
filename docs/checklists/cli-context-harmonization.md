@@ -25,6 +25,7 @@ We aligned the CLI and internal modules around a single source of truth for list
     - `pdd/code_generator_main.py`, `pdd/cmd_test_main.py`, `pdd/fix_main.py`, `pdd/change_main.py`, `pdd/update_main.py`, `pdd/preprocess_main.py`, `pdd/split_main.py`, `pdd/bug_main.py`, `pdd/trace_main.py`, `pdd/conflicts_main.py`, `pdd/auto_deps_main.py`, `pdd/fix_verification_main.py`, `pdd/detect_change_main.py`, `pdd/crash_main.py`, `pdd/context_generator_main.py`.
   - Sync internals updated to propagate the override:
     - `pdd/sync_determine_operation.py`: added `context_override` to `sync_determine_operation`, `_perform_sync_analysis`, and `get_pdd_file_paths`; passed override to all internal `construct_paths` calls.
+    - `pdd/sync_determine_operation.py`: fixed `analyze_conflict_with_llm` to accept `context_override` and pass it to `get_pdd_file_paths` (resolved NameError and ensures context-aware conflict analysis).
     - `pdd/sync_orchestration.py`: added `context_override` parameter; passed to `get_pdd_file_paths` and `sync_determine_operation`.
     - `pdd/sync_main.py`: read `ctx.obj['context']` and forwarded to `sync_orchestration` in both `--log` and normal flows.
 
@@ -41,6 +42,20 @@ We aligned the CLI and internal modules around a single source of truth for list
   - Unit tests adjusted for the new `construct_paths` kwarg:
     - `tests/test_conflicts_main.py`: added `context_override=None` to `mock_construct_paths.assert_called_once_with(...)` expectations.
     - `tests/test_detect_change_main.py`: added `context_override=None` to the corresponding expectation.
+  - Additional unit tests and updates (new):
+    - CLI globals and context handling in `tests/test_cli.py`:
+      - `--list-contexts` early exit without `auto_update`.
+      - Known `--context` threads into subcommands; unknown context raises `UsageError` (with and without `.pddrc`).
+      - Malformed `.pddrc` surfaces a helpful `UsageError` during `--list-contexts`.
+    - Listing helper in `tests/test_construct_paths.py`:
+      - Added tests for `list_available_contexts` (no `.pddrc`, valid `.pddrc`, malformed `.pddrc`).
+    - Sync pathing in `tests/test_sync_determine_operation.py`:
+      - `get_pdd_file_paths` respects `context_override` for test/example/code directories.
+      - LLM conflict analysis tests fixed to reflect context-aware changes.
+    - Trace and preprocess/fix wrappers:
+      - Updated `tests/test_trace_main.py`, `tests/test_preprocess_main.py`, and `tests/test_fix_main.py` to include `context_override=None` in `construct_paths` expectations.
+    - Sync normal flow propagation:
+      - Added `tests/test_sync_main.py::test_sync_normal_flow_threads_context_override` to assert `context_override` is passed to both `construct_paths` and `sync_orchestration`.
 
 ## Validation Results
 
@@ -48,12 +63,14 @@ We aligned the CLI and internal modules around a single source of truth for list
 - Unknown `--context` fails early with a `click.UsageError` (exit code 2), as designed.
 - Known `--context` (e.g., `alt`) threads through to subcommands; `preprocess` produced output under the expected configuration.
 - Regression suite proceeds to later tests after Test 0.
+ - Conflict analysis via LLM succeeds with valid JSON and falls back cleanly on invalid/low-confidence responses (now context-aware).
+ - Unit tests for `fix_main`, `preprocess_main`, `trace_main`, `sync_determine_operation`, and `sync_main` pass with the new `context_override` threading.
 
 ## Remaining Work
 
 - Update any remaining tests that assert `construct_paths` without `context_override`:
   - Grep for direct assertions similar to `assert_called_once_with(..., command=..., command_options=...)` and add `context_override=None`.
-  - Targets likely include wrappers for: `generate`, `update`, `change`, `fix`, `split`, `bug`, `trace`, `auto-deps`, `verify`, `crash`, `context_generator`.
+  - Targets likely include wrappers for: `generate`, `update`, `change`, `split`, `bug`, `auto-deps`, `verify`, `crash`, `context_generator` (several already updated: `fix`, `preprocess`, `trace`).
 
 - Optional: make `context_override` kwarg conditional in code
   - If backward compatibility with tests is preferred, conditionally add the kwarg only when not `None`. We chose explicit passing for clarity and consistency.
@@ -87,7 +104,7 @@ We aligned the CLI and internal modules around a single source of truth for list
 - [x] Fix env var precedence step in regression by updating the local `.pddrc`.
 - [x] Update `tests/test_conflicts_main.py` expectations.
 - [x] Update `tests/test_detect_change_main.py` expectation.
+- [x] Update tests for `fix_main`, `preprocess_main`, `trace_main`, `sync_determine_operation`, and `sync_main` to include or respect `context_override`.
 - [ ] Update any remaining tests asserting `construct_paths` calls to include `context_override=None`.
 - [ ] Optional: make logging quieter for `--list-contexts` by deferring imports.
 - [ ] Optional: add README and developer doc notes for the new flags and requirements.
-
