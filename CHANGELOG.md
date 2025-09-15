@@ -1,5 +1,32 @@
 ## v0.0.56 (2025-09-14)
 
+### CLI & Context
+
+- Add `--list-contexts` flag to list available contexts from `.pddrc` and exit.
+- Add `--context` override with early validation against `.pddrc` entries.
+- Harmonize and improve automatic context detection and propagation across CLI and core modules.
+
+### Tests
+
+- Expand and refactor regression tests to exercise new context handling across CLI, `sync`, and main flows.
+- Update test fixtures and expectations to align with context harmonization.
+
+### Prompts
+
+- Refactor prompt files to enhance clarity and functionality.
+
+### Docs
+
+- README: Document context handling improvements and usage guidance.
+
+### Dependencies
+
+- Add `litellm[caching]` and `psutil` to requirements.
+
+### Build/Tooling
+
+- Update `.gitignore` and `language_format.csv` (Thanks cilibrar@gmail.com) related to context handling workflows.
+
 ## v0.0.55 (2025-09-12)
 
 ### CLI & Code Generation
