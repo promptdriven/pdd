@@ -63,7 +63,7 @@ uv tool install pdd-cli
 This installation method ensures:
 - Faster installations with optimized dependency resolution
 - Automatic environment setup without manual configuration
-- Proper handling of the PDD_PATH environment variable
+- Proper handling of the `path` environment variable
 - Better isolation from other Python packages
 
 The PDD CLI will be available immediately after installation without requiring any additional environment configuration.
@@ -177,9 +177,9 @@ pdd install_completion
 2. Configure environment variables (optional):
 ```bash
 # Add to .bashrc, .zshrc, or equivalent
-export PDD_AUTO_UPDATE=true
-export PDD_GENERATE_OUTPUT_PATH=/path/to/generated/code/
-export PDD_TEST_OUTPUT_PATH=/path/to/tests/
+export auto_update=true
+export generate_output_path=/path/to/generated/code/
+export test_output_path=/path/to/tests/
 ```
 
 ## Troubleshooting Common Installation Issues
@@ -412,14 +412,14 @@ These options can be used with any command:
 
 ## Auto-Update Control
 
-PDD automatically updates itself to ensure you have the latest features and security patches. However, you can control this behavior using the `PDD_AUTO_UPDATE` environment variable:
+PDD automatically updates itself to ensure you have the latest features and security patches. However, you can control this behavior using the `auto_update` environment variable:
 
 ```bash
 # Disable auto-updates
-export PDD_AUTO_UPDATE=false
+export auto_update=false
 
 # Enable auto-updates (default behavior)
-export PDD_AUTO_UPDATE=true
+export auto_update=true
 ```
 
 For persistent settings, add this environment variable to your shell's configuration file (e.g., `.bashrc` or `.zshrc`).
@@ -484,9 +484,9 @@ This comprehensive output allows for detailed tracking of not only the cost and 
 
 You can set a default location for the cost output CSV file using the environment variable:
 
-- **`PDD_OUTPUT_COST_PATH`**: Default path for the cost tracking CSV file.
+- **`output_cost_path`**: Default path for the cost tracking CSV file.
 
-If this environment variable is set, the CSV file will be saved to the specified path by default, unless overridden by the `--output-cost` option. For example, if `PDD_OUTPUT_COST_PATH=/path/to/cost/reports/`, the CSV file will be saved in that directory with a default filename.
+If this environment variable is set, the CSV file will be saved to the specified path by default, unless overridden by the `--output-cost` option. For example, if `output_cost_path=/path/to/cost/reports/`, the CSV file will be saved in that directory with a default filename.
 
 ### Cost Budgeting
 
@@ -663,7 +663,7 @@ Arguments:
 - `PROMPT_FILE`: The filename of the prompt file used to generate the code.
 
 Options:
-- `--output LOCATION`: Specify where to save the generated code. Supports `${VAR}`/`$VAR` expansion from `-e/--env`. The default file name is `<basename>.<language_file_extension>`. If an environment variable `PDD_GENERATE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output LOCATION`: Specify where to save the generated code. Supports `${VAR}`/`$VAR` expansion from `-e/--env`. The default file name is `<basename>.<language_file_extension>`. If an environment variable `generate_output_path` is set, the file will be saved in that path unless overridden by this option.
 - `--original-prompt FILENAME`: The original prompt file used to generate the existing code. If not specified, the command automatically uses the last committed version of the prompt file from git.
 - `--incremental`: Force incremental patching even if changes are significant. This option is only valid when an output location is specified and the file exists.
 
@@ -745,7 +745,7 @@ Arguments:
 - `CODE_FILE`: The filename of the existing code file.
 
 Options:
-- `--output LOCATION`: Specify where to save the generated example code. The default file name is `<basename>_example.<language_file_extension>`. If an environment variable `PDD_EXAMPLE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output LOCATION`: Specify where to save the generated example code. The default file name is `<basename>_example.<language_file_extension>`. If an environment variable `example_output_path` is set, the file will be saved in that path unless overridden by this option.
 
 Where used:
 - Dependency references: Examples serve as lightweight (token efficient) interface references for other prompts and can be included as dependencies of a generate target.
@@ -931,9 +931,9 @@ Arguments:
 - `ERROR_FILE`: The filename containing the unit test runtime error messages. Optional and does not need to exist when used with the `--loop` command.
 
 Options:
-- `--output-test LOCATION`: Specify where to save the fixed unit test file. The default file name is `test_<basename>_fixed.<language_file_extension>`. If an environment variable `PDD_FIX_TEST_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
-- `--output-code LOCATION`: Specify where to save the fixed code file. The default file name is `<basename>_fixed.<language_file_extension>`. If an environment variable `PDD_FIX_CODE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
-- `--output-results LOCATION`: Specify where to save the results of the error fixing process. The default file name is `<basename>_fix_results.log`. If an environment variable `PDD_FIX_RESULTS_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output-test LOCATION`: Specify where to save the fixed unit test file. The default file name is `test_<basename>_fixed.<language_file_extension>`. If an environment variable `fix_test_output_path` is set, the file will be saved in that path unless overridden by this option.
+- `--output-code LOCATION`: Specify where to save the fixed code file. The default file name is `<basename>_fixed.<language_file_extension>`. If an environment variable `fix_code_output_path` is set, the file will be saved in that path unless overridden by this option.
+- `--output-results LOCATION`: Specify where to save the results of the error fixing process. The default file name is `<basename>_fix_results.log`. If an environment variable `fix_results_output_path` is set, the file will be saved in that path unless overridden by this option.
 - `--loop`: Enable iterative fixing process.
   - `--verification-program PATH`: Specify the path to a Python program that verifies if the code still runs correctly.
   - `--max-attempts INT`: Set the maximum number of fix attempts before giving up (default is 3).
@@ -972,8 +972,8 @@ Arguments:
 - `EXAMPLE_CODE`: The filename of the example code that serves as the interface to the sub-module prompt file.
 
 Options:
-- `--output-sub LOCATION`: Specify where to save the generated sub-prompt file. The default file name is `sub_<basename>.prompt`. If an environment variable `PDD_SPLIT_SUB_PROMPT_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
-- `--output-modified LOCATION`: Specify where to save the modified prompt file. The default file name is `modified_<basename>.prompt`. If an environment variable `PDD_SPLIT_MODIFIED_PROMPT_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output-sub LOCATION`: Specify where to save the generated sub-prompt file. The default file name is `sub_<basename>.prompt`. If an environment variable `split_sub_prompt_output_path` is set, the file will be saved in that path unless overridden by this option.
+- `--output-modified LOCATION`: Specify where to save the modified prompt file. The default file name is `modified_<basename>.prompt`. If an environment variable `split_modified_prompt_output_path` is set, the file will be saved in that path unless overridden by this option.
 
 Example:
 ```
@@ -995,7 +995,7 @@ Arguments:
 
 Options:
 - `--budget FLOAT`: Set the maximum cost allowed for the change process (default is $5.0).
-- `--output LOCATION`: Specify where to save the modified prompt file. The default file name is `modified_<basename>.prompt`. If an environment variable `PDD_CHANGE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output LOCATION`: Specify where to save the modified prompt file. The default file name is `modified_<basename>.prompt`. If an environment variable `change_output_path` is set, the file will be saved in that path unless overridden by this option.
 - `--csv`: Use a CSV file for the change prompts instead of a single change prompt file. The CSV file should have columns: `prompt_name` and `change_instructions`. When this option is used, `INPUT_PROMPT_FILE` is not needed, and `INPUT_CODE` should be the directory where the code files are located. The command expects prompt names in the CSV to follow the `<basename>_<language>.prompt` convention. For each `prompt_name` in the CSV, it will look for the corresponding code file (e.g., `<basename>.<language_extension>`) within the specified `INPUT_CODE` directory. Output files will overwrite existing files unless `--output LOCATION` is specified. If `LOCATION` is a directory, the modified prompt files will be saved inside this directory using the default naming convention otherwise, if a csv filename is specified the modified prompts will be saved in that CSV file with columns 'prompt_name' and 'modified_prompt'.
 
 Example (single prompt change):
@@ -1024,7 +1024,7 @@ Arguments:
 **Important**: The `update` command has special behavior compared to other PDD commands. By default, it overwrites the original prompt file to maintain the core PDD principle of "prompts as source of truth." This ensures prompts remain in their canonical location and continue to serve as the authoritative specification.
 
 Options:
-- `--output LOCATION`: Specify where to save the updated prompt file. **If not specified, the original prompt file is overwritten to maintain it as the authoritative source of truth.** If an environment variable `PDD_UPDATE_OUTPUT_PATH` is set, it will be used only when `--output` is explicitly omitted and you want a different default location.
+- `--output LOCATION`: Specify where to save the updated prompt file. **If not specified, the original prompt file is overwritten to maintain it as the authoritative source of truth.** If an environment variable `update_output_path` is set, it will be used only when `--output` is explicitly omitted and you want a different default location.
 - `--git`: Use git history to find the original code file, eliminating the need for the `INPUT_CODE_FILE` argument.
 
 Example (overwrite original prompt - default behavior):
@@ -1057,7 +1057,7 @@ Arguments:
 - `CHANGE_FILE`: Filename whose content describes the changes that need to be analyzed and potentially applied to the prompts.
 
 Options:
-- `--output LOCATION`: Specify where to save the CSV file containing the analysis results. The default file name is `<change_file_basename>_detect.csv`.  If an environment variable `PDD_DETECT_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output LOCATION`: Specify where to save the CSV file containing the analysis results. The default file name is `<change_file_basename>_detect.csv`.  If an environment variable `detect_output_path` is set, the file will be saved in that path unless overridden by this option.
 
 Example:
 ```
@@ -1077,7 +1077,7 @@ Arguments:
 - `PROMPT2`: Second prompt in the pair of prompts we are comparing.
 
 Options:
-- `--output LOCATION`: Specify where to save the CSV file containing the conflict analysis results. The default file name is `<prompt1_basename>_<prompt2_basename>_conflict.csv`.  If an environment variable `PDD_CONFLICTS_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output LOCATION`: Specify where to save the CSV file containing the conflict analysis results. The default file name is `<prompt1_basename>_<prompt2_basename>_conflict.csv`.  If an environment variable `conflicts_output_path` is set, the file will be saved in that path unless overridden by this option.
 
 Example:
 ```
@@ -1101,7 +1101,7 @@ Arguments:
 - `ERROR_FILE`: Filename of the file containing the errors from the program run.
 
 Options:
-- `--output LOCATION`: Specify where to save the fixed code file. The default file name is `<basename>_fixed.<language_extension>`. If an environment variable `PDD_CRASH_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output LOCATION`: Specify where to save the fixed code file. The default file name is `<basename>_fixed.<language_extension>`. If an environment variable `crash_output_path` is set, the file will be saved in that path unless overridden by this option.
 - `--output-program LOCATION`: Specify where to save the fixed program file. The default file name is `<program_basename>_fixed.<language_extension>`.
 - `--loop`: Enable iterative fixing process.
   - `--max-attempts INT`: Set the maximum number of fix attempts before giving up (default is 3).
@@ -1179,8 +1179,8 @@ Arguments:
 - `DIRECTORY_PATH`: Directory path or glob pattern to search for dependency/example files. Supports wildcards like `*.py` and `**/*.py`. You can pass a plain directory (e.g., `examples/`) or a glob (e.g., `examples/**/*.py`). If you pass a plain directory (no wildcards), it is scanned recursively by default (equivalent to `examples/**/*`).
 
 Options:
-- `--output LOCATION`: Specify where to save the modified prompt file with dependencies inserted. The default file name is `<basename>_with_deps.prompt`. If an environment variable `PDD_AUTO_DEPS_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
-- `--csv FILENAME`: Specify the CSV file that contains or will contain dependency information. Default is "project_dependencies.csv". If the environment variable`PDD_AUTO_DEPS_CSV_PATH` is set, that path will be used unless overridden by this option.
+- `--output LOCATION`: Specify where to save the modified prompt file with dependencies inserted. The default file name is `<basename>_with_deps.prompt`. If an environment variable `auto_deps_output_path` is set, the file will be saved in that path unless overridden by this option.
+- `--csv FILENAME`: Specify the CSV file that contains or will contain dependency information. Default is "project_dependencies.csv". If the environment variable`auto_deps_csv_path` is set, that path will be used unless overridden by this option.
 - `--force-scan`: Force rescanning of all potential dependency files even if they exist in the CSV file.
 
 The command maintains a CSV file with the following columns:
@@ -1214,9 +1214,9 @@ Arguments:
 - `PROGRAM_FILE`: Filename of the executable program to run for verification (e.g., the example script generated by `pdd example`). The output of this program run will be judged by the LLM.
 
 Options:
-- `--output-results LOCATION`: Specify where to save the verification and fixing results log. This log typically contains the final status (pass/fail), number of attempts, total cost, and potentially LLM reasoning or identified issues. Default: `<basename>_verify_results.log`. If an environment variable `PDD_VERIFY_RESULTS_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
-- `--output-code LOCATION`: Specify where to save the final code file after verification attempts (even if verification doesn't fully succeed). Default: `<basename>_verified.<language_extension>`. If an environment variable `PDD_VERIFY_CODE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
-- `--output-program LOCATION`: Specify where to save the final program file after verification attempts (even if verification doesn't fully succeed). The default file name is `<program_basename>_verified.<language_extension>`. If an environment variable `PDD_VERIFY_PROGRAM_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output-results LOCATION`: Specify where to save the verification and fixing results log. This log typically contains the final status (pass/fail), number of attempts, total cost, and potentially LLM reasoning or identified issues. Default: `<basename>_verify_results.log`. If an environment variable `verify_results_output_path` is set, the file will be saved in that path unless overridden by this option.
+- `--output-code LOCATION`: Specify where to save the final code file after verification attempts (even if verification doesn't fully succeed). Default: `<basename>_verified.<language_extension>`. If an environment variable `verify_code_output_path` is set, the file will be saved in that path unless overridden by this option.
+- `--output-program LOCATION`: Specify where to save the final program file after verification attempts (even if verification doesn't fully succeed). The default file name is `<program_basename>_verified.<language_extension>`. If an environment variable `verify_program_output_path` is set, the file will be saved in that path unless overridden by this option.
 - `--max-attempts INT`: Set the maximum number of fix attempts within the verification loop before giving up (default is 3).
 - `--budget FLOAT`: Set the maximum cost allowed for the entire verification and iterative fixing process (default is $5.0).
 
@@ -1358,8 +1358,8 @@ PDD automatically detects the appropriate context based on:
 
 **Available Context Settings**:
 - `generate_output_path`: Where generated code files are saved
-- `test_output_path`: Where test files are saved
 - `example_output_path`: Where example files are saved
+- `test_output_path`: Where test files are saved
 - `default_language`: Default programming language for the context
 - `target_coverage`: Default test coverage target
 - `strength`: Default AI model strength (0.0-1.0)
@@ -1387,40 +1387,45 @@ PDD uses several environment variables to customize its behavior:
 
 #### Core Environment Variables
 
-- **`PDD_PATH`**: Points to the root directory of PDD. This is automatically set during pip installation to the directory where PDD is installed. You typically don't need to set this manually.
-- **`PDD_AUTO_UPDATE`**: Controls whether PDD automatically updates itself (default: true).
-- **`PDD_CONFIG_PATH`**: Override the default `.pddrc` file location (default: searches upward from current directory).
-- **`PDD_DEFAULT_CONTEXT`**: Default context to use when no context is detected (default: "default").
-- **`PDD_DEFAULT_LANGUAGE`**: Global default programming language when not specified in context (default: "python").
+- **`target_coverage`**: Global default test coverage target when not specified in context
+- **`strength`**: Global default AI model strength (0.0-1.0) when not specified in context
+- **`temperature`**: Global default AI model temperature when not specified in context
+- **`budget`**: Global default budget for iterative commands when not specified in context
+- **`max_attempts`**: Global default maximum attempts for fixing operations when not specified in context
+- **`path`**: Points to the root directory of PDD. This is automatically set during pip installation to the directory where PDD is installed. You typically don't need to set this manually.
+- **`auto_update`**: Controls whether PDD automatically updates itself (default: true).
+- **`config_path`**: Override the default `.pddrc` file location (default: searches upward from current directory).
+- **`default_context`**: Default context to use when no context is detected (default: "default").
+- **`default_language`**: Global default programming language when not specified in context (default: "python").
 
 #### Output Path Variables
 
 **Note**: When using `.pddrc` configuration, context-specific settings take precedence over these global environment variables.
 
-- **`PDD_GENERATE_OUTPUT_PATH`**: Default path for the `generate` command.
-- **`PDD_EXAMPLE_OUTPUT_PATH`**: Default path for the `example` command.
-- **`PDD_TEST_OUTPUT_PATH`**: Default path for the unit test file.
-- **`PDD_TEST_COVERAGE_TARGET`**: Default target coverage percentage.
-- **`PDD_PREPROCESS_OUTPUT_PATH`**: Default path for the `preprocess` command.
-- **`PDD_FIX_TEST_OUTPUT_PATH`**: Default path for the fixed unit test files in the `fix` command.
-- **`PDD_FIX_CODE_OUTPUT_PATH`**: Default path for the fixed code files in the `fix` command.
-- **`PDD_FIX_RESULTS_OUTPUT_PATH`**: Default path for the results file generated by the `fix` command.
-- **`PDD_SPLIT_SUB_PROMPT_OUTPUT_PATH`**: Default path for the sub-prompts generated by the `split` command.
-- **`PDD_SPLIT_MODIFIED_PROMPT_OUTPUT_PATH`**: Default path for the modified prompts generated by the `split` command.
-- **`PDD_CHANGE_OUTPUT_PATH`**: Default path for the modified prompts generated by the `change` command.
-- **`PDD_UPDATE_OUTPUT_PATH`**: Default path for the updated prompts generated by the `update` command.
-- **`PDD_OUTPUT_COST_PATH`**: Default path for the cost tracking CSV file.
-- **`PDD_DETECT_OUTPUT_PATH`**: Default path for the CSV file generated by the `detect` command.
-- **`PDD_CONFLICTS_OUTPUT_PATH`**: Default path for the CSV file generated by the `conflicts` command.
-- **`PDD_CRASH_OUTPUT_PATH`**: Default path for the fixed code file generated by the `crash` command.
-- **`PDD_CRASH_PROGRAM_OUTPUT_PATH`**: Default path for the fixed program file generated by the `crash` command.
-- **`PDD_TRACE_OUTPUT_PATH`**: Default path for the trace analysis results generated by the `trace` command.
-- **`PDD_BUG_OUTPUT_PATH`**: Default path for the unit test file generated by the `bug` command.
-- **`PDD_AUTO_DEPS_OUTPUT_PATH`**: Default path for the modified prompt files generated by the `auto-deps` command.
-- **`PDD_AUTO_DEPS_CSV_PATH`**: Default path and filename for the CSV file used by the auto-deps command to store dependency information. If set, this overrides the default "project_dependencies.csv" filename.
-- **`PDD_VERIFY_RESULTS_OUTPUT_PATH`**: Default path for the results log file generated by the `verify` command.
-- **`PDD_VERIFY_CODE_OUTPUT_PATH`**: Default path for the final code file generated by the `verify` command.
-- **`PDD_VERIFY_PROGRAM_OUTPUT_PATH`**: Default path for the final program file generated by the `verify` command.
+- **`generate_output_path`**: Default path for the `generate` command.
+- **`example_output_path`**: Default path for the `example` command.
+- **`test_output_path`**: Default path for the unit test file.
+- **`test_coverage_target`**: Default target coverage percentage.
+- **`preprocess_output_path`**: Default path for the `preprocess` command.
+- **`fix_test_output_path`**: Default path for the fixed unit test files in the `fix` command.
+- **`fix_code_output_path`**: Default path for the fixed code files in the `fix` command.
+- **`fix_results_output_path`**: Default path for the results file generated by the `fix` command.
+- **`split_sub_prompt_output_path`**: Default path for the sub-prompts generated by the `split` command.
+- **`split_modified_prompt_output_path`**: Default path for the modified prompts generated by the `split` command.
+- **`change_output_path`**: Default path for the modified prompts generated by the `change` command.
+- **`update_output_path`**: Default path for the updated prompts generated by the `update` command.
+- **`output_cost_path`**: Default path for the cost tracking CSV file.
+- **`detect_output_path`**: Default path for the CSV file generated by the `detect` command.
+- **`conflicts_output_path`**: Default path for the CSV file generated by the `conflicts` command.
+- **`crash_output_path`**: Default path for the fixed code file generated by the `crash` command.
+- **`crash_program_output_path`**: Default path for the fixed program file generated by the `crash` command.
+- **`trace_output_path`**: Default path for the trace analysis results generated by the `trace` command.
+- **`bug_output_path`**: Default path for the unit test file generated by the `bug` command.
+- **`auto_deps_output_path`**: Default path for the modified prompt files generated by the `auto-deps` command.
+- **`auto_deps_csv_path`**: Default path and filename for the CSV file used by the auto-deps command to store dependency information. If set, this overrides the default "project_dependencies.csv" filename.
+- **`verify_results_output_path`**: Default path for the results log file generated by the `verify` command.
+- **`verify_code_output_path`**: Default path for the final code file generated by the `verify` command.
+- **`verify_program_output_path`**: Default path for the final program file generated by the `verify` command.
 
 ### Configuration Priority
 
@@ -1428,7 +1433,7 @@ PDD resolves configuration settings in the following order (highest to lowest pr
 
 1. **Command-line options** (e.g., `--output`, `--strength`)
 2. **Context-specific settings** (from `.pddrc` file)
-3. **Global environment variables** (e.g., `PDD_GENERATE_OUTPUT_PATH`)
+3. **Global environment variables** (e.g., `generate_output_path`)
 4. **Built-in defaults**
 
 ### Migration from Environment Variables
@@ -1437,9 +1442,9 @@ If you're currently using environment variables, you can migrate to `.pddrc` con
 
 ```bash
 # Before: Environment variables
-export PDD_GENERATE_OUTPUT_PATH=backend/src/
-export PDD_TEST_OUTPUT_PATH=backend/tests/
-export PDD_DEFAULT_LANGUAGE=python
+export generate_output_path=backend/src/
+export test_output_path=backend/tests/
+export default_language=python
 
 # After: .pddrc file
 contexts:
@@ -1458,7 +1463,7 @@ The `.pddrc` approach is recommended for team projects as it ensures consistent 
 PDD uses a CSV file (`llm_model.csv`) to store information about available AI models, their costs, capabilities, and required API key names. When running commands locally (e.g., using the `update_model_costs.py` utility or potentially local execution modes if implemented), PDD determines which configuration file to use based on the following priority:
 
 1.  **User-specific:** `~/.pdd/llm_model.csv` - If this file exists, it takes precedence over any project-level configuration. This allows users to maintain a personal, system-wide model configuration.
-2.  **Project-specific:** `<PROJECT_ROOT>/.pdd/llm_model.csv` - If the user-specific file is not found, PDD looks for the file within the `.pdd` directory of the determined project root (based on `PDD_PATH` or auto-detection).
+2.  **Project-specific:** `<PROJECT_ROOT>/.pdd/llm_model.csv` - If the user-specific file is not found, PDD looks for the file within the `.pdd` directory of the determined project root (based on `path` or auto-detection).
 3.  **Package default:** If neither of the above exist, PDD falls back to the default configuration bundled with the package installation.
 
 This tiered approach allows for both shared project configurations and individual user overrides, while ensuring PDD works out-of-the-box without requiring manual configuration.
@@ -1467,13 +1472,13 @@ This tiered approach allows for both shared project configurations and individua
 
 These environment variables allow you to set default output locations for each command. If an environment variable is set and the corresponding `--output` option is not used in the command, PDD will use the path specified by the environment variable. This can help streamline your workflow by reducing the need to specify output paths for frequently used commands.
 
-For example, if you set `PDD_GENERATE_OUTPUT_PATH=/path/to/generated/code/`, all files created by the `generate` command will be saved in that directory by default, unless overridden by the `--output` option in the command line.
+For example, if you set `generate_output_path=/path/to/generated/code/`, all files created by the `generate` command will be saved in that directory by default, unless overridden by the `--output` option in the command line.
 
 To set these environment variables, you can add them to your shell configuration file (e.g., `.bashrc` or `.zshrc`) or set them before running PDD commands:
 
 ```bash
-export PDD_GENERATE_OUTPUT_PATH=/path/to/generated/code/
-export PDD_TEST_OUTPUT_PATH=/path/to/tests/
+export generate_output_path=/path/to/generated/code/
+export test_output_path=/path/to/tests/
 # ... set other variables as needed
 
 pdd generate factorial_calculator_python.prompt  # Output will be saved in /path/to/generated/code/
@@ -1579,7 +1584,7 @@ When using PDD in cloud mode:
    - Track usage per team member
 
 Additionally:
-- Consider disabling auto-updates in production environments using `PDD_AUTO_UPDATE=false`
+- Consider disabling auto-updates in production environments using `auto_update=false`
 - Implement a controlled update process for production systems
 - Review changelogs before manually updating PDD in sensitive environments
 
