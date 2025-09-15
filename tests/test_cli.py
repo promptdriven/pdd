@@ -41,6 +41,101 @@ def test_cli_list_contexts(runner):
     assert "default" in result.output
 
 
+@patch('pdd.cli.auto_update')
+def test_cli_list_contexts_early_exit_no_auto_update(mock_auto_update, runner, tmp_path, monkeypatch):
+    """Ensure --list-contexts exits early and does not call auto_update."""
+    # Create a .pddrc with multiple contexts
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '  alt:\n'
+        '    paths: ["src/**"]\n'
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(cli.cli, ["--list-contexts"])
+    assert result.exit_code == 0
+    # Should list both contexts, one per line
+    assert "default" in result.output
+    assert "alt" in result.output
+    # Must not perform auto-update when listing
+    mock_auto_update.assert_not_called()
+
+
+def test_cli_list_contexts_malformed_pddrc_shows_usage_error(runner, tmp_path, monkeypatch):
+    """Malformed .pddrc should cause --list-contexts to fail with usage error."""
+    (tmp_path / ".pddrc").write_text('version: "1.0"\n')  # Missing contexts
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(cli.cli, ["--list-contexts"])
+    assert result.exit_code == 2
+    assert "Failed to load .pddrc" in result.output
+
+
+@patch('pdd.cli.auto_update')
+@patch('pdd.cli.code_generator_main')
+def test_cli_context_known_passed_to_subcommand(mock_main, mock_auto_update, runner, tmp_path, monkeypatch):
+    """--context NAME sets ctx.obj['context'] and threads into the subcommand."""
+    # Setup .pddrc with an alt context
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '  alt:\n'
+        '    paths: ["**"]\n'
+    )
+    prompt = tmp_path / "prompts" / "demo_python.prompt"
+    prompt.write_text("dummy")
+    monkeypatch.chdir(tmp_path)
+
+    mock_main.return_value = ('code', False, 0.0, 'model')
+
+    result = runner.invoke(cli.cli, ["--context", "alt", "generate", str(prompt)])
+    assert result.exit_code == 0
+    # Verify subcommand was called and ctx carries the override
+    mock_main.assert_called_once()
+    passed_ctx = mock_main.call_args.kwargs.get('ctx')
+    assert passed_ctx is not None
+    assert passed_ctx.obj.get('context') == 'alt'
+
+
+@patch('pdd.cli.auto_update')
+@patch('pdd.cli.code_generator_main')
+def test_cli_context_unknown_raises_usage_error(mock_main, mock_auto_update, runner, tmp_path, monkeypatch):
+    """Unknown --context fails early with UsageError (exit code 2) and no subcommand runs."""
+    # .pddrc only has default
+    (tmp_path / ".pddrc").write_text('contexts:\n  default:\n    paths: ["**"]\n')
+    # Create a dummy prompt path (should not be used due to early error)
+    (tmp_path / "prompts").mkdir()
+    prompt = tmp_path / "prompts" / "x_python.prompt"
+    prompt.write_text("dummy")
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(cli.cli, ["--context", "missing", "generate", str(prompt)])
+    assert result.exit_code == 2  # click.UsageError
+    assert "Unknown context 'missing'" in result.output
+    mock_main.assert_not_called()
+    mock_auto_update.assert_not_called()
+
+
+@patch('pdd.cli.auto_update')
+@patch('pdd.cli.code_generator_main')
+def test_cli_context_unknown_without_pddrc(mock_main, mock_auto_update, runner, tmp_path, monkeypatch):
+    """Unknown context should still fail even when no .pddrc exists (only 'default' is available)."""
+    (tmp_path / "prompts").mkdir()
+    prompt = tmp_path / "prompts" / "x_python.prompt"
+    prompt.write_text("dummy")
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(cli.cli, ["--context", "alt", "generate", str(prompt)])
+    assert result.exit_code == 2
+    assert "Unknown context 'alt'" in result.output
+    mock_main.assert_not_called()
+    mock_auto_update.assert_not_called()
+
+
 def test_cli_version(runner):
     """Test `pdd --version`."""
     result = runner.invoke(cli.cli, ["--version"])

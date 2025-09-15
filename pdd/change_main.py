@@ -203,6 +203,7 @@ def change_main(
                 quiet=quiet,
                 command="change",
                 command_options=command_options,
+                context_override=ctx.obj.get('context')
             )
             logger.debug("construct_paths returned:")
             logger.debug("  input_strings keys: %s", list(input_strings.keys()))

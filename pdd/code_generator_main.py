@@ -184,6 +184,7 @@ def code_generator_main(
             quiet=quiet,
             command="generate",
             command_options=command_options,
+            context_override=ctx.obj.get('context')
         )
         prompt_content = input_strings["prompt_file"]
         # Determine final output path: if user passed a directory, use resolved file path

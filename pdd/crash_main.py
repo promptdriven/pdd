@@ -77,7 +77,8 @@ def crash_main(
             force=force,
             quiet=quiet,
             command="crash",
-            command_options=command_options
+            command_options=command_options,
+            context_override=ctx.obj.get('context')
         )
 
         prompt_content = input_strings["prompt_file"]
