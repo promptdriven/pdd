@@ -675,9 +675,9 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "3" ]; then
     log "3a. Testing 'sync --budget 2.0'"
     rm -f "pdd/${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
     rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
-    run_pdd_command_noexit sync --budget 2.0 "$SIMPLE_BASENAME"
+    run_pdd_command_noexit sync --budget 2.0 --context regression_pdd "$SIMPLE_BASENAME"
     # Should still create basic files even with low budget
-    check_exists "pdd/${SIMPLE_BASENAME}.py" "Generated code with budget limit"
+    check_sync_files "$SIMPLE_BASENAME" "python" false
     
     # Test with max attempts
     log "3b. Testing 'sync --max-attempts 1'"
