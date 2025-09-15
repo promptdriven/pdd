@@ -198,8 +198,40 @@ run_pdd_command_base() {
         log "Running with --local flag"
     fi
 
+    # Lift global flags (e.g., --context, --list-contexts) before the command name
+    local global_ctx_args=()
+    local sub_args=()
+    local i=0
+    while [ $i -lt ${#args[@]} ]; do
+        local a=${args[$i]}
+        if [ "$a" = "--context" ]; then
+            global_ctx_args+=("--context")
+            if [ $((i+1)) -lt ${#args[@]} ]; then
+                global_ctx_args+=("${args[$((i+1))]}")
+                i=$((i+2))
+                continue
+            else
+                i=$((i+1))
+                continue
+            fi
+        elif [ "$a" = "--list-contexts" ]; then
+            global_ctx_args+=("--list-contexts")
+            i=$((i+1))
+            continue
+        else
+            sub_args+=("$a")
+            i=$((i+1))
+        fi
+    done
+
+    # Append globals (if any), then subcommand and its args
+    if [ "${#global_ctx_args[@]:-0}" -gt 0 ]; then
+        cmd_array+=("${global_ctx_args[@]}")
+    fi
     cmd_array+=("$command_name")
-    cmd_array+=("${args[@]}")
+    if [ "${#sub_args[@]:-0}" -gt 0 ]; then
+        cmd_array+=("${sub_args[@]}")
+    fi
 
     local full_command_str="${cmd_array[*]}" # For logging
     log_timestamped "----------------------------------------"
