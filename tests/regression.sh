@@ -231,8 +231,42 @@ run_pdd_command_base() {
         log "Running with --local flag"
     fi
 
+    # Lift global flags (e.g., --context, --list-contexts) before the command name
+    local global_ctx_args=()
+    local sub_args=()
+    local i=0
+    while [ $i -lt ${#args[@]} ]; do
+        local a=${args[$i]}
+        if [ "$a" = "--context" ]; then
+            # Move --context and its value into global args
+            global_ctx_args+=("--context")
+            if [ $((i+1)) -lt ${#args[@]} ]; then
+                global_ctx_args+=("${args[$((i+1))]}")
+                i=$((i+2))
+                continue
+            else
+                # Malformed, but pass through anyway
+                i=$((i+1))
+                continue
+            fi
+        elif [ "$a" = "--list-contexts" ]; then
+            global_ctx_args+=("--list-contexts")
+            i=$((i+1))
+            continue
+        else
+            sub_args+=("$a")
+            i=$((i+1))
+        fi
+    done
+
+    # Assemble final command
+    if [ "${#global_ctx_args[@]:-0}" -gt 0 ]; then
+        cmd_array+=("${global_ctx_args[@]}")
+    fi
     cmd_array+=("$command_name")
-    cmd_array+=("${args[@]}")
+    if [ "${#sub_args[@]:-0}" -gt 0 ]; then
+        cmd_array+=("${sub_args[@]}")
+    fi
 
     local full_command_str="${cmd_array[*]}" # For logging
     log_timestamped "----------------------------------------"
@@ -435,9 +469,10 @@ contexts:
       example_output_path: "examples_default/"
   alt:
     defaults:
-      generate_output_path: "src_alt/"
-      test_output_path: "tests_alt/"
-      example_output_path: "examples_alt/"
+      default_language: "python"
+  envonly:
+    defaults:
+      default_language: "python"
 EOF
 
   # 0a. --list-contexts should print available contexts and exit 0
@@ -480,7 +515,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "1" ]; then
   mkdir "$ENV_OUT_DIR"
   export PDD_GENERATE_OUTPUT_PATH="$ENV_OUT_DIR/" # Trailing slash indicates directory
   # Use envonly context so env vars take precedence (no context paths)
-  run_pdd_command --local --context alt generate "$PROMPTS_PATH/$MATH_PROMPT" # No --output
+  run_pdd_command --local --context envonly generate "$PROMPTS_PATH/$MATH_PROMPT" # No --output
   # Default name is <basename>.<lang_ext> which should be simple_math.py
   check_exists "$ENV_OUT_DIR/$MATH_SCRIPT" "'generate' output via env var" # Check for the Python file, not the prompt
 
@@ -1032,7 +1067,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "8" ]; then
   export PDD_TEST_OUTPUT_PATH="$ENV_OUT_DIR_TEST/" # Trailing slash indicates directory
 
   # Use envonly context so env vars take precedence (no context paths)
-  run_pdd_command --context alt test "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" # No --output
+  run_pdd_command --context envonly test "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" # No --output
   # Default name is test_<basename>.<lang_ext>
   check_exists "$ENV_OUT_DIR_TEST/$MATH_TEST_SCRIPT" "'test' output via env var"
 
