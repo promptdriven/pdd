@@ -44,7 +44,8 @@ def detect_change_main(
             force=ctx.obj.get('force', False),
             quiet=ctx.obj.get('quiet', False),
             command="detect",
-            command_options=command_options
+            command_options=command_options,
+            context_override=ctx.obj.get('context')
         )
 
         # Get change description content

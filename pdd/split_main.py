@@ -53,7 +53,8 @@ def split_main(
             force=ctx.obj.get('force', False),
             quiet=ctx.obj.get('quiet', False),
             command="split",
-            command_options=command_options
+            command_options=command_options,
+            context_override=ctx.obj.get('context')
         )
 
         # Get parameters from context

@@ -39,7 +39,8 @@ def trace_main(ctx: click.Context, prompt_file: str, code_file: str, code_line: 
             force=ctx.obj.get('force', False),
             quiet=quiet,
             command="trace",
-            command_options=command_options
+            command_options=command_options,
+            context_override=ctx.obj.get('context')
         )
         logger.debug("File paths constructed successfully")
 

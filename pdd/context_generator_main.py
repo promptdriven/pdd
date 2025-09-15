@@ -31,7 +31,8 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
             force=ctx.obj.get('force', False),
             quiet=ctx.obj.get('quiet', False),
             command="example",
-            command_options=command_options
+            command_options=command_options,
+            context_override=ctx.obj.get('context')
         )
 
         # Load input files
