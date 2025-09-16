@@ -127,15 +127,25 @@ If you’re brand new to PDD, follow these steps to see it in action.
    export OPENAI_API_KEY="your-openai-key"
    ```
 
-4. **Run the setup helper** (creates `~/.pdd/llm_model.csv` for you):
-   ```bash
-    cd ../../utils/post_setup
-    python pdd-setup.py
-   ```
+### Post-Installation Setup (Required first step after installation)
 
-   👉 If you prefer to configure things manually (without using `pdd-setup.py`),  
-see [examples/SETUP_WITH_GEMINI.md](examples/SETUP_WITH_GEMINI.md) for full instructions  
-on obtaining a Gemini API key and creating your own `~/.pdd/llm_model.csv`.
+Run the guided setup:
+```bash
+pdd setup
+```
+
+This wraps the interactive bootstrap utility to install shell tab completion, capture your API keys, create ~/.pdd configuration files, and write the starter prompt. Re-run it any time to update keys or reinstall completion.
+
+If you skip this step, the first regular pdd command you run will detect the missing setup files and print a reminder banner so you can finish onboarding later.
+
+Reload your shell so the new completion and environment hooks are available:
+```bash
+source ~/.zshrc  # or source ~/.bashrc / fish equivalent
+```
+
+**Legacy Setup (Deprecated)**: The old `pdd-setup.py` script is deprecated. Use `pdd setup` instead.
+
+👉 If you prefer to configure things manually, see [examples/SETUP_WITH_GEMINI.md](examples/SETUP_WITH_GEMINI.md) for full instructions on obtaining a Gemini API key and creating your own `~/.pdd/llm_model.csv`.
 
 5. **Run Hello**:
    ```bash

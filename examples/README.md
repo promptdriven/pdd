@@ -2,6 +2,27 @@
 
 This directory contains examples that demonstrate comparisons between using Cursor and Prompt-Driven Development (PDD) for various programming tasks. These examples serve as practical illustrations of how PDD can be used to generate and modify code, via the pdd sync command, and how it compares to traditional development approaches.
 
+## Getting Started
+
+### Post-Installation Setup (Required first step after installation)
+
+Before running any examples, make sure you've completed the PDD setup:
+
+```bash
+pdd setup
+```
+
+This command will guide you through:
+- Installing shell tab completion
+- Capturing your API keys
+- Creating ~/.pdd configuration files
+- Writing the starter prompt
+
+After setup, reload your shell:
+```bash
+source ~/.zshrc  # or source ~/.bashrc / fish equivalent
+```
+
 ## Available Examples
 
 ### Handpaint
