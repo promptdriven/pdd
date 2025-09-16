@@ -129,7 +129,7 @@ If you’re brand new to PDD, follow these steps to see it in action.
 
 4. **Run the setup helper** (creates `~/.pdd/llm_model.csv` for you):
    ```bash
-    cd utils/post_setup
+    cd ../../utils/post_setup
     python pdd-setup.py
    ```
 
