@@ -74,7 +74,8 @@ def test_success_with_output(mock_file, mock_rprint, mock_construct_paths, mock_
         force=False,
         quiet=False,
         command='conflicts',
-        command_options={'output': 'path/to/output.csv'}
+        command_options={'output': 'path/to/output.csv'},
+        context_override=None,
     )
 
     # Ensure conflicts_in_prompts was called correctly
@@ -170,7 +171,8 @@ def test_success_without_output(
         force=False,
         quiet=False,
         command='conflicts',
-        command_options={'output': None}
+        command_options={'output': None},
+        context_override=None,
     )
     
     # Ensure conflicts_in_prompts was called correctly
@@ -372,7 +374,8 @@ def test_force_option(mock_file, mock_rprint, mock_construct_paths, mock_conflic
         force=True,
         quiet=False,
         command='conflicts',
-        command_options={'output': 'output/output.csv'}
+        command_options={'output': 'output/output.csv'},
+        context_override=None,
     )
     
     # Ensure conflicts_in_prompts was called correctly
@@ -531,7 +534,8 @@ def test_verbose_mode(mock_dict_writer, mock_file, mock_rprint, mock_construct_p
         force=False,
         quiet=False,
         command='conflicts',
-        command_options={'output': None}
+        command_options={'output': None},
+        context_override=None,
     )
 
     # Check that CSV writing happens (even if output is None, it defaults)

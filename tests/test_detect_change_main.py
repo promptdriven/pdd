@@ -86,7 +86,8 @@ def test_detect_change_main_success(mock_construct_paths, mock_detect_change, mo
         force=False,
         quiet=False,
         command='detect',
-        command_options={'output': 'output.csv'}
+        command_options={'output': 'output.csv'},
+        context_override=None,
     )
 
     mock_detect_change.assert_called_once_with(

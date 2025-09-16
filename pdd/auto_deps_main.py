@@ -49,7 +49,8 @@ def auto_deps_main(  # pylint: disable=too-many-arguments, too-many-locals
             force=ctx.obj.get('force', False),
             quiet=ctx.obj.get('quiet', False),
             command="auto-deps",
-            command_options=command_options
+            command_options=command_options,
+            context_override=ctx.obj.get('context')
         )
 
         # Get the CSV file path
