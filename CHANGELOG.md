@@ -1,5 +1,3 @@
-<<<<<<< HEAD
-=======
 ## v0.0.55 (2025-09-12)
 
 ### CLI & Code Generation
@@ -12,15 +10,13 @@
 - Honor `.pddrc` `generate_output_path` in discovery logic.
 
 ### Docs
-- README: Document parameterized prompts, output expansion, and clarify PDD vs. “Vibe coding”.
+- README: Document parameterized prompts, output expansion, and clarify PDD vs. "Vibe coding".
 
 ### VS Code Extension
 - Initial release of the "prompt-highlighter" extension providing `.prompt` syntax highlighting, TextMate grammar, and language configuration. 
 
 ### Build/Tooling
 - Add `.gitignore`. Thanks cilibrar@gmail.com!
-
->>>>>>> upstream/main
 ## v0.0.54 (2025-09-07)
 
 ### CLI & Orchestration

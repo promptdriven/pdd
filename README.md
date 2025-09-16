@@ -1,10 +1,6 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-<<<<<<< HEAD
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.54-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
-=======
 ![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.55-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
->>>>>>> upstream/main
 
 ## Introduction
 
@@ -263,11 +259,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-<<<<<<< HEAD
-Current version: 0.0.54
-=======
 Current version: 0.0.55
->>>>>>> upstream/main
 
 To check your installed version, run:
 ```
