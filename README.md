@@ -272,6 +272,7 @@ PDD includes an auto-update feature to ensure you always have access to the late
 PDD supports a wide range of programming languages, including but not limited to:
 - Python
 - JavaScript
+- TypeScript
 - Java
 - C++
 - Ruby
