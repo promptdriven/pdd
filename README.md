@@ -1387,11 +1387,11 @@ PDD uses several environment variables to customize its behavior:
 
 #### Core Environment Variables
 
-- **`target_coverage`**: Global default test coverage target when not specified in context
-- **`strength`**: Global default AI model strength (0.0-1.0) when not specified in context
-- **`temperature`**: Global default AI model temperature when not specified in context
-- **`budget`**: Global default budget for iterative commands when not specified in context
-- **`max_attempts`**: Global default maximum attempts for fixing operations when not specified in context
+- **`target_coverage`**: Global default test coverage target when not specified in context.
+- **`strength`**: Global default AI model strength (0.0-1.0) when not specified in context.
+- **`temperature`**: Global default AI model temperature when not specified in context.
+- **`budget`**: Global default budget for iterative commands when not specified in context.
+- **`max_attempts`**: Global default maximum attempts for fixing operations when not specified in context.
 - **`path`**: Points to the root directory of PDD. This is automatically set during pip installation to the directory where PDD is installed. You typically don't need to set this manually.
 - **`auto_update`**: Controls whether PDD automatically updates itself (default: true).
 - **`config_path`**: Override the default `.pddrc` file location (default: searches upward from current directory).
