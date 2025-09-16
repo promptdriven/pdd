@@ -1,4 +1,9 @@
+# Exclude common dev and meta files from the VSIX
+.git/**
+.github/**
 .vscode/**
-.vscode-test/**
-.gitignore
-vsc-extension-quickstart.md
+test-fixtures/**
+**/*.map
+**/*.log
+node_modules/**
+*.vsix

@@ -172,6 +172,14 @@ def double_curly(text: str, exclude_keys: Optional[List[str]] = None) -> str:
             "2": {{"id": "2", "name": "Resource Two"}}
         }}"""
     
+    # Protect ${IDENT} placeholders so they remain unchanged
+    # Use placeholders that won't collide with typical content
+    protected_vars: List[str] = []
+    def _protect_var(m):
+        protected_vars.append(m.group(0))
+        return f"__PDD_VAR_{len(protected_vars)-1}__"
+    text = re.sub(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}", _protect_var, text)
+
     # First, protect any existing double curly braces
     text = re.sub(r'\{\{([^{}]*)\}\}', r'__ALREADY_DOUBLED__\1__END_ALREADY__', text)
     
@@ -188,6 +196,12 @@ def double_curly(text: str, exclude_keys: Optional[List[str]] = None) -> str:
     
     # Restore already doubled brackets
     text = re.sub(r'__ALREADY_DOUBLED__(.*?)__END_ALREADY__', r'{{\1}}', text)
+
+    # Restore protected ${IDENT} placeholders
+    def _restore_var(m):
+        idx = int(m.group(1))
+        return protected_vars[idx] if 0 <= idx < len(protected_vars) else m.group(0)
+    text = re.sub(r"__PDD_VAR_(\d+)__", _restore_var, text)
     
     # Special handling for code blocks
     code_block_pattern = r'```([\w\s]*)\n([\s\S]*?)```'

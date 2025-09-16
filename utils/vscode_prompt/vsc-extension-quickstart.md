@@ -27,3 +27,23 @@
 
 * To start using your extension with Visual Studio Code copy it into the `<user home>/.vscode/extensions` folder and restart Code.
 * To share your extension with the world, read on https://code.visualstudio.com/docs about publishing an extension.
+
+## Package & Local Install (.vsix)
+
+Build a distributable `.vsix` and install it locally for testing:
+
+- Package (one-off): `npx @vscode/vsce package`
+- Or with global install: `vsce package`
+
+Output: `prompt-<version>.vsix` in the project folder (e.g., `prompt-0.0.1.vsix`).
+
+Install locally:
+
+- VS Code: `code --install-extension prompt-<version>.vsix`
+- Cursor: `cursor --install-extension prompt-<version>.vsix`
+
+Tips:
+
+- Bump `version` in `package.json` before packaging.
+- Ensure `publisher` in `package.json` is correct.
+- `.vscodeignore` controls what’s included in the package.
