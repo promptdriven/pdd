@@ -1,6 +1,10 @@
 """PDD - Prompt Driven Development"""
 
+<<<<<<< HEAD
 __version__ = "0.0.54"
+=======
+__version__ = "0.0.55"
+>>>>>>> upstream/main
 
 # Strength parameter used for LLM extraction across the codebase
 # Used in postprocessing, XML tagging, code generation, and other extraction
