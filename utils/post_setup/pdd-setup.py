@@ -1,16 +1,36 @@
 #!/usr/bin/env python3
 """
-PDD Setup Script - Post-install configuration tool for PDD (Prompt Driven Development)
-Helps new users bootstrap their PDD configuration with LLM API keys and basic settings.
+PDD Setup Script - DEPRECATED
+
+This script is deprecated. Please use `pdd setup` instead.
+
+The new `pdd setup` command provides the same functionality with better integration
+into the PDD CLI and improved user experience.
 """
 
-import os
 import sys
-import subprocess
-import json
-import requests
-from pathlib import Path
-from typing import Dict, Optional, Tuple, List
+
+def main():
+    print("=" * 80)
+    print("⚠️  DEPRECATION NOTICE")
+    print("=" * 80)
+    print()
+    print("This pdd-setup.py script is deprecated and will be removed in a future version.")
+    print()
+    print("Please use the new setup command instead:")
+    print("    pdd setup")
+    print()
+    print("The new command provides:")
+    print("• Better integration with the PDD CLI")
+    print("• Improved user experience")
+    print("• Shell completion installation")
+    print("• Automatic configuration detection")
+    print()
+    print("=" * 80)
+    sys.exit(1)
+
+if __name__ == '__main__':
+    main()
 
 # Global variables for non-ASCII characters and colors
 HEAVY_HORIZONTAL = "━"
