@@ -7,11 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pdd-cli"
-<<<<<<< HEAD
-version = "0.0.54"
-=======
 version = "0.0.55"
->>>>>>> upstream/main
 description = "PDD (Prompt-Driven Development) Command Line Interface"
 readme = {file = "pypi_description.rst", content-type = "text/x-rst"}
 authors = [
@@ -94,11 +90,7 @@ dev = [
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-<<<<<<< HEAD
-version = "0.0.54"
-=======
 version = "0.0.55"
->>>>>>> upstream/main
 tag_format = "v$version"
 version_files = [
     "pyproject.toml:version",
