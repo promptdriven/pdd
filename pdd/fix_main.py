@@ -97,7 +97,8 @@ def fix_main(
             quiet=ctx.obj.get('quiet', False),
             command="fix",
             command_options=command_options,
-            create_error_file=loop  # Only create error file if in loop mode
+            create_error_file=loop,  # Only create error file if in loop mode
+            context_override=ctx.obj.get('context')
         )
 
         # Get parameters from context

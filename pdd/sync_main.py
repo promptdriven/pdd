@@ -192,6 +192,7 @@ def sync_main(
                 log=True,
                 verbose=verbose,
                 quiet=quiet,
+                context_override=context_override,
             )
         return {}, 0.0, ""
 
@@ -280,6 +281,7 @@ def sync_main(
                 review_examples=review_examples,
                 local=local,
                 context_config=resolved_config,
+                context_override=context_override,
             )
 
             lang_cost = sync_result.get("total_cost", 0.0)

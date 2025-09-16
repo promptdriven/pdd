@@ -209,7 +209,7 @@ def get_extension(language: str) -> str:
     return extensions.get(language.lower(), language.lower())
 
 
-def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts") -> Dict[str, Path]:
+def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts", context_override: Optional[str] = None) -> Dict[str, Path]:
     """Returns a dictionary mapping file types to their expected Path objects."""
     import logging
     logger = logging.getLogger(__name__)
@@ -233,7 +233,8 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     force=True,
                     quiet=True,
                     command="sync",
-                    command_options={"basename": basename, "language": language}
+                    command_options={"basename": basename, "language": language},
+                    context_override=context_override
                 )
                 
                 import logging
@@ -299,7 +300,8 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             force=True,  # Use force=True to avoid interactive prompts during sync
             quiet=True,
             command="sync",  # Use sync command to get more tolerant path handling
-            command_options={"basename": basename, "language": language}
+            command_options={"basename": basename, "language": language},
+            context_override=context_override
         )
         
         # For sync command, output_file_paths contains the configured paths
@@ -332,7 +334,8 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 # Get example path using example command
                 _, _, example_output_paths, _ = construct_paths(
                     input_file_paths={"prompt_file": prompt_path, "code_file": code_path},
-                    force=True, quiet=True, command="example", command_options={}
+                    force=True, quiet=True, command="example", command_options={},
+                    context_override=context_override
                 )
                 example_path = Path(example_output_paths.get('output', f"{basename}_example.{get_extension(language)}"))
                 
@@ -340,7 +343,8 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 try:
                     _, _, test_output_paths, _ = construct_paths(
                         input_file_paths={"prompt_file": prompt_path, "code_file": code_path},
-                        force=True, quiet=True, command="test", command_options={}
+                        force=True, quiet=True, command="test", command_options={},
+                        context_override=context_override
                     )
                     test_path = Path(test_output_paths.get('output', f"test_{basename}.{get_extension(language)}"))
                 except FileNotFoundError:
@@ -365,14 +369,16 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 # Get configured directories by using construct_paths with just the prompt file
                 _, _, example_output_paths, _ = construct_paths(
                     input_file_paths={"prompt_file": prompt_path},
-                    force=True, quiet=True, command="example", command_options={}
+                    force=True, quiet=True, command="example", command_options={},
+                    context_override=context_override
                 )
                 example_path = Path(example_output_paths.get('output', f"{basename}_example.{get_extension(language)}"))
                 
                 try:
                     _, _, test_output_paths, _ = construct_paths(
                         input_file_paths={"prompt_file": prompt_path},
-                        force=True, quiet=True, command="test", command_options={}
+                        force=True, quiet=True, command="test", command_options={},
+                        context_override=context_override
                     )
                     test_path = Path(test_output_paths.get('output', f"test_{basename}.{get_extension(language)}"))
                 except Exception:
@@ -768,7 +774,7 @@ def _check_example_success_history(basename: str, language: str) -> bool:
     return False
 
 
-def sync_determine_operation(basename: str, language: str, target_coverage: float, budget: float = 10.0, log_mode: bool = False, prompts_dir: str = "prompts", skip_tests: bool = False, skip_verify: bool = False) -> SyncDecision:
+def sync_determine_operation(basename: str, language: str, target_coverage: float, budget: float = 10.0, log_mode: bool = False, prompts_dir: str = "prompts", skip_tests: bool = False, skip_verify: bool = False, context_override: Optional[str] = None) -> SyncDecision:
     """
     Core decision-making function for sync operations with skip flag awareness.
     
@@ -788,14 +794,14 @@ def sync_determine_operation(basename: str, language: str, target_coverage: floa
     
     if log_mode:
         # Skip locking for read-only analysis
-        return _perform_sync_analysis(basename, language, target_coverage, budget, prompts_dir, skip_tests, skip_verify)
+        return _perform_sync_analysis(basename, language, target_coverage, budget, prompts_dir, skip_tests, skip_verify, context_override)
     else:
         # Normal exclusive locking for actual operations
         with SyncLock(basename, language) as lock:
-            return _perform_sync_analysis(basename, language, target_coverage, budget, prompts_dir, skip_tests, skip_verify)
+            return _perform_sync_analysis(basename, language, target_coverage, budget, prompts_dir, skip_tests, skip_verify, context_override)
 
 
-def _perform_sync_analysis(basename: str, language: str, target_coverage: float, budget: float, prompts_dir: str = "prompts", skip_tests: bool = False, skip_verify: bool = False) -> SyncDecision:
+def _perform_sync_analysis(basename: str, language: str, target_coverage: float, budget: float, prompts_dir: str = "prompts", skip_tests: bool = False, skip_verify: bool = False, context_override: Optional[str] = None) -> SyncDecision:
     """
     Perform the sync state analysis without locking concerns.
     
@@ -846,7 +852,7 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
         # Check test failures (after crash verification check)
         if run_report.tests_failed > 0:
             # First check if the test file actually exists
-            pdd_files = get_pdd_file_paths(basename, language, prompts_dir)
+            pdd_files = get_pdd_file_paths(basename, language, prompts_dir, context_override=context_override)
             test_file = pdd_files.get('test')
             
             # Only suggest 'fix' if test file exists
@@ -945,7 +951,7 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
                 )
     
     # 2. Analyze File State
-    paths = get_pdd_file_paths(basename, language, prompts_dir)
+    paths = get_pdd_file_paths(basename, language, prompts_dir, context_override=context_override)
     current_hashes = calculate_current_hashes(paths)
     
     # 3. Implement the Decision Tree
@@ -1264,7 +1270,14 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
     )
 
 
-def analyze_conflict_with_llm(basename: str, language: str, fingerprint: Fingerprint, changed_files: List[str], prompts_dir: str = "prompts") -> SyncDecision:
+def analyze_conflict_with_llm(
+    basename: str,
+    language: str,
+    fingerprint: Fingerprint,
+    changed_files: List[str],
+    prompts_dir: str = "prompts",
+    context_override: Optional[str] = None,
+) -> SyncDecision:
     """
     Resolve complex sync conflicts using an LLM.
     
@@ -1297,7 +1310,7 @@ def analyze_conflict_with_llm(basename: str, language: str, fingerprint: Fingerp
             )
         
         # 2. Gather file paths and diffs
-        paths = get_pdd_file_paths(basename, language, prompts_dir)
+        paths = get_pdd_file_paths(basename, language, prompts_dir, context_override=context_override)
         
         # Generate diffs for changed files
         diffs = {}
