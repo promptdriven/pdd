@@ -757,32 +757,33 @@ Use a single, reusable prompt file as a template to generate different outputs b
 - Organize templates: Keep templates under `prompts/` (e.g., `prompts/frontend/`, `prompts/backend/`, `prompts/db/`) so they’re easy to discover and include.
 - Single-file focus: `generate` produces one file per invocation. For multi-file scaffolds, call `generate` multiple times with the same template and different `--output` paths and variables.
 
-Example: Generate a Next.js architecture JSON from a template
+Example: Generate an architecture JSON from the architecture template
 
 ```
 # 1) Simple: write the architecture JSON next to your project root
 pdd generate \
   --output architecture.json \
-  prompts/frontend/nextjs_architecture_json.prompt
+  pdd/templates/architecture/architecture_json.prompt
 
 # 2) With parameters (recommended): pass app-specific metadata
 pdd generate \
+  -e TECH_STACK=nextjs \
   -e APP_NAME=Shop \
   -e ROUTES='["/","/about","/products"]' \
   --output architecture.json \
-  prompts/frontend/nextjs_architecture_json.prompt
+  pdd/templates/architecture/architecture_json.prompt
 
 # 3) Generate multiple variants from the same template
-pdd generate -e APP_NAME=Shop    -e ROUTES='["/","/about"]'    --output apps/shop/architecture.json    prompts/frontend/nextjs_architecture_json.prompt
-pdd generate -e APP_NAME=Admin   -e ROUTES='["/","/dashboard"]' --output apps/admin/architecture.json   prompts/frontend/nextjs_architecture_json.prompt
-pdd generate -e APP_NAME=Public  -e ROUTES='["/","/news"]'      --output apps/public/architecture.json  prompts/frontend/nextjs_architecture_json.prompt
+pdd generate -e PRD_FILE=docs/specs.md -e APP_NAME=Shop    --output apps/shop/architecture.json    pdd/templates/architecture/architecture_json.prompt
+pdd generate -e PRD_FILE=docs/specs.md -e APP_NAME=Admin   --output apps/admin/architecture.json   pdd/templates/architecture/architecture_json.prompt
+pdd generate -e PRD_FILE=docs/specs.md -e APP_NAME=Public  --output apps/public/architecture.json  pdd/templates/architecture/architecture_json.prompt
 
 # 4) Use variables in the output path
-pdd generate -e APP=shop --output 'apps/${APP}/architecture.json' prompts/frontend/nextjs_architecture_json.prompt
+pdd generate -e APP=shop -e TECH_STACK=nextjs --output 'apps/${APP}/architecture.json' pdd/templates/architecture/architecture_json.prompt
 
 # 5) Use shell env fallback for convenience
 export APP=shop
-pdd generate -e APP --output 'apps/${APP}/architecture.json' prompts/frontend/nextjs_architecture_json.prompt
+pdd generate -e APP -e TECH_STACK=nextjs --output 'apps/${APP}/architecture.json' pdd/templates/architecture/architecture_json.prompt
 ```
 
 Tips for authoring templates
@@ -792,7 +793,7 @@ Tips for authoring templates
 - Use includes to share common sections like coding guidelines, project constraints, lint/test setup, or file skeletons.
 - Parameterized includes: You can reference files via variables and pass the path with `-e`. For example:
   - In your prompt: `<include>${PRD_FILE}</include>`
-  - At the CLI: `pdd generate -e PRD_FILE=docs/specs.md --output architecture.json prompts/architecture/unified_architecture_json.prompt`
+  - At the CLI: `pdd generate -e PRD_FILE=docs/specs.md --output architecture.json prompts/architecture/architecture_json.prompt`
   - The engine resolves includes after variable expansion, so this works across different project layouts.
 - Include many files: Provide a comma- or newline-separated list, then use `<include-many>${INCLUDE_FILES}</include-many>` in the prompt.
   - Example: `pdd generate -e INCLUDE_FILES='src/app/layout.tsx,src/app/page.tsx' --output architecture.json ...`
@@ -821,9 +822,118 @@ Where built-ins live (packaged)
 
 Included starter templates
 
-- `frontend/nextjs_architecture_json.prompt`: Generate a Next.js architecture JSON (routes, priorities, dependencies, prompt filenames) from project docs and files.
-- `architecture/architecture_json.prompt`: Generic architecture JSON for backends or services (reasons, descriptions, function signatures, dependencies, priorities, filenames) driven by `PRD.md`.
-- `architecture/unified_architecture_json.prompt`: A single template that adapts to different stacks using `-e` variables (e.g., `STACK=nextjs|python`, `API_STYLE=rest|graphql`, `ROUTES=[...]`).
+- `architecture/architecture_json.prompt`: A single template that adapts to different stacks using `-e` variables (e.g., `TECH_STACK=nextjs|python`, `API_STYLE=rest|graphql`, `ROUTES=[...]`).
+
+Front Matter (YAML) metadata
+
+- Templates include YAML front matter with human-readable metadata:
+  - `name`, `description`, `version`, `tags`: docs and discovery
+  - `language`, `output`: defaults for `generate`
+  - `variables`: parameter schema for `-e/--env` (type, required, default)
+
+Example (architecture template):
+
+```
+---
+name: architecture/architecture_json
+description: Unified architecture template for multiple stacks
+version: 1.0.0
+tags: [architecture, template, json]
+language: json
+output: architecture.json
+variables:
+  TECH_STACK:
+    required: false
+    type: string
+    description: Target tech stack for interface shaping and conventions.
+    examples: [nextjs, python, fastapi, flask, django, node, go]
+  API_STYLE:
+    required: false
+    type: string
+    description: API style for backends.
+    examples: [rest, graphql]
+  APP_NAME:
+    required: false
+    type: string
+    description: Optional app name for context.
+    example: Shop
+  ROUTES:
+    required: false
+    type: json
+    default: []
+    description: Frontend routes.
+    examples:
+      - '["/","/about","/products"]'
+  PRD_FILE:
+    required: false
+    type: path
+    description: Primary product requirements document (PRD) describing scope and goals.
+    example_paths: [PRD.md, docs/specs.md, docs/product/prd.md]
+    example_content: |
+      Title: Order Management MVP
+      Goals: Enable customers to create and track orders end-to-end.
+      Key Features:
+        - Create Order: id, user_id, items[], total, status
+        - View Order: details page with status timeline
+        - List Orders: filter by status, date, user
+      Constraints:
+        - Deployable to Vercel (frontend) and Cloud Run (backend)
+      Non-Functional:
+        - P95 latency < 300ms for read endpoints; error rate < 0.1%
+  TECH_STACK_FILE:
+    required: false
+    type: path
+    description: Tech stack overview (languages, frameworks, infrastructure, and tools).
+    example_paths: [docs/tech_stack.md, docs/architecture/stack.md]
+    example_content: |
+      Backend: Python (FastAPI), Postgres (SQLAlchemy), PyTest
+      Frontend: Next.js (TypeScript), shadcn/ui, Tailwind CSS
+      Auth: Firebase Auth (GitHub Device Flow), JWT for API
+      Infra: Vercel (frontend), Cloud Run (backend), Cloud SQL (Postgres)
+      Observability: OpenTelemetry traces, Cloud Logging
+  DOC_FILES:
+    required: false
+    type: list
+    description: Additional documentation files (comma/newline-separated).
+    example_paths: [docs/ux.md, docs/components.md]
+    example_content: |
+      Design overview, patterns and constraints
+  INCLUDE_FILES:
+    required: false
+    type: list
+    description: Specific source files to include (comma/newline-separated).
+    example_paths: [src/app.py, src/api.py, frontend/app/layout.tsx, frontend/app/page.tsx]
+  SCAN_PATTERNS:
+    required: false
+    type: list
+    description: File name patterns to discover (comma-separated).
+    examples: ['layout.tsx,page.tsx,globals.css,tailwind.config.js', 'app.py,api.py,pyproject.toml']
+  SCAN_ROOT:
+    required: false
+    type: path
+    description: Root directory for discovery.
+    example_paths: ['.']
+---
+```
+
+Notes
+
+- YAML is for documentation and future CLI features; pass variables via `-e` at the CLI today. Templates include example variable values and file paths in the YAML to guide usage.
+
+Template Variables (reference)
+
+- Architecture (`architecture/architecture_json.prompt`)
+  - `PRD_FILE` (path, required): Primary spec/PRD file path
+  - `TECH_STACK_FILE` (path, optional): Tech stack overview file (includes API style; e.g., docs/tech_stack.md)
+  - `APP_NAME` (string, optional): App name for context
+  - `DOC_FILES` (list, optional): Comma/newline-separated list of additional doc paths
+  - `INCLUDE_FILES` (list, optional): Comma/newline-separated list of source files to include
+  - `SCAN_PATTERNS` (list, optional): Comma-separated filename patterns to discover (e.g., 'layout.tsx,page.tsx')
+  - `SCAN_ROOT` (path, optional): Root directory to search (default '.')
+
+Notes
+
+- These variables are declared in YAML front matter at the top of each template for clarity and future CLI discovery. Until the CLI parses front matter, pass values via `-e` as shown in examples.
 
 Phase 1 (current): Copy-and-generate
 
@@ -835,8 +945,8 @@ python - <<'PY'
 from importlib.resources import files
 import shutil, os
 
-dst_dir = 'prompts/frontend'
-src_dir = files('pdd').joinpath('templates/frontend')
+dst_dir = 'prompts/architecture'
+src_dir = files('pdd').joinpath('templates/architecture')
 os.makedirs(dst_dir, exist_ok=True)
 
 for p in src_dir.rglob('*.prompt'):
@@ -845,7 +955,7 @@ print(f'Copied built-in templates from {src_dir} -> {dst_dir}')
 PY
 
 # Then generate from the copied prompt(s)
-pdd generate --output architecture.json prompts/frontend/nextjs_architecture_json.prompt
+pdd generate --output architecture.json prompts/architecture/architecture_json.prompt
 ```
 
 Unified template examples
@@ -853,23 +963,22 @@ Unified template examples
 ```
 # Frontend (Next.js) — interface.page.route and component props
 pdd generate \
-  -e STACK=nextjs \
   -e APP_NAME=Shop \
   -e ROUTES='["/","/about","/products"]' \
   -e PRD_FILE=docs/specs.md \
   -e DOC_FILES='docs/ux.md,docs/components.md' \
+  -e TECH_STACK_FILE=docs/tech_stack.md \
   -e SCAN_PATTERNS='layout.tsx,page.tsx,globals.css,tailwind.config.js' \
   --output architecture.json \
-  pdd/templates/architecture/unified_architecture_json.prompt
+  pdd/templates/architecture/architecture_json.prompt
 
 # Backend (Python) — interface.module.functions or interface.api.endpoints
 pdd generate \
-  -e STACK=python \
-  -e API_STYLE=rest \
   -e PRD_FILE=docs/backend-spec.md \
+  -e TECH_STACK_FILE=docs/tech_stack.md \
   -e INCLUDE_FILES='src/app.py,src/api.py,pyproject.toml' \
   --output architecture.json \
-  pdd/templates/architecture/unified_architecture_json.prompt
+  pdd/templates/architecture/architecture_json.prompt
 ```
 
 **Interface Schema**
