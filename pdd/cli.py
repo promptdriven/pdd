@@ -8,6 +8,8 @@ generating code, tests, fixing issues, and managing prompts.
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from typing import Any, Dict, List, Optional, Tuple
 from pathlib import Path # Import Path
 
@@ -32,7 +34,12 @@ from .crash_main import crash_main
 from .detect_change_main import detect_change_main
 from .fix_main import fix_main
 from .fix_verification_main import fix_verification_main
-from .install_completion import install_completion, get_local_pdd_path
+from .install_completion import (
+    install_completion,
+    get_local_pdd_path,
+    get_current_shell,
+    get_shell_rc_path,
+)
 from .preprocess_main import preprocess_main
 from .pytest_output import run_pytest_and_capture_output
 from .split_main import split_main
@@ -73,6 +80,87 @@ def handle_error(exception: Exception, command_name: str, quiet: bool):
         else:
             console.print(f"  [error]An unexpected error occurred:[/error] {exception}", style="error")
     # Do NOT re-raise e here. Let the command function return None.
+
+
+def _first_pending_command(ctx: click.Context) -> Optional[str]:
+    """Return the first subcommand scheduled for this invocation."""
+    for arg in ctx.protected_args:
+        if not arg.startswith("-"):
+            return arg
+    return None
+
+
+def _api_env_exists() -> bool:
+    """Check whether the ~/.pdd/api-env file exists."""
+    return (Path.home() / ".pdd" / "api-env").exists()
+
+
+def _completion_installed() -> bool:
+    """Check if the shell RC file already sources the PDD completion script."""
+    shell = get_current_shell()
+    rc_path = get_shell_rc_path(shell) if shell else None
+    if not rc_path:
+        return False
+
+    try:
+        content = Path(rc_path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+
+    return "PDD CLI completion" in content or "pdd_completion" in content
+
+
+def _project_has_local_configuration() -> bool:
+    """Detect project-level env configuration that should suppress reminders."""
+    cwd = Path.cwd()
+
+    env_file = cwd / ".env"
+    if env_file.exists():
+        try:
+            env_content = env_file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            env_content = ""
+        if any(token in env_content for token in ("OPENAI_API_KEY=", "GOOGLE_API_KEY=", "ANTHROPIC_API_KEY=")):
+            return True
+
+    project_pdd_dir = cwd / ".pdd"
+    if project_pdd_dir.exists():
+        return True
+
+    return False
+
+
+def _should_show_onboarding_reminder(ctx: click.Context) -> bool:
+    """Determine whether to display the onboarding reminder banner."""
+    suppress = os.getenv("PDD_SUPPRESS_SETUP_REMINDER", "").lower()
+    if suppress in {"1", "true", "yes"}:
+        return False
+
+    first_command = _first_pending_command(ctx)
+    if first_command == "setup":
+        return False
+
+    if _api_env_exists():
+        return False
+
+    if _project_has_local_configuration():
+        return False
+
+    if _completion_installed():
+        return False
+
+    return True
+
+
+def _run_setup_utility() -> None:
+    """Execute the interactive setup utility script."""
+    setup_script = Path(__file__).resolve().parent.parent / "utils" / "pdd-setup.py"
+    if not setup_script.exists():
+        raise FileNotFoundError(f"Setup utility not found at {setup_script}")
+
+    result = subprocess.run([sys.executable, str(setup_script)])
+    if result.returncode not in (0, None):
+        raise RuntimeError(f"Setup utility exited with status {result.returncode}")
 
 
 # --- Main CLI Group ---
@@ -189,6 +277,13 @@ def cli(
     if quiet:
         ctx.obj["verbose"] = False
 
+    # Warn users who have not completed interactive setup unless they are running it now
+    if _should_show_onboarding_reminder(ctx):
+        console.print(
+            "[warning]Complete onboarding with `pdd setup` to install tab completion and configure API keys.[/warning]"
+        )
+        ctx.obj["reminder_shown"] = True
+
     # If --list-contexts is provided, print and exit before any other actions
     if list_contexts:
         try:
@@ -226,6 +321,13 @@ def cli(
                     f"[warning]Auto-update check failed:[/warning] {exception}", 
                     style="warning"
                 )
+
+    # If no subcommands were provided, show help and exit gracefully
+    if ctx.invoked_subcommand is None and not ctx.protected_args:
+        if not quiet:
+            console.print("[info]Run `pdd --help` for usage or `pdd setup` to finish onboarding.[/info]")
+        click.echo(ctx.get_help())
+        ctx.exit(0)
 
 # --- Result Callback for Chained Commands ---
 @cli.result_callback()
@@ -1328,6 +1430,22 @@ def install_completion_cmd(ctx: click.Context) -> None: # Return type remains No
         # Use the centralized error handler
         handle_error(e, command_name, quiet_mode)
         # Do not return anything, as the callback expects None or a tuple
+
+
+@cli.command("setup")
+@click.pass_context
+def setup_cmd(ctx: click.Context) -> None:
+    """Run the interactive setup utility and install shell completion."""
+    command_name = "setup"
+    quiet_mode = ctx.obj.get("quiet", False)
+
+    try:
+        install_completion(quiet=quiet_mode)
+        _run_setup_utility()
+        if not quiet_mode:
+            console.print("[success]Setup completed. Restart your shell or source your RC file to apply changes.[/success]")
+    except Exception as exc:
+        handle_error(exc, command_name, quiet_mode)
 
 
 # --- Entry Point ---

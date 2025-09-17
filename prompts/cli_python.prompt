@@ -16,7 +16,7 @@
 % All these global options should be passed to the `cli` function and stored in `ctx.obj`.
 </context>
 
-% Use `@click.group(chain=True)` for `cli` to support chaining. Implement a `@cli.result_callback()` that summarizes each command’s `(result, cost, model_name)` and prints the total chain cost. Label steps using the invoked subcommand names.
+% Use `@click.group(chain=True, invoke_without_command=True)` for `cli` to support chaining and allow `pdd` to run without subcommands. Implement a `@cli.result_callback()` that summarizes each command’s `(result, cost, model_name)` and prints the total chain cost. Label steps using the invoked subcommand names.
 
 % Call `get_local_pdd_path()` at the very start of `cli()` to ensure `PDD_PATH` is set (e.g., for UV installs).
 
@@ -158,6 +158,8 @@
         <include>context/fix_verification_main_example.py</include>
         </verify_main_example>
         
+        - `setup` command: Expose an interactive bootstrap flow that installs shell completions and gathers API keys by invoking the existing `install_completion` helper and the `utils/pdd-setup.py` entry point.
+
         - `install_completion` command: The core logic is implemented in the `install_completion` function, defined in a separate module. Pass `quiet=ctx.obj['quiet']` to reduce noise. Here's how to use `install_completion` and `get_local_pdd_path`:
         <install_completion_example>
         <include>context/install_completion_example.py</include>
@@ -177,9 +179,10 @@
         - Decorate LLM-using commands with `@track_cost` and return `(result, total_cost, model_name)`.
         - Local-only commands (e.g., `preprocess`) are not cost-tracked; return a dummy `("", 0.0, "local")` when needed for chain summaries.
         - `install_completion` returns `None` and prints its own status.
+        - Detect first-run state (missing `~/.pdd/api-env` or shell completion hook) before executing subcommands; if onboarding has not run, print a reminder banner suggesting `pdd setup` and continue with the requested command. Suppress the banner once `~/.pdd/api-env` exists or when the current project already supplies credentials via `.env` or a `.pdd/` directory.
         - For `generate`, implement `@click.option("-e", "--env", "env_kv", multiple=True, help="Set template variable (KEY=VALUE) or read KEY from env")` and parse it into `env_vars: Dict[str, str]` as described above, then pass `env_vars` into `code_generator_main`.
         - Templating behavior for `generate`: `$VAR` and `${VAR}` in prompt content and `--output` path are replaced using only keys present in `env_vars`. Unknown placeholders remain unchanged.
-        - Implement a centralized `handle_error()` that uses Rich with a custom Theme and formats exceptions (including `click.UsageError` and `MarkupError`).
+        - Implement a centralized `handle_error()` that uses Rich with a custom Theme and formats exceptions (including `click.UsageError` and `MarkupError`). After logging, re-raise the exception so Click propagates the appropriate exit status unless the command has a documented reason to continue.
         - When `--quiet` is active, suppress non-essential console output and chain summaries.
         - The `trace` command should exit non-zero on exceptions.
         - The chain result callback may use `ctx.obj['invoked_subcommands']` (tracked by `@track_cost`) to label steps.

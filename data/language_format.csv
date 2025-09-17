@@ -30,6 +30,7 @@ Groovy,//,.groovy
 Dart,//,.dart
 F#,//,.fs
 YAML,#,.yml
+YAML,#,.yaml
 JSON,del,.json
 JSONL,del,.jsonl
 XML,"<!-- -->",.xml
@@ -62,3 +63,4 @@ TOML,#,.toml
 Log,del,.log
 reStructuredText,del,.rst
 Text,del,.txt
+INI,;,.ini
