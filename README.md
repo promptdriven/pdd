@@ -73,6 +73,13 @@ Verify installation:
 pdd --version
 ```
 
+With the CLI on your `PATH`, continue with:
+```bash
+pdd setup
+```
+The command installs tab completion, walks you through API key entry, and seeds local configuration files.
+If you postpone this step, the CLI detects the missing setup artifacts the first time you run another command and shows a reminder banner so you can complete it later (the banner is suppressed once `~/.pdd/api-env` exists or when your project already provides credentials via `.env` or `.pdd/`).
+
 ### Alternative: pip Installation
 
 If you prefer using pip, you can install PDD with:
@@ -97,69 +104,6 @@ source pdd-env/bin/activate
 # Install PDD
 pip install pdd-cli
 ```
-
-
-
-## 🚀 Quickstart (Hello Example)
-
-If you’re brand new to PDD, follow these steps to see it in action.
-
-1. **Install prerequisites** (macOS/Linux):
-   ```bash
-   xcode-select --install      # macOS only
-   curl -LsSf https://astral.sh/uv/install.sh | sh
-   uv tool install pdd-cli
-   pdd --version
-   ```
-
-2. **Clone repo**
-
-   ```bash
-     # Clone the repository (if not already done)
-    git clone https://github.com/promptdriven/pdd.git
-    cd pdd/examples/hello
-   ```
-
-3. **Set one API key** (choose your provider):
-   ```bash
-   export GEMINI_API_KEY="your-gemini-key"
-   # OR
-   export OPENAI_API_KEY="your-openai-key"
-   ```
-
-### Post-Installation Setup (Required first step after installation)
-
-Run the guided setup:
-```bash
-pdd setup
-```
-
-This wraps the interactive bootstrap utility to install shell tab completion, capture your API keys, create ~/.pdd configuration files, and write the starter prompt. Re-run it any time to update keys or reinstall completion.
-
-If you skip this step, the first regular pdd command you run will detect the missing setup files and print a reminder banner so you can finish onboarding later.
-
-Reload your shell so the new completion and environment hooks are available:
-```bash
-source ~/.zshrc  # or source ~/.bashrc / fish equivalent
-```
-
-**Legacy Setup (Deprecated)**: The old `pdd-setup.py` script is deprecated. Use `pdd setup` instead.
-
-👉 If you prefer to configure things manually, see [examples/SETUP_WITH_GEMINI.md](examples/SETUP_WITH_GEMINI.md) for full instructions on obtaining a Gemini API key and creating your own `~/.pdd/llm_model.csv`.
-
-5. **Run Hello**:
-   ```bash
-   cd ../hello
-   pdd --force generate hello_python.prompt
-   python3 hello.py
-   ```
-
-    ✅ Expected output:
-    ```
-    hello
-    ```
-
-
 
 ## Cloud vs Local Execution
 
@@ -232,12 +176,19 @@ For proper model identifiers to use in your custom configuration, refer to the [
 
 ## Post-Installation Setup
 
-1. Enable tab completion:
+1. Run the guided setup (required unless you do this manually or use the cloud):
 ```bash
-pdd install_completion
+pdd setup
+```
+This wraps the interactive bootstrap utility to install shell tab completion, capture your API keys, create `~/.pdd` configuration files, and write the starter prompt. Re-run it any time to update keys or reinstall completion.
+If you skip this step, the first regular `pdd` command you run will detect the missing setup files and print a reminder banner so you can finish onboarding later (the banner is suppressed once `~/.pdd/api-env` exists or when your project already provides credentials via `.env` or `.pdd/`).
+
+2. Reload your shell so the new completion and environment hooks are available:
+```bash
+source ~/.zshrc  # or source ~/.bashrc / fish equivalent
 ```
 
-2. Configure environment variables (optional):
+3. Configure environment variables (optional):
 ```bash
 # Add to .bashrc, .zshrc, or equivalent
 export PDD_AUTO_UPDATE=true
@@ -282,7 +233,6 @@ PDD includes an auto-update feature to ensure you always have access to the late
 PDD supports a wide range of programming languages, including but not limited to:
 - Python
 - JavaScript
-- TypeScript
 - Java
 - C++
 - Ruby
@@ -795,6 +745,272 @@ pdd [GLOBAL OPTIONS] generate --output src/calculator.py calculator_python.promp
 # Specify a different original prompt (bypassing git detection)
 pdd [GLOBAL OPTIONS] generate --output src/calculator.py  --original-prompt old_calculator_python.prompt calculator_python.prompt
 ```
+
+#### Prompt Templates
+
+Use a single, reusable prompt file as a template to generate different outputs by injecting variables and composing common parts with includes.
+
+- Parameterize with `-e/--env`: Provide `KEY=VALUE` pairs to substitute `$KEY` or `${KEY}` inside the prompt and within `--output` paths. Unknown placeholders remain unchanged.
+- Compose reusable blocks: Reference shared fragments using XML and backtick includes:
+  - `<include>path/to/fragment.prompt</include>` to inline raw file content
+  - ````<path/to/file.ext>```` to inline file content wrapped in a code fence
+- Organize templates: Keep templates under `prompts/` (e.g., `prompts/frontend/`, `prompts/backend/`, `prompts/db/`) so they’re easy to discover and include.
+- Single-file focus: `generate` produces one file per invocation. For multi-file scaffolds, call `generate` multiple times with the same template and different `--output` paths and variables.
+
+Example: Generate a Next.js architecture JSON from a template
+
+```
+# 1) Simple: write the architecture JSON next to your project root
+pdd generate \
+  --output architecture.json \
+  prompts/frontend/nextjs_architecture_json.prompt
+
+# 2) With parameters (recommended): pass app-specific metadata
+pdd generate \
+  -e APP_NAME=Shop \
+  -e ROUTES='["/","/about","/products"]' \
+  --output architecture.json \
+  prompts/frontend/nextjs_architecture_json.prompt
+
+# 3) Generate multiple variants from the same template
+pdd generate -e APP_NAME=Shop    -e ROUTES='["/","/about"]'    --output apps/shop/architecture.json    prompts/frontend/nextjs_architecture_json.prompt
+pdd generate -e APP_NAME=Admin   -e ROUTES='["/","/dashboard"]' --output apps/admin/architecture.json   prompts/frontend/nextjs_architecture_json.prompt
+pdd generate -e APP_NAME=Public  -e ROUTES='["/","/news"]'      --output apps/public/architecture.json  prompts/frontend/nextjs_architecture_json.prompt
+
+# 4) Use variables in the output path
+pdd generate -e APP=shop --output 'apps/${APP}/architecture.json' prompts/frontend/nextjs_architecture_json.prompt
+
+# 5) Use shell env fallback for convenience
+export APP=shop
+pdd generate -e APP --output 'apps/${APP}/architecture.json' prompts/frontend/nextjs_architecture_json.prompt
+```
+
+Tips for authoring templates
+
+- Document variables at the top of the prompt (in comments) so users know what to pass, e.g., `APP_NAME`, `ROUTES`, `API_URL`, etc.
+- Prefer JSON-serializable strings for structured values, and quote them for your shell. For example, pass arrays/objects as single-quoted JSON: `-e ROUTES='["/","/about"]'`.
+- Use includes to share common sections like coding guidelines, project constraints, lint/test setup, or file skeletons.
+- Parameterized includes: You can reference files via variables and pass the path with `-e`. For example:
+  - In your prompt: `<include>${PRD_FILE}</include>`
+  - At the CLI: `pdd generate -e PRD_FILE=docs/specs.md --output architecture.json prompts/architecture/unified_architecture_json.prompt`
+  - The engine resolves includes after variable expansion, so this works across different project layouts.
+- Include many files: Provide a comma- or newline-separated list, then use `<include-many>${INCLUDE_FILES}</include-many>` in the prompt.
+  - Example: `pdd generate -e INCLUDE_FILES='src/app/layout.tsx,src/app/page.tsx' --output architecture.json ...`
+- Optional file discovery: Pass name patterns and an optional root to auto-discover files via `<shell>`; the template will backtick-include matches.
+  - Example: `pdd generate -e SCAN_PATTERNS='layout.tsx,page.tsx,globals.css' -e SCAN_ROOT=. --output architecture.json ...`
+- If your template is intended to output a specific file name (e.g., `architecture.json`), show example commands with `--output` to avoid relying on default language inference.
+
+Behavior notes
+
+- Variable expansion only applies to variables explicitly passed via `-e/--env` (or via the env fallback with `-e KEY`). Other `$NAME` occurrences remain unchanged.
+- `--output` also accepts `$VAR`/`${VAR}` from the same set of variables.
+- If you omit `--output`, PDD derives the filename from the prompt basename and detected language extension; set `PDD_GENERATE_OUTPUT_PATH` to direct outputs to a common directory.
+
+Phases overview
+
+- Phase 1 (current): Use prompt files directly by path, parameterize via `-e/--env`, and compose with includes. Copy packaged built-ins into your project to customize and generate from there.
+- Phase 2 (planned): First-class template UX with `pdd templates list|show|copy` and `pdd generate --template <name>`, optional front‑matter for metadata, defaults, and variable validation.
+
+#### Built-In Templates
+
+PDD can distribute a curated set of popular templates as part of the package to help you get started quickly (e.g., frontend/Next.js, backend/Flask, data/ETL).
+
+Where built-ins live (packaged)
+
+- Under the installed package at `pdd/templates/<category>/**/*.prompt` (plus optional README/index files). When installed from PyPI, these are included as package data.
+
+Included starter templates
+
+- `frontend/nextjs_architecture_json.prompt`: Generate a Next.js architecture JSON (routes, priorities, dependencies, prompt filenames) from project docs and files.
+- `architecture/architecture_json.prompt`: Generic architecture JSON for backends or services (reasons, descriptions, function signatures, dependencies, priorities, filenames) driven by `PRD.md`.
+- `architecture/unified_architecture_json.prompt`: A single template that adapts to different stacks using `-e` variables (e.g., `STACK=nextjs|python`, `API_STYLE=rest|graphql`, `ROUTES=[...]`).
+
+Phase 1 (current): Copy-and-generate
+
+- Copy the desired template(s) into your project’s `prompts/` folder, then use `pdd generate` as usual. This keeps prompts versioned with your repo so you can edit and evolve them.
+- Quick copy (Python one‑liner; run from your project root):
+
+```
+python - <<'PY'
+from importlib.resources import files
+import shutil, os
+
+dst_dir = 'prompts/frontend'
+src_dir = files('pdd').joinpath('templates/frontend')
+os.makedirs(dst_dir, exist_ok=True)
+
+for p in src_dir.rglob('*.prompt'):
+    shutil.copy(p, dst_dir)
+print(f'Copied built-in templates from {src_dir} -> {dst_dir}')
+PY
+
+# Then generate from the copied prompt(s)
+pdd generate --output architecture.json prompts/frontend/nextjs_architecture_json.prompt
+```
+
+Unified template examples
+
+```
+# Frontend (Next.js) — interface.page.route and component props
+pdd generate \
+  -e STACK=nextjs \
+  -e APP_NAME=Shop \
+  -e ROUTES='["/","/about","/products"]' \
+  -e PRD_FILE=docs/specs.md \
+  -e DOC_FILES='docs/ux.md,docs/components.md' \
+  -e SCAN_PATTERNS='layout.tsx,page.tsx,globals.css,tailwind.config.js' \
+  --output architecture.json \
+  pdd/templates/architecture/unified_architecture_json.prompt
+
+# Backend (Python) — interface.module.functions or interface.api.endpoints
+pdd generate \
+  -e STACK=python \
+  -e API_STYLE=rest \
+  -e PRD_FILE=docs/backend-spec.md \
+  -e INCLUDE_FILES='src/app.py,src/api.py,pyproject.toml' \
+  --output architecture.json \
+  pdd/templates/architecture/unified_architecture_json.prompt
+```
+
+**Interface Schema**
+
+- Core keys (every item):
+  - `reason`, `description`, `dependencies`, `priority`, `filename`, optional `tags`.
+- Interface object (typed, include only what applies):
+  - `type`: `component` | `page` | `module` | `api` | `graphql` | `cli` | `job` | `message` | `config`
+  - `component`: `props[]`, optional `emits[]`, `context[]`
+  - `page`: `route`, optional `params[]`, `dataSources[]`, `layout`
+  - `module`: `functions[]` with `name`, `signature`, optional `returns`, `errors`, `sideEffects`
+  - `api`: `endpoints[]` with `method`, `path`, optional `auth`, `requestSchema`, `responseSchema`, `errors`
+  - `graphql`: optional `sdl`, or `operations` with `queries[]`, `mutations[]`, `subscriptions[]`
+  - `cli`: `commands[]` with `name`, optional `args[]`, `flags[]`, `exitCodes[]`; optional `io` (`stdin`, `stdout`)
+  - `job`: `trigger` (cron/event), optional `inputs[]`, `outputs[]`, `retryPolicy`
+  - `message`: `topics[]` with `name`, `direction` (`publish`|`subscribe`), optional `schema`, `qos`
+  - `config`: `keys[]` with `name`, `type`, optional `default`, `required`, `source` (`env`|`file`|`secret`)
+  - Optional: `version`, `stability` (`experimental`|`stable`)
+
+Examples:
+
+```json
+{
+  "reason": "Top-level products page",
+  "description": "...",
+  "dependencies": ["layout_tsx.prompt"],
+  "priority": 1,
+  "filename": "page_tsx.prompt",
+  "tags": ["frontend","nextjs"],
+  "interface": {
+    "type": "page",
+    "page": {"route": "/products", "params": [{"name":"id","type":"string"}]},
+    "component": {"props": [{"name":"initialProducts","type":"Product[]","required":true}]}
+  }
+}
+```
+
+```json
+{
+  "reason": "Order service module",
+  "description": "...",
+  "dependencies": ["db_python.prompt"],
+  "priority": 1,
+  "filename": "orders_python.prompt",
+  "tags": ["backend","python"],
+  "interface": {
+    "type": "module",
+    "module": {
+      "functions": [
+        {"name": "load_orders", "signature": "def load_orders(user_id: str) -> list[Order]"},
+        {"name": "create_order", "signature": "def create_order(dto: OrderIn) -> Order"}
+      ]
+    }
+  }
+}
+```
+
+```json
+{
+  "reason": "Orders HTTP API",
+  "description": "...",
+  "dependencies": ["orders_python.prompt"],
+  "priority": 2,
+  "filename": "api_python.prompt",
+  "tags": ["backend","api"],
+  "interface": {
+    "type": "api",
+    "api": {
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/orders/{id}",
+          "auth": "bearer",
+          "responseSchema": {"type":"object","properties":{"id":{"type":"string"}}},
+          "errors": ["404 Not Found","401 Unauthorized"]
+        }
+      ]
+    }
+  }
+}
+```
+
+Notes and recommendations
+
+- Treat copied templates as a starting point; edit them to match your stack and conventions.
+- Keep templates under version control along with your code to preserve the prompt‑as‑source‑of‑truth model.
+- If you maintain your own template set, store them under `prompts/<org_or_team>/...` and compose with `<include>` to maximize reuse.
+
+Phase 2 (planned): First-class template UX
+
+- Goals:
+  - Discover, inspect, and vendor templates without manual file paths.
+  - Validate required variables and surface defaults from template metadata.
+  - Support a search order so project templates can override packaged ones.
+
+- Commands (planned):
+  - `pdd templates list [--json] [--filter tag=frontend]` to discover templates
+  - `pdd templates show <name> [--raw]` to view metadata and variables
+  - `pdd templates copy <name> --to prompts/` to vendor into your repo
+  - `pdd generate --template <name> [-e KEY=VALUE...] [--output PATH]`
+
+- Example usage (planned):
+```
+# Discover and inspect
+pdd templates list --filter tag=frontend
+pdd templates show frontend/nextjs_architecture_json
+
+# Vendor and customize
+pdd templates copy frontend/nextjs_architecture_json --to prompts/frontend/
+
+# Generate without specifying a file path
+pdd generate --template frontend/nextjs_architecture_json \
+  -e APP_NAME=Shop \
+  -e ROUTES='["/","/about"]' \
+  --output architecture.json
+```
+
+- Search order (planned):
+  - Project: `./prompts/**` (allows team overrides)
+  - `.pddrc` paths: any configured `templates.paths`
+  - Packaged: `pdd/templates/**` (built‑ins)
+  - Optional: `$PDD_PATH/prompts/**` (org‑level packs)
+
+- Template front matter (planned):
+  - YAML metadata at the top of `.prompt` files to declare `name`, `description`, `tags`, `version`, `language`, default `output`, and `variables` (with `required`, `default`, `type` such as `string` or `json`).
+  - CLI precedence: values from `-e/--env` override front‑matter defaults; unknowns are validated and surfaced to the user.
+  - Example:
+    ```
+    ---
+    name: frontend/nextjs_architecture_json
+    description: Generate a Next.js architecture.json file from app metadata
+    tags: [frontend, nextjs, json]
+    version: 1.0.0
+    language: json
+    output: architecture.json
+    variables:
+      APP_NAME: { required: true }
+      ROUTES:   { type: json, default: [] }
+    ---
+    ...prompt body...
+    ```
 
 ### 3. example
 
@@ -1355,10 +1571,7 @@ PDD provides comprehensive help features:
 
 ## Additional Features
 
-- **Tab Completion**: PDD supports tab completion for commands and options in compatible shells. You can install tab completion by running:
-  ```
-  pdd install_completion
-  ```
+- **Tab Completion**: `pdd setup` installs tab completion automatically. If you only need to refresh the completion script, run `pdd install_completion` directly.
 - **Colorized Output**: PDD provides colorized output for better readability in compatible terminals.
 
 
