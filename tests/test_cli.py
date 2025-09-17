@@ -1,6 +1,7 @@
 # tests/test_cli.py
 import os
 import sys
+import subprocess
 from pathlib import Path
 from unittest.mock import patch, ANY, MagicMock
 
@@ -769,6 +770,86 @@ def test_cli_install_completion_cmd_quiet(mock_install_func, mock_auto_update, r
     assert result.exception is None # Should complete gracefully
     mock_install_func.assert_called_once_with(quiet=True)
     mock_auto_update.assert_called_once_with()
+
+
+@patch('pdd.cli._should_show_onboarding_reminder', return_value=False)
+@patch('pdd.cli.subprocess.run')
+@patch('pdd.cli.install_completion')
+@patch('pdd.cli.auto_update')
+def test_cli_setup_command(mock_auto_update, mock_install, mock_run, _mock_reminder, runner):
+    """`pdd setup` should install completions and run the setup utility."""
+    mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
+
+    result = runner.invoke(cli.cli, ["setup"])
+
+    assert result.exit_code == 0
+    mock_auto_update.assert_called_once_with()
+    mock_install.assert_called_once_with(quiet=False)
+
+    expected_script = Path(cli.__file__).resolve().parent.parent / "utils" / "pdd-setup.py"
+    mock_run.assert_called_once_with([sys.executable, str(expected_script)])
+    assert "Setup completed" in result.output
+
+
+def test_cli_onboarding_reminder_shown(monkeypatch, runner, tmp_path):
+    """Warn users when no global or project setup artifacts exist."""
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    rc_path = home_dir / ".bashrc"
+
+    monkeypatch.setattr(cli, "auto_update", lambda: None)
+    monkeypatch.setattr(cli, "get_current_shell", lambda: "bash")
+    monkeypatch.setattr(cli, "get_shell_rc_path", lambda _shell: str(rc_path))
+    monkeypatch.delenv("PDD_SUPPRESS_SETUP_REMINDER", raising=False)
+
+    with patch('pdd.cli.Path.home', return_value=home_dir):
+        with runner.isolated_filesystem():
+            result = runner.invoke(cli.cli, [])
+
+    assert result.exit_code == 0
+    assert "Complete onboarding with `pdd setup`" in result.output
+
+
+def test_cli_onboarding_reminder_suppressed_by_project_env(monkeypatch, runner, tmp_path):
+    """A project-level .env with API keys suppresses the reminder."""
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    rc_path = home_dir / ".bashrc"
+
+    monkeypatch.setattr(cli, "auto_update", lambda: None)
+    monkeypatch.setattr(cli, "get_current_shell", lambda: "bash")
+    monkeypatch.setattr(cli, "get_shell_rc_path", lambda _shell: str(rc_path))
+    monkeypatch.delenv("PDD_SUPPRESS_SETUP_REMINDER", raising=False)
+
+    with patch('pdd.cli.Path.home', return_value=home_dir):
+        with runner.isolated_filesystem():
+            Path(".env").write_text("OPENAI_API_KEY=abc123\n", encoding="utf-8")
+            result = runner.invoke(cli.cli, [])
+
+    assert result.exit_code == 0
+    assert "Complete onboarding with `pdd setup`" not in result.output
+
+
+def test_cli_onboarding_reminder_suppressed_by_api_env(monkeypatch, runner, tmp_path):
+    """Presence of ~/.pdd/api-env suppresses the reminder."""
+    home_dir = tmp_path / "home"
+    pdd_dir = home_dir / ".pdd"
+    pdd_dir.mkdir(parents=True)
+    (pdd_dir / "api-env").write_text("export OPENAI_API_KEY=abc123\n", encoding="utf-8")
+
+    rc_path = home_dir / ".zshrc"
+
+    monkeypatch.setattr(cli, "auto_update", lambda: None)
+    monkeypatch.setattr(cli, "get_current_shell", lambda: "zsh")
+    monkeypatch.setattr(cli, "get_shell_rc_path", lambda _shell: str(rc_path))
+    monkeypatch.delenv("PDD_SUPPRESS_SETUP_REMINDER", raising=False)
+
+    with patch('pdd.cli.Path.home', return_value=home_dir):
+        with runner.isolated_filesystem():
+            result = runner.invoke(cli.cli, [])
+
+    assert result.exit_code == 0
+    assert "Complete onboarding with `pdd setup`" not in result.output
 
 # --- Real Command Tests (No Mocking) ---
 # These tests remain largely unchanged as they call the *_main functions directly

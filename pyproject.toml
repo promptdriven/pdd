@@ -70,6 +70,7 @@ include = ["pdd*"]
 [tool.setuptools.package-data]
 "pdd" = [
     "prompts/*_LLM.prompt",
+    "templates/**",
     "data/*",
     "mcp_config.json",
     "*.zsh",

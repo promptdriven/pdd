@@ -210,7 +210,9 @@ def _is_known_language(language_name: str) -> bool:
     builtin_languages = {
         'python', 'javascript', 'typescript', 'java', 'cpp', 'c', 'go', 'ruby', 'rust',
         'kotlin', 'swift', 'csharp', 'php', 'scala', 'r', 'lua', 'perl', 'bash', 'shell',
-        'powershell', 'sql', 'prompt', 'html', 'css', 'makefile'
+        'powershell', 'sql', 'prompt', 'html', 'css', 'makefile',
+        # Common data and config formats for architecture prompts and configs
+        'json', 'jsonl', 'yaml', 'yml', 'toml', 'ini'
     }
 
     pdd_path_str = os.getenv('PDD_PATH')
@@ -636,7 +638,9 @@ def construct_paths(
             'kotlin': '.kt', 'swift': '.swift', 'csharp': '.cs', 'php': '.php',
             'scala': '.scala', 'r': '.r', 'lua': '.lua', 'perl': '.pl', 'bash': '.sh',
             'shell': '.sh', 'powershell': '.ps1', 'sql': '.sql', 'html': '.html', 'css': '.css',
-            'prompt': '.prompt', 'makefile': ''
+            'prompt': '.prompt', 'makefile': '',
+            # Common data/config formats
+            'json': '.json', 'jsonl': '.jsonl', 'yaml': '.yaml', 'yml': '.yml', 'toml': '.toml', 'ini': '.ini'
         }
         file_extension = builtin_ext_map.get(language.lower(), f".{language.lower()}" if language else '')
 
