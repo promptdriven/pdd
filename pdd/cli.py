@@ -91,79 +91,6 @@ def _first_pending_command(ctx: click.Context) -> Optional[str]:
     return None
 
 
-# --- Templates Command Group ---
-@cli.group("templates")
-def templates_group():
-    """Manage packaged and project templates."""
-    pass
-
-
-@templates_group.command("list")
-@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-@click.option("--filter", "filter_tag", type=str, default=None, help="Filter by tag")
-def templates_list(as_json: bool, filter_tag: Optional[str]):
-    try:
-        items = template_registry.list_templates(filter_tag)
-        if as_json:
-            import json as _json
-            click.echo(_json.dumps(items, indent=2))
-        else:
-            if not items:
-                console.print("[info]No templates found.[/info]")
-                return
-            console.print("[info]Available Templates:[/info]")
-            for it in items:
-                tags = ", ".join(it.get("tags", []))
-                console.print(f"- [bold]{it['name']}[/bold] ({it.get('version','')}) — {it.get('description','')} [dim]{tags}[/dim]")
-    except Exception as e:
-        handle_error(e, "templates list", False)
-
-
-@templates_group.command("show")
-@click.argument("name", type=str)
-def templates_show(name: str):
-    try:
-        data = template_registry.show_template(name)
-        summary = data.get("summary", {})
-        console.print(f"[bold]{summary.get('name','')}[/bold] — {summary.get('description','')}")
-        console.print(f"Version: {summary.get('version','')}  Tags: {', '.join(summary.get('tags',[]))}")
-        console.print(f"Language: {summary.get('language','')}  Output: {summary.get('output','')}")
-        console.print(f"Path: {summary.get('path','')}")
-        if data.get("variables"):
-            console.print("\n[info]Variables:[/info]")
-            for k, v in data["variables"].items():
-                console.print(f"- {k}: {v}")
-        if data.get("usage"):
-            console.print("\n[info]Usage:[/info]")
-            console.print(data["usage"])  # raw; CLI may format later
-        if data.get("discover"):
-            console.print("\n[info]Discover:[/info]")
-            console.print(data["discover"])  # raw dict
-        if data.get("output_schema"):
-            console.print("\n[info]Output Schema:[/info]")
-            try:
-                import json as _json
-                console.print(_json.dumps(data["output_schema"], indent=2))
-            except Exception:
-                console.print(str(data["output_schema"]))
-        if data.get("notes"):
-            console.print("\n[info]Notes:[/info]")
-            console.print(data["notes"])  # plain text
-    except Exception as e:
-        handle_error(e, "templates show", False)
-
-
-@templates_group.command("copy")
-@click.argument("name", type=str)
-@click.option("--to", "dest_dir", type=click.Path(file_okay=False), required=True)
-def templates_copy(name: str, dest_dir: str):
-    try:
-        dest = template_registry.copy_template(name, dest_dir)
-        console.print(f"[success]Copied to:[/success] {dest}")
-    except Exception as e:
-        handle_error(e, "templates copy", False)
-
-
 def _api_env_exists() -> bool:
     """Check whether the ~/.pdd/api-env file exists."""
     return (Path.home() / ".pdd" / "api-env").exists()
@@ -481,9 +408,99 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
         console.print("[info]-------------------------------------[/info]")
 
 
+# --- Templates Command Group ---
+@click.group(name="templates")
+def templates_group():
+    """Manage packaged and project templates."""
+    pass
+
+
+@templates_group.command("list")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.option("--filter", "filter_tag", type=str, default=None, help="Filter by tag")
+def templates_list(as_json: bool, filter_tag: Optional[str]):
+    try:
+        items = template_registry.list_templates(filter_tag)
+        if as_json:
+            import json as _json
+            click.echo(_json.dumps(items, indent=2))
+        else:
+            if not items:
+                console.print("[info]No templates found.[/info]")
+                return
+            console.print("[info]Available Templates:[/info]")
+            for it in items:
+                tags = ", ".join(it.get("tags", []))
+                console.print(f"- [bold]{it['name']}[/bold] ({it.get('version','')}) — {it.get('description','')} [dim]{tags}[/dim]")
+    except Exception as e:
+        handle_error(e, "templates list", False)
+
+
+@templates_group.command("show")
+@click.argument("name", type=str)
+def templates_show(name: str):
+    try:
+        data = template_registry.show_template(name)
+        summary = data.get("summary", {})
+        console.print(f"[bold]{summary.get('name','')}[/bold] — {summary.get('description','')}")
+        console.print(f"Version: {summary.get('version','')}  Tags: {', '.join(summary.get('tags',[]))}")
+        console.print(f"Language: {summary.get('language','')}  Output: {summary.get('output','')}")
+        console.print(f"Path: {summary.get('path','')}")
+        if data.get("variables"):
+            console.print("\n[info]Variables:[/info]")
+            for k, v in data["variables"].items():
+                console.print(f"- {k}: {v}")
+        if data.get("usage"):
+            console.print("\n[info]Usage:[/info]")
+            console.print(data["usage"])  # raw; CLI may format later
+        if data.get("discover"):
+            console.print("\n[info]Discover:[/info]")
+            console.print(data["discover"])  # raw dict
+        if data.get("output_schema"):
+            console.print("\n[info]Output Schema:[/info]")
+            try:
+                import json as _json
+                console.print(_json.dumps(data["output_schema"], indent=2))
+            except Exception:
+                console.print(str(data["output_schema"]))
+        if data.get("notes"):
+            console.print("\n[info]Notes:[/info]")
+            console.print(data["notes"])  # plain text
+    except Exception as e:
+        handle_error(e, "templates show", False)
+
+
+@templates_group.command("copy")
+@click.argument("name", type=str)
+@click.option("--to", "dest_dir", type=click.Path(file_okay=False), required=True)
+def templates_copy(name: str, dest_dir: str):
+    try:
+        dest = template_registry.copy_template(name, dest_dir)
+        console.print(f"[success]Copied to:[/success] {dest}")
+    except Exception as e:
+        handle_error(e, "templates copy", False)
+
+
+# Register the templates group with the main CLI.
+# Click disallows attaching a MultiCommand to a chained group via add_command,
+# so insert directly into the commands mapping after cli is defined.
+cli.commands["templates"] = templates_group
+
+
+# --- Custom Click Command Classes ---
+
+
+class GenerateCommand(click.Command):
+    """Ensure help shows PROMPT_FILE as required even when validated at runtime."""
+
+    def collect_usage_pieces(self, ctx: click.Context) -> List[str]:
+        pieces = super().collect_usage_pieces(ctx)
+        return ["PROMPT_FILE" if piece == "[PROMPT_FILE]" else piece for piece in pieces]
+
+
 # --- Command Definitions ---
 
-@cli.command("generate")
+@cli.command("generate", cls=GenerateCommand)
 @click.argument("prompt_file", required=False, type=click.Path(exists=True, dir_okay=False))
 @click.option(
     "--output",

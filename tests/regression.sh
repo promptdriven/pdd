@@ -1294,6 +1294,147 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "18" ]; then
   run_pdd_expect_fail fix --output-test "err_test.py" --output-code "err_code.py" "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "$MATH_TEST_SCRIPT" "nonexistent/error.log"
 fi
 
+# 19. Templates
+if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "19" ]; then
+  log "19. Testing templates command group and template-backed generation"
+
+  TEMPLATE_FIXTURE_DIR="docs"
+  TEMPLATE_PRD_FILE="$TEMPLATE_FIXTURE_DIR/specs.md"
+  mkdir -p "$TEMPLATE_FIXTURE_DIR"
+  cat > "$TEMPLATE_PRD_FILE" << 'EOF'
+# Order Management MVP (regression template fixture)
+## Goals
+- Capture end-to-end order lifecycle for web and API clients.
+
+## Key Features
+1. Create Order (items, totals, status transitions)
+2. Customer Dashboard (list and track orders)
+3. Admin Oversight (monitor SLAs, escalate stalled orders)
+
+## Constraints
+- Target stack: Next.js frontend, FastAPI backend, Postgres.
+EOF
+
+  # Validate templates list output contains packaged architecture template
+  log "Running 'templates list --json'"
+  log_timestamped "TEMPLATES_LIST_JSON_START"
+  run_pdd_command templates list --json
+  log_timestamped "TEMPLATES_LIST_JSON_END"
+  LOG_PATH="$LOG_FILE" START_MARK="TEMPLATES_LIST_JSON_START" END_MARK="TEMPLATES_LIST_JSON_END" python - <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+log_path = pathlib.Path(os.environ["LOG_PATH"])
+start_mark = os.environ["START_MARK"]
+end_mark = os.environ["END_MARK"]
+
+text = log_path.read_text(encoding="utf-8")
+start_idx = text.rfind(start_mark)
+if start_idx == -1:
+    print("templates list start marker missing", file=sys.stderr)
+    sys.exit(1)
+end_idx = text.find(end_mark, start_idx)
+if end_idx == -1:
+    print("templates list end marker missing", file=sys.stderr)
+    sys.exit(1)
+segment = text[start_idx:end_idx]
+
+decoder = json.JSONDecoder()
+data = None
+for i in range(len(segment)):
+    fragment = segment[i:].lstrip()
+    if not fragment:
+        break
+    try:
+        parsed, _ = decoder.raw_decode(fragment)
+    except json.JSONDecodeError:
+        continue
+    if isinstance(parsed, list):
+        if any(isinstance(item, dict) and "name" in item for item in parsed):
+            data = parsed
+            break
+        # Otherwise keep scanning in case this was a nested array (e.g., tags)
+if data is None:
+    print("no JSON array recovered from templates list output", file=sys.stderr)
+    sys.exit(1)
+
+found = any(isinstance(item, dict) and item.get("name") == "architecture/architecture_json" for item in data)
+if not found:
+    print("architecture/architecture_json missing from templates list output", file=sys.stderr)
+    sys.exit(1)
+PY
+
+  # Validate templates show output exposes variable metadata and output schema mention
+  log "Running 'templates show architecture/architecture_json'"
+  log_timestamped "TEMPLATES_SHOW_START"
+  run_pdd_command templates show architecture/architecture_json
+  log_timestamped "TEMPLATES_SHOW_END"
+  LOG_PATH="$LOG_FILE" START_MARK="TEMPLATES_SHOW_START" END_MARK="TEMPLATES_SHOW_END" python - <<'PY'
+import os
+import pathlib
+import sys
+
+log_path = pathlib.Path(os.environ["LOG_PATH"])
+start_mark = os.environ["START_MARK"]
+end_mark = os.environ["END_MARK"]
+text = log_path.read_text(encoding="utf-8")
+start_idx = text.rfind(start_mark)
+if start_idx == -1:
+    print("templates show start marker missing", file=sys.stderr)
+    sys.exit(1)
+end_idx = text.find(end_mark, start_idx)
+if end_idx == -1:
+    print("templates show end marker missing", file=sys.stderr)
+    sys.exit(1)
+segment = text[start_idx:end_idx]
+if "PRD_FILE" not in segment or "output_schema" not in segment:
+    print("templates show did not surface expected metadata", file=sys.stderr)
+    sys.exit(1)
+PY
+
+  # Copy the packaged template into a project prompts directory
+  TEMPLATE_COPY_DIR="prompts/templates_demo"
+  run_pdd_command templates copy architecture/architecture_json --to "$TEMPLATE_COPY_DIR"
+  check_exists "$TEMPLATE_COPY_DIR/architecture_json.prompt" "'templates copy' output"
+
+  # Ensure generate --template flags missing required variables
+  MISSING_TEMPLATE_OUTPUT="missing_template.json"
+  [ -f "$MISSING_TEMPLATE_OUTPUT" ] && rm -f "$MISSING_TEMPLATE_OUTPUT"
+  log_timestamped "TEMPLATES_GENERATE_FAIL_START"
+  run_pdd_command_noexit generate --template architecture/architecture_json --output "$MISSING_TEMPLATE_OUTPUT"
+  log_timestamped "TEMPLATES_GENERATE_FAIL_END"
+  LOG_PATH="$LOG_FILE" START_MARK="TEMPLATES_GENERATE_FAIL_START" END_MARK="TEMPLATES_GENERATE_FAIL_END" python - <<'PY'
+import os
+import pathlib
+import sys
+
+log_path = pathlib.Path(os.environ["LOG_PATH"])
+start_mark = os.environ["START_MARK"]
+end_mark = os.environ["END_MARK"]
+
+text = log_path.read_text(encoding="utf-8")
+start_idx = text.rfind(start_mark)
+if start_idx == -1:
+    print("templates generate fail start marker missing", file=sys.stderr)
+    sys.exit(1)
+end_idx = text.find(end_mark, start_idx)
+if end_idx == -1:
+    print("templates generate fail end marker missing", file=sys.stderr)
+    sys.exit(1)
+segment = text[start_idx:end_idx]
+if "Missing required variables" not in segment or "PRD_FILE" not in segment:
+    print("generate --template without PRD_FILE did not report missing variable", file=sys.stderr)
+    sys.exit(1)
+PY
+  check_not_exists "$MISSING_TEMPLATE_OUTPUT" "'generate --template' output when PRD_FILE missing"
+
+  TEMPLATE_GENERATED_OUTPUT="template_architecture.json"
+  run_pdd_command generate --template architecture/architecture_json -e PRD_FILE="$TEMPLATE_PRD_FILE" --output "$TEMPLATE_GENERATED_OUTPUT"
+  check_exists "$TEMPLATE_GENERATED_OUTPUT" "'generate --template' output"
+fi
+
 # --- Final Summary ---
 log_timestamped "======== Regression Tests Completed (Target: $TARGET_TEST) ========"
 log "----------------------------------------"

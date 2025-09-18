@@ -629,7 +629,8 @@ def code_generator_main(
                 if verbose or not quiet:
                     console.print(f"Generated code saved to: [green]{p_output.resolve()}[/green]")
             elif not quiet:
-                # Fallback: construct_paths should have provided an output path. Avoid printing artifacts to stdout.
+                # No destination resolved; surface the generated code directly to the console.
+                console.print(Panel(Text(generated_code_content, overflow="fold"), title="[cyan]Generated Code[/cyan]", expand=False))
                 console.print("[yellow]No output path resolved; skipping file write and stdout print.[/yellow]")
         else:
             console.print("[red]Error: Code generation failed. No code was produced.[/red]")
