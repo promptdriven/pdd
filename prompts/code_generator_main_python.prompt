@@ -161,7 +161,10 @@
        - Read content; expand includes with `preprocess(prompt, recursive=True, double_curly_brackets=False)`.
        - Apply variable substitution using `env_vars` (`$KEY` and `${KEY}` only when provided). Unknown placeholders remain unchanged.
        - After substitution, apply curly‑brace doubling if appropriate.
-    3. Determine the language using `construct_paths` (may infer from file extension, special cases, or filename suffix). When calling `construct_paths`, pass `context_override=ctx.obj.get('context')` so a global `--context` is honored.
+    3. Determine the language with clear precedence and context support:
+       - If YAML front matter specifies `language`, use it.
+       - Otherwise, determine the language using `construct_paths` (may infer from file extension, special cases, or filename suffix).
+       - When calling `construct_paths`, pass `context_override=ctx.obj.get('context')` so a global `--context` is honored.
     4. Determine whether to use incremental generation or full generation:
        - Check if output is specified and file exists
        - If original_prompt is specified, use it; otherwise try to get last committed version from git
@@ -177,9 +180,32 @@
         - If cloud execution fails, automatically fall back to local execution with appropriate warnings
     7. Write the final code to the output location:
        - If `--output` ends with a path separator or points to a directory, use the resolved default filename from `construct_paths`.
+       - If `--output` is omitted, derive the filename and destination via `construct_paths` and write the file there. Respect any configured `PDD_GENERATE_OUTPUT_PATH` used by the path resolver.
        - Before writing, expand `$KEY`/`${KEY}` in the final `output_path` string using only keys present in `env_vars`. Leave unknown placeholders unchanged.
-        - If no output is provided, print the generated code to the console (when not in quiet mode).
     8. Return the generated code, incremental flag, cost, and model name
 
 % Helper function expectations:
     - Implement a small helper, e.g., `expand_vars(text: str, vars: Dict[str, str]) -> str`, that performs a single-pass substitution for `$KEY` and `${KEY}` only when `KEY in vars`. Unmatched placeholders remain unchanged; do not read from OS environment in this function.
+
+% Template front‑matter & preprocessing requirements (Phase 2)
+    - Parse YAML front matter at the very beginning of the prompt file when present (leading `---\n` … `\n---`).
+      * Return a dict (or empty) and the remaining prompt body with the front matter stripped.
+      * Do NOT send the YAML to the LLM; treat it as human/CLI metadata.
+    - Merge variable defaults from front matter into `env_vars` (without overwriting explicit `-e` values). Validate required variables; if missing, raise a friendly `click.UsageError` listing the missing keys.
+    - Honor `language` from front matter if present (overrides detection). Honor `output` from front matter when the CLI did not explicitly pass `--output`.
+    - Two‑pass preprocess to support variable‑driven includes:
+        1) First pass: `preprocess(prompt, recursive=True, double_curly_brackets=False)` to resolve static includes while deferring unresolved ones. Strip any `<pdd>...</pdd>` blocks.
+        2) Perform variable substitution with `expand_vars` on the intermediate result.
+        3) Second pass: `preprocess(prompt, recursive=False, double_curly_brackets=True)` to resolve variable‑driven includes and apply brace doubling.
+      Unknown `$VAR` placeholders remain unchanged in both content and output paths.
+    - Support `<include-many>${VAR}</include-many>` where VAR is a comma- or newline‑separated list of file paths.
+    - Maintain existing local/cloud execution and incremental generation behavior; only the prompt assembly changes as described.
+
+    - Discover execution (optional):
+        * If front matter includes a `discover` section (e.g., root, patterns, exclude, caps), execute discovery before preprocessing so its results can populate variables used in includes.
+        * Merge discovered values into `env_vars` only for keys defined by the template's variables schema and not already set via `-e`. Represent multi-file results as comma-separated or newline-separated paths suitable for `<include-many>`.
+        * Discovery is a CLI-side operation; ensure it runs with the appropriate caps and does not leak into the LLM prompt body.
+
+    - Output schema validation (optional):
+        * If front matter defines `output_schema` and the generated artifact is JSON (by `language` or output extension), validate the generated output against the schema.
+        * On validation failure, raise a friendly `click.UsageError` summarizing the errors (and avoid writing an invalid file unless `--force` semantics dictate otherwise).
