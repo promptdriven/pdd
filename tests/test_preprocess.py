@@ -89,7 +89,7 @@ def test_file_not_found() -> None:
     """Test handling of file not found error."""
     set_pdd_path('/mock/path')
     prompt = "This is a test ```<missing_file.txt>```"
-    expected_output = "This is a test ```<missing_file.txt>```"
+    expected_output = "This is a test ```[File not found: missing_file.txt]```"
 
     with patch('builtins.open', side_effect=FileNotFoundError):
         assert preprocess(prompt, recursive=False, double_curly_brackets=False) == expected_output

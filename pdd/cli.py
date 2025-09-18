@@ -47,6 +47,7 @@ from .sync_main import sync_main
 from .trace_main import trace_main
 from .track_cost import track_cost
 from .update_main import update_main
+from . import template_registry
 
 
 # --- Initialize Rich Console ---
@@ -88,6 +89,79 @@ def _first_pending_command(ctx: click.Context) -> Optional[str]:
         if not arg.startswith("-"):
             return arg
     return None
+
+
+# --- Templates Command Group ---
+@cli.group("templates")
+def templates_group():
+    """Manage packaged and project templates."""
+    pass
+
+
+@templates_group.command("list")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.option("--filter", "filter_tag", type=str, default=None, help="Filter by tag")
+def templates_list(as_json: bool, filter_tag: Optional[str]):
+    try:
+        items = template_registry.list_templates(filter_tag)
+        if as_json:
+            import json as _json
+            click.echo(_json.dumps(items, indent=2))
+        else:
+            if not items:
+                console.print("[info]No templates found.[/info]")
+                return
+            console.print("[info]Available Templates:[/info]")
+            for it in items:
+                tags = ", ".join(it.get("tags", []))
+                console.print(f"- [bold]{it['name']}[/bold] ({it.get('version','')}) — {it.get('description','')} [dim]{tags}[/dim]")
+    except Exception as e:
+        handle_error(e, "templates list", False)
+
+
+@templates_group.command("show")
+@click.argument("name", type=str)
+def templates_show(name: str):
+    try:
+        data = template_registry.show_template(name)
+        summary = data.get("summary", {})
+        console.print(f"[bold]{summary.get('name','')}[/bold] — {summary.get('description','')}")
+        console.print(f"Version: {summary.get('version','')}  Tags: {', '.join(summary.get('tags',[]))}")
+        console.print(f"Language: {summary.get('language','')}  Output: {summary.get('output','')}")
+        console.print(f"Path: {summary.get('path','')}")
+        if data.get("variables"):
+            console.print("\n[info]Variables:[/info]")
+            for k, v in data["variables"].items():
+                console.print(f"- {k}: {v}")
+        if data.get("usage"):
+            console.print("\n[info]Usage:[/info]")
+            console.print(data["usage"])  # raw; CLI may format later
+        if data.get("discover"):
+            console.print("\n[info]Discover:[/info]")
+            console.print(data["discover"])  # raw dict
+        if data.get("output_schema"):
+            console.print("\n[info]Output Schema:[/info]")
+            try:
+                import json as _json
+                console.print(_json.dumps(data["output_schema"], indent=2))
+            except Exception:
+                console.print(str(data["output_schema"]))
+        if data.get("notes"):
+            console.print("\n[info]Notes:[/info]")
+            console.print(data["notes"])  # plain text
+    except Exception as e:
+        handle_error(e, "templates show", False)
+
+
+@templates_group.command("copy")
+@click.argument("name", type=str)
+@click.option("--to", "dest_dir", type=click.Path(file_okay=False), required=True)
+def templates_copy(name: str, dest_dir: str):
+    try:
+        dest = template_registry.copy_template(name, dest_dir)
+        console.print(f"[success]Copied to:[/success] {dest}")
+    except Exception as e:
+        handle_error(e, "templates copy", False)
 
 
 def _api_env_exists() -> bool:
@@ -410,7 +484,7 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
 # --- Command Definitions ---
 
 @cli.command("generate")
-@click.argument("prompt_file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("prompt_file", required=False, type=click.Path(exists=True, dir_okay=False))
 @click.option(
     "--output",
     type=click.Path(writable=True),
@@ -438,18 +512,40 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
     multiple=True,
     help="Set template variable (KEY=VALUE) or read KEY from env",
 )
+@click.option(
+    "--template",
+    "template_name",
+    type=str,
+    default=None,
+    help="Use a packaged/project template by name (e.g., architecture/architecture_json)",
+)
 @click.pass_context
 @track_cost
 def generate(
     ctx: click.Context,
-    prompt_file: str,
+    prompt_file: Optional[str],
     output: Optional[str],
     original_prompt_file_path: Optional[str],
     incremental_flag: bool,
     env_kv: Tuple[str, ...],
+    template_name: Optional[str],
 ) -> Optional[Tuple[str, float, str]]:
     """Generate code from a prompt file."""
     try:
+        # Resolve template to a prompt path when requested
+        if template_name and prompt_file:
+            raise click.UsageError("Provide either --template or a PROMPT_FILE path, not both.")
+        if template_name:
+            try:
+                from . import template_registry as _tpl
+                meta = _tpl.load_template(template_name)
+                prompt_file = meta.get("path")
+                if not prompt_file:
+                    raise click.UsageError(f"Template '{template_name}' did not return a valid path")
+            except Exception as e:
+                raise click.UsageError(f"Failed to load template '{template_name}': {e}")
+        if not template_name and not prompt_file:
+            raise click.UsageError("Missing PROMPT_FILE. To use a template, pass --template NAME instead.")
         # Parse -e/--env arguments into a dict
         env_vars: Dict[str, str] = {}
         import os as _os
@@ -470,7 +566,7 @@ def generate(
                             console.print(f"[warning]-e {key} not found in environment; skipping[/warning]")
         generated_code, incremental, total_cost, model_name = code_generator_main(
             ctx=ctx,
-            prompt_file=prompt_file,
+            prompt_file=prompt_file,  # resolved template path or user path
             output=output,
             original_prompt_file_path=original_prompt_file_path,
             force_incremental_flag=incremental_flag,
