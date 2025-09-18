@@ -43,46 +43,44 @@
     Step 3. Run an initial test to determine the starting state of the unit tests and store the results in the statistics tracker.
     Step 4. Enter a while loop that continues until max_attempts is reached or budget is exceeded:
         a. Print out to console and error log file the attempt iteration.
-        b. Run the unit tests using pytest via a subprocess call to a custom reporter script (`pdd.pytest_output`) with the `--json-only` flag. Parse this JSON output to capture:
+        b. Run the unit tests using pytest. First try invoking `pdd pytest-output --json-only <test_file>` via subprocess. If the command is missing, fall back to calling `run_pytest_and_capture_output` from the in-tree `pytest_output` module, and finally to `python -m pdd.pytest_output --json-only <test_file>` using the detected host Python. Strip any non-JSON text from stdout by locating the first `{` and balancing braces to extract the payload, then parse the JSON to capture:
            - Number of failures (tests that failed assertions)
-           - Number of errors (tests that had errors during setup, execution, or teardown)
+           - Number of errors (tests that had errors during setup, execution, or teardown) and increment this count when `return_code` is 2
            - Number of warnings
            - Complete test output logs (Combine stdout and stderr from the test results within the JSON.)
-           - Include error handling in case the pytest output is not valid JSON.
-           - **Important:** Check the `return_code` in the JSON. If the `return_code` is not 0, pytest encountered a general error, and the detailed results might be missing. Be sure to increment the `errors` count if `return_code` is 2.
+           - Handle `json.JSONDecodeError` and other exceptions gracefully by returning placeholder failure counts and raw output in the logs field.
         c. If the test passes and has no warnings, break the loop and update the statistics tracker with the final state.
         d. If the test fails or has warnings:
            - Print the captured test output to the console and error log file, escaping square brackets for proper Rich console display.
-           - Create backup copies of the unit_test_file and code_file in their respective directories, appending the current iteration number, the number of errors, fails, and warnings to the filenames like this "unit_test_filename_3_1_0_2.py" and "code_filename_3_1_0_2.py", it is the third iteration where there was one error, zero fails, and two warnings through the loop.
+           - Create backup copies of the unit_test_file and code_file in their respective directories, appending the current iteration number, the number of errors, fails, warnings, and a timestamp to the filenames like "unit_test_filename_3_1_0_2_20240101_120000.py" and "code_filename_3_1_0_2_20240101_120000.py" (iteration 3 with one error, zero fails, two warnings).
+           - Update the best iteration tracker immediately after creating backups using the current failure, error, and warning counts so the loop can restore this snapshot later if needed (preferring lower errors, then fails, then warnings).
            - Read the contents of the unit_test_file and code_file.
            - Call fix_errors_from_unit_tests with the file contents, error and warning messages from the error log file, the error log file, and the provided strength, temperature, and time. Pass the verbose flag to enable detailed logging if specified.
            - Add the returned total_cost to the total cost accumulator.
            - If the total cost exceeds the budget, break the loop.
-           - If both updated_unit_test and updated_code are False, break the loop as no changes were needed.
            - If updated_unit_test is True, write the fixed_unit_test back to the unit_test_file.
            - Increment the attempt counter.
            - If updated_code is True:
               * Write the fixed_code back to the code_file.
               * Run the verification_program to check if the code still runs.
               * If the verification fails, restore the last known working code_file from one of the backups and output the errors and results of the failed verification run into the error log file so that this can be debugged in the next iteration and indicate that a restore has happened. Then continue the loop.
-              * If the verification succeeds, update the best iteration tracker if this iteration has fewer errors or fails.
            - Run the tests again in the same iteration using the pytest subprocess call to check if the fixes worked.
            - Update the statistics tracker with the results of the current iteration, including whether the fixes improved the test results.
-    Step 5. After the loop ends, run pytest one final time using the subprocess call, append the output to the error log file, escape square brackets, and print it to the console. Update the statistics tracker with the final state.
-    Step 6. If the last run isn't the best iteration, copy back the files from the best iteration and print out which was the best iteration. Update the statistics tracker with the best iteration information.
-    Step 7. Calculate and print summary statistics, including the initial state, final state, best iteration, and overall improvement percentages for failures, errors, and warnings.
-    Step 8. Return the success status, final unit test contents, final code contents, total number of attempts, total cost, and model name.
+    Step 5. If the last run isn't the best iteration, copy back the files from the best iteration and print out which iteration was restored. Update the statistics tracker with the best iteration information.
+    Step 6. Calculate and print summary statistics, including the initial state, final state, best iteration identifier, reductions in failures/errors/warnings, and the overall improvement percentage across all three metrics.
+    Step 7. Return the success status, final unit test contents, final code contents, total number of attempts, total cost, and model name.
 
 % In addition, update the docstring and implementation of the `run_pytest_on_file` function. The function should:
-    - Run pytest on the specified test file using `subprocess`.
+    - Run pytest on the specified test file by first calling `pdd pytest-output --json-only <test_file>`.
+    - Fall back to importing and calling `run_pytest_and_capture_output` when the CLI is unavailable, and otherwise to `python -m pdd.pytest_output --json-only <test_file>` using the detected host Python executable.
     - Return a tuple: `(failures, errors, warnings, logs)`.
-    - Use the `pdd.pytest_output` custom reporter with the `--json-only` flag.
-    - If `return_code` is 0, parse `failures`, `errors`, `warnings`, and combine `standard_output` and `standard_error` for `logs`.
-    - Handle `json.JSONDecodeError` and other exceptions gracefully.
+    - Extract the JSON payload by locating the leading `{` and balancing braces before parsing.
+    - Increment the `errors` total when the parsed `return_code` equals 2, and concatenate `standard_output` and `standard_error` for the logs.
+    - Handle `json.JSONDecodeError` and other exceptions gracefully by returning placeholder failure counts and the raw combined output in the logs.
 
 % Finally, ensure that the function tracks and reports detailed statistics about the fixing process, including:
     - Initial state of the tests (failures, errors, warnings).
     - Final state of the tests (failures, errors, warnings).
     - Improvements made during the process (reductions in failures, errors, warnings).
-    - The best iteration and its corresponding test results.
-    - Overall improvement percentage for failures, errors, and warnings.
+    - The identifier of the best iteration that can be restored.
+    - The overall percentage improvement across failures, errors, and warnings combined.
