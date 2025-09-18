@@ -79,6 +79,27 @@ def _expand_vars(text: str, vars_map: Optional[Dict[str, str]]) -> str:
     return text
 
 
+def _parse_front_matter(text: str) -> Tuple[Optional[Dict[str, Any]], str]:
+    """Parse YAML front matter at the start of a prompt and return (meta, body)."""
+    try:
+        if not text.startswith("---\n"):
+            return None, text
+        end_idx = text.find("\n---", 4)
+        if end_idx == -1:
+            return None, text
+        fm_body = text[4:end_idx]
+        rest = text[end_idx + len("\n---"):]
+        if rest.startswith("\n"):
+            rest = rest[1:]
+        import yaml as _yaml
+        meta = _yaml.safe_load(fm_body) or {}
+        if not isinstance(meta, dict):
+            meta = {}
+        return meta, rest
+    except Exception:
+        return None, text
+
+
 def get_git_content_at_ref(file_path: str, git_ref: str = "HEAD") -> Optional[str]:
     """Gets the content of the file as it was at the specified git_ref."""
     abs_file_path = pathlib.Path(file_path).resolve()
@@ -187,6 +208,10 @@ def code_generator_main(
             context_override=ctx.obj.get('context')
         )
         prompt_content = input_strings["prompt_file"]
+        # Phase-2 templates: parse front matter metadata
+        fm_meta, body = _parse_front_matter(prompt_content)
+        if fm_meta:
+            prompt_content = body
         # Determine final output path: if user passed a directory, use resolved file path
         resolved_output = output_file_paths.get("output")
         if output is None:
@@ -212,9 +237,107 @@ def code_generator_main(
     existing_code_content: Optional[str] = None
     original_prompt_content_for_incremental: Optional[str] = None
 
+    # Merge -e vars with front-matter defaults; validate required
+    if env_vars is None:
+        env_vars = {}
+    if fm_meta and isinstance(fm_meta.get("variables"), dict):
+        for k, spec in (fm_meta["variables"].items()):
+            if isinstance(spec, dict):
+                if k not in env_vars and "default" in spec:
+                    env_vars[k] = str(spec["default"])
+            # if scalar default allowed, ignore for now
+        missing = [k for k, spec in fm_meta["variables"].items() if isinstance(spec, dict) and spec.get("required") and k not in env_vars]
+        if missing:
+            console.print(f"[error]Missing required variables: {', '.join(missing)}")
+            return "", False, 0.0, "error"
+
+    # Execute optional discovery from front matter to populate env_vars without overriding explicit -e values
+    def _run_discovery(discover_cfg: Dict[str, Any]) -> Dict[str, str]:
+        results: Dict[str, str] = {}
+        try:
+            if not discover_cfg:
+                return results
+            enabled = discover_cfg.get("enabled", False)
+            if not enabled:
+                return results
+            root = discover_cfg.get("root", ".")
+            patterns = discover_cfg.get("patterns", []) or []
+            exclude = discover_cfg.get("exclude", []) or []
+            max_per = int(discover_cfg.get("max_per_pattern", 0) or 0)
+            max_total = int(discover_cfg.get("max_total", 0) or 0)
+            root_path = pathlib.Path(root).resolve()
+            seen: List[str] = []
+            def _match_one(patterns_list: List[str]) -> List[str]:
+                matches: List[str] = []
+                for pat in patterns_list:
+                    globbed = list(root_path.rglob(pat))
+                    for p in globbed:
+                        if any(p.match(ex) for ex in exclude):
+                            continue
+                        sp = str(p.resolve())
+                        if sp not in matches:
+                            matches.append(sp)
+                    if max_per and len(matches) >= max_per:
+                        matches = matches[:max_per]
+                        break
+                return matches
+            # If a mapping 'set' is provided, compute per-variable results
+            set_map = discover_cfg.get("set") or {}
+            if isinstance(set_map, dict) and set_map:
+                for var_name, spec in set_map.items():
+                    if var_name in env_vars:
+                        continue  # don't override explicit -e
+                    v_patterns = spec.get("patterns", []) if isinstance(spec, dict) else []
+                    v_exclude = spec.get("exclude", []) if isinstance(spec, dict) else []
+                    save_exclude = exclude
+                    try:
+                        if v_exclude:
+                            exclude = v_exclude
+                        matches = _match_one(v_patterns or patterns)
+                    finally:
+                        exclude = save_exclude
+                    if matches:
+                        results[var_name] = ",".join(matches)
+                        seen.extend(matches)
+            # Fallback: populate SCAN_FILES and SCAN metadata
+            if not results:
+                files = _match_one(patterns)
+                if max_total and len(files) > max_total:
+                    files = files[:max_total]
+                if files:
+                    results["SCAN_FILES"] = ",".join(files)
+            # Always set root/patterns helpers
+            if root:
+                results.setdefault("SCAN_ROOT", str(root_path))
+            if patterns:
+                results.setdefault("SCAN_PATTERNS", ",".join(patterns))
+        except Exception as e:
+            if verbose and not quiet:
+                console.print(f"[yellow]Discovery skipped due to error: {e}[/yellow]")
+        return results
+
+    if fm_meta and isinstance(fm_meta.get("discover"), dict):
+        discovered = _run_discovery(fm_meta.get("discover") or {})
+        for k, v in discovered.items():
+            if k not in env_vars:
+                env_vars[k] = v
+
     # Expand variables in output path if provided
     if output_path:
         output_path = _expand_vars(output_path, env_vars)
+
+    # Honor front-matter output when CLI did not pass --output
+    if output is None and fm_meta and isinstance(fm_meta.get("output"), str):
+        try:
+            meta_out = _expand_vars(fm_meta["output"], env_vars)
+            if meta_out:
+                output_path = str(pathlib.Path(meta_out).resolve())
+        except Exception:
+            pass
+
+    # Honor front-matter language if provided (overrides detection for both local and cloud)
+    if fm_meta and isinstance(fm_meta.get("language"), str) and fm_meta.get("language"):
+        language = fm_meta.get("language")
 
     if output_path and pathlib.Path(output_path).exists():
         try:
@@ -462,9 +585,11 @@ def code_generator_main(
                 local_prompt = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False, exclude_keys=[])
                 local_prompt = _expand_vars(local_prompt, env_vars)
                 local_prompt = pdd_preprocess(local_prompt, recursive=False, double_curly_brackets=True, exclude_keys=[])
+                # Language already resolved (front matter overrides detection if present)
+                gen_language = language
                 generated_code_content, total_cost, model_name = local_code_generator_func(
                     prompt=local_prompt,
-                    language=language,
+                    language=gen_language,
                     strength=strength,
                     temperature=temperature,
                     time=time_budget,
@@ -476,14 +601,36 @@ def code_generator_main(
                     console.print(Panel(f"Full generation successful. Model: {model_name}, Cost: ${total_cost:.6f}", title="[green]Local Success[/green]", expand=False))
         
         if generated_code_content is not None:
+            # Optional output_schema JSON validation before writing
+            try:
+                if fm_meta and isinstance(fm_meta.get("output_schema"), dict):
+                    is_json_output = False
+                    if isinstance(language, str) and str(language).lower().strip() == "json":
+                        is_json_output = True
+                    elif output_path and str(output_path).lower().endswith(".json"):
+                        is_json_output = True
+                    if is_json_output:
+                        parsed = json.loads(generated_code_content)
+                        try:
+                            import jsonschema  # type: ignore
+                            jsonschema.validate(instance=parsed, schema=fm_meta.get("output_schema"))
+                        except ModuleNotFoundError:
+                            if verbose and not quiet:
+                                console.print("[yellow]jsonschema not installed; skipping schema validation.[/yellow]")
+                        except Exception as ve:
+                            raise click.UsageError(f"Generated JSON does not match output_schema: {ve}")
+            except json.JSONDecodeError as jde:
+                raise click.UsageError(f"Generated output is not valid JSON: {jde}")
+
             if output_path:
                 p_output = pathlib.Path(output_path)
                 p_output.parent.mkdir(parents=True, exist_ok=True)
                 p_output.write_text(generated_code_content, encoding="utf-8")
                 if verbose or not quiet:
                     console.print(f"Generated code saved to: [green]{p_output.resolve()}[/green]")
-            elif not quiet: # No output path, print to console if not quiet
-                console.print(Panel(Text(generated_code_content, overflow="fold"), title="[cyan]Generated Code[/cyan]", expand=True))
+            elif not quiet:
+                # Fallback: construct_paths should have provided an output path. Avoid printing artifacts to stdout.
+                console.print("[yellow]No output path resolved; skipping file write and stdout print.[/yellow]")
         else:
             console.print("[red]Error: Code generation failed. No code was produced.[/red]")
             return "", was_incremental_operation, total_cost, model_name or "error"
