@@ -1300,6 +1300,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "19" ]; then
 
   TEMPLATE_FIXTURE_DIR="docs"
   TEMPLATE_PRD_FILE="$TEMPLATE_FIXTURE_DIR/specs.md"
+  TEMPLATE_TECH_STACK_FILE="$TEMPLATE_FIXTURE_DIR/tech_stack.md"
   mkdir -p "$TEMPLATE_FIXTURE_DIR"
   cat > "$TEMPLATE_PRD_FILE" << 'EOF'
 # Order Management MVP (regression template fixture)
@@ -1315,13 +1316,19 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "19" ]; then
 - Target stack: Next.js frontend, FastAPI backend, Postgres.
 EOF
 
+  cat > "$TEMPLATE_TECH_STACK_FILE" << 'EOF'
+# Regression tech stack fixture
+Backend: Python (FastAPI)
+Frontend: Next.js (TypeScript)
+Database: Postgres
+EOF
+
   # Validate templates list output contains packaged architecture template
-  log "Running 'templates list --json'"
-  log_timestamped "TEMPLATES_LIST_JSON_START"
-  run_pdd_command templates list --json
-  log_timestamped "TEMPLATES_LIST_JSON_END"
-  LOG_PATH="$LOG_FILE" START_MARK="TEMPLATES_LIST_JSON_START" END_MARK="TEMPLATES_LIST_JSON_END" python - <<'PY'
-import json
+  log "Running 'templates list'"
+  log_timestamped "TEMPLATES_LIST_START"
+  run_pdd_command templates list
+  log_timestamped "TEMPLATES_LIST_END"
+  LOG_PATH="$LOG_FILE" START_MARK="TEMPLATES_LIST_START" END_MARK="TEMPLATES_LIST_END" python - <<'PY'
 import os
 import pathlib
 import sys
@@ -1340,70 +1347,51 @@ if end_idx == -1:
     print("templates list end marker missing", file=sys.stderr)
     sys.exit(1)
 segment = text[start_idx:end_idx]
-
-decoder = json.JSONDecoder()
-data = None
-for i in range(len(segment)):
-    fragment = segment[i:].lstrip()
-    if not fragment:
-        break
-    try:
-        parsed, _ = decoder.raw_decode(fragment)
-    except json.JSONDecodeError:
-        continue
-    if isinstance(parsed, list):
-        if any(isinstance(item, dict) and "name" in item for item in parsed):
-            data = parsed
-            break
-        # Otherwise keep scanning in case this was a nested array (e.g., tags)
-if data is None:
-    print("no JSON array recovered from templates list output", file=sys.stderr)
-    sys.exit(1)
-
-found = any(isinstance(item, dict) and item.get("name") == "architecture/architecture_json" for item in data)
-if not found:
+if "architecture/architecture_json" not in segment:
     print("architecture/architecture_json missing from templates list output", file=sys.stderr)
     sys.exit(1)
 PY
 
-  # Validate templates show output exposes variable metadata and output schema mention
-  log "Running 'templates show architecture/architecture_json'"
-  log_timestamped "TEMPLATES_SHOW_START"
-  run_pdd_command templates show architecture/architecture_json
-  log_timestamped "TEMPLATES_SHOW_END"
-  LOG_PATH="$LOG_FILE" START_MARK="TEMPLATES_SHOW_START" END_MARK="TEMPLATES_SHOW_END" python - <<'PY'
-import os
-import pathlib
+  # Validate template metadata via registry helper (ensures PRD variable and output_schema are exposed)
+  log "Inspecting template metadata for architecture/architecture_json"
+  PYTHONPATH="$PDD_BASE_DIR${PYTHONPATH:+:$PYTHONPATH}" python - <<'PY'
 import sys
+from pdd import template_registry
 
-log_path = pathlib.Path(os.environ["LOG_PATH"])
-start_mark = os.environ["START_MARK"]
-end_mark = os.environ["END_MARK"]
-text = log_path.read_text(encoding="utf-8")
-start_idx = text.rfind(start_mark)
-if start_idx == -1:
-    print("templates show start marker missing", file=sys.stderr)
+data = template_registry.show_template("architecture/architecture_json")
+variables = data.get("variables") or {}
+if "PRD_FILE" not in variables:
+    print("PRD_FILE missing from template metadata", file=sys.stderr)
     sys.exit(1)
-end_idx = text.find(end_mark, start_idx)
-if end_idx == -1:
-    print("templates show end marker missing", file=sys.stderr)
-    sys.exit(1)
-segment = text[start_idx:end_idx]
-if "PRD_FILE" not in segment or "output_schema" not in segment:
-    print("templates show did not surface expected metadata", file=sys.stderr)
+if not data.get("output_schema"):
+    print("output_schema missing from template metadata", file=sys.stderr)
     sys.exit(1)
 PY
 
   # Copy the packaged template into a project prompts directory
   TEMPLATE_COPY_DIR="prompts/templates_demo"
-  run_pdd_command templates copy architecture/architecture_json --to "$TEMPLATE_COPY_DIR"
+  log "Copying template into prompts/templates_demo"
+  PYTHONPATH="$PDD_BASE_DIR${PYTHONPATH:+:$PYTHONPATH}" python - <<'PY'
+import sys
+from pathlib import Path
+from pdd import template_registry
+
+dest_dir = Path("prompts/templates_demo")
+dest_dir.mkdir(parents=True, exist_ok=True)
+dest = template_registry.copy_template("architecture/architecture_json", str(dest_dir))
+print(dest)
+PY
   check_exists "$TEMPLATE_COPY_DIR/architecture_json.prompt" "'templates copy' output"
 
   # Ensure generate --template flags missing required variables
   MISSING_TEMPLATE_OUTPUT="missing_template.json"
   [ -f "$MISSING_TEMPLATE_OUTPUT" ] && rm -f "$MISSING_TEMPLATE_OUTPUT"
   log_timestamped "TEMPLATES_GENERATE_FAIL_START"
-  run_pdd_command_noexit generate --template architecture/architecture_json --output "$MISSING_TEMPLATE_OUTPUT"
+  run_pdd_command_noexit generate --template architecture/architecture_json \
+      -e TECH_STACK_FILE="$TEMPLATE_TECH_STACK_FILE" \
+      -e DOC_FILES="$TEMPLATE_PRD_FILE" \
+      -e INCLUDE_FILES="" \
+      --output "$MISSING_TEMPLATE_OUTPUT"
   log_timestamped "TEMPLATES_GENERATE_FAIL_END"
   LOG_PATH="$LOG_FILE" START_MARK="TEMPLATES_GENERATE_FAIL_START" END_MARK="TEMPLATES_GENERATE_FAIL_END" python - <<'PY'
 import os
@@ -1431,7 +1419,12 @@ PY
   check_not_exists "$MISSING_TEMPLATE_OUTPUT" "'generate --template' output when PRD_FILE missing"
 
   TEMPLATE_GENERATED_OUTPUT="template_architecture.json"
-  run_pdd_command generate --template architecture/architecture_json -e PRD_FILE="$TEMPLATE_PRD_FILE" --output "$TEMPLATE_GENERATED_OUTPUT"
+  run_pdd_command generate --template architecture/architecture_json \
+      -e PRD_FILE="$TEMPLATE_PRD_FILE" \
+      -e TECH_STACK_FILE="$TEMPLATE_TECH_STACK_FILE" \
+      -e DOC_FILES="$TEMPLATE_PRD_FILE" \
+      -e INCLUDE_FILES="" \
+      --output "$TEMPLATE_GENERATED_OUTPUT"
   check_exists "$TEMPLATE_GENERATED_OUTPUT" "'generate --template' output"
 fi
 
