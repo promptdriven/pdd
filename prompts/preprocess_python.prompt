@@ -12,25 +12,26 @@
         - Returns a string that is the preprocessed prompt. To preserve significant whitespace, the function should NOT trim leading or trailing whitespace.
 
 % Processing order and tag behavior
-    Process tags in this order: 'pdd' → 'include' → 'shell' → 'web'. After tag processing completes, optionally apply curly‑brace doubling according to 'double_curly_brackets'.
+    Process tags in this order: 'pdd' → 'include' (and 'include-many') → 'shell' → 'web'. After tag processing completes, optionally apply curly‑brace doubling according to 'double_curly_brackets'.
 
 % Here are the XML-like tags to preprocess, other tags will remain unmodified:
-    'include' - This tag will include the content of the file indicated in the include tag. The 'include tag' will be directly replaced with the content of the file in the prompt, without wrapping it in a new tag.
-    'pdd' - This tag indicates a comment and anything in this XML will be deleted from the string including the 'pdd' tags themselves.
-    'shell' - This tag indicates that there are shell commands to run. Capture standard output (stdout) of the shell commands and include it in the prompt; on a non-zero exit status, replace with an error message including the exit code. Remove the shell tags themselves.
-    'web' - This tag indicates that there is a web page to scrape. When scraping the web page, extract using Firecrawl the markdown version of the web page and include it in the prompt; remove the web tags themselves.
+    'include' - Include the content of the file indicated; replace the tag with the file contents, without wrapping in a new tag.
+    'include-many' - Include multiple files; the inner text is a comma- or newline‑separated list of paths. Read each file in order, concatenating contents with newlines. On missing file, insert `[File not found: path]`.
+    'pdd' - Human‑only comment; delete the entire block including tags.
+    'shell' - Execute in a subshell and include stdout in place of the tag; on nonzero exit, insert a bracketed error with the exit code. Remove the tag.
+    'web' - Use Firecrawl to fetch markdown and include it; on failure, insert a bracketed error. Remove the tag.
 
 % Here is how to use the Firecrawl API to scrape the web page:
 <firecrawl_example>
     <include>./context/firecrawl_example.py</include>
 </firecrawl_example>
 
-% Includes can be nested, that is there can be includes inside of the files of the includes and 'preprocess' should be called recursively on these include files if recursive is True. There are two ways of having includes in the prompt:
-    1. For triple backtick includes of the form ```<path>```, replace the entire fenced segment with ```{file contents}```. Perform this replacement recursively until there are no more such fenced includes. If the file cannot be found, leave the original fenced include unchanged.
-    2. The XML 'include' mentioned above.
+% Includes can be nested. When `recursive=True`, resolve static includes but defer unresolved, variable‑driven includes so they can be resolved after variable expansion. Two include forms:
+    1. Backtick includes: ```<path>``` → replace entire fenced segment with ```{file contents}```; if missing, leave unchanged during the first pass and replace with ```[File not found: path]``` during the non‑recursive pass.
+    2. XML 'include' and 'include-many' as above.
 
 % Include error handling specifics
-    - For XML <include> tags, if the file cannot be found or read, replace the tag with a bracketed error note like: [File not found: ./path/to/file]
+    - For XML <include> and <include-many> tags, if a file cannot be found or read, insert a bracketed error like: [File not found: ./path/to/file]. During the first (recursive) pass, leave the tag unchanged so variables can be expanded; emit the error on the non‑recursive pass if still missing.
 
 % If double_curly_brackets is True, the program will check to see if the file has any single curly brackets and if it does and the string in the curly brackets are not in the exclude_keys list, it will check to see if the curly brackets are already doubled before doubling the curly brackets. Apply curly-brace doubling only to the top-level prompt (not to content introduced via includes during recursive processing). The curly brackets may be on different lines and may have nested curly brackets. Special handling is needed for several cases:
     1. Handle already doubled brackets to prevent doubling them again
@@ -43,3 +44,6 @@
 
 % Web scraping requirements and error handling
     - Requires the 'firecrawl' package and a FIRECRAWL_API_KEY environment variable. If either is missing or scraping fails, insert a bracketed error note. If no markdown content is returned, insert a bracketed note indicating no content is available.
+
+% Pass‑sensitive behavior
+    - When `recursive=True`, defer execution of `<shell>` and `<web>` blocks (leave tags intact). Execute them only when `recursive=False` so that variable expansion can occur first.

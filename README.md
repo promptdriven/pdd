@@ -748,58 +748,48 @@ pdd [GLOBAL OPTIONS] generate --output src/calculator.py  --original-prompt old_
 
 #### Prompt Templates
 
-Use a single, reusable prompt file as a template to generate different outputs by injecting variables and composing common parts with includes.
+Templates are reusable prompt files that generate a specific artifact (code, JSON, tests, etc.). Templates carry human/CLI metadata in YAML front matter (parsed by the CLI and not sent to the LLM), while the body stays concise and model‑focused.
 
-- Parameterize with `-e/--env`: Provide `KEY=VALUE` pairs to substitute `$KEY` or `${KEY}` inside the prompt and within `--output` paths. Unknown placeholders remain unchanged.
-- Compose reusable blocks: Reference shared fragments using XML and backtick includes:
-  - `<include>path/to/fragment.prompt</include>` to inline raw file content
-  - ````<path/to/file.ext>```` to inline file content wrapped in a code fence
-- Organize templates: Keep templates under `prompts/` (e.g., `prompts/frontend/`, `prompts/backend/`, `prompts/db/`) so they’re easy to discover and include.
-- Single-file focus: `generate` produces one file per invocation. For multi-file scaffolds, call `generate` multiple times with the same template and different `--output` paths and variables.
+- Front matter (human/CLI):
+  - name, description, version, tags, language, output
+  - variables: schema for `-e/--env` (required/optional, type, examples)
+  - usage: copyable `pdd generate` commands
+  - discover (optional): CLI‑executed file discovery (root, patterns, exclude, caps)
+  - output_schema (optional): JSON shape used by the CLI for validation and by `pdd templates show`
+- Prompt body (LLM):
+  - Includes to hydrate context: `<include>${VAR}</include>`, `<include-many>${LIST}</include-many>`
+  - Crisp instructions and an explicit output contract; no human usage notes or discovery logic
 
-Example: Generate an architecture JSON from the architecture template
+Quick examples (templates)
 
 ```
-# 1) Simple: write the architecture JSON next to your project root
-pdd generate \
-  --output architecture.json \
+# Minimal (PRD required)
+pdd generate -e PRD_FILE=docs/specs.md --output architecture.json \
   pdd/templates/architecture/architecture_json.prompt
 
-# 2) With parameters (recommended): pass app-specific metadata
-pdd generate \
-  -e TECH_STACK=nextjs \
-  -e APP_NAME=Shop \
-  -e ROUTES='["/","/about","/products"]' \
-  --output architecture.json \
-  pdd/templates/architecture/architecture_json.prompt
+# With extra context
+pdd generate -e PRD_FILE=docs/specs.md -e TECH_STACK_FILE=docs/tech_stack.md \
+  -e DOC_FILES='docs/ux.md,docs/components.md' \
+  -e INCLUDE_FILES='src/app.py,src/api.py,frontend/app/layout.tsx' \
+  --output architecture.json pdd/templates/architecture/architecture_json.prompt
 
-# 3) Generate multiple variants from the same template
-pdd generate -e PRD_FILE=docs/specs.md -e APP_NAME=Shop    --output apps/shop/architecture.json    pdd/templates/architecture/architecture_json.prompt
-pdd generate -e PRD_FILE=docs/specs.md -e APP_NAME=Admin   --output apps/admin/architecture.json   pdd/templates/architecture/architecture_json.prompt
-pdd generate -e PRD_FILE=docs/specs.md -e APP_NAME=Public  --output apps/public/architecture.json  pdd/templates/architecture/architecture_json.prompt
+# Multiple variants
+pdd generate -e PRD_FILE=docs/specs.md -e APP_NAME=Shop   --output apps/shop/architecture.json   pdd/templates/architecture/architecture_json.prompt
+pdd generate -e PRD_FILE=docs/specs.md -e APP_NAME=Admin  --output apps/admin/architecture.json  pdd/templates/architecture/architecture_json.prompt
+pdd generate -e PRD_FILE=docs/specs.md -e APP_NAME=Public --output apps/public/architecture.json pdd/templates/architecture/architecture_json.prompt
 
 # 4) Use variables in the output path
-pdd generate -e APP=shop -e TECH_STACK=nextjs --output 'apps/${APP}/architecture.json' pdd/templates/architecture/architecture_json.prompt
-
 # 5) Use shell env fallback for convenience
 export APP=shop
-pdd generate -e APP -e TECH_STACK=nextjs --output 'apps/${APP}/architecture.json' pdd/templates/architecture/architecture_json.prompt
+pdd generate -e APP -e PRD_FILE=docs/specs.md --output 'apps/${APP}/architecture.json' pdd/templates/architecture/architecture_json.prompt
 ```
 
 Tips for authoring templates
 
-- Document variables at the top of the prompt (in comments) so users know what to pass, e.g., `APP_NAME`, `ROUTES`, `API_URL`, etc.
-- Prefer JSON-serializable strings for structured values, and quote them for your shell. For example, pass arrays/objects as single-quoted JSON: `-e ROUTES='["/","/about"]'`.
-- Use includes to share common sections like coding guidelines, project constraints, lint/test setup, or file skeletons.
-- Parameterized includes: You can reference files via variables and pass the path with `-e`. For example:
-  - In your prompt: `<include>${PRD_FILE}</include>`
-  - At the CLI: `pdd generate -e PRD_FILE=docs/specs.md --output architecture.json prompts/architecture/architecture_json.prompt`
-  - The engine resolves includes after variable expansion, so this works across different project layouts.
-- Include many files: Provide a comma- or newline-separated list, then use `<include-many>${INCLUDE_FILES}</include-many>` in the prompt.
-  - Example: `pdd generate -e INCLUDE_FILES='src/app/layout.tsx,src/app/page.tsx' --output architecture.json ...`
-- Optional file discovery: Pass name patterns and an optional root to auto-discover files via `<shell>`; the template will backtick-include matches.
-  - Example: `pdd generate -e SCAN_PATTERNS='layout.tsx,page.tsx,globals.css' -e SCAN_ROOT=. --output architecture.json ...`
-- If your template is intended to output a specific file name (e.g., `architecture.json`), show example commands with `--output` to avoid relying on default language inference.
+- Put human guidance in YAML front matter (variables with examples, usage, notes); keep the prompt body model‑focused.
+- Use `<include>`/`<include-many>` for curated context; prefer specs/configs over large code dumps.
+- Parameterized includes: pass file paths via `-e`, e.g. `<include>${PRD_FILE}</include>`; the engine resolves includes after variable expansion.
+- If your template outputs a specific filename, show example commands with `--output`.
 
 Behavior notes
 
@@ -807,10 +797,18 @@ Behavior notes
 - `--output` also accepts `$VAR`/`${VAR}` from the same set of variables.
 - If you omit `--output`, PDD derives the filename from the prompt basename and detected language extension; set `PDD_GENERATE_OUTPUT_PATH` to direct outputs to a common directory.
 
-Phases overview
+Templates: Commands
 
-- Phase 1 (current): Use prompt files directly by path, parameterize via `-e/--env`, and compose with includes. Copy packaged built-ins into your project to customize and generate from there.
-- Phase 2 (planned): First-class template UX with `pdd templates list|show|copy` and `pdd generate --template <name>`, optional front‑matter for metadata, defaults, and variable validation.
+- Front matter is parsed (not sent to the LLM) and powers:
+  - Variables schema and validation
+  - Usage examples (rendered by `pdd templates show`)
+  - Optional `discover` settings (executed by the CLI with caps)
+  - Optional `output_schema` for validation
+- Commands:
+  - `pdd templates list [--json] [--filter tag=...]`
+  - `pdd templates show <name>`
+  - `pdd templates copy <name> --to prompts/`
+  - `pdd generate --template <name> [-e KEY=VALUE...] [--output PATH]`
 
 #### Built-In Templates
 
@@ -822,7 +820,7 @@ Where built-ins live (packaged)
 
 Included starter templates
 
-- `architecture/architecture_json.prompt`: A single template that adapts to different stacks using `-e` variables (e.g., `TECH_STACK=nextjs|python`, `API_STYLE=rest|graphql`, `ROUTES=[...]`).
+- `architecture/architecture_json.prompt`: Universal architecture generator (requires `-e PRD_FILE=...`; supports optional `TECH_STACK_FILE`, `DOC_FILES`, `INCLUDE_FILES`).
 
 Front Matter (YAML) metadata
 
@@ -857,15 +855,8 @@ variables:
     type: string
     description: Optional app name for context.
     example: Shop
-  ROUTES:
-    required: false
-    type: json
-    default: []
-    description: Frontend routes.
-    examples:
-      - '["/","/about","/products"]'
   PRD_FILE:
-    required: false
+    required: true
     type: path
     description: Primary product requirements document (PRD) describing scope and goals.
     example_paths: [PRD.md, docs/specs.md, docs/product/prd.md]
@@ -876,10 +867,9 @@ variables:
         - Create Order: id, user_id, items[], total, status
         - View Order: details page with status timeline
         - List Orders: filter by status, date, user
-      Constraints:
-        - Deployable to Vercel (frontend) and Cloud Run (backend)
-      Non-Functional:
-        - P95 latency < 300ms for read endpoints; error rate < 0.1%
+      Non-Functional Requirements:
+        - P95 latency < 300ms for read endpoints
+        - Error rate < 0.1%
   TECH_STACK_FILE:
     required: false
     type: path
@@ -888,6 +878,7 @@ variables:
     example_content: |
       Backend: Python (FastAPI), Postgres (SQLAlchemy), PyTest
       Frontend: Next.js (TypeScript), shadcn/ui, Tailwind CSS
+      API: REST
       Auth: Firebase Auth (GitHub Device Flow), JWT for API
       Infra: Vercel (frontend), Cloud Run (backend), Cloud SQL (Postgres)
       Observability: OpenTelemetry traces, Cloud Logging
@@ -903,22 +894,22 @@ variables:
     type: list
     description: Specific source files to include (comma/newline-separated).
     example_paths: [src/app.py, src/api.py, frontend/app/layout.tsx, frontend/app/page.tsx]
-  SCAN_PATTERNS:
-    required: false
-    type: list
-    description: File name patterns to discover (comma-separated).
-    examples: ['layout.tsx,page.tsx,globals.css,tailwind.config.js', 'app.py,api.py,pyproject.toml']
-  SCAN_ROOT:
-    required: false
-    type: path
-    description: Root directory for discovery.
-    example_paths: ['.']
+  usage:
+    generate:
+      - name: Minimal (PRD only)
+        command: pdd generate -e PRD_FILE=docs/specs.md --output architecture.json pdd/templates/architecture/architecture_json.prompt
+      - name: With tech stack overview
+        command: pdd generate -e PRD_FILE=docs/specs.md -e TECH_STACK_FILE=docs/tech_stack.md --output architecture.json pdd/templates/architecture/architecture_json.prompt
+  discover:
+    enabled: false
+    max_per_pattern: 5
+    max_total: 10
 ---
 ```
 
 Notes
 
-- YAML is for documentation and future CLI features; pass variables via `-e` at the CLI today. Templates include example variable values and file paths in the YAML to guide usage.
+- YAML front matter is parsed and not sent to the LLM. Use `pdd templates show` to view variables, usage, discover, and output schema. Pass variables via `-e` at the CLI.
 
 Template Variables (reference)
 
@@ -928,14 +919,14 @@ Template Variables (reference)
   - `APP_NAME` (string, optional): App name for context
   - `DOC_FILES` (list, optional): Comma/newline-separated list of additional doc paths
   - `INCLUDE_FILES` (list, optional): Comma/newline-separated list of source files to include
-  - `SCAN_PATTERNS` (list, optional): Comma-separated filename patterns to discover (e.g., 'layout.tsx,page.tsx')
-  - `SCAN_ROOT` (path, optional): Root directory to search (default '.')
+  - `SCAN_PATTERNS` (list, optional): Discovery patterns defined in front matter `discover` and executed by the CLI
+  - `SCAN_ROOT` (path, optional): Discovery root defined in front matter `discover`
 
 Notes
 
 - These variables are declared in YAML front matter at the top of each template for clarity and future CLI discovery. Until the CLI parses front matter, pass values via `-e` as shown in examples.
 
-Phase 1 (current): Copy-and-generate
+Copy-and-generate
 
 - Copy the desired template(s) into your project’s `prompts/` folder, then use `pdd generate` as usual. This keeps prompts versioned with your repo so you can edit and evolve them.
 - Quick copy (Python one‑liner; run from your project root):
@@ -964,11 +955,11 @@ Unified template examples
 # Frontend (Next.js) — interface.page.route and component props
 pdd generate \
   -e APP_NAME=Shop \
-  -e ROUTES='["/","/about","/products"]' \
+  # (routes are inferred from PRD/tech stack/files)
   -e PRD_FILE=docs/specs.md \
   -e DOC_FILES='docs/ux.md,docs/components.md' \
   -e TECH_STACK_FILE=docs/tech_stack.md \
-  -e SCAN_PATTERNS='layout.tsx,page.tsx,globals.css,tailwind.config.js' \
+  # discovery, if needed, is configured in template YAML and executed by the CLI
   --output architecture.json \
   pdd/templates/architecture/architecture_json.prompt
 
@@ -1067,20 +1058,20 @@ Notes and recommendations
 - Keep templates under version control along with your code to preserve the prompt‑as‑source‑of‑truth model.
 - If you maintain your own template set, store them under `prompts/<org_or_team>/...` and compose with `<include>` to maximize reuse.
 
-Phase 2 (planned): First-class template UX
+Templates: additional UX
 
 - Goals:
   - Discover, inspect, and vendor templates without manual file paths.
   - Validate required variables and surface defaults from template metadata.
   - Support a search order so project templates can override packaged ones.
 
-- Commands (planned):
+- Commands:
   - `pdd templates list [--json] [--filter tag=frontend]` to discover templates
   - `pdd templates show <name> [--raw]` to view metadata and variables
   - `pdd templates copy <name> --to prompts/` to vendor into your repo
   - `pdd generate --template <name> [-e KEY=VALUE...] [--output PATH]`
 
-- Example usage (planned):
+- Example usage:
 ```
 # Discover and inspect
 pdd templates list --filter tag=frontend
@@ -1092,17 +1083,17 @@ pdd templates copy frontend/nextjs_architecture_json --to prompts/frontend/
 # Generate without specifying a file path
 pdd generate --template frontend/nextjs_architecture_json \
   -e APP_NAME=Shop \
-  -e ROUTES='["/","/about"]' \
+  # routes are inferred from PRD/tech stack/files
   --output architecture.json
 ```
 
-- Search order (planned):
+- Search order:
   - Project: `./prompts/**` (allows team overrides)
   - `.pddrc` paths: any configured `templates.paths`
   - Packaged: `pdd/templates/**` (built‑ins)
   - Optional: `$PDD_PATH/prompts/**` (org‑level packs)
 
-- Template front matter (planned):
+- Template front matter:
   - YAML metadata at the top of `.prompt` files to declare `name`, `description`, `tags`, `version`, `language`, default `output`, and `variables` (with `required`, `default`, `type` such as `string` or `json`).
   - CLI precedence: values from `-e/--env` override front‑matter defaults; unknowns are validated and surfaced to the user.
   - Example:

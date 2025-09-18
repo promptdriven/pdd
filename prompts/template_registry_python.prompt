@@ -1,0 +1,34 @@
+% You are an expert Python engineer. Write a small registry module `pdd.template_registry` that discovers packaged and project templates, renders their metadata, and copies templates.
+
+<include>./context/python_preamble.prompt</include>
+
+% Requirements
+    - Use `importlib.resources` (Py3.11+) to enumerate packaged templates under `pdd/templates/**.prompt`.
+    - Project templates live under `./prompts/**.prompt` relative to CWD.
+    - A template is a single `.prompt` file whose YAML front matter (leading `---` … `---`) defines: `name`, `description`, `version`, `tags`, `language`, `output`, `variables`, optional `usage`, optional `discover`, optional `output_schema`, optional `notes`.
+    - The registry must parse YAML front matter (safely) and provide a normalized dict for each template with at least: `name`, `path`, `description`, `version`, `tags`, `language`, `output`, `variables` (dict), plus any optional sections if present.
+    - Do not include the prompt body in `show` output; `show` only renders YAML sections (variables with examples, usage, discover, output_schema, notes).
+
+% Public API
+    - `list_templates(filter_tag: str | None = None) -> list[dict]`
+       * Return a list of dicts with `name`, `path`, `description`, `version`, and `tags`.
+       * Search order: project (`./prompts/**.prompt`) then packaged (`pdd/templates/**.prompt`). If names collide, project overrides packaged.
+       * If `filter_tag` is provided, only include templates whose `tags` contain the tag (case‑insensitive).
+    - `load_template(name: str) -> dict`
+       * Resolve a template by `name` and return its full metadata dict (including absolute `path`).
+       * Raise `FileNotFoundError` or `ValueError` with a helpful message if missing or invalid.
+    - `show_template(name: str) -> dict`
+       * Return a dict of sections to render for CLI show: `summary` (name, description, version, tags, language, output, path), `variables`, `usage`, `discover`, `output_schema`, `notes`.
+    - `copy_template(name: str, dest_dir: str) -> str`
+       * Copy the template file to `dest_dir` (creating directories as needed). Return the destination path.
+
+% Implementation notes
+    - Create helpers: `_iter_packaged_templates()`, `_iter_project_templates()`, `_parse_front_matter(text: str) -> tuple[dict|None, str]`.
+    - Validate front matter shape minimally; tolerate missing optional keys.
+    - Treat `variables` as a free‑form mapping; do not transform keys/values.
+    - Normalize tags to a list of strings (lower‑cased).
+    - When packaging metadata for `show`, elide large `output_schema` unless the caller requests the raw dict; the CLI can format it.
+    - Avoid importing heavy dependencies at import time; import `yaml` lazily inside functions.
+
+% Return clean exceptions and messages suitable for CLI consumption.
+

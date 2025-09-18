@@ -81,6 +81,7 @@
             - `--original-prompt FILENAME`: Original prompt for incremental generation; if omitted, auto-detect from git.
             - `--incremental`: Force incremental patching even if the analyzer suggests full regeneration. Requires that `--output` points to an existing file; otherwise fall back to full generation with a warning.
             - `-e/--env KEY=VALUE | -e KEY`: Provide template variables as described below.
+            - If `--output` is omitted, write to the derived default path from `construct_paths` (respecting `PDD_GENERATE_OUTPUT_PATH`); do not print the artifact to stdout.
 
         - `generate` command parameters for parameterized prompts:
             - Add a repeatable option `-e/--env` to accept template variables from the CLI. Support two forms:
@@ -181,7 +182,14 @@
         - `install_completion` returns `None` and prints its own status.
         - Detect first-run state (missing `~/.pdd/api-env` or shell completion hook) before executing subcommands; if onboarding has not run, print a reminder banner suggesting `pdd setup` and continue with the requested command. Suppress the banner once `~/.pdd/api-env` exists or when the current project already supplies credentials via `.env` or a `.pdd/` directory.
         - For `generate`, implement `@click.option("-e", "--env", "env_kv", multiple=True, help="Set template variable (KEY=VALUE) or read KEY from env")` and parse it into `env_vars: Dict[str, str]` as described above, then pass `env_vars` into `code_generator_main`.
+        - Add `@click.option("--template", "template_name", type=str, default=None, help="Use a packaged/project template by name (e.g., architecture/architecture_json)")`. If provided, resolve the prompt file via `pdd.template_registry.load_template(template_name)` and pass the resolved absolute path to `code_generator_main`. Disallow passing both `--template` and a positional `prompt_file` simultaneously.
+        - Add a `templates` command group with subcommands:
+            * `templates list [--json] [--filter tag=...]`: call `pdd.template_registry.list_templates(filter_tag)`; pretty-print as a table or JSON when `--json` is set.
+            * `templates show NAME`: call `pdd.template_registry.show_template(name)` and render sections (variables with examples, usage, discover, output_schema, notes).
+            * `templates copy NAME --to DIR`: call `pdd.template_registry.copy_template(name, dest_dir)` and print the destination.
         - Templating behavior for `generate`: `$VAR` and `${VAR}` in prompt content and `--output` path are replaced using only keys present in `env_vars`. Unknown placeholders remain unchanged.
+        - When using `--template`, if the template front matter includes a `discover` section, execute discovery before preprocessing to populate variables used in includes; merge results into `env_vars` unless overridden by `-e`.
+        - When using `--template`, if the template front matter provides an `output_schema` and the generated artifact is JSON, validate the output against the schema and raise a friendly `click.UsageError` on validation failure.
         - Implement a centralized `handle_error()` that uses Rich with a custom Theme and formats exceptions (including `click.UsageError` and `MarkupError`). After logging, re-raise the exception so Click propagates the appropriate exit status unless the command has a documented reason to continue.
         - When `--quiet` is active, suppress non-essential console output and chain summaries.
         - The `trace` command should exit non-zero on exceptions.
