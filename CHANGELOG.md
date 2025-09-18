@@ -42,7 +42,7 @@
 
 ### Docs
 
-- README: Document parameterized prompts, output expansion, and clarify PDD vs. “Vibe coding”.
+- README: Document parameterized prompts, output expansion, and clarify PDD vs. "Vibe coding".
 
 ### VS Code Extension
 
@@ -51,7 +51,6 @@
 ### Build/Tooling
 
 - Add `.gitignore`. Thanks cilibrar@gmail.com!
-
 ## v0.0.54 (2025-09-07)
 
 ### CLI & Orchestration

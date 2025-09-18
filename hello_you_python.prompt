@@ -1,0 +1,13 @@
+Create a Python program that prints "Hello <username>" in ASCII art.
+
+Requirements:
+- <username> is the username of the current session, using the "whoami" command
+- in the code, generate the full english 26 character alphabet in ascii art as a map of character values to ascii art strings, then use those to render
+- Use only the Python standard library (no external dependencies)
+- Create large, bold ASCII art text, using ASCII drawing characters, symbols, or any other characters that are useful
+- The drawn text should be at least 10 rows in height
+- Make it visually appealing with simple characters like #, *, or =
+- Keep the code clean and readable
+- Add a brief comment explaining what the program does
+
+The program should be self-contained and runnable with just `python3 filename.py`.
