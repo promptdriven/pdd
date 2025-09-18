@@ -165,7 +165,7 @@ def _run_setup_utility() -> None:
 
 
 # --- Main CLI Group ---
-@click.group(chain=True, invoke_without_command=True, help="PDD (Prompt-Driven Development) Command Line Interface.")
+@click.group(invoke_without_command=True, help="PDD (Prompt-Driven Development) Command Line Interface.")
 @click.option(
     "--force",
     is_flag=True,
@@ -255,7 +255,6 @@ def cli(
 ):
     """
     Main entry point for the PDD CLI. Handles global options and initializes context.
-    Supports multi-command chaining.
     """
     # Ensure PDD_PATH is set before any commands run
     get_local_pdd_path()
@@ -330,17 +329,16 @@ def cli(
         click.echo(ctx.get_help())
         ctx.exit(0)
 
-# --- Result Callback for Chained Commands ---
+# --- Result Callback for Command Execution Summary ---
 @cli.result_callback()
 @click.pass_context
 def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float, str]]], **kwargs):
     """
-    Processes the results from chained commands.
-
+    Processes results returned by executed commands and prints a summary.
     Receives a list of tuples, typically (result, cost, model_name),
     or None from each command function.
     """
-    total_chain_cost = 0.0
+    total_cost = 0.0
     # Get Click's invoked subcommands attribute first
     invoked_subcommands = getattr(ctx, 'invoked_subcommands', [])
     # If Click didn't provide it (common in real runs), fall back to the list
@@ -354,11 +352,12 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
                     invoked_subcommands = ctx.obj.get('invoked_subcommands', []) or []
             except Exception:
                 invoked_subcommands = []
+    results = results or []
     num_commands = len(invoked_subcommands)
     num_results = len(results) # Number of results actually received
 
     if not ctx.obj.get("quiet"):
-        console.print("\n[info]--- Command Chain Execution Summary ---[/info]")
+        console.print("\n[info]--- Command Execution Summary ---[/info]")
 
     for i, result_tuple in enumerate(results):
         # Use the retrieved subcommand name (might be "Unknown Command X" in tests)
@@ -382,7 +381,7 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
         # Check if the result is the expected tuple structure from @track_cost or preprocess success
         elif isinstance(result_tuple, tuple) and len(result_tuple) == 3:
             _result_data, cost, model_name = result_tuple
-            total_chain_cost += cost
+            total_cost += cost
             if not ctx.obj.get("quiet"):
                 # Special handling for preprocess success message (check actual command name)
                 actual_command_name = invoked_subcommands[i] if i < num_commands else None # Get actual name if possible
@@ -401,7 +400,7 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
     if not ctx.obj.get("quiet"):
         # Only print total cost if at least one command potentially contributed cost
         if any(res is not None and isinstance(res, tuple) and len(res) == 3 for res in results):
-            console.print(f"[info]Total Estimated Cost for Chain:[/info] ${total_chain_cost:.6f}")
+            console.print(f"[info]Total Estimated Cost:[/info] ${total_cost:.6f}")
         # Indicate if the chain might have been incomplete due to errors
         if num_results < num_commands and not all(res is None for res in results): # Avoid printing if all failed
             console.print("[warning]Note: Chain may have terminated early due to errors.[/warning]")
