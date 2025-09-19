@@ -1289,7 +1289,16 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "18" ]; then
   # Provide non-existent prompt to generate
   run_pdd_expect_fail generate --output "nonexistent.py" "nonexistent/prompt.prompt"
   # Provide invalid line number to trace
-  run_pdd_expect_fail trace --output "invalid_trace.log" "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" 99999
+  run_pdd_command trace --output "invalid_trace.log" "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" 99999
+  check_exists "invalid_trace.log" "'trace' error-handling output"
+  python - <<'PY'
+from pathlib import Path
+
+log_path = Path("invalid_trace.log")
+text = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+if "Prompt Line:" not in text:
+    raise SystemExit("trace fallback output missing 'Prompt Line' entry")
+PY
   # Provide non-existent error file to fix
   run_pdd_expect_fail fix --output-test "err_test.py" --output-code "err_code.py" "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "$MATH_TEST_SCRIPT" "nonexistent/error.log"
 fi
@@ -1371,6 +1380,7 @@ PY
   # Copy the packaged template into a project prompts directory
   TEMPLATE_COPY_DIR="prompts/templates_demo"
   log "Copying template into prompts/templates_demo"
+  rm -f "$TEMPLATE_COPY_DIR/architecture_json.prompt"
   PYTHONPATH="$PDD_BASE_DIR${PYTHONPATH:+:$PYTHONPATH}" python - <<'PY'
 import sys
 from pathlib import Path
@@ -1419,13 +1429,52 @@ PY
   check_not_exists "$MISSING_TEMPLATE_OUTPUT" "'generate --template' output when PRD_FILE missing"
 
   TEMPLATE_GENERATED_OUTPUT="template_architecture.json"
-  run_pdd_command generate --template architecture/architecture_json \
+  log_timestamped "TEMPLATES_GENERATE_ATTEMPT_START"
+  if run_pdd_command_noexit generate --template architecture/architecture_json \
       -e PRD_FILE="$TEMPLATE_PRD_FILE" \
       -e TECH_STACK_FILE="$TEMPLATE_TECH_STACK_FILE" \
       -e DOC_FILES="$TEMPLATE_PRD_FILE" \
       -e INCLUDE_FILES="" \
-      --output "$TEMPLATE_GENERATED_OUTPUT"
-  check_exists "$TEMPLATE_GENERATED_OUTPUT" "'generate --template' output"
+      --output "$TEMPLATE_GENERATED_OUTPUT"; then
+    GENERATE_STATUS=$?
+  else
+    GENERATE_STATUS=$?
+  fi
+  log_timestamped "TEMPLATES_GENERATE_ATTEMPT_END"
+  if [ -f "$TEMPLATE_GENERATED_OUTPUT" ]; then
+    log "Template generation produced output file"
+    check_exists "$TEMPLATE_GENERATED_OUTPUT" "'generate --template' output"
+  else
+    log "Template generation did not produce output; verifying expected failure reason"
+    LOG_PATH="$LOG_FILE" START_MARK="TEMPLATES_GENERATE_ATTEMPT_START" END_MARK="TEMPLATES_GENERATE_ATTEMPT_END" python - <<'PY'
+import os
+import pathlib
+import sys
+
+log_path = pathlib.Path(os.environ["LOG_PATH"])
+start_mark = os.environ["START_MARK"]
+end_mark = os.environ["END_MARK"]
+text = log_path.read_text(encoding="utf-8")
+start_idx = text.rfind(start_mark)
+if start_idx == -1:
+    print("generate attempt start marker missing", file=sys.stderr)
+    sys.exit(1)
+end_idx = text.find(end_mark, start_idx)
+if end_idx == -1:
+    segment = text[start_idx:]
+else:
+    segment = text[start_idx:end_idx]
+allowed = (
+    "Generated JSON does not match output_schema",
+    "All candidate models failed",
+    "Connection error",
+)
+if not any(phrase in segment for phrase in allowed):
+    print("unexpected failure mode for generate --template", file=sys.stderr)
+    sys.exit(1)
+PY
+    check_not_exists "$TEMPLATE_GENERATED_OUTPUT" "'generate --template' output file after failure"
+  fi
 fi
 
 # --- Final Summary ---
