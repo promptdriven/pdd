@@ -1,0 +1,183 @@
+---
+name: architecture/architecture_json
+description: Unified architecture template for multiple tech stacks
+version: 1.0.0
+tags: [architecture, template, json]
+language: json
+output: architecture.json
+variables:
+  APP_NAME:
+    required: false
+    type: string
+    description: Optional app name for context.
+    example: Shop
+  PRD_FILE:
+    required: true
+    type: path
+    description: Primary product requirements document (PRD) describing scope and goals.
+    example_paths: [PRD.md, docs/specs.md, docs/product/prd.md]
+    example_content: |
+      Title: Order Management MVP
+      Goals: Enable customers to create and track orders end-to-end.
+      Key Features:
+        - Create Order: id, user_id, items[], total, status
+        - View Order: details page with status timeline
+        - List Orders: filter by status, date, user
+      Non-Functional Requirements:
+        - P95 latency < 300ms for read endpoints
+        - Error rate < 0.1%
+  TECH_STACK_FILE:
+    required: false
+    type: path
+    description: Tech stack overview (languages, frameworks, infrastructure, and tools).
+    example_paths: [docs/tech_stack.md, docs/architecture/stack.md]
+    example_content: |
+      Backend: Python (FastAPI), Postgres (SQLAlchemy), PyTest
+      Frontend: Next.js (TypeScript), shadcn/ui, Tailwind CSS
+      API: REST
+      Auth: Firebase Auth (GitHub Device Flow), JWT for API
+      Infra: Vercel (frontend), Cloud Run (backend), Cloud SQL (Postgres)
+      Observability: OpenTelemetry traces, Cloud Logging
+  DOC_FILES:
+    required: false
+    type: list
+    description: Additional documentation files (comma/newline-separated).
+    example_paths: [docs/ux.md, docs/components.md]
+    example_content: |
+      Design overview, patterns and constraints
+  INCLUDE_FILES:
+    required: false
+    type: list
+    description: Specific source files to include (comma/newline-separated).
+    example_paths: [src/app.py, src/api.py, frontend/app/layout.tsx, frontend/app/page.tsx]
+usage:
+  generate:
+    - name: Minimal (PRD only)
+      command: pdd generate -e PRD_FILE=docs/specs.md --output architecture.json pdd/templates/architecture/architecture_json.prompt
+    - name: With tech stack overview
+      command: pdd generate -e PRD_FILE=docs/specs.md -e TECH_STACK_FILE=docs/tech_stack.md --output architecture.json pdd/templates/architecture/architecture_json.prompt
+
+discover:
+  enabled: false
+  max_per_pattern: 5
+  max_total: 10
+
+output_schema:
+  type: array
+  items:
+    type: object
+    required: [reason, description, dependencies, priority, filename]
+    properties:
+      reason: { type: string }
+      description: { type: string }
+      dependencies: { type: array, items: { type: string } }
+      priority: { type: integer, minimum: 1 }
+      filename: { type: string }
+      tags: { type: array, items: { type: string } }
+      interface:
+        type: object
+        properties:
+          type: { enum: [component, page, module, api, graphql, cli, job, message, config] }
+          component: { type: object }
+          page:
+            type: object
+            properties:
+              route: { type: string }
+              params: { type: array, items: { type: object } }
+              dataSources: { type: array, items: { type: object } }
+              layout: { type: object }
+          module: { type: object }
+          api: { type: object }
+          graphql: { type: object }
+          cli: { type: object }
+          job: { type: object }
+          message: { type: object }
+          config: { type: object }
+---
+
+Purpose: Produce an architecture JSON that enumerates prompt files to generate code files for the project.
+
+<PRD_FILE><include>${PRD_FILE}</include></PRD_FILE>
+<TECH_STACK_FILE><include>${TECH_STACK_FILE}</include></TECH_STACK_FILE>
+<DOC_FILES><include-many>${DOC_FILES}</include-many></DOC_FILES>
+
+<INCLUDE_FILES><include-many>${INCLUDE_FILES}</include-many></INCLUDE_FILES>
+
+INSTRUCTIONS:
+- Use only the facts from the included documents and files. Do not invent technologies or filenames.
+- If TECH_STACK_FILE is absent, infer a reasonable tech stack from the PRD and included files; state key assumptions within each item's description.
+- Output a single top-level JSON array of items. Each item must include:
+  - reason, description, dependencies (filenames), priority (1 = highest), filename, optional tags.
+  - interface: include only the applicable sub-object (component, page, module, api, graphql, cli, job, message, or config). Omit all non-applicable sub-objects entirely.
+- Valid JSON only. No comments or trailing commas.
+
+OUTPUT FORMAT (authoritative):
+```json
+{
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["reason", "description", "dependencies", "priority", "filename"],
+    "properties": {
+      "reason": {"type": "string"},
+      "description": {"type": "string"},
+      "dependencies": {"type": "array", "items": {"type": "string"}},
+      "priority": {"type": "integer", "minimum": 1},
+      "filename": {"type": "string"},
+      "tags": {"type": "array", "items": {"type": "string"}},
+      "interface": {
+        "type": "object",
+        "properties": {
+          "type": {"enum": ["component", "page", "module", "api", "graphql", "cli", "job", "message", "config"]},
+          "component": {"type": "object"},
+          "page": {"type": "object", "properties": {"route": {"type": "string"}}},
+          "module": {"type": "object"},
+          "api": {"type": "object"},
+          "graphql": {"type": "object"},
+          "cli": {"type": "object"},
+          "job": {"type": "object"},
+          "message": {"type": "object"},
+          "config": {"type": "object"}
+        }
+      }
+    }
+  }
+}
+```
+
+INTERFACE TYPES (emit only applicable):
+- page: route (string), params? (array), dataSources? (array), layout? (object)
+- component: props (array of {name, type, required?}), emits? (array), context? (array)
+- module: functions (array of {name, signature, returns?, errors?, sideEffects?})
+- api: endpoints (array of {method, path, auth?, requestSchema?, responseSchema?, errors?})
+- graphql: sdl? (string) or operations {queries?[], mutations?[], subscriptions?[]}
+- cli: commands (array of {name, args?[], flags?[], exitCodes?[]}), io? {stdin?, stdout?}
+- job: trigger {schedule? | event?}, inputs? (array), outputs? (array), retryPolicy? (string)
+- message: topics (array of {name, direction: "publish"|"subscribe", schema?, qos?})
+- config: keys (array of {name, type, default?, required?, source: "env"|"file"|"secret"})
+
+FILENAME CONVENTIONS:
+- The "filename" field is the prompt filename to generate (not the code file). Use PDD convention: <base>_<LangOrFramework>.prompt where <LangOrFramework> matches the tech stack.
+- Examples (adapt to your stack):
+  - Next.js (TypeScript React): page_TypeScriptReact.prompt -> generates page.tsx; layout_TypeScriptReact.prompt -> layout.tsx
+  - Python backend: api_Python.prompt -> api.py; orders_Python.prompt -> orders.py
+- Choose descriptive <base> names (e.g., orders_page, orders_api) and keep names consistent across dependencies.
+
+DEPENDENCY RULES:
+- The "dependencies" array must list other items by their prompt filenames (the "filename" values), not code filenames.
+- Do not reference files that are not part of this array unless they were explicitly provided via INCLUDE_FILES/DOC_FILES.
+- Avoid cycles; if a cycle is necessary, justify it in the description and clarify initialization order.
+
+PRIORITY AND ORDERING:
+- Use unique integer priorities starting at 1 without gaps (1,2,3,...).
+- Sort the top-level array by ascending priority.
+
+TAGS (optional):
+- Use short, lower-case tags for slicing (e.g., ["frontend","nextjs"], ["backend","api"], ["config"]).
+
+CONTENT GUIDANCE:
+- Descriptions must be architectural and actionable: responsibilities, interfaces, error handling, cross-cutting concerns.
+- For API items, outline endpoints (method, path, auth) and high-level request/response shapes.
+- For page/component items, include the route, key props, and data sources.
+
+DO NOT INCLUDE the schema or these conventions in the output; return only the JSON array.

@@ -48,7 +48,9 @@ def process_backtick_includes(text: str, recursive: bool) -> str:
                 return f"```{content}```"
         except FileNotFoundError:
             console.print(f"[bold red]Warning:[/bold red] File not found: {file_path}")
-            return match.group(0)
+            # First pass (recursive=True): leave the tag so a later env expansion can resolve it
+            # Second pass (recursive=False): replace with a visible placeholder
+            return match.group(0) if recursive else f"```[File not found: {file_path}]```"
         except Exception as e:
             console.print(f"[bold red]Error processing include:[/bold red] {str(e)}")
             return f"```[Error processing include: {file_path}]```"
@@ -62,9 +64,9 @@ def process_backtick_includes(text: str, recursive: bool) -> str:
 def process_xml_tags(text: str, recursive: bool) -> str:
     text = process_pdd_tags(text)
     text = process_include_tags(text, recursive)
-
-    text = process_shell_tags(text)
-    text = process_web_tags(text)
+    text = process_include_many_tags(text, recursive)
+    text = process_shell_tags(text, recursive)
+    text = process_web_tags(text, recursive)
     return text
 
 def process_include_tags(text: str, recursive: bool) -> str:
@@ -81,7 +83,9 @@ def process_include_tags(text: str, recursive: bool) -> str:
                 return content
         except FileNotFoundError:
             console.print(f"[bold red]Warning:[/bold red] File not found: {file_path}")
-            return f"[File not found: {file_path}]"
+            # First pass (recursive=True): leave the tag so a later env expansion can resolve it
+            # Second pass (recursive=False): replace with a visible placeholder
+            return match.group(0) if recursive else f"[File not found: {file_path}]"
         except Exception as e:
             console.print(f"[bold red]Error processing include:[/bold red] {str(e)}")
             return f"[Error processing include: {file_path}]"
@@ -101,10 +105,13 @@ def process_pdd_tags(text: str) -> str:
         return "This is a test "
     return processed
 
-def process_shell_tags(text: str) -> str:
+def process_shell_tags(text: str, recursive: bool) -> str:
     pattern = r'<shell>(.*?)</shell>'
     def replace_shell(match):
         command = match.group(1).strip()
+        if recursive:
+            # Defer execution until after env var expansion
+            return match.group(0)
         console.print(f"Executing shell command: [cyan]{escape(command)}[/cyan]")
         try:
             result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
@@ -118,10 +125,13 @@ def process_shell_tags(text: str) -> str:
             return f"[Shell execution error: {str(e)}]"
     return re.sub(pattern, replace_shell, text, flags=re.DOTALL)
 
-def process_web_tags(text: str) -> str:
+def process_web_tags(text: str, recursive: bool) -> str:
     pattern = r'<web>(.*?)</web>'
     def replace_web(match):
         url = match.group(1).strip()
+        if recursive:
+            # Defer network operations until after env var expansion
+            return match.group(0)
         console.print(f"Scraping web content from: [cyan]{url}[/cyan]")
         try:
             try:
@@ -143,6 +153,34 @@ def process_web_tags(text: str) -> str:
             console.print(f"[bold red]Error scraping web content:[/bold red] {str(e)}")
             return f"[Web scraping error: {str(e)}]"
     return re.sub(pattern, replace_web, text, flags=re.DOTALL)
+
+def process_include_many_tags(text: str, recursive: bool) -> str:
+    """Process <include-many> blocks whose inner content is a comma- or newline-separated
+    list of file paths (typically provided via variables after env expansion)."""
+    pattern = r'<include-many>(.*?)</include-many>'
+    def replace_many(match):
+        inner = match.group(1)
+        if recursive:
+            # Wait for env expansion to materialize the list
+            return match.group(0)
+        # Split by newlines or commas
+        raw_items = [s.strip() for part in inner.split('\n') for s in part.split(',')]
+        paths = [p for p in raw_items if p]
+        contents: list[str] = []
+        for p in paths:
+            try:
+                full_path = get_file_path(p)
+                console.print(f"Including (many): [cyan]{full_path}[/cyan]")
+                with open(full_path, 'r', encoding='utf-8') as fh:
+                    contents.append(fh.read())
+            except FileNotFoundError:
+                console.print(f"[bold red]Warning:[/bold red] File not found: {p}")
+                contents.append(f"[File not found: {p}]")
+            except Exception as e:
+                console.print(f"[bold red]Error processing include-many:[/bold red] {str(e)}")
+                contents.append(f"[Error processing include: {p}]")
+        return "\n".join(contents)
+    return re.sub(pattern, replace_many, text, flags=re.DOTALL)
 
 def double_curly(text: str, exclude_keys: Optional[List[str]] = None) -> str:
     if exclude_keys is None:
