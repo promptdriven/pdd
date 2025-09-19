@@ -205,23 +205,11 @@ def _meta_to_payload(meta: TemplateMeta) -> Dict[str, Any]:
     }
 
 
-def _is_discover_enabled(meta: TemplateMeta) -> bool:
-    discover = meta.discover
-    if not discover:
-        return True
-    enabled = discover.get("enabled")
-    if isinstance(enabled, bool):
-        return enabled
-    return True
-
-
 def list_templates(filter_tag: Optional[str] = None) -> List[Dict[str, Any]]:
     by_name, _ = _index_templates()
     normalized_tag = filter_tag.lower() if filter_tag else None
     items: List[Dict[str, Any]] = []
     for meta in by_name.values():
-        if not _is_discover_enabled(meta):
-            continue
         if normalized_tag and normalized_tag not in meta.tags:
             continue
         items.append({
