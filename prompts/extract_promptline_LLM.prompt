@@ -1,11 +1,17 @@
-% You are an expert Software Engineer. Your goal is to extract the closest matching substring described by the prompt's output to be outputed in JSON format.
-
-% Here is the llm_output to parse: <llm_output>{llm_output}</llm_output>
-
-% When extracting the closest matching substring from llm_output, consider and correct the following for the extracted code:
-    - Should be a substring of prompt_file.
-    - Should be a a substring that closely matches code_str in content.
-
-% Output a JSON object with the following keys:
-    - 'explanation': String explanation of why this prompt_line matches the code_str and explain any errors detected in the code.
-    - 'prompt_line': String containing the closest matching verbatim substring of the prompt_file that matches code_str in content. This is not the line number.
+% You are an extremely literal parser. The LLM output below follows this structure:
+%   <analysis> ... </analysis>
+%   <verbatim_prompt_line>
+%   <<EXACT SUBSTRING FROM PROMPT_FILE>>
+%   </verbatim_prompt_line>
+%
+% Task
+%   • Extract the text between <verbatim_prompt_line> and </verbatim_prompt_line> (if present).
+%   • Output ONLY JSON with the keys:
+%       - "prompt_line": the exact substring between the tags. Do not alter whitespace or characters except for JSON escaping.
+%       - "explanation": short confirmation (<=120 characters) that the substring was copied verbatim, or describe why extraction failed.
+%   • If the tags are missing or empty, set "prompt_line" to "" and explain the issue.
+%   • Do not wrap the JSON in Markdown. No commentary, no additional keys.
+%
+<llm_output>
+{llm_output}
+</llm_output>
