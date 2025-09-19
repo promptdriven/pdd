@@ -4,6 +4,12 @@ This directory contains examples that demonstrate comparisons between using Curs
 
 ## Available Examples
 
+### Edit File Tool
+The edit_file_tool_example walks through generating a complete Python tool using PDD's streamlined `pdd --force sync` workflow. This example shows:
+- How to drive end-to-end project generation (code, tests, docs) from component prompts (complete dev units)
+- Using the provided Makefile targets to orchestrate setup, prompt creation, and sync runs
+- Integrating automation features like command logging and optional cost tracking during sync
+
 ### Handpaint
 The handpaint example demonstrates how PDD can be used to create and modify a painting application. This example shows:
 - How PDD can be used to generate code for a graphical application
