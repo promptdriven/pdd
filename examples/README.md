@@ -41,6 +41,12 @@ The handpaint example demonstrates how PDD can be used to create and modify a pa
 The hello_world example demonstrates how PDD can be used to generate code for a simple Python function that prints "hello". This example shows:
 - How PDD can be used to generate code for a simple Python function via the sync command
 
+### Hello You
+The hello_you example expands on the Hello World flow by rendering a personalized greeting in large ASCII art. This example shows:
+- Capturing the current shell username (via `whoami`) and feeding it into the generated program
+- Building a reusable ASCII art alphabet map inside the generated Python file to spell arbitrary strings
+- Producing a self-contained script that prints a 10-row tall "Hello <username>" banner with no external dependencies
+
 ### Pi Calc
 The pi_calc example demonstrates how PDD can be used to generate code for a simple Python function that calculates the value of Pi. This example shows:
 - How PDD can be used to generate code for a simple Python function using the sync command
