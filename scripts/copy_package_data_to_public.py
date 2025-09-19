@@ -59,12 +59,47 @@ def load_package_include_patterns(pyproject_path: str) -> list[str]:
 
 def copy_patterns_to_public(patterns: list[str], dest_root: str, base: str = "pdd") -> int:
     copied = 0
+    processed_dirs: set[str] = set()
+    copied_paths: set[str] = set()
     for pattern in patterns:
-        for src in glob.glob(os.path.join(base, pattern)):
+        matches = glob.glob(os.path.join(base, pattern), recursive=True)
+        for src in sorted(matches):
+            if os.path.isdir(src):
+                dir_path = os.path.normpath(src)
+                if any(dir_path == seen or dir_path.startswith(seen + os.sep) for seen in processed_dirs):
+                    continue
+                processed_dirs.add(dir_path)
+
+                copied_in_dir = 0
+                for root, _, files in os.walk(src):
+                    rel_dir = os.path.relpath(root, base)
+                    dest_dir = os.path.join(dest_root, base, rel_dir)
+                    os.makedirs(dest_dir, exist_ok=True)
+                    for fname in files:
+                        src_file = os.path.join(root, fname)
+                        dest_file = os.path.join(dest_dir, fname)
+                        if dest_file in copied_paths:
+                            continue
+                        shutil.copy2(src_file, dest_file)
+                        copied_paths.add(dest_file)
+                        print(f"  Copied {src_file} -> {dest_file}")
+                        copied += 1
+                        copied_in_dir += 1
+
+                if copied_in_dir == 0:
+                    rel_dir = os.path.relpath(src, base)
+                    dest_dir = os.path.join(dest_root, base, rel_dir)
+                    os.makedirs(dest_dir, exist_ok=True)
+                    print(f"  Created directory {src} -> {dest_dir}")
+                continue
+
             rel = os.path.relpath(src, base)
             dest = os.path.join(dest_root, base, rel)
             os.makedirs(os.path.dirname(dest), exist_ok=True)
+            if dest in copied_paths:
+                continue
             shutil.copy2(src, dest)
+            copied_paths.add(dest)
             print(f"  Copied {src} -> {dest}")
             copied += 1
     return copied
