@@ -37,7 +37,7 @@ Learn more:
 
 ## PDD CLI Installation
 
-- Getting started with PDD CLI (Gemini setup): https://github.com/promptdriven/pdd/blob/main/examples/SETUP_WITH_GEMINI.md
+- Getting started with PDD CLI (Gemini setup): https://github.com/promptdriven/pdd/blob/main/SETUP_WITH_GEMINI.md
 
 ## Get Started
 
