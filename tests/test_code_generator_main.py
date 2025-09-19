@@ -4,6 +4,8 @@ import os
 import pathlib
 import shlex
 import subprocess
+import sys
+import types
 import pytest
 from unittest.mock import MagicMock, patch, mock_open, AsyncMock
 
@@ -928,3 +930,290 @@ def test_generate_with_output_directory_path_uses_resolved_file_and_succeeds(
     assert not incremental
     assert resolved_output_file.exists()
     assert resolved_output_file.read_text() == DEFAULT_MOCK_GENERATED_CODE
+
+
+# Template Front Matter & Prompt Template Behavior
+def test_front_matter_language_override(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_env_vars,
+):
+    mock_ctx.obj['local'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "front_lang.prompt"
+    create_file(prompt_file_path, "placeholder")
+
+    front_matter_prompt = """---
+language: json
+---
+Say hi to the user.
+"""
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": front_matter_prompt},
+        {"output": str(temp_dir_setup["output_dir"] / "fm_lang.py")},
+        "python",
+    )
+
+    code_generator_main(mock_ctx, str(prompt_file_path), None, None, False)
+
+    called_kwargs = mock_local_generator_fixture.call_args.kwargs
+    assert called_kwargs["language"] == "json"
+    assert "Say hi to the user." in called_kwargs["prompt"]
+
+
+def test_front_matter_output_path_with_env_substitution(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_env_vars,
+):
+    mock_ctx.obj['local'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "front_output.prompt"
+    create_file(prompt_file_path, "placeholder")
+
+    output_template_path = temp_dir_setup["tmp_path"] / "templated_outputs" / "${NAME}.py"
+    front_matter_prompt = f"""---
+output: "{output_template_path}"
+variables:
+  NAME:
+    required: true
+---
+Generate module for $NAME.
+"""
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": front_matter_prompt},
+        {"output": str(temp_dir_setup["output_dir"] / "fallback.py")},
+        "python",
+    )
+
+    code_generator_main(
+        mock_ctx,
+        str(prompt_file_path),
+        None,
+        None,
+        False,
+        env_vars={"NAME": "Widget"},
+    )
+
+    expected_path = pathlib.Path(str(output_template_path).replace("${NAME}", "Widget")).resolve()
+    assert expected_path.exists()
+    assert expected_path.read_text() == DEFAULT_MOCK_GENERATED_CODE
+
+
+def test_front_matter_variable_defaults_and_no_override(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_env_vars,
+):
+    mock_ctx.obj['local'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "front_defaults.prompt"
+    create_file(prompt_file_path, "placeholder")
+
+    front_matter_prompt = """---
+variables:
+  NAME:
+    required: true
+  COLOR:
+    default: blue
+  STYLE:
+    default: simple
+  OVERRIDE:
+    default: should_not_win
+---
+Name: $NAME | Color: $COLOR | Style: $STYLE | Override: $OVERRIDE
+"""
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": front_matter_prompt},
+        {"output": str(temp_dir_setup["output_dir"] / "defaults.py")},
+        "python",
+    )
+
+    code_generator_main(
+        mock_ctx,
+        str(prompt_file_path),
+        str(temp_dir_setup["output_dir"] / "defaults.py"),
+        None,
+        False,
+        env_vars={"NAME": "Ada", "OVERRIDE": "custom"},
+    )
+
+    called_prompt = mock_local_generator_fixture.call_args.kwargs["prompt"]
+    assert "Name: Ada" in called_prompt
+    assert "Color: blue" in called_prompt
+    assert "Style: simple" in called_prompt
+    assert "Override: custom" in called_prompt
+
+
+def test_front_matter_missing_required_variable_returns_error(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_rich_console_fixture,
+):
+    mock_ctx.obj['local'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "front_missing.prompt"
+    create_file(prompt_file_path, "placeholder")
+
+    front_matter_prompt = """---
+variables:
+  NAME:
+    required: true
+---
+Hello $NAME
+"""
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": front_matter_prompt},
+        {"output": str(temp_dir_setup["output_dir"] / "missing.py")},
+        "python",
+    )
+
+    code, incremental, cost, model = code_generator_main(
+        mock_ctx,
+        str(prompt_file_path),
+        str(temp_dir_setup["output_dir"] / "missing.py"),
+        None,
+        False,
+        env_vars={},
+    )
+
+    assert code == ""
+    assert not incremental
+    assert cost == 0.0
+    assert model == "error"
+    assert not mock_local_generator_fixture.called
+    assert any(
+        "missing required variables" in str(call_args[0][0]).lower()
+        for call_args in mock_rich_console_fixture.call_args_list
+        if call_args[0]
+    )
+
+
+def test_front_matter_discovery_populates_env_vars(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_env_vars,
+):
+    mock_ctx.obj['local'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "front_discover.prompt"
+    create_file(prompt_file_path, "placeholder")
+
+    docs_dir = temp_dir_setup["tmp_path"] / "docs"
+    docs_dir.mkdir(exist_ok=True)
+    discovered_file = docs_dir / "spec.md"
+    create_file(discovered_file, "Spec content")
+
+    root_str = str(temp_dir_setup["tmp_path"])
+    front_matter_prompt = f"""---
+variables:
+  DOC_FILES:
+    required: false
+discover:
+  enabled: true
+  root: "{root_str}"
+  set:
+    DOC_FILES:
+      patterns:
+        - "docs/*.md"
+---
+Docs included: $DOC_FILES
+"""
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": front_matter_prompt},
+        {"output": str(temp_dir_setup["output_dir"] / "discover.py")},
+        "python",
+    )
+
+    code_generator_main(
+        mock_ctx,
+        str(prompt_file_path),
+        str(temp_dir_setup["output_dir"] / "discover.py"),
+        None,
+        False,
+        env_vars={},
+    )
+
+    called_prompt = mock_local_generator_fixture.call_args.kwargs["prompt"]
+    assert str(discovered_file.resolve()) in called_prompt
+
+
+def test_front_matter_output_schema_validation_failure(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_env_vars,
+    mock_rich_console_fixture,
+    monkeypatch,
+):
+    mock_ctx.obj['local'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "front_schema.prompt"
+    create_file(prompt_file_path, "placeholder")
+
+    schema_output_path = temp_dir_setup["tmp_path"] / "schema_output.json"
+    front_matter_prompt = f"""---
+language: json
+output: "{schema_output_path}"
+output_schema:
+  type: object
+  required:
+    - name
+---
+Return JSON for the spec.
+"""
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": front_matter_prompt},
+        {"output": str(temp_dir_setup["output_dir"] / "schema.json")},
+        "python",
+    )
+
+    calls = {"count": 0}
+
+    def _failing_validate(instance, schema):
+        calls["count"] += 1
+        raise ValueError("schema mismatch")
+
+    if "jsonschema" in sys.modules:
+        monkeypatch.setattr(sys.modules["jsonschema"], "validate", _failing_validate, raising=False)
+    else:
+        monkeypatch.setitem(sys.modules, "jsonschema", types.SimpleNamespace(validate=_failing_validate))
+    mock_local_generator_fixture.return_value = ("{\"age\": 1}", DEFAULT_MOCK_COST, DEFAULT_MOCK_MODEL_NAME)
+
+    code, incremental, cost, model = code_generator_main(
+        mock_ctx,
+        str(prompt_file_path),
+        None,
+        None,
+        False,
+        env_vars={},
+    )
+
+    assert calls["count"] == 1
+    assert code == ""
+    assert not incremental
+    assert cost == DEFAULT_MOCK_COST
+    assert model == "error"
+    assert not schema_output_path.exists()
+    assert any(
+        "output_schema" in str(call_args[0][0]).lower()
+        for call_args in mock_rich_console_fixture.call_args_list
+        if call_args[0]
+    )
