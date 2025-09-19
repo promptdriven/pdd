@@ -6,7 +6,7 @@
 
 PDD (Prompt-Driven Development) is a versatile tool for generating code, creating examples, running unit tests, and managing prompt files. It leverages AI models to streamline the development process, allowing developers to work more efficiently with prompt-driven code generation.
 
-The primary command is **`sync`**, which automatically executes the complete PDD workflow loop with intelligent decision-making, real-time visual feedback, and sophisticated state management. It analyzes your project files, determines what operations are needed, and executes them with live progress animation while maintaining detailed logs of all decisions and changes. For most use cases, `sync` is the recommended starting point, as it intelligently determines what steps are needed and executes them in the correct order.
+The primary command is **`sync`**, which automatically executes the complete PDD workflow loop with intelligent decision-making, real-time visual feedback, and sophisticated state management. It analyzes your project files, determines what operations are needed, and executes them with live progress animation while maintaining detailed logs of all decisions and changes. For most use cases, `sync` is the recommended starting point, as it intelligently determines what steps are needed and executes them in the correct order. Make sure the `generate` command is run first to ensure the LLM API keys work.
 
 ## Whitepaper
 
@@ -104,6 +104,67 @@ source pdd-env/bin/activate
 # Install PDD
 pip install pdd-cli
 ```
+
+
+
+## 🚀 Quickstart (Hello Example)
+
+If you’re brand new to PDD, follow these steps to see it in action.
+
+1. **Install prerequisites** (macOS/Linux):
+   ```bash
+   xcode-select --install      # macOS only
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   uv tool install pdd-cli
+   pdd --version
+   ```
+
+2. **Clone repo**
+
+   ```bash
+     # Clone the repository (if not already done)
+    git clone https://github.com/promptdriven/pdd.git
+    cd pdd/examples/hello
+   ```
+
+3. **Set one API key** (choose your provider):
+   ```bash
+   export GEMINI_API_KEY="your-gemini-key"
+   # OR
+   export OPENAI_API_KEY="your-openai-key"
+   ```
+
+### Post-Installation Setup (Required first step after installation)
+
+Run the guided setup:
+```bash
+pdd setup
+```
+
+This wraps the interactive bootstrap utility to install shell tab completion, capture your API keys, create ~/.pdd configuration files, and write the starter prompt. Re-run it any time to update keys or reinstall completion.
+
+If you skip this step, the first regular pdd command you run will detect the missing setup files and print a reminder banner so you can finish onboarding later.
+
+Reload your shell so the new completion and environment hooks are available:
+```bash
+source ~/.zshrc  # or source ~/.bashrc / fish equivalent
+```
+
+👉 If you prefer to configure things manually, see [SETUP_WITH_GEMINI.md](SETUP_WITH_GEMINI.md) for full instructions on obtaining a Gemini API key and creating your own `~/.pdd/llm_model.csv`.
+
+5. **Run Hello**:
+   ```bash
+   cd ../hello
+   pdd --force generate hello_python.prompt
+   python3 hello.py
+   ```
+
+    ✅ Expected output:
+    ```
+    hello
+    ```
+
+
 
 ## Cloud vs Local Execution
 
@@ -233,6 +294,7 @@ PDD includes an auto-update feature to ensure you always have access to the late
 PDD supports a wide range of programming languages, including but not limited to:
 - Python
 - JavaScript
+- TypeScript
 - Java
 - C++
 - Ruby

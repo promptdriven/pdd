@@ -15,8 +15,8 @@ PDD works best in an isolated environment. You can pick one of these methods:
 **macOS/Linux**
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
-~/.local/bin/uv tool install pdd-cli
-~/.local/bin/pdd --version
+uv tool install pdd-cli
+pdd --version
 ```
 
 **Windows (PowerShell)**
@@ -52,14 +52,35 @@ pdd --version
 
 ---
 
-## 2. Clone the repo
+## 2. Run the guided setup
+
+Right after installation, let PDD bootstrap its configuration:
+
+```bash
+pdd setup
+```
+
+During the wizard:
+- Choose **Install tab completion** if you want shell helpers.
+- Pick **Google Gemini** when asked which providers to configure.
+- Paste your Gemini API key when prompted (you can create it in the next step if you haven’t already).
+
+The wizard writes your credentials to `~/.pdd/api-env`, seeds `~/.pdd/llm_model.csv` with Gemini entries, and reminds you to reload your shell (`source ~/.zshrc`, etc.) so completion and env hooks load.
+
+If you prefer to configure everything manually—or you’re on an offline machine—skip the wizard and follow the manual instructions below.
+
+---
+
+## 3. Clone the repo
 
 ```bash
 git clone https://github.com/promptdriven/pdd.git
 cd pdd/examples/hello
 ```
 
-## 3. Configure your Google API Key
+## 4. Configure your Google API Key (manual setup)
+
+If you already pasted the key into `pdd setup`, you can skip this section. Otherwise:
 
 1. Go to [Google AI Studio](https://aistudio.google.com/app/apikey).  
 2. Log in with your Google account.  
@@ -85,9 +106,9 @@ echo $Env:GEMINI_API_KEY # Windows
 
 ---
 
-## 4. Create `~/.pdd/llm_model.csv`
+## 5. Create `~/.pdd/llm_model.csv` (manual setup)
 
-Add Gemini rows so PDD knows how to call the Google AI Studio models:
+The setup wizard already adds a Gemini row. Only follow this step if you skipped the wizard or want to edit the file by hand. Add Gemini rows so PDD knows how to call the Google AI Studio models:
 
 ```csv
 provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type
@@ -101,7 +122,7 @@ head -2 ~/.pdd/llm_model.csv
 
 ---
 
-## 5. Output locations (tests & examples)
+## 6. Output locations (tests & examples)
 
 By default, PDD writes generated files next to your source code.  
 To keep repos tidy, set these environment variables once (e.g., in `~/.zshrc` or `~/.bashrc`):
@@ -117,7 +138,7 @@ With these set, PDD will place outputs like so:
 
 ---
 
-## 6. Run the Hello Example
+## 7. Run the Hello Example
 
 From `pdd/examples/hello`:
 
@@ -138,7 +159,7 @@ hello
 ```
 
 ---
-## 7. (Optional) Sync
+## 8. (Optional) Sync
 
 After you’ve confirmed `generate` works:
 
@@ -147,7 +168,7 @@ pdd --force sync hello
 ```
 ---
 
-## 8. What if nothing prints?
+## 9. What if nothing prints?
 
 Sometimes the generated file only defines the function (e.g., `def hello(): print("hello")`) but doesn’t include the standard Python entry point:
 
