@@ -127,7 +127,9 @@ def test_list_templates_no_prompts_dir_returns_empty(tmp_path, monkeypatch):
         shutil.rmtree(prompts_dir)
     items = tr.list_templates()
     assert isinstance(items, list)
-    assert items == []
+    assert items, "Packaged templates should still be listed"
+    names = {item["name"] for item in items}
+    assert "architecture/architecture_json" in names
 
 
 def test_project_template_discovered_and_metadata_parsed(tmp_path, monkeypatch):
@@ -147,13 +149,14 @@ def test_project_template_discovered_and_metadata_parsed(tmp_path, monkeypatch):
     fp = tmp_path / "prompts" / "sub" / "myproj.prompt"
     _write_prompt_file(fp, fm, body="print('hello')\n")
     items = tr.list_templates()
-    assert len(items) == 1
-    it = items[0]
-    assert it["name"] == "myproj"
-    assert "Project template" in it["description"]
-    assert it["version"] == "0.1"
+    names = {item["name"] for item in items}
+    assert "myproj" in names
+    assert "architecture/architecture_json" in names
+    proj = next(item for item in items if item["name"] == "myproj")
+    assert "Project template" in proj["description"]
+    assert proj["version"] == "0.1"
     # tags normalized to lowercase
-    assert set(it["tags"]) == {"foo", "bar"}
+    assert set(proj["tags"]) == {"foo", "bar"}
     # load_template returns full metadata including variables
     meta = tr.load_template("myproj")
     assert meta["name"] == "myproj"
@@ -180,7 +183,8 @@ def test_missing_front_matter_ignored_and_malformed_ignored(tmp_path, monkeypatc
     p2.write_text(f"---\n{bad_fm_body}\n---\nbody\n", encoding="utf-8")
     # No templates should be discovered
     items = tr.list_templates()
-    assert items == []
+    assert len(items) == 1
+    assert items[0]["name"] == "architecture/architecture_json"
 
 
 def test_filter_tag_case_insensitive(tmp_path, monkeypatch):
