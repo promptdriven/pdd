@@ -1,5 +1,35 @@
 ## v0.0.57 (2025-09-19)
 
+### CLI & Templates
+
+- Introduce `pdd templates` command group with `list`, `show`, and `copy` subcommands backed by a new registry that unifies packaged and project prompts.
+- Enhance `pdd generate` with front-matter-aware templates that auto-populate defaults, enforce required variables, and optionally discover project files.
+- Improve `pdd trace` normalization and fallback heuristics to produce a line match even when LLM output is noisy.
+
+### Examples & Tooling
+
+- Ship a comprehensive `edit_file_tool_example` project with scripts, prompts, CLI entrypoints, utilities, and tests demonstrating edit-file workflows end-to-end.
+- Add a `hello_you` example to showcase personalized greeting prompts and outputs. thanks to Sai Vathsavayi for the PR and contributions.
+- Provide `utils/pdd-setup.py` to guide interactive configuration of API keys and local environment prerequisites. Thanks James Levine for your contributions!
+
+### Docs
+
+- Rewrite README with template workflow walkthroughs, edit-file tool instructions, onboarding checklists, and expanded troubleshooting. Thanks Sai Vathsavayi for your edits!
+- Expand CONTRIBUTING with detailed testing expectations and guidance for contributing templates and examples.
+- Promote the Gemini setup guide and generation guidelines into top-level docs and examples, keeping onboarding in sync.
+
+### Tests
+
+- Add targeted coverage for the template registry, new CLI template commands, code generation path handling, and edit-file tool modules.
+- Update regression harnesses and `test_trace` expectations to align with the new behaviors.
+
+### Dependencies
+
+- Package bundled templates with the CLI distribution and add `jsonschema` for metadata validation.
+- Extend language format mappings with `.yaml` and INI support.
+
+Thanks Rudi Cilibrasi for all your feedback!
+
 ## v0.0.56 (2025-09-14)
 
 ### CLI & Context
@@ -68,7 +98,7 @@
 - README: Clarify that `sync` commonly needs the global `--force` flag to overwrite generated files; update all `sync` examples accordingly.
 - README: Improve usage clarity and reporting notes for `sync`; add version badge and link to Prompt‑Driven Development Doctrine.
 - Doctrine: Add new doctrine document outlining core principles and workflow; referenced from README.
-- Examples: Add/setup Gemini guide (`SETUP_WITH_GEMINI.md`) — thanks to @saisaiecho for the PR and contributions.
+- Examples: Add/setup Gemini guide (`SETUP_WITH_GEMINI.md`) — thanks to Sai Vathsavayi for the PR and contributions.
 
 ### CLI
 
