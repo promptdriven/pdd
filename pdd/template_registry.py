@@ -1,18 +1,23 @@
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass
+import re
+import shutil
+from collections.abc import Iterable as IterableABC
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-import yaml
+from importlib.resources import as_file
 
 try:
-    # Python 3.11+
     from importlib.resources import files as pkg_files
 except ImportError:  # pragma: no cover
-    # Fallback for older Python, though project targets 3.12+
-    from importlib_resources import files as pkg_files  # type: ignore
+    # Fallback for Python < 3.11 if needed.
+    from importlib_resources import files as pkg_files  # type: ignore[attr-defined]
+
+
+_FRONT_MATTER_PATTERN = re.compile(r"^---\s*\r?\n(.*?)\r?\n---\s*\r?\n?", re.DOTALL)
+_SOURCE_PRIORITY = {"packaged": 0, "project": 1}
 
 
 @dataclass
@@ -21,46 +26,77 @@ class TemplateMeta:
     path: Path
     description: str = ""
     version: str = ""
-    tags: List[str] = None  # type: ignore
+    tags: List[str] = field(default_factory=list)
     language: str = ""
     output: str = ""
-    variables: Dict[str, Any] = None  # type: ignore
-    usage: Dict[str, Any] = None  # type: ignore
-    discover: Dict[str, Any] = None  # type: ignore
-    output_schema: Dict[str, Any] = None  # type: ignore
+    variables: Dict[str, Any] = field(default_factory=dict)
+    usage: Dict[str, Any] = field(default_factory=dict)
+    discover: Dict[str, Any] = field(default_factory=dict)
+    output_schema: Dict[str, Any] = field(default_factory=dict)
     notes: str = ""
+    source: str = "packaged"
+
+    @property
+    def alias(self) -> str:
+        return self.path.stem
+
+
+def _safe_load_yaml(text: str) -> Optional[Dict[str, Any]]:
+    try:
+        import yaml  # type: ignore
+    except ImportError as exc:  # pragma: no cover - PyYAML is an install requirement
+        raise RuntimeError("PyYAML is required to parse template front matter") from exc
+
+    try:
+        data = yaml.safe_load(text) or {}
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
 
 
 def _parse_front_matter(text: str) -> Tuple[Optional[Dict[str, Any]], str]:
-    if not text.startswith("---\n"):
+    match = _FRONT_MATTER_PATTERN.match(text)
+    if not match:
         return None, text
-    end_idx = text.find("\n---", 4)
-    if end_idx == -1:
-        return None, text
-    fm_body = text[4:end_idx]
-    rest = text[end_idx + len("\n---"):]
-    if rest.startswith("\n"):
-        rest = rest[1:]
-    try:
-        meta = yaml.safe_load(fm_body) or {}
-        if not isinstance(meta, dict):
-            meta = {}
-    except Exception:
-        meta = {}
+    meta_text = match.group(1)
+    rest = text[match.end():]
+    meta = _safe_load_yaml(meta_text)
     return meta, rest
 
 
-def _normalize_meta(meta: Dict[str, Any], path: Path) -> TemplateMeta:
-    name = str(meta.get("name") or path.stem)
-    description = str(meta.get("description") or "")
-    version = str(meta.get("version") or "")
-    language = str(meta.get("language") or "")
-    output = str(meta.get("output") or "")
-    tags_raw = meta.get("tags") or []
-    if isinstance(tags_raw, str):
-        tags = [tags_raw.lower()]
-    else:
-        tags = [str(t).lower() for t in (tags_raw or [])]
+def _normalize_tags(tags: Any) -> List[str]:
+    if tags is None:
+        return []
+    if isinstance(tags, str):
+        return [tags.lower()]
+    if isinstance(tags, IterableABC):
+        normalized: List[str] = []
+        for tag in tags:
+            if tag is None:
+                continue
+            normalized.append(str(tag).lower())
+        return normalized
+    return []
+
+
+def _ensure_mapping(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    return {}
+
+
+def _normalize_meta(raw: Dict[str, Any], path: Path, source: str) -> TemplateMeta:
+    name = str(raw.get("name") or path.stem)
+    description = str(raw.get("description") or "")
+    version = str(raw.get("version") or "")
+    language = str(raw.get("language") or "")
+    output = str(raw.get("output") or "")
+    tags = _normalize_tags(raw.get("tags"))
+    notes_raw = raw.get("notes")
+    notes = "" if notes_raw is None else str(notes_raw)
+
     return TemplateMeta(
         name=name,
         path=path.resolve(),
@@ -69,96 +105,142 @@ def _normalize_meta(meta: Dict[str, Any], path: Path) -> TemplateMeta:
         tags=tags,
         language=language,
         output=output,
-        variables=meta.get("variables") or {},
-        usage=meta.get("usage") or {},
-        discover=meta.get("discover") or {},
-        output_schema=meta.get("output_schema") or {},
-        notes=str(meta.get("notes") or ""),
+        variables=_ensure_mapping(raw.get("variables")),
+        usage=_ensure_mapping(raw.get("usage")),
+        discover=_ensure_mapping(raw.get("discover")),
+        output_schema=_ensure_mapping(raw.get("output_schema")),
+        notes=notes,
+        source=source,
     )
 
 
 def _iter_project_templates() -> Iterable[Path]:
     root = Path.cwd() / "prompts"
     if not root.exists():
-        return []
-    return root.rglob("*.prompt")
+        return ()
+    return (path for path in root.rglob("*.prompt") if path.is_file())
 
 
 def _iter_packaged_templates() -> Iterable[Path]:
     try:
         pkg_root = pkg_files("pdd").joinpath("templates")
-        if not pkg_root.is_dir():
-            return []
-        return (Path(str(p)) for p in pkg_root.rglob("*.prompt"))
-    except Exception:
-        return []
+    except ModuleNotFoundError:  # pragma: no cover - package missing
+        return ()
+    if not pkg_root.is_dir():
+        return ()
+
+    resolved: List[Path] = []
+    for entry in pkg_root.rglob("*.prompt"):  # type: ignore[attr-defined]
+        try:
+            with as_file(entry) as concrete:
+                path = Path(concrete)
+                if path.is_file():
+                    resolved.append(path)
+        except FileNotFoundError:
+            continue
+    return resolved
 
 
-def _load_meta_from_path(path: Path) -> Optional[TemplateMeta]:
+def _load_meta_from_path(path: Path, source: str) -> Optional[TemplateMeta]:
     try:
         text = path.read_text(encoding="utf-8")
-    except Exception:
+    except OSError:
         return None
-    fm, _ = _parse_front_matter(text)
-    if not fm:
+    front_matter, _ = _parse_front_matter(text)
+    if not front_matter:
         return None
-    try:
-        return _normalize_meta(fm, path)
-    except Exception:
-        return None
+    return _normalize_meta(front_matter, path, source)
 
 
-def _index_templates() -> Dict[str, TemplateMeta]:
-    index: Dict[str, TemplateMeta] = {}
-    # Project templates override packaged ones
-    for p in _iter_packaged_templates():
-        meta = _load_meta_from_path(p)
-        if meta and meta.name not in index:
-            index[meta.name] = meta
-    for p in _iter_project_templates():
-        meta = _load_meta_from_path(p)
+def _index_templates() -> Tuple[Dict[str, TemplateMeta], Dict[str, TemplateMeta]]:
+    by_name: Dict[str, TemplateMeta] = {}
+    priority: Dict[str, int] = {}
+
+    def register(meta: TemplateMeta) -> None:
+        current_priority = priority.get(meta.name, -1)
+        new_priority = _SOURCE_PRIORITY.get(meta.source, 0)
+        if new_priority < current_priority:
+            return
+        by_name[meta.name] = meta
+        priority[meta.name] = new_priority
+
+    for path in _iter_packaged_templates():
+        meta = _load_meta_from_path(Path(path), "packaged")
         if meta:
-            index[meta.name] = meta
-    return index
+            register(meta)
+
+    for path in _iter_project_templates():
+        meta = _load_meta_from_path(Path(path), "project")
+        if meta:
+            register(meta)
+
+    lookup = dict(by_name)
+    lookup_priority = priority.copy()
+
+    for meta in by_name.values():
+        alias = meta.alias
+        alias_priority = lookup_priority.get(alias, -1)
+        meta_priority = priority.get(meta.name, 0)
+        if alias_priority <= meta_priority:
+            lookup[alias] = meta
+            lookup_priority[alias] = meta_priority
+
+    return by_name, lookup
+
+
+def _meta_to_payload(meta: TemplateMeta) -> Dict[str, Any]:
+    return {
+        "name": meta.name,
+        "path": str(meta.path),
+        "description": meta.description,
+        "version": meta.version,
+        "tags": list(meta.tags),
+        "language": meta.language,
+        "output": meta.output,
+        "variables": dict(meta.variables),
+        "usage": dict(meta.usage),
+        "discover": dict(meta.discover),
+        "output_schema": dict(meta.output_schema),
+        "notes": meta.notes,
+    }
+
+
+def _is_discover_enabled(meta: TemplateMeta) -> bool:
+    discover = meta.discover
+    if not discover:
+        return True
+    enabled = discover.get("enabled")
+    if isinstance(enabled, bool):
+        return enabled
+    return True
 
 
 def list_templates(filter_tag: Optional[str] = None) -> List[Dict[str, Any]]:
-    idx = _index_templates()
+    by_name, _ = _index_templates()
+    normalized_tag = filter_tag.lower() if filter_tag else None
     items: List[Dict[str, Any]] = []
-    for meta in idx.values():
-        if filter_tag and filter_tag.lower() not in (meta.tags or []):
+    for meta in by_name.values():
+        if not _is_discover_enabled(meta):
+            continue
+        if normalized_tag and normalized_tag not in meta.tags:
             continue
         items.append({
             "name": meta.name,
             "path": str(meta.path),
             "description": meta.description,
             "version": meta.version,
-            "tags": meta.tags or [],
+            "tags": list(meta.tags),
         })
-    # Sort by name for stable output
-    items.sort(key=lambda d: d["name"])  # type: ignore
+    items.sort(key=lambda item: item["name"].lower())
     return items
 
 
 def load_template(name: str) -> Dict[str, Any]:
-    idx = _index_templates()
-    if name not in idx:
+    _, lookup = _index_templates()
+    meta = lookup.get(name)
+    if not meta:
         raise FileNotFoundError(f"Template '{name}' not found.")
-    meta = idx[name]
-    return {
-        "name": meta.name,
-        "path": str(meta.path),
-        "description": meta.description,
-        "version": meta.version,
-        "tags": meta.tags or [],
-        "language": meta.language,
-        "output": meta.output,
-        "variables": meta.variables or {},
-        "usage": meta.usage or {},
-        "discover": meta.discover or {},
-        "output_schema": meta.output_schema or {},
-        "notes": meta.notes or "",
-    }
+    return _meta_to_payload(meta)
 
 
 def show_template(name: str) -> Dict[str, Any]:
@@ -184,11 +266,11 @@ def show_template(name: str) -> Dict[str, Any]:
 
 def copy_template(name: str, dest_dir: str) -> str:
     meta = load_template(name)
-    src = Path(meta["path"])  # absolute
+    src = Path(meta["path"])
+    if not src.exists():
+        raise FileNotFoundError(f"Template '{name}' file is missing at {src}")
     dest_root = Path(dest_dir)
     dest_root.mkdir(parents=True, exist_ok=True)
-    dest = dest_root / src.name
-    contents = src.read_text(encoding="utf-8")
-    dest.write_text(contents, encoding="utf-8")
-    return str(dest.resolve())
-
+    dest_path = dest_root / src.name
+    shutil.copy2(src, dest_path)
+    return str(dest_path.resolve())

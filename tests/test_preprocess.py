@@ -1,4 +1,6 @@
 import os
+import io
+import sys
 import pytest
 from unittest.mock import patch, mock_open
 from pdd.preprocess import preprocess
@@ -36,6 +38,50 @@ def test_process_xml_include_tag() -> None:
     with patch('builtins.open', mock_open(read_data=mock_file_content)):
         assert preprocess(prompt, recursive=False, double_curly_brackets=False) == expected_output
 
+# New include-many coverage
+def test_process_include_many_mixed_paths() -> None:
+    """Include-many should concatenate all referenced files across commas and newlines."""
+    prompt = "Start <include-many>file1.txt, file2.txt\nfile3.txt</include-many> End"
+    file_map = {
+        './file1.txt': 'Content One',
+        './file2.txt': 'Content Two',
+        './file3.txt': 'Content Three',
+    }
+
+    def mocked_open(path, *args, **kwargs):
+        if path in file_map:
+            return io.StringIO(file_map[path])
+        raise FileNotFoundError(path)
+
+    with patch('builtins.open', side_effect=mocked_open):
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    expected = "Start Content One\nContent Two\nContent Three End"
+    assert result == expected
+
+
+def test_process_include_many_missing_file() -> None:
+    """Include-many should surface placeholders for missing files while keeping other content."""
+    prompt = "<include-many>present.txt, missing.txt</include-many>"
+    file_map = {'./present.txt': 'Here'}
+
+    def mocked_open(path, *args, **kwargs):
+        if path in file_map:
+            return io.StringIO(file_map[path])
+        raise FileNotFoundError(path)
+
+    with patch('builtins.open', side_effect=mocked_open):
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    assert result == "Here\n[File not found: missing.txt]"
+
+
+def test_process_include_many_recursive_defers() -> None:
+    """Recursive pass should leave include-many blocks untouched for later expansion."""
+    prompt = "Prefix <include-many>foo.txt</include-many> Suffix"
+    result = preprocess(prompt, recursive=True, double_curly_brackets=False)
+    assert result == prompt
+
 # Test for processing XML-like pdd tags
 def test_process_xml_pdd_tag() -> None:
     """Test processing of XML-like pdd tags."""
@@ -54,6 +100,27 @@ def test_process_xml_shell_tag() -> None:
         mock_run.return_value.stdout = "Hello\n"
         assert preprocess(prompt, recursive=False, double_curly_brackets=False) == expected_output
 
+
+def test_recursive_shell_defers_execution() -> None:
+    """Ensure recursive pass defers shell execution and keeps the tag in place."""
+    prompt = "Check <shell>echo Ready</shell>"
+    with patch('subprocess.run') as mock_run:
+        result = preprocess(prompt, recursive=True, double_curly_brackets=False)
+    assert result == prompt
+    mock_run.assert_not_called()
+
+
+def test_shell_second_pass_executes_after_deferral() -> None:
+    """Second pass without recursion should execute the deferred shell block."""
+    prompt = "Check <shell>echo Ready</shell>"
+    with patch('subprocess.run') as mock_run:
+        mock_run.return_value.stdout = "Ready\n"
+        first_pass = preprocess(prompt, recursive=True, double_curly_brackets=False)
+        assert first_pass == prompt
+        processed = preprocess(first_pass, recursive=False, double_curly_brackets=False)
+    assert processed == "Check Ready\n"
+    mock_run.assert_called_once()
+
 # Test for doubling curly brackets
 def test_double_curly_brackets() -> None:
     """Test doubling of curly brackets."""
@@ -70,6 +137,14 @@ def test_exclude_keys_from_doubling() -> None:
 
     assert preprocess(prompt, recursive=False, double_curly_brackets=True, exclude_keys=['exclude']) == expected_output
 
+
+def test_exclude_keys_requires_exact_match() -> None:
+    """Exclude list should only skip doubling when the inner text is an exact match."""
+    prompt = "Values {exclude_suffix} and {exclude}"
+    expected = "Values {{exclude_suffix}} and {exclude}"
+    result = preprocess(prompt, recursive=False, double_curly_brackets=True, exclude_keys=['exclude'])
+    assert result == expected
+
 # Test for recursive processing
 def test_recursive_processing() -> None:
     """Test recursive processing of includes."""
@@ -83,6 +158,22 @@ def test_recursive_processing() -> None:
         mock_file.side_effect = [mock_open(read_data=mock_file_content).return_value,
                                  mock_open(read_data=nested_file_content).return_value]
         assert preprocess(prompt, recursive=True, double_curly_brackets=False) == expected_output
+
+
+def test_recursive_backtick_missing_file_preserves_tag() -> None:
+    """Recursive pass should keep unresolved backtick includes for later resolution."""
+    prompt = "```<missing.txt>```"
+    with patch('builtins.open', side_effect=FileNotFoundError):
+        result = preprocess(prompt, recursive=True, double_curly_brackets=False)
+    assert result == prompt
+
+
+def test_recursive_xml_missing_file_preserves_tag() -> None:
+    """Recursive pass should keep unresolved XML includes for later resolution."""
+    prompt = "<include>missing.txt</include>"
+    with patch('builtins.open', side_effect=FileNotFoundError):
+        result = preprocess(prompt, recursive=True, double_curly_brackets=False)
+    assert result == prompt
 
 # Test for handling file not found
 def test_file_not_found() -> None:
@@ -102,6 +193,37 @@ def test_shell_command_error() -> None:
 
     with patch('subprocess.run', side_effect=subprocess.CalledProcessError(1, 'invalid_command')):
         assert preprocess(prompt, recursive=False, double_curly_brackets=False) == expected_output
+
+
+def test_recursive_web_defers_scrape() -> None:
+    """Recursive pass should not attempt to import or scrape during web processing."""
+    prompt = "Start <web>https://example.com</web> End"
+    original_import = __import__
+
+    def raising_import(name, *args, **kwargs):
+        if name == 'firecrawl':
+            raise AssertionError('firecrawl import should be deferred')
+        return original_import(name, *args, **kwargs)
+
+    with patch('builtins.__import__', side_effect=raising_import):
+        result = preprocess(prompt, recursive=True, double_curly_brackets=False)
+
+    assert result == prompt
+
+
+def test_web_second_pass_executes_after_deferral() -> None:
+    """Second pass without recursion should execute the deferred web scrape."""
+    prompt = "Start <web>https://example.com</web> End"
+    mock_firecrawl = MagicMock()
+    mock_response = MagicMock()
+    mock_response.markdown = "# Content"
+    mock_firecrawl.FirecrawlApp.return_value.scrape_url.return_value = mock_response
+
+    with patch.dict('sys.modules', {'firecrawl': mock_firecrawl}):
+        with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'key'}):
+            result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    assert result == "Start # Content End"
 
 # Ensure to clean up the environment variable after tests
 def teardown_module(module) -> None:
@@ -199,6 +321,27 @@ All endpoints return standard HTTP status codes. In case of an error, the respon
     assert processed.count('{{') == expected_output.count('{{'), \
         "Extra curly brackets were added around the entire JSON object"
 
+
+def test_double_curly_brackets_python_code_block() -> None:
+    """Ensure Python code blocks are processed without disturbing existing double braces."""
+    prompt = (
+        """```python
+def build_config():
+    template = "{{ already }}"
+    return {"key": value}
+```"""
+    )
+
+    expected = (
+        """```python
+def build_config():
+    template = "{{ already }}"
+    return {{"key": value}}
+```"""
+    )
+
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+    assert processed == expected
 def test_double_curly_preserves_braced_env_placeholders() -> None:
     """Ensure ${IDENT} placeholders are not altered by double-curly processing."""
     prompt = "This has ${FOO} and {bar}"

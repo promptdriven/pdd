@@ -127,9 +127,7 @@ def test_list_templates_no_prompts_dir_returns_empty(tmp_path, monkeypatch):
         shutil.rmtree(prompts_dir)
     items = tr.list_templates()
     assert isinstance(items, list)
-    assert items, "Packaged templates should still be listed"
-    names = {item["name"] for item in items}
-    assert "architecture/architecture_json" in names
+    assert items == []
 
 
 def test_project_template_discovered_and_metadata_parsed(tmp_path, monkeypatch):
@@ -149,14 +147,13 @@ def test_project_template_discovered_and_metadata_parsed(tmp_path, monkeypatch):
     fp = tmp_path / "prompts" / "sub" / "myproj.prompt"
     _write_prompt_file(fp, fm, body="print('hello')\n")
     items = tr.list_templates()
-    names = {item["name"] for item in items}
-    assert "myproj" in names
-    assert "architecture/architecture_json" in names
-    proj = next(item for item in items if item["name"] == "myproj")
-    assert "Project template" in proj["description"]
-    assert proj["version"] == "0.1"
+    assert len(items) == 1
+    it = items[0]
+    assert it["name"] == "myproj"
+    assert "Project template" in it["description"]
+    assert it["version"] == "0.1"
     # tags normalized to lowercase
-    assert set(proj["tags"]) == {"foo", "bar"}
+    assert set(it["tags"]) == {"foo", "bar"}
     # load_template returns full metadata including variables
     meta = tr.load_template("myproj")
     assert meta["name"] == "myproj"
@@ -181,14 +178,9 @@ def test_missing_front_matter_ignored_and_malformed_ignored(tmp_path, monkeypatc
     p2 = tmp_path / "prompts" / "badfm.prompt"
     bad_fm_body = "- just\n- a\n- list"
     p2.write_text(f"---\n{bad_fm_body}\n---\nbody\n", encoding="utf-8")
-    # Packaged templates should still be listed, but project files without
-    # valid front matter must be ignored
+    # No templates should be discovered
     items = tr.list_templates()
-    names = {item["name"] for item in items}
-    assert "architecture/architecture_json" in names
-    # Ensure the malformed/missing front-matter files weren't indexed
-    assert "nofm" not in names
-    assert "badfm" not in names
+    assert items == []
 
 
 def test_filter_tag_case_insensitive(tmp_path, monkeypatch):
