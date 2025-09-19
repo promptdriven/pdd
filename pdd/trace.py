@@ -1,4 +1,4 @@
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
 from rich import print
 from rich.console import Console
 from pydantic import BaseModel, Field
@@ -9,6 +9,39 @@ from .preprocess import preprocess
 from .llm_invoke import llm_invoke
 from . import DEFAULT_TIME, DEFAULT_STRENGTH
 console = Console()
+
+
+def _normalize_text(value: str) -> str:
+    if value is None:
+        return ""
+    value = value.replace("\u201c", '"').replace("\u201d", '"')
+    value = value.replace("\u2018", "'").replace("\u2019", "'")
+    value = value.replace("\u00A0", " ")
+    value = re.sub(r"\s+", " ", value.strip())
+    return value
+
+
+def _fallback_prompt_line(prompt_lines: List[str], code_str: str) -> int:
+    """Best-effort deterministic fallback to select a prompt line."""
+    normalized_code = _normalize_text(code_str).casefold()
+    tokens = [tok for tok in re.split(r"\W+", normalized_code) if len(tok) >= 3]
+
+    token_best_idx: Optional[int] = None
+    token_best_hits = 0
+    if tokens:
+        for i, line in enumerate(prompt_lines, 1):
+            normalized_line = _normalize_text(line).casefold()
+            hits = sum(1 for tok in tokens if tok in normalized_line)
+            if hits > token_best_hits:
+                token_best_hits = hits
+                token_best_idx = i
+    if token_best_idx is not None and token_best_hits > 0:
+        return token_best_idx
+
+    for i, line in enumerate(prompt_lines, 1):
+        if _normalize_text(line):
+            return i
+    return 1
 
 class PromptLineOutput(BaseModel):
     prompt_line: str = Field(description="The line from the prompt file that matches the code")
@@ -109,15 +142,6 @@ def trace(
             console.print(f"Searching for line: {prompt_line_str}")
 
         # Robust normalization for comparison
-        def normalize_text(s: str) -> str:
-            if s is None:
-                return ""
-            s = s.replace("\u201c", '"').replace("\u201d", '"')  # smart double quotes → straight
-            s = s.replace("\u2018", "'").replace("\u2019", "'")  # smart single quotes → straight
-            s = s.replace("\u00A0", " ")  # non-breaking space → space
-            s = re.sub(r"\s+", " ", s.strip())  # collapse whitespace
-            return s
-
         # If the model echoed wrapper tags like <llm_output>...</llm_output>, extract inner text
         raw_search = prompt_line_str
         try:
@@ -127,12 +151,12 @@ def trace(
         except Exception:
             pass
 
-        normalized_search = normalize_text(raw_search).casefold()
+        normalized_search = _normalize_text(raw_search).casefold()
         best_candidate_idx = None
         best_candidate_len = 0
 
         for i, line in enumerate(prompt_lines, 1):
-            normalized_line = normalize_text(line).casefold()
+            normalized_line = _normalize_text(line).casefold()
             line_len = len(normalized_line)
 
             # Base similarity
@@ -246,14 +270,26 @@ def trace(
                             f"[yellow]Low-confidence multi-line match selected (ratio={win_best_ratio:.3f}).[/yellow]"
                         )
 
+        # Step 7c: Deterministic fallback when LLM output cannot be matched reliably
+        fallback_used = False
+        if best_match is None:
+            best_match = _fallback_prompt_line(prompt_lines, code_str)
+            fallback_used = True
+
         # Step 8: Return results
         if verbose:
             console.print(f"[green]Found matching line: {best_match}[/green]")
             console.print(f"[green]Total cost: ${total_cost:.6f}[/green]")
             console.print(f"[green]Model used: {model_name}[/green]")
+            if fallback_used:
+                console.print("[yellow]Fallback matching heuristic was used.[/yellow]")
 
         return best_match, total_cost, model_name
 
     except Exception as e:
         console.print(f"[bold red]Error in trace function: {str(e)}[/bold red]")
-        return None, 0.0, ""
+        try:
+            fallback_line = _fallback_prompt_line(prompt_file.splitlines(), code_file.splitlines()[code_line - 1] if 0 < code_line <= len(code_file.splitlines()) else "")
+        except Exception:
+            fallback_line = 1
+        return fallback_line, 0.0, "fallback"

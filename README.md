@@ -1,12 +1,12 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.56-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.57-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
 PDD (Prompt-Driven Development) is a versatile tool for generating code, creating examples, running unit tests, and managing prompt files. It leverages AI models to streamline the development process, allowing developers to work more efficiently with prompt-driven code generation.
 
-The primary command is **`sync`**, which automatically executes the complete PDD workflow loop with intelligent decision-making, real-time visual feedback, and sophisticated state management. It analyzes your project files, determines what operations are needed, and executes them with live progress animation while maintaining detailed logs of all decisions and changes. For most use cases, `sync` is the recommended starting point, as it intelligently determines what steps are needed and executes them in the correct order.
+The primary command is **`sync`**, which automatically executes the complete PDD workflow loop with intelligent decision-making, real-time visual feedback, and sophisticated state management. It analyzes your project files, determines what operations are needed, and executes them with live progress animation while maintaining detailed logs of all decisions and changes. For most use cases, `sync` is the recommended starting point, as it intelligently determines what steps are needed and executes them in the correct order. Make sure the `generate` command is run first to ensure the LLM API keys work.
 
 ## Whitepaper
 
@@ -72,6 +72,13 @@ Verify installation:
 ```bash
 pdd --version
 ```
+
+With the CLI on your `PATH`, continue with:
+```bash
+pdd setup
+```
+The command installs tab completion, walks you through API key entry, and seeds local configuration files.
+If you postpone this step, the CLI detects the missing setup artifacts the first time you run another command and shows a reminder banner so you can complete it later (the banner is suppressed once `~/.pdd/api-env` exists or when your project already provides credentials via `.env` or `.pdd/`).
 
 ### Alternative: pip Installation
 
@@ -143,9 +150,7 @@ Reload your shell so the new completion and environment hooks are available:
 source ~/.zshrc  # or source ~/.bashrc / fish equivalent
 ```
 
-**Legacy Setup (Deprecated)**: The old `pdd-setup.py` script is deprecated. Use `pdd setup` instead.
-
-👉 If you prefer to configure things manually, see [examples/SETUP_WITH_GEMINI.md](examples/SETUP_WITH_GEMINI.md) for full instructions on obtaining a Gemini API key and creating your own `~/.pdd/llm_model.csv`.
+👉 If you prefer to configure things manually, see [SETUP_WITH_GEMINI.md](SETUP_WITH_GEMINI.md) for full instructions on obtaining a Gemini API key and creating your own `~/.pdd/llm_model.csv`.
 
 5. **Run Hello**:
    ```bash
@@ -232,12 +237,19 @@ For proper model identifiers to use in your custom configuration, refer to the [
 
 ## Post-Installation Setup
 
-1. Enable tab completion:
+1. Run the guided setup (required unless you do this manually or use the cloud):
 ```bash
-pdd install_completion
+pdd setup
+```
+This wraps the interactive bootstrap utility to install shell tab completion, capture your API keys, create `~/.pdd` configuration files, and write the starter prompt. Re-run it any time to update keys or reinstall completion.
+If you skip this step, the first regular `pdd` command you run will detect the missing setup files and print a reminder banner so you can finish onboarding later (the banner is suppressed once `~/.pdd/api-env` exists or when your project already provides credentials via `.env` or `.pdd/`).
+
+2. Reload your shell so the new completion and environment hooks are available:
+```bash
+source ~/.zshrc  # or source ~/.bashrc / fish equivalent
 ```
 
-2. Configure environment variables (optional):
+3. Configure environment variables (optional):
 ```bash
 # Add to .bashrc, .zshrc, or equivalent
 export PDD_AUTO_UPDATE=true
@@ -269,7 +281,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.56
+Current version: 0.0.57
 
 To check your installed version, run:
 ```
@@ -795,6 +807,372 @@ pdd [GLOBAL OPTIONS] generate --output src/calculator.py calculator_python.promp
 # Specify a different original prompt (bypassing git detection)
 pdd [GLOBAL OPTIONS] generate --output src/calculator.py  --original-prompt old_calculator_python.prompt calculator_python.prompt
 ```
+
+#### Prompt Templates
+
+Templates are reusable prompt files that generate a specific artifact (code, JSON, tests, etc.). Templates carry human/CLI metadata in YAML front matter (parsed by the CLI and not sent to the LLM), while the body stays concise and model‑focused.
+
+- Front matter (human/CLI):
+  - name, description, version, tags, language, output
+  - variables: schema for `-e/--env` (required/optional, type, examples)
+  - usage: copyable `pdd generate` commands
+  - discover (optional): CLI‑executed file discovery (root, patterns, exclude, caps)
+  - output_schema (optional): JSON shape used by the CLI for validation and by `pdd templates show`
+- Prompt body (LLM):
+  - Includes to hydrate context: `<include>${VAR}</include>`, `<include-many>${LIST}</include-many>`
+  - Crisp instructions and an explicit output contract; no human usage notes or discovery logic
+
+Quick examples (templates)
+
+```
+# Minimal (PRD required)
+pdd generate -e PRD_FILE=docs/specs.md --output architecture.json \
+  pdd/templates/architecture/architecture_json.prompt
+
+# With extra context
+pdd generate -e PRD_FILE=docs/specs.md -e TECH_STACK_FILE=docs/tech_stack.md \
+  -e DOC_FILES='docs/ux.md,docs/components.md' \
+  -e INCLUDE_FILES='src/app.py,src/api.py,frontend/app/layout.tsx' \
+  --output architecture.json pdd/templates/architecture/architecture_json.prompt
+
+# Multiple variants
+pdd generate -e PRD_FILE=docs/specs.md -e APP_NAME=Shop   --output apps/shop/architecture.json   pdd/templates/architecture/architecture_json.prompt
+pdd generate -e PRD_FILE=docs/specs.md -e APP_NAME=Admin  --output apps/admin/architecture.json  pdd/templates/architecture/architecture_json.prompt
+pdd generate -e PRD_FILE=docs/specs.md -e APP_NAME=Public --output apps/public/architecture.json pdd/templates/architecture/architecture_json.prompt
+
+# 4) Use variables in the output path
+# 5) Use shell env fallback for convenience
+export APP=shop
+pdd generate -e APP -e PRD_FILE=docs/specs.md --output 'apps/${APP}/architecture.json' pdd/templates/architecture/architecture_json.prompt
+```
+
+Tips for authoring templates
+
+- Put human guidance in YAML front matter (variables with examples, usage, notes); keep the prompt body model‑focused.
+- Use `<include>`/`<include-many>` for curated context; prefer specs/configs over large code dumps.
+- Parameterized includes: pass file paths via `-e`, e.g. `<include>${PRD_FILE}</include>`; the engine resolves includes after variable expansion.
+- If your template outputs a specific filename, show example commands with `--output`.
+
+Behavior notes
+
+- Variable expansion only applies to variables explicitly passed via `-e/--env` (or via the env fallback with `-e KEY`). Other `$NAME` occurrences remain unchanged.
+- `--output` also accepts `$VAR`/`${VAR}` from the same set of variables.
+- If you omit `--output`, PDD derives the filename from the prompt basename and detected language extension; set `PDD_GENERATE_OUTPUT_PATH` to direct outputs to a common directory.
+
+Templates: Commands
+
+- Front matter is parsed (not sent to the LLM) and powers:
+  - Variables schema and validation
+  - Usage examples (rendered by `pdd templates show`)
+  - Optional `discover` settings (executed by the CLI with caps)
+  - Optional `output_schema` for validation
+- Commands:
+  - `pdd templates list [--json] [--filter tag=...]`
+  - `pdd templates show <name>`
+  - `pdd templates copy <name> --to prompts/`
+  - `pdd generate --template <name> [-e KEY=VALUE...] [--output PATH]`
+
+#### Built-In Templates
+
+PDD can distribute a curated set of popular templates as part of the package to help you get started quickly (e.g., frontend/Next.js, backend/Flask, data/ETL).
+
+Where built-ins live (packaged)
+
+- Under the installed package at `pdd/templates/<category>/**/*.prompt` (plus optional README/index files). When installed from PyPI, these are included as package data.
+
+Included starter templates
+
+- `architecture/architecture_json.prompt`: Universal architecture generator (requires `-e PRD_FILE=...`; supports optional `TECH_STACK_FILE`, `DOC_FILES`, `INCLUDE_FILES`).
+
+Front Matter (YAML) metadata
+
+- Templates include YAML front matter with human-readable metadata:
+  - `name`, `description`, `version`, `tags`: docs and discovery
+  - `language`, `output`: defaults for `generate`
+  - `variables`: parameter schema for `-e/--env` (type, required, default)
+
+Example (architecture template):
+
+```
+---
+name: architecture/architecture_json
+description: Unified architecture template for multiple stacks
+version: 1.0.0
+tags: [architecture, template, json]
+language: json
+output: architecture.json
+variables:
+  TECH_STACK:
+    required: false
+    type: string
+    description: Target tech stack for interface shaping and conventions.
+    examples: [nextjs, python, fastapi, flask, django, node, go]
+  API_STYLE:
+    required: false
+    type: string
+    description: API style for backends.
+    examples: [rest, graphql]
+  APP_NAME:
+    required: false
+    type: string
+    description: Optional app name for context.
+    example: Shop
+  PRD_FILE:
+    required: true
+    type: path
+    description: Primary product requirements document (PRD) describing scope and goals.
+    example_paths: [PRD.md, docs/specs.md, docs/product/prd.md]
+    example_content: |
+      Title: Order Management MVP
+      Goals: Enable customers to create and track orders end-to-end.
+      Key Features:
+        - Create Order: id, user_id, items[], total, status
+        - View Order: details page with status timeline
+        - List Orders: filter by status, date, user
+      Non-Functional Requirements:
+        - P95 latency < 300ms for read endpoints
+        - Error rate < 0.1%
+  TECH_STACK_FILE:
+    required: false
+    type: path
+    description: Tech stack overview (languages, frameworks, infrastructure, and tools).
+    example_paths: [docs/tech_stack.md, docs/architecture/stack.md]
+    example_content: |
+      Backend: Python (FastAPI), Postgres (SQLAlchemy), PyTest
+      Frontend: Next.js (TypeScript), shadcn/ui, Tailwind CSS
+      API: REST
+      Auth: Firebase Auth (GitHub Device Flow), JWT for API
+      Infra: Vercel (frontend), Cloud Run (backend), Cloud SQL (Postgres)
+      Observability: OpenTelemetry traces, Cloud Logging
+  DOC_FILES:
+    required: false
+    type: list
+    description: Additional documentation files (comma/newline-separated).
+    example_paths: [docs/ux.md, docs/components.md]
+    example_content: |
+      Design overview, patterns and constraints
+  INCLUDE_FILES:
+    required: false
+    type: list
+    description: Specific source files to include (comma/newline-separated).
+    example_paths: [src/app.py, src/api.py, frontend/app/layout.tsx, frontend/app/page.tsx]
+  usage:
+    generate:
+      - name: Minimal (PRD only)
+        command: pdd generate -e PRD_FILE=docs/specs.md --output architecture.json pdd/templates/architecture/architecture_json.prompt
+      - name: With tech stack overview
+        command: pdd generate -e PRD_FILE=docs/specs.md -e TECH_STACK_FILE=docs/tech_stack.md --output architecture.json pdd/templates/architecture/architecture_json.prompt
+  discover:
+    enabled: false
+    max_per_pattern: 5
+    max_total: 10
+---
+```
+
+Notes
+
+- YAML front matter is parsed and not sent to the LLM. Use `pdd templates show` to view variables, usage, discover, and output schema. Pass variables via `-e` at the CLI.
+
+Template Variables (reference)
+
+- Architecture (`architecture/architecture_json.prompt`)
+  - `PRD_FILE` (path, required): Primary spec/PRD file path
+  - `TECH_STACK_FILE` (path, optional): Tech stack overview file (includes API style; e.g., docs/tech_stack.md)
+  - `APP_NAME` (string, optional): App name for context
+  - `DOC_FILES` (list, optional): Comma/newline-separated list of additional doc paths
+  - `INCLUDE_FILES` (list, optional): Comma/newline-separated list of source files to include
+  - `SCAN_PATTERNS` (list, optional): Discovery patterns defined in front matter `discover` and executed by the CLI
+  - `SCAN_ROOT` (path, optional): Discovery root defined in front matter `discover`
+
+Notes
+
+- These variables are declared in YAML front matter at the top of each template for clarity and future CLI discovery. Until the CLI parses front matter, pass values via `-e` as shown in examples.
+
+Copy-and-generate
+
+- Copy the desired template(s) into your project’s `prompts/` folder, then use `pdd generate` as usual. This keeps prompts versioned with your repo so you can edit and evolve them.
+- Quick copy (Python one‑liner; run from your project root):
+
+```
+python - <<'PY'
+from importlib.resources import files
+import shutil, os
+
+dst_dir = 'prompts/architecture'
+src_dir = files('pdd').joinpath('templates/architecture')
+os.makedirs(dst_dir, exist_ok=True)
+
+for p in src_dir.rglob('*.prompt'):
+    shutil.copy(p, dst_dir)
+print(f'Copied built-in templates from {src_dir} -> {dst_dir}')
+PY
+
+# Then generate from the copied prompt(s)
+pdd generate --output architecture.json prompts/architecture/architecture_json.prompt
+```
+
+Unified template examples
+
+```
+# Frontend (Next.js) — interface.page.route and component props
+pdd generate \
+  -e APP_NAME=Shop \
+  # (routes are inferred from PRD/tech stack/files)
+  -e PRD_FILE=docs/specs.md \
+  -e DOC_FILES='docs/ux.md,docs/components.md' \
+  -e TECH_STACK_FILE=docs/tech_stack.md \
+  # discovery, if needed, is configured in template YAML and executed by the CLI
+  --output architecture.json \
+  pdd/templates/architecture/architecture_json.prompt
+
+# Backend (Python) — interface.module.functions or interface.api.endpoints
+pdd generate \
+  -e PRD_FILE=docs/backend-spec.md \
+  -e TECH_STACK_FILE=docs/tech_stack.md \
+  -e INCLUDE_FILES='src/app.py,src/api.py,pyproject.toml' \
+  --output architecture.json \
+  pdd/templates/architecture/architecture_json.prompt
+```
+
+**Interface Schema**
+
+- Core keys (every item):
+  - `reason`, `description`, `dependencies`, `priority`, `filename`, optional `tags`.
+- Interface object (typed, include only what applies):
+  - `type`: `component` | `page` | `module` | `api` | `graphql` | `cli` | `job` | `message` | `config`
+  - `component`: `props[]`, optional `emits[]`, `context[]`
+  - `page`: `route`, optional `params[]`, `dataSources[]`, `layout`
+  - `module`: `functions[]` with `name`, `signature`, optional `returns`, `errors`, `sideEffects`
+  - `api`: `endpoints[]` with `method`, `path`, optional `auth`, `requestSchema`, `responseSchema`, `errors`
+  - `graphql`: optional `sdl`, or `operations` with `queries[]`, `mutations[]`, `subscriptions[]`
+  - `cli`: `commands[]` with `name`, optional `args[]`, `flags[]`, `exitCodes[]`; optional `io` (`stdin`, `stdout`)
+  - `job`: `trigger` (cron/event), optional `inputs[]`, `outputs[]`, `retryPolicy`
+  - `message`: `topics[]` with `name`, `direction` (`publish`|`subscribe`), optional `schema`, `qos`
+  - `config`: `keys[]` with `name`, `type`, optional `default`, `required`, `source` (`env`|`file`|`secret`)
+  - Optional: `version`, `stability` (`experimental`|`stable`)
+
+Examples:
+
+```json
+{
+  "reason": "Top-level products page",
+  "description": "...",
+  "dependencies": ["layout_tsx.prompt"],
+  "priority": 1,
+  "filename": "page_tsx.prompt",
+  "tags": ["frontend","nextjs"],
+  "interface": {
+    "type": "page",
+    "page": {"route": "/products", "params": [{"name":"id","type":"string"}]},
+    "component": {"props": [{"name":"initialProducts","type":"Product[]","required":true}]}
+  }
+}
+```
+
+```json
+{
+  "reason": "Order service module",
+  "description": "...",
+  "dependencies": ["db_python.prompt"],
+  "priority": 1,
+  "filename": "orders_python.prompt",
+  "tags": ["backend","python"],
+  "interface": {
+    "type": "module",
+    "module": {
+      "functions": [
+        {"name": "load_orders", "signature": "def load_orders(user_id: str) -> list[Order]"},
+        {"name": "create_order", "signature": "def create_order(dto: OrderIn) -> Order"}
+      ]
+    }
+  }
+}
+```
+
+```json
+{
+  "reason": "Orders HTTP API",
+  "description": "...",
+  "dependencies": ["orders_python.prompt"],
+  "priority": 2,
+  "filename": "api_python.prompt",
+  "tags": ["backend","api"],
+  "interface": {
+    "type": "api",
+    "api": {
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/orders/{id}",
+          "auth": "bearer",
+          "responseSchema": {"type":"object","properties":{"id":{"type":"string"}}},
+          "errors": ["404 Not Found","401 Unauthorized"]
+        }
+      ]
+    }
+  }
+}
+```
+
+Notes and recommendations
+
+- Treat copied templates as a starting point; edit them to match your stack and conventions.
+- Keep templates under version control along with your code to preserve the prompt‑as‑source‑of‑truth model.
+- If you maintain your own template set, store them under `prompts/<org_or_team>/...` and compose with `<include>` to maximize reuse.
+
+Templates: additional UX
+
+- Goals:
+  - Discover, inspect, and vendor templates without manual file paths.
+  - Validate required variables and surface defaults from template metadata.
+  - Support a search order so project templates can override packaged ones.
+
+- Commands:
+  - `pdd templates list [--json] [--filter tag=frontend]` to discover templates
+  - `pdd templates show <name> [--raw]` to view metadata and variables
+  - `pdd templates copy <name> --to prompts/` to vendor into your repo
+  - `pdd generate --template <name> [-e KEY=VALUE...] [--output PATH]`
+
+- Example usage:
+```
+# Discover and inspect
+pdd templates list --filter tag=frontend
+pdd templates show frontend/nextjs_architecture_json
+
+# Vendor and customize
+pdd templates copy frontend/nextjs_architecture_json --to prompts/frontend/
+
+# Generate without specifying a file path
+pdd generate --template frontend/nextjs_architecture_json \
+  -e APP_NAME=Shop \
+  # routes are inferred from PRD/tech stack/files
+  --output architecture.json
+```
+
+- Search order:
+  - Project: `./prompts/**` (allows team overrides)
+  - `.pddrc` paths: any configured `templates.paths`
+  - Packaged: `pdd/templates/**` (built‑ins)
+  - Optional: `$PDD_PATH/prompts/**` (org‑level packs)
+
+- Template front matter:
+  - YAML metadata at the top of `.prompt` files to declare `name`, `description`, `tags`, `version`, `language`, default `output`, and `variables` (with `required`, `default`, `type` such as `string` or `json`).
+  - CLI precedence: values from `-e/--env` override front‑matter defaults; unknowns are validated and surfaced to the user.
+  - Example:
+    ```
+    ---
+    name: frontend/nextjs_architecture_json
+    description: Generate a Next.js architecture.json file from app metadata
+    tags: [frontend, nextjs, json]
+    version: 1.0.0
+    language: json
+    output: architecture.json
+    variables:
+      APP_NAME: { required: true }
+      ROUTES:   { type: json, default: [] }
+    ---
+    ...prompt body...
+    ```
 
 ### 3. example
 
@@ -1328,15 +1706,6 @@ For all commands that generate or modify files, the `--output` option (or its va
 4. **Environment Variable**: If the `--output` option is not provided, and an environment variable specific to the command is set, PDD will use the path specified by this variable. Otherwise, it will use default naming conventions and save the file in the current working directory.
 5. **No Output Location**: If no output location is specified and no environment variable is set, the file will be saved in the current working directory with a default name given the command.
 
-## Multi-Command Chaining
-
-PDD supports multi-command chaining, allowing you to execute multiple commands in a single line. Commands will be executed in the order they are specified. This feature enables you to perform complex workflows efficiently, combining various PDD operations into a single, streamlined process.
-
-Basic syntax for multi-command chaining:
-```
-pdd [GLOBAL OPTIONS] COMMAND1 [OPTIONS] [ARGS]... [COMMAND2 [OPTIONS] [ARGS]...]...
-```
-
 ## Getting Help
 
 PDD provides comprehensive help features:
@@ -1355,10 +1724,7 @@ PDD provides comprehensive help features:
 
 ## Additional Features
 
-- **Tab Completion**: PDD supports tab completion for commands and options in compatible shells. You can install tab completion by running:
-  ```
-  pdd install_completion
-  ```
+- **Tab Completion**: `pdd setup` installs tab completion automatically. If you only need to refresh the completion script, run `pdd install_completion` directly.
 - **Colorized Output**: PDD provides colorized output for better readability in compatible terminals.
 
 
@@ -1818,11 +2184,11 @@ One or more patent applications covering aspects of the PDD workflows and system
 
 PDD (Prompt-Driven Development) CLI provides a comprehensive set of tools for managing prompt files, generating code, creating examples, running tests, and handling various aspects of prompt-driven development. By leveraging the power of AI models and iterative processes, PDD aims to streamline the development workflow and improve code quality.
 
-The various commands and options allow for flexible usage, from simple code generation to complex workflows involving multiple steps. The ability to track costs, manage output locations through environment variables, and chain multiple commands further enhances the tool's utility in different development environments.
+The various commands and options allow for flexible usage, from simple code generation to complex workflows involving multiple steps. The ability to track costs and manage output locations through environment variables further enhances the tool's utility in different development environments.
 
 With the consistent argument order placing prompt files first, PDD emphasizes its prompt-driven nature and provides a more intuitive interface for users. This consistency across commands should make the tool easier to learn and use effectively.
 
-As you become more familiar with PDD, you can create more complex workflows by chaining multiple commands and utilizing the full range of options available. Always refer to the latest documentation and use the built-in help features to make the most of PDD in your development process.
+As you become more familiar with PDD, you can compose richer workflows by chaining commands in shell scripts, task runners, or CI pipelines while leveraging the full range of options available. Always refer to the latest documentation and use the built-in help features to make the most of PDD in your development process.
 
 Remember to stay mindful of security considerations, especially when working with generated code or sensitive data. Regularly update PDD to access the latest features and improvements.
 

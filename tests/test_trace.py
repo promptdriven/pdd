@@ -16,7 +16,7 @@ def hello():
 @pytest.fixture
 def mock_llm_responses():
     trace_response = {
-        'result': 'The matching line is: print("Hello, World!")',
+        'result': '<analysis>Line matches print statement</analysis><verbatim_prompt_line>print("Hello, World!")</verbatim_prompt_line>',
         'cost': 0.001,
         'model_name': 'gpt-3.5-turbo'
     }
@@ -65,9 +65,9 @@ def test_invalid_code_line():
         verbose=False
     )
     
-    assert result is None
+    assert result == 1
     assert cost == 0.0
-    assert model == ""
+    assert model == "fallback"
 
 def test_empty_inputs():
     result, cost, model = trace(
@@ -77,9 +77,9 @@ def test_empty_inputs():
         verbose=False
     )
     
-    assert result is None
+    assert result == 1
     assert cost == 0.0
-    assert model == ""
+    assert model == "fallback"
 
 @pytest.mark.parametrize("code_line", [0, -1])
 def test_invalid_line_numbers(code_line):
@@ -90,9 +90,9 @@ def test_invalid_line_numbers(code_line):
         verbose=False
     )
     
-    assert result is None
+    assert result == 1
     assert cost == 0.0
-    assert model == ""
+    assert model == "fallback"
 
 def test_verbose_output(mock_llm_responses, mock_prompt_templates, capsys):
     with patch('pdd.trace.load_prompt_template', return_value=mock_prompt_templates), \
@@ -118,9 +118,9 @@ def test_failed_prompt_template_load():
             verbose=False
         )
         
-        assert result is None
+        assert result == 1
         assert cost == 0.0
-        assert model == ""
+        assert model == "fallback"
 
 def test_llm_invoke_error(mock_prompt_templates):
     with patch('pdd.trace.load_prompt_template', return_value=mock_prompt_templates), \
@@ -133,6 +133,6 @@ def test_llm_invoke_error(mock_prompt_templates):
             verbose=False
         )
         
-        assert result is None
+        assert result == 1
         assert cost == 0.0
-        assert model == ""
+        assert model == "fallback"
