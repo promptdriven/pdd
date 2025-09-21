@@ -10,6 +10,8 @@ complete -c pdd -n "__fish_use_subcommand" -l quiet -d "Decrease output verbosit
 complete -c pdd -n "__fish_use_subcommand" -l output-cost -r -d "Enable cost tracking and output CSV file"
 complete -c pdd -n "__fish_use_subcommand" -l review-examples -d "Review few-shot examples before execution"
 complete -c pdd -n "__fish_use_subcommand" -l local -d "Run commands locally"
+complete -c pdd -n "__fish_use_subcommand" -l context -r -d "Override .pddrc context"
+complete -c pdd -n "__fish_use_subcommand" -l list-contexts -d ".pddrc contexts and exit"
 complete -c pdd -n "__fish_use_subcommand" -l help -d "Show help message"
 complete -c pdd -n "__fish_use_subcommand" -l version -d "Show version information"
 
@@ -29,12 +31,16 @@ complete -c pdd -n "__fish_use_subcommand" -a trace -d "Trace code line to promp
 complete -c pdd -n "__fish_use_subcommand" -a bug -d "Generate unit test from bug report"
 complete -c pdd -n "__fish_use_subcommand" -a auto-deps -d "Analyze and insert dependencies from directory or glob"
 complete -c pdd -n "__fish_use_subcommand" -a verify -d "Verify functional correctness using LLM judgment"
+complete -c pdd -n "__fish_use_subcommand" -a sync -d "Synchronize prompt, code, examples, tests"
+complete -c pdd -n "__fish_use_subcommand" -a setup -d "Interactive setup and completion install"
+complete -c pdd -n "__fish_use_subcommand" -a install_completion -d "Install shell completion"
+complete -c pdd -n "__fish_use_subcommand" -a pytest-output -d "Run pytest and capture structured output"
 
 # Command-specific completions
 complete -c pdd -n "__fish_seen_subcommand_from generate" -l output -r -d "Output location for generated code"
 complete -c pdd -n "__fish_seen_subcommand_from generate" -l original-prompt -r -d "Original prompt file for incremental generation"
 complete -c pdd -n "__fish_seen_subcommand_from generate" -l incremental -d "Force incremental patching"
-complete -c pdd -n "__fish_seen_subcommand_from generate" -s e -l env -xa "(env | cut -d= -f1 | sed 's/$/=/' | sort -u)" -d "Set template variable (KEY=VALUE) or read KEY from env"
+complete -c pdd -n "__fish_seen_subcommand_from generate" -s e -l env -xa (env | cut -d= -f1 | sed 's/.*/&=/' | sort -u) -d "Set template variable (KEY=VALUE) or read KEY from env"
 complete -c pdd -n "__fish_seen_subcommand_from generate" -a "(__fish_complete_suffix .prompt)"
 
 complete -c pdd -n "__fish_seen_subcommand_from example" -l output -r -d "Output location for example code"
@@ -126,10 +132,26 @@ complete -c pdd -n "__fish_seen_subcommand_from verify" -l budget -x -d "Max bud
 complete -c pdd -n "__fish_seen_subcommand_from verify" -a "(__fish_complete_suffix .prompt)"
 complete -c pdd -n "__fish_seen_subcommand_from verify" -a "(__fish_complete_suffix .py .js .java .cpp .rb .go)" # For CODE_FILE and PROGRAM_FILE
 
+# sync command
+complete -c pdd -n "__fish_seen_subcommand_from sync" -l max-attempts -x -d "Max attempts for loops"
+complete -c pdd -n "__fish_seen_subcommand_from sync" -l budget -x -d "Total budget for sync"
+complete -c pdd -n "__fish_seen_subcommand_from sync" -l skip-verify -d "Skip functional verification"
+complete -c pdd -n "__fish_seen_subcommand_from sync" -l skip-tests -d "Skip unit test generation"
+complete -c pdd -n "__fish_seen_subcommand_from sync" -l target-coverage -x -d "Desired coverage percentage"
+complete -c pdd -n "__fish_seen_subcommand_from sync" -l log -d "Show analysis instead of running"
+
+# setup and install_completion have no options
+complete -c pdd -n "__fish_seen_subcommand_from setup" -d "Run interactive setup"
+complete -c pdd -n "__fish_seen_subcommand_from install_completion" -d "Install shell completion"
+
+# pytest-output command
+complete -c pdd -n "__fish_seen_subcommand_from pytest-output" -l json-only -d "Print only JSON"
+complete -c pdd -n "__fish_seen_subcommand_from pytest-output" -a "(__fish_complete_suffix .py)"
+
 # File completion for all commands
 complete -c pdd -n "__fish_seen_subcommand_from generate example test preprocess fix split change update detect conflicts crash trace bug auto-deps verify" -a "(__fish_complete_suffix .prompt)"
 complete -c pdd -n "__fish_seen_subcommand_from generate example test preprocess fix split change update detect conflicts crash trace bug auto-deps verify" -a "(__fish_complete_suffix .py .js .java .cpp .rb .go)"
 complete -c pdd -n "__fish_seen_subcommand_from generate example test preprocess fix split change update detect conflicts crash trace bug auto-deps verify" -a "(__fish_complete_suffix .log .txt .csv)"
 
 # Help completion
-complete -c pdd -n "__fish_seen_subcommand_from help" -a "generate example test preprocess fix split change update detect conflicts crash trace bug auto-deps verify" -d "Show help for specific command"
+complete -c pdd -n "__fish_seen_subcommand_from help" -a "generate example test preprocess fix split change update detect conflicts crash trace bug auto-deps verify sync setup install_completion pytest-output" -d "Show help for specific command"

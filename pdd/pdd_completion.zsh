@@ -57,6 +57,8 @@ _pdd_global_opts=(
   '--output-cost[Enable cost tracking and output a CSV file with usage details.]:filename:_files'
   '--review-examples[Review and optionally exclude few-shot examples before command execution.]'
   '--local[Run commands locally instead of in the cloud.]'
+  '--context[Override automatic .pddrc context]:context-name:_guard'
+  '--list-contexts[List available .pddrc contexts and exit]'
   '--help[Show help message and exit.]'
   '--version[Show version and exit.]'
 )
@@ -396,6 +398,54 @@ _pdd_verify() {
     '*:filename:_files'
 }
 
+# sync
+# Usage: pdd [GLOBAL OPTIONS] sync [OPTIONS] BASENAME
+# Options:
+#   --max-attempts [INT]
+#   --budget [FLOAT]
+#   --skip-verify
+#   --skip-tests
+#   --target-coverage [FLOAT]
+#   --log
+# Arg:
+#   1: BASENAME
+_pdd_sync() {
+  _arguments -s \
+    $_pdd_global_opts \
+    '--max-attempts=[Maximum attempts for iterative loops (default 3)]:int' \
+    '--budget=[Maximum total cost for sync (default 10.0)]:float' \
+    '--skip-verify[Skip the functional verification step]' \
+    '--skip-tests[Skip unit test generation and fixing]' \
+    '--target-coverage=[Desired code coverage percentage]:float' \
+    '--log[Show analysis instead of executing operations]' \
+    '1:basename: ' \
+    '*: :'
+}
+
+# setup (no options)
+_pdd_setup() {
+  _arguments -s $_pdd_global_opts
+}
+
+# install_completion (no options)
+_pdd_install_completion() {
+  _arguments -s $_pdd_global_opts
+}
+
+# pytest-output
+# Usage: pdd [GLOBAL OPTIONS] pytest-output [OPTIONS] TEST_FILE
+# Options:
+#   --json-only
+# Arg:
+#   1: TEST_FILE
+_pdd_pytest_output() {
+  _arguments -s \
+    $_pdd_global_opts \
+    '--json-only[Print only JSON to stdout]' \
+    '1:test-file:_files' \
+    '*:filename:_files'
+}
+
 ##
 # Main PDD completion dispatcher
 ##
@@ -421,6 +471,10 @@ _pdd() {
     'bug:Generate a unit test based on incorrect vs desired outputs'
     'auto-deps:Analyze a prompt and include deps from a directory or glob'
     'verify:Verify functional correctness using LLM judgment and iteratively fix'
+    'sync:Synchronize prompt, code, examples, tests with analysis'
+    'setup:Interactive setup and completion install'
+    'install_completion:Install shell completion for current shell'
+    'pytest-output:Run pytest and capture structured output'
   )
 
   # If there's no subcommand yet (i.e., user typed only "pdd " or "pdd -<Tab>"), offer global opts or subcommands.
@@ -479,6 +533,18 @@ _pdd() {
       ;;
     verify)
       _pdd_verify
+      ;;
+    sync)
+      _pdd_sync
+      ;;
+    setup)
+      _pdd_setup
+      ;;
+    install_completion)
+      _pdd_install_completion
+      ;;
+    pytest-output)
+      _pdd_pytest_output
       ;;
     # If the subcommand is unknown or not typed yet, fall back to showing the list of subcommands.
     *)
