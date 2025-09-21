@@ -486,6 +486,9 @@ publish-public:
 	@echo "Copying doctrine doc to public repo"
 	@mkdir -p $(PUBLIC_PDD_REPO_DIR)/docs
 	@cp docs/prompt-driven-development-doctrine.md $(PUBLIC_PDD_REPO_DIR)/docs/
+	@echo "Copying demo video to public repo"
+	@mkdir -p $(PUBLIC_PDD_REPO_DIR)/docs/videos
+	@cp docs/videos/handpaint_demo.gif $(PUBLIC_PDD_REPO_DIR)/docs/videos/
 	@echo "Copying specific whitepaper files to public repo"
 	@mkdir -p $(PUBLIC_PDD_REPO_DIR)/docs/whitepaper_with_benchmarks/analysis_report
 	@mkdir -p $(PUBLIC_PDD_REPO_DIR)/docs/whitepaper_with_benchmarks/creation_report

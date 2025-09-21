@@ -78,6 +78,11 @@ include = ["pdd*"]
     "*.sh"
 ]
 
+[tool.setuptools.data-files]
+"utils" = [
+    "utils/pdd-setup.py"
+]
+
 [project.optional-dependencies]
 dev = [
     "commitizen",
