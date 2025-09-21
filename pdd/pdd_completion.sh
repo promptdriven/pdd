@@ -15,10 +15,10 @@ _pdd() {
     cword=$COMP_CWORD
 
     # Global options
-    local global_opts="--force --strength --time --temperature --verbose --quiet --output-cost --review-examples --local --help --version"
+    local global_opts="--force --strength --time --temperature --verbose --quiet --output-cost --review-examples --local --context --list-contexts --help --version"
 
     # Commands
-    local commands="generate example test preprocess fix split change update detect conflicts crash trace bug auto-deps verify"
+    local commands="generate example test preprocess fix split change update detect conflicts crash trace bug auto-deps verify sync setup install_completion pytest-output"
 
     # Command-specific options
     local generate_opts="--output --original-prompt --incremental --env -e"
@@ -36,6 +36,8 @@ _pdd() {
     local bug_opts="--output --language"
     local auto_deps_opts="--output --csv --force-scan"
     local verify_opts="--output-results --output-code --output-program --max-attempts --budget"
+    local sync_opts="--max-attempts --budget --skip-verify --skip-tests --target-coverage --log"
+    local pytest_output_opts="--json-only"
 
     # Complete global options before command
     if [[ $cword -eq 1 ]]; then
@@ -140,6 +142,20 @@ _pdd() {
             _complete_files
             _complete_files
             COMPREPLY+=($(compgen -W "$verify_opts" -- "$cur"))
+            ;;
+        sync)
+            # BASENAME (not a file), offer options
+            COMPREPLY+=($(compgen -W "$sync_opts" -- "$cur"))
+            ;;
+        setup)
+            # no command-specific options
+            ;;
+        install_completion)
+            # no command-specific options
+            ;;
+        pytest-output)
+            _complete_files
+            COMPREPLY+=($(compgen -W "$pytest_output_opts" -- "$cur"))
             ;;
         *)
             COMPREPLY=($(compgen -W "$global_opts" -- "$cur"))
