@@ -13,6 +13,9 @@ import click # Import click for UsageError
 # Adjust import if necessary based on project structure
 from pdd import cli, __version__, DEFAULT_STRENGTH, DEFAULT_TIME
 
+
+RUN_ALL_TESTS_ENABLED = os.getenv("PDD_RUN_ALL_TESTS") == "1"
+
 # Import fix_verification_main to mock
 # NOTE: fix_verification_main is imported in cli.py, so mocking pdd.cli.fix_verification_main is correct
 # from pdd.fix_verification_main import fix_verification_main # Not needed directly in test
@@ -912,8 +915,7 @@ def test_cli_setup_command(mock_auto_update, mock_install, mock_run, _mock_remin
     mock_auto_update.assert_called_once_with()
     mock_install.assert_called_once_with(quiet=False)
 
-    expected_script = Path(cli.__file__).resolve().parent.parent / "utils" / "pdd-setup.py"
-    mock_run.assert_called_once_with([sys.executable, str(expected_script)])
+    mock_run.assert_called_once_with([sys.executable, "-m", "pdd.setup_tool"])
     assert "Setup completed" in result.output
 
 
@@ -983,8 +985,11 @@ def test_cli_onboarding_reminder_suppressed_by_api_env(monkeypatch, runner, tmp_
 
 def test_real_generate_command(create_dummy_files, tmp_path):
     """Test the 'generate' command with real files by calling the function directly."""
-    if not os.getenv("PDD_RUN_REAL_LLM_TESTS"):
-        pytest.skip("Real LLM integration tests require network/API access.")
+    if not (os.getenv("PDD_RUN_REAL_LLM_TESTS") or RUN_ALL_TESTS_ENABLED):
+        pytest.skip(
+            "Real LLM integration tests require network/API access; set "
+            "PDD_RUN_REAL_LLM_TESTS=1 or use --run-all / PDD_RUN_ALL_TESTS=1."
+        )
 
     import sys
     import click
@@ -1071,8 +1076,11 @@ def add(a, b):
 @pytest.mark.real
 def test_real_fix_command(create_dummy_files, tmp_path):
     """Test the 'fix' command with real files by calling the function directly."""
-    if not os.getenv("PDD_RUN_REAL_LLM_TESTS"):
-        pytest.skip("Real LLM integration tests require network/API access.")
+    if not (os.getenv("PDD_RUN_REAL_LLM_TESTS") or RUN_ALL_TESTS_ENABLED):
+        pytest.skip(
+            "Real LLM integration tests require network/API access; set "
+            "PDD_RUN_REAL_LLM_TESTS=1 or use --run-all / PDD_RUN_ALL_TESTS=1."
+        )
 
     import sys
     import click
@@ -1536,8 +1544,11 @@ def test_cli_verify_command_env_var_output_program(mock_fix_verification, mock_c
 @pytest.mark.real
 def test_real_verify_command(create_dummy_files, tmp_path):
     """Test the 'verify' command with real files by calling the function directly."""
-    if not os.getenv("PDD_RUN_REAL_LLM_TESTS"):
-        pytest.skip("Real LLM integration tests require network/API access.")
+    if not (os.getenv("PDD_RUN_REAL_LLM_TESTS") or RUN_ALL_TESTS_ENABLED):
+        pytest.skip(
+            "Real LLM integration tests require network/API access; set "
+            "PDD_RUN_REAL_LLM_TESTS=1 or use --run-all / PDD_RUN_ALL_TESTS=1."
+        )
 
     import sys
     import click

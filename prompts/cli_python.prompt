@@ -159,7 +159,7 @@
         <include>context/fix_verification_main_example.py</include>
         </verify_main_example>
         
-        - `setup` command: Expose an interactive bootstrap flow that installs shell completions and gathers API keys by invoking the existing `install_completion` helper and the `utils/pdd-setup.py` entry point.
+        - `setup` command: Expose an interactive bootstrap flow that installs shell completions and gathers API keys by invoking the existing `install_completion` helper and the packaged `pdd.setup_tool` module.
 
         - `install_completion` command: The core logic is implemented in the `install_completion` function, defined in a separate module. Pass `quiet=ctx.obj['quiet']` to reduce noise. Here's how to use `install_completion` and `get_local_pdd_path`:
         <install_completion_example>
