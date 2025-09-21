@@ -82,6 +82,8 @@ include = ["pdd*"]
 dev = [
     "commitizen",
     "pytest-cov",
+    "pytest-testmon",
+    "pytest-xdist",
     "pytest-mock",
     "pytest-asyncio",
     "z3-solver",
