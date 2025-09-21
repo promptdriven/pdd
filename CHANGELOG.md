@@ -1,5 +1,13 @@
 ## v0.0.58 (2025-09-21)
 
+### Docs & Demos
+
+- Embed a new hand-paint workflow demo GIF in the README and sync the asset into the public repo alongside the full video recording.
+
+### Packaging
+
+- Bundle the interactive setup utility as `pdd.setup_tool` and invoke it via `python -m pdd.setup_tool` so `pdd setup` works after wheel installs (pip/uv).
+
 ## v0.0.57 (2025-09-19)
 
 ### CLI & Templates

@@ -6,6 +6,8 @@ import pytest
 from unittest.mock import patch, Mock
 from pdd.unfinished_prompt import unfinished_prompt, PromptAnalysis
 
+RUN_ALL_TESTS_ENABLED = os.getenv("PDD_RUN_ALL_TESTS") == "1"
+
 # Define a mock response for llm_invoke
 mock_llm_response = {
     'result': {
@@ -294,16 +296,20 @@ def test_unfinished_prompt_marks_complete_python_as_finished(monkeypatch):
 
 
 @pytest.mark.skipif(
-    os.getenv("PDD_RUN_LLM_TESTS") != "1",
-    reason="Integration test requires live LLM access; set PDD_RUN_LLM_TESTS=1 to run.",
+    os.getenv("PDD_RUN_LLM_TESTS") != "1" and not RUN_ALL_TESTS_ENABLED,
+    reason=(
+        "Integration test requires live LLM access; set PDD_RUN_LLM_TESTS=1 "
+        "or use --run-all / PDD_RUN_ALL_TESTS=1 to run."
+    ),
 )
 def test_unfinished_prompt_llm_marks_complete_python_as_finished_integration():
     """
     Integration-style check using the actual prompt + llm_invoke.
 
     Skipped by default to keep unit tests deterministic and offline.
-    Run with PDD_RUN_LLM_TESTS=1 (and valid LLM credentials) to verify the
-    model+preset prompt judge syntactically complete Python as finished.
+    Run with PDD_RUN_LLM_TESTS=1 (or pass --run-all / set PDD_RUN_ALL_TESTS=1,
+    along with valid LLM credentials) to verify the model+preset prompt judge
+    syntactically complete Python as finished.
     """
     # Arrange
     repo_root = Path(__file__).resolve().parents[1]
@@ -332,8 +338,11 @@ def test_unfinished_prompt_llm_marks_complete_python_as_finished_integration():
 
 
 @pytest.mark.skipif(
-    os.getenv("PDD_RUN_LLM_TESTS") != "1",
-    reason="Integration test requires live LLM access; set PDD_RUN_LLM_TESTS=1 to run.",
+    os.getenv("PDD_RUN_LLM_TESTS") != "1" and not RUN_ALL_TESTS_ENABLED,
+    reason=(
+        "Integration test requires live LLM access; set PDD_RUN_LLM_TESTS=1 "
+        "or use --run-all / PDD_RUN_ALL_TESTS=1 to run."
+    ),
 )
 def test_unfinished_prompt_marks_tail_with_closing_fence_as_finished():
     """
@@ -366,8 +375,11 @@ def test_unfinished_prompt_marks_tail_with_closing_fence_as_finished():
 
 
 @pytest.mark.skipif(
-    os.getenv("PDD_RUN_LLM_TESTS") != "1",
-    reason="Integration test requires live LLM access; set PDD_RUN_LLM_TESTS=1 to run.",
+    os.getenv("PDD_RUN_LLM_TESTS") != "1" and not RUN_ALL_TESTS_ENABLED,
+    reason=(
+        "Integration test requires live LLM access; set PDD_RUN_LLM_TESTS=1 "
+        "or use --run-all / PDD_RUN_ALL_TESTS=1 to run."
+    ),
 )
 def test_unfinished_prompt_marks_mid_block_tail_without_dangling_as_finished():
     """
