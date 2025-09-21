@@ -1,5 +1,22 @@
 ## v0.0.59 (2025-09-21)
 
+### CLI & Setup
+
+- Update `pdd setup` to invoke the packaged interactive tool via `python -m pdd.setup_tool`, simplifying onboarding and avoiding path issues.
+- Remove the deprecated `pdd-setup.py` from distribution (drop MANIFEST/data-files entry).
+
+### Testing
+
+- Add `--run-all` pytest option (exports `PDD_RUN_ALL_TESTS=1`) to run the full suite including integration tests.
+- Add dev dependencies `pytest-testmon` and `pytest-xdist` for faster, selective, and parallel test runs.
+- Ignore Testmon cache (`.testmon*`) in `.gitignore`.
+
+### Tooling
+
+- Add `pyrightconfig.json` and update VS Code settings.
+
+Thankes James Levine and Parth Patil for identifying and root causing the setup issue.
+
 ## v0.0.58 (2025-09-21)
 
 ### Docs & Demos
