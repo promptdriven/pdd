@@ -188,3 +188,6 @@ cython_debug/
 edit-file-tool/
 
 staging/
+
+# Testmon cache
+.testmon*
