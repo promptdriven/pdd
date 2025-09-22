@@ -33,7 +33,8 @@ Learn more:
 
 ## Requirements
 
-- Visual Studio Code (or Cursor) 1.96+ recommended
+- Visual Studio Code 1.96+ or Cursor (recommended)
+- Compatible with both VS Code and Cursor editors
 
 ## PDD CLI Installation
 
