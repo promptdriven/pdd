@@ -27,6 +27,7 @@ from .change_main import change_main
 from .cmd_test_main import cmd_test_main
 from .code_generator_main import code_generator_main
 from .conflicts_main import conflicts_main
+from .config_main import config_main
 # Need to import construct_paths for tests patching pdd.cli.construct_paths
 from .construct_paths import construct_paths, list_available_contexts
 from .context_generator_main import context_generator_main
@@ -1554,6 +1555,24 @@ def setup_cmd(ctx: click.Context) -> None:
             console.print("[success]Setup completed. Restart your shell or source your RC file to apply changes.[/success]")
     except Exception as exc:
         handle_error(exc, command_name, quiet_mode)
+
+
+@cli.command("config")
+@click.argument("directory", required=False, type=click.Path(exists=True, file_okay=False, dir_okay=True))
+@click.pass_context
+@track_cost
+def config(ctx: click.Context, directory: str | None) -> tuple[str, float, str] | None:
+    """Create a project-specific .pdd configuration directory and API key file."""
+    quiet = ctx.obj.get("quiet", False)
+    command_name = "config"
+    try:
+        result_data, total_cost, model_name = config_main(
+            directory=directory,
+        )
+        return result_data, total_cost, model_name
+    except Exception as e:
+        handle_error(e, command_name, quiet)
+        return None
 
 
 # --- Entry Point ---
