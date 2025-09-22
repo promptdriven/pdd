@@ -1422,8 +1422,8 @@ PDD automatically detects the appropriate context based on:
 
 **Available Context Settings**:
 - `generate_output_path`: Where generated code files are saved
-- `example_output_path`: Where example files are saved
 - `test_output_path`: Where test files are saved
+- `example_output_path`: Where example files are saved
 - `default_language`: Default programming language for the context
 - `target_coverage`: Default test coverage target
 - `strength`: Default AI model strength (0.0-1.0)
