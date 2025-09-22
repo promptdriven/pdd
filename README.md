@@ -1244,7 +1244,7 @@ Arguments:
 
 Options:
 - `--output LOCATION`: Specify where to save the modified prompt file with dependencies inserted. The default file name is `<basename>_with_deps.prompt`. If an environment variable `auto_deps_output_path` is set, the file will be saved in that path unless overridden by this option.
-- `--csv FILENAME`: Specify the CSV file that contains or will contain dependency information. Default is "project_dependencies.csv". If the environment variable`auto_deps_csv_path` is set, that path will be used unless overridden by this option.
+- `--csv FILENAME`: Specify the CSV file that contains or will contain dependency information. Default is "project_dependencies.csv". If the environment variable `auto_deps_csv_path` is set, that path will be used unless overridden by this option.
 - `--force-scan`: Force rescanning of all potential dependency files even if they exist in the CSV file.
 
 The command maintains a CSV file with the following columns:
