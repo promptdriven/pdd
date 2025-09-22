@@ -1,7 +1,7 @@
 {
   "name": "prompt-highlighter",
   "displayName": "Prompt Driven Development",
-  "description": "VS Code syntax highlighting for .prompt files (Prompt‑Driven Development, AI prompts)",
+  "description": "Syntax highlighting for .prompt files in VS Code and Cursor (Prompt‑Driven Development, AI prompts)",
   "version": "0.0.1",
   "engines": {
     "vscode": "^1.96.0"
@@ -78,7 +78,8 @@
     "openai",
     "anthropic",
     "gemini",
-    "chatgpt"
+    "chatgpt",
+    "cursor"
   ],
   "scripts": {
     "package": "vsce package",
