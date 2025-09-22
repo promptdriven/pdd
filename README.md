@@ -156,6 +156,29 @@ source ~/.zshrc  # or source ~/.bashrc / fish equivalent
 
 👉 If you prefer to configure things manually, see [SETUP_WITH_GEMINI.md](SETUP_WITH_GEMINI.md) for full instructions on obtaining a Gemini API key and creating your own `~/.pdd/llm_model.csv`.
 
+### Project-Specific Configuration (pdd config)
+
+  You can create a project-specific configuration that overrides your global
+  ~/.pdd settings. This is useful for managing different API keys or model
+  preferences for different projects.
+
+  To set up a local configuration, navigate to your project's root directory and
+  run:
+
+   1 pdd config
+
+  This command will create a .pdd directory in your current folder and guide you
+  through an interactive setup process:
+
+   1. It scans for existing API keys in your environment (variables ending in
+      _API_KEY).
+   2. It asks you which of the discovered keys you want to use for this project.
+   3. If no keys are found, it will prompt you to enter them manually.
+
+  Based on your selections, it generates a project-specific llm_model.csv file
+  inside the .pdd directory, ensuring that any pdd commands run from that
+  directory will use your local configuration.
+
 5. **Run Hello**:
    ```bash
    cd ../hello
