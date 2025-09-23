@@ -111,7 +111,7 @@ pip install pdd-cli
 
 
 
-## 🚀 Quickstart (Hello Example)
+## Quickstart (Hello Example)
 
 If you’re brand new to PDD, follow these steps to see it in action.
 
@@ -163,7 +163,7 @@ source ~/.zshrc  # or source ~/.bashrc / fish equivalent
    python3 hello.py
    ```
 
-    ✅ Expected output:
+    Expected output:
     ```
     hello
     ```
