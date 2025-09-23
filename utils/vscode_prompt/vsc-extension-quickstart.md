@@ -41,6 +41,10 @@ Install locally:
 
 - VS Code: `code --install-extension prompt-<version>.vsix`
 - Cursor: `cursor --install-extension prompt-<version>.vsix`
+- VSCodium: `codium --install-extension prompt-<version>.vsix`
+- Kiro: Use the extension manager or CLI equivalent
+- Windsurf: Use the extension manager or CLI equivalent
+- Other OpenVSX-compatible IDEs: Use the extension manager or CLI equivalent
 
 Tips:
 
