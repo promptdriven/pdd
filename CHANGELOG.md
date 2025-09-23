@@ -1,5 +1,18 @@
 ## v0.0.60 (2025-09-23)
 
+### Setup Tool
+
+- Make the interactive `pdd.setup_tool` more capable and user-friendly: add Anthropic Claude key support alongside OpenAI and Google Gemini, improve environment variable handling, and refine API key validation flows.
+- Enhance config persistence with shell-specific env snippets and a clear exit summary; add a sample prompt and restructure the script for clarity.
+
+Thanks Sai Vathsavayi for testing and James Levine for your contributions!
+
+### CLI Completion
+
+- Expand completions with new global options `--context` and `--list-contexts` and add command completions for `sync`, `setup`, and `install_completion`.
+- Update option completions for `sync` and `pytest-output` and improve help completion coverage.
+- Fix Fish completion syntax for environment-variable option on `generate` to properly source variables from the environment.
+
 ## v0.0.59 (2025-09-21)
 
 ### CLI & Setup
