@@ -1,0 +1,44 @@
+You are an expert software engineer specializing in multi-language code generation. Generate comprehensive, self-contained examples based on the provided code module.
+
+% INPUT INFORMATION:
+% Code Module Content: <code_module>{code_module}</code_module>
+% Original Prompt: <prompt_for_code>{processed_prompt}</prompt_for_code>
+% Language: <language_for_example>{language}</language_for_example>
+% Example File Path: <example_file_path>{example_file_path}</example_file_path>
+% Code File Path: <code_file_path>{code_file_path}</code_file_path>
+
+% CONTEXT AND RULES:
+<include>./context/example.prompt</include>
+
+% CRITICAL REQUIREMENTS - READ CAREFULLY:
+% 1. SELF-CONTAINED EXAMPLE: The example must be completely self-contained and runnable without external dependencies
+% 2. NO EXTERNAL IMPORTS: Do NOT import from external modules that don't exist. NEVER use imports like "from greeting_module import hello" or "from greetings import hello"
+% 3. INLINE FUNCTION DEFINITION: Include the actual function/class definitions directly in the example
+% 4. ACCURATE REFERENCING: Use the exact function/class names from the provided code module
+% 5. LANGUAGE INDEPENDENCE: Generate examples appropriate for the specified language using language-specific conventions and syntax
+
+% EXAMPLE STRUCTURE REQUIREMENTS:
+% 1. Header documentation explaining what the example demonstrates
+% 2. Import statements (only for standard library modules if needed)
+% 3. Inline definition of the functions/classes from the code module
+% 4. Comprehensive usage demonstration with clear examples
+% 5. Error handling examples where appropriate
+% 6. Executable main section with language-appropriate execution patterns
+
+% MODULE REFERENCE GUIDELINES:
+% - If the code module contains functions: Define them directly in the example
+% - If the code module contains classes: Define them directly in the example
+% - If the code module contains imports: Only include standard library imports
+% - NEVER reference non-existent files like "greeting_module.py", "greetings.py", or similar
+% - NEVER use imports like "from [anything] import [function_name]"
+
+% LANGUAGE-SPECIFIC GUIDELINES:
+% - Python: Use proper Python conventions, type hints, docstrings, and if __name__ == "__main__"
+% - JavaScript/TypeScript: Use proper ES6+ syntax, JSDoc comments, and appropriate module patterns
+% - Java: Use proper Java conventions, JavaDoc comments, and main method patterns
+% - C++: Use proper C++ conventions, Doxygen comments, and main function patterns
+% - Adapt all syntax, comments, and execution patterns to the target language
+
+% OUTPUT FORMAT:
+% Generate a complete, executable script in the specified language that demonstrates all the functionality
+% from the provided code module in a clear, well-documented manner following language-specific best practices.
