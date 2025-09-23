@@ -9,6 +9,8 @@ import sys
 import subprocess
 import json
 import requests
+import csv
+import importlib.resources
 from pathlib import Path
 from typing import Dict, Optional, Tuple, List
 
@@ -44,16 +46,22 @@ Write a python script to print "You did it, <Username>!!!" to the console.
 Do not write anything except that message.   
 Capitalize the username."""
 
-LLM_MODEL_CSV_TEMPLATE = """provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type
-OpenAI,gpt-5-nano,0.05,0.4,1249,,OPENAI_API_KEY,0,True,none
-Google,gemini/gemini-2.5-flash,0.15,0.6,1290,,GEMINI_API_KEY,0,True,none
-Google,gemini/gemini-2.5-pro,1.25,10.0,1360,,GEMINI_API_KEY,0,True,none
-OpenAI,gpt-5-mini,0.25,2.0,1325,,OPENAI_API_KEY,0,True,effort
-OpenAI,gpt-5,1.25,10.0,1482,,OPENAI_API_KEY,0,True,effort
-OpenAI,gpt-4.1,2.0,8.0,1253,,OPENAI_API_KEY,0,True,none
-Anthropic,anthropic/claude-sonnet-4-20250514,3.0,15.0,1356,,ANTHROPIC_API_KEY,64000,True,budget
-Anthropic,anthropic/claude-opus-4-1-20250805,3.0,15.0,1474,,ANTHROPIC_API_KEY,32000,True,budget
-Anthropic,anthropic/claude-3-5-haiku-20241022,3.0,15.0,1133,,ANTHROPIC_API_KEY,8192,True,budget"""
+def _read_packaged_llm_model_csv() -> Tuple[List[str], List[Dict[str, str]]]:
+    """Load the packaged CSV (pdd/data/llm_model.csv) and return header + rows.
+
+    Returns:
+        (header_fields, rows) where header_fields is the list of column names
+        and rows is a list of dictionaries for each CSV row.
+    """
+    try:
+        csv_text = importlib.resources.files('pdd').joinpath('data/llm_model.csv').read_text()
+    except Exception as e:
+        raise FileNotFoundError(f"Failed to load default LLM model CSV from package: {e}")
+
+    reader = csv.DictReader(csv_text.splitlines())
+    header = reader.fieldnames or []
+    rows = [row for row in reader]
+    return header, rows
 
 def print_colored(text: str, color: str = WHITE, bold: bool = False) -> None:
     """Print colored text to console"""
@@ -98,20 +106,35 @@ def print_pdd_logo():
     print()
 
 def get_csv_variable_names() -> Dict[str, str]:
-    """Parse CSV template to get the actual variable names used"""
-    csv_lines = LLM_MODEL_CSV_TEMPLATE.strip().split('\n')
-    variable_names = {}
-    
-    for line in csv_lines[1:]:  # Skip header
-        if 'OPENAI_API_KEY' in line:
-            variable_names['OPENAI'] = 'OPENAI_API_KEY'
-        elif 'GEMINI_API_KEY' in line:
-            variable_names['GOOGLE'] = 'GEMINI_API_KEY'
-        elif 'GOOGLE_API_KEY' in line:
-            variable_names['GOOGLE'] = 'GOOGLE_API_KEY'
-        elif 'ANTHROPIC_API_KEY' in line:
-            variable_names['ANTHROPIC'] = 'ANTHROPIC_API_KEY'
-    
+    """Inspect packaged CSV to determine API key variable names per provider.
+
+    Focus on direct providers only: OpenAI GPT models (model startswith 'gpt-'),
+    Google Gemini (model startswith 'gemini/'), and Anthropic (model startswith 'anthropic/').
+    """
+    header, rows = _read_packaged_llm_model_csv()
+    variable_names: Dict[str, str] = {}
+
+    for row in rows:
+        model = (row.get('model') or '').strip()
+        api_key = (row.get('api_key') or '').strip()
+        provider = (row.get('provider') or '').strip().upper()
+
+        if not api_key:
+            continue
+
+        if model.startswith('gpt-') and provider == 'OPENAI':
+            variable_names['OPENAI'] = api_key
+        elif model.startswith('gemini/') and provider == 'GOOGLE':
+            # Prefer direct Gemini key, not Vertex
+            variable_names['GOOGLE'] = api_key
+        elif model.startswith('anthropic/') and provider == 'ANTHROPIC':
+            variable_names['ANTHROPIC'] = api_key
+
+    # Fallbacks if not detected (keep prior behavior)
+    variable_names.setdefault('OPENAI', 'OPENAI_API_KEY')
+    # Prefer GEMINI_API_KEY name for Google if present
+    variable_names.setdefault('GOOGLE', 'GEMINI_API_KEY')
+    variable_names.setdefault('ANTHROPIC', 'ANTHROPIC_API_KEY')
     return variable_names
 
 def discover_api_keys() -> Dict[str, Optional[str]]:
@@ -327,22 +350,37 @@ def save_configuration(valid_keys: Dict[str, str]) -> Tuple[List[str], bool, Opt
     api_env_file.chmod(0o755)
     saved_files.append(str(api_env_file))
     
-    # Create llm_model.csv with only valid providers
-    csv_lines = LLM_MODEL_CSV_TEMPLATE.strip().split('\n')
-    header = csv_lines[0]
-    valid_lines = [header]
-    
-    for line in csv_lines[1:]:
-        if 'OPENAI_API_KEY' in line and 'OPENAI_API_KEY' in valid_keys:
-            valid_lines.append(line)
-        elif ('GEMINI_API_KEY' in line and 'GEMINI_API_KEY' in valid_keys) or \
-             ('GOOGLE_API_KEY' in line and 'GOOGLE_API_KEY' in valid_keys):
-            valid_lines.append(line)
-        elif 'ANTHROPIC_API_KEY' in line and 'ANTHROPIC_API_KEY' in valid_keys:
-            valid_lines.append(line)
-    
+    # Create llm_model.csv with models from packaged CSV filtered by provider and available keys
+    header_fields, rows = _read_packaged_llm_model_csv()
+
+    # Keep only direct Google Gemini (model startswith 'gemini/'), OpenAI GPT (gpt-*) and Anthropic (anthropic/*)
+    def _is_supported_model(row: Dict[str, str]) -> bool:
+        model = (row.get('model') or '').strip()
+        if model.startswith('gpt-'):
+            return True
+        if model.startswith('gemini/'):
+            return True
+        if model.startswith('anthropic/'):
+            return True
+        return False
+
+    # Filter rows by supported models and by api_key presence in valid_keys
+    filtered_rows: List[Dict[str, str]] = []
+    for row in rows:
+        if not _is_supported_model(row):
+            continue
+        api_key_name = (row.get('api_key') or '').strip()
+        # Include only if we have a validated key for this row
+        if api_key_name and api_key_name in valid_keys:
+            filtered_rows.append(row)
+
+    # Write out the filtered CSV to ~/.pdd/llm_model.csv preserving column order
     llm_model_file = pdd_dir / 'llm_model.csv'
-    llm_model_file.write_text('\n'.join(valid_lines) + '\n')
+    with llm_model_file.open('w', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=header_fields)
+        writer.writeheader()
+        for row in filtered_rows:
+            writer.writerow({k: row.get(k, '') for k in header_fields})
     saved_files.append(str(llm_model_file))
     
     # Update shell init file
@@ -608,4 +646,3 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         print_colored("\n\nSetup cancelled.", YELLOW)
         sys.exit(0)
-
