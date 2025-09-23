@@ -17,6 +17,7 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
     :param output: Optional path to save the generated example code.
     :return: A tuple containing the generated example code, total cost, and model name used.
     """
+    verbose = ctx.obj.get('verbose', False)
     try:
         # Construct file paths
         input_file_paths = {
