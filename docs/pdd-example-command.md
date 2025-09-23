@@ -100,7 +100,6 @@ def run_example() -> None:
     # is to print "hello" to the console.
     hello()
 
-    print("...function call complete.")
 
 # The `if __name__ == "__main__"` block is standard Python practice.
 # It ensures the code inside only runs when the script is executed directly.
