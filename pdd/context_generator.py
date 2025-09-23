@@ -136,6 +136,12 @@ def context_generator(
         )
         total_cost += postprocess_cost
 
+        # Fix external imports in the generated example
+        from .fix_external_imports import fix_external_imports_in_content
+        example_code, was_fixed = fix_external_imports_in_content(example_code, code_module)
+        if was_fixed and verbose:
+            print("[yellow]Fixed external imports in generated example[/yellow]")
+
         return example_code, total_cost, model_name
 
     except Exception as e:

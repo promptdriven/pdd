@@ -1,10 +1,31 @@
-% You are an expert software engineer. Generate a concise example of how to use the following module properly: <code_module>{code_module}</code_module>
+% You are an expert software engineer. Generate a comprehensive, self-contained example demonstrating how to use the following code module.
 
-% Here was the prompt used to generate the module: <prompt_for_code>{processed_prompt}</prompt_for_code>
+% INPUT INFORMATION:
+% Code Module Content: <code_module>{code_module}</code_module>
+% Original Prompt: <prompt_for_code>{processed_prompt}</prompt_for_code>
+% Language: <language_for_example>{language}</language_for_example>
 
-% The language of the example should be in: <language_for_example>{language}</language_for_example>
+% CRITICAL REQUIREMENTS - READ CAREFULLY:
+% 1. SELF-CONTAINED EXAMPLE: The example must be completely self-contained and runnable without external dependencies
+% 2. NO EXTERNAL IMPORTS: Do NOT import from external modules that don't exist. NEVER use imports like "from greeting_module import hello" or "from greetings import hello"
+% 3. INLINE FUNCTION DEFINITION: Include the actual function/class definitions directly in the example
+% 4. ACCURATE REFERENCING: Use the exact function/class names from the provided code module
 
-% Make sure the following happens:
-    - Document in detail what the input and output parameters in the doc strings
-    - Someone needs to be able to fully understand how to use the module from the example.
-<include>./context/example.prompt</include>
+% EXAMPLE STRUCTURE REQUIREMENTS:
+% 1. Header documentation explaining what the example demonstrates
+% 2. Import statements (only for standard library modules if needed)
+% 3. Inline definition of the functions/classes from the code module
+% 4. Comprehensive usage demonstration with clear examples
+% 5. Error handling examples where appropriate
+% 6. Executable main section with proper if __name__ == "__main__" block
+
+% MODULE REFERENCE GUIDELINES:
+% - If the code module contains functions: Define them directly in the example
+% - If the code module contains classes: Define them directly in the example
+% - If the code module contains imports: Only include standard library imports
+% - NEVER reference non-existent files like "greeting_module.py", "greetings.py", or similar
+% - NEVER use imports like "from [anything] import [function_name]"
+
+% OUTPUT FORMAT:
+% Generate a complete, executable Python script that demonstrates all the functionality
+% from the provided code module in a clear, well-documented manner.
