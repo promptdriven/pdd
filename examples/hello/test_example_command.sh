@@ -41,10 +41,33 @@ echo
 if [ -f "test_output.py" ]; then
     echo "Generated example file contents:"
     echo "=================================="
-    cat test_output.py
+    head -20 test_output.py
     echo "=================================="
     echo
-    echo "To run the example: python test_output.py"
+    echo "Testing if the example runs correctly..."
+    
+    # Test if the example runs
+    if python test_output.py >/dev/null 2>&1; then
+        echo "✅ Example runs successfully!"
+        echo "Output:"
+        python test_output.py
+    else
+        echo "❌ Example failed to run. Checking for common issues..."
+        
+        # Check for import issues
+        if grep -q "from.*import" test_output.py; then
+            echo "Found import statements. This might cause issues if the imported module doesn't exist."
+            echo "You may need to fix the imports manually or run the fix script."
+        fi
+        
+        echo "To debug: python test_output.py"
+    fi
 else
     echo "No output file was created (likely due to API key or quota issues)"
 fi
+
+echo
+echo "If you have issues with the generated example, you can:"
+echo "1. Run the fix script: python fix_example.py"
+echo "2. Manually edit the example to remove problematic imports"
+echo "3. Ensure the example is self-contained and doesn't depend on external modules"
