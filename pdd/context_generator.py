@@ -136,11 +136,18 @@ def context_generator(
         )
         total_cost += postprocess_cost
 
-        # Fix external imports in the generated example
-        from .fix_external_imports import fix_external_imports_in_content
-        example_code, was_fixed = fix_external_imports_in_content(example_code, code_module)
-        if was_fixed and verbose:
-            print("[yellow]Fixed external imports in generated example[/yellow]")
+        # Apply language-specific fixes
+        if language.lower() == "python":
+            # Fix external imports in Python examples
+            from .fix_external_imports import fix_external_imports_in_content
+            example_code, was_fixed = fix_external_imports_in_content(example_code, code_module)
+            if was_fixed and verbose:
+                print("[yellow]Fixed external imports in generated Python example[/yellow]")
+        # Future language-specific fixes can be added here:
+        # elif language.lower() == "javascript":
+        #     # Fix JavaScript-specific issues
+        # elif language.lower() == "java":
+        #     # Fix Java-specific issues
 
         return example_code, total_cost, model_name
 
