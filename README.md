@@ -2151,7 +2151,7 @@ PDD offers integrations to streamline its use within your development environmen
 
 ### VS Code Extension
 
-A dedicated VS Code extension (`utils/vscode_prompt`) provides syntax highlighting, snippets, and potentially other features for working with `.prompt` files directly within the editor. Refer to the [extension's README](utils/vscode_prompt/README.md) for installation and usage details.
+A dedicated VS Code extension (`utils/vscode_prompt`) provides syntax highlighting, snippets, and potentially other features for working with `.prompt` files directly within the editor. The extension is compatible with all OpenVSX-compatible IDEs including VS Code, Cursor, VSCodium, Gitpod, Kiro, Windsurf, and other editors that support the OpenVSX marketplace. Refer to the [extension's README](utils/vscode_prompt/README.md) for installation and usage details.
 
 ### MCP Server (for Agentic Clients)
 
