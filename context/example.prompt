@@ -1,0 +1,66 @@
+# Example Generation Rules and Guidelines
+
+## Core Principles for Example Generation
+
+### 1. Self-Contained Examples
+- Examples must be completely self-contained and runnable without external dependencies
+- All function/class definitions must be inlined within the example
+- Never import from external modules that don't exist - this prevents import errors
+- Include all necessary imports for standard library modules only
+- Use proper import syntax for the target language (import/require/include/etc.)
+- Handle all language-specific syntax correctly in the first generation
+
+### 2. Comprehensive Documentation
+- Document in detail what the input and output parameters are in docstrings
+- Someone needs to be able to fully understand how to use the module from the example
+- Include clear usage demonstrations with multiple scenarios
+- Provide error handling examples where appropriate
+
+### 3. Language Independence
+- Examples should work for any programming language (Python, JavaScript, TypeScript, Java, C++, etc.)
+- Use language-appropriate syntax and conventions
+- Include language-specific best practices and patterns
+- Handle imports/dependencies appropriately for each language
+- Generate correct syntax on first attempt - avoid needing post-processing fixes
+- Use proper language-specific comment styles (//, /* */, #, //, etc.)
+
+### 4. Professional Quality
+- Follow language-specific coding standards and conventions
+- Include proper error handling and validation
+- Use meaningful variable names and clear comments
+- Structure code with clear sections and logical flow
+
+### 5. Executable Structure
+- Include proper main execution blocks (e.g., `if __name__ == "__main__"` for Python)
+- Make examples immediately runnable with clear output
+- Demonstrate both success cases and error scenarios
+- Include cleanup code where necessary
+
+### 6. Educational Value
+- Examples should teach users how to use the functionality effectively
+- Include comments explaining why certain approaches are used
+- Show best practices and common patterns
+- Demonstrate edge cases and error conditions
+
+## Implementation Guidelines
+
+### Input Validation
+- Always validate inputs in examples
+- Show how to handle invalid inputs gracefully
+- Demonstrate proper error messages and exception handling
+
+### Output Formatting
+- Use clear, readable output formatting
+- Include helpful status messages and progress indicators
+- Format data appropriately for the target language
+
+### Error Handling
+- Include comprehensive error handling examples
+- Show both expected and unexpected error scenarios
+- Demonstrate proper exception handling patterns
+- Include cleanup code in error scenarios
+
+### Testing and Verification
+- Include verification steps in examples
+- Show how to validate that operations completed successfully
+- Demonstrate testing of edge cases and boundary conditions

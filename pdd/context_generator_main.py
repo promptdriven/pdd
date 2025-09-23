@@ -40,6 +40,9 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
         prompt_content = input_strings["prompt_file"]
         code_content = input_strings["code_file"]
 
+        # Save results - if output is a directory, use resolved file path from construct_paths
+        resolved_output = output_file_paths["output"]
+        
         # Generate example code
         strength = ctx.obj.get('strength', 0.5)
         temperature = ctx.obj.get('temperature', 0)
@@ -51,11 +54,10 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
             strength=strength,
             temperature=temperature,
             time=time,
-            verbose=ctx.obj.get('verbose', False)
+            verbose=ctx.obj.get('verbose', False),
+            example_file_path=resolved_output,
+            code_file_path=code_file
         )
-
-        # Save results - if output is a directory, use resolved file path from construct_paths
-        resolved_output = output_file_paths["output"]
         if output is None:
             final_output_path = resolved_output
         else:

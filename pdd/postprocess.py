@@ -7,57 +7,61 @@ from . import DEFAULT_TIME, DEFAULT_STRENGTH
 
 def _apply_language_specific_fixes(code: str, language: str, verbose: bool = False) -> str:
     """
-    Apply language-specific fixes to generated code.
+    Apply language-independent fixes to generated code.
     
-    This function provides a clean, extensible way to add language-specific
-    post-processing to generated code examples.
+    Since we now use prompt-based solutions to prevent issues like external imports
+    and syntax errors, this function focuses on minimal, universal fixes that
+    can apply to any programming language.
     
     Args:
         code: The generated code to fix
-        language: The programming language of the code
+        language: The programming language of the code (for logging purposes)
         verbose: Whether to print verbose messages
         
     Returns:
         The fixed code
     """
-    if language.lower() == "python":
-        return _fix_python_code(code, verbose)
-    # Future language-specific fixes can be added here:
-    # elif language.lower() == "javascript":
-    #     return _fix_javascript_code(code, verbose)
-    # elif language.lower() == "java":
-    #     return _fix_java_code(code, verbose)
-    # elif language.lower() == "cpp" or language.lower() == "c++":
-    #     return _fix_cpp_code(code, verbose)
+    # Apply minimal, universal fixes
+    code = _apply_universal_fixes(code, verbose)
+    
+    if verbose:
+        print(f"[green]Applied language-independent fixes for {language}[/green]")
     
     return code
 
 
-def _fix_python_code(code: str, verbose: bool = False) -> str:
+def _apply_universal_fixes(code: str, verbose: bool = False) -> str:
     """
-    Apply Python-specific fixes to generated code.
+    Apply universal fixes that work across all programming languages.
+    
+    These are minimal fixes for common issues that can occur in any language,
+    such as double keywords or basic syntax errors.
     
     Args:
-        code: The Python code to fix
+        code: The generated code to fix
         verbose: Whether to print verbose messages
         
     Returns:
-        The fixed Python code
+        The fixed code
     """
-    try:
-        from .fix_external_imports import fix_external_imports_in_content
-        # Note: We don't have access to the original code_module here,
-        # so we'll just fix the double def issue and external imports
-        fixed_code, was_fixed = fix_external_imports_in_content(code, "")
-        if was_fixed and verbose:
-            print("[yellow]Fixed external imports in generated Python example[/yellow]")
-        return fixed_code
-    except ImportError as e:
-        if verbose:
-            print(f"[yellow]Warning: Could not import fix_external_imports: {e}[/yellow]")
-    except Exception as e:
-        if verbose:
-            print(f"[yellow]Warning: Error applying Python fixes: {e}[/yellow]")
+    import re
+    
+    # Fix double keywords that can occur in any language
+    # This pattern catches common double declarations across languages
+    double_keyword_pattern = r'\b(def|function|class|public|private|protected|static|const|let|var)\s+\1\b'
+    
+    original_code = code
+    code = re.sub(double_keyword_pattern, r'\1', code)
+    
+    if verbose and code != original_code:
+        print("[yellow]Fixed double keyword declarations in generated code[/yellow]")
+    
+    # Fix common whitespace issues that can occur in any language
+    # Remove excessive blank lines (more than 2 consecutive)
+    code = re.sub(r'\n\s*\n\s*\n+', '\n\n', code)
+    
+    # Fix trailing whitespace on lines
+    code = re.sub(r'[ \t]+$', '', code, flags=re.MULTILINE)
     
     return code
 
