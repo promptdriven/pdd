@@ -14,7 +14,7 @@ help:
 	@echo "  thumb     - Build images/video-thumb.png from YouTube cover"
 	@echo "  package   - Create $(VSIX) using vsce (or npx @vscode/vsce)"
 	@echo "  publish   - Publish to Marketplace (requires VSCODE_PAT)"
-	@echo "  install   - Local install of $(VSIX) into VS Code (or Insiders/Codium/Cursor)"
+	@echo "  install   - Local install of $(VSIX) into VS Code (or Insiders/Codium/Cursor/Kiro/Windsurf/other OpenVSX-compatible IDEs)"
 	@echo "  uninstall - Remove installed extension ($(EXT_ID)) from local editor(s)"
 	@echo "  reinstall - Uninstall then install the built VSIX"
 	@echo "  verify    - Quick sanity check of package.json"
@@ -51,7 +51,7 @@ install: package
 	    exit 0; \
 	  fi; \
 	done; \
-	echo "No supported editor CLI found (code/code-insiders/codium/cursor)."; \
+	echo "No supported editor CLI found (code/code-insiders/codium/cursor/kiro/windsurf/other OpenVSX-compatible IDEs)."; \
 	exit 1
 
 uninstall:

@@ -33,8 +33,21 @@ Learn more:
 
 ## Requirements
 
-- Visual Studio Code 1.96+ or Cursor (recommended)
-- Compatible with both VS Code and Cursor editors
+- Visual Studio Code 1.96+ or any OpenVSX-compatible IDE
+- Compatible with VS Code, Cursor, VSCodium, Gitpod, Kiro, Windsurf, and other OpenVSX-compatible editors
+
+## Installation
+
+### VS Code Marketplace
+Install directly from the VS Code marketplace in VS Code or compatible editors.
+
+### OpenVSX Marketplace
+For OpenVSX-compatible IDEs (VSCodium, Gitpod, Kiro, Windsurf, etc.), install from the OpenVSX marketplace:
+- VSCodium: Search for "Prompt Driven Development" in the Extensions view
+- Gitpod: Available through the OpenVSX marketplace integration
+- Kiro: Available through the OpenVSX marketplace integration
+- Windsurf: Available through the OpenVSX marketplace integration
+- Other OpenVSX-compatible editors: Use the OpenVSX marketplace URL
 
 ## PDD CLI Installation
 
