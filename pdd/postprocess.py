@@ -5,6 +5,63 @@ from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
 from . import DEFAULT_TIME, DEFAULT_STRENGTH
 
+def _apply_language_specific_fixes(code: str, language: str, verbose: bool = False) -> str:
+    """
+    Apply language-specific fixes to generated code.
+    
+    This function provides a clean, extensible way to add language-specific
+    post-processing to generated code examples.
+    
+    Args:
+        code: The generated code to fix
+        language: The programming language of the code
+        verbose: Whether to print verbose messages
+        
+    Returns:
+        The fixed code
+    """
+    if language.lower() == "python":
+        return _fix_python_code(code, verbose)
+    # Future language-specific fixes can be added here:
+    # elif language.lower() == "javascript":
+    #     return _fix_javascript_code(code, verbose)
+    # elif language.lower() == "java":
+    #     return _fix_java_code(code, verbose)
+    # elif language.lower() == "cpp" or language.lower() == "c++":
+    #     return _fix_cpp_code(code, verbose)
+    
+    return code
+
+
+def _fix_python_code(code: str, verbose: bool = False) -> str:
+    """
+    Apply Python-specific fixes to generated code.
+    
+    Args:
+        code: The Python code to fix
+        verbose: Whether to print verbose messages
+        
+    Returns:
+        The fixed Python code
+    """
+    try:
+        from .fix_external_imports import fix_external_imports_in_content
+        # Note: We don't have access to the original code_module here,
+        # so we'll just fix the double def issue and external imports
+        fixed_code, was_fixed = fix_external_imports_in_content(code, "")
+        if was_fixed and verbose:
+            print("[yellow]Fixed external imports in generated Python example[/yellow]")
+        return fixed_code
+    except ImportError as e:
+        if verbose:
+            print(f"[yellow]Warning: Could not import fix_external_imports: {e}[/yellow]")
+    except Exception as e:
+        if verbose:
+            print(f"[yellow]Warning: Error applying Python fixes: {e}[/yellow]")
+    
+    return code
+
+
 class ExtractedCode(BaseModel):
     """Pydantic model for the extracted code."""
     extracted_code: str = Field(description="The extracted code from the LLM output")
@@ -110,6 +167,9 @@ def postprocess(
             lines = lines[:-1]
         
         final_code = '\n'.join(lines)
+
+        # Step 3d: Apply language-specific fixes
+        final_code = _apply_language_specific_fixes(final_code, language, verbose)
 
         if verbose:
             print("[green]Successfully extracted code[/green]")

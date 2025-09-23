@@ -17,7 +17,7 @@ def fix_external_imports_in_content(content: str, original_code: str) -> Tuple[s
     
     Args:
         content: The generated example content
-        original_code: The original code module content
+        original_code: The original code module content (can be empty string if not available)
         
     Returns:
         Tuple of (fixed_content, was_fixed)
@@ -41,15 +41,23 @@ def fix_external_imports_in_content(content: str, original_code: str) -> Tuple[s
         if module_name in ['os', 'sys', 'json', 'datetime', 'pathlib', 'typing', 'collections', 'itertools']:
             continue
             
-        # Extract the function definition from original code
-        function_def = _extract_function_definition(original_code, function_name)
-        
-        if function_def:
-            # Replace the import with the inline function definition
-            content = content.replace(match.group(0), function_def)
-            was_fixed = True
+        # If we have original code, try to extract the function definition
+        if original_code:
+            function_def = _extract_function_definition(original_code, function_name)
+            
+            if function_def:
+                # Replace the import with the inline function definition
+                content = content.replace(match.group(0), function_def)
+                was_fixed = True
+            else:
+                # If we can't find the function definition, replace with a comment
+                content = content.replace(
+                    match.group(0), 
+                    f"# {function_name} function definition (import from {module_name} removed)"
+                )
+                was_fixed = True
         else:
-            # If we can't find the function definition, replace with a comment
+            # If no original code available, just replace with a comment
             content = content.replace(
                 match.group(0), 
                 f"# {function_name} function definition (import from {module_name} removed)"
