@@ -1180,7 +1180,7 @@ pdd generate --template frontend/nextjs_architecture_json \
 
 ### 3. example
 
-Create a compact example demonstrating how to use functionality defined in a prompt. Similar to a header file or API documentation, this produces minimal, token-efficient code that shows the interface without implementation details.
+Create a comprehensive example demonstrating how to use functionality defined in a prompt. This produces well-documented, self-contained, executable scripts that serve as practical usage guides.
 
 ```
 pdd [GLOBAL OPTIONS] example [OPTIONS] PROMPT_FILE CODE_FILE
@@ -1192,6 +1192,15 @@ Arguments:
 
 Options:
 - `--output LOCATION`: Specify where to save the generated example code. The default file name is `<basename>_example.<language_file_extension>`. If an environment variable `PDD_EXAMPLE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+
+**Quick Start Example:**
+```bash
+cd examples/hello
+export GEMINI_API_KEY=your_api_key
+pdd example hello_python.prompt pdd/hello.py
+```
+
+For detailed usage instructions, see [PDD Example Command Documentation](docs/pdd-example-command.md).
 
 Where used:
 - Dependency references: Examples serve as lightweight (token efficient) interface references for other prompts and can be included as dependencies of a generate target.
