@@ -1540,6 +1540,36 @@ def install_completion_cmd(ctx: click.Context) -> None: # Return type remains No
         # Do not return anything, as the callback expects None or a tuple
 
 
+@cli.group("firecrawl-cache")
+def firecrawl_cache_group():
+    """Manage Firecrawl web scraping cache to reduce API credit usage."""
+    pass
+
+@firecrawl_cache_group.command("stats")
+def firecrawl_cache_stats():
+    """Show Firecrawl cache statistics."""
+    from .firecrawl_cache_cli import stats
+    stats()
+
+@firecrawl_cache_group.command("clear")
+def firecrawl_cache_clear():
+    """Clear all cached Firecrawl entries."""
+    from .firecrawl_cache_cli import clear
+    clear()
+
+@firecrawl_cache_group.command("info")
+def firecrawl_cache_info():
+    """Show Firecrawl cache configuration and environment variables."""
+    from .firecrawl_cache_cli import info
+    info()
+
+@firecrawl_cache_group.command("check")
+@click.option('--url', help='URL to check in cache')
+def firecrawl_cache_check(url):
+    """Check if a specific URL is cached."""
+    from .firecrawl_cache_cli import check
+    check(url)
+
 @cli.command("setup")
 @click.pass_context
 def setup_cmd(ctx: click.Context) -> None:
