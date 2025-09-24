@@ -830,7 +830,8 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "8" ]; then
     
     # Test sync with non-existent basename (may succeed as no-op)
     log "8a. Testing sync with non-existent basename"
-    run_pdd_command_noexit sync "nonexistent_module"
+    # Allow non-zero exit without aborting the script under 'set -e'
+    run_pdd_command_noexit sync "nonexistent_module" || true
     # Check that no files were actually generated for non-existent module
     if [ -f "pdd/nonexistent_module.py" ]; then
         log_error "Files were generated for non-existent module (unexpected)"
@@ -843,8 +844,12 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "8" ]; then
     # Test sync with invalid options (budget validation)
     log "8b. Testing sync with invalid budget"
     # Test with negative budget - should be rejected
-    run_pdd_command_noexit sync --budget -1.0 "$SIMPLE_BASENAME"
-    budget_exit_code=$?
+    # Capture exit code in a set -e safe way
+    if run_pdd_command_noexit sync --budget -1.0 "$SIMPLE_BASENAME"; then
+        budget_exit_code=0
+    else
+        budget_exit_code=$?
+    fi
     if [ $budget_exit_code -ne 0 ]; then
         log "Sync properly rejected negative budget"
         log_timestamped "Validation success: Sync rejected invalid budget"
@@ -857,7 +862,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "8" ]; then
     log "8c. Testing sync with malformed prompt"
     MALFORMED_PROMPT="malformed_test_python.prompt"
     echo "This is not a proper prompt format without clear requirements" > "prompts/$MALFORMED_PROMPT"
-    run_pdd_command_noexit sync "malformed_test"
+    run_pdd_command_noexit sync "malformed_test" || true
     # Should handle gracefully but may not produce optimal results
 fi
 
