@@ -225,11 +225,11 @@ run_pdd_command_base() {
     done
 
     # Append globals (if any), then subcommand and its args
-    if [ "${#global_ctx_args[@]:-0}" -gt 0 ]; then
+    if [ "${#global_ctx_args[@]}" -gt 0 ]; then
         cmd_array+=("${global_ctx_args[@]}")
     fi
     cmd_array+=("$command_name")
-    if [ "${#sub_args[@]:-0}" -gt 0 ]; then
+    if [ "${#sub_args[@]}" -gt 0 ]; then
         cmd_array+=("${sub_args[@]}")
     fi
 

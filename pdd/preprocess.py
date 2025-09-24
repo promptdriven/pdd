@@ -210,8 +210,8 @@ def double_curly(text: str, exclude_keys: Optional[List[str]] = None) -> str:
             "2": {{"id": "2", "name": "Resource Two"}}
         }}"""
     
-    # Protect ${IDENT} placeholders so they remain unchanged
-    # Use placeholders that won't collide with typical content
+    # Protect ${IDENT} placeholders so we can safely double braces, then restore
+    # them as ${{IDENT}} to avoid PromptTemplate interpreting {IDENT}.
     protected_vars: List[str] = []
     def _protect_var(m):
         protected_vars.append(m.group(0))
@@ -235,10 +235,22 @@ def double_curly(text: str, exclude_keys: Optional[List[str]] = None) -> str:
     # Restore already doubled brackets
     text = re.sub(r'__ALREADY_DOUBLED__(.*?)__END_ALREADY__', r'{{\1}}', text)
 
-    # Restore protected ${IDENT} placeholders
+    # Restore protected ${IDENT} placeholders as ${{IDENT}} so single braces
+    # don't leak into PromptTemplate formatting. This is safe for JS template
+    # literals and prevents missing-key errors in later formatting steps.
     def _restore_var(m):
         idx = int(m.group(1))
-        return protected_vars[idx] if 0 <= idx < len(protected_vars) else m.group(0)
+        if 0 <= idx < len(protected_vars):
+            original = protected_vars[idx]  # e.g., ${FOO}
+            try:
+                inner = re.match(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", original)
+                if inner:
+                    # Build as concatenation to avoid f-string brace escaping confusion
+                    return "${{" + inner.group(1) + "}}"  # -> ${{FOO}}
+            except Exception:
+                pass
+            return original
+        return m.group(0)
     text = re.sub(r"__PDD_VAR_(\d+)__", _restore_var, text)
     
     # Special handling for code blocks

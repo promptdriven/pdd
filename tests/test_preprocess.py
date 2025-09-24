@@ -129,6 +129,22 @@ def test_double_curly_brackets() -> None:
 
     assert preprocess(prompt, recursive=False, double_curly_brackets=True) == expected_output
 
+def test_include_js_doubles_curly_braces() -> None:
+    """Including a JS file with {x} should result in {{x}} after preprocess.
+
+    This simulates the case where an included renderer.js/main.js introduces
+    a single-brace placeholder that must be escaped before PromptTemplate.
+    """
+    prompt = "Before <include>./renderer.js</include> After"
+    js_content = "function f(x) { return {x}; }\nconst obj = { a: 1, b: 2 };\n"
+    expected_inner = "function f(x) {{ return {{x}}; }}\nconst obj = {{ a: 1, b: 2 }};\n"
+    expected = f"Before {expected_inner} After"
+
+    with patch('builtins.open', mock_open(read_data=js_content)):
+        result = preprocess(prompt, recursive=False, double_curly_brackets=True)
+
+    assert result == expected
+
 # Test for excluding keys from doubling curly brackets
 def test_exclude_keys_from_doubling() -> None:
     """Test excluding specific keys from doubling curly brackets."""
@@ -342,10 +358,64 @@ def build_config():
 
     processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
     assert processed == expected
-def test_double_curly_preserves_braced_env_placeholders() -> None:
-    """Ensure ${IDENT} placeholders are not altered by double-curly processing."""
+
+def test_double_curly_brackets_javascript_code_block_destructuring_jsx() -> None:
+    """Ensure JS code blocks handle destructuring, object literals, and JSX."""
+    prompt = (
+        """```javascript
+const { x, y } = obj;
+const obj = { a: 1, b: 2 };
+function C() { return <div>{x}</div>; }
+```"""
+    )
+
+    expected = (
+        """```javascript
+const {{ x, y }} = obj;
+const obj = {{ a: 1, b: 2 }};
+function C() {{ return <div>{{x}}</div>; }}
+```"""
+    )
+
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+    assert processed == expected
+
+def test_double_curly_brackets_javascript_template_literals() -> None:
+    """Ensure simple ${x} is preserved and complex ${x + 1} is doubled safely."""
+    prompt = (
+        """```javascript
+const a = `Hello ${x}`;
+const b = `Sum ${x + 1}`;
+```"""
+    )
+
+    expected = (
+        """```javascript
+const a = `Hello ${{x}}`;
+const b = `Sum ${{x + 1}}`;
+```"""
+    )
+
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+    assert processed == expected
+
+def test_unfenced_template_literal_should_be_doubled_but_is_not():
+    """BUG REPRO: ${x} outside code fences is restored unchanged, leaving {x}.
+
+    Expected behavior (to avoid PromptTemplate errors): `${x}` should become `${{x}}`
+    when double_curly_brackets=True even outside fenced code blocks.
+
+    Current behavior: preprocess protects and restores ${x} unchanged, so this test
+    should FAIL until we harden double_curly to handle unfenced template literals.
+    """
+    prompt = "const a = `Hello ${x}`;"
+    expected = "const a = `Hello ${{x}}`;"
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+    assert processed == expected
+def test_double_curly_preserves_braced_env_placeholders_as_escaped() -> None:
+    """Ensure ${IDENT} placeholders are restored as ${{IDENT}} to avoid formatting issues."""
     prompt = "This has ${FOO} and {bar}"
-    expected_output = "This has ${FOO} and {{bar}}"
+    expected_output = "This has ${{FOO}} and {{bar}}"
     processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
     assert processed == expected_output
 
