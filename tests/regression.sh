@@ -260,11 +260,13 @@ run_pdd_command_base() {
     done
 
     # Assemble final command
-    if [ "${#global_ctx_args[@]:-0}" -gt 0 ]; then
+    # On macOS bash, using default expansion with length (:-0) is invalid.
+    # Arrays are initialized above, so plain length checks are safe.
+    if [ "${#global_ctx_args[@]}" -gt 0 ]; then
         cmd_array+=("${global_ctx_args[@]}")
     fi
     cmd_array+=("$command_name")
-    if [ "${#sub_args[@]:-0}" -gt 0 ]; then
+    if [ "${#sub_args[@]}" -gt 0 ]; then
         cmd_array+=("${sub_args[@]}")
     fi
 
