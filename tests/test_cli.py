@@ -862,6 +862,43 @@ def test_cli_chaining_with_no_cost_command():
     assert "Total Estimated Cost" in summary and "$0.111000" in summary
 
 
+def test_cli_result_callback_single_tuple_normalization():
+    """When Click passes a single 3-tuple, it should count as one step."""
+    lines = _capture_summary(
+        ['generate'],
+        # Simulate Click delivering a single 3-tuple rather than a list
+        ('generated code', 0.0040675, 'gpt-5-mini'),
+    )
+
+    summary = "\n".join(lines)
+    assert "Command Execution Summary" in summary
+    # Should show exactly one step associated with 'generate'
+    expected_cost = f"{0.0040675:.6f}"
+    assert f"Step 1 (generate):[/info] Cost: ${expected_cost}, Model: gpt-5-mini" in summary
+    # Should NOT emit Unknown Command 2/3 lines from mis-iterating over tuple elements
+    assert "Unknown Command 2" not in summary
+    assert "Unknown Command 3" not in summary
+    # No unexpected format warnings should be printed
+    assert "Unexpected result format" not in summary
+
+
+def test_cli_result_callback_non_tuple_result_warning():
+    """A non-tuple result should be wrapped and warned once, not split."""
+    lines = _capture_summary(
+        ['generate'],
+        # Simulate an unexpected scalar return type
+        "unexpected string result",
+    )
+
+    summary = "\n".join(lines)
+    assert "Command Execution Summary" in summary
+    # Should warn exactly once for step 1
+    assert "Step 1 (generate):[/warning] Unexpected result format: str" in summary
+    # No phantom Unknown Command entries
+    assert "Unknown Command 2" not in summary
+    assert "Unknown Command 3" not in summary
+
+
 # --- install_completion Command Test ---
 
 @patch('pdd.cli.auto_update') # Patch auto_update
