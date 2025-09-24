@@ -1,5 +1,32 @@
 ## v0.0.61 (2025-09-23)
 
+### VS Code Extension
+
+- Improve compatibility across OpenVSX‑compatible IDEs (VS Code, Cursor, VSCodium, Gitpod, Kiro, Windsurf). Update extension metadata, keywords, and docs to reflect broader support.
+
+### CLI
+
+- Normalize command result handling in `process_commands`: treat a single 3‑tuple as one step in the execution summary; wrap unexpected scalar results and warn once; keep total‑cost calculation correct. Add tests for these cases.
+
+### Prompts & Templates
+
+- Add `pdd/templates/generic/generate_prompt.prompt` with detailed variable descriptions and usage examples for generating module prompts.
+
+Thanks Sai Vathsavayi for altering me that this was missing!
+
+### Tests
+
+- CLI: expand `tests/test_cli.py` with coverage for single‑tuple normalization and non‑tuple result warnings.
+- Template registry: clarify behavior so packaged templates still list while project files with missing/malformed front matter are ignored.
+
+### Docs
+
+- README: note that the extension supports all OpenVSX‑compatible IDEs.
+- VS Code extension quickstart: add installation guidance for VSCodium, Kiro, Windsurf, and other OpenVSX‑compatible IDEs.
+
+Thanks Shrenya Mathur for your contributions on OpenVSX compatibility!
+
+
 ## v0.0.60 (2025-09-23)
 
 ### Setup Tool
