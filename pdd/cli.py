@@ -348,14 +348,26 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
                     invoked_subcommands = ctx.obj.get('invoked_subcommands', []) or []
             except Exception:
                 invoked_subcommands = []
-    results = results or []
+    # Normalize results: Click may pass a single return value (e.g., a 3-tuple)
+    # rather than a list of results. Wrap single 3-tuples so we treat them as
+    # one step in the summary instead of three separate items.
+    if results is None:
+        normalized_results: List[Any] = []
+    elif isinstance(results, list):
+        normalized_results = results
+    elif isinstance(results, tuple) and len(results) == 3:
+        normalized_results = [results]
+    else:
+        # Fallback: wrap any other scalar/iterable as a single result
+        normalized_results = [results]
+
     num_commands = len(invoked_subcommands)
-    num_results = len(results) # Number of results actually received
+    num_results = len(normalized_results)  # Number of results actually received
 
     if not ctx.obj.get("quiet"):
         console.print("\n[info]--- Command Execution Summary ---[/info]")
 
-    for i, result_tuple in enumerate(results):
+    for i, result_tuple in enumerate(normalized_results):
         # Use the retrieved subcommand name (might be "Unknown Command X" in tests)
         command_name = invoked_subcommands[i] if i < num_commands else f"Unknown Command {i+1}"
 
@@ -395,7 +407,7 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
 
     if not ctx.obj.get("quiet"):
         # Only print total cost if at least one command potentially contributed cost
-        if any(res is not None and isinstance(res, tuple) and len(res) == 3 for res in results):
+        if any(res is not None and isinstance(res, tuple) and len(res) == 3 for res in normalized_results):
             console.print(f"[info]Total Estimated Cost:[/info] ${total_cost:.6f}")
         # Indicate if the chain might have been incomplete due to errors
         if num_results < num_commands and not all(res is None for res in results): # Avoid printing if all failed
