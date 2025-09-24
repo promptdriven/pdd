@@ -181,10 +181,14 @@ def test_missing_front_matter_ignored_and_malformed_ignored(tmp_path, monkeypatc
     p2 = tmp_path / "prompts" / "badfm.prompt"
     bad_fm_body = "- just\n- a\n- list"
     p2.write_text(f"---\n{bad_fm_body}\n---\nbody\n", encoding="utf-8")
-    # No templates should be discovered
+    # Packaged templates should still be listed, but project files without
+    # valid front matter must be ignored
     items = tr.list_templates()
-    assert len(items) == 1
-    assert items[0]["name"] == "architecture/architecture_json"
+    names = {item["name"] for item in items}
+    assert "architecture/architecture_json" in names
+    # Ensure the malformed/missing front-matter files weren't indexed
+    assert "nofm" not in names
+    assert "badfm" not in names
 
 
 def test_filter_tag_case_insensitive(tmp_path, monkeypatch):
