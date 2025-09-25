@@ -50,8 +50,14 @@ cd pdd
 
 ### 4. Review Documentation
 
-1. Read through the [PDD Whitepaper](https://www.notion.so/Whitepaper-The-Case-for-Prompt-Driven-Development-1efd44f08ca480ac987ae068f2578f83) to understand the core concepts and architecture
-2. Review the [main README.md](https://github.com/gltanaka/pdd/blob/main/README.md) for project overview and setup instructions
+1. Read the Whitepaper to understand the core concepts and architecture:
+   - Local: pdd/docs/whitepaper.md
+   - Notion: https://www.notion.so/Whitepaper-The-Case-for-Prompt-Driven-Development-1efd44f08ca480ac987ae068f2578f83
+2. Review the main repository overview and setup instructions:
+   - Root README: README.md
+3. Learn how to write effective prompts for PDD:
+   - Prompting Guide: pdd/docs/prompting_guide.md
+   - PDD Doctrine (principles and guardrails): pdd/docs/prompt-driven-development-doctrine.md
 
 ### 5. Set Up Cursor IDE (*Optional but heavily recommended, Visual Studio Code or other similar IDE)
 

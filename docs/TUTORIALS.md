@@ -2,6 +2,10 @@
 
 This document provides step-by-step tutorials for common tasks in the PDD workflow.
 
+See also:
+- Prompting Guide: pdd/docs/prompting_guide.md
+- PDD Doctrine: pdd/docs/prompt-driven-development-doctrine.md
+
 ## How to Create a New Test Case
 
 Adding a new test case is a great way to improve the robustness of PDD. This guide will walk you through the process of creating **unit tests** - low-level tests that focus on testing individual functions and modules for robustness and functionality.
