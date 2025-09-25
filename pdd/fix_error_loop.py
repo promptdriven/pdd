@@ -22,75 +22,24 @@ def escape_brackets(text: str) -> str:
     """Escape square brackets so Rich doesn't misinterpret them."""
     return text.replace("[", "\\[").replace("]", "\\]")
 
+import pytest
+from .pytest_output import TestResultCollector
+
 def run_pytest_on_file(test_file: str) -> tuple[int, int, int, str]:
     """
-    Run pytest on the specified test file using subprocess.
+    Run pytest on the specified test file using the TestResultCollector plugin.
     Returns a tuple: (failures, errors, warnings, logs)
     """
-    try:
-        # Try using the pdd pytest-output command first (works with uv tool installs)
-        cmd = ["pdd", "pytest-output", "--json-only", test_file]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        
-        # If pdd command failed, try fallback approaches
-        if result.returncode != 0 and ("command not found" in result.stderr.lower() or "not found" in result.stderr.lower()):
-            # Fallback 1: Try direct function call (fastest for development)
-            try:
-                from .pytest_output import run_pytest_and_capture_output
-                pytest_output = run_pytest_and_capture_output(test_file)
-                result_stdout = json.dumps(pytest_output)
-                result = type('MockResult', (), {'stdout': result_stdout, 'stderr': '', 'returncode': 0})()
-            except ImportError:
-                # Fallback 2: Try python -m approach for development installs where pdd isn't in PATH
-                python_executable = detect_host_python_executable()
-                cmd = [python_executable, "-m", "pdd.pytest_output", "--json-only", test_file]
-                result = subprocess.run(cmd, capture_output=True, text=True)
-        
-        # Parse the JSON output from stdout
-        try:
-            # Extract just the JSON part from stdout (handles CLI contamination)
-            stdout_clean = result.stdout
-            json_start = stdout_clean.find('{')
-            if json_start == -1:
-                raise json.JSONDecodeError("No JSON found in output", stdout_clean, 0)
-            
-            # Find the end of the JSON object by counting braces
-            brace_count = 0
-            json_end = json_start
-            for i, char in enumerate(stdout_clean[json_start:], json_start):
-                if char == '{':
-                    brace_count += 1
-                elif char == '}':
-                    brace_count -= 1
-                    if brace_count == 0:
-                        json_end = i + 1
-                        break
-            
-            json_str = stdout_clean[json_start:json_end]
-            output = json.loads(json_str)
-            test_results = output.get('test_results', [{}])[0]
-            
-            # Check pytest's return code first
-            return_code = test_results.get('return_code', 1)
-            
-            failures = test_results.get('failures', 0)
-            errors = test_results.get('errors', 0)
-            warnings = test_results.get('warnings', 0)
-
-            if return_code == 2:
-                errors += 1
-            
-            # Combine stdout and stderr from the test results
-            logs = test_results.get('standard_output', '') + '\n' + test_results.get('standard_error', '')
-            
-            return failures, errors, warnings, logs
-            
-        except json.JSONDecodeError:
-            # If JSON parsing fails, return the raw output
-            return 1, 1, 0, f"Failed to parse pytest output:\n{result.stdout}\n{result.stderr}"
-            
-    except Exception as e:
-        return 1, 1, 0, f"Error running pytest: {str(e)}"
+    collector = TestResultCollector()
+    pytest.main([test_file], plugins=[collector])
+    logs, _ = collector.get_logs()
+    
+    # If there are any errors or failures, we should return a non-zero value
+    # to indicate that the test has failed.
+    if collector.errors > 0 or collector.failures > 0:
+        return collector.failures, collector.errors, collector.warnings, logs
+    
+    return 0, 0, collector.warnings, logs
 
 def format_log_for_output(log_structure):
     """
