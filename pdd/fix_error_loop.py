@@ -13,6 +13,8 @@ from rich.console import Console
 from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
 from . import DEFAULT_TIME # Import DEFAULT_TIME
 from .python_env_detector import detect_host_python_executable
+from .agentic_fix import run_agentic_fix
+
 
 console = Console()
 
@@ -140,7 +142,8 @@ def fix_error_loop(unit_test_file: str,
                    budget: float,
                    error_log_file: str = "error_log.txt",
                    verbose: bool = False,
-                   time: float = DEFAULT_TIME):
+                   time: float = DEFAULT_TIME,
+                   agentic_fallback: bool = False):
     """
     Attempt to fix errors in a unit test and corresponding code using repeated iterations, 
     counting only the number of times we actually call the LLM fix function. 
@@ -555,6 +558,22 @@ def fix_error_loop(unit_test_file: str,
     
     rprint(f"Improvement: {stats['improvement']['fails_reduced']} fails, {stats['improvement']['errors_reduced']} errors, {stats['improvement']['warnings_reduced']} warnings")
     rprint(f"Overall improvement: {stats['improvement']['percent_improvement']:.2f}%")
+
+    if not success and agentic_fallback:
+        success, _ = run_agentic_fix(
+            prompt_file=prompt,
+            code_file=code_file,
+            unit_test_file=unit_test_file,
+            error_log_file=error_log_file,
+        )
+        if success:
+            try:
+                with open(unit_test_file, "r") as f:
+                    final_unit_test = f.read()
+                with open(code_file, "r") as f:
+                    final_code = f.read()
+            except Exception as e:
+                rprint(f"[yellow]Warning: Could not read files after successful agentic fix: {e}[/yellow]")
 
     return success, final_unit_test, final_code, fix_attempts, total_cost, model_name
 

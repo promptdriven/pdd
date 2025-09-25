@@ -33,7 +33,8 @@ def fix_main(
     verification_program: Optional[str],
     max_attempts: int,
     budget: float,
-    auto_submit: bool
+    auto_submit: bool,
+    agentic_fallback: bool = False
 ) -> Tuple[bool, str, str, int, float, str]:
     """
     Main function to fix errors in code and unit tests.
@@ -120,7 +121,8 @@ def fix_main(
                 max_attempts=max_attempts,
                 budget=budget,
                 error_log_file=output_file_paths.get("output_results"),
-                verbose=verbose
+                verbose=verbose,
+                agentic_fallback=agentic_fallback
             )
         else:
             # Use fix_errors_from_unit_tests for single-pass fixing
