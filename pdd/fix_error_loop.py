@@ -83,6 +83,7 @@ def format_log_for_output(log_structure):
 
 def fix_error_loop(unit_test_file: str,
                    code_file: str,
+                   prompt_file: str,
                    prompt: str,
                    verification_program: str,
                    strength: float,
@@ -510,7 +511,7 @@ def fix_error_loop(unit_test_file: str,
 
     if not success and agentic_fallback:
         success, _ = run_agentic_fix(
-            prompt_file=prompt,
+            prompt_file=prompt_file,
             code_file=code_file,
             unit_test_file=unit_test_file,
             error_log_file=error_log_file,
