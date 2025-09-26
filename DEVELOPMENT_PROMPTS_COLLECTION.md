@@ -29,7 +29,6 @@ REQUIREMENTS:
 
 TECHNICAL CONTEXT:
 - Issue #52: Enhance pdd example with richer sections + default output path
-- Issue #64: Documentation for pdd example command
 - Current behavior: Examples go to current working directory by default
 - Desired behavior: Examples go to examples/ directory by default
 - Import problem: LLM generates incorrect module names in import statements
@@ -43,7 +42,7 @@ IMPLEMENTATION APPROACH:
 
 ### **4. API Configuration with Specific Model**
 ```
-Set GEMINI_API_KEY="AIzaSyBb9VqwWVKSUNTBzJWGAeAklYmZgq_5QMI" for testing the enhanced pdd example command with Gemini 2.5 Pro model.
+Set GEMINI_API_KEY="[YOUR_API_KEY]" for testing the enhanced pdd example command with Gemini 2.5 Pro model.
 ```
 
 ### **5. Functionality Verification with Specific Test**
@@ -123,7 +122,7 @@ Remove specific file types and directories:
 ```
 Create a new feature branch with descriptive naming:
 - Branch name: 'fix/enhance-pdd-example-imports' 
-- Reference issues: #52, #64
+- Reference issues: #52
 - Include specific functionality: import fix + default output path
 - Ensure branch name clearly indicates the purpose
 ```
