@@ -1,0 +1,1 @@
+Create a Python script that defines a function `calculate_sum` which takes a list of numbers and returns their sum. The script should also include a main execution block that calls this function with a sample list and prints the result.

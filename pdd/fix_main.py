@@ -53,7 +53,7 @@ def fix_main(
         max_attempts: Maximum number of fix attempts
         budget: Maximum cost allowed for fixing
         auto_submit: Whether to auto-submit example if tests pass
-
+        
     Returns:
         Tuple containing:
         - Success status (bool)
@@ -113,6 +113,7 @@ def fix_main(
             success, fixed_unit_test, fixed_code, attempts, total_cost, model_name = fix_error_loop(
                 unit_test_file=unit_test_file,
                 code_file=code_file,
+                prompt_file=prompt_file,
                 prompt=input_strings["prompt_file"],
                 verification_program=verification_program,
                 strength=strength,
