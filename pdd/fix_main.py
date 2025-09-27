@@ -53,7 +53,7 @@ def fix_main(
         max_attempts: Maximum number of fix attempts
         budget: Maximum cost allowed for fixing
         auto_submit: Whether to auto-submit example if tests pass
-        
+        agentic_fallback: Whether the cli agent fallback is triggered
     Returns:
         Tuple containing:
         - Success status (bool)
