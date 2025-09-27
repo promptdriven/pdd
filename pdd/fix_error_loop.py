@@ -509,7 +509,7 @@ def fix_error_loop(unit_test_file: str,
     rprint(f"Improvement: {stats['improvement']['fails_reduced']} fails, {stats['improvement']['errors_reduced']} errors, {stats['improvement']['warnings_reduced']} warnings")
     rprint(f"Overall improvement: {stats['improvement']['percent_improvement']:.2f}%")
 
-    if not success and agentic_fallback:
+    if not success and agentic_fallback and total_cost < budget:
         success, _ = run_agentic_fix(
             prompt_file=prompt_file,
             code_file=code_file,
