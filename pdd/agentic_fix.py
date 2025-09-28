@@ -62,14 +62,15 @@ def _end_marker(path: Path) -> str:
 def get_agent_command(provider: str, instruction_file: Path) -> List[str]:
     p = provider.lower()
     if p == "anthropic":
-        # Claude CLI supports a small shell-repl with /implement
-        return ["claude", "sh", "-c", f"/implement {instruction_file.resolve()}"]
+        # Claude: stdin prompt to the `claude` binary
+        return ["claude"]
     if p == "google":
-        # Gemini CLI shim that reads instruction file
+        # Gemini CLI reads instruction file path
         return ["gemini", "implement", str(instruction_file.resolve())]
     if p == "openai":
-        # We'll call codex in a few non-interactive variants below
-        return ["codex"]
+        # OpenAI Codex CLI: use non-interactive exec mode
+        # Add --skip-git-repo-check to allow running in pytest temp dirs
+        return ["codex", "exec", "--skip-git-repo-check"]
     return []
 
 def find_llm_csv_path() -> Optional[Path]:
@@ -178,6 +179,11 @@ def _print_diff(old: str, new: str, path: Path) -> None:
     _print_head("Unified diff (first lines)", text)
 
 def _extract_corrected_from_output(stdout: str, stderr: str, code_path: Path) -> Optional[str]:
+    """
+    Extract corrected file content printed between <<<BEGIN_FILE:...>>> ... <<<END_FILE:...>>>.
+    Prefer matches that are not the placeholder from our instructions, and prefer the *last* match,
+    because many CLIs echo our prompt before emitting the real answer.
+    """
     resolved = code_path.resolve()
     abs_path = str(resolved)
     real_path = str(Path(abs_path).resolve())
@@ -196,12 +202,29 @@ def _extract_corrected_from_output(stdout: str, stderr: str, code_path: Path) ->
         _pattern_for(just_name),
     ]
 
-    for blob in (stdout or "", stderr or ""):
+    # Collect ALL matches from both streams
+    matches: List[str] = []
+    for blob in [stdout or "", stderr or ""]:
         for pat in candidates:
-            m = pat.search(blob)
-            if m:
-                return m.group(1)
-    return None
+            for m in pat.finditer(blob):
+                body = (m.group(1) or "").strip()
+                if body:
+                    matches.append(body)
+
+    if not matches:
+        return None
+
+    # Filter out the placeholder we include in instructions
+    placeholder_token = "FULL CORRECTED FILE CONTENT HERE"
+    filtered = [b for b in matches if placeholder_token.lower() not in b.lower()]
+
+    # Prefer the last valid match (model output usually comes after echoed prompt)
+    if filtered:
+        return filtered[-1]
+
+    # Fallback to the last match if all we saw were placeholders
+    return matches[-1]
+
 
 def _run_cli(cmd: List[str], cwd: Path, timeout: int) -> subprocess.CompletedProcess:
     return subprocess.run(
@@ -213,8 +236,8 @@ def _run_cli(cmd: List[str], cwd: Path, timeout: int) -> subprocess.CompletedPro
         cwd=str(cwd),
     )
 
-# --- OpenAI (codex) non-interactive variants ---
-def _sanitized_env_for_openai() -> dict:
+# --- Anthropic (Claude) helper (stdin) ---
+def _sanitized_env_for_claude() -> dict:
     env = os.environ.copy()
     env["TERM"] = "dumb"
     env["CI"] = "1"
@@ -222,56 +245,19 @@ def _sanitized_env_for_openai() -> dict:
     env["CLICOLOR"] = "0"
     env["CLICOLOR_FORCE"] = "0"
     env["FORCE_COLOR"] = "0"
-    env["SHELL"] = "/bin/sh"
-    env["COLUMNS"] = env.get("COLUMNS", "80")
-    env["LINES"] = env.get("LINES", "40")
-    # prevent bash completion spew
-    for k in list(env.keys()):
-        if k.startswith("COMP_") or k in ("BASH_COMPLETION", "BASH_COMPLETION_COMPAT_DIR", "BASH_VERSION", "BASH", "ZDOTDIR", "ZSH_NAME", "ZSH_VERSION"):
-            env.pop(k, None)
-    env["DISABLE_AUTO_COMPLETE"] = "1"
-    env["OPENAI_CLI_NO_TTY"] = "1"
-    env["OPENAI_CLI_NO_COLOR"] = "1"
     return env
 
-def _run_cli_args_openai(args: List[str], cwd: Path, timeout: int) -> subprocess.CompletedProcess:
-    env = _sanitized_env_for_openai()
+def _run_claude_with_stdin(prompt_text: str, cwd: Path, timeout: int) -> subprocess.CompletedProcess:
     return subprocess.run(
-        args,
+        ["claude"],
+        input=prompt_text,
         capture_output=True,
         text=True,
         check=False,
         timeout=timeout,
         cwd=str(cwd),
-        env=env,
+        env=_sanitized_env_for_claude(),
     )
-
-def _run_openai_variants(prompt_text: str, cwd: Path, total_timeout: int, label: str) -> subprocess.CompletedProcess:
-    wrapper = (
-        "You must ONLY output the corrected file content wrapped EXACTLY between "
-        "the two markers I provide. No commentary. "
-    )
-    full = wrapper + "\n\n" + prompt_text
-
-    variants = [
-        ["codex", full, "completion"],
-        ["codex", full, "p"],
-        ["codex", full],
-    ]
-    per_attempt = max(8, min(30, total_timeout // 2))
-    last = None
-    for v in variants:
-        try:
-            _verbose(f"[cyan]OpenAI variant ({label}): {' '.join(v[:2])} ...[/cyan]")
-            last = _run_cli_args_openai(v, cwd, per_attempt)
-            if last.stdout or last.stderr or last.returncode == 0:
-                return last
-        except subprocess.TimeoutExpired:
-            _info(f"[yellow]OpenAI variant timed out: {' '.join(v[:2])} ...[/yellow]")
-            continue
-    if last is None:
-        return subprocess.CompletedProcess(variants[-1], 124, stdout="", stderr="timeout")
-    return last
 
 # --- main execution helpers ---
 def _try_harvest_then_verify(
@@ -297,7 +283,23 @@ def _try_harvest_then_verify(
     _print_head("Harvest-only instruction preview", harvest_instr)
 
     if provider == "openai":
-        res = _run_openai_variants(harvest_instr, cwd, max(60, _AGENT_CALL_TIMEOUT // 3), "harvest")
+        # Use codex exec: pass entire prompt as a single argument (non-interactive)
+        try:
+            res = _run_cli(get_agent_command(provider, harvest_file) + [harvest_instr],
+                           cwd, max(60, _AGENT_CALL_TIMEOUT // 3))
+        except subprocess.TimeoutExpired:
+            _info("[yellow]OpenAI harvest-only attempt timed out.[/yellow]")
+            try: harvest_file.unlink()
+            except Exception: pass
+            return False
+    elif provider == "anthropic":
+        try:
+            res = _run_claude_with_stdin(harvest_instr, cwd, max(60, _AGENT_CALL_TIMEOUT // 2))
+        except subprocess.TimeoutExpired:
+            _info(f"[yellow]Anthropic harvest-only attempt timed out.[/yellow]")
+            try: harvest_file.unlink()
+            except Exception: pass
+            return False
     else:
         try:
             res = _run_cli(get_agent_command(provider, harvest_file), cwd, max(60, _AGENT_CALL_TIMEOUT // 2))
@@ -422,10 +424,8 @@ def run_agentic_fix(
                 _info(f"[yellow]Skipping {provider.capitalize()} (CLI '{binary}' not found in PATH).[/yellow]")
                 continue
 
-            # Strategy:
-            # - Google & OpenAI: harvest-first (printing markers is reliable)
-            # - Anthropic: try primary first; if no change, try harvest-only too.
-            if provider in ("google", "openai"):
+            # Strategy: harvest-first for all providers (reliable marker path)
+            if provider in ("google", "openai", "anthropic"):
                 if _try_harvest_then_verify(provider, code_path, unit_test_file, orig_code, test_content, error_content, cwd):
                     try: instruction_file.unlink()
                     except Exception: pass
@@ -435,7 +435,11 @@ def run_agentic_fix(
             # primary instruction path
             try:
                 if provider == "openai":
-                    res = _run_openai_variants(primary_instr, cwd, max(30, _AGENT_CALL_TIMEOUT // 2), "primary")
+                    # codex exec: pass the full instruction text as a single arg
+                    res = _run_cli(get_agent_command(provider, instruction_file) + [primary_instr],
+                                   cwd, max(30, _AGENT_CALL_TIMEOUT // 2))
+                elif provider == "anthropic":
+                    res = _run_claude_with_stdin(primary_instr, cwd, _AGENT_CALL_TIMEOUT)
                 else:
                     res = _run_cli(cmd, cwd, _AGENT_CALL_TIMEOUT)
             except subprocess.TimeoutExpired:
@@ -445,27 +449,16 @@ def run_agentic_fix(
             _print_head(f"{provider.capitalize()} stdout", res.stdout)
             _print_head(f"{provider.capitalize()} stderr", res.stderr)
 
-            # If agent printed corrected file, apply it
             harvested = _extract_corrected_from_output(res.stdout, res.stderr, code_path.resolve())
             if harvested is not None:
                 _info("[cyan]Detected corrected file content in agent output (primary attempt). Applying patch...[/cyan]")
                 code_path.write_text(harvested, encoding="utf-8")
 
-            # Diff to see if file changed (some agents may write directly)
             new_code = code_path.read_text(encoding="utf-8")
             _print_diff(orig_code, new_code, code_path)
 
-            # If no change AND agent didn't return 0, try harvest-only (Claude path)
-            if provider == "anthropic" and new_code == orig_code and res.returncode != 0:
-                if _try_harvest_then_verify(provider, code_path, unit_test_file, orig_code, test_content, error_content, cwd):
-                    try: instruction_file.unlink()
-                    except Exception: pass
-                    return True, "Agentic fix successful with Anthropic (harvest)."
-                # reload for next provider
-                new_code = code_path.read_text(encoding="utf-8")
-
-            # Verify if agent claims success or code changed
-            proceed_to_verify = (res.returncode == 0) or (new_code != orig_code)
+            # Only verify if code changed or we harvested a file
+            proceed_to_verify = (new_code != orig_code) or (harvested is not None)
             if proceed_to_verify and _VERIFY_AFTER_AGENT:
                 _info("[cyan]Verifying agent fix by running the test file...[/cyan]")
                 verify = subprocess.run(
@@ -484,7 +477,14 @@ def run_agentic_fix(
                     except Exception: pass
                     return True, f"Agentic fix successful with {provider.capitalize()}."
 
-            # prepare for next agent
+            # Anthropic: if no change, try harvest-only again
+            if provider == "anthropic" and new_code == orig_code:
+                if _try_harvest_then_verify(provider, code_path, unit_test_file, orig_code, test_content, error_content, cwd):
+                    try: instruction_file.unlink()
+                    except Exception: pass
+                    return True, "Agentic fix successful with Anthropic (harvest retry)."
+                new_code = code_path.read_text(encoding="utf-8")
+
             orig_code = new_code
             _info(f"[yellow]{provider.capitalize()} attempt did not yield a passing test. Trying next...[/yellow]")
 

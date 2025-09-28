@@ -146,7 +146,16 @@ def test_real_claude_agent(tmp_path, monkeypatch):
         pytest.xfail("Claude run hit hard timeout.")
     assert ok, f"Claude should succeed via agent. msg={msg}"
     fixed = (project / "src" / "utils.py").read_text(encoding="utf-8")
-    assert ".get(" in fixed and "['name']" not in fixed
+
+    # Accept either dict.get(...) or try/except guarding KeyError
+    assert (".get(" in fixed) or ("except KeyError" in fixed), \
+        "Agent must either use dict.get(...) or guard KeyError with try/except."
+
+    # Optional extra sanity: the function actually returns a greeting
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("utils", project / "src" / "utils.py")
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    assert "Hello" in mod.get_greeting()
 
 
 @pytest.mark.e2e
