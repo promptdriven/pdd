@@ -71,9 +71,9 @@ def test_successful_fix(setup_files):
 
     # Define our patched version that skips the early return check
     def patched_fix_error_loop(
-            unit_test_file, code_file, prompt, verification_program,
+            unit_test_file, code_file, prompt_file, prompt, verification_program,
             strength, temperature, max_attempts, budget,
-            error_log_file="error_log.txt", verbose=False):
+            error_log_file="error_log.txt", verbose=False, agentic_fallback=False):
         """A simplified version that always processes one fix attempt and returns success"""
         # Create a backup file for test file
         shutil.copy(unit_test_file, unit_test_file + ".bak")
@@ -82,7 +82,7 @@ def test_successful_fix(setup_files):
 
         # Call fix_errors_from_unit_tests with basic params
         (updated_unit_test, updated_code, fixed_unit_test_content,
-         fixed_code_content, cost, model) = pdd.fix_error_loop.fix_errors_from_unit_tests(
+         fixed_code_content, analysis, cost, model) = pdd.fix_error_loop.fix_errors_from_unit_tests(
             Path(unit_test_file).read_text(),
             Path(code_file).read_text(),
             prompt,
@@ -118,6 +118,7 @@ def test_successful_fix(setup_files):
                 True, True,  # updated_unit_test, updated_code
                 files["test_file"].read_text(),
                 fixed_code,  # corrected code
+                "dummy analysis", # analysis
                 0.1,         # cost
                 "mock-model"  # model_name
             )
@@ -127,12 +128,17 @@ def test_successful_fix(setup_files):
 
             success, final_test, final_code, attempts, cost, model = (
                 pdd.fix_error_loop.fix_error_loop(
-                    str(files["test_file"]),
-                    str(files["code_file"]),
-                    "Test prompt",
-                    str(files["verify_file"]),
-                    0.5, 0.0, 3, 10.0,
-                    str(files["error_log"])
+                    unit_test_file=str(files["test_file"]),
+                    code_file=str(files["code_file"]),
+                    prompt_file="dummy_prompt.txt",
+                    prompt="Test prompt",
+                    verification_program=str(files["verify_file"]),
+                    strength=0.5, 
+                    temperature=0.0, 
+                    max_attempts=3, 
+                    budget=10.0,
+                    error_log_file=str(files["error_log"]),
+                    agentic_fallback=False
                 )
             )
     finally:
@@ -165,9 +171,11 @@ def test_add():
     assert add(2, 3) == 5
     assert add(-1, 1) == 0
 """)
+    # Call fix_code_loop
     success, final_test, final_code, attempts, cost, model = fix_error_loop(
             unit_test_file=str(files["test_file"]),
             code_file=str(files["code_file"]),
+            prompt_file="dummy_prompt.txt",
             prompt=(
                 "Write a function add() that takes in and adds two numbers together."
             ),
@@ -177,7 +185,8 @@ def test_add():
             max_attempts=3,
             budget=10.0,
             error_log_file=str(files["error_log"]),
-            verbose=True
+            verbose=True,
+            agentic_fallback=False
         )
 
     assert success is True
@@ -219,15 +228,17 @@ def test_max_attempts_exceeded(setup_files):
             )
 
             success, final_test, final_code, attempts, cost, model = fix_error_loop(
-                str(files["test_file"]),
-                str(files["code_file"]),
-                "Test prompt",
-                str(files["verify_file"]),
-                0.5,
-                0.0,
-                3,           # max_attempts
-                10.0,
-                str(files["error_log"])
+                unit_test_file=str(files["test_file"]),
+                code_file=str(files["code_file"]),
+                prompt_file="dummy_prompt.txt",
+                prompt="Test prompt",
+                verification_program=str(files["verify_file"]),
+                strength=0.5,
+                temperature=0.0,
+                max_attempts=3,           # max_attempts
+                budget=10.0,
+                error_log_file=str(files["error_log"]),
+                agentic_fallback=False
             )
 
     assert success is False
@@ -281,15 +292,17 @@ def test_verification_failure(setup_files):
 
                 success, final_test, final_code, attempts, cost, model = (
                     fix_error_loop(
-                        str(files["test_file"]),
-                        str(files["code_file"]),
-                        "Test prompt",
-                        str(files["verify_file"]),
-                        0.5,
-                        0.0,
-                        3,
-                        10.0,
-                        str(files["error_log"])
+                        unit_test_file=str(files["test_file"]),
+                        code_file=str(files["code_file"]),
+                        prompt_file="dummy_prompt.txt",
+                        prompt="Test prompt",
+                        verification_program=str(files["verify_file"]),
+                        strength=0.5,
+                        temperature=0.0,
+                        max_attempts=3,
+                        budget=10.0,
+                        error_log_file=str(files["error_log"]),
+                        agentic_fallback=False
                     )
                 )
 
@@ -327,12 +340,17 @@ def test_backup_creation(setup_files):
             )
 
             fix_error_loop(
-                str(files["test_file"]),
-                str(files["code_file"]),
-                "Test prompt",
-                str(files["verify_file"]),
-                0.5, 0.0, 1, 10.0,
-                str(files["error_log"])
+                unit_test_file=str(files["test_file"]),
+                code_file=str(files["code_file"]),
+                prompt_file="dummy_prompt.txt",
+                prompt="Test prompt",
+                verification_program=str(files["verify_file"]),
+                strength=0.5, 
+                temperature=0.0, 
+                max_attempts=1, 
+                budget=10.0,
+                error_log_file=str(files["error_log"]),
+                agentic_fallback=False
             )
 
     # Check for any backup files with a more general pattern
@@ -352,10 +370,15 @@ def test_missing_files():
     Ensure that fix_error_loop returns False immediately if the test/code files do not exist.
     """
     success, *rest = fix_error_loop(
-        "nonexistent_test.py",
-        "nonexistent_code.py",
-        "prompt",
-        "verify.py",
-        0.5, 0.0, 3, 10.0
+        unit_test_file="nonexistent_test.py",
+        code_file="nonexistent_code.py",
+        prompt_file="dummy_prompt.txt",
+        prompt="prompt",
+        verification_program="verify.py",
+        strength=0.5, 
+        temperature=0.0, 
+        max_attempts=3, 
+        budget=10.0,
+        agentic_fallback=False
     )
     assert success is False

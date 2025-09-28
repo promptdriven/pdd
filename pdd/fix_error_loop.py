@@ -114,7 +114,7 @@ def fix_error_loop(unit_test_file: str,
         error_log_file: Path to file to log errors (default: "error_log.txt").
         verbose: Enable verbose logging (default: False).
         time: Time parameter for the fix_errors_from_unit_tests call.
-
+        agentic_fallback: Whether to trigger cli agentic fallback when fix fails.
     Outputs:
         success: Boolean indicating if the overall process succeeded.
         final_unit_test: String contents of the final unit test file.
