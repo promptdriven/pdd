@@ -1,4 +1,4 @@
-# tests/test_fix_command_e2e.py
+# tests/test_fix_agentic_e2e.py
 import os
 import shutil
 import sys
@@ -13,14 +13,25 @@ def _has_cli(name: str) -> bool:
     return shutil.which(name) is not None
 
 
-def _make_project(root: Path) -> None:
+def _purge_modules():
+    """Remove cached modules that can bleed across tmp projects in a single pytest session."""
+    for key in list(sys.modules.keys()):
+        if key == "test_utils" or key.startswith("test_utils"):
+            sys.modules.pop(key, None)
+        if key == "src" or key.startswith("src."):
+            sys.modules.pop(key, None)
+
+
+def _make_project(root: Path, test_basename: str) -> None:
     (root / "prompts").mkdir()
     (root / "src").mkdir()
     (root / "tests").mkdir()
     (root / ".pdd").mkdir()
 
-    # Prompt (minimal)
-    (root / "prompts" / "utils.prompt").write_text("Handle missing 'name' key gracefully.", encoding="utf-8")
+    # Prompt
+    (root / "prompts" / "utils.prompt").write_text(
+        "Handle missing 'name' key gracefully.", encoding="utf-8"
+    )
 
     # Buggy code: KeyError when 'name' missing
     buggy = (
@@ -36,10 +47,12 @@ def _make_project(root: Path) -> None:
     )
     (root / "src" / "utils.py").write_text(buggy, encoding="utf-8")
 
-    # Config lacks 'name'
-    (root / "src" / "config.json").write_text('{"user": {"email": "test@example.com"}}', encoding="utf-8")
+    # Config w/o name
+    (root / "src" / "config.json").write_text(
+        '{"user": {"email": "test@example.com"}}', encoding="utf-8"
+    )
 
-    # Unit test: only requires "Hello"
+    # Test file — use a UNIQUE BASENAME per provider!
     tests = (
         "import unittest\n"
         "from src import utils\n\n"
@@ -48,12 +61,12 @@ def _make_project(root: Path) -> None:
         "        msg = utils.get_greeting()\n"
         "        assert 'Hello' in msg\n"
     )
-    (root / "tests" / "test_utils.py").write_text(tests, encoding="utf-8")
+    (root / "tests" / f"{test_basename}.py").write_text(tests, encoding="utf-8")
 
     # Error log
     (root / "error.log").write_text("KeyError: 'name'", encoding="utf-8")
 
-    # Let the SUT discover providers from a local CSV (names only)
+    # Local provider CSV
     (root / ".pdd" / "llm_model.csv").write_text(
         "provider,model,api_key\n"
         "google,gemini-pro,GOOGLE_API_KEY\n"
@@ -63,17 +76,19 @@ def _make_project(root: Path) -> None:
     )
 
 
-def _run_fix_once(project: Path) -> bool:
-    # run the standard loop but force fallback to agents quickly
+def _run_fix_once(project: Path, unit_test_file: str) -> bool:
+    # Make sure previous imports don’t leak
+    _purge_modules()
+
     success, *_ = fix_error_loop(
-        unit_test_file="tests/test_utils.py",
+        unit_test_file=unit_test_file,
         code_file="src/utils.py",
         prompt_file="prompts/utils.prompt",
         prompt="Handle missing 'name' key gracefully.",
-        verification_program=str(project / "tests" / "test_utils.py"),
+        verification_program=str(project / unit_test_file),
         strength=0.0,
         temperature=0.0,
-        max_attempts=1,           # trigger fallback fast
+        max_attempts=1,         # force a quick fallback to the agent
         budget=5.0,
         error_log_file="error.log",
         verbose=False,
@@ -93,7 +108,7 @@ def _assert_fixed() -> None:
 
 @pytest.mark.e2e
 def test_fix_command_gemini(tmp_path, monkeypatch):
-    """E2E: real fix command uses Google/Gemini agent successfully (if available)."""
+    """E2E: real fix command uses Google/Gemini agent (if available)."""
     if not (os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")) or not _has_cli("gemini"):
         pytest.skip("Gemini not available (need gemini CLI and GOOGLE_API_KEY or GEMINI_API_KEY).")
 
@@ -110,14 +125,14 @@ def test_fix_command_gemini(tmp_path, monkeypatch):
     monkeypatch.setenv("NO_COLOR", "1"); monkeypatch.setenv("CLICOLOR", "0"); monkeypatch.setenv("CLICOLOR_FORCE", "0")
 
     project = tmp_path
-    _make_project(project)
+    unit_test = "tests/test_utils_gemini.py"
+    _make_project(project, "test_utils_gemini")
     monkeypatch.chdir(project)
     monkeypatch.syspath_prepend(str(project))
 
-    ok = _run_fix_once(project)
+    ok = _run_fix_once(project, unit_test)
     if not ok:
-        # surface more info, but don't pollute logs
-        res = os.system(f"{sys.executable} -m pytest tests/test_utils.py -q > /dev/null 2>&1")
+        res = os.system(f"{sys.executable} -m pytest {unit_test} -q > /dev/null 2>&1")
         if res != 0:
             pytest.xfail("Gemini agent did not finish within timeout.")
         ok = True
@@ -128,7 +143,7 @@ def test_fix_command_gemini(tmp_path, monkeypatch):
 
 @pytest.mark.e2e
 def test_fix_command_claude(tmp_path, monkeypatch):
-    """E2E: real fix command uses Anthropic/Claude agent successfully (if available)."""
+    """E2E: real fix command uses Anthropic/Claude agent (if available)."""
     if not os.getenv("ANTHROPIC_API_KEY") or not _has_cli("claude"):
         pytest.skip("Claude not available (need claude CLI and ANTHROPIC_API_KEY).")
 
@@ -144,13 +159,14 @@ def test_fix_command_claude(tmp_path, monkeypatch):
     monkeypatch.setenv("NO_COLOR", "1"); monkeypatch.setenv("CLICOLOR", "0"); monkeypatch.setenv("CLICOLOR_FORCE", "0")
 
     project = tmp_path
-    _make_project(project)
+    unit_test = "tests/test_utils_claude.py"
+    _make_project(project, "test_utils_claude")
     monkeypatch.chdir(project)
     monkeypatch.syspath_prepend(str(project))
 
-    ok = _run_fix_once(project)
+    ok = _run_fix_once(project, unit_test)
     if not ok:
-        res = os.system(f"{sys.executable} -m pytest tests/test_utils.py -q > /dev/null 2>&1")
+        res = os.system(f"{sys.executable} -m pytest {unit_test} -q > /dev/null 2>&1")
         if res != 0:
             pytest.xfail("Claude agent did not finish within timeout.")
         ok = True
@@ -161,7 +177,7 @@ def test_fix_command_claude(tmp_path, monkeypatch):
 
 @pytest.mark.e2e
 def test_fix_command_codex(tmp_path, monkeypatch):
-    """E2E: real fix command uses OpenAI/Codex agent successfully (if available)."""
+    """E2E: real fix command uses OpenAI/Codex agent (if available)."""
     if not os.getenv("OPENAI_API_KEY") or not _has_cli("codex"):
         pytest.skip("Codex not available (need codex CLI and OPENAI_API_KEY).")
 
@@ -170,21 +186,21 @@ def test_fix_command_codex(tmp_path, monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
-    # Logs/timeouts — Codex can be a touch slower
+    # Logs/timeouts
     monkeypatch.setenv("PDD_AGENTIC_LOGLEVEL", os.getenv("PDD_AGENTIC_LOGLEVEL", "normal"))
     monkeypatch.setenv("PDD_AGENTIC_TIMEOUT", os.getenv("PDD_AGENTIC_TIMEOUT", "210"))
     monkeypatch.setenv("PDD_AGENTIC_VERIFY_TIMEOUT", os.getenv("PDD_AGENTIC_VERIFY_TIMEOUT", "90"))
-    # Ensure colorless logs
     monkeypatch.setenv("NO_COLOR", "1"); monkeypatch.setenv("CLICOLOR", "0"); monkeypatch.setenv("CLICOLOR_FORCE", "0")
 
     project = tmp_path
-    _make_project(project)
+    unit_test = "tests/test_utils_codex.py"
+    _make_project(project, "test_utils_codex")
     monkeypatch.chdir(project)
     monkeypatch.syspath_prepend(str(project))
 
-    ok = _run_fix_once(project)
+    ok = _run_fix_once(project, unit_test)
     if not ok:
-        res = os.system(f"{sys.executable} -m pytest tests/test_utils.py -q > /dev/null 2>&1")
+        res = os.system(f"{sys.executable} -m pytest {unit_test} -q > /dev/null 2>&1")
         if res != 0:
             pytest.xfail("Codex agent did not finish within timeout.")
         ok = True
