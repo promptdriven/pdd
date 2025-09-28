@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-# ---- Opt-in to real-agent test so CI stays fast ----
+# ---- Opt-in to real-agent tests so CI stays fast ----
 if not os.getenv("RUN_REAL_AGENT_E2E"):
     pytest.skip("Set RUN_REAL_AGENT_E2E=1 to run the real-agent E2E test.", allow_module_level=True)
 
@@ -35,18 +35,15 @@ TEST_CONTENT_FAILING = (
     "        msg = utils.get_greeting()\n"
     "        self.assertIn('Hello', msg)\n"
 )
-# keep logs tiny; big logs slow CLIs
-ERROR_LOG_CONTENT = "KeyError: 'name'\n"
+ERROR_LOG_CONTENT = "KeyError: 'name'\n"  # keep tiny; large logs slow CLIs
 
+# Preflight helper (does NOT change production discovery logic)
 PROVIDER_CLI = {"anthropic": "claude", "google": "gemini", "openai": "codex"}
 ENV_FOR_PROVIDER = {"anthropic": "ANTHROPIC_API_KEY", "google": "GOOGLE_API_KEY", "openai": "OPENAI_API_KEY"}
 
 
 def _has_usable_provider():
-    """
-    Preflight so we can skip with a helpful message if nothing is configured.
-    This does NOT alter production discovery logic; run_agentic_fix does the real work.
-    """
+    """Only to decide whether to skip; production discovery still happens inside run_agentic_fix."""
     for provider in AGENT_PROVIDER_PREFERENCE:
         cli = PROVIDER_CLI.get(provider)
         if not cli:
@@ -61,10 +58,7 @@ def _has_usable_provider():
 
 @pytest.fixture(scope="session", autouse=True)
 def warmup_agent():
-    """
-    Best-effort warmup; reduces cold-start latency for common CLIs.
-    Does not alter agent discovery logic.
-    """
+    """Best-effort warmup; reduces cold start without changing discovery logic."""
     for cli in ("claude", "gemini", "codex"):
         path = shutil.which(cli)
         if not path:
@@ -77,10 +71,7 @@ def warmup_agent():
 
 @pytest.fixture
 def e2e_project(tmp_path):
-    """
-    Create a tiny project tree compatible with run_agentic_fix() without altering
-    production agent selection logic.
-    """
+    """Create a tiny project tree compatible with run_agentic_fix()."""
     root = tmp_path
     (root / "prompts").mkdir()
     src_dir = root / "src"
@@ -112,29 +103,30 @@ def e2e_project(tmp_path):
     return root
 
 
-def _patch_global_timeout(monkeypatch):
+def _patch_global_timeout(monkeypatch, seconds: int):
     """
-    Add a hard timeout to subprocess.run used by the SUT,
-    WITHOUT causing recursion.
+    Add a hard timeout to subprocess.run used by the SUT, WITHOUT recursion.
+    We patch the dotted path inside pdd.agentic_fix and also our local subprocess.run
+    for consistency in the re-run step.
     """
     original_run = subprocess.run
-    real_timeout = int(os.getenv("AGENT_E2E_TIMEOUT", "90"))  # keep it tight for speed
 
     def run_with_timeout(*args, **kwargs):
-        kwargs.setdefault("timeout", real_timeout)
+        kwargs.setdefault("timeout", seconds)
         return original_run(*args, **kwargs)
 
-    # Patch the function that pdd.agentic_fix will call (dotted path!)
     monkeypatch.setattr("pdd.agentic_fix.subprocess.run", run_with_timeout, raising=False)
-    # Optional: keep our test's subprocess calls consistent too
     monkeypatch.setattr("subprocess.run", run_with_timeout, raising=False)
 
 
+# -----------------------------
+# 1) FAST SMOKE (infra only)
+# -----------------------------
 @pytest.mark.e2e
 def test_agentic_fix_real_cli_smoke(e2e_project, monkeypatch):
     """
-    SMOKE (fastest): call the real agent via production-discovery, assert success flag only.
-    This validates: CSV load -> env detection -> command build -> subprocess exec -> success handling.
+    Call the real agent via production discovery and assert success flag only.
+    Validates: CSV load -> env detection -> command build -> subprocess exec -> success handling.
     """
     if not _has_usable_provider():
         pytest.skip(
@@ -142,7 +134,9 @@ def test_agentic_fix_real_cli_smoke(e2e_project, monkeypatch):
             "Supported: claude/ANTHROPIC_API_KEY, gemini/GOOGLE_API_KEY, codex/OPENAI_API_KEY."
         )
 
-    _patch_global_timeout(monkeypatch)
+    # Keep smoke test tight
+    soft_cap = int(os.getenv("AGENT_E2E_SOFT_MAX_SECS", "150"))
+    _patch_global_timeout(monkeypatch, int(os.getenv("AGENT_E2E_TIMEOUT", "90")))
     monkeypatch.chdir(e2e_project)
 
     t0 = time.time()
@@ -155,16 +149,17 @@ def test_agentic_fix_real_cli_smoke(e2e_project, monkeypatch):
     elapsed = time.time() - t0
 
     assert success is True, f"Agentic fix reported failure. Message: {message}"
-    # Optional soft guard: fail if it took egregiously long (adjust as you like)
-    max_seconds = int(os.getenv("AGENT_E2E_SOFT_MAX_SECS", "150"))
-    assert elapsed <= max_seconds, f"Real-agent smoke test too slow: {elapsed:.1f}s > {max_seconds}s"
+    assert elapsed <= soft_cap, f"Real-agent smoke test too slow: {elapsed:.1f}s > {soft_cap}s"
 
 
+# -----------------------------------
+# 2) FULL BEHAVIOR (opt-in & slower)
+# -----------------------------------
 @pytest.mark.e2e
 def test_agentic_fix_real_cli_behavior(e2e_project, monkeypatch):
     """
-    FULL BEHAVIOR (opt-in): only runs if RUN_AGENT_BEHAVIOR=1 is set.
     Uses real agent. After success, re-runs the user's unit test to ensure the bug is truly fixed.
+    Only runs if RUN_AGENT_BEHAVIOR=1 is set.
     """
     if not os.getenv("RUN_AGENT_BEHAVIOR"):
         pytest.skip("Set RUN_AGENT_BEHAVIOR=1 to run the full behavior check.")
@@ -175,7 +170,10 @@ def test_agentic_fix_real_cli_behavior(e2e_project, monkeypatch):
             "Supported: claude/ANTHROPIC_API_KEY, gemini/GOOGLE_API_KEY, codex/OPENAI_API_KEY."
         )
 
-    _patch_global_timeout(monkeypatch)
+    # Give the real agent more time for a code edit
+    agent_timeout = int(os.getenv("AGENT_E2E_TIMEOUT", "240"))
+    test_timeout = int(os.getenv("AGENT_E2E_TEST_TIMEOUT", "120"))
+    _patch_global_timeout(monkeypatch, agent_timeout)
     monkeypatch.chdir(e2e_project)
 
     success, message = run_agentic_fix(
@@ -184,18 +182,22 @@ def test_agentic_fix_real_cli_behavior(e2e_project, monkeypatch):
         unit_test_file="tests/test_utils.py",
         error_log_file="error.log",
     )
+
+    # Provider/network slowness should not fail CI: xfail on timeout
+    if not success and "timed out" in (message or "").lower():
+        pytest.xfail(f"Agent CLI timed out: {message}")
+
     assert success is True, f"Agentic fix reported failure. Message: {message}"
 
-    # Ground truth: user's test must pass (agent actually fixed the bug)
+    # Ground truth: user's unit test must pass now
     if str(e2e_project) not in sys.path:
         sys.path.insert(0, str(e2e_project))
 
-    rerun_timeout = int(os.getenv("AGENT_E2E_TEST_TIMEOUT", "90"))
     result = subprocess.run(
         [sys.executable, "-m", "pytest", "tests/test_utils.py", "-q"],
         capture_output=True,
         text=True,
-        timeout=rerun_timeout,
+        timeout=test_timeout,
     )
     assert result.returncode == 0, (
         "Downstream unit test still fails after agentic fix.\n"
