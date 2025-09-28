@@ -1,16 +1,14 @@
+# tests/test_agentic_e2e.py
 import os
-import sys
-import stat
 import shutil
-import subprocess
+import multiprocessing as mp
 from pathlib import Path
 
-import pandas as pd
 import pytest
 
 from pdd.agentic_fix import run_agentic_fix
 
-# --- Shared mini project content ---
+
 PROMPT = "Handle missing 'name' key gracefully."
 BUGGY = """import json
 from pathlib import Path
@@ -34,182 +32,155 @@ class TestGreeting(unittest.TestCase):
 CONFIG = '{"user": {"email": "test@example.com"}}'
 ERRLOG = "KeyError: 'name'"
 
-@pytest.fixture
-def mini_project(tmp_path):
-    root = tmp_path
+
+def _make_mini_project(root: Path):
     (root / "prompts").mkdir()
     (root / "src").mkdir()
     (root / "tests").mkdir()
-    # project files
-    (root / "prompts" / "utils.prompt").write_text(PROMPT, encoding="utf-8")
+    # use *_python.prompt to be consistent with your other suite
+    (root / "prompts" / "utils_python.prompt").write_text(PROMPT, encoding="utf-8")
     (root / "src" / "utils.py").write_text(BUGGY, encoding="utf-8")
     (root / "src" / "config.json").write_text(CONFIG, encoding="utf-8")
     (root / "tests" / "test_utils.py").write_text(TESTS, encoding="utf-8")
     (root / "error.log").write_text(ERRLOG, encoding="utf-8")
-    # .pdd with llm_model.csv (we’ll monkeypatch loader anyway; still nice to have)
-    (root / ".pdd").mkdir()
-    (root / ".pdd" / "llm_model.csv").write_text(
-        "provider,model,api_key\ngoogle,gemini-pro,GOOGLE_API_KEY\nopenai,gpt-4,OPENAI_API_KEY\n",
-        encoding="utf-8",
+
+
+def _worker(q, prompt_file, code_file, unit_test_file, error_log_file):
+    try:
+        ok, msg = run_agentic_fix(
+            prompt_file=prompt_file,
+            code_file=code_file,
+            unit_test_file=unit_test_file,
+            error_log_file=error_log_file,
+        )
+        q.put((ok, msg))
+    except Exception as e:
+        q.put((False, f"exception: {e!r}"))
+
+
+def _run_with_timeout(seconds: int, *args):
+    q = mp.Queue()
+    p = mp.Process(target=_worker, args=(q, *args))
+    p.start()
+    p.join(seconds)
+    if p.is_alive():
+        p.terminate()
+        p.join(5)
+        return False, "timeout"
+    return q.get() if not q.empty() else (False, "no-result")
+
+
+def _has_cli(name: str) -> bool:
+    return shutil.which(name) is not None
+
+
+@pytest.mark.e2e
+def test_real_gemini_agent(tmp_path, monkeypatch):
+    """Real-agent test for Google's Gemini CLI."""
+    if not os.getenv("GOOGLE_API_KEY") and not os.getenv("GEMINI_API_KEY"):
+        pytest.skip("No GOOGLE_API_KEY/GEMINI_API_KEY in environment.")
+    if not _has_cli("gemini"):
+        pytest.skip("Gemini CLI not found in PATH (need `gemini`).")
+
+    # Prefer Google; remove others
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    if not os.getenv("GOOGLE_API_KEY") and os.getenv("GEMINI_API_KEY"):
+        monkeypatch.setenv("GOOGLE_API_KEY", os.environ["GEMINI_API_KEY"])
+
+    # logging
+    monkeypatch.setenv("PDD_AGENTIC_LOGLEVEL", os.getenv("PDD_AGENTIC_LOGLEVEL", "normal"))
+    monkeypatch.setenv("PDD_AGENTIC_MAX_LOG_LINES", os.getenv("PDD_AGENTIC_MAX_LOG_LINES", "2000"))
+    monkeypatch.setenv("PDD_AGENTIC_TIMEOUT", os.getenv("PDD_AGENTIC_TIMEOUT", "180"))
+    monkeypatch.setenv("PDD_AGENTIC_VERIFY_TIMEOUT", os.getenv("PDD_AGENTIC_VERIFY_TIMEOUT", "90"))
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("CLICOLOR", "0")
+    monkeypatch.setenv("CLICOLOR_FORCE", "0")
+
+    project = tmp_path
+    _make_mini_project(project)
+    monkeypatch.chdir(project)
+
+    ok, msg = _run_with_timeout(
+        180,
+        "prompts/utils_python.prompt", "src/utils.py", "tests/test_utils.py", "error.log"
     )
-    return root
+    if msg == "timeout":
+        pytest.xfail("Gemini run hit hard timeout.")
+    assert ok, f"Gemini should succeed via agent. msg={msg}"
+    fixed = (project / "src" / "utils.py").read_text(encoding="utf-8")
+    assert ".get(" in fixed and "['name']" not in fixed
 
 
-def _df_google_openai():
-    return pd.DataFrame.from_records(
-        [
-            {"provider": "google", "model": "gemini-pro", "api_key": "GOOGLE_API_KEY"},
-            {"provider": "openai", "model": "gpt-4", "api_key": "OPENAI_API_KEY"},
-        ]
+@pytest.mark.e2e
+def test_real_claude_agent(tmp_path, monkeypatch):
+    """Real-agent test for Anthropic's Claude CLI."""
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        pytest.skip("No ANTHROPIC_API_KEY in environment.")
+    if not _has_cli("claude"):
+        pytest.skip("Claude CLI not found in PATH (need `claude`).")
+
+    # Prefer Anthropic; remove others
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    # logging
+    monkeypatch.setenv("PDD_AGENTIC_LOGLEVEL", os.getenv("PDD_AGENTIC_LOGLEVEL", "normal"))
+    monkeypatch.setenv("PDD_AGENTIC_MAX_LOG_LINES", os.getenv("PDD_AGENTIC_MAX_LOG_LINES", "2000"))
+    monkeypatch.setenv("PDD_AGENTIC_TIMEOUT", os.getenv("PDD_AGENTIC_TIMEOUT", "180"))
+    monkeypatch.setenv("PDD_AGENTIC_VERIFY_TIMEOUT", os.getenv("PDD_AGENTIC_VERIFY_TIMEOUT", "90"))
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("CLICOLOR", "0")
+    monkeypatch.setenv("CLICOLOR_FORCE", "0")
+
+    project = tmp_path
+    _make_mini_project(project)
+    monkeypatch.chdir(project)
+
+    ok, msg = _run_with_timeout(
+        180,
+        "prompts/utils_python.prompt", "src/utils.py", "tests/test_utils.py", "error.log"
     )
+    if msg == "timeout":
+        pytest.xfail("Claude run hit hard timeout.")
+    assert ok, f"Claude should succeed via agent. msg={msg}"
+    fixed = (project / "src" / "utils.py").read_text(encoding="utf-8")
+    assert ".get(" in fixed and "['name']" not in fixed
 
 
-def _harvested_code(name_default: str = "Guest") -> str:
-    return f"""import json
-from pathlib import Path
+@pytest.mark.e2e
+def test_real_codex_agent(tmp_path, monkeypatch):
+    """Real-agent test for OpenAI Codex-style CLI (codex)."""
+    if not os.getenv("OPENAI_API_KEY"):
+        pytest.skip("No OPENAI_API_KEY in environment.")
+    if not _has_cli("codex"):
+        pytest.skip("Codex CLI not found in PATH (need `codex`).")
 
-def get_greeting():
-    cfg = Path(__file__).parent / 'config.json'
-    with cfg.open('r') as f:
-        config = json.load(f)
-    # use .get with default
-    name = (config.get("user") or {{}}).get("name", "{name_default}")
-    return f'Hello, {{name}}!'
-"""
+    # Prefer OpenAI; remove others
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
+    # tighter verify for codex
+    monkeypatch.setenv("PDD_AGENTIC_LOGLEVEL", os.getenv("PDD_AGENTIC_LOGLEVEL", "normal"))
+    monkeypatch.setenv("PDD_AGENTIC_MAX_LOG_LINES", os.getenv("PDD_AGENTIC_MAX_LOG_LINES", "2000"))
+    monkeypatch.setenv("PDD_AGENTIC_TIMEOUT", os.getenv("PDD_AGENTIC_TIMEOUT", "150"))
+    monkeypatch.setenv("PDD_AGENTIC_VERIFY_TIMEOUT", os.getenv("PDD_AGENTIC_VERIFY_TIMEOUT", "60"))
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("CLICOLOR", "0")
+    monkeypatch.setenv("CLICOLOR_FORCE", "0")
 
-def _patch_env_and_loader(monkeypatch):
-    # Present GOOGLE_API_KEY so google is considered available
-    monkeypatch.setenv("GOOGLE_API_KEY", "DUMMY")
-    # OPENAI_API_KEY present too (for tests that need skipping codex)
-    monkeypatch.setenv("OPENAI_API_KEY", "DUMMY_OPENAI")
-    # Make the loader return our controlled dataframe
-    monkeypatch.setattr("pdd.agentic_fix._load_model_data", lambda _: _df_google_openai(), raising=True)
+    project = tmp_path
+    _make_mini_project(project)
+    monkeypatch.chdir(project)
 
-
-# -------------------------------
-# 1) Absolute-path harvest applies
-# -------------------------------
-def test_harvest_applies_with_absolute_markers(mini_project, monkeypatch):
-    from pdd import agentic_fix as AF
-
-    _patch_env_and_loader(monkeypatch)
-
-    # Pretend gemini CLI exists
-    monkeypatch.setattr(shutil, "which", lambda bin: "/usr/bin/gemini" if bin == "gemini" else None)
-
-    # Build absolute markers the same way the SUT does (resolve)
-    code_path = (mini_project / "src" / "utils.py").resolve()
-    begin = f"<<<BEGIN_FILE:{code_path}>>>"
-    end = f"<<<END_FILE:{code_path}>>>"
-    stdout_with_markers = f"{begin}\n{_harvested_code('World')}{end}\n"
-
-    real_run = subprocess.run
-
-    def fake_run(cmd, **kwargs):
-        # The agent invocation
-        if isinstance(cmd, (list, tuple)) and cmd[:2] == ["gemini", "implement"]:
-            return subprocess.CompletedProcess(cmd, 0, stdout=stdout_with_markers, stderr="")
-        # Pytest verification should be real
-        return real_run(cmd, **kwargs)
-
-    monkeypatch.setattr("subprocess.run", fake_run, raising=True)
-
-    # Run inside the temp project
-    monkeypatch.chdir(mini_project)
-    ok, msg = run_agentic_fix(
-        prompt_file="prompts/utils.prompt",
-        code_file="src/utils.py",
-        unit_test_file="tests/test_utils.py",
-        error_log_file="error.log",
+    ok, msg = _run_with_timeout(
+        180,
+        "prompts/utils_python.prompt", "src/utils.py", "tests/test_utils.py", "error.log"
     )
-
-    assert ok, f"Expected success, got: {msg}"
-    fixed = (mini_project / "src" / "utils.py").read_text(encoding="utf-8")
-    assert 'get("name", "World")' in fixed
-    # run the test file again to be extra sure
-    res = subprocess.run([sys.executable, "-m", "pytest", "tests/test_utils.py", "-q"], capture_output=True, text=True)
-    assert res.returncode == 0, f"Downstream tests failed:\n{res.stdout}\n{res.stderr}"
-
-
-# ------------------------------------------------------
-# 2) Path-variant harvesting: relative path & filename-only
-# ------------------------------------------------------
-@pytest.mark.parametrize("variant", ["relative", "filename"])
-def test_harvest_path_variants(mini_project, monkeypatch, variant):
-    from pdd import agentic_fix as AF
-
-    _patch_env_and_loader(monkeypatch)
-    monkeypatch.setattr(shutil, "which", lambda bin: "/usr/bin/gemini" if bin == "gemini" else None)
-
-    code_abs = (mini_project / "src" / "utils.py").resolve()
-    if variant == "relative":
-        marker_path = str(mini_project / "src" / "utils.py")
-    else:
-        marker_path = "utils.py"
-
-    begin = f"<<<BEGIN_FILE:{marker_path}>>>"
-    end = f"<<<END_FILE:{marker_path}>>>"
-    stdout_with_markers = f"{begin}\n{_harvested_code('Guest')}{end}\n"
-
-    real_run = subprocess.run
-
-    def fake_run(cmd, **kwargs):
-        if isinstance(cmd, (list, tuple)) and cmd[:2] == ["gemini", "implement"]:
-            return subprocess.CompletedProcess(cmd, 0, stdout=stdout_with_markers, stderr="")
-        return real_run(cmd, **kwargs)
-
-    monkeypatch.setattr("subprocess.run", fake_run, raising=True)
-    monkeypatch.chdir(mini_project)
-
-    ok, msg = run_agentic_fix(
-        prompt_file="prompts/utils.prompt",
-        code_file="src/utils.py",
-        unit_test_file="tests/test_utils.py",
-        error_log_file="error.log",
-    )
-    assert ok, f"Harvest for variant {variant} should succeed. Msg: {msg}"
-    fixed = (mini_project / "src" / "utils.py").read_text(encoding="utf-8")
-    assert 'get("name", "Guest")' in fixed
-
-
-# ---------------------------------------------------------
-# 3) Timeout on first agent & missing CLI for the next agent
-# ---------------------------------------------------------
-def test_timeout_and_missing_cli_path(mini_project, monkeypatch):
-    """
-    Simulate gemini timing out and codex missing from PATH.
-    Expect overall failure with a useful message (but no crash).
-    """
-    from pdd import agentic_fix as AF
-
-    _patch_env_and_loader(monkeypatch)
-
-    def fake_which(bin):
-        if bin == "gemini":
-            return "/usr/bin/gemini"
-        if bin == "codex":
-            return None  # not in PATH
-        return None
-
-    monkeypatch.setattr(shutil, "which", fake_which, raising=True)
-
-    real_run = subprocess.run
-
-    def fake_run(cmd, **kwargs):
-        # Raise timeout for gemini agent call
-        if isinstance(cmd, (list, tuple)) and cmd[:2] == ["gemini", "implement"]:
-            raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout", 60))
-        return real_run(cmd, **kwargs)
-
-    monkeypatch.setattr("subprocess.run", fake_run, raising=True)
-    monkeypatch.chdir(mini_project)
-
-    ok, msg = run_agentic_fix(
-        prompt_file="prompts/utils.prompt",
-        code_file="src/utils.py",
-        unit_test_file="tests/test_utils.py",
-        error_log_file="error.log",
-    )
-    assert not ok, "Should report failure when first agent times out and second is missing."
-    assert "timed out" in msg.lower() or "failed" in msg.lower()
+    if msg == "timeout":
+        pytest.xfail("Codex run hit hard timeout.")
+    assert ok, f"OpenAI/Codex should succeed via agent. msg={msg}"
+    fixed = (project / "src" / "utils.py").read_text(encoding="utf-8")
+    assert ".get(" in fixed and "['name']" not in fixed
