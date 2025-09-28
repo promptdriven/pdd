@@ -1,3 +1,4 @@
+# tests/test_fix_command_e2e.py
 import os
 import shutil
 import sys
@@ -7,52 +8,21 @@ import pytest
 
 from pdd.fix_error_loop import fix_error_loop
 
-def _has_real_agent() -> bool:
-    """
-    Detect if we can actually run a real agent based on env + CLI presence.
-    We keep the selection logic independent from SUT: just check common CLIs.
-    """
-    # Google / Gemini
-    if (os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")) and shutil.which("gemini"):
-        return True
-    # Anthropic / Claude
-    if os.getenv("ANTHROPIC_API_KEY") and shutil.which("claude"):
-        return True
-    # OpenAI / Codex (rarely available)
-    if os.getenv("OPENAI_API_KEY") and shutil.which("codex"):
-        return True
-    return False
 
-@pytest.mark.e2e
-def test_agentic_fallback_real_agent(tmp_path, monkeypatch):
-    """
-    Case 11 (E2E, real agent): Use the actual CLI agent to fix a simple KeyError bug.
-    Skips automatically if no usable provider/CLI is available in this environment.
-    """
-    if not _has_real_agent():
-        pytest.skip(
-            "No usable agent found. Install a CLI and set its API key. "
-            "Supported: claude/ANTHROPIC_API_KEY, gemini/GOOGLE_API_KEY|GEMINI_API_KEY, codex/OPENAI_API_KEY."
-        )
+def _has_cli(name: str) -> bool:
+    return shutil.which(name) is not None
 
-    # Keep module output quiet to preserve clean pytest logs
-    monkeypatch.setenv("PDD_AGENTIC_LOGLEVEL", "quiet")
 
-    # Slightly generous timeouts so the real agent can edit + verify
-    monkeypatch.setenv("PDD_AGENTIC_TIMEOUT", os.getenv("PDD_AGENTIC_TIMEOUT", "240"))
-    monkeypatch.setenv("PDD_AGENTIC_VERIFY_TIMEOUT", os.getenv("PDD_AGENTIC_VERIFY_TIMEOUT", "120"))
+def _make_project(root: Path) -> None:
+    (root / "prompts").mkdir()
+    (root / "src").mkdir()
+    (root / "tests").mkdir()
+    (root / ".pdd").mkdir()
 
-    # ---- Project layout for a known-fixable scenario (greeting + missing 'name') ----
-    project = tmp_path
-    (project / "prompts").mkdir()
-    (project / "src").mkdir()
-    (project / "tests").mkdir()
-    (project / ".pdd").mkdir()
+    # Prompt (minimal)
+    (root / "prompts" / "utils.prompt").write_text("Handle missing 'name' key gracefully.", encoding="utf-8")
 
-    # Prompt (minimal is fine)
-    (project / "prompts" / "utils.prompt").write_text("Handle missing 'name' key gracefully.")
-
-    # Buggy code: raises KeyError when 'name' is missing
+    # Buggy code: KeyError when 'name' missing
     buggy = (
         "import json\n"
         "from pathlib import Path\n\n"
@@ -64,70 +34,160 @@ def test_agentic_fallback_real_agent(tmp_path, monkeypatch):
         "    name = config['user']['name']\n"
         "    return f'Hello, {name}!'\n"
     )
-    (project / "src" / "utils.py").write_text(buggy)
+    (root / "src" / "utils.py").write_text(buggy, encoding="utf-8")
 
-    # Config without 'name'
-    (project / "src" / "config.json").write_text('{"user": {"email": "test@example.com"}}')
+    # Config lacks 'name'
+    (root / "src" / "config.json").write_text('{"user": {"email": "test@example.com"}}', encoding="utf-8")
 
-    # Unit test: only requires 'Hello' to be in the message
-    test_content = (
+    # Unit test: only requires "Hello"
+    tests = (
         "import unittest\n"
         "from src import utils\n\n"
         "class TestGreeting(unittest.TestCase):\n"
         "    def test_get_greeting(self):\n"
         "        msg = utils.get_greeting()\n"
-        "        self.assertIn('Hello', msg)\n"
-        "\n"
+        "        assert 'Hello' in msg\n"
     )
-    (project / "tests" / "test_utils.py").write_text(test_content)
+    (root / "tests" / "test_utils.py").write_text(tests, encoding="utf-8")
 
     # Error log
-    (project / "error.log").write_text("KeyError: 'name'")
+    (root / "error.log").write_text("KeyError: 'name'", encoding="utf-8")
 
-    # llm_model.csv to allow the SUT to discover configured providers in this project
-    # (doesn't override discovery logic; just mirrors user/home setup locally)
-    (project / ".pdd" / "llm_model.csv").write_text(
+    # Let the SUT discover providers from a local CSV (names only)
+    (root / ".pdd" / "llm_model.csv").write_text(
         "provider,model,api_key\n"
         "google,gemini-pro,GOOGLE_API_KEY\n"
         "anthropic,claude-3-opus,ANTHROPIC_API_KEY\n"
-        "openai,gpt-4,OPENAI_API_KEY\n"
+        "openai,gpt-4,OPENAI_API_KEY\n",
+        encoding="utf-8",
     )
 
-    # Make imports and relative paths resolve like a user project
-    monkeypatch.syspath_prepend(str(project))
-    monkeypatch.chdir(project)
 
-    # Force the standard loop to "fail" quickly so we hit agent fallback:
-    #   - run_pytest_on_file will see a failing test naturally from the buggy code
-    #   - fix_errors_from_unit_tests won't be monkeypatched, so the loop will attempt 1 time (max_attempts=1) and then fallback
-    #   - agentic_fallback=True triggers `run_agentic_fix`, which runs the real CLI.
-    success, _, _, _, _, _ = fix_error_loop(
+def _run_fix_once(project: Path) -> bool:
+    # run the standard loop but force fallback to agents quickly
+    success, *_ = fix_error_loop(
         unit_test_file="tests/test_utils.py",
         code_file="src/utils.py",
         prompt_file="prompts/utils.prompt",
         prompt="Handle missing 'name' key gracefully.",
-        verification_program=str(project / "tests" / "test_utils.py"),  # not used in fallback verification
+        verification_program=str(project / "tests" / "test_utils.py"),
         strength=0.0,
         temperature=0.0,
-        max_attempts=1,
+        max_attempts=1,           # trigger fallback fast
         budget=5.0,
         error_log_file="error.log",
         verbose=False,
         agentic_fallback=True,
     )
+    return success
 
-    # If real agent timed out due to provider slowness, mark as xfail instead of hard fail
-    if not success:
-        # Re-run the unit test directly to surface extra debugging info if needed
-        result = os.system(f"{sys.executable} -m pytest tests/test_utils.py -q > /dev/null 2>&1")
-        if result != 0:
-            pytest.xfail("Real agent did not produce a passing test within the configured timeout.")
-        # If tests actually pass now, consider this a success
-        success = True
 
-    assert success is True
-
-    # Optional: confirm file was updated to a .get()-style access
+def _assert_fixed() -> None:
     final_code = Path("src/utils.py").read_text(encoding="utf-8")
-    assert "config['user']['name']" not in final_code and 'config["user"]["name"]' not in final_code
+    # Must not use fragile indexing
+    assert "config['user']['name']" not in final_code
+    assert 'config["user"]["name"]' not in final_code
+    # Must use a safe get-based access
     assert ".get(" in final_code
+
+
+@pytest.mark.e2e
+def test_fix_command_gemini(tmp_path, monkeypatch):
+    """E2E: real fix command uses Google/Gemini agent successfully (if available)."""
+    if not (os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")) or not _has_cli("gemini"):
+        pytest.skip("Gemini not available (need gemini CLI and GOOGLE_API_KEY or GEMINI_API_KEY).")
+
+    # Prefer Google; remove others
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    if not os.getenv("GOOGLE_API_KEY") and os.getenv("GEMINI_API_KEY"):
+        monkeypatch.setenv("GOOGLE_API_KEY", os.environ["GEMINI_API_KEY"])
+
+    # Logs/timeouts
+    monkeypatch.setenv("PDD_AGENTIC_LOGLEVEL", os.getenv("PDD_AGENTIC_LOGLEVEL", "normal"))
+    monkeypatch.setenv("PDD_AGENTIC_TIMEOUT", os.getenv("PDD_AGENTIC_TIMEOUT", "180"))
+    monkeypatch.setenv("PDD_AGENTIC_VERIFY_TIMEOUT", os.getenv("PDD_AGENTIC_VERIFY_TIMEOUT", "90"))
+    monkeypatch.setenv("NO_COLOR", "1"); monkeypatch.setenv("CLICOLOR", "0"); monkeypatch.setenv("CLICOLOR_FORCE", "0")
+
+    project = tmp_path
+    _make_project(project)
+    monkeypatch.chdir(project)
+    monkeypatch.syspath_prepend(str(project))
+
+    ok = _run_fix_once(project)
+    if not ok:
+        # surface more info, but don't pollute logs
+        res = os.system(f"{sys.executable} -m pytest tests/test_utils.py -q > /dev/null 2>&1")
+        if res != 0:
+            pytest.xfail("Gemini agent did not finish within timeout.")
+        ok = True
+
+    assert ok is True
+    _assert_fixed()
+
+
+@pytest.mark.e2e
+def test_fix_command_claude(tmp_path, monkeypatch):
+    """E2E: real fix command uses Anthropic/Claude agent successfully (if available)."""
+    if not os.getenv("ANTHROPIC_API_KEY") or not _has_cli("claude"):
+        pytest.skip("Claude not available (need claude CLI and ANTHROPIC_API_KEY).")
+
+    # Prefer Anthropic; remove others
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    # Logs/timeouts
+    monkeypatch.setenv("PDD_AGENTIC_LOGLEVEL", os.getenv("PDD_AGENTIC_LOGLEVEL", "normal"))
+    monkeypatch.setenv("PDD_AGENTIC_TIMEOUT", os.getenv("PDD_AGENTIC_TIMEOUT", "180"))
+    monkeypatch.setenv("PDD_AGENTIC_VERIFY_TIMEOUT", os.getenv("PDD_AGENTIC_VERIFY_TIMEOUT", "90"))
+    monkeypatch.setenv("NO_COLOR", "1"); monkeypatch.setenv("CLICOLOR", "0"); monkeypatch.setenv("CLICOLOR_FORCE", "0")
+
+    project = tmp_path
+    _make_project(project)
+    monkeypatch.chdir(project)
+    monkeypatch.syspath_prepend(str(project))
+
+    ok = _run_fix_once(project)
+    if not ok:
+        res = os.system(f"{sys.executable} -m pytest tests/test_utils.py -q > /dev/null 2>&1")
+        if res != 0:
+            pytest.xfail("Claude agent did not finish within timeout.")
+        ok = True
+
+    assert ok is True
+    _assert_fixed()
+
+
+@pytest.mark.e2e
+def test_fix_command_codex(tmp_path, monkeypatch):
+    """E2E: real fix command uses OpenAI/Codex agent successfully (if available)."""
+    if not os.getenv("OPENAI_API_KEY") or not _has_cli("codex"):
+        pytest.skip("Codex not available (need codex CLI and OPENAI_API_KEY).")
+
+    # Prefer OpenAI; remove others
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    # Logs/timeouts — Codex can be a touch slower
+    monkeypatch.setenv("PDD_AGENTIC_LOGLEVEL", os.getenv("PDD_AGENTIC_LOGLEVEL", "normal"))
+    monkeypatch.setenv("PDD_AGENTIC_TIMEOUT", os.getenv("PDD_AGENTIC_TIMEOUT", "210"))
+    monkeypatch.setenv("PDD_AGENTIC_VERIFY_TIMEOUT", os.getenv("PDD_AGENTIC_VERIFY_TIMEOUT", "90"))
+    # Ensure colorless logs
+    monkeypatch.setenv("NO_COLOR", "1"); monkeypatch.setenv("CLICOLOR", "0"); monkeypatch.setenv("CLICOLOR_FORCE", "0")
+
+    project = tmp_path
+    _make_project(project)
+    monkeypatch.chdir(project)
+    monkeypatch.syspath_prepend(str(project))
+
+    ok = _run_fix_once(project)
+    if not ok:
+        res = os.system(f"{sys.executable} -m pytest tests/test_utils.py -q > /dev/null 2>&1")
+        if res != 0:
+            pytest.xfail("Codex agent did not finish within timeout.")
+        ok = True
+
+    assert ok is True
+    _assert_fixed()
