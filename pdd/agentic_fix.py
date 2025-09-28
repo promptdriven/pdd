@@ -19,6 +19,33 @@ console = Console()
 # Preference order unchanged
 AGENT_PROVIDER_PREFERENCE = ["anthropic", "google", "openai"]
 
+# --- Logging levels ---
+# PDD_AGENTIC_LOGLEVEL = quiet | normal | verbose
+# If running under pytest (PYTEST_CURRENT_TEST is set) and no explicit level is set,
+# default to 'quiet' to avoid polluting test output.
+_env_level = os.getenv("PDD_AGENTIC_LOGLEVEL")
+if _env_level is None and os.getenv("PYTEST_CURRENT_TEST"):
+    _env_level = "quiet"
+_LOGLEVEL = (_env_level or "normal").strip().lower()
+_IS_QUIET = _LOGLEVEL == "quiet"
+_IS_VERBOSE = _LOGLEVEL == "verbose"
+
+def _print(msg: str, *, force: bool = False) -> None:
+    # force=True would bypass quiet mode; not used in tests to keep output clean.
+    if not _IS_QUIET or force:
+        console.print(msg)
+
+def _info(msg: str) -> None:
+    _print(msg)
+
+def _always(msg: str) -> None:
+    # Previously always printed; now respects quiet to keep pytest clean.
+    _print(msg)
+
+def _verbose(msg: str) -> None:
+    if _IS_VERBOSE:
+        console.print(msg)
+
 # Defaults: behavior verification ON, with reasonable timeouts
 _AGENT_CALL_TIMEOUT = int(os.getenv("PDD_AGENTIC_TIMEOUT", "240"))
 _VERIFY_TIMEOUT = int(os.getenv("PDD_AGENTIC_VERIFY_TIMEOUT", "120"))
@@ -34,7 +61,6 @@ def _begin_marker(path: Path) -> str:
 def _end_marker(path: Path) -> str:
     return f"<<<END_FILE:{path}>>>"
 
-
 def get_agent_command(provider: str, instruction_file: Path) -> List[str]:
     """Construct the shell command for a given agent provider."""
     p = provider.lower()
@@ -46,7 +72,6 @@ def get_agent_command(provider: str, instruction_file: Path) -> List[str]:
         return ["codex", "implement", str(instruction_file.resolve())]
     return []
 
-
 def find_llm_csv_path() -> Optional[Path]:
     """Find the llm_model.csv file in standard locations."""
     home_path = Path.home() / ".pdd" / "llm_model.csv"
@@ -56,7 +81,6 @@ def find_llm_csv_path() -> Optional[Path]:
     if project_path.is_file():
         return project_path
     return None
-
 
 def _build_primary_instructions(
     code_file: str,
@@ -71,8 +95,6 @@ def _build_primary_instructions(
     test_abs = Path(unit_test_file).resolve()
     begin = _begin_marker(code_abs)
     end = _end_marker(code_abs)
-
-    # NOTE: double braces {{ }} are literal in an f-string
     return f"""
 You are a CLI code-fixing agent with filesystem access limited by your toolset.
 
@@ -108,7 +130,6 @@ Context for reference:
 {error_content}
 """
 
-
 def _build_harvest_only_instructions(
     code_file: str,
     unit_test_file: str,
@@ -142,15 +163,17 @@ Relevant error:
 ----------------8<----------------
 """
 
-
 def _print_head(label: str, text: str, max_lines: int = _MAX_LOG_LINES) -> None:
+    if not _IS_VERBOSE:
+        return
     lines = (text or "").splitlines()
     head = "\n".join(lines[:max_lines])
     tail = "" if len(lines) <= max_lines else f"\n... (truncated, total {len(lines)} lines)"
     console.print(f"[bold cyan]{label}[/bold cyan]\n{head}{tail}")
 
-
 def _print_diff(old: str, new: str, path: Path) -> None:
+    if not _IS_VERBOSE:
+        return
     old_lines = old.splitlines(keepends=True)
     new_lines = new.splitlines(keepends=True)
     diff = list(difflib.unified_diff(old_lines, new_lines, fromfile=f"{path} (before)", tofile=f"{path} (after)"))
@@ -160,11 +183,9 @@ def _print_diff(old: str, new: str, path: Path) -> None:
     text = "".join(diff)
     _print_head("Unified diff (first lines)", text)
 
-
 def _extract_corrected_from_output(stdout: str, stderr: str, code_path: Path) -> Optional[str]:
     """Extract corrected file content printed between markers from agent outputs.
     Be robust to absolute vs relative paths or symlink realpaths."""
-    # Normalize variants we’ll accept
     resolved = code_path.resolve()
     abs_path = str(resolved)
     real_path = str(Path(abs_path).resolve())  # in case of symlinks
@@ -174,7 +195,6 @@ def _extract_corrected_from_output(stdout: str, stderr: str, code_path: Path) ->
     def _pattern_for(path_str: str) -> re.Pattern:
         begin = re.escape(f"<<<BEGIN_FILE:{path_str}>>>")
         end = re.escape(f"<<<END_FILE:{path_str}>>>")
-        # allow optional leading/trailing whitespace/newlines between markers & content
         return re.compile(begin + r"\s*(.*?)\s*" + end, re.DOTALL)
 
     candidates = [
@@ -191,7 +211,6 @@ def _extract_corrected_from_output(stdout: str, stderr: str, code_path: Path) ->
                 return m.group(1)
     return None
 
-
 def _run_cli(cmd: List[str], cwd: Path, timeout: int) -> subprocess.CompletedProcess:
     return subprocess.run(
         cmd,
@@ -201,7 +220,6 @@ def _run_cli(cmd: List[str], cwd: Path, timeout: int) -> subprocess.CompletedPro
         timeout=timeout,
         cwd=str(cwd),
     )
-
 
 def _execute_with_harvest_only(
     provider: str,
@@ -225,14 +243,14 @@ def _execute_with_harvest_only(
     )
     harvest_file = Path("agentic_fix_harvest.txt")
     harvest_file.write_text(harvest_instr, encoding="utf-8")
-    console.print(f"[cyan]Executing {provider.capitalize()} with harvest-only instructions: {harvest_file.resolve()}[/cyan]")
+    _info(f"[cyan]Executing {provider.capitalize()} with harvest-only instructions: {harvest_file.resolve()}[/cyan]")
     _print_head("Harvest-only instruction preview", harvest_instr)
 
     harvest_cmd = get_agent_command(provider, harvest_file)
     try:
         harvest_res = _run_cli(harvest_cmd, cwd, max(60, _AGENT_CALL_TIMEOUT // 2))
     except subprocess.TimeoutExpired:
-        console.print(f"[yellow]{provider.capitalize()} harvest-only attempt timed out.[/yellow]")
+        _info(f"[yellow]{provider.capitalize()} harvest-only attempt timed out.[/yellow]")
         try:
             harvest_file.unlink()
         except Exception:
@@ -246,21 +264,21 @@ def _execute_with_harvest_only(
         harvest_res.stdout, harvest_res.stderr, code_path.resolve()
     )
     if harvested_content is None:
-        console.print("[yellow]Harvest-only attempt did not include the required markers.[/yellow]")
+        _info("[yellow]Harvest-only attempt did not include the required markers.[/yellow]")
         try:
             harvest_file.unlink()
         except Exception:
             pass
         return False
 
-    console.print("[cyan]Applying harvested corrected file...[/cyan]")
+    _info("[cyan]Applying harvested corrected file...[/cyan]")
     code_path.write_text(harvested_content, encoding="utf-8")
     newest = code_path.read_text(encoding="utf-8")
     _print_diff(code_snapshot, newest, code_path)
 
     # Verify
     if _VERIFY_AFTER_AGENT:
-        console.print("[cyan]Verifying agent fix by running the test file...[/cyan]")
+        _info("[cyan]Verifying agent fix by running the test file...[/cyan]")
         verify = subprocess.run(
             [os.sys.executable, "-m", "pytest", unit_test_file, "-q"],
             capture_output=True,
@@ -272,7 +290,7 @@ def _execute_with_harvest_only(
         _print_head("pytest stdout", verify.stdout)
         _print_head("pytest stderr", verify.stderr)
         if verify.returncode == 0:
-            console.print(f"[bold green]{provider.capitalize()} agent completed successfully and tests passed.[/bold green]")
+            _always(f"[bold green]{provider.capitalize()} agent completed successfully and tests passed.[/bold green]")
             try:
                 harvest_file.unlink()
             except Exception:
@@ -285,21 +303,20 @@ def _execute_with_harvest_only(
         pass
     return False
 
-
 def run_agentic_fix(
     prompt_file: str,
     code_file: str,
     unit_test_file: str,
     error_log_file: str,
 ) -> Tuple[bool, str]:
-    console.print("[bold yellow]Standard fix failed. Initiating agentic fallback...[/bold yellow]")
+    _always("[bold yellow]Standard fix failed. Initiating agentic fallback...[/bold yellow]")
 
     instruction_file: Optional[Path] = None
 
     try:
         # 0) Context
         cwd = Path.cwd()
-        console.print(f"[cyan]Project root (cwd): {cwd}[/cyan]")
+        _info(f"[cyan]Project root (cwd): {cwd}[/cyan]")
 
         # 1) Load model data
         csv_path = find_llm_csv_path()
@@ -323,10 +340,10 @@ def run_agentic_fix(
                     available_agents.append(provider)
                     seen.add(provider)
 
-        console.print(f"[cyan]Env API keys present (names only): {', '.join(present_keys) or 'none'}[/cyan]")
+        _info(f"[cyan]Env API keys present (names only): {', '.join(present_keys) or 'none'}[/cyan]")
         if not available_agents:
             return False, "No configured agent API keys found in environment for providers (anthropic, google, openai)."
-        console.print(f"[cyan]Available agents found: {', '.join(available_agents)}[/cyan]")
+        _info(f"[cyan]Available agents found: {', '.join(available_agents)}[/cyan]")
 
         # 3) Build primary instructions
         prompt_content = Path(prompt_file).read_text(encoding="utf-8")
@@ -347,7 +364,7 @@ def run_agentic_fix(
         instruction_file = Path("agentic_fix_instructions.txt")
         instruction_file.write_text(primary_instr, encoding="utf-8")
         size_bytes = instruction_file.stat().st_size
-        console.print(f"[cyan]Instruction file: {instruction_file.resolve()} ({size_bytes} bytes)[/cyan]")
+        _info(f"[cyan]Instruction file: {instruction_file.resolve()} ({size_bytes} bytes)[/cyan]")
         _print_head("Instruction preview", primary_instr)
 
         # 4) Try agents in order
@@ -358,12 +375,13 @@ def run_agentic_fix(
 
             binary = cmd[0]
             cli_path = shutil.which(binary) or "NOT-IN-PATH"
-            console.print(f"[cyan]Attempting fix with {provider.capitalize()} agent...[/cyan]")
-            console.print(f"[cyan]CLI binary: {binary} -> {cli_path}[/cyan]")
-            console.print(f"Executing (cwd={cwd}): {' '.join(cmd)}")
+            _info(f"[cyan]Attempting fix with {provider.capitalize()} agent...[/cyan]")
+            if _IS_VERBOSE:
+                _verbose(f"[cyan]CLI binary: {binary} -> {cli_path}[/cyan]")
+                _verbose(f"Executing (cwd={cwd}): {' '.join(cmd)}")
 
             if cli_path == "NOT-IN-PATH":
-                console.print(f"[yellow]Skipping {provider.capitalize()} (CLI '{binary}' not found in PATH).[/yellow]")
+                _info(f"[yellow]Skipping {provider.capitalize()} (CLI '{binary}' not found in PATH).[/yellow]")
                 continue
 
             # --- Special handling for Google/Gemini: harvest-only FIRST (it can't write files)
@@ -382,14 +400,13 @@ def run_agentic_fix(
                     except Exception:
                         pass
                     return True, f"Agentic fix successful with {provider.capitalize()}."
-                # If harvest-only failed, fall back to primary instruction
-                console.print("[yellow]Harvest-first attempt did not pass tests; trying primary instruction path...[/yellow]")
+                _info("[yellow]Harvest-first attempt did not pass tests; trying primary instruction path...[/yellow]")
 
             # ---- Primary instruction path
             try:
                 res = _run_cli(cmd, cwd, _AGENT_CALL_TIMEOUT)
             except subprocess.TimeoutExpired:
-                console.print(f"[yellow]{provider.capitalize()} agent timed out after {_AGENT_CALL_TIMEOUT}s. Trying next...[/yellow]")
+                _info(f"[yellow]{provider.capitalize()} agent timed out after {_AGENT_CALL_TIMEOUT}s. Trying next...[/yellow]")
                 continue
 
             _print_head(f"{provider.capitalize()} stdout", res.stdout)
@@ -399,7 +416,7 @@ def run_agentic_fix(
                 res.stdout, res.stderr, code_path.resolve()
             )
             if harvested is not None:
-                console.print("[cyan]Detected corrected file content in agent output (primary attempt). Applying patch...[/cyan]")
+                _info("[cyan]Detected corrected file content in agent output (primary attempt). Applying patch...[/cyan]")
                 code_path.write_text(harvested, encoding="utf-8")
 
             # Diff after primary
@@ -427,7 +444,6 @@ def run_agentic_fix(
                     except Exception:
                         pass
                     return True, f"Agentic fix successful with {provider.capitalize()}."
-                # Update snapshot for next provider
                 try:
                     new_code = code_path.read_text(encoding="utf-8")
                 except Exception:
@@ -435,7 +451,7 @@ def run_agentic_fix(
 
             # ---- Verify
             if proceed_to_verify and _VERIFY_AFTER_AGENT:
-                console.print("[cyan]Verifying agent fix by running the test file...[/cyan]")
+                _info("[cyan]Verifying agent fix by running the test file...[/cyan]")
                 verify = subprocess.run(
                     [os.sys.executable, "-m", "pytest", unit_test_file, "-q"],
                     capture_output=True,
@@ -447,19 +463,18 @@ def run_agentic_fix(
                 _print_head("pytest stdout", verify.stdout)
                 _print_head("pytest stderr", verify.stderr)
                 if verify.returncode == 0:
-                    console.print(f"[bold green]{provider.capitalize()} agent completed successfully and tests passed.[/bold green]")
+                    _always(f"[bold green]{provider.capitalize()} agent completed successfully and tests passed.[/bold green]")
                     try:
                         instruction_file.unlink()
                     except Exception:
                         pass
                     return True, f"Agentic fix successful with {provider.capitalize()}."
 
-            # Update snapshot & continue to next provider
             try:
                 orig_code = code_path.read_text(encoding="utf-8")
             except Exception:
                 pass
-            console.print(f"[yellow]{provider.capitalize()} attempt did not yield a passing test. Trying next...[/yellow]")
+            _info(f"[yellow]{provider.capitalize()} attempt did not yield a passing test. Trying next...[/yellow]")
 
         # 5) All agents exhausted
         try:
@@ -471,7 +486,7 @@ def run_agentic_fix(
 
     except FileNotFoundError as e:
         msg = f"A required file or command was not found: {e}. Is the agent CLI installed and in your PATH?"
-        console.print(f"[bold red]Error:[/bold red] {msg}")
+        _always(f"[bold red]Error:[/bold red] {msg}")
         try:
             if instruction_file and instruction_file.exists():
                 instruction_file.unlink()
@@ -479,7 +494,7 @@ def run_agentic_fix(
             pass
         return False, msg
     except Exception as e:
-        console.print(f"[bold red]An unexpected error occurred during agentic fix:[/bold red] {e}")
+        _always(f"[bold red]An unexpected error occurred during agentic fix:[/bold red] {e}")
         try:
             if instruction_file and instruction_file.exists():
                 instruction_file.unlink()
