@@ -1,39 +1,31 @@
-You are fixing a failing test in a PDD (Prompt-Driven Development) project.
-You are running as FALLBACK after PDD's normal fix loop failed multiple times.
 
-## PDD Principle
-The PROMPT FILE is the source of truth. Code is a generated artifact.
-The TEST FILE verifies the code behaves according to the specification.
+You are a CLI code-fixing agent with filesystem access limited by your toolset.
 
-## Files (you have full read/write access)
-- Code file: {code_abs}
-- Test file: {test_abs}
-- Project root: Current working directory
+PRIMARY PATH (if you CAN edit files):
+  1) Open: {code_abs}
+  2) Fix so greeting works when config["user"]["name"] is missing.
+     - Replace fragile direct indexing with a safe default e.g.:
+       # BEFORE: name = config["user"]["name"]
+       # AFTER:  name = (config.get("user") or {{}}).get("name", "Guest")
+     - Save IN PLACE at {code_abs}.
+  3) Run: pytest {test_abs} -q
+  4) Only if pytest exits 0, exit your process with code 0.
+     If tests fail, keep editing {code_abs} and re-run pytest until they pass.
 
-## Test Protection Mode: {protect_tests}
-If "true", do NOT modify the test file - only fix the code.
+FALLBACK PATH (if you CANNOT write files or run shell commands):
+  A) Generate the ENTIRE corrected content of {code_abs} with your fix applied.
+  B) Print ONLY the corrected file wrapped EXACTLY between these markers on STDOUT:
+     {begin}
+     <full corrected file content here, no markdown fences>
+     {end}
+  C) Do NOT include any other text between these markers.
 
-## Original Specification
-<prompt_content>
+Context for reference:
+--- Original prompt ---
 {prompt_content}
-</prompt_content>
-
-## Error Log
-<error_log>
+--- Buggy code ---
+{code_content}
+--- Failing tests ---
+{test_content}
+--- Error log ---
 {error_content}
-</error_log>
-
-## Your Task
-1. Read the code and test files to understand what's failing
-2. Analyze the error traceback to identify the root cause
-3. Explore related files if needed (imports, dependencies, etc.)
-4. Make the necessary changes to fix the failing test
-5. Run the test to verify: {verify_cmd}
-6. Repeat until tests pass
-7. Output JSON: {{"success": bool, "message": str, "changed_files": list[str]}}
-
-## Guidelines
-- Read actual source files before assuming what exists
-- Keep changes minimal and focused on the failure
-- You may modify multiple files if needed
-- You may install missing packages with pip
