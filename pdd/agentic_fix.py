@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Tuple, List, Optional
 from rich.console import Console
 from .llm_invoke import _load_model_data
+from .load_prompt_template import load_prompt_template
 
 console = Console()
 
@@ -82,81 +83,7 @@ def find_llm_csv_path() -> Optional[Path]:
         return project_path
     return None
 
-def _build_primary_instructions(
-    code_file: str,
-    unit_test_file: str,
-    prompt_content: str,
-    code_content: str,
-    test_content: str,
-    error_content: str,
-) -> str:
-    code_abs = Path(code_file).resolve()
-    test_abs = Path(unit_test_file).resolve()
-    begin = _begin_marker(code_abs)
-    end = _end_marker(code_abs)
-    return f"""
-You are a CLI code-fixing agent with filesystem access limited by your toolset.
 
-PRIMARY PATH (if you CAN edit files):
-  1) Open: {code_abs}
-  2) Fix so greeting works when config["user"]["name"] is missing.
-     - Replace fragile direct indexing with a safe default e.g.:
-       # BEFORE: name = config["user"]["name"]
-       # AFTER:  name = (config.get("user") or {{}}).get("name", "Guest")
-     - Save IN PLACE at {code_abs}.
-  3) Run: pytest {test_abs} -q
-  4) Only if pytest exits 0, exit your process with code 0.
-     If tests fail, keep editing {code_abs} and re-run pytest until they pass.
-
-FALLBACK PATH (if you CANNOT write files or run shell commands):
-  A) Generate the ENTIRE corrected content of {code_abs} with your fix applied.
-  B) Print ONLY the corrected file wrapped EXACTLY between these markers on STDOUT:
-     {begin}
-     <full corrected file content here, no markdown fences>
-     {end}
-  C) Do NOT include any other text between these markers.
-
-Context for reference:
---- Original prompt ---
-{prompt_content}
---- Buggy code ---
-{code_content}
---- Failing tests ---
-{test_content}
---- Error log ---
-{error_content}
-"""
-
-def _build_harvest_only_instructions(
-    code_file: str,
-    unit_test_file: str,
-    code_content: str,
-    test_content: str,
-    error_content: str,
-) -> str:
-    code_abs = Path(code_file).resolve()
-    begin = _begin_marker(code_abs)
-    end = _end_marker(code_abs)
-    return f"""
-ONLY OUTPUT the fully corrected {code_abs} between the markers below.
-NO commentary, NO markdown fences, NO tool output, NOTHING else between markers.
-{begin}
-<FULL CORRECTED FILE CONTENT HERE>
-{end}
-
-Buggy file content you MUST FIX (verbatim for reference):
-----------------8<----------------
-{code_content}
-----------------8<----------------
-Unit test to satisfy (summary):
-----------------8<----------------
-{test_content}
-----------------8<----------------
-Relevant error:
-----------------8<----------------
-{error_content}
-----------------8<----------------
-"""
 
 def _print_head(label: str, text: str, max_lines: int = _MAX_LOG_LINES) -> None:
     if not _IS_VERBOSE:
@@ -424,9 +351,15 @@ def _try_harvest_then_verify(
     cwd: Path,
 ) -> bool:
     """Ask agent to print corrected file between markers, then verify."""
-    harvest_instr = _build_harvest_only_instructions(
-        code_file=str(code_path),
-        unit_test_file=unit_test_file,
+    harvest_prompt_template = load_prompt_template("agentic_fix_harvest_only_LLM")
+    if not harvest_prompt_template:
+        _info("[yellow]Failed to load harvest-only agent prompt template.[/yellow]")
+        return False
+
+    harvest_instr = harvest_prompt_template.format(
+        code_abs=str(code_path),
+        begin=_begin_marker(code_path),
+        end=_end_marker(code_path),
         code_content=code_snapshot,
         test_content=test_content,
         error_content=error_content,
@@ -567,9 +500,15 @@ def run_agentic_fix(
         test_content = Path(unit_test_file).read_text(encoding="utf-8")
         error_content = Path(error_log_file).read_text(encoding="utf-8")
 
-        primary_instr = _build_primary_instructions(
-            code_file=str(code_path),
-            unit_test_file=unit_test_file,
+        primary_prompt_template = load_prompt_template("agentic_fix_primary_LLM")
+        if not primary_prompt_template:
+            return False, "Failed to load primary agent prompt template."
+
+        primary_instr = primary_prompt_template.format(
+            code_abs=str(code_path),
+            test_abs=str(Path(unit_test_file).resolve()),
+            begin=_begin_marker(code_path),
+            end=_end_marker(code_path),
             prompt_content=prompt_content,
             code_content=orig_code,
             test_content=test_content,
