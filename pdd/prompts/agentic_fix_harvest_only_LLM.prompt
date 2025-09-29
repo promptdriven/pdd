@@ -1,0 +1,19 @@
+
+ONLY OUTPUT the fully corrected {code_abs} between the markers below.
+NO commentary, NO markdown fences, NO tool output, NOTHING else between markers.
+{begin}
+<FULL CORRECTED FILE CONTENT HERE>
+{end}
+
+Buggy file content you MUST FIX (verbatim for reference):
+----------------8<----------------
+{code_content}
+----------------8<----------------
+Unit test to satisfy (summary):
+----------------8<----------------
+{test_content}
+----------------8<----------------
+Relevant error:
+----------------8<----------------
+{error_content}
+----------------8<----------------
