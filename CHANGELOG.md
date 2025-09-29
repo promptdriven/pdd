@@ -1,3 +1,47 @@
+## v0.0.61 (2025-09-23)
+
+### VS Code Extension
+
+- Improve compatibility across OpenVSX‑compatible IDEs (VS Code, Cursor, VSCodium, Gitpod, Kiro, Windsurf). Update extension metadata, keywords, and docs to reflect broader support.
+
+### CLI
+
+- Normalize command result handling in `process_commands`: treat a single 3‑tuple as one step in the execution summary; wrap unexpected scalar results and warn once; keep total‑cost calculation correct. Add tests for these cases.
+
+### Prompts & Templates
+
+- Add `pdd/templates/generic/generate_prompt.prompt` with detailed variable descriptions and usage examples for generating module prompts.
+
+Thanks Sai Vathsavayi for altering me that this was missing!
+
+### Tests
+
+- CLI: expand `tests/test_cli.py` with coverage for single‑tuple normalization and non‑tuple result warnings.
+- Template registry: clarify behavior so packaged templates still list while project files with missing/malformed front matter are ignored.
+
+### Docs
+
+- README: note that the extension supports all OpenVSX‑compatible IDEs.
+- VS Code extension quickstart: add installation guidance for VSCodium, Kiro, Windsurf, and other OpenVSX‑compatible IDEs.
+
+Thanks Shrenya Mathur for your contributions on OpenVSX compatibility!
+
+
+## v0.0.60 (2025-09-23)
+
+### Setup Tool
+
+- Make the interactive `pdd.setup_tool` more capable and user-friendly: add Anthropic Claude key support alongside OpenAI and Google Gemini, improve environment variable handling, and refine API key validation flows.
+- Enhance config persistence with shell-specific env snippets and a clear exit summary; add a sample prompt and restructure the script for clarity.
+
+Thanks Sai Vathsavayi for testing and James Levine for your contributions!
+
+### CLI Completion
+
+- Expand completions with new global options `--context` and `--list-contexts` and add command completions for `sync`, `setup`, and `install_completion`.
+- Update option completions for `sync` and `pytest-output` and improve help completion coverage.
+- Fix Fish completion syntax for environment-variable option on `generate` to properly source variables from the environment.
+
 ## v0.0.59 (2025-09-21)
 
 ### CLI & Setup
