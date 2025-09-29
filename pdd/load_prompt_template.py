@@ -38,11 +38,23 @@ def load_prompt_template(prompt_name: str) -> Optional[str]:
     except Exception:
         pass
 
-    # Fallback 2: current working directory
-    candidate_paths.append(Path.cwd())
+    # Fallback 2: Traverse up from current working directory
+    p = Path.cwd()
+    while p != p.parent:
+        if (p / 'prompts').is_dir():
+            candidate_paths.append(p)
+            break
+        p = p.parent
 
     # Build candidate prompt paths to try in order
     prompt_candidates = [cp / 'prompts' / f"{prompt_name}.prompt" for cp in candidate_paths]
+    # Also consider the path relative to this module, in case CWD is totally different
+    try:
+        module_path = Path(__file__).resolve().parent / 'prompts' / f"{prompt_name}.prompt"
+        if module_path.exists():
+            prompt_candidates.insert(0, module_path)
+    except Exception:
+        pass
 
     # Step 2: Load and return the prompt template
     prompt_path: Optional[Path] = None
