@@ -462,7 +462,7 @@ Here is a brief overview of the main commands provided by PDD. Click the command
 - **[`auto-deps`](#15-auto-deps)**: Analyzes and inserts needed dependencies into a prompt file.
 - **[`verify`](#16-verify)**: Verifies functional correctness by running a program and judging its output against the prompt's intent using an LLM.
 
-**Aliases**: The following **Aliases**: The following shorthand forms are also supported:
+**Aliases**: The following shorthand forms are also supported:
 - `pdd generate tests` → `pdd test`
 - `pdd generate examples` → `pdd example`
 
