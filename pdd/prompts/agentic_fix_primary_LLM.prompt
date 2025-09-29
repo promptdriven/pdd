@@ -2,23 +2,23 @@
 You are a CLI code-fixing agent with filesystem access limited by your toolset.
 
 PRIMARY PATH (if you CAN edit files):
-  1) Open: {code_abs}
-  2) Fix so greeting works when config["user"]["name"] is missing.
+  1. Open: {code_abs}
+  2. Fix so greeting works when config["user"]["name"] is missing.
      - Replace fragile direct indexing with a safe default e.g.:
        # BEFORE: name = config["user"]["name"]
        # AFTER:  name = (config.get("user") or {{}}).get("name", "Guest")
      - Save IN PLACE at {code_abs}.
-  3) Run: pytest {test_abs} -q
-  4) Only if pytest exits 0, exit your process with code 0.
+  3. Run: pytest {test_abs} -q
+  4. Only if pytest exits 0, exit your process with code 0.
      If tests fail, keep editing {code_abs} and re-run pytest until they pass.
 
 FALLBACK PATH (if you CANNOT write files or run shell commands):
-  A) Generate the ENTIRE corrected content of {code_abs} with your fix applied.
-  B) Print ONLY the corrected file wrapped EXACTLY between these markers on STDOUT:
+  A. Generate the ENTIRE corrected content of {code_abs} with your fix applied.
+  B. Print ONLY the corrected file wrapped EXACTLY between these markers on STDOUT:
      {begin}
      <full corrected file content here, no markdown fences>
      {end}
-  C) Do NOT include any other text between these markers.
+  C. Do NOT include any other text between these markers.
 
 Context for reference:
 --- Original prompt ---
