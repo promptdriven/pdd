@@ -820,7 +820,7 @@ def preprocess(
 @click.option(
     "--agentic-fallback",
     is_flag=True,
-    default=False,
+    default=True,
     help="Enable agentic fallback if the primary fix mechanism fails.",
 )
 @click.pass_context
