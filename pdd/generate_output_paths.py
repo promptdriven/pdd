@@ -8,6 +8,9 @@ logger = logging.getLogger(__name__)
 
 # --- Configuration Data ---
 
+# Default directory names
+EXAMPLES_DIR = "examples"
+
 # Define the expected output keys for each command
 # Use underscores for keys as requested
 COMMAND_OUTPUT_KEYS: Dict[str, List[str]] = {
@@ -318,7 +321,7 @@ def generate_output_paths(
             source = "default"
             # For example command, default to examples/ directory
             if command == "example":
-                examples_dir = "examples"
+                examples_dir = EXAMPLES_DIR
                 # Create examples directory if it doesn't exist
                 if not os.path.exists(examples_dir):
                     try:
