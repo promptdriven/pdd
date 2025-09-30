@@ -1,68 +1,75 @@
 #!/usr/bin/env python3
 """
-A complete, runnable example of how to use the `hello` function from the `hello` module.
+A concise example of how to import and use the `hello` function.
 
-This script demonstrates the necessary steps to import and execute a function
-from a module located in a different directory, as per the specified file paths.
+This script demonstrates the necessary steps to import a module that is not in a
+standard package structure relative to the script. It dynamically modifies the
+Python path to include the module's directory before importing.
+
+File Structure Assumption:
+--------------------------
+This script (`hello_example.py`) and the module it uses (`hello.py`) are
+expected to be in the following relative structure:
+
+    .../examples/
+    ├── hello_example.py  (this file)
+    └── hello/
+        └── pdd/
+            └── hello.py      (the module to import)
+
+The script calculates the path to the `.../examples/hello/pdd` directory and adds
+it to `sys.path`, allowing the `hello` module to be imported directly.
 """
 
-import os
 import sys
+import os
 
-def main():
+def demonstrate_hello_usage():
     """
-    Sets up the system path, imports the `hello` function, and executes it.
-
-    This function handles the dynamic modification of Python's import path
-    to locate the `hello.py` module and then calls the `hello()` function
-    to demonstrate its usage.
+    Sets up the path, imports, and calls the hello() function.
     """
-    print("--- Running example for 'hello' module ---")
-
-    # To import the 'hello' module, we must first add its containing directory
-    # to Python's system path. The script needs to resolve the relative paths.
-    #
-    # Assumed file structure:
-    # /Users/shrenyamathur/pdd-1/examples/
-    #   ├── hello_example.py  (this script)
-    #   └── hello/
-    #       └── pdd/
-    #           └── hello.py      (the module to import)
-    #
-    # We need to add '/Users/shrenyamathur/pdd-1/examples/hello/pdd' to the path.
+    # --- Path Setup for Module Discovery ---
+    # To import the 'hello' module, we must add its containing directory to the
+    # Python path. This is necessary because the module is not in a standard
+    # location relative to this example script.
 
     try:
-        # Get the absolute path of the directory containing this example script.
-        example_dir = os.path.dirname(os.path.abspath(__file__))
+        # Get the absolute path of the directory containing this script.
+        # e.g., /path/to/pdd-1/examples
+        script_dir = os.path.dirname(os.path.abspath(__file__))
 
         # Construct the full path to the directory containing the 'hello.py' module.
-        module_dir = os.path.join(example_dir, "hello", "pdd")
+        # This will resolve to /path/to/pdd-1/examples/hello/pdd
+        module_path = os.path.join(script_dir, "hello", "pdd")
 
-        # Add the module's directory to the beginning of the system path.
-        sys.path.insert(0, module_dir)
+        # Add the module's directory to the beginning of the Python path list.
+        if module_path not in sys.path:
+            sys.path.insert(0, module_path)
 
-        # Now that the path is configured, we can import the function.
-        # This imports the 'hello' function directly from the 'hello.py' module.
+        # --- Import the Function ---
+        # Now that the path is correctly configured, we can import the function.
         from hello import hello
 
-        print("\nSuccessfully imported the 'hello' function.")
-        print("Calling the function now...")
-        print("Expected output:\nhello\n" + "-"*20)
-
-        # Call the imported function.
-        # It takes no arguments and will print "hello" to the console.
-        hello()
-
-        print("-"*20)
-        print("Example finished successfully.")
-
-    except ImportError:
-        print("\nError: Could not import the 'hello' module.")
-        print(f"Please ensure that 'hello.py' exists at: {os.path.join(module_dir, 'hello.py')}")
+    except ImportError as e:
+        print(f"Error: Failed to import the 'hello' module.")
+        print(f"Please ensure the file structure is correct.")
+        print(f"Looked for module at: {module_path}")
+        print(f"Original error: {e}")
         sys.exit(1)
-    except Exception as e:
-        print(f"\nAn unexpected error occurred: {e}")
-        sys.exit(1)
+
+
+    # --- Using the Imported Function ---
+    print("Calling the `hello()` function from the imported module...")
+
+    # The hello() function takes no arguments and returns None.
+    # Its sole side effect is printing "hello" to standard output.
+    #
+    # Input: None
+    # Output (to stdout): "hello" followed by a newline.
+    hello()
+
+    print("\nExample execution finished.")
+
 
 if __name__ == "__main__":
-    main()
+    demonstrate_hello_usage()
