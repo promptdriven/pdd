@@ -24,4 +24,9 @@
     - Use correct import statements based on the actual file structure
     - The example should be a complete, runnable script that imports from the actual module
     - Include proper file path handling and module discovery if needed
+    - CRITICAL: Never include hardcoded absolute paths like "/Users/username/project/examples/" in comments or code
+    - Use only relative path descriptions in comments (e.g., "relative to project root" or "relative to this script")
+    - Make the example portable across different development environments
+    - Use dynamic path resolution with os.path.dirname(__file__) and relative path construction
+    - In comments, describe file structure using relative terms, not absolute paths
 <include>./context/example.prompt</include>
