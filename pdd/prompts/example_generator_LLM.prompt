@@ -20,6 +20,7 @@
 %   - Import the specific functions/classes that are defined in the code module
 %   - CRITICAL: Use only ONE "def" keyword when defining functions (NOT "def def function_name")
 %   - CRITICAL: Do not assume module names - use the exact module_name provided
+%   - CRITICAL: Import syntax should be "from {module_name} import {function_name}" where module_name is the exact value provided
 
 % Make sure the following happens:
     - Document in detail what the input and output parameters in the doc strings
