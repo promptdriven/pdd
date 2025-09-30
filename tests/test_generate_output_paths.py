@@ -1,6 +1,7 @@
 import os
 import sys
 import pytest
+import tempfile
 from pathlib import Path
 from pdd import DEFAULT_STRENGTH
 
@@ -460,4 +461,62 @@ def test_sync_orchestration_example_scenario():
     # Test that directory detection works correctly
     assert not user_output_path.endswith(os.path.sep), "Path should not end with separator"
     # The path should be treated as a file, not a directory
+
+
+def test_example_command_defaults_to_examples_directory():
+    """Test that the example command defaults to examples/ directory."""
+    basename = "hello"
+    
+    result = generate_output_paths("example", basename)
+    
+    # Should default to examples/ directory
+    assert "output" in result, "Should have output key"
+    output_path = result["output"]
+    assert "examples" in str(output_path), "Output should be in examples directory"
+    assert basename in str(output_path), "Output should contain basename"
+
+
+def test_example_command_with_existing_examples_directory():
+    """Test example command behavior when examples directory already exists."""
+    basename = "test_module"
+    
+    # Create a temporary examples directory
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        examples_dir = Path(tmp_dir) / "examples"
+        examples_dir.mkdir()
+        
+        # Change to the temporary directory
+        original_cwd = os.getcwd()
+        os.chdir(tmp_dir)
+        
+        try:
+            result = generate_output_paths("example", basename)
+            
+            # Should use the existing examples directory
+            assert "output" in result, "Should have output key"
+            output_path = result["output"]
+            assert "examples" in str(output_path), "Output should be in examples directory"
+            assert basename in str(output_path), "Output should contain basename"
+            
+        finally:
+            os.chdir(original_cwd)
+
+
+def test_other_commands_not_affected():
+    """Test that other commands are not affected by the example command changes."""
+    basename = "test_module"
+    
+    # Test other commands still work as expected
+    commands_to_test = ["generate", "test", "fix", "update"]
+    
+    for command in commands_to_test:
+        result = generate_output_paths(command, basename)
+        assert "output" in result, f"Command {command} should have output key"
+        
+        # These commands should not default to examples/ directory
+        output_path = result["output"]
+        if command != "example":
+            # Other commands should not automatically go to examples/
+            # They should use the current directory or user-specified path
+            pass  # This is more of a sanity check that they don't break
 

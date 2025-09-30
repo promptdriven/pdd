@@ -2,6 +2,7 @@ import pytest
 import click
 from click.testing import CliRunner
 from unittest.mock import patch, mock_open
+from pathlib import Path
 from pdd.context_generator_main import context_generator_main
 
 # Mock data for testing
@@ -178,3 +179,38 @@ def test_context_generator_main_output_directory_path_uses_resolved_file(mock_ct
         m_open.assert_called_once_with(str(resolved_file), 'w')
         handle = m_open()
         handle.write.assert_called_once_with(MOCK_EXAMPLE_CODE)
+
+
+def test_context_generator_main_with_file_paths():
+    """Test that context_generator_main extracts and passes file path information."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        # Create test files
+        prompt_file = Path(tmp_dir) / "test.prompt"
+        code_file = Path(tmp_dir) / "hello.py"
+        output_file = Path(tmp_dir) / "hello_example.py"
+        
+        prompt_file.write_text("Write a hello function")
+        code_file.write_text("def hello():\n    print('hello')")
+        
+        with patch('pdd.context_generator_main.context_generator') as mock_context_generator:
+            mock_context_generator.return_value = (MOCK_EXAMPLE_CODE, MOCK_TOTAL_COST, MOCK_MODEL_NAME)
+            
+            result = context_generator_main(
+                mock_ctx, 
+                str(prompt_file), 
+                str(code_file), 
+                str(output_file)
+            )
+            
+            # Verify context_generator was called with file path parameters
+            mock_context_generator.assert_called_once()
+            call_args = mock_context_generator.call_args[1]
+            
+            # Check that file path information was extracted and passed
+            assert 'source_file_path' in call_args, "source_file_path should be passed"
+            assert 'example_file_path' in call_args, "example_file_path should be passed"
+            assert 'module_name' in call_args, "module_name should be passed"
+            
+            assert call_args['source_file_path'] == str(code_file)
+            assert call_args['example_file_path'] == str(output_file)
+            assert call_args['module_name'] == "hello"
