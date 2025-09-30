@@ -10,13 +10,15 @@
 % - The module name (without extension) is: <module_name>{module_name}</module_name>
 
 % IMPORT INSTRUCTIONS: Use the appropriate import mechanism for the target language ({language})
-%   - For Python: Use direct imports from the module name
+%   - For Python: Use direct imports from the module name (e.g., if module_name is "hello", use "from hello import function_name")
 %   - For JavaScript: Use require() or ES6 import syntax with relative paths
 %   - For C++: Use appropriate header inclusion
 %   - For Java: Use proper import statements
 %   - For other languages: Use the standard import/inclusion mechanism
+%   - IMPORTANT: Use the exact module_name provided in the file path information above
 %   - Avoid package-style imports unless the file is actually in a package structure
 %   - Import the specific functions/classes that are defined in the code module
+%   - CRITICAL: Use only ONE "def" keyword when defining functions (NOT "def def function_name")
 
 % Make sure the following happens:
     - Document in detail what the input and output parameters in the doc strings
@@ -29,4 +31,3 @@
     - Make the example portable across different development environments
     - Use dynamic path resolution with os.path.dirname(__file__) and relative path construction
     - In comments, describe file structure using relative terms, not absolute paths
-<include>./context/example.prompt</include>
