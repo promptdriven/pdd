@@ -8,8 +8,6 @@ generating code, tests, fixing issues, and managing prompts.
 from __future__ import annotations
 
 import os
-import subprocess
-import sys
 from typing import Any, Dict, List, Optional, Tuple
 from pathlib import Path # Import Path
 
@@ -34,12 +32,7 @@ from .crash_main import crash_main
 from .detect_change_main import detect_change_main
 from .fix_main import fix_main
 from .fix_verification_main import fix_verification_main
-from .install_completion import (
-    install_completion,
-    get_local_pdd_path,
-    get_current_shell,
-    get_shell_rc_path,
-)
+from .install_completion import install_completion, get_local_pdd_path
 from .preprocess_main import preprocess_main
 from .pytest_output import run_pytest_and_capture_output
 from .split_main import split_main
@@ -47,7 +40,6 @@ from .sync_main import sync_main
 from .trace_main import trace_main
 from .track_cost import track_cost
 from .update_main import update_main
-from . import template_registry
 
 
 # --- Initialize Rich Console ---
@@ -83,85 +75,8 @@ def handle_error(exception: Exception, command_name: str, quiet: bool):
     # Do NOT re-raise e here. Let the command function return None.
 
 
-def _first_pending_command(ctx: click.Context) -> Optional[str]:
-    """Return the first subcommand scheduled for this invocation."""
-    for arg in ctx.protected_args:
-        if not arg.startswith("-"):
-            return arg
-    return None
-
-
-def _api_env_exists() -> bool:
-    """Check whether the ~/.pdd/api-env file exists."""
-    return (Path.home() / ".pdd" / "api-env").exists()
-
-
-def _completion_installed() -> bool:
-    """Check if the shell RC file already sources the PDD completion script."""
-    shell = get_current_shell()
-    rc_path = get_shell_rc_path(shell) if shell else None
-    if not rc_path:
-        return False
-
-    try:
-        content = Path(rc_path).read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return False
-
-    return "PDD CLI completion" in content or "pdd_completion" in content
-
-
-def _project_has_local_configuration() -> bool:
-    """Detect project-level env configuration that should suppress reminders."""
-    cwd = Path.cwd()
-
-    env_file = cwd / ".env"
-    if env_file.exists():
-        try:
-            env_content = env_file.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            env_content = ""
-        if any(token in env_content for token in ("OPENAI_API_KEY=", "GOOGLE_API_KEY=", "ANTHROPIC_API_KEY=")):
-            return True
-
-    project_pdd_dir = cwd / ".pdd"
-    if project_pdd_dir.exists():
-        return True
-
-    return False
-
-
-def _should_show_onboarding_reminder(ctx: click.Context) -> bool:
-    """Determine whether to display the onboarding reminder banner."""
-    suppress = os.getenv("PDD_SUPPRESS_SETUP_REMINDER", "").lower()
-    if suppress in {"1", "true", "yes"}:
-        return False
-
-    first_command = _first_pending_command(ctx)
-    if first_command == "setup":
-        return False
-
-    if _api_env_exists():
-        return False
-
-    if _project_has_local_configuration():
-        return False
-
-    if _completion_installed():
-        return False
-
-    return True
-
-
-def _run_setup_utility() -> None:
-    """Execute the interactive setup utility script."""
-    result = subprocess.run([sys.executable, "-m", "pdd.setup_tool"])
-    if result.returncode not in (0, None):
-        raise RuntimeError(f"Setup utility exited with status {result.returncode}")
-
-
 # --- Main CLI Group ---
-@click.group(invoke_without_command=True, help="PDD (Prompt-Driven Development) Command Line Interface.")
+@click.group(chain=True, invoke_without_command=True, help="PDD (Prompt-Driven Development) Command Line Interface.")
 @click.option(
     "--force",
     is_flag=True,
@@ -251,6 +166,7 @@ def cli(
 ):
     """
     Main entry point for the PDD CLI. Handles global options and initializes context.
+    Supports multi-command chaining.
     """
     # Ensure PDD_PATH is set before any commands run
     get_local_pdd_path()
@@ -272,13 +188,6 @@ def cli(
     # Suppress verbose if quiet is enabled
     if quiet:
         ctx.obj["verbose"] = False
-
-    # Warn users who have not completed interactive setup unless they are running it now
-    if _should_show_onboarding_reminder(ctx):
-        console.print(
-            "[warning]Complete onboarding with `pdd setup` to install tab completion and configure API keys.[/warning]"
-        )
-        ctx.obj["reminder_shown"] = True
 
     # If --list-contexts is provided, print and exit before any other actions
     if list_contexts:
@@ -318,23 +227,17 @@ def cli(
                     style="warning"
                 )
 
-    # If no subcommands were provided, show help and exit gracefully
-    if ctx.invoked_subcommand is None and not ctx.protected_args:
-        if not quiet:
-            console.print("[info]Run `pdd --help` for usage or `pdd setup` to finish onboarding.[/info]")
-        click.echo(ctx.get_help())
-        ctx.exit(0)
-
-# --- Result Callback for Command Execution Summary ---
+# --- Result Callback for Chained Commands ---
 @cli.result_callback()
 @click.pass_context
 def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float, str]]], **kwargs):
     """
-    Processes results returned by executed commands and prints a summary.
+    Processes the results from chained commands.
+
     Receives a list of tuples, typically (result, cost, model_name),
     or None from each command function.
     """
-    total_cost = 0.0
+    total_chain_cost = 0.0
     # Get Click's invoked subcommands attribute first
     invoked_subcommands = getattr(ctx, 'invoked_subcommands', [])
     # If Click didn't provide it (common in real runs), fall back to the list
@@ -348,26 +251,13 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
                     invoked_subcommands = ctx.obj.get('invoked_subcommands', []) or []
             except Exception:
                 invoked_subcommands = []
-    # Normalize results: Click may pass a single return value (e.g., a 3-tuple)
-    # rather than a list of results. Wrap single 3-tuples so we treat them as
-    # one step in the summary instead of three separate items.
-    if results is None:
-        normalized_results: List[Any] = []
-    elif isinstance(results, list):
-        normalized_results = results
-    elif isinstance(results, tuple) and len(results) == 3:
-        normalized_results = [results]
-    else:
-        # Fallback: wrap any other scalar/iterable as a single result
-        normalized_results = [results]
-
     num_commands = len(invoked_subcommands)
-    num_results = len(normalized_results)  # Number of results actually received
+    num_results = len(results) # Number of results actually received
 
     if not ctx.obj.get("quiet"):
-        console.print("\n[info]--- Command Execution Summary ---[/info]")
+        console.print("\n[info]--- Command Chain Execution Summary ---[/info]")
 
-    for i, result_tuple in enumerate(normalized_results):
+    for i, result_tuple in enumerate(results):
         # Use the retrieved subcommand name (might be "Unknown Command X" in tests)
         command_name = invoked_subcommands[i] if i < num_commands else f"Unknown Command {i+1}"
 
@@ -389,7 +279,7 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
         # Check if the result is the expected tuple structure from @track_cost or preprocess success
         elif isinstance(result_tuple, tuple) and len(result_tuple) == 3:
             _result_data, cost, model_name = result_tuple
-            total_cost += cost
+            total_chain_cost += cost
             if not ctx.obj.get("quiet"):
                 # Special handling for preprocess success message (check actual command name)
                 actual_command_name = invoked_subcommands[i] if i < num_commands else None # Get actual name if possible
@@ -407,108 +297,18 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
 
     if not ctx.obj.get("quiet"):
         # Only print total cost if at least one command potentially contributed cost
-        if any(res is not None and isinstance(res, tuple) and len(res) == 3 for res in normalized_results):
-            console.print(f"[info]Total Estimated Cost:[/info] ${total_cost:.6f}")
+        if any(res is not None and isinstance(res, tuple) and len(res) == 3 for res in results):
+            console.print(f"[info]Total Estimated Cost for Chain:[/info] ${total_chain_cost:.6f}")
         # Indicate if the chain might have been incomplete due to errors
         if num_results < num_commands and not all(res is None for res in results): # Avoid printing if all failed
             console.print("[warning]Note: Chain may have terminated early due to errors.[/warning]")
         console.print("[info]-------------------------------------[/info]")
 
 
-# --- Templates Command Group ---
-@click.group(name="templates")
-def templates_group():
-    """Manage packaged and project templates."""
-    pass
-
-
-@templates_group.command("list")
-@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-@click.option("--filter", "filter_tag", type=str, default=None, help="Filter by tag")
-def templates_list(as_json: bool, filter_tag: Optional[str]):
-    try:
-        items = template_registry.list_templates(filter_tag)
-        if as_json:
-            import json as _json
-            click.echo(_json.dumps(items, indent=2))
-        else:
-            if not items:
-                console.print("[info]No templates found.[/info]")
-                return
-            console.print("[info]Available Templates:[/info]")
-            for it in items:
-                tags = ", ".join(it.get("tags", []))
-                console.print(f"- [bold]{it['name']}[/bold] ({it.get('version','')}) — {it.get('description','')} [dim]{tags}[/dim]")
-    except Exception as e:
-        handle_error(e, "templates list", False)
-
-
-@templates_group.command("show")
-@click.argument("name", type=str)
-def templates_show(name: str):
-    try:
-        data = template_registry.show_template(name)
-        summary = data.get("summary", {})
-        console.print(f"[bold]{summary.get('name','')}[/bold] — {summary.get('description','')}")
-        console.print(f"Version: {summary.get('version','')}  Tags: {', '.join(summary.get('tags',[]))}")
-        console.print(f"Language: {summary.get('language','')}  Output: {summary.get('output','')}")
-        console.print(f"Path: {summary.get('path','')}")
-        if data.get("variables"):
-            console.print("\n[info]Variables:[/info]")
-            for k, v in data["variables"].items():
-                console.print(f"- {k}: {v}")
-        if data.get("usage"):
-            console.print("\n[info]Usage:[/info]")
-            console.print(data["usage"])  # raw; CLI may format later
-        if data.get("discover"):
-            console.print("\n[info]Discover:[/info]")
-            console.print(data["discover"])  # raw dict
-        if data.get("output_schema"):
-            console.print("\n[info]Output Schema:[/info]")
-            try:
-                import json as _json
-                console.print(_json.dumps(data["output_schema"], indent=2))
-            except Exception:
-                console.print(str(data["output_schema"]))
-        if data.get("notes"):
-            console.print("\n[info]Notes:[/info]")
-            console.print(data["notes"])  # plain text
-    except Exception as e:
-        handle_error(e, "templates show", False)
-
-
-@templates_group.command("copy")
-@click.argument("name", type=str)
-@click.option("--to", "dest_dir", type=click.Path(file_okay=False), required=True)
-def templates_copy(name: str, dest_dir: str):
-    try:
-        dest = template_registry.copy_template(name, dest_dir)
-        console.print(f"[success]Copied to:[/success] {dest}")
-    except Exception as e:
-        handle_error(e, "templates copy", False)
-
-
-# Register the templates group with the main CLI.
-# Click disallows attaching a MultiCommand to a chained group via add_command,
-# so insert directly into the commands mapping after cli is defined.
-cli.commands["templates"] = templates_group
-
-
-# --- Custom Click Command Classes ---
-
-
-class GenerateCommand(click.Command):
-    """Ensure help shows PROMPT_FILE as required even when validated at runtime."""
-
-    def collect_usage_pieces(self, ctx: click.Context) -> List[str]:
-        pieces = super().collect_usage_pieces(ctx)
-        return ["PROMPT_FILE" if piece == "[PROMPT_FILE]" else piece for piece in pieces]
-
-
 # --- Command Definitions ---
 
-@cli.command("generate", cls=GenerateCommand)
-@click.argument("prompt_file", required=False, type=click.Path(exists=True, dir_okay=False))
+@cli.command("generate")
+@click.argument("prompt_file", type=click.Path(exists=True, dir_okay=False))
 @click.option(
     "--output",
     type=click.Path(writable=True),
@@ -536,40 +336,18 @@ class GenerateCommand(click.Command):
     multiple=True,
     help="Set template variable (KEY=VALUE) or read KEY from env",
 )
-@click.option(
-    "--template",
-    "template_name",
-    type=str,
-    default=None,
-    help="Use a packaged/project template by name (e.g., architecture/architecture_json)",
-)
 @click.pass_context
 @track_cost
 def generate(
     ctx: click.Context,
-    prompt_file: Optional[str],
+    prompt_file: str,
     output: Optional[str],
     original_prompt_file_path: Optional[str],
     incremental_flag: bool,
     env_kv: Tuple[str, ...],
-    template_name: Optional[str],
 ) -> Optional[Tuple[str, float, str]]:
     """Generate code from a prompt file."""
     try:
-        # Resolve template to a prompt path when requested
-        if template_name and prompt_file:
-            raise click.UsageError("Provide either --template or a PROMPT_FILE path, not both.")
-        if template_name:
-            try:
-                from . import template_registry as _tpl
-                meta = _tpl.load_template(template_name)
-                prompt_file = meta.get("path")
-                if not prompt_file:
-                    raise click.UsageError(f"Template '{template_name}' did not return a valid path")
-            except Exception as e:
-                raise click.UsageError(f"Failed to load template '{template_name}': {e}")
-        if not template_name and not prompt_file:
-            raise click.UsageError("Missing PROMPT_FILE. To use a template, pass --template NAME instead.")
         # Parse -e/--env arguments into a dict
         env_vars: Dict[str, str] = {}
         import os as _os
@@ -590,7 +368,7 @@ def generate(
                             console.print(f"[warning]-e {key} not found in environment; skipping[/warning]")
         generated_code, incremental, total_cost, model_name = code_generator_main(
             ctx=ctx,
-            prompt_file=prompt_file,  # resolved template path or user path
+            prompt_file=prompt_file,
             output=output,
             original_prompt_file_path=original_prompt_file_path,
             force_incremental_flag=incremental_flag,
@@ -1550,22 +1328,6 @@ def install_completion_cmd(ctx: click.Context) -> None: # Return type remains No
         # Use the centralized error handler
         handle_error(e, command_name, quiet_mode)
         # Do not return anything, as the callback expects None or a tuple
-
-
-@cli.command("setup")
-@click.pass_context
-def setup_cmd(ctx: click.Context) -> None:
-    """Run the interactive setup utility and install shell completion."""
-    command_name = "setup"
-    quiet_mode = ctx.obj.get("quiet", False)
-
-    try:
-        install_completion(quiet=quiet_mode)
-        _run_setup_utility()
-        if not quiet_mode:
-            console.print("[success]Setup completed. Restart your shell or source your RC file to apply changes.[/success]")
-    except Exception as exc:
-        handle_error(exc, command_name, quiet_mode)
 
 
 # --- Entry Point ---
