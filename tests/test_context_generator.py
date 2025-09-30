@@ -115,14 +115,11 @@ def test_context_generator_with_file_paths():
          patch('pdd.context_generator.continue_generation') as mock_continue, \
          patch('pdd.context_generator.postprocess') as mock_postprocess:
         
-        # Mock the prompt template
-        mock_load.return_value = """
-        % File path information:
-        % - The source module file is located at: <source_file_path>{source_file_path}</source_file_path>
-        % - The example file will be saved at: <example_file_path>{example_file_path}</example_file_path>
-        % - The module name (without extension) is: <module_name>{module_name}</module_name>
-        % - IMPORT INSTRUCTIONS: Import directly from the module name, e.g., "from {module_name} import function_name"
-        """
+        # Mock the prompt template by loading the actual template file
+        from pathlib import Path
+        template_path = Path(__file__).parent.parent / "pdd" / "prompts" / "example_generator_LLM.prompt"
+        with open(template_path, "r", encoding="utf-8") as f:
+            mock_load.return_value = f.read()
         
         # Mock preprocessing
         mock_preprocess.side_effect = lambda x, **kwargs: x
@@ -177,17 +174,11 @@ def test_context_generator_prompt_template_includes_import_instructions():
          patch('pdd.context_generator.continue_generation') as mock_continue, \
          patch('pdd.context_generator.postprocess') as mock_postprocess:
         
-        # Mock the enhanced prompt template
-        mock_load.return_value = """
-        % IMPORT INSTRUCTIONS: Use the appropriate import mechanism for the target language
-        %   - For Python: Use direct imports from the module name
-        %   - For JavaScript: Use require() or ES6 import syntax with relative paths
-        %   - For C++: Use appropriate header inclusion
-        %   - For Java: Use proper import statements
-        %   - For other languages: Use the standard import/inclusion mechanism
-        %   - Avoid package-style imports unless the file is actually in a package structure
-        %   - Import the specific functions/classes that are defined in the code module
-        """
+        # Mock the enhanced prompt template by loading the actual template file
+        from pathlib import Path
+        template_path = Path(__file__).parent.parent / "pdd" / "prompts" / "example_generator_LLM.prompt"
+        with open(template_path, "r", encoding="utf-8") as f:
+            mock_load.return_value = f.read()
         
         # Mock other functions
         mock_preprocess.side_effect = lambda x, **kwargs: x
