@@ -11,6 +11,9 @@ import datetime
 import subprocess
 import re
 import os
+import sys
+import io
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from dataclasses import asdict
@@ -227,6 +230,43 @@ def _execute_tests_and_create_run_report(test_file: Path, basename: str, languag
     # Save the run report
     save_run_report(asdict(report), basename, language)
     return report
+
+# --- Output Capture Helper ---
+
+@contextmanager
+def capture_output():
+    """Context manager to capture stdout and stderr."""
+    old_stdout = sys.stdout
+    old_stderr = sys.stderr
+    stdout_buffer = io.StringIO()
+    stderr_buffer = io.StringIO()
+
+    try:
+        sys.stdout = stdout_buffer
+        sys.stderr = stderr_buffer
+        yield stdout_buffer, stderr_buffer
+    finally:
+        sys.stdout = old_stdout
+        sys.stderr = old_stderr
+
+def call_with_capture(func, quiet=False, *args, **kwargs):
+    """Call a function and capture its output, returning (result, captured_output)."""
+    captured_output = []
+
+    if not quiet:
+        with capture_output() as (stdout_buf, stderr_buf):
+            result = func(*args, **kwargs)
+            stdout_content = stdout_buf.getvalue()
+            stderr_content = stderr_buf.getvalue()
+            if stdout_content or stderr_content:
+                if stdout_content:
+                    captured_output.append(f"STDOUT:\n{stdout_content}")
+                if stderr_content:
+                    captured_output.append(f"STDERR:\n{stderr_content}")
+    else:
+        result = func(*args, **kwargs)
+
+    return result, captured_output
 
 # --- Helper for Click Context ---
 
@@ -662,6 +702,7 @@ def sync_orchestration(
                 
                 result = {}
                 success = False
+                captured_output = []
                 start_time = time.time()  # Track execution time
 
                 # --- Execute Operation ---
@@ -673,14 +714,17 @@ def sync_orchestration(
                         # Read original prompt content to compare later
                         original_content = pdd_files['prompt'].read_text(encoding='utf-8')
                         
-                        result = auto_deps_main(
-                            ctx, 
-                            prompt_file=str(pdd_files['prompt']), 
+                        result, operation_output = call_with_capture(
+                            auto_deps_main,
+                            quiet,
+                            ctx,
+                            prompt_file=str(pdd_files['prompt']),
                             directory_path=f"{examples_dir}/*",
                             auto_deps_csv_path="project_dependencies.csv",
                             output=temp_output,
                             force_scan=False  # Don't force scan every time
                         )
+                        captured_output.extend(operation_output)
                         
                         # Only move the temp file back if content actually changed
                         if Path(temp_output).exists():
@@ -694,22 +738,28 @@ def sync_orchestration(
                                 # Mark as successful with no changes
                                 result = (new_content, 0.0, 'no-changes')
                     elif operation == 'generate':
-                        result = code_generator_main(
-                            ctx, 
-                            prompt_file=str(pdd_files['prompt']), 
+                        result, operation_output = call_with_capture(
+                            code_generator_main,
+                            quiet,
+                            ctx,
+                            prompt_file=str(pdd_files['prompt']),
                             output=str(pdd_files['code']),
                             original_prompt_file_path=None,
                             force_incremental_flag=False
                         )
+                        captured_output.extend(operation_output)
                     elif operation == 'example':
                         print(f"DEBUG SYNC: pdd_files['example'] = {pdd_files['example']}")
                         print(f"DEBUG SYNC: str(pdd_files['example']) = {str(pdd_files['example'])}")
-                        result = context_generator_main(
-                            ctx, 
-                            prompt_file=str(pdd_files['prompt']), 
-                            code_file=str(pdd_files['code']), 
+                        result, operation_output = call_with_capture(
+                            context_generator_main,
+                            quiet,
+                            ctx,
+                            prompt_file=str(pdd_files['prompt']),
+                            code_file=str(pdd_files['code']),
                             output=str(pdd_files['example'])
                         )
+                        captured_output.extend(operation_output)
                     elif operation == 'crash':
                         # Validate required files exist before attempting crash operation
                         required_files = [pdd_files['code'], pdd_files['example']]
@@ -875,11 +925,13 @@ def sync_orchestration(
                                 Path("crash.log").write_text(crash_log_content)
                             
                             try:
-                                result = crash_main(
-                                    ctx, 
-                                    prompt_file=str(pdd_files['prompt']), 
-                                    code_file=str(pdd_files['code']), 
-                                    program_file=str(pdd_files['example']), 
+                                result, operation_output = call_with_capture(
+                                    crash_main,
+                                    quiet,
+                                    ctx,
+                                    prompt_file=str(pdd_files['prompt']),
+                                    code_file=str(pdd_files['code']),
+                                    program_file=str(pdd_files['example']),
                                     error_file="crash.log",
                                     output=str(pdd_files['code']),
                                     output_program=str(pdd_files['example']),
@@ -887,6 +939,7 @@ def sync_orchestration(
                                     max_attempts=max_attempts,
                                     budget=budget - current_cost_ref[0]
                                 )
+                                captured_output.extend(operation_output)
                             except (RuntimeError, Exception) as e:
                                 error_str = str(e)
                                 if ("LLM returned None" in error_str or 
@@ -954,10 +1007,12 @@ def sync_orchestration(
                                 print(f"Creating test directory: {test_path.parent}")
                             test_path.parent.mkdir(parents=True, exist_ok=True)
                         
-                        result = cmd_test_main(
-                            ctx, 
-                            prompt_file=str(pdd_files['prompt']), 
-                            code_file=str(pdd_files['code']), 
+                        result, operation_output = call_with_capture(
+                            cmd_test_main,
+                            quiet,
+                            ctx,
+                            prompt_file=str(pdd_files['prompt']),
+                            code_file=str(pdd_files['code']),
                             output=str(pdd_files['test']),
                             language=language,
                             coverage_report=None,
@@ -965,6 +1020,7 @@ def sync_orchestration(
                             target_coverage=target_coverage,
                             merge=False
                         )
+                        captured_output.extend(operation_output)
                         
                         # After test generation, check if the test file was actually created
                         test_file = pdd_files['test']
@@ -1026,11 +1082,13 @@ def sync_orchestration(
                         
                         error_file_path.write_text(error_content)
                         
-                        result = fix_main(
-                            ctx, 
-                            prompt_file=str(pdd_files['prompt']), 
-                            code_file=str(pdd_files['code']), 
-                            unit_test_file=str(pdd_files['test']), 
+                        result, operation_output = call_with_capture(
+                            fix_main,
+                            quiet,
+                            ctx,
+                            prompt_file=str(pdd_files['prompt']),
+                            code_file=str(pdd_files['code']),
+                            unit_test_file=str(pdd_files['test']),
                             error_file=str(error_file_path),
                             output_test=str(pdd_files['test']),
                             output_code=str(pdd_files['code']),
@@ -1041,6 +1099,7 @@ def sync_orchestration(
                             budget=budget - current_cost_ref[0],
                             auto_submit=True
                         )
+                        captured_output.extend(operation_output)
                     elif operation == 'update':
                         result = update_main(
                             ctx, 
@@ -1053,7 +1112,7 @@ def sync_orchestration(
                     else:
                         errors.append(f"Unknown operation '{operation}' requested.")
                         result = {'success': False, 'cost': 0.0}
-                    
+
                     # Handle different return formats from command functions
                     if isinstance(result, dict):
                         # Dictionary return (e.g., from some commands)
@@ -1106,6 +1165,13 @@ def sync_orchestration(
                     'error': error_message
                 }, duration)
                 append_sync_log(basename, language, log_entry)
+
+                # Display captured output if any
+                if captured_output and not quiet:
+                    print(f"\n--- {operation.upper()} OUTPUT ---")
+                    for output_section in captured_output:
+                        print(output_section)
+                    print("--- END OUTPUT ---\n")
 
                 # Track the most recent model used on a successful step
                 if success and isinstance(model_name, str) and model_name:
