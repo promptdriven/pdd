@@ -84,7 +84,7 @@ pdd setup
 The command installs tab completion, walks you through API key entry, and seeds local configuration files.
 If you postpone this step, the CLI detects the missing setup artifacts the first time you run another command and shows a reminder banner so you can complete it later (the banner is suppressed once `~/.pdd/api-env` exists or when your project already provides credentials via `.env` or `.pdd/`).
 
-If you see the error message `Unsupported shell: ` after running the setup command, it most likely means your `SHELL` environment variable is not set. Configure the `SHELL` variable with the path of your desired shell (e.g., $env:SHELL = “~\bash”).
+If you see the error message `Unsupported shell: ` after running the setup command, it most likely means your `SHELL` environment variable is not set. Configure the `SHELL` variable with the path of your desired shell (e.g., `$env:SHELL = “~\bash”`).
 
 ### Alternative: pip Installation
 
