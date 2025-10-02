@@ -319,9 +319,9 @@ def generate_output_paths(
         # 4. Use Default Naming Convention
         else:
             source = "default"
-            # For example command, default to examples/ directory
+            # For example command, default to examples/ directory if no .pddrc config
             if command == "example":
-                examples_dir = EXAMPLES_DIR
+                examples_dir = EXAMPLES_DIR  # Fallback constant
                 # Create examples directory if it doesn't exist
                 if not os.path.exists(examples_dir):
                     try:
