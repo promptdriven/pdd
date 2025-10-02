@@ -191,9 +191,105 @@ def test_llm_invoke_strength_less_than_half(mock_load_models, mock_set_llm_cache
                 assert response['model_name'] == 'gemini-pro'
                 assert response['result'] == mock_response_content
                 assert response['cost'] == mock_cost
-                mock_completion.assert_called_once()
-                call_args, call_kwargs = mock_completion.call_args
-                assert call_kwargs['model'] == 'gemini-pro'
+    mock_completion.assert_called_once()
+    call_args, call_kwargs = mock_completion.call_args
+    assert call_kwargs['model'] == 'gemini-pro'
+
+
+def test_llm_invoke_raises_on_missing_key_x():
+    """Replicate the 'Missing key "x"' prompt formatting error.
+
+    If the prompt contains an unescaped {x} and input_json is empty, the
+    LangChain PromptTemplate formatting inside llm_invoke should raise a
+    ValueError indicating the missing key.
+    """
+    prompt = "Please use the value here: {x}\n"
+
+    with pytest.raises(ValueError, match=r"Missing key 'x' in input_json"):
+        llm_invoke(
+            prompt=prompt,
+            input_json={},  # Deliberately empty to trigger the missing key
+            strength=0.5,
+            temperature=0.0,
+            time=0.25,
+            verbose=False,
+        )
+
+
+def test_e2e_include_preprocess_llm_no_missing_key(tmp_path, monkeypatch):
+    """End-to-end: include -> preprocess (two-pass) -> llm_invoke without missing-key.
+
+    Creates a JS include file containing `{x}` and object literals, preprocesses
+    with doubling, then invokes llm_invoke. Mocks model loading and LLM call to
+    keep the test offline and deterministic.
+    """
+    # Lazy import to avoid adding a global dependency for this file
+    from pdd.preprocess import preprocess as pdd_preprocess
+
+    # Ensure includes resolve relative to this temp directory
+    monkeypatch.chdir(tmp_path)
+
+    # Write include file and prompt that references it
+    (tmp_path / "renderer.js").write_text(
+        "function f(x) { return {x}; }\nconst obj = { a: 1, b: 2 };\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "automation_javascript.prompt").write_text(
+        "<include>./renderer.js</include>", encoding="utf-8"
+    )
+
+    # Preprocess like generate: recursive include expansion, then doubling
+    raw_prompt = (tmp_path / "automation_javascript.prompt").read_text(encoding="utf-8")
+    first_pass = pdd_preprocess(raw_prompt, recursive=True, double_curly_brackets=False)
+    processed_prompt = pdd_preprocess(first_pass, recursive=False, double_curly_brackets=True)
+
+    # Sanity checks: braces should be doubled now
+    assert "{{x}}" in processed_prompt
+    assert "{{ a: 1, b: 2 }}" in processed_prompt
+
+    # Mock model data and litellm completion
+    def _mock_models_df():
+        rows = [{
+            "provider": "OpenAI",
+            "model": "gpt-5-mini",
+            "input": 0.01,
+            "output": 0.02,
+            "coding_arena_elo": 1500,
+            "structured_output": False,
+            "base_url": "",
+            "api_key": "OPENAI_API_KEY",
+            "max_tokens": 0,
+            "max_completion_tokens": 0,
+            "reasoning_type": "none",
+            "max_reasoning_tokens": 0,
+        }]
+        df = pd.DataFrame(rows)
+        df["avg_cost"] = (df["input"] + df["output"]) / 2
+        return df
+
+    def _mock_litellm_response(content="console.log('ok');", model_name="gpt-5-mini"):
+        mock_response = MagicMock()
+        mock_choice = MagicMock()
+        mock_message = MagicMock()
+        mock_usage = MagicMock()
+        mock_message.content = content
+        mock_choice.message = mock_message
+        mock_choice.finish_reason = "stop"
+        mock_response.choices = [mock_choice]
+        mock_usage.prompt_tokens = 5
+        mock_usage.completion_tokens = 5
+        mock_response.usage = mock_usage
+        mock_response.model = model_name
+        return mock_response
+
+    with patch("pdd.llm_invoke._load_model_data", return_value=_mock_models_df()):
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "fake"}, clear=False):
+            with patch("pdd.llm_invoke.litellm.completion", return_value=_mock_litellm_response()):
+                with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.0, "input_tokens": 5, "output_tokens": 5}):
+                    resp = llm_invoke(prompt=processed_prompt, input_json={}, strength=0.5, temperature=0.0, verbose=False)
+
+    assert isinstance(resp, dict)
+    assert resp.get("result") == "console.log('ok');"
 
 def test_llm_invoke_strength_greater_than_half(mock_load_models, mock_set_llm_cache):
     selected_model_key_name = "GOOGLE_API_KEY"
