@@ -65,4 +65,5 @@ reStructuredText,del,.rst
 Text,del,.txt
 INI,;,.ini
 Verilog,//,.v
-Systemverilog,//.sv
+Systemverilog,//,.sv
+Prisma,///,.prisma
