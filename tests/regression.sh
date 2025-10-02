@@ -1443,11 +1443,54 @@ PY
     GENERATE_STATUS=$?
   fi
   log_timestamped "TEMPLATES_GENERATE_ATTEMPT_END"
-  if [ -f "$TEMPLATE_GENERATED_OUTPUT" ]; then
+  if [ "$GENERATE_STATUS" -eq 0 ] && [ -f "$TEMPLATE_GENERATED_OUTPUT" ]; then
     log "Template generation produced output file"
     check_exists "$TEMPLATE_GENERATED_OUTPUT" "'generate --template' output"
+    LOG_PATH="$TEMPLATE_GENERATED_OUTPUT" python - <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+output_path = pathlib.Path(os.environ["LOG_PATH"])
+try:
+    data = json.loads(output_path.read_text(encoding="utf-8"))
+except Exception as exc:  # json decode should never fail here
+    print(f"failed to parse architecture output JSON: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+def ensure_datasource(entry, item_idx, ds_idx):
+    if not isinstance(entry, dict):
+        raise ValueError(f"item[{item_idx}] dataSources[{ds_idx}] is not an object: {entry!r}")
+    missing = [key for key in ("kind", "source") if key not in entry or not entry[key]]
+    if missing:
+        raise ValueError(
+            f"item[{item_idx}] dataSources[{ds_idx}] missing required fields: {missing}"
+        )
+
+if isinstance(data, list):
+    for idx, item in enumerate(data):
+        interface = isinstance(item, dict) and item.get("interface")
+        if not isinstance(interface, dict):
+            continue
+        if interface.get("type") != "page":
+            continue
+        page = interface.get("page")
+        if not isinstance(page, dict):
+            continue
+        data_sources = page.get("dataSources")
+        if not data_sources:
+            continue
+        if not isinstance(data_sources, list):
+            raise ValueError(f"item[{idx}] page.dataSources is not a list")
+        for ds_idx, entry in enumerate(data_sources):
+            ensure_datasource(entry, idx, ds_idx)
+else:
+    print("architecture output is not a list", file=sys.stderr)
+    sys.exit(1)
+PY
   else
-    log "Template generation did not produce output; verifying expected failure reason"
+    log "Template generation failed or did not produce output; verifying allowed failure reason"
     LOG_PATH="$LOG_FILE" START_MARK="TEMPLATES_GENERATE_ATTEMPT_START" END_MARK="TEMPLATES_GENERATE_ATTEMPT_END" python - <<'PY'
 import os
 import pathlib
@@ -1467,13 +1510,14 @@ if end_idx == -1:
 else:
     segment = text[start_idx:end_idx]
 allowed = (
-    "Generated JSON does not match output_schema",
     "All candidate models failed",
     "Connection error",
 )
-if not any(phrase in segment for phrase in allowed):
-    print("unexpected failure mode for generate --template", file=sys.stderr)
-    sys.exit(1)
+if any(phrase in segment for phrase in allowed):
+    sys.exit(0)
+
+print("unexpected failure mode for generate --template", file=sys.stderr)
+sys.exit(1)
 PY
     check_not_exists "$TEMPLATE_GENERATED_OUTPUT" "'generate --template' output file after failure"
   fi
