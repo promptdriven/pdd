@@ -1219,7 +1219,7 @@ Return JSON for the spec.
     )
 
 
-def test_architecture_template_datasource_string_allows_generation(
+def test_architecture_template_datasource_object_passes_schema(
     mock_ctx,
     temp_dir_setup,
     mock_construct_paths_fixture,
@@ -1257,7 +1257,14 @@ def test_architecture_template_datasource_string_allows_generation(
                     "type": "page",
                     "page": {
                         "route": "/inventory",
-                        "dataSources": ["/api/inventory"],
+                        "dataSources": [
+                            {
+                                "kind": "api",
+                                "source": "/api/inventory",
+                                "method": "GET",
+                                "description": "Fetch inventory table contents",
+                            }
+                        ],
                     },
                 },
             }
@@ -1279,26 +1286,85 @@ def test_architecture_template_datasource_string_allows_generation(
         env_vars={"PRD_FILE": str(prd_path)},
     )
 
-    if code != generated_json:
-        observed = [
-            str(call_args[0][0])
-            for call_args in mock_rich_console_fixture.call_args_list
-            if call_args and call_args[0]
-        ]
-        assert not incremental
-        assert model == "error"
-        assert not output_path.exists()
-        assert any(
-            "Generated JSON does not match output_schema" in message and "/api/inventory" in message
-            for message in observed
-        )
-        pytest.fail(
-            "architecture/architecture_json generation still fails schema validation for string dataSources (#82):\n"
-            + "\n".join(observed)
-        )
-
     assert not incremental
     assert cost == DEFAULT_MOCK_COST
     assert model == DEFAULT_MOCK_MODEL_NAME
     assert output_path.exists()
     assert output_path.read_text(encoding="utf-8") == generated_json
+
+
+def test_architecture_template_datasource_string_rejected(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_env_vars,
+    mock_rich_console_fixture,
+):
+    mock_ctx.obj['local'] = True
+    prompt_file_path = temp_dir_setup["output_dir"] / "architecture_string.prompt"
+    create_file(prompt_file_path, "placeholder")
+
+    prd_path = temp_dir_setup["tmp_path"] / "docs" / "specs.md"
+    create_file(prd_path, "Spec content for schema regression")
+
+    template_path = pathlib.Path("pdd/templates/architecture/architecture_json.prompt")
+    template_content = template_path.read_text(encoding="utf-8")
+    output_path = temp_dir_setup["output_dir"] / "architecture_string.json"
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": template_content},
+        {"output": str(output_path)},
+        "json",
+    )
+
+    invalid_json = json.dumps(
+        [
+            {
+                "reason": "Legacy string",
+                "description": "String data source should fail",
+                "dependencies": [],
+                "priority": 1,
+                "filename": "architecture.prompt",
+                "interface": {
+                    "type": "page",
+                    "page": {
+                        "route": "/inventory",
+                        "dataSources": ["/api/inventory"],
+                    },
+                },
+            }
+        ]
+    )
+
+    mock_local_generator_fixture.return_value = (
+        invalid_json,
+        DEFAULT_MOCK_COST,
+        DEFAULT_MOCK_MODEL_NAME,
+    )
+
+    code, incremental, cost, model = code_generator_main(
+        mock_ctx,
+        str(prompt_file_path),
+        str(output_path),
+        None,
+        False,
+        env_vars={"PRD_FILE": str(prd_path)},
+    )
+
+    observed = [
+        str(call_args[0][0])
+        for call_args in mock_rich_console_fixture.call_args_list
+        if call_args and call_args[0]
+    ]
+
+    assert code == ""
+    assert not incremental
+    assert cost == DEFAULT_MOCK_COST
+    assert model == "error"
+    assert not output_path.exists()
+    assert any(
+        "Generated JSON does not match output_schema" in message and "/api/inventory" in message
+        for message in observed
+    )
