@@ -1045,7 +1045,7 @@ pdd generate \
 - Interface object (typed, include only what applies):
   - `type`: `component` | `page` | `module` | `api` | `graphql` | `cli` | `job` | `message` | `config`
   - `component`: `props[]`, optional `emits[]`, `context[]`
-  - `page`: `route`, optional `params[]`, `dataSources[]`, `layout`
+  - `page`: `route`, optional `params[]`, `layout`, and `dataSources[]` where each entry is an object with required `kind` (e.g., `api`, `query`) and `source` (URL or identifier), plus optional `method`, `description`, `auth`, `inputs[]`, `outputs[]`, `refreshInterval`, `notes`
   - `module`: `functions[]` with `name`, `signature`, optional `returns`, `errors`, `sideEffects`
   - `api`: `endpoints[]` with `method`, `path`, optional `auth`, `requestSchema`, `responseSchema`, `errors`
   - `graphql`: optional `sdl`, or `operations` with `queries[]`, `mutations[]`, `subscriptions[]`
