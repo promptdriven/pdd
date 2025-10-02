@@ -323,12 +323,11 @@ def generate_output_paths(
             if command == "example":
                 examples_dir = EXAMPLES_DIR  # Fallback constant
                 # Create examples directory if it doesn't exist
-                if not os.path.exists(examples_dir):
-                    try:
-                        os.makedirs(examples_dir, exist_ok=True)
-                        logger.debug(f"Created examples directory: {examples_dir}")
-                    except OSError as e:
-                        logger.warning(f"Could not create examples directory: {e}")
+                try:
+                    os.makedirs(examples_dir, exist_ok=True)
+                    logger.debug(f"Created examples directory: {examples_dir}")
+                except OSError as e:
+                    logger.warning(f"Could not create examples directory: {e}")
                 final_path = os.path.join(examples_dir, default_filename)
                 logger.debug(f"Using default filename '{default_filename}' in examples directory.")
             else:
