@@ -347,9 +347,10 @@ def test_cli_templates_show_outputs_sections(mock_show_template, runner):
 
     assert result.exit_code == 0
     mock_show_template.assert_called_once_with("architecture/architecture_json")
+    assert "Template Summary:" in result.output
     assert "Architecture outline" in result.output
-    assert "Version:" in result.output
-    assert "Variables" in result.output
+    assert "Version" in result.output
+    assert "Variables:" in result.output
     assert "Output Schema" in result.output
     assert "Provide a PRD file." in result.output
 

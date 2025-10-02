@@ -2,7 +2,7 @@
   "name": "prompt-highlighter",
   "displayName": "Prompt Driven Development",
   "description": "Syntax highlighting for .prompt files in VS Code and OpenVSX-compatible IDEs (Prompt‑Driven Development, AI prompts)",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "engines": {
     "vscode": "^1.96.0"
   },
