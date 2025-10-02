@@ -14,9 +14,11 @@ from typing import Any, Dict, List, Optional, Tuple
 from pathlib import Path # Import Path
 
 import click
+from rich import box
 from rich.console import Console
-from rich.theme import Theme
 from rich.markup import MarkupError, escape
+from rich.table import Table
+from rich.theme import Theme
 
 # --- Relative Imports for Internal Modules ---
 from . import DEFAULT_STRENGTH, __version__, DEFAULT_TIME
@@ -348,14 +350,26 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
                     invoked_subcommands = ctx.obj.get('invoked_subcommands', []) or []
             except Exception:
                 invoked_subcommands = []
-    results = results or []
+    # Normalize results: Click may pass a single return value (e.g., a 3-tuple)
+    # rather than a list of results. Wrap single 3-tuples so we treat them as
+    # one step in the summary instead of three separate items.
+    if results is None:
+        normalized_results: List[Any] = []
+    elif isinstance(results, list):
+        normalized_results = results
+    elif isinstance(results, tuple) and len(results) == 3:
+        normalized_results = [results]
+    else:
+        # Fallback: wrap any other scalar/iterable as a single result
+        normalized_results = [results]
+
     num_commands = len(invoked_subcommands)
-    num_results = len(results) # Number of results actually received
+    num_results = len(normalized_results)  # Number of results actually received
 
     if not ctx.obj.get("quiet"):
         console.print("\n[info]--- Command Execution Summary ---[/info]")
 
-    for i, result_tuple in enumerate(results):
+    for i, result_tuple in enumerate(normalized_results):
         # Use the retrieved subcommand name (might be "Unknown Command X" in tests)
         command_name = invoked_subcommands[i] if i < num_commands else f"Unknown Command {i+1}"
 
@@ -395,7 +409,7 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
 
     if not ctx.obj.get("quiet"):
         # Only print total cost if at least one command potentially contributed cost
-        if any(res is not None and isinstance(res, tuple) and len(res) == 3 for res in results):
+        if any(res is not None and isinstance(res, tuple) and len(res) == 3 for res in normalized_results):
             console.print(f"[info]Total Estimated Cost:[/info] ${total_cost:.6f}")
         # Indicate if the chain might have been incomplete due to errors
         if num_results < num_commands and not all(res is None for res in results): # Avoid printing if all failed
@@ -437,20 +451,138 @@ def templates_show(name: str):
     try:
         data = template_registry.show_template(name)
         summary = data.get("summary", {})
-        console.print(f"[bold]{summary.get('name','')}[/bold] — {summary.get('description','')}")
-        console.print(f"Version: {summary.get('version','')}  Tags: {', '.join(summary.get('tags',[]))}")
-        console.print(f"Language: {summary.get('language','')}  Output: {summary.get('output','')}")
-        console.print(f"Path: {summary.get('path','')}")
+
+        def _render_key_value_table(title: Optional[str], items: List[Tuple[str, Any]], *, highlight_path: bool = False):
+            """Render a 2-column Rich table for key/value pairs."""
+
+            table = Table(show_header=False, box=box.SIMPLE, expand=True)
+            table.add_column("Field", style="info", no_wrap=True)
+            table.add_column("Value", overflow="fold")
+
+            added_rows = False
+            for label, value in items:
+                if value in (None, "", [], {}):
+                    continue
+                if isinstance(value, (list, tuple)):
+                    value_str = ", ".join(str(v) for v in value)
+                else:
+                    value_str = str(value)
+
+                if highlight_path and label.lower() == "path":
+                    value_markup = f"[path]{escape(value_str)}[/path]"
+                else:
+                    value_markup = escape(value_str)
+
+                table.add_row(label, value_markup)
+                added_rows = True
+
+            if added_rows:
+                if title:
+                    console.print(f"[info]{title}[/info]")
+                console.print(table)
+
+        summary_items = [
+            ("Name", summary.get("name")),
+            ("Description", summary.get("description")),
+            ("Version", summary.get("version")),
+            ("Tags", summary.get("tags", [])),
+            ("Language", summary.get("language")),
+            ("Output", summary.get("output")),
+            ("Path", summary.get("path")),
+        ]
+        _render_key_value_table("Template Summary:", summary_items, highlight_path=True)
+
         if data.get("variables"):
             console.print("\n[info]Variables:[/info]")
-            for k, v in data["variables"].items():
-                console.print(f"- {k}: {v}")
+            variables_table = Table(box=box.SIMPLE_HEAD, show_lines=False, expand=True)
+            variables_table.add_column("Name", style="bold", no_wrap=True)
+            variables_table.add_column("Required", style="info", no_wrap=True)
+            variables_table.add_column("Type", no_wrap=True)
+            variables_table.add_column("Description", overflow="fold")
+            variables_table.add_column("Default/Examples", overflow="fold")
+
+            for var_name, var_meta in data["variables"].items():
+                required = var_meta.get("required")
+                if required is True:
+                    required_str = "Yes"
+                elif required is False:
+                    required_str = "No"
+                else:
+                    required_str = "-"
+
+                var_type = escape(str(var_meta.get("type", "-")))
+                description = escape(str(var_meta.get("description", "")))
+
+                default_parts: List[str] = []
+                default_value = var_meta.get("default")
+                if default_value not in (None, ""):
+                    default_parts.append(f"default: {default_value}")
+
+                examples_value = var_meta.get("examples")
+                if examples_value:
+                    if isinstance(examples_value, (list, tuple)):
+                        examples_str = ", ".join(str(example) for example in examples_value)
+                    else:
+                        examples_str = str(examples_value)
+                    default_parts.append(f"examples: {examples_str}")
+
+                example_paths_value = var_meta.get("example_paths")
+                if example_paths_value:
+                    if isinstance(example_paths_value, (list, tuple)):
+                        example_paths_str = ", ".join(str(example) for example in example_paths_value)
+                    else:
+                        example_paths_str = str(example_paths_value)
+                    default_parts.append(f"paths: {example_paths_str}")
+
+                default_examples = "\n".join(default_parts) if default_parts else "-"
+
+                variables_table.add_row(
+                    escape(str(var_name)),
+                    required_str,
+                    var_type,
+                    description,
+                    escape(default_examples),
+                )
+
+            console.print(variables_table)
+
         if data.get("usage"):
             console.print("\n[info]Usage:[/info]")
-            console.print(data["usage"])  # raw; CLI may format later
+            usage = data["usage"]
+            if isinstance(usage, dict):
+                for group_name, entries in usage.items():
+                    console.print(f"[bold]{escape(str(group_name))}[/bold]")
+                    usage_table = Table(box=box.SIMPLE, show_lines=False, expand=True)
+                    usage_table.add_column("Name", style="bold", no_wrap=True)
+                    usage_table.add_column("Command", overflow="fold")
+
+                    if isinstance(entries, (list, tuple)):
+                        iterable_entries = entries
+                    else:
+                        iterable_entries = [entries]
+
+                    for entry in iterable_entries:
+                        if isinstance(entry, dict):
+                            name_value = escape(str(entry.get("name", "")))
+                            command_value = escape(str(entry.get("command", "")))
+                        else:
+                            name_value = "-"
+                            command_value = escape(str(entry))
+                        usage_table.add_row(name_value, f"[command]{command_value}[/command]")
+
+                    if usage_table.row_count:
+                        console.print(usage_table)
+            else:
+                console.print(usage)
+
         if data.get("discover"):
             console.print("\n[info]Discover:[/info]")
-            console.print(data["discover"])  # raw dict
+            discover = data["discover"]
+            if isinstance(discover, dict):
+                discover_items = [(str(key), value) for key, value in discover.items()]
+                _render_key_value_table(None, discover_items)
+            else:
+                console.print(discover)
         if data.get("output_schema"):
             console.print("\n[info]Output Schema:[/info]")
             try:
@@ -817,12 +949,6 @@ def preprocess(
     default=False,
     help="Automatically submit the example if all unit tests pass.",
 )
-@click.option(
-    "--agentic-fallback",
-    is_flag=True,
-    default=False,
-    help="Enable agentic fallback if the primary fix mechanism fails.",
-)
 @click.pass_context
 @track_cost
 def fix(
@@ -839,7 +965,6 @@ def fix(
     max_attempts: int,
     budget: float,
     auto_submit: bool,
-    agentic_fallback: bool,
 ) -> Optional[Tuple[Dict[str, Any], float, str]]:
     """Fix code based on a prompt and unit test errors."""
     try:
@@ -858,7 +983,6 @@ def fix(
             max_attempts=max_attempts,
             budget=budget,
             auto_submit=auto_submit,
-            agentic_fallback=agentic_fallback,
         )
         result = {
             "success": success,
