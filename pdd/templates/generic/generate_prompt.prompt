@@ -145,10 +145,30 @@ IMPORTANT: Your reply MUST begin with `<prompt>` on the very first line and end 
 - Start the output with `<prompt>` on its own line and end with `</prompt>` on its own line.
 - Do not emit any characters (including whitespace, markdown fences, or commentary) outside the `<prompt>...</prompt>` block.
 - Within the tags, include the sections described above as plain text.
-- Example skeleton:
+- OUTPUT FORMAT (authoritative – copy/paste and replace the bracketed placeholders, keeping every literal token):
+  ```text
   <prompt>
-  Requirements...
-  Dependencies...
-  Instructions...
-  Deliverable...
+  {ROLE_PARAGRAPH}
+  Requirements
+  1. {REQ_ITEM_1}
+  2. {REQ_ITEM_2}
+  Dependencies
+  <{DEPENDENCY_TAG_1}>
+    <include>{DEPENDENCY_INCLUDE_1}</include>
+  </{DEPENDENCY_TAG_1}>
+  {OPTIONAL_ADDITIONAL_DEPENDENCY_TAGS}
+  Prompt Dependencies:
+  {PROMPT_DEPENDENCIES_SECTION}
+  Instructions
+  - {INSTRUCTION_1}
+  - {INSTRUCTION_2}
+  Deliverable
+  - {DELIVERABLE_1}
+  - {DELIVERABLE_2}
+  Implementation assumptions (explicit)
+  - {ASSUMPTION_1}
+  - {ASSUMPTION_2}
+  Please produce production-ready prompt content that will generate the module consistent with the above.
   </prompt>
+  ```
+  Replace each `{PLACEHOLDER}` with concrete content while preserving the surrounding structure and literal `<prompt>` / `<include>` tags.

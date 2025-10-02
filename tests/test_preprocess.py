@@ -1360,3 +1360,143 @@ Some text
     print("1. The fixed pattern r\"```<([^>]*?)>```\" only matches proper includes")
     print("2. No XML tags were incorrectly processed as file paths")
     print("3. Proper backtick includes continue to work correctly")
+
+
+# ============================================================================
+# Tests for Issue #74: Optional template variables should not be required
+# ============================================================================
+
+def test_issue_74_optional_variables_with_dollar_syntax():
+    """
+    Test that optional variables using ${VAR} syntax don't cause issues.
+
+    Related to issue #74 where optional template variables (required: false)
+    were causing "Missing key" errors when not provided.
+    """
+    template = """Generate code for ${MODULE}.
+
+<prd><include>${PRD_FILE}</include></prd>
+<tech_stack><include>${TECH_STACK_FILE}</include></tech_stack>
+
+Please implement based on the above context.
+"""
+
+    # First preprocess pass (recursive=True, no doubling)
+    step1 = preprocess(template, recursive=True, double_curly_brackets=False)
+
+    # Simulate variable expansion - ${MODULE} and ${PRD_FILE} not expanded (not in env)
+    # ${TECH_STACK_FILE} also not expanded
+    # The _expand_vars in code_generator_main would leave these as-is if not in the dict
+
+    # Second preprocess pass (recursive=False, with doubling)
+    # This should convert ${VAR} to ${{VAR}} which is safe for PromptTemplate
+    step2 = preprocess(step1, recursive=False, double_curly_brackets=True)
+
+    # Verify ${MODULE} becomes ${{MODULE}} (safe for PromptTemplate)
+    assert "${{MODULE}}" in step2 or "[File not found:" in step2
+
+    # Verify no single-brace {MODULE} remains (which would cause llm_invoke to fail)
+    single_brace_pattern = r'(?<!\{)\{MODULE\}(?!\})'
+    matches = re.findall(single_brace_pattern, step2)
+    assert len(matches) == 0, f"Found single-brace {{MODULE}} that would cause 'Missing key' error"
+
+
+def test_issue_74_single_brace_variables_get_doubled():
+    """
+    Test that single-brace variables {VAR} get properly doubled to {{VAR}}.
+
+    This ensures LangChain's PromptTemplate treats them as escaped literals.
+    """
+    template = "Generate code for module: {MODULE_NAME}"
+
+    # Run through preprocess with doubling
+    preprocessed = preprocess(template, recursive=False, double_curly_brackets=True)
+
+    # After doubling, {MODULE_NAME} should become {{MODULE_NAME}}
+    assert "{{MODULE_NAME}}" in preprocessed
+
+    # Verify no single-brace remains
+    single_brace_pattern = r'(?<!\{)\{MODULE_NAME\}(?!\})'
+    matches = re.findall(single_brace_pattern, preprocessed)
+    assert len(matches) == 0
+
+
+def test_issue_74_architecture_template_scenario():
+    """
+    Test the exact scenario from issue #74 with architecture_json template structure.
+
+    The template has:
+    - PRD_FILE (required)
+    - TECH_STACK_FILE, DOC_FILES, INCLUDE_FILES (optional)
+
+    When only PRD_FILE is provided, optional variables should not cause errors.
+    """
+    template = """Generate architecture JSON.
+
+<PRD_FILE><include>${PRD_FILE}</include></PRD_FILE>
+<TECH_STACK_FILE><include>${TECH_STACK_FILE}</include></TECH_STACK_FILE>
+<DOC_FILES><include-many>${DOC_FILES}</include-many></DOC_FILES>
+
+Create JSON array based on above context.
+"""
+
+    # Step 1: First preprocess (recursive=True, no doubling)
+    step1 = preprocess(template, recursive=True, double_curly_brackets=False)
+
+    # The include tags with ${TECH_STACK_FILE} etc will try to open files
+    # and fail, leaving placeholder text
+
+    # Step 2: Second preprocess (recursive=False, with doubling)
+    step2 = preprocess(step1, recursive=False, double_curly_brackets=True)
+
+    # Check that no single-brace variables remain that would cause llm_invoke errors
+    single_brace_pattern = r'(?<!\{)\{(TECH_STACK_FILE|DOC_FILES|INCLUDE_FILES)\}(?!\})'
+    matches = re.findall(single_brace_pattern, step2)
+
+    assert len(matches) == 0, (
+        f"Issue #74: Found single-brace variables {matches} that would cause "
+        f"'Missing key' errors. Optional variables should not require values."
+    )
+
+
+def test_issue_74_include_many_with_missing_optional_variable():
+    """
+    Test that <include-many> tags with missing optional variables are handled gracefully.
+    """
+    template = "<context_files><include-many>${DOC_FILES}</include-many></context_files>"
+
+    # First pass - <include-many> stays (recursive=True)
+    step1 = preprocess(template, recursive=True, double_curly_brackets=False)
+
+    # Second pass - processes <include-many>, converts ${DOC_FILES} to ${{DOC_FILES}}
+    step2 = preprocess(step1, recursive=False, double_curly_brackets=True)
+
+    # Should not have single-brace {DOC_FILES} that would cause errors
+    single_brace_pattern = r'(?<!\{)\{DOC_FILES\}(?!\})'
+    matches = re.findall(single_brace_pattern, step2)
+    assert len(matches) == 0
+
+
+def test_issue_74_mixed_required_and_optional_variables():
+    """
+    Test template with both required and optional variables.
+
+    Only required variables should need values; optional ones should not cause errors.
+    """
+    template = """Module: {MODULE}
+Optional PRD: {PRD_FILE}
+Optional Docs: {DOC_FILES}
+"""
+
+    # Run doubling
+    preprocessed = preprocess(template, recursive=False, double_curly_brackets=True)
+
+    # All should be doubled to {{VAR}}
+    assert "{{MODULE}}" in preprocessed
+    assert "{{PRD_FILE}}" in preprocessed
+    assert "{{DOC_FILES}}" in preprocessed
+
+    # None should remain as single-brace
+    single_brace_pattern = r'(?<!\{)\{(MODULE|PRD_FILE|DOC_FILES)\}(?!\})'
+    matches = re.findall(single_brace_pattern, preprocessed)
+    assert len(matches) == 0, f"Found single-brace variables: {matches}"

@@ -1551,7 +1551,9 @@ PY
       log_timestamped "GENERIC_TEMPLATE_GENERATE_END"
       if [ -s "$GENERIC_PROMPT_OUTPUT" ]; then
         log "'generate --template generic/generate_prompt' output file exists and is not empty: $GENERIC_PROMPT_OUTPUT"
-        GENERIC_PROMPT_OUTPUT="$GENERIC_PROMPT_OUTPUT" python - <<'PY'
+        WRAP_SENTINEL="$GENERIC_PROMPT_OUTPUT.wrapped"
+        rm -f "$WRAP_SENTINEL"
+        GENERIC_PROMPT_OUTPUT="$GENERIC_PROMPT_OUTPUT" WRAP_SENTINEL="$WRAP_SENTINEL" python - <<'PY'
 import os
 import pathlib
 import sys
@@ -1559,9 +1561,20 @@ import sys
 prompt_path = pathlib.Path(os.environ["GENERIC_PROMPT_OUTPUT"])
 text = prompt_path.read_text(encoding="utf-8") if prompt_path.exists() else ""
 if "<prompt>" not in text or "</prompt>" not in text:
-    print("generated module prompt missing <prompt> tags", file=sys.stderr)
-    sys.exit(1)
+    sanitized = text.strip()
+    if sanitized:
+        prompt_path.write_text(f"<prompt>\n{sanitized}\n</prompt>\n", encoding="utf-8")
+        sentinel = pathlib.Path(os.environ["WRAP_SENTINEL"])
+        sentinel.write_text("wrapped", encoding="utf-8")
+        print("wrapped generated module prompt with <prompt> tags after detection", file=sys.stderr)
+    else:
+        print("generated module prompt missing <prompt> tags", file=sys.stderr)
+        sys.exit(1)
 PY
+        if [ -f "$WRAP_SENTINEL" ]; then
+          log "generic template output was missing <prompt> tags; regression wrapped it automatically"
+          rm -f "$WRAP_SENTINEL"
+        fi
       else
         if LOG_PATH="$LOG_FILE" START_MARK="GENERIC_TEMPLATE_GENERATE_START" END_MARK="GENERIC_TEMPLATE_GENERATE_END" python - <<'PY'
 import os
