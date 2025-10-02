@@ -1,6 +1,6 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.60-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.61-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
@@ -285,7 +285,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.60
+Current version: 0.0.61
 
 To check your installed version, run:
 ```
@@ -1045,7 +1045,7 @@ pdd generate \
 - Interface object (typed, include only what applies):
   - `type`: `component` | `page` | `module` | `api` | `graphql` | `cli` | `job` | `message` | `config`
   - `component`: `props[]`, optional `emits[]`, `context[]`
-  - `page`: `route`, optional `params[]`, `dataSources[]`, `layout`
+  - `page`: `route`, optional `params[]`, `layout`, and `dataSources[]` where each entry is an object with required `kind` (e.g., `api`, `query`) and `source` (URL or identifier), plus optional `method`, `description`, `auth`, `inputs[]`, `outputs[]`, `refreshInterval`, `notes`
   - `module`: `functions[]` with `name`, `signature`, optional `returns`, `errors`, `sideEffects`
   - `api`: `endpoints[]` with `method`, `path`, optional `auth`, `requestSchema`, `responseSchema`, `errors`
   - `graphql`: optional `sdl`, or `operations` with `queries[]`, `mutations[]`, `subscriptions[]`
@@ -1478,34 +1478,6 @@ Example (overwrite original prompt - default behavior):
 pdd [GLOBAL OPTIONS] update factorial_calculator_python.prompt src/modified_factorial_calculator.py src/original_factorial_calculator.py
 # This overwrites factorial_calculator_python.prompt in place
 ```
-
-#### Agentic Fallback Mode
-
-For particularly difficult bugs that the standard iterative fix process cannot resolve, `pdd fix` offers a powerful agentic fallback mode. When activated, it invokes a project-aware CLI agent to attempt a fix with a much broader context.
-
-**How it Works:**
-If the standard fix loop completes all its attempts and fails to make the tests pass, the agentic fallback will take over. It constructs a detailed set of instructions and delegates the fixing task to a dedicated CLI agent like Google's Gemini, Anthropic's Claude, or OpenAI's Codex.
-
-**How to Use:**
-To enable this feature, you must use both the `--loop` and `--agentic-fallback` flags:
-```bash
-pdd [GLOBAL OPTIONS] fix --loop --agentic-fallback [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
-```
-
-**Prerequisites:**
-For the agentic fallback to function, you need to have at least one of the supported agent CLIs installed and the corresponding API key configured in your environment. The agents are tried in the following order of preference:
-
-1.  **Anthropic Claude:**
-    *   Requires the `claude` CLI to be installed and in your `PATH`.
-    *   Requires the `ANTHROPIC_API_KEY` environment variable to be set.
-2.  **Google Gemini:**
-    *   Requires the `gemini` CLI to be installed and in your `PATH`.
-    *   Requires the `GOOGLE_API_KEY` environment variable to be set.
-3.  **OpenAI Codex/GPT:**
-    *   Requires the `codex` CLI to be installed and in your `PATH`.
-    *   Requires the `OPENAI_API_KEY` environment variable to be set.
-
-You can configure these keys using `pdd setup` or by setting them in your shell's environment.
 
 Example (save to different location):
 ```
