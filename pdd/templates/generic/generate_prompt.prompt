@@ -22,11 +22,11 @@ variables:
     type: string
     description: System layer or interface type for context.
     examples: [backend, frontend, api, graphql, cli, job, message, config, module, component, page]
-  README_FILE:
+  PRD_FILE:
     required: false
     type: path
-    description: Project README to provide overall context.
-    example_paths: [README.md, docs/README.md]
+    description: Product requirements document providing overall context.
+    example_paths: [PRD.md, docs/product/prd.md]
   API_DOC_FILE:
     required: false
     type: path
@@ -48,7 +48,7 @@ variables:
     description: CSV of function inputs/outputs and dependencies for backend modules.
     example_paths: [prompts/backend/io_dependencies.csv]
   ARCHITECTURE_FILE:
-    required: false
+    required: true
     type: path
     description: Architecture JSON (from architecture/architecture_json) to drive module scope, dependencies, and interface.
     example_paths: [architecture.json]
@@ -75,14 +75,14 @@ variables:
     default: py
 usage:
   generate:
-    - name: Minimal (module only)
-      command: pdd generate -e MODULE=orders -e LANG_OR_FRAMEWORK=Python --output 'prompts/${MODULE}_${LANG_OR_FRAMEWORK}.prompt' pdd/templates/generic/generate_prompt.prompt
+    - name: Minimal (architecture only)
+      command: pdd generate -e MODULE=orders -e LANG_OR_FRAMEWORK=Python -e ARCHITECTURE_FILE=architecture.json --output 'prompts/${MODULE}_${LANG_OR_FRAMEWORK}.prompt' pdd/templates/generic/generate_prompt.prompt
     - name: With project docs
-      command: pdd generate -e MODULE=orders -e LANG_OR_FRAMEWORK=Python -e README_FILE=README.md -e API_DOC_FILE=docs/api-documentation.md -e DB_SCHEMA_FILE=context/database-schema.md --output 'prompts/${MODULE}_${LANG_OR_FRAMEWORK}.prompt' pdd/templates/generic/generate_prompt.prompt
+      command: pdd generate -e MODULE=orders -e LANG_OR_FRAMEWORK=Python -e ARCHITECTURE_FILE=architecture.json -e PRD_FILE=docs/PRD.md -e API_DOC_FILE=docs/api-documentation.md -e DB_SCHEMA_FILE=context/database-schema.md --output 'prompts/${MODULE}_${LANG_OR_FRAMEWORK}.prompt' pdd/templates/generic/generate_prompt.prompt
     - name: With CSVs and references (backend/Python)
-      command: pdd generate -e MODULE=orders -e LANG_OR_FRAMEWORK=Python -e README_FILE=README.md -e API_DOC_FILE=docs/api-documentation.md -e DB_SCHEMA_FILE=context/database-schema.md -e BACKEND_FILES_CSV=prompts/backend/python_architecture.csv -e IO_DEPENDENCIES_CSV=prompts/backend/io_dependencies.csv -e CODE_GENERATOR_PROMPT=prompts/code_generator_python.prompt --output 'prompts/${MODULE}_${LANG_OR_FRAMEWORK}.prompt' pdd/templates/generic/generate_prompt.prompt
+      command: pdd generate -e MODULE=orders -e LANG_OR_FRAMEWORK=Python -e ARCHITECTURE_FILE=architecture.json -e PRD_FILE=docs/PRD.md -e API_DOC_FILE=docs/api-documentation.md -e DB_SCHEMA_FILE=context/database-schema.md -e BACKEND_FILES_CSV=prompts/backend/python_architecture.csv -e IO_DEPENDENCIES_CSV=prompts/backend/io_dependencies.csv -e CODE_GENERATOR_PROMPT=prompts/code_generator_python.prompt --output 'prompts/${MODULE}_${LANG_OR_FRAMEWORK}.prompt' pdd/templates/generic/generate_prompt.prompt
     - name: Frontend (TypeScriptReact) variant
-      command: pdd generate -e MODULE=profile_page -e LANG_OR_FRAMEWORK=TypeScriptReact -e LAYER=frontend -e README_FILE=README.md --output 'prompts/${MODULE}_${LANG_OR_FRAMEWORK}.prompt' pdd/templates/generic/generate_prompt.prompt
+      command: pdd generate -e MODULE=profile_page -e LANG_OR_FRAMEWORK=TypeScriptReact -e LAYER=frontend -e ARCHITECTURE_FILE=architecture.json -e PRD_FILE=docs/PRD.md --output 'prompts/${MODULE}_${LANG_OR_FRAMEWORK}.prompt' pdd/templates/generic/generate_prompt.prompt
     - name: From architecture.json
       command: pdd generate -e MODULE=orders_api -e LANG_OR_FRAMEWORK=Python -e LAYER=api -e ARCHITECTURE_FILE=architecture.json --output 'prompts/${MODULE}_${LANG_OR_FRAMEWORK}.prompt' pdd/templates/generic/generate_prompt.prompt
 
@@ -94,8 +94,8 @@ discover:
 
 % You are an expert prompt writer and software architect for PDD. Your goal is to write a high-quality prompt that will generate the code for the ${MODULE} module/component. The prompt you create will be used to produce a detailed implementation specification in a file named ${MODULE}_${LANG_OR_FRAMEWORK}.prompt, suitable for the specified stack and layer.
 
-% Project context (optional but recommended):
-<readme><include>${README_FILE}</include></readme>
+% Project context (architecture required, others optional):
+<prd><include>${PRD_FILE}</include></prd>
 <api><include>${API_DOC_FILE}</include></api>
 <database><include>${DB_SCHEMA_FILE}</include></database>
 <backend_files_csv><include>${BACKEND_FILES_CSV}</include></backend_files_csv>
@@ -110,7 +110,7 @@ discover:
 % Do the following:
 - Explain concisely what you are going to do (create a prompt for the ${MODULE} module/component for the specified layer and stack).
 - Analyze any difficulties this prompt might encounter for ${MODULE} (e.g., data modeling, API or UI contracts, transactions, idempotency, auth, state management, error handling) and briefly state mitigation strategies tailored to the given LAYER and LANG_OR_FRAMEWORK.
-- If ARCHITECTURE_FILE is provided, identify the item that corresponds to this prompt by matching `filename` to `${MODULE}_${LANG_OR_FRAMEWORK}.prompt` (or best match by basename and layer). Use that item’s `reason`, `description`, `dependencies`, `interface`, and `tags` to shape the sections below.
+- Use the ARCHITECTURE_FILE to identify the item that corresponds to this prompt by matching `filename` to `${MODULE}_${LANG_OR_FRAMEWORK}.prompt` (or best match by basename and layer). Use that item’s `reason`, `description`, `dependencies`, `interface`, and `tags` to shape the sections below.
 - Then create the prompt content for ${MODULE} inside XML tags named prompt, ensuring conventions fit the stack and layer.
 
 % The prompt you generate must follow this structure:
@@ -127,9 +127,9 @@ discover:
   </orders_service>
 - Prefer real example files available in the provided context (use <include-many> when listing multiple). If examples are not provided, assume dependency examples live under context/ using the pattern context/[dependency_name]_example.${DEP_EXAMPLE_EXT}.
 - Include all necessary dependencies for the module/component (based on the provided context and references).
-- When using ARCHITECTURE_FILE, its `dependencies` reference other prompt filenames. Convert each dependency prompt filename into a sensible dependency name (strip language suffix and `_prompt`), and map to context files with the `${DEP_EXAMPLE_EXT}` extension if present; otherwise, list the prompt filename explicitly in a "Prompt Dependencies" subsection.
+- The ARCHITECTURE_FILE lists `dependencies` referencing other prompt filenames. Convert each dependency prompt filename into a sensible dependency name (strip language suffix and `_prompt`), and map to context files with the `${DEP_EXAMPLE_EXT}` extension if present; otherwise, list the prompt filename explicitly in a "Prompt Dependencies" subsection.
 
-% Architecture awareness (when ARCHITECTURE_FILE provided):
+% Architecture awareness (ARCHITECTURE_FILE is required):
 - Align the "Requirements" and "Instructions" with the selected item’s `interface.type` (e.g., page, component, module, api, graphql, cli, job, message, config).
 - For `api`, outline endpoints (method, path, auth) consistent with the architecture description; for `page`/`component`, describe route/props/data sources; for `job`, include trigger and retry policy; for `config`, list keys and sources.
 

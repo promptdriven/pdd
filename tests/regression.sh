@@ -1489,6 +1489,108 @@ else:
     print("architecture output is not a list", file=sys.stderr)
     sys.exit(1)
 PY
+
+    # Use the generated architecture output to drive generic/generate_prompt
+    log "Deriving module/language from architecture output for generic template"
+    GENERIC_ENV_FILE="$REGRESSION_DIR/generic_template_env.sh"
+    ARCH_JSON_PATH="$TEMPLATE_GENERATED_OUTPUT" PYTHONPATH="$PDD_BASE_DIR${PYTHONPATH:+:$PYTHONPATH}" python - <<'PY' > "$GENERIC_ENV_FILE"
+import json
+import os
+import pathlib
+import shlex
+import sys
+
+arch_path = pathlib.Path(os.environ["ARCH_JSON_PATH"])
+if not arch_path.exists():
+    print("architecture JSON file not found", file=sys.stderr)
+    sys.exit(1)
+try:
+    data = json.loads(arch_path.read_text(encoding="utf-8"))
+except Exception as exc:  # JSON decode errors should be fatal here
+    print(f"failed to parse architecture JSON: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+if not isinstance(data, list) or not data:
+    print("architecture JSON has no entries", file=sys.stderr)
+    sys.exit(1)
+
+item = data[0]
+filename = isinstance(item, dict) and item.get("filename")
+if not filename or not filename.endswith(".prompt"):
+    print("architecture entry missing prompt filename", file=sys.stderr)
+    sys.exit(1)
+
+basename = filename[:-len(".prompt")]
+parts = basename.split("_")
+if len(parts) >= 2:
+    module = "_".join(parts[:-1])
+    language = parts[-1]
+else:
+    module = basename
+    language = "Python"
+
+print(f"MODULE_FROM_ARCHITECTURE={shlex.quote(module)}")
+print(f"LANG_FROM_ARCHITECTURE={shlex.quote(language)}")
+PY
+    # shellcheck disable=SC1090
+    source "$GENERIC_ENV_FILE"
+
+    SANITIZED_MODULE=$(printf '%s' "$MODULE_FROM_ARCHITECTURE" | tr -c '[:alnum:]_' '_')
+    SANITIZED_LANG=$(printf '%s' "$LANG_FROM_ARCHITECTURE" | tr -c '[:alnum:]_' '_')
+    GENERIC_PROMPT_OUTPUT="$REGRESSION_DIR/${SANITIZED_MODULE}_${SANITIZED_LANG}.prompt"
+
+    log "Generating generic/generate_prompt using architecture output -> $GENERIC_PROMPT_OUTPUT"
+    log_timestamped "GENERIC_TEMPLATE_GENERATE_START"
+    if run_pdd_command_noexit generate --template generic/generate_prompt \
+        -e MODULE="$MODULE_FROM_ARCHITECTURE" \
+        -e LANG_OR_FRAMEWORK="$LANG_FROM_ARCHITECTURE" \
+        -e ARCHITECTURE_FILE="$TEMPLATE_GENERATED_OUTPUT" \
+        -e PRD_FILE="$TEMPLATE_PRD_FILE" \
+        -e TECH_STACK_FILE="$TEMPLATE_TECH_STACK_FILE" \
+        --output "$GENERIC_PROMPT_OUTPUT"; then
+      log_timestamped "GENERIC_TEMPLATE_GENERATE_END"
+      check_exists "$GENERIC_PROMPT_OUTPUT" "'generate --template generic/generate_prompt' output"
+      GENERIC_PROMPT_OUTPUT="$GENERIC_PROMPT_OUTPUT" python - <<'PY'
+import os
+import pathlib
+import sys
+
+prompt_path = pathlib.Path(os.environ["GENERIC_PROMPT_OUTPUT"])
+text = prompt_path.read_text(encoding="utf-8") if prompt_path.exists() else ""
+if "<prompt>" not in text or "</prompt>" not in text:
+    print("generated module prompt missing <prompt> tags", file=sys.stderr)
+    sys.exit(1)
+PY
+    else
+      log_timestamped "GENERIC_TEMPLATE_GENERATE_END"
+      LOG_PATH="$LOG_FILE" START_MARK="GENERIC_TEMPLATE_GENERATE_START" END_MARK="GENERIC_TEMPLATE_GENERATE_END" python - <<'PY'
+import os
+import pathlib
+import sys
+
+log_path = pathlib.Path(os.environ["LOG_PATH"])
+start_mark = os.environ["START_MARK"]
+end_mark = os.environ["END_MARK"]
+
+text = log_path.read_text(encoding="utf-8")
+start_idx = text.rfind(start_mark)
+if start_idx == -1:
+    print("generic template generate start marker missing", file=sys.stderr)
+    sys.exit(1)
+end_idx = text.find(end_mark, start_idx)
+segment = text[start_idx:] if end_idx == -1 else text[start_idx:end_idx]
+allowed = (
+    "All candidate models failed",
+    "Connection error",
+)
+if any(phrase in segment for phrase in allowed):
+    sys.exit(0)
+
+print("unexpected failure mode for generate --template generic/generate_prompt", file=sys.stderr)
+sys.exit(1)
+PY
+      check_not_exists "$GENERIC_PROMPT_OUTPUT" "'generate --template generic/generate_prompt' output file after failure"
+    fi
   else
     log "Template generation failed or did not produce output; verifying allowed failure reason"
     LOG_PATH="$LOG_FILE" START_MARK="TEMPLATES_GENERATE_ATTEMPT_START" END_MARK="TEMPLATES_GENERATE_ATTEMPT_END" python - <<'PY'
