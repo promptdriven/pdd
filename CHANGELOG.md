@@ -1,3 +1,19 @@
+## v0.0.62 (2025-10-02)
+
+### Feat
+
+- improve prompt generation and validation in regression tests
+- enforce prompt structure in generate_prompt template
+- enhance templates show command output with Rich tables
+
+### Fix
+
+- update model names in llm_model.csv for consistency
+
+### Refactor
+
+- update generate_prompt template for improved context handling
+
 ## v0.0.61 (2025-09-23)
 
 ### VS Code Extension
