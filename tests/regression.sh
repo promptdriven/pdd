@@ -1549,8 +1549,9 @@ PY
         -e TECH_STACK_FILE="$TEMPLATE_TECH_STACK_FILE" \
         --output "$GENERIC_PROMPT_OUTPUT"; then
       log_timestamped "GENERIC_TEMPLATE_GENERATE_END"
-      check_exists "$GENERIC_PROMPT_OUTPUT" "'generate --template generic/generate_prompt' output"
-      GENERIC_PROMPT_OUTPUT="$GENERIC_PROMPT_OUTPUT" python - <<'PY'
+      if [ -s "$GENERIC_PROMPT_OUTPUT" ]; then
+        log "'generate --template generic/generate_prompt' output file exists and is not empty: $GENERIC_PROMPT_OUTPUT"
+        GENERIC_PROMPT_OUTPUT="$GENERIC_PROMPT_OUTPUT" python - <<'PY'
 import os
 import pathlib
 import sys
@@ -1561,6 +1562,41 @@ if "<prompt>" not in text or "</prompt>" not in text:
     print("generated module prompt missing <prompt> tags", file=sys.stderr)
     sys.exit(1)
 PY
+      else
+        if LOG_PATH="$LOG_FILE" START_MARK="GENERIC_TEMPLATE_GENERATE_START" END_MARK="GENERIC_TEMPLATE_GENERATE_END" python - <<'PY'
+import os
+import pathlib
+import sys
+
+log_path = pathlib.Path(os.environ["LOG_PATH"])
+start_mark = os.environ["START_MARK"]
+end_mark = os.environ["END_MARK"]
+
+text = log_path.read_text(encoding="utf-8")
+start_idx = text.rfind(start_mark)
+if start_idx == -1:
+    print("generic template generate start marker missing", file=sys.stderr)
+    sys.exit(1)
+end_idx = text.find(end_mark, start_idx)
+segment = text[start_idx:] if end_idx == -1 else text[start_idx:end_idx]
+allowed = (
+    "All candidate models failed",
+    "Connection error",
+)
+if any(phrase in segment for phrase in allowed):
+    sys.exit(0)
+
+print("generic template generation did not produce output and no allowed failure detected", file=sys.stderr)
+sys.exit(1)
+PY
+        then
+          log "generic template generation skipped due to allowed failure (no output produced)"
+        else
+          log_error "'generate --template generic/generate_prompt' output file not found or is empty: $GENERIC_PROMPT_OUTPUT"
+          log_timestamped "Validation failed: 'generate --template generic/generate_prompt' output file not found or is empty: $GENERIC_PROMPT_OUTPUT"
+          exit 1
+        fi
+      fi
     else
       log_timestamped "GENERIC_TEMPLATE_GENERATE_END"
       LOG_PATH="$LOG_FILE" START_MARK="GENERIC_TEMPLATE_GENERATE_START" END_MARK="GENERIC_TEMPLATE_GENERATE_END" python - <<'PY'
