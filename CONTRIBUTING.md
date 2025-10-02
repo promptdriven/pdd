@@ -100,7 +100,7 @@ Artifacts appear in `dist/`.
 
 ## Tools for Contributors
 - IDEs: Cursor (great prompt autocomplete) or VS Code (PDD extension for syntax highlighting).
-- CLIs: Codex CLI and other LLM CLIs (e.g., Gemini); use what works for you.
+- CLIs: Kodex CLI and other LLM CLIs (e.g., Gemini); use what works for you.
 - Docker: for reproducible bug reports and dev environments.
 
 ## Key PDD CLI Parameters
