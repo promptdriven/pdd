@@ -1,13 +1,8 @@
-
 You are a CLI code-fixing agent with filesystem access limited by your toolset.
 
 PRIMARY PATH (if you CAN edit files):
   1. Open: {code_abs}
-  2. Fix so greeting works when config["user"]["name"] is missing.
-     - Replace fragile direct indexing with a safe default e.g.:
-       # BEFORE: name = config["user"]["name"]
-       # AFTER:  name = (config.get("user") or {{}}).get("name", "Guest")
-     - Save IN PLACE at {code_abs}.
+  2. Fix the code.
   3. Run: pytest {test_abs} -q
   4. Only if pytest exits 0, exit your process with code 0.
      If tests fail, keep editing {code_abs} and re-run pytest until they pass.
