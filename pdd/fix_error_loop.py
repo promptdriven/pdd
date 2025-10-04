@@ -13,6 +13,8 @@ from rich.console import Console
 from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
 from . import DEFAULT_TIME # Import DEFAULT_TIME
 from .python_env_detector import detect_host_python_executable
+from .agentic_fix import run_agentic_fix
+
 
 console = Console()
 
@@ -20,75 +22,24 @@ def escape_brackets(text: str) -> str:
     """Escape square brackets so Rich doesn't misinterpret them."""
     return text.replace("[", "\\[").replace("]", "\\]")
 
+import pytest
+from .pytest_output import TestResultCollector
+
 def run_pytest_on_file(test_file: str) -> tuple[int, int, int, str]:
     """
-    Run pytest on the specified test file using subprocess.
+    Run pytest on the specified test file using the TestResultCollector plugin.
     Returns a tuple: (failures, errors, warnings, logs)
     """
-    try:
-        # Try using the pdd pytest-output command first (works with uv tool installs)
-        cmd = ["pdd", "pytest-output", "--json-only", test_file]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        
-        # If pdd command failed, try fallback approaches
-        if result.returncode != 0 and ("command not found" in result.stderr.lower() or "not found" in result.stderr.lower()):
-            # Fallback 1: Try direct function call (fastest for development)
-            try:
-                from .pytest_output import run_pytest_and_capture_output
-                pytest_output = run_pytest_and_capture_output(test_file)
-                result_stdout = json.dumps(pytest_output)
-                result = type('MockResult', (), {'stdout': result_stdout, 'stderr': '', 'returncode': 0})()
-            except ImportError:
-                # Fallback 2: Try python -m approach for development installs where pdd isn't in PATH
-                python_executable = detect_host_python_executable()
-                cmd = [python_executable, "-m", "pdd.pytest_output", "--json-only", test_file]
-                result = subprocess.run(cmd, capture_output=True, text=True)
-        
-        # Parse the JSON output from stdout
-        try:
-            # Extract just the JSON part from stdout (handles CLI contamination)
-            stdout_clean = result.stdout
-            json_start = stdout_clean.find('{')
-            if json_start == -1:
-                raise json.JSONDecodeError("No JSON found in output", stdout_clean, 0)
-            
-            # Find the end of the JSON object by counting braces
-            brace_count = 0
-            json_end = json_start
-            for i, char in enumerate(stdout_clean[json_start:], json_start):
-                if char == '{':
-                    brace_count += 1
-                elif char == '}':
-                    brace_count -= 1
-                    if brace_count == 0:
-                        json_end = i + 1
-                        break
-            
-            json_str = stdout_clean[json_start:json_end]
-            output = json.loads(json_str)
-            test_results = output.get('test_results', [{}])[0]
-            
-            # Check pytest's return code first
-            return_code = test_results.get('return_code', 1)
-            
-            failures = test_results.get('failures', 0)
-            errors = test_results.get('errors', 0)
-            warnings = test_results.get('warnings', 0)
-
-            if return_code == 2:
-                errors += 1
-            
-            # Combine stdout and stderr from the test results
-            logs = test_results.get('standard_output', '') + '\n' + test_results.get('standard_error', '')
-            
-            return failures, errors, warnings, logs
-            
-        except json.JSONDecodeError:
-            # If JSON parsing fails, return the raw output
-            return 1, 1, 0, f"Failed to parse pytest output:\n{result.stdout}\n{result.stderr}"
-            
-    except Exception as e:
-        return 1, 1, 0, f"Error running pytest: {str(e)}"
+    collector = TestResultCollector()
+    pytest.main([test_file], plugins=[collector])
+    logs, _ = collector.get_logs()
+    
+    # If there are any errors or failures, we should return a non-zero value
+    # to indicate that the test has failed.
+    if collector.errors > 0 or collector.failures > 0:
+        return collector.failures, collector.errors, collector.warnings, logs
+    
+    return 0, 0, collector.warnings, logs
 
 def format_log_for_output(log_structure):
     """
@@ -132,6 +83,7 @@ def format_log_for_output(log_structure):
 
 def fix_error_loop(unit_test_file: str,
                    code_file: str,
+                   prompt_file: str,
                    prompt: str,
                    verification_program: str,
                    strength: float,
@@ -140,7 +92,8 @@ def fix_error_loop(unit_test_file: str,
                    budget: float,
                    error_log_file: str = "error_log.txt",
                    verbose: bool = False,
-                   time: float = DEFAULT_TIME):
+                   time: float = DEFAULT_TIME,
+                   agentic_fallback: bool = False):
     """
     Attempt to fix errors in a unit test and corresponding code using repeated iterations, 
     counting only the number of times we actually call the LLM fix function. 
@@ -161,7 +114,7 @@ def fix_error_loop(unit_test_file: str,
         error_log_file: Path to file to log errors (default: "error_log.txt").
         verbose: Enable verbose logging (default: False).
         time: Time parameter for the fix_errors_from_unit_tests call.
-
+        agentic_fallback: Whether to trigger cli agentic fallback when fix fails.
     Outputs:
         success: Boolean indicating if the overall process succeeded.
         final_unit_test: String contents of the final unit test file.
@@ -555,6 +508,22 @@ def fix_error_loop(unit_test_file: str,
     
     rprint(f"Improvement: {stats['improvement']['fails_reduced']} fails, {stats['improvement']['errors_reduced']} errors, {stats['improvement']['warnings_reduced']} warnings")
     rprint(f"Overall improvement: {stats['improvement']['percent_improvement']:.2f}%")
+
+    if not success and agentic_fallback and total_cost < budget:
+        success, _ = run_agentic_fix(
+            prompt_file=prompt_file,
+            code_file=code_file,
+            unit_test_file=unit_test_file,
+            error_log_file=error_log_file,
+        )
+        if success:
+            try:
+                with open(unit_test_file, "r") as f:
+                    final_unit_test = f.read()
+                with open(code_file, "r") as f:
+                    final_code = f.read()
+            except Exception as e:
+                rprint(f"[yellow]Warning: Could not read files after successful agentic fix: {e}[/yellow]")
 
     return success, final_unit_test, final_code, fix_attempts, total_cost, model_name
 
