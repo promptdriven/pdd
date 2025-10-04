@@ -1,5 +1,7 @@
+ONLY OUTPUT the fully corrected code:
 
-ONLY OUTPUT the fully corrected {code_abs} between the markers below.
+<code_abs>
+{code_abs} between the markers below.
 NO commentary, NO markdown fences, NO tool output, NOTHING else between markers.
 {begin}
 <FULL CORRECTED FILE CONTENT HERE>
