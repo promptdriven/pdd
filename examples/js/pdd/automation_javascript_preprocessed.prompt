@@ -1,0 +1,14 @@
+You're an expert JS programmer and you're gonna create a new js module named automations that can screen record a users
+interaction with a page, store it in the toolbar, and replay it back later in a new tab.
+
+The inputs are the data recorded from using puppeteer and the outputs are json blobs that i want stored locally on disk.
+
+This automations module will be called by modules/classes in renderer.js
+
+<renderer.js>
+[File not found: ./renderer.js]
+</renderer.js>
+
+<main.js>
+[File not found: ./main.js]
+</main.js>
