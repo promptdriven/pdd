@@ -34,7 +34,7 @@ def fix_main(
     max_attempts: int,
     budget: float,
     auto_submit: bool,
-    agentic_fallback: bool = False
+    agentic_fallback: bool = True
 ) -> Tuple[bool, str, str, int, float, str]:
     """
     Main function to fix errors in code and unit tests.
