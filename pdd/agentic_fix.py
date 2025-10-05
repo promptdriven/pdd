@@ -83,8 +83,6 @@ def find_llm_csv_path() -> Optional[Path]:
         return project_path
     return None
 
-
-
 def _print_head(label: str, text: str, max_lines: int = _MAX_LOG_LINES) -> None:
     if not _IS_VERBOSE:
         return
@@ -340,6 +338,22 @@ def _run_google_variants(prompt_text: str, cwd: Path, total_timeout: int, label:
         return subprocess.CompletedProcess(variants[-1], 124, stdout="", stderr="timeout")
     return last
 
+# --- verification helper (deduplicated) ---
+def _verify_and_log(unit_test_file: str, cwd: Path) -> bool:
+    """Run `pytest <unit_test_file> -q`, log output, and return True on success."""
+    _info("[cyan]Verifying agent fix by running the test file...[/cyan]")
+    verify = subprocess.run(
+        [os.sys.executable, "-m", "pytest", unit_test_file, "-q"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=_VERIFY_TIMEOUT,
+        cwd=str(cwd),
+    )
+    _print_head("pytest stdout", verify.stdout)
+    _print_head("pytest stderr", verify.stderr)
+    return verify.returncode == 0
+
 # --- main execution helpers ---
 def _try_harvest_then_verify(
     provider: str,
@@ -399,18 +413,7 @@ def _try_harvest_then_verify(
                 _print_diff(code_snapshot, newest, code_path)
 
                 if _VERIFY_AFTER_AGENT:
-                    _info("[cyan]Verifying agent fix by running the test file...[/cyan]")
-                    verify = subprocess.run(
-                        [os.sys.executable, "-m", "pytest", unit_test_file, "-q"],
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                        timeout=_VERIFY_TIMEOUT,
-                        cwd=str(cwd),
-                    )
-                    _print_head("pytest stdout", verify.stdout)
-                    _print_head("pytest stderr", verify.stderr)
-                    if verify.returncode == 0:
+                    if _verify_and_log(unit_test_file, cwd):
                         _always(f"[bold green]{provider.capitalize()} agent completed successfully and tests passed.[/bold green]")
                         try: harvest_file.unlink()
                         except Exception: pass
@@ -431,18 +434,7 @@ def _try_harvest_then_verify(
     _print_diff(code_snapshot, newest, code_path)
 
     if _VERIFY_AFTER_AGENT:
-        _info("[cyan]Verifying agent fix by running the test file...[/cyan]")
-        verify = subprocess.run(
-            [os.sys.executable, "-m", "pytest", unit_test_file, "-q"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=_VERIFY_TIMEOUT,
-            cwd=str(cwd),
-        )
-        _print_head("pytest stdout", verify.stdout)
-        _print_head("pytest stderr", verify.stderr)
-        if verify.returncode == 0:
+        if _verify_and_log(unit_test_file, cwd):
             _always(f"[bold green]{provider.capitalize()} agent completed successfully and tests passed.[/bold green]")
             try: harvest_file.unlink()
             except Exception: pass
@@ -579,18 +571,7 @@ def run_agentic_fix(
             # Verify if agent claims success or code changed
             proceed_to_verify = (res.returncode == 0) or (new_code != orig_code)
             if proceed_to_verify and _VERIFY_AFTER_AGENT:
-                _info("[cyan]Verifying agent fix by running the test file...[/cyan]")
-                verify = subprocess.run(
-                    [os.sys.executable, "-m", "pytest", unit_test_file, "-q"],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    timeout=_VERIFY_TIMEOUT,
-                    cwd=str(cwd),
-                )
-                _print_head("pytest stdout", verify.stdout)
-                _print_head("pytest stderr", verify.stderr)
-                if verify.returncode == 0:
+                if _verify_and_log(unit_test_file, cwd):
                     _always(f"[bold green]{provider.capitalize()} agent completed successfully and tests passed.[/bold green]")
                     try: instruction_file.unlink()
                     except Exception: pass
