@@ -94,7 +94,7 @@ def fix_error_loop(unit_test_file: str,
                    error_log_file: str = "error_log.txt",
                    verbose: bool = False,
                    time: float = DEFAULT_TIME,
-                   agentic_fallback: bool = False):
+                   agentic_fallback: bool = True):
     """
     Attempt to fix errors in a unit test and corresponding code using repeated iterations, 
     counting only the number of times we actually call the LLM fix function. 
