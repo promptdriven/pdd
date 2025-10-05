@@ -1,0 +1,3 @@
+Create a Java project with the following file in a 'src' directory.
+
+ **`src/Main.java`**: This file should import `getGreeting` from `Utils.java`. It should contain a function `createUserGreeting` that calls `getGreeting` to create a greeting for a user with the name John Doe.

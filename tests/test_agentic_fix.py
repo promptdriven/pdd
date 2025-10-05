@@ -458,3 +458,173 @@ def test_fix_command_codex(tmp_path, monkeypatch):
 
     assert ok is True
     _assert_fixed()
+
+def test_non_python_immediate_agentic_gemini(tmp_path, monkeypatch):
+    """
+    Non-Python input: should trigger Gemini (mocked) agentic fallback immediately
+    and skip pytest.
+    """
+    # Arrange: non-Python code + dummy test/verify files
+    code_dir = tmp_path / "proj"
+    code_dir.mkdir()
+    code_file = code_dir / "index.js"
+    code_file.write_text("export const add = (a,b) => a + b + 1;")
+
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    unit_test_file = tests_dir / "test_dummy.txt"
+    unit_test_file.write_text("dummy test content")
+
+    verify_file = tmp_path / "verify.sh"
+    verify_file.write_text("echo verify")
+    error_log = tmp_path / "error.log"
+
+    # Simulate "Gemini present" env (not strictly required; no real agent is called)
+    monkeypatch.setenv("GOOGLE_API_KEY", "dummy")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    # Patch agent + pytest
+    mock_agent = MagicMock(return_value=(True, "Gemini ok"))
+    monkeypatch.setattr("pdd.fix_error_loop.run_agentic_fix", mock_agent)
+    mock_pytest = MagicMock()
+    monkeypatch.setattr("pdd.fix_error_loop.run_pytest_on_file", mock_pytest)
+
+    # Act
+    success, final_test, final_code, attempts, cost, model = fix_error_loop(
+        unit_test_file=str(unit_test_file),
+        code_file=str(code_file),                     # <-- non-Python
+        prompt_file="dummy.prompt",
+        prompt="Fix the JS function",
+        verification_program=str(verify_file),
+        strength=0.0,
+        temperature=0.0,
+        max_attempts=3,
+        budget=5.0,
+        error_log_file=str(error_log),
+        verbose=False,
+        agentic_fallback=True,
+    )
+
+    # Assert
+    mock_agent.assert_called_once()
+    mock_pytest.assert_not_called()
+    assert success is True
+    assert attempts == 1
+    assert model == "agentic-cli"
+    assert "dummy test content" in final_test
+    assert "export const add" in final_code
+
+
+def test_non_python_immediate_agentic_claude(tmp_path, monkeypatch):
+    """
+    Non-Python input: should trigger Claude (mocked) agentic fallback immediately
+    and skip pytest.
+    """
+    # Arrange
+    code_dir = tmp_path / "app"
+    code_dir.mkdir()
+    code_file = code_dir / "main.rs"
+    code_file.write_text('fn main() { println!("Hello"); }')
+
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    unit_test_file = tests_dir / "test_dummy.txt"
+    unit_test_file.write_text("dummy rust test")
+
+    verify_file = tmp_path / "verify.sh"
+    verify_file.write_text("echo verify")
+    error_log = tmp_path / "error.log"
+
+    # Simulate "Claude present"
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "dummy")
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    # Patch agent + pytest
+    mock_agent = MagicMock(return_value=(True, "Claude ok"))
+    monkeypatch.setattr("pdd.fix_error_loop.run_agentic_fix", mock_agent)
+    mock_pytest = MagicMock()
+    monkeypatch.setattr("pdd.fix_error_loop.run_pytest_on_file", mock_pytest)
+
+    # Act
+    success, final_test, final_code, attempts, cost, model = fix_error_loop(
+        unit_test_file=str(unit_test_file),
+        code_file=str(code_file),                     # <-- non-Python
+        prompt_file="dummy.prompt",
+        prompt="Fix the Rust code",
+        verification_program=str(verify_file),
+        strength=0.0,
+        temperature=0.0,
+        max_attempts=2,
+        budget=5.0,
+        error_log_file=str(error_log),
+        verbose=True,
+        agentic_fallback=True,
+    )
+
+    # Assert
+    mock_agent.assert_called_once()
+    mock_pytest.assert_not_called()
+    assert success is True
+    assert attempts == 1
+    assert model == "agentic-cli"
+    assert "dummy rust test" in final_test
+    assert "fn main()" in final_code
+
+
+def test_non_python_immediate_agentic_codex(tmp_path, monkeypatch):
+    """
+    Non-Python input: should trigger Codex/OpenAI (mocked) agentic fallback immediately
+    and skip pytest.
+    """
+    # Arrange
+    code_dir = tmp_path / "web"
+    code_dir.mkdir()
+    code_file = code_dir / "styles.css"
+    code_file.write_text("body { color: red; } /* bad style? */")
+
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    unit_test_file = tests_dir / "test_dummy.txt"
+    unit_test_file.write_text("dummy css test")
+
+    verify_file = tmp_path / "verify.sh"
+    verify_file.write_text("echo verify")
+    error_log = tmp_path / "error.log"
+
+    # Simulate "OpenAI present"
+    monkeypatch.setenv("OPENAI_API_KEY", "dummy")
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    # Patch agent + pytest
+    mock_agent = MagicMock(return_value=(True, "Codex ok"))
+    monkeypatch.setattr("pdd.fix_error_loop.run_agentic_fix", mock_agent)
+    mock_pytest = MagicMock()
+    monkeypatch.setattr("pdd.fix_error_loop.run_pytest_on_file", mock_pytest)
+
+    # Act
+    success, final_test, final_code, attempts, cost, model = fix_error_loop(
+        unit_test_file=str(unit_test_file),
+        code_file=str(code_file),                     # <-- non-Python
+        prompt_file="dummy.prompt",
+        prompt="Fix the CSS",
+        verification_program=str(verify_file),
+        strength=0.0,
+        temperature=0.0,
+        max_attempts=2,
+        budget=5.0,
+        error_log_file=str(error_log),
+        verbose=False,
+        agentic_fallback=True,
+    )
+
+    # Assert
+    mock_agent.assert_called_once()
+    mock_pytest.assert_not_called()
+    assert success is True
+    assert attempts == 1
+    assert model == "agentic-cli"
+    assert "dummy css test" in final_test
+    assert "body { color: red;" in final_code
