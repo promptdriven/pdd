@@ -33,6 +33,9 @@ _LOGLEVEL = (_env_level or "normal").strip().lower()
 _IS_QUIET = _LOGLEVEL == "quiet"
 _IS_VERBOSE = _LOGLEVEL == "verbose"
 
+# --- simple per-call estimate (kept minimal & opt-in)
+_AGENT_COST_PER_CALL = float(os.getenv("PDD_AGENTIC_COST_PER_CALL", "0.02"))
+
 def _print(msg: str, *, force: bool = False) -> None:
     if not _IS_QUIET or force:
         console.print(msg)
@@ -63,14 +66,10 @@ def _end_marker(path: Path) -> str:
 def get_agent_command(provider: str, instruction_file: Path) -> List[str]:
     p = provider.lower()
     if p == "anthropic":
-        # Use non-interactive -p path; handled by _run_anthropic_variants(), so no direct cmd here.
         return []
     if p == "google":
-        # Use non-interactive -p path; handled by _run_google_variants(), so no direct cmd here.
         return []
     if p == "openai":
-        # Codex CLI tends to require exec; we'll still run via _run_openai_variants(),
-        # but keeping a default here is harmless.
         return ["codex", "exec", "--skip-git-repo-check"]
     return []
 
@@ -138,25 +137,17 @@ def _extract_corrected_from_output(stdout: str, stderr: str, code_path: Path) ->
     if not matches:
         return None
 
-    # Filter out the placeholder we include in instructions
     placeholder_token = "FULL CORRECTED FILE CONTENT HERE"
     filtered = [b for b in matches if placeholder_token.lower() not in b.lower()]
 
-    # Prefer the last valid match (model output usually comes after echoed prompt)
     if filtered:
         return filtered[-1]
-
-    # Fallback to the last match if all we saw were placeholders
     return matches[-1]
 
-# --- Gemini plain-fence fallback (sometimes ignores our markers)
+# Gemini plain-fence fallback
 _CODE_FENCE_RE = re.compile(r"```(?:python)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 
 def _extract_python_code_block(*blobs: str) -> Optional[str]:
-    """
-    Return the last plausible Python code fence from the given text blobs.
-    Heuristics: prefer blocks containing the function name or common imports.
-    """
     candidates: List[str] = []
     for blob in blobs:
         if not blob:
@@ -169,13 +160,10 @@ def _extract_python_code_block(*blobs: str) -> Optional[str]:
     if not candidates:
         return None
 
-    # Prefer blocks that look like our utils.py
     for block in reversed(candidates):
         low = block.lower()
         if "def get_greeting" in low or "from pathlib import path" in low or "import json" in low:
             return block
-
-    # Fallback: last code fence
     return candidates[-1]
 
 def _run_cli(cmd: List[str], cwd: Path, timeout: int) -> subprocess.CompletedProcess:
@@ -188,7 +176,7 @@ def _run_cli(cmd: List[str], cwd: Path, timeout: int) -> subprocess.CompletedPro
         cwd=str(cwd),
     )
 
-# --- Common sanitized env (no colors/tty noise) ---
+# Common sanitized env
 def _sanitized_env_common() -> dict:
     env = os.environ.copy()
     env["TERM"] = "dumb"
@@ -202,10 +190,9 @@ def _sanitized_env_common() -> dict:
     env["LINES"] = env.get("LINES", "40")
     return env
 
-# --- OpenAI (codex) non-interactive variants ---
+# OpenAI (codex)
 def _sanitized_env_for_openai() -> dict:
     env = _sanitized_env_common()
-    # Prevent bash completion spew
     for k in list(env.keys()):
         if k.startswith("COMP_") or k in ("BASH_COMPLETION", "BASH_COMPLETION_COMPAT_DIR", "BASH_VERSION", "BASH", "ZDOTDIR", "ZSH_NAME", "ZSH_VERSION"):
             env.pop(k, None)
@@ -226,10 +213,6 @@ def _run_cli_args_openai(args: List[str], cwd: Path, timeout: int) -> subprocess
     )
 
 def _run_openai_variants(prompt_text: str, cwd: Path, total_timeout: int, label: str) -> subprocess.CompletedProcess:
-    """
-    Run the OpenAI/Codex CLI in a reliable, non-interactive way.
-    We *never* call the 'completion' subcommand (it prints shell completions).
-    """
     wrapper = (
         "You must ONLY output the corrected file content wrapped EXACTLY between "
         "the two markers I provide. No commentary. "
@@ -256,7 +239,7 @@ def _run_openai_variants(prompt_text: str, cwd: Path, total_timeout: int, label:
         return subprocess.CompletedProcess(variants[-1], 124, stdout="", stderr="timeout")
     return last
 
-# --- Anthropic (claude) non-interactive variants ---
+# Anthropic (claude)
 def _run_cli_args_anthropic(args: List[str], cwd: Path, timeout: int) -> subprocess.CompletedProcess:
     return subprocess.run(
         args,
@@ -269,9 +252,6 @@ def _run_cli_args_anthropic(args: List[str], cwd: Path, timeout: int) -> subproc
     )
 
 def _run_anthropic_variants(prompt_text: str, cwd: Path, total_timeout: int, label: str) -> subprocess.CompletedProcess:
-    """
-    Run the Claude CLI non-interactively via -p (avoid interactive shell/implement).
-    """
     wrapper = (
         "IMPORTANT: You must ONLY output the corrected file content wrapped EXACTLY "
         "between the two markers below. NO commentary, NO extra text.\n"
@@ -296,7 +276,7 @@ def _run_anthropic_variants(prompt_text: str, cwd: Path, total_timeout: int, lab
         return subprocess.CompletedProcess(variants[-1], 124, stdout="", stderr="timeout")
     return last
 
-# --- Google (gemini) non-interactive variants ---
+# Google (gemini)
 def _run_cli_args_google(args: List[str], cwd: Path, timeout: int) -> subprocess.CompletedProcess:
     return subprocess.run(
         args,
@@ -309,10 +289,6 @@ def _run_cli_args_google(args: List[str], cwd: Path, timeout: int) -> subprocess
     )
 
 def _run_google_variants(prompt_text: str, cwd: Path, total_timeout: int, label: str) -> subprocess.CompletedProcess:
-    """
-    Run the Gemini CLI non-interactively via -p.
-    Do NOT pass unknown flags like --skip-git-repo-check (CLI rejects them).
-    """
     wrapper = (
         "IMPORTANT: ONLY output the corrected file content wrapped EXACTLY between "
         "the two markers below. No commentary. No extra text.\n"
@@ -321,7 +297,6 @@ def _run_google_variants(prompt_text: str, cwd: Path, total_timeout: int, label:
 
     variants = [
         ["gemini", "-p", full],
-        # If needed later, we could add: ["gemini", "-p", full, "--output-format", "text"]
     ]
     per_attempt = max(8, min(30, total_timeout // 2))
     last: Optional[subprocess.CompletedProcess] = None
@@ -338,9 +313,8 @@ def _run_google_variants(prompt_text: str, cwd: Path, total_timeout: int, label:
         return subprocess.CompletedProcess(variants[-1], 124, stdout="", stderr="timeout")
     return last
 
-# --- verification helper (deduplicated) ---
+# verification helper
 def _verify_and_log(unit_test_file: str, cwd: Path) -> bool:
-    """Run `pytest <unit_test_file> -q`, log output, and return True on success."""
     _info("[cyan]Verifying agent fix by running the test file...[/cyan]")
     verify = subprocess.run(
         [os.sys.executable, "-m", "pytest", unit_test_file, "-q"],
@@ -402,7 +376,6 @@ def _try_harvest_then_verify(
 
     harvested = _extract_corrected_from_output(res.stdout, res.stderr, code_path.resolve())
     if harvested is None:
-        # Gemini sometimes returns a plain code fence instead of our markers.
         if provider == "google":
             code_block = _extract_python_code_block(res.stdout, res.stderr)
             if code_block:
@@ -440,7 +413,6 @@ def _try_harvest_then_verify(
             except Exception: pass
             return True
     else:
-        # Verification disabled → consider “file applied” as success
         _always(f"[bold green]{provider.capitalize()} agent applied changes (verification skipped).[/bold green]")
         try: harvest_file.unlink()
         except Exception: pass
@@ -455,10 +427,14 @@ def run_agentic_fix(
     code_file: str,
     unit_test_file: str,
     error_log_file: str,
-) -> Tuple[bool, str]:
+) -> Tuple[bool, str, float, str]:
     _always("[bold yellow]Standard fix failed. Initiating agentic fallback (AGENT-ONLY)...[/bold yellow]")
 
     instruction_file: Optional[Path] = None
+    # minimal, aggregated cost & model for upstream accounting
+    est_cost: float = 0.0
+    used_model: str = "agentic-cli"
+
     try:
         cwd = Path.cwd()
         _info(f"[cyan]Project root (cwd): {cwd}[/cyan]")
@@ -487,7 +463,7 @@ def run_agentic_fix(
 
         _info(f"[cyan]Env API keys present (names only): {', '.join(present_keys) or 'none'}[/cyan]")
         if not available_agents:
-            return False, "No configured agent API keys found in environment."
+            return False, "No configured agent API keys found in environment.", est_cost, used_model
 
         _info(f"[cyan]Available agents found: {', '.join(available_agents)}[/cyan]")
 
@@ -500,7 +476,7 @@ def run_agentic_fix(
 
         primary_prompt_template = load_prompt_template("agentic_fix_primary_LLM")
         if not primary_prompt_template:
-            return False, "Failed to load primary agent prompt template."
+            return False, "Failed to load primary agent prompt template.", est_cost, used_model
 
         primary_instr = primary_prompt_template.format(
             code_abs=str(code_path),
@@ -519,6 +495,7 @@ def run_agentic_fix(
 
         # 4) try agents in preference order
         for provider in available_agents:
+            used_model = f"agentic-{provider}"
             cmd = get_agent_command(provider, instruction_file)
             binary = (cmd[0] if cmd else {"anthropic": "claude", "google": "gemini", "openai": "codex"}.get(provider, ""))
             cli_path = shutil.which(binary) or "NOT-IN-PATH"
@@ -532,16 +509,17 @@ def run_agentic_fix(
                 _info(f"[yellow]Skipping {provider.capitalize()} (CLI '{binary}' not found in PATH).[/yellow]")
                 continue
 
-            # Strategy:
-            # - Google & OpenAI & Anthropic: harvest-first (printing markers is most robust)
+            # Harvest-first path — count the agent call
             if provider in ("google", "openai", "anthropic"):
+                est_cost += _AGENT_COST_PER_CALL
                 if _try_harvest_then_verify(provider, code_path, unit_test_file, orig_code, test_content, error_content, cwd):
                     try: instruction_file.unlink()
                     except Exception: pass
-                    return True, f"Agentic fix successful with {provider.capitalize()}."
+                    return True, f"Agentic fix successful with {provider.capitalize()}.", est_cost, used_model
                 _info("[yellow]Harvest-first attempt did not pass; trying primary instruction path...[/yellow]")
 
-            # primary instruction path
+            # Primary instruction path — count another agent call
+            est_cost += _AGENT_COST_PER_CALL
             try:
                 if provider == "openai":
                     res = _run_openai_variants(primary_instr, cwd, max(30, _AGENT_CALL_TIMEOUT // 2), "primary")
@@ -558,19 +536,16 @@ def run_agentic_fix(
             _print_head(f"{provider.capitalize()} stdout", res.stdout)
             _print_head(f"{provider.capitalize()} stderr", res.stderr)
 
-            # If agent printed corrected file, apply it
             harvested = _extract_corrected_from_output(res.stdout, res.stderr, code_path.resolve())
             if harvested is not None:
                 _info("[cyan]Detected corrected file content in agent output (primary attempt). Applying patch...[/cyan]")
                 code_path.write_text(harvested, encoding="utf-8")
             elif provider == "google":
-                # Gemini often returns a fenced code block instead of markers
                 code_block = _extract_python_code_block(res.stdout, res.stderr)
                 if code_block:
                     _info("[cyan]Detected a Python code block from Google (no markers). Applying patch...[/cyan]")
                     code_path.write_text(code_block, encoding="utf-8")
 
-            # Diff to see if file changed (some agents may write directly)
             new_code = code_path.read_text(encoding="utf-8")
             _print_diff(orig_code, new_code, code_path)
 
@@ -581,26 +556,24 @@ def run_agentic_fix(
                         _always(f"[bold green]{provider.capitalize()} agent completed successfully and tests passed.[/bold green]")
                         try: instruction_file.unlink()
                         except Exception: pass
-                        return True, f"Agentic fix successful with {provider.capitalize()}."
+                        return True, f"Agentic fix successful with {provider.capitalize()}.", est_cost, used_model
                 else:
-                    # Verification disabled → success if code changed or agent returned OK
                     if new_code != orig_code or res.returncode == 0:
                         _always(f"[bold green]{provider.capitalize()} agent applied changes (verification skipped).[/bold green]")
                         try: instruction_file.unlink()
                         except Exception: pass
-                        return True, f"Agentic fix successful with {provider.capitalize()}."
+                        return True, f"Agentic fix successful with {provider.capitalize()}.", est_cost, used_model
 
-            # prepare for next agent
             orig_code = new_code
             _info(f"[yellow]{provider.capitalize()} attempt did not yield a passing test. Trying next...[/yellow]")
 
-        # 5) No local fallback — fail cleanly
+        # No local fallback — fail cleanly
         try:
             if instruction_file and instruction_file.exists():
                 instruction_file.unlink()
         except Exception:
             pass
-        return False, "All agents failed to produce a passing fix (no local fallback)."
+        return False, "All agents failed to produce a passing fix (no local fallback).", est_cost, used_model
 
     except FileNotFoundError as e:
         msg = f"A required file or command was not found: {e}. Is the agent CLI installed and in your PATH?"
@@ -610,7 +583,7 @@ def run_agentic_fix(
                 instruction_file.unlink()
         except Exception:
             pass
-        return False, msg
+        return False, msg, 0.0, "agentic-cli"
     except Exception as e:
         _always(f"[bold red]An unexpected error occurred during agentic fix:[/bold red] {e}")
         try:
@@ -618,4 +591,4 @@ def run_agentic_fix(
                 instruction_file.unlink()
         except Exception:
             pass
-        return False, str(e)
+        return False, str(e), 0.0, "agentic-cli"
