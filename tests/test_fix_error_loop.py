@@ -382,3 +382,99 @@ def test_missing_files():
         agentic_fallback=False
     )
     assert success is False
+
+def test_non_python_triggers_agentic_fallback_success(tmp_path):
+    """
+    If the code_file is not a .py file, fix_error_loop should immediately
+    trigger agentic fallback and return its result.
+    """
+    # Arrange: make a dummy non-Python code file and a unit test file
+    code_dir = tmp_path / "proj"
+    code_dir.mkdir()
+    code_file = code_dir / "index.js"
+    code_file.write_text("export const add = (a,b) => a + b + 1;")  # broken on purpose
+
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    unit_test_file = tests_dir / "test_dummy.txt"
+    unit_test_file.write_text("dummy unit test content")
+
+    verify_file = tmp_path / "verify.sh"
+    verify_file.write_text("echo verify")  # not used in non-Python path
+    error_log = tmp_path / "error_log.txt"
+
+    with patch("pdd.fix_error_loop.run_agentic_fix") as mock_agent, \
+         patch("pdd.fix_error_loop.run_pytest_on_file") as mock_pytest:
+        mock_agent.return_value = (True, "ok")
+        # Act
+        success, final_test, final_code, attempts, cost, model = fix_error_loop(
+            unit_test_file=str(unit_test_file),
+            code_file=str(code_file),
+            prompt_file="dummy_prompt.txt",
+            prompt="Fix the JS add function",
+            verification_program=str(verify_file),
+            strength=0.5,
+            temperature=0.0,
+            max_attempts=2,
+            budget=5.0,
+            error_log_file=str(error_log),
+            verbose=True,
+            agentic_fallback=True,
+        )
+
+    # Assert: agentic path taken, pytest never called
+    mock_agent.assert_called_once()
+    mock_pytest.assert_not_called()
+    assert success is True
+    assert attempts == 1
+    assert model == "agentic-cli"
+    # Returned contents come from reading files (best-effort in implementation)
+    assert "dummy unit test content" in final_test
+    assert "export const add" in final_code
+
+
+def test_non_python_triggers_agentic_fallback_failure(tmp_path):
+    """
+    If agentic fallback returns failure, fix_error_loop should propagate that failure
+    and still count 1 attempt, without invoking pytest.
+    """
+    code_dir = tmp_path / "proj"
+    code_dir.mkdir()
+    code_file = code_dir / "main.rs"
+    code_file.write_text("fn main() { println!(\"Hello\"); }")
+
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    unit_test_file = tests_dir / "test_dummy.txt"
+    unit_test_file.write_text("dummy test")
+
+    verify_file = tmp_path / "verify.sh"
+    verify_file.write_text("echo verify")
+    error_log = tmp_path / "error_log.txt"
+
+    with patch("pdd.fix_error_loop.run_agentic_fix") as mock_agent, \
+         patch("pdd.fix_error_loop.run_pytest_on_file") as mock_pytest:
+        mock_agent.return_value = (False, "not ok")
+        success, final_test, final_code, attempts, cost, model = fix_error_loop(
+            unit_test_file=str(unit_test_file),
+            code_file=str(code_file),
+            prompt_file="dummy_prompt.txt",
+            prompt="Fix the Rust code",
+            verification_program=str(verify_file),
+            strength=0.5,
+            temperature=0.0,
+            max_attempts=2,
+            budget=5.0,
+            error_log_file=str(error_log),
+            verbose=False,
+            agentic_fallback=True,
+        )
+
+    mock_agent.assert_called_once()
+    mock_pytest.assert_not_called()
+    assert success is False
+    assert attempts == 1
+    assert model == "agentic-cli"
+    # Should still return contents read from disk on best-effort basis
+    assert "dummy test" in final_test
+    assert "fn main()" in final_code

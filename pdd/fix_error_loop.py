@@ -134,6 +134,29 @@ def fix_error_loop(unit_test_file: str,
     if verbose:
         rprint("[cyan]Starting fix error loop process.[/cyan]")
 
+    # NEW: If target is not a Python file, trigger agentic fallback immediately
+    if not str(code_file).lower().endswith(".py"):
+        rprint("[cyan]Non-Python target detected. Triggering agentic fallback...[/cyan]")
+        success, _ = run_agentic_fix(
+            prompt_file=prompt_file,
+            code_file=code_file,
+            unit_test_file=unit_test_file,
+            error_log_file=error_log_file,
+        )
+        final_unit_test = ""
+        final_code = ""
+        try:
+            with open(unit_test_file, "r") as f:
+                final_unit_test = f.read()
+        except Exception:
+            pass
+        try:
+            with open(code_file, "r") as f:
+                final_code = f.read()
+        except Exception:
+            pass
+        return success, final_unit_test, final_code, 1, 0.0, "agentic-cli"
+
     # Remove existing error log file if it exists.
     if os.path.exists(error_log_file):
         try:
