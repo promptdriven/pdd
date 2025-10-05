@@ -240,12 +240,6 @@ class TestEnhancedPDDExample:
             
             # Mock LLM to return correct import syntax
             correct_import_code = """
-import sys
-import os
-
-# Add module path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'hello', 'pdd'))
-
 from hello import hello
 
 def main():
