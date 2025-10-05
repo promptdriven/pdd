@@ -118,7 +118,7 @@ def test_successful_fix(setup_files):
                 True, True,  # updated_unit_test, updated_code
                 files["test_file"].read_text(),
                 fixed_code,  # corrected code
-                "dummy analysis", # analysis
+                "dummy analysis", # Analysis
                 0.1,         # cost
                 "mock-model"  # model_name
             )
