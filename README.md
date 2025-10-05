@@ -1487,9 +1487,9 @@ For particularly difficult bugs that the standard iterative fix process cannot r
 If the standard fix loop completes all its attempts and fails to make the tests pass, the agentic fallback will take over. It constructs a detailed set of instructions and delegates the fixing task to a dedicated CLI agent like Google's Gemini, Anthropic's Claude, or OpenAI's Codex.
 
 **How to Use:**
-To enable this feature, you must use both the `--loop` and `--agentic-fallback` flags:
+To enable this feature, you must use the `--loop` flags:
 ```bash
-pdd [GLOBAL OPTIONS] fix --loop --agentic-fallback [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
+pdd [GLOBAL OPTIONS] fix --loop [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
 ```
 
 **Prerequisites:**
