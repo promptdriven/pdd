@@ -11,7 +11,7 @@ from rich.console import Console
 
 # Relative import from an internal module.
 from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
-from . import DEFAULT_TIME # Import DEFAULT_TIME
+from . import DEFAULT_TIME  # Import DEFAULT_TIME
 from .python_env_detector import detect_host_python_executable
 from .agentic_fix import run_agentic_fix
 
@@ -22,6 +22,37 @@ def escape_brackets(text: str) -> str:
     """Escape square brackets so Rich doesn't misinterpret them."""
     return text.replace("[", "\\[").replace("]", "\\]")
 
+# ---------- Normalize any agentic return shape to a 4-tuple ----------
+def _normalize_agentic_result(result):
+    """
+    Normalize run_agentic_fix result into: (success: bool, msg: str, cost: float, model: str)
+    Handles older 2/3-tuple shapes used by tests/monkeypatches.
+    """
+    if isinstance(result, tuple):
+        if len(result) == 4:
+            ok, msg, cost, model = result
+            return bool(ok), str(msg), float(cost), str(model or "agentic-cli")
+        if len(result) == 3:
+            ok, msg, cost = result
+            return bool(ok), str(msg), float(cost), "agentic-cli"
+        if len(result) == 2:
+            ok, msg = result
+            return bool(ok), str(msg), 0.0, "agentic-cli"
+    # Fallback (shouldn't happen)
+    return False, "Invalid agentic result shape", 0.0, "agentic-cli"
+
+def _safe_run_agentic_fix(*, prompt_file, code_file, unit_test_file, error_log_file):
+    """
+    Call (possibly monkeypatched) run_agentic_fix and normalize its return.
+    """
+    res = run_agentic_fix(
+        prompt_file=prompt_file,
+        code_file=code_file,
+        unit_test_file=unit_test_file,
+        error_log_file=error_log_file,
+    )
+    return _normalize_agentic_result(res)
+# ---------------------------------------------------------------------
 
 
 def run_pytest_on_file(test_file: str) -> tuple[int, int, int, str]:
@@ -134,10 +165,11 @@ def fix_error_loop(unit_test_file: str,
     if verbose:
         rprint("[cyan]Starting fix error loop process.[/cyan]")
 
-    # NEW: If target is not a Python file, trigger agentic fallback immediately
+    # If target is not a Python file, trigger agentic fallback immediately
     if not str(code_file).lower().endswith(".py"):
         rprint("[cyan]Non-Python target detected. Triggering agentic fallback...[/cyan]")
-        success, _ = run_agentic_fix(
+        # capture cost + model via safe wrapper
+        success, _msg, agent_cost, agent_model = _safe_run_agentic_fix(
             prompt_file=prompt_file,
             code_file=code_file,
             unit_test_file=unit_test_file,
@@ -155,7 +187,7 @@ def fix_error_loop(unit_test_file: str,
                 final_code = f.read()
         except Exception:
             pass
-        return success, final_unit_test, final_code, 1, 0.0, "agentic-cli"
+        return success, final_unit_test, final_code, 1, agent_cost, agent_model
 
     # Remove existing error log file if it exists.
     if os.path.exists(error_log_file):
@@ -354,7 +386,7 @@ def fix_error_loop(unit_test_file: str,
                 strength,
                 temperature,
                 verbose=verbose,
-                time=time # Pass time parameter
+                time=time  # Pass time parameter
             )
             
             # Update the fix attempt in the structured log
@@ -522,25 +554,28 @@ def fix_error_loop(unit_test_file: str,
     
     # Calculate improvements
     stats["improvement"] = {
-        "fails_reduced": initial_fails - stats["final_fails"],
-        "errors_reduced": initial_errors - stats["final_errors"],
-        "warnings_reduced": initial_warnings - stats["final_warnings"],
-        "percent_improvement": 100 if initial_fails + initial_errors + initial_warnings == 0 else 
-                              (1 - (stats["final_fails"] + stats["final_errors"] + stats["final_warnings"]) / 
+        "fails_reduced": initial_fails - stats['final_fails'],
+        "errors_reduced": initial_errors - stats['final_errors'],
+        "warnings_reduced": initial_warnings - stats['final_warnings'],
+        "percent_improvement": 100 if (initial_fails + initial_errors + initial_warnings) == 0 else 
+                              (1 - (stats['final_fails'] + stats['final_errors'] + stats['final_warnings']) / 
                                    (initial_fails + initial_errors + initial_warnings)) * 100
     }
     
     rprint(f"Improvement: {stats['improvement']['fails_reduced']} fails, {stats['improvement']['errors_reduced']} errors, {stats['improvement']['warnings_reduced']} warnings")
     rprint(f"Overall improvement: {stats['improvement']['percent_improvement']:.2f}%")
 
+    # Agentic fallback at end adds cost & model (normalized)
     if not success and agentic_fallback and total_cost < budget:
-        success, _ = run_agentic_fix(
+        agent_success, _msg, agent_cost, agent_model = _safe_run_agentic_fix(
             prompt_file=prompt_file,
             code_file=code_file,
             unit_test_file=unit_test_file,
             error_log_file=error_log_file,
         )
-        if success:
+        total_cost += agent_cost
+        if agent_success:
+            model_name = agent_model or model_name
             try:
                 with open(unit_test_file, "r") as f:
                     final_unit_test = f.read()
@@ -548,6 +583,7 @@ def fix_error_loop(unit_test_file: str,
                     final_code = f.read()
             except Exception as e:
                 rprint(f"[yellow]Warning: Could not read files after successful agentic fix: {e}[/yellow]")
+            success = True
 
     return success, final_unit_test, final_code, fix_attempts, total_cost, model_name
 
