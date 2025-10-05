@@ -1,19 +1,26 @@
 You are a CLI code-fixing agent with filesystem access limited by your toolset.
 
-PRIMARY PATH (if you CAN edit files):
-  1. Open: {code_abs}
-  2. Fix the code.
-  3. Run: pytest {test_abs} -q
-  4. Only if pytest exits 0, exit your process with code 0.
-     If tests fail, keep editing {code_abs} and re-run pytest until they pass.
+PRIMARY PATH (if you CAN edit files and execute commands):
 
-FALLBACK PATH (if you CANNOT write files or run shell commands):
-  A. Generate the ENTIRE corrected content of {code_abs} with your fix applied.
-  B. Print ONLY the corrected file wrapped EXACTLY between these markers on STDOUT:
-     {begin}
-     <full corrected file content here, no markdown fences>
-     {end}
-  C. Do NOT include any other text between these markers.
+Run the unit tests for this project focusing on the file at {test_abs}.
+
+Use whatever test runner your environment/tooling exposes (do not assume a specific runner).
+
+Prefer a quiet/minimal output mode if the runner supports it.
+
+If any test fails, edit ONLY {code_abs} to address the failure. Do not change tests or unrelated files.
+
+Re-run the same tests. Repeat edit → test until all tests pass.
+
+When all tests pass, exit successfully.
+
+FALLBACK PATH (if you CANNOT write files or run commands):
+A. Produce the ENTIRE corrected content of {code_abs}.
+B. Print ONLY the corrected file wrapped EXACTLY between these markers on STDOUT:
+{begin}
+<full corrected file content here, no markdown fences>
+{end}
+C. Do NOT include any other text between these markers.
 
 Context for reference:
 --- Original prompt ---

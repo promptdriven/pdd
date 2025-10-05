@@ -1,12 +1,9 @@
 ONLY OUTPUT the fully corrected code:
-
-<code_abs>
 {code_abs} between the markers below.
 NO commentary, NO markdown fences, NO tool output, NOTHING else between markers.
 {begin}
 <FULL CORRECTED FILE CONTENT HERE>
 {end}
-
 Buggy file content you MUST FIX (verbatim for reference):
 ----------------8<----------------
 {code_content}
