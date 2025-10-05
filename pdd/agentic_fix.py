@@ -354,7 +354,6 @@ def _verify_and_log(unit_test_file: str, cwd: Path) -> bool:
     _print_head("pytest stderr", verify.stderr)
     return verify.returncode == 0
 
-# --- main execution helpers ---
 def _try_harvest_then_verify(
     provider: str,
     code_path: Path,
@@ -418,10 +417,11 @@ def _try_harvest_then_verify(
                         try: harvest_file.unlink()
                         except Exception: pass
                         return True
-
-                try: harvest_file.unlink()
-                except Exception: pass
-                return False
+                else:
+                    _always(f"[bold green]{provider.capitalize()} agent applied changes (verification skipped).[/bold green]")
+                    try: harvest_file.unlink()
+                    except Exception: pass
+                    return True
 
         _info("[yellow]Harvest-only attempt did not include the required markers.[/yellow]")
         try: harvest_file.unlink()
@@ -439,6 +439,12 @@ def _try_harvest_then_verify(
             try: harvest_file.unlink()
             except Exception: pass
             return True
+    else:
+        # Verification disabled → consider “file applied” as success
+        _always(f"[bold green]{provider.capitalize()} agent applied changes (verification skipped).[/bold green]")
+        try: harvest_file.unlink()
+        except Exception: pass
+        return True
 
     try: harvest_file.unlink()
     except Exception: pass
@@ -568,14 +574,21 @@ def run_agentic_fix(
             new_code = code_path.read_text(encoding="utf-8")
             _print_diff(orig_code, new_code, code_path)
 
-            # Verify if agent claims success or code changed
             proceed_to_verify = (res.returncode == 0) or (new_code != orig_code)
-            if proceed_to_verify and _VERIFY_AFTER_AGENT:
-                if _verify_and_log(unit_test_file, cwd):
-                    _always(f"[bold green]{provider.capitalize()} agent completed successfully and tests passed.[/bold green]")
-                    try: instruction_file.unlink()
-                    except Exception: pass
-                    return True, f"Agentic fix successful with {provider.capitalize()}."
+            if proceed_to_verify:
+                if _VERIFY_AFTER_AGENT:
+                    if _verify_and_log(unit_test_file, cwd):
+                        _always(f"[bold green]{provider.capitalize()} agent completed successfully and tests passed.[/bold green]")
+                        try: instruction_file.unlink()
+                        except Exception: pass
+                        return True, f"Agentic fix successful with {provider.capitalize()}."
+                else:
+                    # Verification disabled → success if code changed or agent returned OK
+                    if new_code != orig_code or res.returncode == 0:
+                        _always(f"[bold green]{provider.capitalize()} agent applied changes (verification skipped).[/bold green]")
+                        try: instruction_file.unlink()
+                        except Exception: pass
+                        return True, f"Agentic fix successful with {provider.capitalize()}."
 
             # prepare for next agent
             orig_code = new_code
