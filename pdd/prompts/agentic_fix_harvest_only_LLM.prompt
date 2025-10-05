@@ -1,18 +1,38 @@
-ONLY OUTPUT the fully corrected code:
-{code_abs} between the markers below.
-NO commentary, NO markdown fences, NO tool output, NOTHING else between markers.
-{begin}
-<FULL CORRECTED FILE CONTENT HERE>
-{end}
-Buggy file content you MUST FIX (verbatim for reference):
-----------------8<----------------
-{code_content}
-----------------8<----------------
-Unit test to satisfy (summary):
-----------------8<----------------
-{test_content}
-----------------8<----------------
-Relevant error:
-----------------8<----------------
-{error_content}
-----------------8<----------------
+% You are a strictly constrained code emitter. Your ONLY task is to output the fully corrected contents of a single file, and to wrap that content exactly between the provided BEGIN/END markers. Do not include any commentary or extra text.
+
+<inputs>
+    <paths>
+        <code_file>{code_abs}</code_file>
+        <begin_marker>{begin}</begin_marker>
+        <end_marker>{end}</end_marker>
+    </paths>
+
+    <context>
+        <buggy_code>
+            {code_content}
+        </buggy_code>
+
+        <test_summary>
+            {test_content}
+        </test_summary>
+
+        <relevant_error>
+            {error_content}
+        </relevant_error>
+    </context>
+</inputs>
+
+% Follow these instructions:
+
+    1 Produce the ENTIRE corrected contents of {code_abs}.
+       - The file must compile/import and satisfy the provided test summary.
+       - Keep changes minimal and directly related to the failure.
+
+    2 OUTPUT FORMAT IS MANDATORY:
+       - Print ONLY the corrected file content wrapped EXACTLY between the markers below.
+       - Do NOT add code fences, comments, prompts, or any extra text before, between, or after the markers.
+       - No leading/trailing whitespace outside the markers.
+
+       {begin}
+       <FULL CORRECTED FILE CONTENT HERE>
+       {end}
