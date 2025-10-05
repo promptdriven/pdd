@@ -22,10 +22,11 @@ def escape_brackets(text: str) -> str:
     """Escape square brackets so Rich doesn't misinterpret them."""
     return text.replace("[", "\\[").replace("]", "\\]")
 
-import pytest
-from .pytest_output import TestResultCollector
+
 
 def run_pytest_on_file(test_file: str) -> tuple[int, int, int, str]:
+    import pytest
+    from .pytest_output import TestResultCollector
     """
     Run pytest on the specified test file using the TestResultCollector plugin.
     Returns a tuple: (failures, errors, warnings, logs)
