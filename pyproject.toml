@@ -106,8 +106,3 @@ version_files = [
 ]
 changelog_file = "CHANGELOG.md"
 update_changelog_on_bump = true
-
-[tool.pytest.ini_options]
-markers = [
-    "e2e: mark test as end-to-end",
-]
