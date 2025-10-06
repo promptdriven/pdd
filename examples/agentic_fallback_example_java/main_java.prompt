@@ -1,3 +1,12 @@
-Create a Java project with the following file in a 'src' directory.
+You are generating a single Java source file.
 
- **`src/Main.java`**: This file should import `getGreeting` from `Utils.java`. It should contain a function `createUserGreeting` that calls `getGreeting` to create a greeting for a user with the name John Doe.
+TARGET FILE NAME: Main.java
+GOAL: Provide a tiny console application that depends on a separate utility class `Utils`.
+REQUIREMENTS:
+- Call `Utils.add(int a, int b)` and print the result to STDOUT.
+- Keep the class minimal: a `public class Main` with a `public static void main(String[] args)` entry point.
+- No package declaration.
+- No external libraries; only standard Java.
+- Output ONLY valid Java code for Main.java (no commentary, no markdown fences).
+
+Deliver ONLY the full contents of Main.java.

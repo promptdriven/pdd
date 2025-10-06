@@ -1,3 +1,14 @@
-Create the following file
+You are generating a single Java source file.
 
-1.  **`src/Utils.java`**: This file should contain a single function called `getGreeting` that accepts two string arguments, `firstName` and `lastName`, and returns the string "Hello, {firstName} {lastName}!".
+TARGET FILE NAME: Utils.java
+GOAL: Provide a reusable utility class used by `Main`.
+REQUIREMENTS:
+- Declare `public class Utils`.
+- Implement a public static method with the following intended API:
+  - `public static int add(int a, int b)` → returns `a + b`.
+- Keep the file minimal and self-contained.
+- No package declaration.
+- No external libraries; only standard Java.
+- Output ONLY valid Java code for Utils.java (no commentary, no markdown fences).
+
+Deliver ONLY the full contents of Utils.java.
