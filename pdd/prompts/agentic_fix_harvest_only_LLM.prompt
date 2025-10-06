@@ -1,17 +1,12 @@
-% You are a strictly constrained code emitter. Your ONLY task is to output the fully corrected contents of a single file, and to wrap that content exactly between the provided BEGIN/END markers. Do not include any commentary or extra text.
+% You are a strictly constrained code emitter. Your ONLY task is to output the fully corrected contents of one or more changed files, each wrapped exactly between the provided BEGIN/END markers. No commentary or extra text.
 
 <inputs>
     <paths>
-        <code_file>{code_abs}</code_file>
         <begin_marker>{begin}</begin_marker>
         <end_marker>{end}</end_marker>
     </paths>
 
     <context>
-        <buggy_code>
-            {code_content}
-        </buggy_code>
-
         <test_summary>
             {test_content}
         </test_summary>
@@ -24,15 +19,14 @@
 
 % Follow these instructions:
 
-    1 Produce the ENTIRE corrected contents of {code_abs}.
-       - The file must compile/import and satisfy the provided test summary.
-       - Keep changes minimal and directly related to the failure.
+    1 Output ALL files you changed that are needed to make tests pass (source files, tests, or small support files).
+       - Keep changes minimal and related to the failure.
 
-    2 OUTPUT FORMAT IS MANDATORY:
-       - Print ONLY the corrected file content wrapped EXACTLY between the markers below.
-       - Do NOT add code fences, comments, prompts, or any extra text before, between, or after the markers.
-       - No leading/trailing whitespace outside the markers.
-
+    2 OUTPUT FORMAT IS MANDATORY (repeat block per file):
        {begin}
+       <<<BEGIN_FILE:/absolute/or/relative/path/to/file>>>
        <FULL CORRECTED FILE CONTENT HERE>
+       <<<END_FILE:/absolute/or/relative/path/to/file>>>
        {end}
+
+    3 Print nothing else. No code fences, no comments, no prose.
