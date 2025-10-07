@@ -1,0 +1,11 @@
+{
+  "name": "agentic-fallback-example-javascript",
+  "version": "1.0.0",
+  "description": "PDD.AI Agentic Fallback Example for JavaScript",
+  "main": "src/main.js",
+  "scripts": {
+    "test": "node tests/test_main.js"
+  },
+  "author": "pdd.ai",
+  "license": "Apache-2.0"
+}
