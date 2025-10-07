@@ -400,9 +400,9 @@ def test_non_python_triggers_agentic_fallback_success(tmp_path):
     unit_test_file.write_text("dummy unit test content")
 
     verify_file = tmp_path / "verify.sh"
-    verify_file.write_text("echo verify")  # not used in non-Python path
+    verify_file.write_text("#!/bin/bash\nexit 1") # Fail to trigger fallback
+    verify_file.chmod(0o755)
     error_log = tmp_path / "error_log.txt"
-
     with patch("pdd.fix_error_loop.run_agentic_fix") as mock_agent, \
          patch("pdd.fix_error_loop.run_pytest_on_file") as mock_pytest:
         mock_agent.return_value = (True, "ok")
@@ -449,9 +449,9 @@ def test_non_python_triggers_agentic_fallback_failure(tmp_path):
     unit_test_file.write_text("dummy test")
 
     verify_file = tmp_path / "verify.sh"
-    verify_file.write_text("echo verify")
+    verify_file.write_text("#!/bin/bash\nexit 1") # Fail to trigger fallback
+    verify_file.chmod(0o755)
     error_log = tmp_path / "error_log.txt"
-
     with patch("pdd.fix_error_loop.run_agentic_fix") as mock_agent, \
          patch("pdd.fix_error_loop.run_pytest_on_file") as mock_pytest:
         mock_agent.return_value = (False, "not ok")
