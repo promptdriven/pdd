@@ -648,9 +648,13 @@ def run_agentic_fix(
 
         env_verify = os.getenv("PDD_AGENTIC_VERIFY", None)
         verify_force = os.getenv("PDD_AGENTIC_VERIFY_FORCE", "0") == "1"
-        verify_cmd = os.getenv("PDD_AGENTIC_VERIFY_CMD", None)
+        verify_cmd = os.getenv("PDD_AGENTIC_VERIFY_CMD", None) or default_verify_cmd_for(detect_language(code_path), cwd, unit_test_file)
+
 
         if verify_force:
+            verify_enabled = True
+        # If a verification command is present (from user or defaults), ALWAYS enable verification.
+        elif verify_cmd:
             verify_enabled = True
         else:
             if is_python:

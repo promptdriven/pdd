@@ -8,10 +8,6 @@
     </paths>
 
     <context>
-        <buggy_code>
-            {code_content}
-        </buggy_code>
-
         <test_summary>
             {test_content}
         </test_summary>

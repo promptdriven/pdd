@@ -5,6 +5,34 @@ from typing import Dict, List, Optional
 
 from .agentic_logging import print_head, verbose
 
+
+# put near top, after imports/regexes
+_BAD_BODY_PATTERNS = (
+    "FULL CORRECTED FILE CONTENT HERE",
+    "<begin_marker",  # model echoed your XML-ish control tags
+    "</begin_marker",
+    "<end_marker",
+    "</end_marker",
+)
+
+_PLACEHOLDER_PATHS = {
+    "/absolute/or/relative/path/to/file",  # template path that some models echo
+}
+
+def _is_bad_body(body: str) -> bool:
+    b = (body or "").strip().lower()
+    if not b:
+        return True
+    for pat in _BAD_BODY_PATTERNS:
+        if pat.lower() in b:
+            return True
+    # Heuristic: reject tiny tag-only or obviously-not-source outputs
+    if b in {"<begin_marker>", "</begin_marker>", "<end_marker>", "</end_marker>"}:
+        return True
+    return False
+
+
+
 def begin_marker(path: Path) -> str:
     return f"<<<BEGIN_FILE:{path}>>>"
 
@@ -28,9 +56,13 @@ def extract_files_from_output(*blobs: str) -> Dict[str, str]:
         for m in _MULTI_FILE_BLOCK_RE.finditer(blob):
             path = (m.group(1) or "").strip()
             body = m.group(2) or ""
-            if path and body != "":
-                out[path] = body
+            if not path or path in _PLACEHOLDER_PATHS:
+                continue
+            if _is_bad_body(body):
+                continue
+            out[path] = body
     return out
+
 
 def extract_corrected_single(stdout: str, stderr: str, code_path: Path) -> Optional[str]:
     resolved = code_path.resolve()
@@ -62,9 +94,10 @@ def extract_corrected_single(stdout: str, stderr: str, code_path: Path) -> Optio
     if not matches:
         return None
 
-    placeholder_token = "FULL CORRECTED FILE CONTENT HERE"
-    filtered = [b for b in matches if placeholder_token.lower() not in b.lower()]
-    return filtered[-1] if filtered else matches[-1]
+    # Drop placeholders/junk; if all junk, return None (do NOT write)
+    filtered = [b for b in matches if not _is_bad_body(b)]
+    return filtered[-1] if filtered else None
+
 
 def extract_python_code_block(*blobs: str) -> Optional[str]:
     candidates: List[str] = []

@@ -165,30 +165,6 @@ def fix_error_loop(unit_test_file: str,
     if verbose:
         rprint("[cyan]Starting fix error loop process.[/cyan]")
 
-    # If target is not a Python file, trigger agentic fallback immediately
-    if not str(code_file).lower().endswith(".py"):
-        rprint("[cyan]Non-Python target detected. Triggering agentic fallback...[/cyan]")
-        # capture cost + model via safe wrapper
-        success, _msg, agent_cost, agent_model = _safe_run_agentic_fix(
-            prompt_file=prompt_file,
-            code_file=code_file,
-            unit_test_file=unit_test_file,
-            error_log_file=error_log_file,
-        )
-        final_unit_test = ""
-        final_code = ""
-        try:
-            with open(unit_test_file, "r") as f:
-                final_unit_test = f.read()
-        except Exception:
-            pass
-        try:
-            with open(code_file, "r") as f:
-                final_code = f.read()
-        except Exception:
-            pass
-        return success, final_unit_test, final_code, 1, agent_cost, agent_model
-
     # Remove existing error log file if it exists.
     if os.path.exists(error_log_file):
         try:
@@ -227,7 +203,20 @@ def fix_error_loop(unit_test_file: str,
     iteration = 0
     # Run an initial test to determine starting state
     try:
-        initial_fails, initial_errors, initial_warnings, pytest_output = run_pytest_on_file(unit_test_file)
+        is_python = str(code_file).lower().endswith(".py")
+        if is_python:
+            initial_fails, initial_errors, initial_warnings, pytest_output = run_pytest_on_file(unit_test_file)
+        else:
+            # For non-Python files, run the verification program to get an initial error state
+            rprint(f"[cyan]Non-Python target detected. Running verification program to get initial state...[/cyan]")
+            verify_cmd = verification_program.split()
+            verify_result = subprocess.run(verify_cmd, capture_output=True, text=True)
+            pytest_output = (verify_result.stdout or "") + "\n" + (verify_result.stderr or "")
+            if verify_result.returncode == 0:
+                initial_fails, initial_errors, initial_warnings = 0, 0, 0
+            else:
+                initial_fails, initial_errors, initial_warnings = 1, 0, 0 # Treat any failure as one "fail"
+
         # Store initial state for statistics
         stats = {
             "initial_fails": initial_fails,
@@ -240,8 +229,46 @@ def fix_error_loop(unit_test_file: str,
             "iterations_info": []
         }
     except Exception as e:
-        rprint(f"[red]Error running initial pytest:[/red] {e}")
+        rprint(f"[red]Error running initial test/verification:[/red] {e}")
         return False, "", "", fix_attempts, total_cost, model_name
+
+    # If target is not a Python file, trigger agentic fallback if tests fail
+    if not is_python:
+        if initial_fails > 0 or initial_errors > 0:
+            rprint("[cyan]Non-Python target failed initial verification. Triggering agentic fallback...[/cyan]")
+            with open(error_log_file, "w") as f:
+                f.write(pytest_output)
+            
+            success, _msg, agent_cost, agent_model = _safe_run_agentic_fix(
+                prompt_file=prompt_file,
+                code_file=code_file,
+                unit_test_file=unit_test_file,
+                error_log_file=error_log_file,
+            )
+            final_unit_test = ""
+            final_code = ""
+            try:
+                with open(unit_test_file, "r") as f:
+                    final_unit_test = f.read()
+            except Exception:
+                pass
+            try:
+                with open(code_file, "r") as f:
+                    final_code = f.read()
+            except Exception:
+                pass
+            return success, final_unit_test, final_code, 1, agent_cost, agent_model
+        else:
+            # Non-python tests passed, so we are successful.
+            rprint("[green]Non-Python tests passed. No fix needed.[/green]")
+            try:
+                with open(unit_test_file, "r") as f:
+                    final_unit_test = f.read()
+                with open(code_file, "r") as f:
+                    final_code = f.read()
+            except Exception as e:
+                rprint(f"[yellow]Warning: Could not read final files: {e}[/yellow]")
+            return True, final_unit_test, final_code, 0, 0.0, "N/A"
 
     fails, errors, warnings = initial_fails, initial_errors, initial_warnings
     

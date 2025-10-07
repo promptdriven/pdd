@@ -12,15 +12,6 @@
         <original_prompt>
             {prompt_content}
         </original_prompt>
-
-        <buggy_code>
-            {code_content}
-        </buggy_code>
-
-        <failing_tests>
-            {test_content}
-        </failing_tests>
-
         <error_log>
             {error_content}
         </error_log>
