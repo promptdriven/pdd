@@ -28,40 +28,30 @@
 </inputs>
 
 % Edit policy:
-
     • You MAY modify:
         - The target source file at {code_abs}
         - The test file at {test_abs}
-        - Additional supporting files that are in the same project and necessary to resolve the failure
+        - Additional supporting files in the same project when necessary
     • Keep changes minimal and directly related to the failure.
-    • Do NOT rename public APIs unless absolutely necessary (and then update all references).
-    • Prefer fixing the implementation over weakening tests.
+    • Prefer fixing implementation over weakening tests.
 
 % Follow these instructions:
 
-    PRIMARY PATH (if you CAN edit files and execute commands):
+PRIMARY PATH (if you CAN run commands):
+  1) Run the tests for the project (focus on {test_abs}, or the whole suite if easier).
+  2) If any test fails:
+       - Edit only the files needed per policy, then re-run tests.
+       - Repeat until all tests pass.
+  3) When done, save all changed files and exit successfully.
 
-    1 Run the unit tests for this project (focus on {test_abs} but allow full suite if convenient).
-       - Use the test runner available in your environment.
-       - Prefer a quiet/minimal output mode if available.
-
-    2 If any test fails:
-       - Edit ONLY the files necessary to address the failure (see Edit policy).
-       - Keep diffs as small as practical.
-
-    3 Re-run the tests after each change.
-       - Repeat edit → test until all tests pass.
-
-    4 When all tests pass:
-       - Save all changes to disk and exit successfully.
-
-    FALLBACK PATH (if you CANNOT write files or run commands):
-
-    A Produce the ENTIRE corrected contents for every file you changed.
-    B For EACH changed file, print ONLY one block using this exact wrapping (absolute or project-relative path):
-       {begin}
+FALLBACK PATH (if you CANNOT run commands):
+  A) Produce the ENTIRE corrected contents for every file you changed.
+  B) For EACH changed file, print ONE block using this exact wrapping:
        <<<BEGIN_FILE:/absolute/or/relative/path/to/file>>>
        <FULL CORRECTED FILE CONTENT HERE>
        <<<END_FILE:/absolute/or/relative/path/to/file>>>
-       {end}
-    C Do NOT include any extra text between or outside the markers.
+  C) If you cannot run tests locally, ALSO output a single block with the exact shell command to run the tests:
+       <<<BEGIN_TESTCMD>>>
+       <single-line or multi-line shell command to run the tests and return 0 on success>
+       <<<END_TESTCMD>>>
+  D) Print nothing else.
