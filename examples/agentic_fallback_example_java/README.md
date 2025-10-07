@@ -20,7 +20,6 @@ Agentic fallback is a feature that allows the debugging agent to read files acro
 To fix the error in `Main.java` using agentic fallback, you would typically run a command that invokes a CLI agent. The exact command depends on the tool you are using. For example, with `pdd`, the command would look something like this:
 
 ```bash
-PDD_AGENTIC_VERIFY=0 \
 pdd fix examples/agentic_fallback_example_java/main_java.prompt \
         examples/agentic_fallback_example_java/src/Main.java \
         examples/agentic_fallback_example_java/tests/TestMain.java \
