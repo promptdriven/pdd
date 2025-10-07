@@ -1,4 +1,8 @@
 const utils = require('./utils');
 
-const result = utils.add(2, 3);
-console.log(result);
+function main() {
+    const sum = utils.add(2, 3);
+    console.log(sum);
+}
+
+main();

@@ -1,4 +1,6 @@
-import { add } from "./utils";
+import { add } from './utils';
 
-const result = add(2, 3);
-console.log(result);
+const a = 5;
+const b = 10;
+const result = add(a, b);
+console.log(`The result of adding ${a} and ${b} is ${result}.`);

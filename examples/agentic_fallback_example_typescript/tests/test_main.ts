@@ -1,25 +1,14 @@
-import assert from "assert";
-import { execSync } from "child_process";
-import path from "path";
-import { add } from "../src/utils";
+#!/usr/bin/env ts-node
+import { add } from '../src/utils';
+import { execSync } from 'child_process';
 
-function testUtilsAddReturnsFive() {
-  const result = add(2, 3);
-  assert.strictEqual(result, 5, "utils.add(2,3) must return 5");
-}
+describe('TypeScript Agentic Fallback Example', () => {
+    test('utils.add(2, 3) should return 5', () => {
+        expect(add(2, 3)).toBe(5);
+    });
 
-function testMainPrintsFive() {
-  const mainPath = path.join(__dirname, "../src/main.ts");
-  const tsnode = path.join(process.cwd(), "node_modules", ".bin", "ts-node");
-  const output = execSync(`${JSON.stringify(tsnode)} ${JSON.stringify(mainPath)}`).toString().trim();
-  assert.strictEqual(output, "5", "main.ts should print 5");
-}
-
-try {
-  testUtilsAddReturnsFive();
-  testMainPrintsFive();
-  console.log("All tests passed!");
-} catch (err: unknown) {
-  console.error("Test failed:", err instanceof Error ? err.message : String(err));
-  process.exit(1);
-}
+    test('main.ts should print 5 to the console', () => {
+        const output = execSync('ts-node examples/agentic_fallback_example_typescript/src/main.ts').toString().trim();
+        expect(output).toBe('5');
+    });
+});

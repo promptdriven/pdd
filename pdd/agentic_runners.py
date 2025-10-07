@@ -32,29 +32,56 @@ def sanitized_env_openai() -> dict:
 
 def run_cli(args: List[str], cwd: Path, timeout: int) -> subprocess.CompletedProcess:
     return subprocess.run(args, capture_output=True, text=True, check=False, timeout=timeout, cwd=str(cwd))
-
 def run_openai_variants(prompt_text: str, cwd: Path, total_timeout: int, label: str) -> subprocess.CompletedProcess:
-    wrapper = ("You must ONLY output corrected file content wrapped EXACTLY between the markers I provide. No commentary. ")
+    """
+    One-shot Codex: single argv (-p), fast timeout, treat no-output as a valid no-op.
+    """
+    wrapper = "You must ONLY output corrected file content wrapped EXACTLY between the markers I provide. No commentary. "
     full = wrapper + "\n\n" + prompt_text
-    variants = [
-        ["codex", "exec", full],
-        ["codex", "exec", "--skip-git-repo-check", full],
-        ["codex", "exec", "--skip-git-repo-check", "--sandbox", "read-only", full],
-    ]
-    per_attempt = max(12, min(45, total_timeout // 2))
-    last = None
-    for args in variants:
-        try:
-            verbose(f"[cyan]OpenAI variant ({label}): {' '.join(args[:-1])} ...[/cyan]")
-            last = subprocess.run(args, capture_output=True, text=True, check=False, timeout=per_attempt, cwd=str(cwd), env=sanitized_env_openai())
-            if (last.stdout or last.stderr) or last.returncode == 0:
-                return last
-        except subprocess.TimeoutExpired:
-            info(f"[yellow]OpenAI variant timed out: {' '.join(args[:-1])} ...[/yellow]")
-            continue
-    if last is None:
-        return subprocess.CompletedProcess(variants[-1], 124, stdout="", stderr="timeout")
-    return last
+
+    # single fast path
+    args = ["codex", "exec", "--skip-git-repo-check", "-p", full]
+
+    per_attempt = max(6, min(12, max(1, total_timeout // 4)))
+
+    def _is_transport_or_quota(txt: str) -> bool:
+        t = (txt or "").lower()
+        return any(k in t for k in (
+            "exceeded your current quota", "insufficient_quota", "rate_limit",
+            "billing", "subscription", "stream disconnected", "connection reset",
+            "temporarily unavailable",
+        ))
+
+    try:
+        proc = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=per_attempt,
+            cwd=str(cwd),
+            env=sanitized_env_openai(),
+        )
+        out, err, rc = proc.stdout or "", proc.stderr or "", proc.returncode
+
+        # If it’s a transport/quota problem, signal upstream to ignore output and move on.
+        if _is_transport_or_quota(out) or _is_transport_or_quota(err):
+            return subprocess.CompletedProcess(args, 429, stdout="", stderr=err or out or "quota/stream")
+
+        # IMPORTANT: treat "no output" as a *valid* no-op to avoid further variants.
+        # Return success (rc=0) so the caller doesn't spin other attempts.
+        if not out and not err:
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+        # Otherwise, return whatever we got.
+        return proc
+
+    except subprocess.TimeoutExpired:
+        # Hard stop on timeout; no more attempts.
+        info("[yellow]OpenAI one-shot timed out.[/yellow]")
+        return subprocess.CompletedProcess(args, 124, stdout="", stderr="timeout")
+
+
 
 def run_anthropic_variants(prompt_text: str, cwd: Path, total_timeout: int, label: str) -> subprocess.CompletedProcess:
     wrapper = ("IMPORTANT: You must ONLY output corrected file content wrapped EXACTLY between the two markers below. NO commentary, NO extra text.\n")
@@ -78,15 +105,36 @@ def run_anthropic_variants(prompt_text: str, cwd: Path, total_timeout: int, labe
 def run_google_variants(prompt_text: str, cwd: Path, total_timeout: int, label: str) -> subprocess.CompletedProcess:
     wrapper = ("IMPORTANT: ONLY output corrected file content wrapped EXACTLY between the two markers below. No commentary. No extra text.\n")
     full = wrapper + "\n" + prompt_text
-    variants = [["gemini"], ["gemini", "-p", full]]
-    per_attempt = max(12, min(45, total_timeout // 2))
+    # Prefer -p first (more reliable), then stdin fallback
+    variants = [
+        ["gemini", "-p", full],
+        ["gemini"],  # stdin
+    ]
+    per_attempt = max(12, min(60, total_timeout // 2))
     last = None
     for args in variants:
         try:
             if args == ["gemini"]:
-                last = subprocess.run(args, input=full, capture_output=True, text=True, check=False, timeout=per_attempt, cwd=str(cwd), env=sanitized_env_common())
+                last = subprocess.run(
+                    args,
+                    input=full,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=per_attempt,
+                    cwd=str(cwd),
+                    env=sanitized_env_common(),
+                )
             else:
-                last = subprocess.run(args, capture_output=True, text=True, check=False, timeout=per_attempt, cwd=str(cwd), env=sanitized_env_common())
+                last = subprocess.run(
+                    args,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=per_attempt,
+                    cwd=str(cwd),
+                    env=sanitized_env_common(),
+                )
             if (last.stdout or last.stderr) or last.returncode == 0:
                 return last
         except subprocess.TimeoutExpired:
@@ -95,6 +143,7 @@ def run_google_variants(prompt_text: str, cwd: Path, total_timeout: int, label: 
     if last is None:
         return subprocess.CompletedProcess(variants[-1], 124, stdout="", stderr="timeout")
     return last
+
 
 def which_or_skip(provider: str, cmd: list[str]) -> Optional[str]:
     binary = (cmd[0] if cmd else {"anthropic": "claude", "google": "gemini", "openai": "codex"}.get(provider, ""))

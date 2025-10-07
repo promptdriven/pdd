@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 const assert = require('assert');
 const { execSync } = require('child_process');
-const path = require('path');
 const utils = require('../src/utils');
 
 function testUtilsAddReturnsFive() {
@@ -12,8 +11,7 @@ function testUtilsAddReturnsFive() {
 
 function testMainPrintsFive() {
     // Main should print the computed sum (5) followed by a newline.
-    const mainPath = path.join(__dirname, '../src/main.js');
-    const output = execSync(`node ${JSON.stringify(mainPath)}`).toString().trim();
+    const output = execSync('node examples/agentic_fallback_example_javascript/src/main.js').toString().trim();
     assert.strictEqual(output, '5', 'main.js should print 5');
 }
 

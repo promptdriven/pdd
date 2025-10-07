@@ -1,12 +1,10 @@
 {
   "compilerOptions": {
-    "target": "ES2019",
+    "target": "es2016",
     "module": "commonjs",
-    "moduleResolution": "node",
     "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
     "strict": true,
-    "outDir": "dist",
-    "rootDir": "."
-  },
-  "include": ["src/**/*.ts", "tests/**/*.ts"]
+    "skipLibCheck": true
+  }
 }
