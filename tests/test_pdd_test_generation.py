@@ -34,7 +34,7 @@ class TestPDDTestGeneration:
             result = subprocess.run([
                 'pdd', 'test', '--language', 'python', '--output', 'test_output.py',
                 'pdd/prompts/generate_test_LLM.prompt', temp_file
-            ], capture_output=True, text=True, cwd='/Users/shrenyamathur/pdd-1')
+            ], capture_output=True, text=True, cwd=os.getcwd())
             
             # Should succeed without language detection errors
             assert "Could not determine language" not in result.stderr
@@ -71,13 +71,14 @@ def calculate_factorial(n):
             result = subprocess.run([
                 'pdd', 'test', '--language', 'python', '--output', 'test_generated.py',
                 'pdd/prompts/generate_test_LLM.prompt', temp_file
-            ], capture_output=True, text=True, cwd='/Users/shrenyamathur/pdd-1')
+            ], capture_output=True, text=True, cwd=os.getcwd())
             
             assert result.returncode == 0, f"Test generation failed: {result.stderr}"
             
             # Check generated test file
-            if os.path.exists('/Users/shrenyamathur/pdd-1/test_generated.py'):
-                with open('/Users/shrenyamathur/pdd-1/test_generated.py', 'r') as f:
+            test_output_path = os.path.join(os.getcwd(), 'test_generated.py')
+            if os.path.exists(test_output_path):
+                with open(test_output_path, 'r') as f:
                     test_content = f.read()
                 
                 # Should import the correct function
@@ -88,7 +89,7 @@ def calculate_factorial(n):
                 assert 'find_closest_elements' not in test_content, "Should not import wrong function"
                 
                 # Cleanup
-                os.unlink('/Users/shrenyamathur/pdd-1/test_generated.py')
+                os.unlink(test_output_path)
         
         finally:
             os.unlink(temp_file)
@@ -111,13 +112,14 @@ def add_numbers(a, b):
             result = subprocess.run([
                 'pdd', 'test', '--language', 'python', '--output', 'test_generated.py',
                 'pdd/prompts/generate_test_LLM.prompt', temp_file
-            ], capture_output=True, text=True, cwd='/Users/shrenyamathur/pdd-1')
+            ], capture_output=True, text=True, cwd=os.getcwd())
             
             assert result.returncode == 0, f"Test generation failed: {result.stderr}"
             
             # Check generated test file
-            if os.path.exists('/Users/shrenyamathur/pdd-1/test_generated.py'):
-                with open('/Users/shrenyamathur/pdd-1/test_generated.py', 'r') as f:
+            test_output_path = os.path.join(os.getcwd(), 'test_generated.py')
+            if os.path.exists(test_output_path):
+                with open(test_output_path, 'r') as f:
                     test_content = f.read()
                 
                 # Should test the correct function
@@ -129,7 +131,7 @@ def add_numbers(a, b):
                 assert 'k_equals_zero' not in test_content, "Should not test array logic"
                 
                 # Cleanup
-                os.unlink('/Users/shrenyamathur/pdd-1/test_generated.py')
+                os.unlink(test_output_path)
         
         finally:
             os.unlink(temp_file)
@@ -152,15 +154,16 @@ def hello():
             result = subprocess.run([
                 'pdd', 'test', '--language', 'python', '--output', 'test_generated.py',
                 'pdd/prompts/generate_test_LLM.prompt', temp_file
-            ], capture_output=True, text=True, cwd='/Users/shrenyamathur/pdd-1')
+            ], capture_output=True, text=True, cwd=os.getcwd())
             
             # Should not have include path warnings
             assert "File not found: ./context/test.prompt" not in result.stdout
             assert "File not found: ./context/test.prompt" not in result.stderr
             
             # Cleanup
-            if os.path.exists('/Users/shrenyamathur/pdd-1/test_generated.py'):
-                os.unlink('/Users/shrenyamathur/pdd-1/test_generated.py')
+            test_output_path = os.path.join(os.getcwd(), 'test_generated.py')
+            if os.path.exists(test_output_path):
+                os.unlink(test_output_path)
         
         finally:
             os.unlink(temp_file)
@@ -168,13 +171,13 @@ def hello():
     def test_generated_test_runs_successfully(self):
         """Test that generated tests can actually run and pass."""
         # Use the existing test_factorial.py and test_factorial_generated.py
-        test_file = '/Users/shrenyamathur/pdd-1/test_factorial_generated.py'
+        test_file = os.path.join(os.getcwd(), 'test_factorial_generated.py')
         
         if os.path.exists(test_file):
             # Run the generated test
             result = subprocess.run([
                 'python', '-m', 'pytest', test_file, '-v'
-            ], capture_output=True, text=True, cwd='/Users/shrenyamathur/pdd-1')
+            ], capture_output=True, text=True, cwd=os.getcwd())
             
             # Should have some passing tests
             assert "PASSED" in result.stdout or "passed" in result.stdout
@@ -199,13 +202,13 @@ def multiply(a, b):
             result_test = subprocess.run([
                 'pdd', 'test', '--language', 'python', '--output', 'test_via_test.py',
                 'pdd/prompts/generate_test_LLM.prompt', temp_file
-            ], capture_output=True, text=True, cwd='/Users/shrenyamathur/pdd-1')
+            ], capture_output=True, text=True, cwd=os.getcwd())
             
             # Test pdd generate command (this should work now with our fixes)
             result_generate = subprocess.run([
                 'pdd', 'generate', '-e', f'code="$(cat {temp_file})"', '--output', 'test_via_generate.py',
                 'pdd/prompts/generate_test_LLM.prompt'
-            ], capture_output=True, text=True, cwd='/Users/shrenyamathur/pdd-1')
+            ], capture_output=True, text=True, cwd=os.getcwd())
             
             # pdd test should work
             assert result_test.returncode == 0, f"pdd test failed: {result_test.stderr}"
@@ -217,8 +220,9 @@ def multiply(a, b):
             
             # Cleanup
             for f in ['test_via_test.py', 'test_via_generate.py']:
-                if os.path.exists(f'/Users/shrenyamathur/pdd-1/{f}'):
-                    os.unlink(f'/Users/shrenyamathur/pdd-1/{f}')
+                file_path = os.path.join(os.getcwd(), f)
+                if os.path.exists(file_path):
+                    os.unlink(file_path)
         
         finally:
             os.unlink(temp_file)
@@ -233,7 +237,7 @@ def my_special_function(x):
 '''
         
         special_filename = 'my_special_function.py'
-        with open(f'/Users/shrenyamathur/pdd-1/{special_filename}', 'w') as f:
+        with open(f'os.getcwd()/{special_filename}', 'w') as f:
             f.write(test_code)
         
         try:
@@ -241,13 +245,14 @@ def my_special_function(x):
             result = subprocess.run([
                 'pdd', 'test', '--language', 'python', '--output', 'test_special.py',
                 'pdd/prompts/generate_test_LLM.prompt', special_filename
-            ], capture_output=True, text=True, cwd='/Users/shrenyamathur/pdd-1')
+            ], capture_output=True, text=True, cwd=os.getcwd())
             
             assert result.returncode == 0, f"Test generation failed: {result.stderr}"
             
             # Check generated test file
-            if os.path.exists('/Users/shrenyamathur/pdd-1/test_special.py'):
-                with open('/Users/shrenyamathur/pdd-1/test_special.py', 'r') as f:
+            test_output_path = os.path.join(os.getcwd(), 'test_special.py')
+            if os.path.exists(test_output_path):
+                with open(test_output_path, 'r') as f:
                     test_content = f.read()
                 
                 # Should import from the correct module name
@@ -255,10 +260,10 @@ def my_special_function(x):
                 assert 'from my_special_function import my_special_function' in test_content
                 
                 # Cleanup
-                os.unlink('/Users/shrenyamathur/pdd-1/test_special.py')
+                os.unlink(test_output_path)
         
         finally:
-            os.unlink(f'/Users/shrenyamathur/pdd-1/{special_filename}')
+            os.unlink(os.path.join(os.getcwd(), special_filename))
 
 
 if __name__ == '__main__':
