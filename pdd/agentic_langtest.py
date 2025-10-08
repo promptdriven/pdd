@@ -62,7 +62,7 @@ def default_verify_cmd_for(lang: str, project_root: Path, unit_test_file: str) -
             "command -v npm >/dev/null 2>&1 || { echo 'npm missing'; exit 127; } && "
             "if [ -f package.json ]; then "
             # Use the standard npm test command, which is configured in package.json
-            "  npm test; "
+            "  npm install && npm test; "
             "else "
             # Fallback to a simple type-check if no package.json is found
             "  echo 'No package.json; falling back to typecheck only'; npx --yes tsc --noEmit; "
@@ -71,28 +71,32 @@ def default_verify_cmd_for(lang: str, project_root: Path, unit_test_file: str) -
 
     if lang == "javascript":
         example_dir = str(Path(unit_test_file).parent.parent)
+        rel_test_path = os.path.relpath(unit_test_file, example_dir)
         return (
             "set -e\n"
             f'cd "{example_dir}" && '
-            "command -v npm >/dev/null 2/dev/null 2>&1 || { echo 'npm missing'; exit 127; } && "
+            "command -v npm >/dev/null 2>&1 || { echo 'npm missing'; exit 127; } && "
             "if [ -f package.json ]; then "
-            "  npm test; "
+            "  npm install && npm test; "
             "else "
             f'  echo "No package.json in {example_dir}; running test file directly"; '
-            f'  node "{unit_test_file}"; '
+            f'  node -e "try {{ require(\'./{rel_test_path}\'); }} catch (e) {{ console.error(e); process.exit(1); }}"; '
             "fi"
         )
 
     if lang == "java":
+        example_dir = str(Path(unit_test_file).parent.parent)
         # Expect a ConsoleLauncher JAR somewhere in project root.
         return (
             "set -e\n"
-            f'cd "{pr}" && '
-            'JAR="$(ls -1 *.jar 2>/dev/null | grep -i \"junit.*console\" | head -n1 || true)"; '
-            'if [ -z \"$JAR\" ]; then echo \"JUnit Console jar missing\"; exit 127; fi; '
+            f'cd "{example_dir}" && '
+            'JAR_URL="https://repo1.maven.org/maven2/org/junit/platform/junit-platform-console-standalone/1.10.2/junit-platform-console-standalone-1.10.2.jar"; '
+            'JAR_NAME=$(basename "$JAR_URL"); '
+            'if [ ! -f "$JAR_NAME" ]; then echo "JUnit Console jar missing, downloading..."; curl -s -L -o "$JAR_NAME" "$JAR_URL"; fi; '
+            'if [ ! -f "$JAR_NAME" ]; then echo "Failed to download JUnit JAR"; exit 1; fi; '
             "mkdir -p build && "
-            "javac -d build src/*.java tests/*.java && "
-            'java -jar \"$JAR\" --class-path build --scan-class-path'
+            'javac -cp "$JAR_NAME" -d build src/*.java tests/*.java && '
+            'java -jar "$JAR_NAME" --class-path build --scan-class-path'
         )
 
     if lang == "cpp":
