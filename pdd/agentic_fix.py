@@ -10,6 +10,7 @@ from typing import Tuple, List, Optional, Dict
 from rich.console import Console
 from .llm_invoke import _load_model_data
 from .load_prompt_template import load_prompt_template
+from .agentic_langtest import default_verify_cmd_for, detect_language
 
 console = Console()
 
@@ -489,6 +490,7 @@ def _try_harvest_then_verify(
         code_content=code_snapshot,
         test_content=test_content,
         error_content=error_content,
+        verify_cmd=verify_cmd or "No verification command provided.",
     )
     harvest_file = Path("agentic_fix_harvest.txt")
     harvest_file.write_text(harvest_instr, encoding="utf-8")
@@ -624,6 +626,13 @@ def run_agentic_fix(
         test_content = Path(unit_test_file).read_text(encoding="utf-8")
         error_content = Path(error_log_file).read_text(encoding="utf-8")
 
+        ext = code_path.suffix.lower()
+        is_python = ext == ".py"
+
+        env_verify = os.getenv("PDD_AGENTIC_VERIFY", None)
+        verify_force = os.getenv("PDD_AGENTIC_VERIFY_FORCE", "0") == "1"
+        verify_cmd = os.getenv("PDD_AGENTIC_VERIFY_CMD", None) or default_verify_cmd_for(detect_language(code_path), cwd, unit_test_file)
+
         primary_prompt_template = load_prompt_template("agentic_fix_primary_LLM")
         if not primary_prompt_template:
             return False, "Failed to load primary agent prompt template.", est_cost, used_model
@@ -637,19 +646,12 @@ def run_agentic_fix(
             code_content=orig_code,
             test_content=test_content,
             error_content=error_content,
+            verify_cmd=verify_cmd or "No verification command provided.",
         )
         instruction_file = Path("agentic_fix_instructions.txt")
         instruction_file.write_text(primary_instr, encoding="utf-8")
         _info(f"[cyan]Instruction file: {instruction_file.resolve()} ({instruction_file.stat().st_size} bytes)[/cyan]")
         _print_head("Instruction preview", primary_instr)
-
-        ext = code_path.suffix.lower()
-        is_python = ext == ".py"
-
-        env_verify = os.getenv("PDD_AGENTIC_VERIFY", None)
-        verify_force = os.getenv("PDD_AGENTIC_VERIFY_FORCE", "0") == "1"
-        verify_cmd = os.getenv("PDD_AGENTIC_VERIFY_CMD", None) or default_verify_cmd_for(detect_language(code_path), cwd, unit_test_file)
-
 
         if verify_force:
             verify_enabled = True
@@ -657,16 +659,13 @@ def run_agentic_fix(
         elif verify_cmd:
             verify_enabled = True
         else:
-            if is_python:
-                verify_enabled = (env_verify is None and True) or (env_verify is not None and env_verify != "0")
+            if env_verify is None:
+                # AUTO mode: if not explicitly disabled, allow agent-supplied TESTCMD
+                verify_enabled = True
+            elif env_verify.lower() == "auto":
+                verify_enabled = False
             else:
-                if env_verify is None:
-                    # AUTO mode: if not explicitly disabled, allow agent-supplied TESTCMD
-                    verify_enabled = False
-                elif env_verify.lower() == "auto":
-                    verify_enabled = False
-                else:
-                    verify_enabled = (env_verify != "0")
+                verify_enabled = (env_verify != "0")
 
         allow_new = False
 
