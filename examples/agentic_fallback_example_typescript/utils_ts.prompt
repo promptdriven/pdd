@@ -3,9 +3,9 @@ You are generating a single TypeScript source file.
 TARGET FILE NAME: utils.ts
 GOAL: Provide a reusable utility module used by `main.ts`.
 REQUIREMENTS:
-- Export a function `add(a: number, b: number): number` that returns `a + b`.
+- Export a function `add(a, b)` that returns `a + b`.
 - Keep the file minimal and self-contained.
-- No external libraries; only standard TypeScript.
+- No external libraries; only standard Node.ts.
 - Output ONLY valid TypeScript code for utils.ts (no commentary, no markdown fences).
 
 Deliver ONLY the full contents of utils.ts.

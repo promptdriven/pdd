@@ -1,20 +1,16 @@
 {
-  "name": "agentic_fallback_example_typescript",
+  "name": "agentic-fallback-example-typescript",
   "version": "1.0.0",
-  "description": "",
+  "description": "PDD.AI Agentic Fallback Example for TypeScript",
   "main": "src/main.ts",
   "scripts": {
     "test": "ts-node tests/test_main.ts"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "author": "pdd.ai",
+  "license": "Apache-2.0",
   "devDependencies": {
-    "@types/jest": "^29.5.12",
-    "@types/node": "^20.12.12",
-    "jest": "^29.7.0",
-    "ts-jest": "^29.1.2",
+    "@types/node": "^24.7.0",
     "ts-node": "^10.9.2",
-    "typescript": "^5.4.5"
+    "typescript": "^5.9.3"
   }
 }
