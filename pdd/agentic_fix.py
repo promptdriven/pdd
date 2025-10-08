@@ -10,7 +10,7 @@ from typing import Tuple, List, Optional, Dict
 from rich.console import Console
 from .llm_invoke import _load_model_data
 from .load_prompt_template import load_prompt_template
-from .agentic_langtest import default_verify_cmd_for, detect_language
+from .agentic_langtest import default_verify_cmd_for, detect_language, _find_project_root
 
 console = Console()
 
@@ -517,7 +517,7 @@ def _try_harvest_then_verify(
     _print_head(f"{provider.capitalize()} harvest stdout", res.stdout or "")
     _print_head(f"{provider.capitalize()} harvest stderr", res.stderr or "")
 
-    allow_new = False
+    allow_new = True
 
     multi = _extract_files_from_output(res.stdout or "", res.stderr or "")
     if multi:
@@ -667,7 +667,7 @@ def run_agentic_fix(
             else:
                 verify_enabled = (env_verify != "0")
 
-        allow_new = False
+        allow_new = True
 
         for provider in available_agents:
             used_model = f"agentic-{provider}"

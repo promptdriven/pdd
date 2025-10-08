@@ -41,6 +41,17 @@ def detect_language(name_or_path) -> str:
 def _which(cmd: str) -> bool:
     return shutil.which(cmd) is not None
 
+def _find_project_root(start_path: str) -> Path:
+    """
+    Find the project root by searching for common project files.
+    """
+    p = Path(start_path).resolve()
+    while p != p.parent:
+        if any((p / f).exists() for f in ["pom.xml", "package.json", "jest.config.js"]):
+            return p
+        p = p.parent
+    return Path(start_path).resolve().parent
+
 def default_verify_cmd_for(lang: str, project_root: Path, unit_test_file: str) -> str | None:
     """
     Return a conservative shell command (bash -lc) that compiles/tests
@@ -52,25 +63,9 @@ def default_verify_cmd_for(lang: str, project_root: Path, unit_test_file: str) -
     if lang == "python":
         return f'{os.sys.executable} -m pytest "{test_rel}" -q'
 
-    if lang == "typescript":
-        # Determine the example's root directory from the unit test file path
-        example_dir = str(Path(unit_test_file).parent.parent)
-        return (
-            "set -e\n"
-            # Change to the example's directory so npm can find the correct package.json
-            f'cd "{example_dir}" && '
-            "command -v npm >/dev/null 2>&1 || { echo 'npm missing'; exit 127; } && "
-            "if [ -f package.json ]; then "
-            # Use the standard npm test command, which is configured in package.json
-            "  npm install && npm test; "
-            "else "
-            # Fallback to a simple type-check if no package.json is found
-            "  echo 'No package.json; falling back to typecheck only'; npx --yes tsc --noEmit; "
-            "fi"
-        )
 
-    if lang == "javascript":
-        example_dir = str(Path(unit_test_file).parent.parent)
+    if lang == "javascript" or lang == "typescript":
+        example_dir = str(_find_project_root(unit_test_file))
         rel_test_path = os.path.relpath(unit_test_file, example_dir)
         return (
             "set -e\n"
@@ -85,7 +80,7 @@ def default_verify_cmd_for(lang: str, project_root: Path, unit_test_file: str) -
         )
 
     if lang == "java":
-        example_dir = str(Path(unit_test_file).parent.parent)
+        example_dir = str(_find_project_root(unit_test_file))
         # Expect a ConsoleLauncher JAR somewhere in project root.
         return (
             "set -e\n"
