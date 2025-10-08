@@ -1,3 +1,4 @@
-import { add } from './utils';
+import { add } from "./utils";
 
-console.log(add(2, 3));
+const result = add(2, 3);
+console.log(result);
