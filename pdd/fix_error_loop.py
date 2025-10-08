@@ -5,6 +5,7 @@ import subprocess
 import shutil
 import json
 from datetime import datetime
+from pathlib import Path
 
 from rich import print as rprint
 from rich.console import Console
@@ -14,6 +15,7 @@ from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
 from . import DEFAULT_TIME  # Import DEFAULT_TIME
 from .python_env_detector import detect_host_python_executable
 from .agentic_fix import run_agentic_fix
+from .agentic_langtest import detect_language, default_verify_cmd_for
 
 
 console = Console()
@@ -209,8 +211,12 @@ def fix_error_loop(unit_test_file: str,
         else:
             # For non-Python files, run the verification program to get an initial error state
             rprint(f"[cyan]Non-Python target detected. Running verification program to get initial state...[/cyan]")
-            verify_cmd = verification_program.split()
-            verify_result = subprocess.run(verify_cmd, capture_output=True, text=True)
+            lang = detect_language(code_file)
+            verify_cmd = default_verify_cmd_for(lang, Path.cwd(), unit_test_file)
+            if not verify_cmd:
+                raise ValueError(f"No default verification command for language: {lang}")
+            
+            verify_result = subprocess.run(verify_cmd, capture_output=True, text=True, shell=True)
             pytest_output = (verify_result.stdout or "") + "\n" + (verify_result.stderr or "")
             if verify_result.returncode == 0:
                 initial_fails, initial_errors, initial_warnings = 0, 0, 0
