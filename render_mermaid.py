@@ -22,9 +22,9 @@ def generate_mermaid_code(architecture, app_name="System"):
     """Generate Mermaid flowchart code from architecture JSON."""
     lines = ["flowchart TB", f'    PRD["{app_name}"]', ""]
     
-    # Categorize modules by tags
+    # Categorize modules by tags (frontend takes priority over backend)
     frontend = [m for m in architecture if any(t in m.get('tags', []) for t in ['frontend', 'react', 'nextjs', 'ui', 'page', 'component'])]
-    backend = [m for m in architecture if any(t in m.get('tags', []) for t in ['backend', 'api', 'database', 'sqlalchemy', 'fastapi'])]
+    backend = [m for m in architecture if m not in frontend and any(t in m.get('tags', []) for t in ['backend', 'api', 'database', 'sqlalchemy', 'fastapi'])]
     shared = [m for m in architecture if m not in frontend and m not in backend]
     
     # Generate subgraphs
