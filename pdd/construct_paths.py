@@ -332,14 +332,32 @@ def _determine_language(
         ext = path_obj.suffix
         # Prioritize non-prompt code files
         if ext and ext != ".prompt":
-            language = get_language(ext)
-            if language:
-                return language.lower()
+            try:
+                language = get_language(ext)
+                if language:
+                    return language.lower()
+            except ValueError:
+                # Fallback to built-in language mapping when PDD_PATH is not set
+                builtin_extensions = {
+                    '.py': 'python', '.js': 'javascript', '.ts': 'typescript',
+                    '.java': 'java', '.cpp': 'cpp', '.c': 'c', '.go': 'go',
+                    '.rb': 'ruby', '.rs': 'rust', '.kt': 'kotlin', '.swift': 'swift',
+                    '.cs': 'csharp', '.php': 'php', '.scala': 'scala', '.r': 'r',
+                    '.lua': 'lua', '.pl': 'perl', '.sh': 'bash', '.ps1': 'powershell',
+                    '.sql': 'sql', '.html': 'html', '.css': 'css'
+                }
+                if ext.lower() in builtin_extensions:
+                    return builtin_extensions[ext.lower()]
         # Handle files without extension like Makefile
         elif not ext and path_obj.is_file(): # Check it's actually a file
-            language = get_language(path_obj.name) # Check name (e.g., 'Makefile')
-            if language:
-                return language.lower()
+            try:
+                language = get_language(path_obj.name) # Check name (e.g., 'Makefile')
+                if language:
+                    return language.lower()
+            except ValueError:
+                # Fallback for files without extension
+                if path_obj.name.lower() in ['makefile', 'dockerfile']:
+                    return 'makefile'
 
     # 3 – parse from prompt filename suffix
     prompt_path = _candidate_prompt_path(input_file_paths)
