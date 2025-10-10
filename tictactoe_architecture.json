@@ -1,0 +1,196 @@
+[
+  {
+    "reason": "Defines the project structure, dependencies, and scripts, which is the first step for any modern JavaScript project.",
+    "description": "Standard package.json file for a React project using TypeScript. It will include dependencies like 'react', 'react-dom', and dev dependencies for TypeScript and a build tool like Vite. It also defines scripts for starting the development server and building the project.",
+    "dependencies": [],
+    "priority": 1,
+    "filename": "package_JSON.prompt",
+    "filepath": "package.json",
+    "tags": ["config", "frontend", "react"],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": [
+          {"name": "name", "type": "string", "default": "tic-tac-toe"},
+          {"name": "private", "type": "boolean", "default": true},
+          {"name": "version", "type": "string", "default": "0.0.0"},
+          {"name": "type", "type": "string", "default": "module"},
+          {"name": "scripts", "type": "object"},
+          {"name": "dependencies", "type": "object"},
+          {"name": "devDependencies", "type": "object"}
+        ]
+      }
+    }
+  },
+  {
+    "reason": "This is the main HTML document that serves as the entry point for the single-page application.",
+    "description": "The root HTML file that the browser will load. It contains a single `div` element with an ID (e.g., 'root') where the React application will be mounted by the main JavaScript file.",
+    "dependencies": [],
+    "priority": 2,
+    "filename": "index_HTML.prompt",
+    "filepath": "index.html",
+    "tags": ["frontend", "html"],
+    "interface": {
+      "type": "page",
+      "page": {
+        "route": "/"
+      }
+    }
+  },
+  {
+    "reason": "Provides the visual styling for the entire application, ensuring a clean and responsive user experience as required by the PRD.",
+    "description": "A CSS file containing all styles for the Tic-Tac-Toe game. This includes styling for the game board, individual cells, status messages, the reset button, and the scoreboard. It will also include media queries to ensure the layout is responsive for both mobile and desktop devices.",
+    "dependencies": [],
+    "priority": 3,
+    "filename": "styles_CSS.prompt",
+    "filepath": "src/styles.css",
+    "tags": ["frontend", "css", "ui"]
+  },
+  {
+    "reason": "Decouples the core game logic from the UI components, making the code cleaner, easier to test, and more maintainable.",
+    "description": "A pure TypeScript module that exports functions for the game's logic. It has no dependencies on React or the DOM. It is responsible for determining the winner, checking for a draw, and managing turn alternation.",
+    "dependencies": [],
+    "priority": 4,
+    "filename": "gameLogic_TypeScript.prompt",
+    "filepath": "src/logic/gameLogic.ts",
+    "tags": ["frontend", "logic", "typescript"],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "calculateWinner",
+            "signature": "calculateWinner(cells: (string | null)[]): string | null",
+            "returns": "The winning player ('X' or 'O') or null if there is no winner yet.",
+            "sideEffects": ["None"]
+          },
+          {
+            "name": "isBoardFull",
+            "signature": "isBoardFull(cells: (string | null)[]): boolean",
+            "returns": "True if all cells on the board are filled, false otherwise.",
+            "sideEffects": ["None"]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "This is the most granular UI component, representing a single clickable square on the board.",
+    "description": "A reusable React component that renders a single cell (a button). It displays its value ('X', 'O', or empty) and triggers a callback function when clicked. It should be a presentational component.",
+    "dependencies": [],
+    "priority": 5,
+    "filename": "Cell_TypeScriptReact.prompt",
+    "filepath": "src/components/Cell.tsx",
+    "tags": ["frontend", "react", "component", "ui"],
+    "interface": {
+      "type": "component",
+      "component": {
+        "props": [
+          {"name": "value", "type": "'X' | 'O' | null", "required": true, "description": "The value to display in the cell."},
+          {"name": "onClick", "type": "() => void", "required": true, "description": "Function to call when the cell is clicked."}
+        ]
+      }
+    }
+  },
+  {
+    "reason": "This component is responsible for laying out the 3x3 grid, composing the individual Cell components.",
+    "description": "A React component that renders the 3x3 game board. It maps over an array representing the board state and renders a `Cell` component for each square, passing the appropriate props.",
+    "dependencies": [
+      "Cell_TypeScriptReact.prompt"
+    ],
+    "priority": 6,
+    "filename": "Board_TypeScriptReact.prompt",
+    "filepath": "src/components/Board.tsx",
+    "tags": ["frontend", "react", "component", "ui"],
+    "interface": {
+      "type": "component",
+      "component": {
+        "props": [
+          {"name": "cells", "type": "(string | null)[]", "required": true, "description": "An array of 9 elements representing the state of the board."},
+          {"name": "onCellClick", "type": "(index: number) => void", "required": true, "description": "Callback function to handle a click on any cell, passing the cell's index."}
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Provides essential visual feedback to the user about the current state of the game, as required by the PRD.",
+    "description": "A React component that displays the game's status. It will show whose turn it is, announce the winner, or declare a draw based on the props it receives.",
+    "dependencies": [],
+    "priority": 7,
+    "filename": "GameStatus_TypeScriptReact.prompt",
+    "filepath": "src/components/GameStatus.tsx",
+    "tags": ["frontend", "react", "component", "ui"],
+    "interface": {
+      "type": "component",
+      "component": {
+        "props": [
+          {"name": "winner", "type": "string | null", "required": true, "description": "The winning player ('X' or 'O'), or null."},
+          {"name": "currentPlayer", "type": "string", "required": true, "description": "The current player ('X' or 'O')."},
+          {"name": "isDraw", "type": "boolean", "required": true, "description": "Whether the game is a draw."}
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Fulfills the PRD requirement for tracking and displaying scores for both players and draws.",
+    "description": "A React component that displays the current scores. It takes a scores object as a prop and renders the number of wins for 'X', wins for 'O', and the number of draws.",
+    "dependencies": [],
+    "priority": 8,
+    "filename": "Scoreboard_TypeScriptReact.prompt",
+    "filepath": "src/components/Scoreboard.tsx",
+    "tags": ["frontend", "react", "component", "ui"],
+    "interface": {
+      "type": "component",
+      "component": {
+        "props": [
+          {"name": "scores", "type": "{ x: number; o: number; draws: number }", "required": true, "description": "An object containing the scores for X, O, and draws."}
+        ]
+      }
+    }
+  },
+  {
+    "reason": "This is the main application component that orchestrates all other components and manages the entire game state.",
+    "description": "The root React component of the application. It maintains the game's state, including the board cells, current player, winner, and scores. It handles game logic by calling functions from the game logic module and passes state down to its child components (`Board`, `GameStatus`, `Scoreboard`). It also contains the game reset logic.",
+    "dependencies": [
+      "Board_TypeScriptReact.prompt",
+      "GameStatus_TypeScriptReact.prompt",
+      "Scoreboard_TypeScriptReact.prompt",
+      "gameLogic_TypeScript.prompt"
+    ],
+    "priority": 9,
+    "filename": "App_TypeScriptReact.prompt",
+    "filepath": "src/App.tsx",
+    "tags": ["frontend", "react", "component"],
+    "interface": {
+      "type": "component",
+      "component": {
+        "props": []
+      }
+    }
+  },
+  {
+    "reason": "This file is the entry point for the JavaScript/React application, responsible for rendering the root component into the DOM.",
+    "description": "The main TypeScript file that bootstraps the React application. It imports the `App` component and uses `ReactDOM` to render it into the root `div` element in `index.html`. It also imports the main CSS file.",
+    "dependencies": [
+      "App_TypeScriptReact.prompt",
+      "styles_CSS.prompt"
+    ],
+    "priority": 10,
+    "filename": "main_TypeScriptReact.prompt",
+    "filepath": "src/main.tsx",
+    "tags": ["frontend", "react", "config"],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "main",
+            "signature": "()",
+            "returns": "void",
+            "sideEffects": ["Renders the React application to the DOM."]
+          }
+        ]
+      }
+    }
+  }
+]
