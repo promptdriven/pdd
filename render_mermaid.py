@@ -70,42 +70,107 @@ def generate_mermaid_code(architecture, app_name="System"):
 
 
 def generate_html(mermaid_code, architecture, app_name):
-    """Generate minimal black and white HTML with Mermaid diagram."""
+    """Generate interactive HTML with hover tooltips."""
     
-    table_rows = []
-    for m in sorted(architecture, key=lambda x: x.get('priority', 999)):
-        deps = ', '.join(m.get('dependencies', [])) or '-'
-        table_rows.append(f"""
-            <tr>
-                <td>{m.get('priority', '-')}</td>
-                <td><strong>{m['filename']}</strong></td>
-                <td>{', '.join(m.get('tags', []))}</td>
-                <td>{deps}</td>
-            </tr>""")
+    # Create module data as JSON for tooltips
+    module_data = {}
+    for m in architecture:
+        module_id = Path(m['filename']).stem
+        module_data[module_id] = {
+            'filename': m['filename'],
+            'priority': m.get('priority', 'N/A'),
+            'description': m.get('description', 'No description'),
+            'dependencies': m.get('dependencies', []),
+            'tags': m.get('tags', []),
+            'filepath': m.get('filepath', '')
+        }
+    
+    import json
+    module_json = json.dumps(module_data)
     
     return f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>{app_name}</title>
 <script type="module">
 import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
 mermaid.initialize({{startOnLoad:true,theme:'default'}});
+
+window.addEventListener('load', () => {{
+    const moduleData = {module_json};
+    
+    // Add hover listeners to all nodes
+    setTimeout(() => {{
+        const nodes = document.querySelectorAll('.node');
+        nodes.forEach(node => {{
+            const text = node.querySelector('.nodeLabel');
+            if (!text) return;
+            
+            const nodeText = text.textContent.trim();
+            const moduleId = nodeText.split(' ')[0];
+            const data = moduleData[moduleId];
+            
+            if (data) {{
+                node.style.cursor = 'pointer';
+                
+                node.addEventListener('mouseenter', (e) => {{
+                    showTooltip(e, data);
+                }});
+                
+                node.addEventListener('mouseleave', () => {{
+                    hideTooltip();
+                }});
+            }}
+        }});
+    }}, 500);
+}});
+
+function showTooltip(e, data) {{
+    hideTooltip();
+    
+    const tooltip = document.createElement('div');
+    tooltip.id = 'module-tooltip';
+    tooltip.innerHTML = `
+        <div style="font-weight:600;margin-bottom:8px;font-size:1.1em;">${{data.filename}}</div>
+        <div style="margin-bottom:6px;"><strong>Priority:</strong> ${{data.priority}}</div>
+        <div style="margin-bottom:6px;"><strong>Path:</strong> ${{data.filepath}}</div>
+        <div style="margin-bottom:6px;"><strong>Tags:</strong> ${{data.tags.join(', ')}}</div>
+        <div style="margin-bottom:6px;"><strong>Dependencies:</strong> ${{data.dependencies.length > 0 ? data.dependencies.join(', ') : 'None'}}</div>
+        <div style="margin-top:8px;padding-top:8px;border-top:1px solid #ddd;font-size:0.9em;color:#444;">${{data.description}}</div>
+    `;
+    
+    document.body.appendChild(tooltip);
+    
+    const rect = e.target.closest('.node').getBoundingClientRect();
+    tooltip.style.left = rect.right + 10 + 'px';
+    tooltip.style.top = rect.top + window.scrollY + 'px';
+}}
+
+function hideTooltip() {{
+    const existing = document.getElementById('module-tooltip');
+    if (existing) existing.remove();
+}}
 </script>
 <style>
 *{{margin:0;padding:0;box-sizing:border-box}}
 body{{font-family:system-ui,sans-serif;background:#fff;color:#000;padding:2rem;max-width:1400px;margin:0 auto}}
 h1{{font-size:2rem;font-weight:600;margin-bottom:2rem;padding-bottom:1rem;border-bottom:2px solid #000}}
-.diagram{{border:1px solid #000;padding:2rem;margin:2rem 0;overflow-x:auto}}
+.diagram{{border:1px solid #000;padding:2rem;margin:2rem 0;overflow-x:auto;position:relative}}
 .mermaid{{display:flex;justify-content:center}}
-h2{{font-size:1.5rem;font-weight:600;margin:2rem 0 1rem;border-bottom:1px solid #000;padding-bottom:0.5rem}}
-table{{width:100%;border-collapse:collapse;border:1px solid #000;margin:1rem 0}}
-th{{padding:0.75rem;text-align:left;font-weight:600;background:#f5f5f5;border:1px solid #000}}
-td{{padding:0.75rem;border:1px solid #ddd}}
-tbody tr:hover{{background:#f9f9f9}}
+#module-tooltip{{
+    position:absolute;
+    background:#fff;
+    border:2px solid #000;
+    padding:1rem;
+    max-width:400px;
+    z-index:1000;
+    box-shadow:4px 4px 0 rgba(0,0,0,0.1);
+    font-size:0.9rem;
+    line-height:1.5;
+}}
+.node{{transition:opacity 0.2s}}
+.node:hover{{opacity:0.8}}
 </style></head><body>
 <h1>{app_name}</h1>
 <div class="diagram"><pre class="mermaid">{mermaid_code}</pre></div>
-<h2>Modules</h2>
-<table><thead><tr><th>Priority</th><th>Module</th><th>Tags</th><th>Dependencies</th></tr></thead>
-<tbody>{''.join(table_rows)}</tbody></table>
 </body></html>"""
 
 
