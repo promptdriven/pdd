@@ -440,8 +440,8 @@ def test_non_python_triggers_agentic_fallback_failure(tmp_path):
     """
     code_dir = tmp_path / "proj"
     code_dir.mkdir()
-    code_file = code_dir / "main.rs"
-    code_file.write_text("fn main() { println!(\"Hello\"); }")
+    code_file = code_dir / "main.js"
+    code_file.write_text("console.log('Hello, world!');")
 
     tests_dir = tmp_path / "tests"
     tests_dir.mkdir()
@@ -459,7 +459,7 @@ def test_non_python_triggers_agentic_fallback_failure(tmp_path):
             unit_test_file=str(unit_test_file),
             code_file=str(code_file),
             prompt_file="dummy_prompt.txt",
-            prompt="Fix the Rust code",
+            prompt="Fix the javascript code",
             verification_program=str(verify_file),
             strength=0.5,
             temperature=0.0,
@@ -477,4 +477,4 @@ def test_non_python_triggers_agentic_fallback_failure(tmp_path):
     assert model == "agentic-cli"
     # Should still return contents read from disk on best-effort basis
     assert "dummy test" in final_test
-    assert "fn main()" in final_code
+    assert "console.log('Hello, world!');" in final_code
