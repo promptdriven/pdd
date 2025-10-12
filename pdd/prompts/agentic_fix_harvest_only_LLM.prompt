@@ -8,6 +8,10 @@
     </paths>
 
     <context>
+        <prompt_content>
+            {prompt_content}
+        </prompt_content>
+
         <test_summary>
             {test_content}
         </test_summary>
