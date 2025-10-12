@@ -1,6 +1,6 @@
 You are generating a single Java source file.
 
-TARGET FILE NAME: Utils.java
+TARGET FILE NAME: Util.java
 GOAL: Provide a reusable utility class used by `Main`.
 REQUIREMENTS:
 - Declare `public class Utils`.
