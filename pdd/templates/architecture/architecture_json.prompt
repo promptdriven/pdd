@@ -66,13 +66,14 @@ output_schema:
   type: array
   items:
     type: object
-    required: [reason, description, dependencies, priority, filename]
+    required: [reason, description, dependencies, priority, filename, filepath]
     properties:
       reason: { type: string }
       description: { type: string }
       dependencies: { type: array, items: { type: string } }
       priority: { type: integer, minimum: 1 }
       filename: { type: string }
+      filepath: { type: string }
       tags: { type: array, items: { type: string } }
       interface:
         type: object
@@ -83,7 +84,15 @@ output_schema:
             type: object
             properties:
               route: { type: string }
-              params: { type: array, items: { type: object } }
+              params:
+                type: array
+                items:
+                  type: object
+                  required: [name, type]
+                  properties:
+                    name: { type: string }
+                    type: { type: string }
+                    description: { type: string }
               dataSources:
                 type: array
                 items:
@@ -121,7 +130,7 @@ INSTRUCTIONS:
 - Use only the facts from the included documents and files. Do not invent technologies or filenames.
 - If TECH_STACK_FILE is absent, infer a reasonable tech stack from the PRD and included files; state key assumptions within each item's description.
 - Output a single top-level JSON array of items. Each item must include:
-  - reason, description, dependencies (filenames), priority (1 = highest), filename, optional tags.
+  - reason, description, dependencies (filenames), priority (1 = highest), filename, filepath, optional tags.
   - interface: include only the applicable sub-object (component, page, module, api, graphql, cli, job, message, or config). Omit all non-applicable sub-objects entirely.
   - When interface.type is "page", each entry in `dataSources` must be an object with at least `kind` (e.g., api/query) and `source` (e.g., URL or identifier). Provide `method`, `description`, and any other useful metadata when known.
 - Valid JSON only. No comments or trailing commas.
@@ -132,20 +141,38 @@ OUTPUT FORMAT (authoritative):
   "type": "array",
   "items": {
     "type": "object",
-    "required": ["reason", "description", "dependencies", "priority", "filename"],
+    "required": ["reason", "description", "dependencies", "priority", "filename", "filepath"],
     "properties": {
       "reason": {"type": "string"},
       "description": {"type": "string"},
       "dependencies": {"type": "array", "items": {"type": "string"}},
       "priority": {"type": "integer", "minimum": 1},
       "filename": {"type": "string"},
+      "filepath": {"type": "string"},
       "tags": {"type": "array", "items": {"type": "string"}},
       "interface": {
         "type": "object",
         "properties": {
           "type": {"enum": ["component", "page", "module", "api", "graphql", "cli", "job", "message", "config"]},
           "component": {"type": "object"},
-          "page": {"type": "object", "properties": {"route": {"type": "string"}}},
+          "page": {
+            "type": "object",
+            "properties": {
+              "route": {"type": "string"},
+              "params": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["name", "type"],
+                  "properties": {
+                    "name": {"type": "string"},
+                    "type": {"type": "string"},
+                    "description": {"type": "string"}
+                  }
+                }
+              }
+            }
+          },
           "module": {"type": "object"},
           "api": {"type": "object"},
           "graphql": {"type": "object"},
@@ -161,7 +188,7 @@ OUTPUT FORMAT (authoritative):
 ```
 
 INTERFACE TYPES (emit only applicable):
-- page: route (string), params? (array), dataSources? (array), layout? (object)
+- page: route (string), params? (array of {name, type, description?}), dataSources? (array), layout? (object)
 - component: props (array of {name, type, required?}), emits? (array), context? (array)
 - module: functions (array of {name, signature, returns?, errors?, sideEffects?})
 - api: endpoints (array of {method, path, auth?, requestSchema?, responseSchema?, errors?})
@@ -177,6 +204,18 @@ FILENAME CONVENTIONS:
   - Next.js (TypeScript React): page_TypeScriptReact.prompt -> generates page.tsx; layout_TypeScriptReact.prompt -> layout.tsx
   - Python backend: api_Python.prompt -> api.py; orders_Python.prompt -> orders.py
 - Choose descriptive <base> names (e.g., orders_page, orders_api) and keep names consistent across dependencies.
+
+FILEPATH CONVENTIONS:
+- The "filepath" field specifies the path of the output source file from the source tree root, using conventions appropriate for the language and framework.
+- Examples (adapt to your stack):
+  - Next.js app router: app/orders/page.tsx, app/layout.tsx, app/api/orders/route.ts
+  - Next.js pages router: pages/orders.tsx, pages/api/orders.ts
+  - Python FastAPI: src/api.py, src/orders.py, src/models/order.py
+  - React components: src/components/OrderList.tsx, src/hooks/useOrders.ts
+  - Config files: .env.example, pyproject.toml, package.json
+- Use forward slashes (/) for path separators regardless of OS.
+- Include the appropriate file extension for the target language (.tsx, .py, .rs, .go, etc.).
+- Follow standard directory structures for the framework (e.g., app/ for Next.js 13+, src/ for typical React/Python projects).
 
 DEPENDENCY RULES:
 - The "dependencies" array must list other items by their prompt filenames (the "filename" values), not code filenames.
