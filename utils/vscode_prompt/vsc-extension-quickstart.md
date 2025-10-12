@@ -6,13 +6,28 @@
 * `package.json` - this is the manifest file in which you declare your language support and define the location of the grammar file that has been copied into your extension.
 * `syntaxes/prompt.tmLanguage.json` - this is the Text mate grammar file that is used for tokenization.
 * `language-configuration.json` - this is the language configuration, defining the tokens that are used for comments and brackets.
+* `src/extension.ts` - main extension entry point with command registration and activation logic.
+* `src/pddInstaller.ts` - PDD CLI installation system with cross-platform support.
 
 ## Get up and running straight away
 
 * Make sure the language configuration settings in `language-configuration.json` are accurate.
 * Press `F5` to open a new window with your extension loaded.
-* Create a new file with a file name suffix matching your language.
+* Create a new file with a `.prompt` extension to test syntax highlighting.
+* The extension will automatically detect if PDD CLI is installed and offer installation if needed.
 * Verify that syntax highlighting works and that the language configuration settings are working.
+
+## Extension Features
+
+### PDD CLI Integration
+* **Smart Installation System**: Detects existing installations across uv tools, conda environments, and pip
+* **User Choice**: Offers uv (recommended) or pip installation
+* **Cross-Platform**: Works on macOS, Linux, and Windows
+* **Command Palette Integration**: 
+  - `PDD: Install PDD CLI` - Smart installation with user choice
+  - `PDD: Check PDD CLI Installation` - Verify installation status
+  - `PDD: Run PDD Setup` - Configure API keys and settings
+  - `PDD: Upgrade PDD to uv Installation` - Migrate from pip to uv
 
 ## Make changes
 
