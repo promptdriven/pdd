@@ -949,8 +949,8 @@ def preprocess(
     default=False,
     help="Automatically submit the example if all unit tests pass.",
 )
-@click.option(
-    "--agentic-fallback",
+@click.option( 
+    "--agentic-fallback/--no-agentic-fallback",
     is_flag=True,
     default=True,
     help="Enable agentic fallback if the primary fix mechanism fails.",

@@ -1,9 +1,9 @@
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 public class TestMain {
     @Test
     void testComputeSomething() {
-        assertEquals(5, Main.xPlus3(2));
+        assertEquals(7, Main.computeSomething(2));
     }
 }

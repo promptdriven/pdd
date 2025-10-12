@@ -11,11 +11,12 @@ from rich import print as rprint
 from rich.console import Console
 
 # Relative import from an internal module.
+from .get_language import get_language
 from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
 from . import DEFAULT_TIME  # Import DEFAULT_TIME
 from .python_env_detector import detect_host_python_executable
 from .agentic_fix import run_agentic_fix
-from .agentic_langtest import detect_language, default_verify_cmd_for
+from .agentic_langtest import default_verify_cmd_for
 
 
 console = Console()
@@ -211,8 +212,8 @@ def fix_error_loop(unit_test_file: str,
         else:
             # For non-Python files, run the verification program to get an initial error state
             rprint(f"[cyan]Non-Python target detected. Running verification program to get initial state...[/cyan]")
-            lang = detect_language(code_file)
-            verify_cmd = default_verify_cmd_for(lang, Path.cwd(), unit_test_file)
+            lang = get_language(os.path.splitext(code_file)[1])
+            verify_cmd = default_verify_cmd_for(lang, unit_test_file)
             if not verify_cmd:
                 raise ValueError(f"No default verification command for language: {lang}")
             
