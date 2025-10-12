@@ -1,8 +1,8 @@
 {
   "name": "prompt-highlighter",
   "displayName": "Prompt Driven Development",
-  "description": "Syntax highlighting for .prompt files in VS Code and OpenVSX-compatible IDEs (Prompt‑Driven Development, AI prompts)",
-  "version": "0.0.2",
+  "description": "PDD CLI installation and syntax highlighting for .prompt files.",
+  "version": "0.0.3",
   "engines": {
     "vscode": "^1.96.0"
   },
@@ -10,6 +10,10 @@
     "Programming Languages",
     "Machine Learning",
     "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
   ],
   "contributes": {
     "languages": [
@@ -39,7 +43,39 @@
         "scopeName": "text.prompt",
         "path": "./syntaxes/prompt.tmLanguage.json"
       }
-    ]
+    ],
+    "commands": [
+      {
+        "command": "pdd.installCli",
+        "title": "Install PDD CLI",
+        "category": "PDD"
+      },
+      {
+        "command": "pdd.checkCli",
+        "title": "Check PDD CLI Installation",
+        "category": "PDD"
+      },
+      {
+        "command": "pdd.runSetup",
+        "title": "Run PDD Setup",
+        "category": "PDD"
+      },
+      {
+        "command": "pdd.upgradeToUv",
+        "title": "Upgrade PDD to uv Installation",
+        "category": "PDD"
+      }
+    ],
+    "configuration": {
+      "title": "PDD",
+      "properties": {
+        "pdd.promptForInstallation": {
+          "type": "boolean",
+          "default": true,
+          "description": "Prompt to install PDD CLI if not found"
+        }
+      }
+    }
   },
   "repository": {
     "type": "git",
@@ -85,9 +121,19 @@
     "gitpod",
     "kiro",
     "windsurf",
-    "compatible ide"
+    "compatible ide",
+    "uv",
+    "pip",
+    "python",
+    "cli",
+    "installation",
+    "automatic",
+    "cross-platform"
   ],
   "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
     "package": "vsce package",
     "publish": "vsce publish",
     "render-icon": "node scripts/render-icon.mjs",
@@ -95,6 +141,9 @@
   },
   "icon": "images/icon.png",
   "devDependencies": {
-    "@resvg/resvg-js": "^2.6.2"
+    "@resvg/resvg-js": "^2.6.2",
+    "@types/vscode": "^1.96.0",
+    "@types/node": "16.x",
+    "typescript": "^4.9.4"
   }
 }

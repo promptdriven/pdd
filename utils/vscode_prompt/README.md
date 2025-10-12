@@ -10,6 +10,8 @@ Why this matters: AI agents can draft code in seconds, but teams often spend hou
 
 - Syntax highlighting for `.prompt` files
 - Language configuration for predictable editing (comments, brackets)
+- PDD CLI installation with user choice between uv (recommended) and pip
+- Automatic detection across multiple installation methods (uv tools, conda environments, pip)
 - Works alongside `pdd` CLI to turn prompts into code
 
 Learn more:
@@ -51,7 +53,45 @@ For OpenVSX-compatible IDEs (VSCodium, Gitpod, Kiro, Windsurf, etc.), install fr
 
 ## PDD CLI Installation
 
-- Getting started with PDD CLI (Gemini setup): https://github.com/promptdriven/pdd/blob/main/SETUP_WITH_GEMINI.md
+### Installation System
+
+New in v0.0.3: The extension now provides an intelligent installation system that detects your environment and offers the best installation method for your setup.
+
+#### Automatic Detection
+The extension automatically detects if PDD CLI is installed via:
+- uv tools (recommended method)
+- Conda environments
+- pip installations
+- Direct PATH installations
+
+#### Installation Options
+When PDD CLI is not found, you'll see a friendly prompt with options:
+
+1. Install with uv (recommended) - Modern Python package manager
+   - Latest PDD CLI version with all features
+   - Faster installation and updates
+   - Isolated tool environment
+   - If uv isn't installed, the extension will install it first with your permission
+
+2. Install with pip - Traditional fallback method
+   - Works with existing Python installations
+   - May install older versions
+   - Compatible with conda and virtual environments
+
+3. Manual installation - For other platforms or custom setups
+
+#### Available Commands
+- `PDD: Install PDD CLI` - installation with user choice
+- `PDD: Check PDD CLI Installation` - Verify current installation
+- `PDD: Run PDD Setup` - Configure API keys and settings
+- `PDD: Upgrade PDD to uv Installation` - Migrate from pip to uv
+
+### Manual Installation
+
+For custom setups or manual installation:
+- Getting started with PDD CLI: https://github.com/promptdriven/pdd#readme
+- uv installation: `uv tool install pdd-cli`
+- pip installation: `pip install pdd-cli`
 
 ## Get Started
 
@@ -63,8 +103,43 @@ Extension contributes:
 
 - Custom language support for `.prompt`
 - File association and syntax highlighting
+- PDD CLI installation with multiple installation methods
+- Cross-platform support (macOS, Linux, Windows)
+- User choice between uv (recommended) and pip installation
+- Automatic environment detection (uv tools, conda, pip)
+- Command palette integration for PDD operations
+- Optional setup - users can configure when ready
 
 ## Release Notes
+
+### 0.0.3
+
+- New Installation System
+  - Detection across multiple installation methods (uv tools, conda environments, pip)
+  - User choice between uv (recommended) and pip installation
+  - Automatic uv installation with user consent
+  - Cross-platform support (macOS, Linux, Windows)
+  - Friendly installation prompts without warnings
+  - Optional setup - no longer automatically runs after installation
+  - New "Upgrade to uv Installation" command for pip users
+  - Error handling and fallback options
+
+### 0.0.2
+
+- Extended IDE Compatibility
+
+  - Updated metadata and documentation to support OpenVSX-compatible editors such as VSCodium, Cursor, Gitpod, Kiro, and Windsurf.
+  - Improved extension description and keywords for better discoverability across marketplaces (VS Code + OpenVSX).
+
+- Documentation Enhancements
+
+  - Expanded README and quickstart instructions for alternative IDEs.
+  - Added installation notes and clarified usage across platforms.
+
+- Build & Metadata Updates
+
+  - Improved Makefile `install` target messaging for editor CLIs.
+
 
 ### 0.0.1
 
