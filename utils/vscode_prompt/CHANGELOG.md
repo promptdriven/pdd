@@ -6,6 +6,18 @@ This project follows the guidelines from [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+## [0.0.3] - 2025-10-11
+
+### Added
+- **PDD CLI Installation System**
+  - Intelligent detection across multiple installation methods (uv tools, conda environments, pip installations)
+  - User choice between uv (recommended) and pip installation methods
+  - Automatic uv installation with user consent and clear explanations
+  - Cross-platform support for macOS, Linux, and Windows
+  - Command Palette Integration
+  - Users can choose installation method or defer installation
+  - Setup is optional 
+
 ## [0.0.2] - 2025-09-23
 
 ### Changed
