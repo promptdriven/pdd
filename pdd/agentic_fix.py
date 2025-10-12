@@ -8,9 +8,11 @@ import difflib
 from pathlib import Path
 from typing import Tuple, List, Optional, Dict
 from rich.console import Console
+
+from .get_language import get_language
 from .llm_invoke import _load_model_data
 from .load_prompt_template import load_prompt_template
-from .agentic_langtest import default_verify_cmd_for, detect_language, _find_project_root
+from .agentic_langtest import default_verify_cmd_for
 
 console = Console()
 
@@ -631,7 +633,7 @@ def run_agentic_fix(
 
         env_verify = os.getenv("PDD_AGENTIC_VERIFY", None)
         verify_force = os.getenv("PDD_AGENTIC_VERIFY_FORCE", "0") == "1"
-        verify_cmd = os.getenv("PDD_AGENTIC_VERIFY_CMD", None) or default_verify_cmd_for(detect_language(code_path), cwd, unit_test_file)
+        verify_cmd = os.getenv("PDD_AGENTIC_VERIFY_CMD", None) or default_verify_cmd_for(get_language(os.path.splitext(code_path)[1]), unit_test_file)
 
         primary_prompt_template = load_prompt_template("agentic_fix_primary_LLM")
         if not primary_prompt_template:
