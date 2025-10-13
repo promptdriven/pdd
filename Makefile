@@ -25,12 +25,13 @@ help:
 	@echo "  make all-regression 		  - Run all regression test suites"
 	@echo "  make analysis                - Run regression analysis"
 	@echo "  make verify MODULE=name      - Verify code functionality against prompt intent"
-		@echo "  make lint                    - Run pylint for static code analysis"
-		@echo ""
-		@echo "Public repo helpers:"
-		@echo "  make public-update           - Ensure and update local public repo clone ($(PUBLIC_PDD_REPO_DIR))"
-		@echo "  make public-import ITEM=path - Copy file/dir from public clone into this repo (e.g., ITEM=pdd/examples/SETUP_WITH_GEMINI.md)"
-		@echo "  make public-diff ITEM=path   - Show diff between public clone file and local file (uses same ITEM rules)"
+	@echo "  make lint                    - Run pylint for static code analysis"
+	@echo ""
+	@echo "Public repo helpers:"
+	@echo "  make public-update           - Ensure and update local public repo clone ($(PUBLIC_PDD_REPO_DIR))"
+	@echo "  make public-import ITEM=path - Copy file/dir from public clone into this repo (e.g., ITEM=pdd/examples/SETUP_WITH_GEMINI.md)"
+	@echo "  make public-diff ITEM=path   - Show diff between public clone file and local file (uses same ITEM rules)"
+	@echo "  make sync-public             - Fetch public remote and list commits missing locally"
 	@echo "Fixing & Maintenance:"
 	@echo "  make fix [MODULE=name]       - Fix prompts command"
 	@echo "  make crash MODULE=name       - Fix crashes in code"
@@ -84,7 +85,7 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory
 EXAMPLE_FILES := $(wildcard $(CONTEXT_DIR)/*_example.py)
 
-.PHONY: all clean test requirements production coverage staging regression sync-regression all-regression install build analysis fix crash update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff
+.PHONY: all clean test requirements production coverage staging regression sync-regression all-regression install build analysis fix crash update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -629,4 +630,31 @@ public-diff: public-update
 		echo "Local destination missing: $$DST"; \
 		echo "Diff against empty file:"; \
 		git --no-pager diff --no-index -- /dev/null "$${SRC}" || true; \
+	fi
+
+# Fetch updates from the public remote and report unsynced commits
+sync-public:
+	@if ! git remote get-url public >/dev/null 2>&1; then \
+		echo "Error: no 'public' remote configured."; \
+		echo "Add it with: git remote add public $(PUBLIC_PDD_REMOTE)"; \
+		exit 1; \
+	fi
+	@echo "Fetching refs from 'public' remote"
+	@git fetch public
+	@DEFAULT_BRANCH=$$(git remote show public | awk '/HEAD branch/ {print $$NF}'); \
+	if [ -z "$$DEFAULT_BRANCH" ]; then DEFAULT_BRANCH=main; fi; \
+	echo "Comparing against public/$$DEFAULT_BRANCH"; \
+	BEHIND=$$(git rev-list --count HEAD..public/$$DEFAULT_BRANCH 2>/dev/null || echo 0); \
+	AHEAD=$$(git rev-list --count public/$$DEFAULT_BRANCH..HEAD 2>/dev/null || echo 0); \
+	if [ "$$BEHIND" -eq 0 ]; then \
+		echo "No missing commits from public/$$DEFAULT_BRANCH."; \
+	else \
+		echo "$$BEHIND commit(s) in public/$$DEFAULT_BRANCH not yet synced locally:"; \
+		git --no-pager log --oneline HEAD..public/$$DEFAULT_BRANCH; \
+	fi; \
+	if [ "$$AHEAD" -eq 0 ]; then \
+		echo "No local commits ahead of public/$$DEFAULT_BRANCH."; \
+	else \
+		echo "$$AHEAD local commit(s) ahead of public/$$DEFAULT_BRANCH:"; \
+		git --no-pager log --oneline public/$$DEFAULT_BRANCH..HEAD; \
 	fi
