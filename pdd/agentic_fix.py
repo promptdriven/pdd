@@ -488,6 +488,7 @@ def _try_harvest_then_verify(
 
     harvest_instr = harvest_prompt_template.format(
         code_abs=str(code_path),
+        test_abs=str(Path(unit_test_file).resolve()),
         begin=_begin_marker(code_path),
         end=_end_marker(code_path),
         code_content=code_snapshot,
