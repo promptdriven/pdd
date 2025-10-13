@@ -67,5 +67,3 @@ INI,;,.ini
 Verilog,//,.v
 Systemverilog,//,.sv
 Prisma,///,.prisma
-Lean,--,.lean
-Agda,--,.agda
