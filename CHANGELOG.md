@@ -1,8 +1,16 @@
-## v0.0.63 (2025-10-12)
+## v0.0.64 (2025-10-12)
 
 ### Feat
 
-- extend architecture JSON prompt schema with filepath and params details
+- add new language formats to CSV data
+
+## v0.0.63 (2025-10-12)
+
+### Prompt Templates
+
+- architecture JSON template now requires a `filepath` alongside each filename and enforces typed `params` objects for page routes, clarifying how generators should emit file locations.
+
+Thanks to James Levine for your contributions!
 
 ## v0.0.62 (2025-10-02)
 
