@@ -28,9 +28,12 @@ def _write_debug_report() -> None:
                 fh.write("Preprocess Debug Report\n\n")
                 for line in _DEBUG_EVENTS:
                     fh.write(line + "\n")
-        except Exception:
-            # Avoid interfering with normal flow if writing fails
-            pass
+            console.print(f"[green]Debug report written to:[/green] {_DEBUG_OUTPUT_FILE}")
+        except Exception as e:
+            # Report the error so users know why the log file wasn't written
+            console.print(f"[yellow]Warning: Could not write debug report to {_DEBUG_OUTPUT_FILE}: {e}[/yellow]")
+    elif _DEBUG_PREPROCESS and not _DEBUG_OUTPUT_FILE:
+        console.print("[dim]Debug mode enabled but PDD_PREPROCESS_DEBUG_FILE not set (output shown in console only)[/dim]")
 
 def _extract_fence_spans(text: str) -> List[Tuple[int, int]]:
     """Return list of (start, end) spans for fenced code blocks ```...```.
