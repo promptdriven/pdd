@@ -213,37 +213,36 @@ def test_html_structure():
     assert '<title>Test HTML App</title>' in html
     assert '<h1>Test HTML App</h1>' in html
     assert '<pre class="mermaid">flowchart TB\n...</pre>' in html
-    assert '<table>' in html
-    assert '<th>Priority</th>' in html
-    assert '<td><strong>main.py</strong></td>' in html
+    # New implementation uses interactive tooltips, not tables
+    assert 'moduleData' in html  # JavaScript data for tooltips
+    assert 'showTooltip' in html  # Tooltip function
+    assert 'addEventListener' in html  # Event listeners
 
-def test_html_table_sorting():
-    """Verify the module table is sorted by priority."""
+def test_html_tooltip_data():
+    """Verify the tooltip data is correctly embedded in JavaScript."""
     arch = [
         {"filename": "c.js", "priority": 10},
-        {"filename": "d.js"}, # Missing priority, should be last
+        {"filename": "d.js"}, # Missing priority
         {"filename": "a.js", "priority": 1},
         {"filename": "b.js", "priority": 2},
     ]
     html = generate_html("", arch, "Sort App")
     
-    # Find the order of filenames in the generated table rows
-    body_content = html.split('<tbody>')[1].split('</tbody>')[0]
-    rows = [row for row in body_content.split('<tr>') if '<td>' in row]
-    
-    assert '<strong>a.js</strong>' in rows[0]
-    assert '<strong>b.js</strong>' in rows[1]
-    assert '<strong>c.js</strong>' in rows[2]
-    assert '<strong>d.js</strong>' in rows[3]
-    assert '<td>-</td>' in rows[3] # Check missing priority display
+    # Check that module data is embedded in JavaScript
+    assert '"c": {"filename": "c.js", "priority": 10' in html
+    assert '"d": {"filename": "d.js", "priority": "N/A"' in html
+    assert '"a": {"filename": "a.js", "priority": 1' in html
+    assert '"b": {"filename": "b.js", "priority": 2' in html
 
-def test_html_table_content_empty_fields():
-    """Verify empty/missing optional fields are displayed gracefully."""
+def test_html_tooltip_empty_fields():
+    """Verify empty/missing optional fields are displayed gracefully in tooltips."""
     arch = [{"filename": "module.js"}]
     html = generate_html("", arch, "Empty Fields App")
-    assert '<td>-</td>' in html # Priority
-    assert '<td></td>' in html # Tags
-    assert '<td>-</td>' in html # Dependencies
+    
+    # Check that empty fields are handled in JavaScript data
+    assert '"priority": "N/A"' in html  # Missing priority becomes N/A
+    assert '"tags": []' in html  # Empty tags array
+    assert '"dependencies": []' in html  # Empty dependencies array
 
 def test_html_escaping_vulnerability():
     """Test that HTML special characters in app_name are not escaped."""
