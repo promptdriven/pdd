@@ -1,6 +1,7 @@
 import os
 import sys
 import pytest
+import tempfile
 from pathlib import Path
 from pdd import DEFAULT_STRENGTH
 
@@ -84,7 +85,11 @@ def test_defaults_for_all_commands(command):
     assert list(result.keys()).sort() == list(expected_keys).sort()
     for key in expected_keys:
         expected_filename = get_expected_default_name(command, key, TEST_BASENAME, TEST_LANG, TEST_EXT_WITH_DOT)
-        expected_path = abs_path_cwd(expected_filename)
+        # Special handling for example command which now defaults to examples/ directory
+        if command == "example":
+            expected_path = abs_path_cwd(f"examples/{expected_filename}")
+        else:
+            expected_path = abs_path_cwd(expected_filename)
         assert key in result
         assert result[key] == expected_path
         assert os.path.isabs(result[key])
@@ -456,4 +461,7 @@ def test_sync_orchestration_example_scenario():
     # Test that directory detection works correctly
     assert not user_output_path.endswith(os.path.sep), "Path should not end with separator"
     # The path should be treated as a file, not a directory
+
+
+# Enhanced tests moved to test_enhanced_pdd_example.py for better organization
 
