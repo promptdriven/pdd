@@ -1,8 +1,10 @@
 ## v0.0.64 (2025-10-12)
 
-### Feat
+### Data & Formats
 
-- add new language formats to CSV data
+- Added Lean and Agda entries to `data/language_format.csv`, expanding supported language metadata with the correct comment markers and extensions for theorem-proving workflows.
+
+Thanks to Rudi Cilibrasi for your contributions!
 
 ## v0.0.63 (2025-10-12)
 
