@@ -18,7 +18,6 @@
     - Setup and teardown methods should only use public APIs and environment variables, never reset internal module state directly.
     - Design tests to be independent of implementation details that might change when code is regenerated.
     - For test isolation, use fixtures and mocking of external dependencies rather than manipulating internal module state. In general minimize the amount of mocking needed so that the tests are more robust to changes in the code under test and more code is tested.
-<include>examples/edit_file_tool_example/context/test.prompt</include>
 
 <instructions>
     1. FIRST: Carefully analyze the ACTUAL code provided in <code_under_test>:
