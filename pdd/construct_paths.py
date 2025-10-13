@@ -337,17 +337,21 @@ def _determine_language(
                 if language:
                     return language.lower()
             except ValueError:
-                # Fallback to built-in language mapping when PDD_PATH is not set
-                builtin_extensions = {
-                    '.py': 'python', '.js': 'javascript', '.ts': 'typescript',
-                    '.java': 'java', '.cpp': 'cpp', '.c': 'c', '.go': 'go',
-                    '.rb': 'ruby', '.rs': 'rust', '.kt': 'kotlin', '.swift': 'swift',
-                    '.cs': 'csharp', '.php': 'php', '.scala': 'scala', '.r': 'r',
-                    '.lua': 'lua', '.pl': 'perl', '.sh': 'bash', '.ps1': 'powershell',
-                    '.sql': 'sql', '.html': 'html', '.css': 'css'
-                }
-                if ext.lower() in builtin_extensions:
-                    return builtin_extensions[ext.lower()]
+                # Fallback: load language CSV file directly when PDD_PATH is not set
+                try:
+                    import csv
+                    import os
+                    # Try to find the CSV file relative to this script
+                    script_dir = os.path.dirname(os.path.abspath(__file__))
+                    csv_path = os.path.join(script_dir, 'data', 'language_format.csv')
+                    if os.path.exists(csv_path):
+                        with open(csv_path, 'r') as csvfile:
+                            reader = csv.DictReader(csvfile)
+                            for row in reader:
+                                if row['extension'].lower() == ext.lower():
+                                    return row['language'].lower()
+                except (FileNotFoundError, csv.Error):
+                    pass
         # Handle files without extension like Makefile
         elif not ext and path_obj.is_file(): # Check it's actually a file
             try:
@@ -355,9 +359,21 @@ def _determine_language(
                 if language:
                     return language.lower()
             except ValueError:
-                # Fallback for files without extension
-                if path_obj.name.lower() in ['makefile', 'dockerfile']:
-                    return 'makefile'
+                # Fallback: load language CSV file directly for files without extension
+                try:
+                    import csv
+                    import os
+                    script_dir = os.path.dirname(os.path.abspath(__file__))
+                    csv_path = os.path.join(script_dir, 'data', 'language_format.csv')
+                    if os.path.exists(csv_path):
+                        with open(csv_path, 'r') as csvfile:
+                            reader = csv.DictReader(csvfile)
+                            for row in reader:
+                                # Check if the filename matches (for files without extension)
+                                if not row['extension'] and path_obj.name.lower() == row['language'].lower():
+                                    return row['language'].lower()
+                except (FileNotFoundError, csv.Error):
+                    pass
 
     # 3 – parse from prompt filename suffix
     prompt_path = _candidate_prompt_path(input_file_paths)
