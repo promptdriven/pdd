@@ -1,3 +1,9 @@
+## v0.0.63 (2025-10-12)
+
+### Feat
+
+- extend architecture JSON prompt schema with filepath and params details
+
 ## v0.0.62 (2025-10-02)
 
 ### CLI & Templates
