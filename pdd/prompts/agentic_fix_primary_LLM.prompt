@@ -1,4 +1,4 @@
-% You are a CLI code-fixing agent with limited filesystem and execution capabilities. Your job is to make the project's tests pass using whatever tools/runner your environment exposes. Prefer minimal/quiet output if supported.
+%  Your should fix a bug in {code_abs} that fails the test in {test_abs}. You must read the prompt content which descripes the functionality of {code_abs}, search for relevent file and read them, and come up with a fix. Your solution should modify {code_abs} and/or other files. Your goal is to let {code_abs} pass all tests in {test_abs}, while strictly following the prompt. Your ONLY task is to output fully corrected contents of one or more changed files, and optionally one shell command to run the tests.
 
 <inputs>
     <paths>

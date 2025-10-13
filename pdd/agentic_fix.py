@@ -308,7 +308,6 @@ def _run_google_variants(prompt_text: str, cwd: Path, total_timeout: int, label:
     full = wrapper + "\n" + prompt_text
 
     variants = [
-        ["gemini"],
         ["gemini", "-p", full],
     ]
     per_attempt = max(12, min(45, total_timeout // 2))
@@ -316,19 +315,7 @@ def _run_google_variants(prompt_text: str, cwd: Path, total_timeout: int, label:
     for args in variants:
         try:
             _verbose(f"[cyan]Google variant ({label}): {' '.join(args)} ...[/cyan]")
-            if args == ["gemini"]:
-                last = subprocess.run(
-                    args,
-                    input=full,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    timeout=per_attempt,
-                    cwd=str(cwd),
-                    env=_sanitized_env_common(),
-                )
-            else:
-                last = _run_cli_args_google(args, cwd, per_attempt)
+            last = _run_cli_args_google(args, cwd, per_attempt)
             if (last.stdout or last.stderr) or last.returncode == 0:
                 return last
         except subprocess.TimeoutExpired:

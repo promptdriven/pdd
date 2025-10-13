@@ -9,12 +9,7 @@ from main import create_user_greeting
 
 class TestMain(unittest.TestCase):
     def test_create_user_greeting(self):
-        """
-        This test will fail because main.py calls get_greeting with wrong keywords.
-        The resulting TypeError is captured in error.log.
-        """
-        # This call will raise the TypeError we want to fix.
-        create_user_greeting()
+        assert create_user_greeting("John", "Doe") == "Hello, John Doe!"
 
 if __name__ == '__main__':
     unittest.main()
