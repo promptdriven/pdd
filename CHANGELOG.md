@@ -1,18 +1,45 @@
+## v0.0.64 (2025-10-12)
+
+### Data & Formats
+
+- Added Lean and Agda entries to `data/language_format.csv`, expanding supported language metadata with the correct comment markers and extensions for theorem-proving workflows.
+
+Thanks to Rudi Cilibrasi for your contributions!
+
+## v0.0.63 (2025-10-12)
+
+### Prompt Templates
+
+- architecture JSON template now requires a `filepath` alongside each filename and enforces typed `params` objects for page routes, clarifying how generators should emit file locations.
+
+Thanks to James Levine for your contributions!
+
 ## v0.0.62 (2025-10-02)
 
-### Feat
+### CLI & Templates
 
-- improve prompt generation and validation in regression tests
-- enforce prompt structure in generate_prompt template
-- enhance templates show command output with Rich tables
+- `pdd templates show` now renders summary, variables, and examples with Rich tables for clearer output.
+- Hardened `pdd/templates/generic/generate_prompt.prompt`: responses must return `<prompt>...</prompt>`, `ARCHITECTURE_FILE` is now required, and optional variables are normalized to avoid brace issues.
 
-### Fix
+### Prompt Validation & Regression
 
-- update model names in llm_model.csv for consistency
+- Regression harnesses wrap prompts with the required tags, validate architecture `dataSources`, and surface schema errors earlier in `tests/regression.sh`. Thanks James Levine and Sai Vathsavayi for your debugging efforts!
+- Expanded coverage in `tests/test_preprocess.py` and `tests/test_code_generator_main.py` to exercise brace protection, optional template variables, and architecture generation workflows.
 
-### Refactor
+### Docs
 
-- update generate_prompt template for improved context handling
+- Added `docs/prompting_guide.md`, refreshed onboarding/tutorial guides, and introduced `AGENTS.md` as a quick-reference to repository conventions.
+- Documented the `dataSources` contract in the README and architecture template, highlighting required fields and schema expectations.
+
+### Data & Model Metadata
+
+- Added Prisma, Verilog, and SystemVerilog entries to `data/language_format.csv` to expand supported formats. Thanks Dan Barrowman for the Contributions!
+- Renamed Anthropic and Google entries in `data/llm_model.csv` for consistent model naming. Sonnet 4.5 is now the default model for Anthropic.
+
+### Tooling
+
+- Improved double-curly brace handling in `pdd/preprocess.py` to preserve `${IDENT}` placeholders and added targeted regression coverage.
+- VS Code prompt-highlighter extension 0.0.2 ships with Open VSX metadata/docs plus Makefile targets to publish and verify releases.
 
 ## v0.0.61 (2025-09-23)
 
