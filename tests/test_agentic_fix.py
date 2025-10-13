@@ -32,6 +32,7 @@ def _prep_files(tmp_path: Path):
 
 @pytest.fixture
 def patch_env(monkeypatch):
+    monkeypatch.setenv("PDD_PATH", ".")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
     monkeypatch.setenv("GOOGLE_API_KEY", "x")
     monkeypatch.setenv("OPENAI_API_KEY", "x")
@@ -131,6 +132,7 @@ def test_run_agentic_fix_real_call_when_available(provider, env_key, cli, tmp_pa
     else:
         monkeypatch.setenv(env_key, detected_key)
 
+    monkeypatch.setenv("PDD_PATH", ".")
     # Keep local verification off (agents may run on remote infra)
     monkeypatch.setenv("PDD_AGENTIC_VERIFY", "0")
     monkeypatch.setenv("PDD_AGENTIC_LOGLEVEL", "quiet")
