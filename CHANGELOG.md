@@ -1,8 +1,10 @@
 ## v0.0.63 (2025-10-12)
 
-### Feat
+### Prompt Templates
 
-- extend architecture JSON prompt schema with filepath and params details
+- architecture JSON template now requires a `filepath` alongside each filename and enforces typed `params` objects for page routes, clarifying how generators should emit file locations.
+
+Thanks to James Levine for your contributions!
 
 ## v0.0.62 (2025-10-02)
 
