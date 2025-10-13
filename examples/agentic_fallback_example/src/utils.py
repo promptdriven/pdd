@@ -7,6 +7,6 @@ def get_greeting(first_name: str, last_name: str) -> str:
         last_name: The user's last name
     
     Returns:
-        A greeting string containing the user's full name
+        A greeting string containing Hello and the user's full name
     """
-    return f"Hello, {first_name} {last_name}! Welcome!"
+    return f"Hello, {first_name} {last_name}!"
