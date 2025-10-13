@@ -1,3 +1,9 @@
+## v0.0.64 (2025-10-12)
+
+### Feat
+
+- add new language formats to CSV data
+
 ## v0.0.63 (2025-10-12)
 
 ### Prompt Templates
