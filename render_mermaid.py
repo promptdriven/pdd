@@ -20,7 +20,7 @@ from pathlib import Path
 
 def generate_mermaid_code(architecture, app_name="System"):
     """Generate Mermaid flowchart code from architecture JSON."""
-    lines = ["flowchart TB", f'    PRD["{app_name}"]', ""]
+    lines = ["flowchart TB", f'            PRD["{app_name}"]', "    ", "    "]
     
     # Categorize modules by tags (frontend takes priority over backend)
     frontend = [m for m in architecture if any(t in m.get('tags', []) for t in ['frontend', 'react', 'nextjs', 'ui', 'page', 'component'])]
@@ -42,7 +42,10 @@ def generate_mermaid_code(architecture, app_name="System"):
         lines.append("    PRD --> Frontend")
     if backend:
         lines.append("    PRD --> Backend")
-    lines.append("")
+    
+    # Only add extra newline if there are modules
+    if architecture:
+        lines.append("")
     
     # Dependencies
     for m in architecture:
@@ -52,10 +55,10 @@ def generate_mermaid_code(architecture, app_name="System"):
             lines.append(f'    {src} -->|uses| {dst}')
     
     # Styles
-    lines.extend(["", "    classDef frontend fill:#FFF3E0,stroke:#F57C00,stroke-width:2px",
-                  "    classDef backend fill:#E3F2FD,stroke:#1976D2,stroke-width:2px",
-                  "    classDef shared fill:#E8F5E9,stroke:#388E3C,stroke-width:2px",
-                  "    classDef system fill:#E0E0E0,stroke:#616161,stroke-width:3px", ""])
+    lines.extend(["", "            classDef frontend fill:#FFF3E0,stroke:#F57C00,stroke-width:2px",
+                  "            classDef backend fill:#E3F2FD,stroke:#1976D2,stroke-width:2px",
+                  "            classDef shared fill:#E8F5E9,stroke:#388E3C,stroke-width:2px",
+                  "            classDef system fill:#E0E0E0,stroke:#616161,stroke-width:3px", "    "])
     
     # Apply classes
     if frontend:
@@ -64,7 +67,7 @@ def generate_mermaid_code(architecture, app_name="System"):
         lines.append(f"    class {','.join([Path(m['filename']).stem for m in backend])} backend")
     if shared:
         lines.append(f"    class {','.join([Path(m['filename']).stem for m in shared])} shared")
-    lines.append("    class PRD system")
+    lines.append("            class PRD system")
     
     return "\n".join(lines)
 
