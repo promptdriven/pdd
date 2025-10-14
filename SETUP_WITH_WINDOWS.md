@@ -106,7 +106,7 @@ To make them permanent, add the variable to your system environment variables:
 git clone https://github.com/promptdriven/pdd.git  
 cd pdd/examples/hello  
 ```  
-Set environment key PDD_PATH to the location of the cloned repo.
+Set environment variable PDD_PATH to the location of the cloned repo.
 
 If you are having trouble with API keys, check out README.md or SETUP_WITH_GEMINI.md for more setup information.
 
