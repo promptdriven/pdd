@@ -275,3 +275,19 @@ If you encounter any issues during setup:
 2. Check the [README](https://github.com/gltanaka/pdd/blob/main/README.md) for additional details.
 3. Search existing issues on GitHub.
 4. Join the [Discord](https://discord.gg/Q7Ts5Qt3) community for support.
+
+### If you hit "quota exceeded" due to a user-specific model CSV
+
+PDD will preferentially read a user model registry at `$HOME/.pdd/llm_model.csv` if it exists. If that file pins a provider/model with a stricter quota, runs may fail even when you change flags.
+
+- Fix by removing the user-specific file so the repo defaults (e.g., `data/llm_model.csv`) are used:
+
+```bash
+# Inspect if the user-specific model CSV exists
+ls -l ~/.pdd/llm_model.csv || true
+
+# Remove it to fall back to project defaults
+rm -f ~/.pdd/llm_model.csv
+```
+
+After removal, rerun your command (optionally with `infisical run -- ...`) so the default model table is used.
