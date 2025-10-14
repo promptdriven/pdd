@@ -326,7 +326,7 @@ def _run_google_variants(prompt_text: str, cwd: Path, total_timeout: int, label:
     return last
 
 def _run_testcmd(cmd: str, cwd: Path) -> bool:
-    _info(f"[cyan]Executing agent-supplied test command:[/cyan] {cmd}")
+    _info(f"[cyan]Executing test command:[/cyan] {cmd}")
     proc = subprocess.run(
         ["bash", "-lc", cmd],
         capture_output=True,
@@ -617,6 +617,41 @@ def run_agentic_fix(
         orig_code = code_path.read_text(encoding="utf-8")
         test_content = Path(unit_test_file).read_text(encoding="utf-8")
         error_content = Path(error_log_file).read_text(encoding="utf-8")
+
+        # --- Preflight: populate error_content if empty so the agent sees fresh failures ---
+        if not (error_content or "").strip():
+            try:
+                lang = get_language(os.path.splitext(code_path)[1])
+                pre_cmd = os.getenv("PDD_AGENTIC_VERIFY_CMD") or default_verify_cmd_for(lang, unit_test_file)
+                if pre_cmd:
+                    pre_cmd = pre_cmd.replace("{test}", str(Path(unit_test_file).resolve())).replace("{cwd}", str(cwd))
+                    pre = subprocess.run(
+                        ["bash", "-lc", pre_cmd],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        timeout=_VERIFY_TIMEOUT,
+                        cwd=str(cwd),
+                    )
+                else:
+                    pre = subprocess.run(
+                        [os.sys.executable, "-m", "pytest", unit_test_file, "-q"],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        timeout=_VERIFY_TIMEOUT,
+                        cwd=str(cwd),
+                    )
+                error_content = (pre.stdout or "") + "\n" + (pre.stderr or "")
+                try:
+                    Path(error_log_file).write_text(error_content, encoding="utf-8")
+                except Exception:
+                    pass
+                _print_head("preflight verify stdout", pre.stdout or "")
+                _print_head("preflight verify stderr", pre.stderr or "")
+            except Exception as e:
+                _info(f"[yellow]Preflight verification failed: {e}. Proceeding with empty error log.[/yellow]")
+        # --- End preflight ---
 
         ext = code_path.suffix.lower()
         is_python = ext == ".py"
