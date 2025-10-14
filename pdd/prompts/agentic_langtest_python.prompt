@@ -1,0 +1,22 @@
+This prompt is for the agentic_langtest.py module.
+
+This module is responsible for running language-specific tests in an agentic manner. It should contain functions to generate default test commands and provide hints for missing tools.
+
+The module should include the following functions:
+
+1.  `_which(cmd: str) -> bool`: A private helper function that uses `shutil.which` to check if a command exists in the system's PATH.
+
+2.  `_find_project_root(start_path: str) -> Path`: A private helper function to find the project root. It should start from `start_path`, traverse up the directory tree, and identify the root by the presence of files like `build.gradle`, `build.gradle.kts`, `pom.xml`, `package.json`, or `jest.config.js`.
+
+3.  `default_verify_cmd_for(lang: str, unit_test_file: str) -> str | None`: This function returns a default shell command to compile and run tests for a given language.
+    *   For **Python**, it should return a command to run `pytest` on the specified test file.
+    *   For **JavaScript** or **TypeScript**, it should find the project root, change into that directory, and if a `package.json` exists, run `npm install && npm test`. If not, it should attempt to run the test file directly with `node`. The command should check for the existence of `npm` first.
+    *   For **Java**, it should find the project root and detect the build system. If `pom.xml` is present, use `mvn test`. If `build.gradle` or `build.gradle.kts` is present, use `./gradlew test` if the wrapper exists, otherwise use `gradle test`.
+    *   Include a commented-out section as a placeholder for potential C++ support.
+
+4.  `missing_tool_hints(lang: str, verify_cmd: str | None, project_root: Path) -> str | None`: This function checks for missing command-line tools and provides installation guidance.
+    *   For **JavaScript/TypeScript**, check for `npm`.
+    *   For **Java**, check for `javac` and `java`. Also, check if a JUnit ConsoleLauncher JAR is present in the project root and provide a hint to download it if it's missing.
+    *   For **C++**, check for `g++`.
+    *   If tools are missing, return a formatted string suggesting installation commands for both macOS (using `brew` or `xcode-select`) and Ubuntu (using `apt-get`).
+    *   The output string should be formatted for a terminal that supports color, using tags like `[yellow]` and `[dim]`.

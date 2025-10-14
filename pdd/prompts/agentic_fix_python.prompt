@@ -1,0 +1,47 @@
+This prompt is for the agentic_fix.py module.
+
+The agentic_fix module provides a fallback mechanism for fixing code when automated attempts fail. It uses a project-aware CLI agent to attempt a fix with a broader context.
+
+The main function, `run_agentic_fix`, should orchestrate the entire process:
+1.  **Initialization**: Announce the start of the agentic fallback. Determine the project's current working directory.
+2.  **Agent Discovery**:
+    *   Load LLM provider data from a `.pdd/llm_model.csv` file.
+    *   Check for the presence of API key environment variables for preferred providers (Anthropic, Google, OpenAI) to determine which agents are available.
+    *   If no agents are available, exit with an error message.
+3.  **Input Preparation**:
+    *   Read the content from the input prompt, code, unit test, and error log files.
+    *   **Pre-flight Check**: If the error log is empty, run the default verification command for the language to populate it with fresh failure details. This ensures the agent always has context, even if the initial error log was not provided.
+4.  **Prompt Construction**:
+    *   Load a primary prompt template (`agentic_fix_primary_LLM`).
+    *   Construct a detailed set of instructions for the CLI agent, including the code, test, original prompt, and error log content. The instructions must specify the exact output format using `<<<BEGIN_FILE:path>>>` and `<<<END_FILE:path>>>` markers.
+    *   Save these instructions to a temporary file (e.g., `agentic_fix_instructions.txt`).
+5.  **Verification Strategy**: Determine if verification should be enabled based on environment variables (`PDD_AGENTIC_VERIFY`, `PDD_AGENTIC_VERIFY_FORCE`). A verification command should be derived from `PDD_AGENTIC_VERIFY_CMD` or a language-specific default.
+
+The module should implement a two-attempt strategy for each available agent:
+
+**Attempt 1: Harvest-Only (Strict & Fast)**
+*   Use a separate, more direct prompt template (`agentic_fix_harvest_only_LLM`) that instructs the agent to *only* output corrected file blocks.
+*   Invoke the agent's CLI with a shorter timeout.
+*   Parse the output for `<<<BEGIN_FILE...>>>` blocks. Also, include a fallback to parse Python code fences (```python...```) specifically for Gemini, which may omit markers.
+*   Apply the changes to the local files.
+*   Verify the fix. If it passes, the process is successful.
+
+**Attempt 2: Primary (Permissive)**
+*   If the harvest-only attempt fails, use the main, more detailed instruction file that allows edits.
+*   Invoke the agent's CLI with the full timeout.
+*   The CLI invocation for each provider (Gemini, Claude, Codex) should be handled by a specialized "variant runner" function (`_run_google_variants`, etc.). These runners should add a wrapper to the prompt enforcing the output format and may try multiple CLI arguments for robustness (e.g., with/without sandbox for Codex).
+*   Parse the output for file blocks and an optional `<<<BEGIN_TESTCMD>>>` block.
+*   Apply the file changes.
+*   Verify the fix using the standard verification command. If that fails and an agent-supplied test command was found, execute it as a fallback verification step.
+*   If the fix is verified, the process is successful.
+
+**Supporting Functionality:**
+*   **Output Parsing**: Implement robust regex-based functions to extract multi-file content blocks and test commands from the agent's stdout/stderr.
+*   **File Application**:
+    *   Safely apply changes to disk. This includes normalizing emitted paths to match existing project files (e.g., stripping `_fixed` suffixes) and ensuring writes do not occur outside the project root.
+    *   Create new files if the agent emits them.
+*   **Subprocess Execution**: Use helper functions to run CLI commands in a sanitized, non-interactive environment.
+*   **Logging**: Use the `rich` library for console output, with different levels (info, verbose, always). Suppress most logging in quiet mode.
+*   **Configuration**: The module's behavior (timeouts, logging level, verification) should be tunable via environment variables (e.g., `PDD_AGENTIC_TIMEOUT`).
+*   **Error Handling**: Gracefully handle `FileNotFoundError` (e.g., if a CLI tool is not installed) and other exceptions.
+*   **Cleanup**: Ensure temporary instruction files are deleted upon completion or error.
