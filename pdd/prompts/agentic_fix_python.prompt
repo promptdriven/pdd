@@ -1,47 +1,68 @@
-This prompt is for the agentic_fix.py module.
+% You are an expert Python engineer. Your goal is to write the `agentic_fix` module.
 
-The agentic_fix module provides a fallback mechanism for fixing code when automated attempts fail. It uses a project-aware CLI agent to attempt a fix with a broader context.
+% Role & Scope
+A module that provides a robust, multi-agent, two-pass fallback mechanism for fixing code when automated attempts fail. It orchestrates local CLI-based agents (like Gemini, Claude, Codex) to analyze and repair code based on a detailed problem description.
 
-The main function, `run_agentic_fix`, should orchestrate the entire process:
-1.  **Initialization**: Announce the start of the agentic fallback. Determine the project's current working directory.
+% Requirements
+1.  **Entry Point**: The main function `run_agentic_fix` will orchestrate the entire process.
 2.  **Agent Discovery**:
-    *   Load LLM provider data from a `.pdd/llm_model.csv` file.
-    *   Check for the presence of API key environment variables for preferred providers (Anthropic, Google, OpenAI) to determine which agents are available.
-    *   If no agents are available, exit with an error message.
+    -   Dynamically discover available CLI agents by checking for API keys (e.g., `ANTHROPIC_API_KEY`) defined in the environment and configured in `.pdd/llm_model.csv`.
+    -   If no agents are available, exit gracefully with an informative error message.
 3.  **Input Preparation**:
-    *   Read the content from the input prompt, code, unit test, and error log files.
-    *   **Pre-flight Check**: If the error log is empty, run the default verification command for the language to populate it with fresh failure details. This ensures the agent always has context, even if the initial error log was not provided.
-4.  **Prompt Construction**:
-    *   Load a primary prompt template (`agentic_fix_primary_LLM`).
-    *   Construct a detailed set of instructions for the CLI agent, including the code, test, original prompt, and error log content. The instructions must specify the exact output format using `<<<BEGIN_FILE:path>>>` and `<<<END_FILE:path>>>` markers.
-    *   Save these instructions to a temporary file (e.g., `agentic_fix_instructions.txt`).
-5.  **Verification Strategy**: Determine if verification should be enabled based on environment variables (`PDD_AGENTIC_VERIFY`, `PDD_AGENTIC_VERIFY_FORCE`). A verification command should be derived from `PDD_AGENTIC_VERIFY_CMD` or a language-specific default.
+    -   Accept paths to a prompt file, a code file, a unit test file, and an error log.
+    -   **Pre-flight Check**: If the provided error log is empty, execute a default verification command for the target language to generate fresh error output, ensuring the agent always has context.
+4.  **Two-Attempt Strategy**: For each available agent, perform the following two attempts in order:
+    -   **Attempt 1: Harvest-Only (Strict & Fast)**:
+        -   Use a concise prompt (`agentic_fix_harvest_only_LLM`) that instructs the agent to *only* output corrected file blocks.
+        -   Invoke the agent with a short timeout.
+        -   Parse the output strictly for file blocks (`<<<BEGIN_FILE...>>>`) and apply them.
+        -   Verify the fix. If successful, terminate and report success.
+    -   **Attempt 2: Primary (Permissive)**:
+        -   If the first attempt fails, use a more detailed primary prompt (`agentic_fix_primary_LLM`) that allows for more comprehensive changes.
+        -   Invoke the agent with a longer, full timeout.
+        -   Parse the output for file blocks and an optional `<<<BEGIN_TESTCMD>>>` block.
+        -   Apply file changes.
+        -   Verify the fix using the standard command. If it fails, and the agent provided a custom test command, use that as a fallback verification.
+        -   If successful, terminate and report success.
+5.  **Output Parsing**: Implement robust regex-based parsing to extract content from `<<<BEGIN_FILE:path>>>...<<<END_FILE:path>>>` blocks and `<<<BEGIN_TESTCMD>>>...<<<END_TESTCMD>>>` blocks. Include a fallback to parse Python code fences for Gemini.
+6.  **File Application**:
+    -   Safely write changes to disk, normalizing paths to ensure they match existing project files (e.g., stripping `_fixed` suffixes).
+    -   Do not write outside the project root directory.
+7.  **Configuration**: Control behavior via environment variables (e.g., `PDD_AGENTIC_TIMEOUT`, `PDD_AGENTIC_VERIFY`).
+8.  **Error Handling & Cleanup**: Handle `FileNotFoundError` for missing CLI tools and ensure temporary instruction files are always deleted.
 
-The module should implement a two-attempt strategy for each available agent:
+% Dependencies
+<pdd>This module relies on several internal prompts and helper modules. Per the prompting guide, we include the minimal, token-efficient examples of its direct dependencies to provide context and define their interfaces.</pdd>
 
-**Attempt 1: Harvest-Only (Strict & Fast)**
-*   Use a separate, more direct prompt template (`agentic_fix_harvest_only_LLM`) that instructs the agent to *only* output corrected file blocks.
-*   Invoke the agent's CLI with a shorter timeout.
-*   Parse the output for `<<<BEGIN_FILE...>>>` blocks. Also, include a fallback to parse Python code fences (```python...```) specifically for Gemini, which may omit markers.
-*   Apply the changes to the local files.
-*   Verify the fix. If it passes, the process is successful.
+<prompt_dependencies>
+    <include>prompts/agentic_fix_primary_LLM.prompt</include>
+    <include>prompts/agentic_fix_harvest_only_LLM.prompt</include>
+</prompt_dependencies>
 
-**Attempt 2: Primary (Permissive)**
-*   If the harvest-only attempt fails, use the main, more detailed instruction file that allows edits.
-*   Invoke the agent's CLI with the full timeout.
-*   The CLI invocation for each provider (Gemini, Claude, Codex) should be handled by a specialized "variant runner" function (`_run_google_variants`, etc.). These runners should add a wrapper to the prompt enforcing the output format and may try multiple CLI arguments for robustness (e.g., with/without sandbox for Codex).
-*   Parse the output for file blocks and an optional `<<<BEGIN_TESTCMD>>>` block.
-*   Apply the file changes.
-*   Verify the fix using the standard verification command. If that fails and an agent-supplied test command was found, execute it as a fallback verification step.
-*   If the fix is verified, the process is successful.
+<module_dependencies>
+    <agentic_langtest_example>
+      <include>context/agentic_langtest_example.py</include>
+    </agentic_langtest_example>
+    <get_language_example>
+      <include>context/get_language_example.py</include>
+    </get_language_example>
+    <llm_invoke_example>
+      <include>context/llm_invoke_example.py</include>
+    </llm_invoke_example>
+    <load_prompt_template_example>
+      <include>context/load_prompt_template_example.py</include>
+    </load_prompt_template_example>
+</module_dependencies>
 
-**Supporting Functionality:**
-*   **Output Parsing**: Implement robust regex-based functions to extract multi-file content blocks and test commands from the agent's stdout/stderr.
-*   **File Application**:
-    *   Safely apply changes to disk. This includes normalizing emitted paths to match existing project files (e.g., stripping `_fixed` suffixes) and ensuring writes do not occur outside the project root.
-    *   Create new files if the agent emits them.
-*   **Subprocess Execution**: Use helper functions to run CLI commands in a sanitized, non-interactive environment.
-*   **Logging**: Use the `rich` library for console output, with different levels (info, verbose, always). Suppress most logging in quiet mode.
-*   **Configuration**: The module's behavior (timeouts, logging level, verification) should be tunable via environment variables (e.g., `PDD_AGENTIC_TIMEOUT`).
-*   **Error Handling**: Gracefully handle `FileNotFoundError` (e.g., if a CLI tool is not installed) and other exceptions.
-*   **Cleanup**: Ensure temporary instruction files are deleted upon completion or error.
+<file_dependencies>
+    <pdd>Reads .pdd/llm_model.csv to discover available agents and API keys.</pdd>
+</file_dependencies>
+
+% Instructions
+- The module should be implemented in `pdd/agentic_fix.py`.
+- Use the `rich` library for styled console output.
+- Use helper functions for subprocess execution in a sanitized, non-interactive environment.
+- Specialized "variant runner" functions (e.g., `_run_google_variants`) should handle the specifics of invoking each agent's CLI, including adding wrappers to enforce the output format.
+
+% Deliverables
+- Code: `pdd/agentic_fix.py` containing the `run_agentic_fix` function and its helpers.
