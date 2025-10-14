@@ -20,7 +20,9 @@ from pathlib import Path
 
 def generate_mermaid_code(architecture, app_name="System"):
     """Generate Mermaid flowchart code from architecture JSON."""
-    lines = ["flowchart TB", f'            PRD["{app_name}"]', "    ", "    "]
+    lines = ["flowchart TB", f'            PRD["{app_name}"]', "    "]
+    if not architecture:
+        lines.append("    ")
     
     # Categorize modules by tags (frontend takes priority over backend)
     frontend = [m for m in architecture if any(t in m.get('tags', []) for t in ['frontend', 'react', 'nextjs', 'ui', 'page', 'component'])]
@@ -30,21 +32,22 @@ def generate_mermaid_code(architecture, app_name="System"):
     # Generate subgraphs
     for group_name, modules in [("Frontend", frontend), ("Backend", backend), ("Shared", shared)]:
         if modules:
-            lines.append(f"    subgraph {group_name}")
+            lines.append(f"            subgraph {group_name}")
             for m in modules:
                 name = Path(m['filename']).stem
                 pri = m.get('priority', 0)
-                lines.append(f'        {name}["{name} ({pri})"]')
-            lines.append("    end\n")
+                lines.append(f'                {name}["{name} ({pri})"]')
+            lines.append("            end")
+            lines.append("    ")
     
     # PRD connections
     if frontend:
-        lines.append("    PRD --> Frontend")
+        lines.append("            PRD --> Frontend")
     if backend:
-        lines.append("    PRD --> Backend")
+        lines.append("            PRD --> Backend")
     
-    # Only add extra newline if there are modules
-    if architecture:
+    # Add newline between PRD connections and dependencies
+    if frontend or backend:
         lines.append("")
     
     # Dependencies
@@ -52,21 +55,31 @@ def generate_mermaid_code(architecture, app_name="System"):
         src = Path(m['filename']).stem
         for dep in m.get('dependencies', []):
             dst = Path(dep).stem
-            lines.append(f'    {src} -->|uses| {dst}')
+            lines.append(f'            {src} -->|uses| {dst}')
+    
+    # Add newline after dependencies
+    if any(m.get('dependencies', []) for m in architecture):
+        lines.append("    ")
     
     # Styles
-    lines.extend(["", "            classDef frontend fill:#FFF3E0,stroke:#F57C00,stroke-width:2px",
-                  "            classDef backend fill:#E3F2FD,stroke:#1976D2,stroke-width:2px",
-                  "            classDef shared fill:#E8F5E9,stroke:#388E3C,stroke-width:2px",
-                  "            classDef system fill:#E0E0E0,stroke:#616161,stroke-width:3px", "    "])
+    if architecture:
+        lines.extend(["            classDef frontend fill:#FFF3E0,stroke:#F57C00,stroke-width:2px",
+                      "            classDef backend fill:#E3F2FD,stroke:#1976D2,stroke-width:2px",
+                      "            classDef shared fill:#E8F5E9,stroke:#388E3C,stroke-width:2px",
+                      "            classDef system fill:#E0E0E0,stroke:#616161,stroke-width:3px", "    "])
+    else:
+        lines.extend(["            classDef frontend fill:#FFF3E0,stroke:#F57C00,stroke-width:2px",
+                      "            classDef backend fill:#E3F2FD,stroke:#1976D2,stroke-width:2px",
+                      "            classDef shared fill:#E8F5E9,stroke:#388E3C,stroke-width:2px",
+                      "            classDef system fill:#E0E0E0,stroke:#616161,stroke-width:3px", "    "])
     
     # Apply classes
     if frontend:
-        lines.append(f"    class {','.join([Path(m['filename']).stem for m in frontend])} frontend")
+        lines.append(f"            class {','.join([Path(m['filename']).stem for m in frontend])} frontend")
     if backend:
-        lines.append(f"    class {','.join([Path(m['filename']).stem for m in backend])} backend")
+        lines.append(f"            class {','.join([Path(m['filename']).stem for m in backend])} backend")
     if shared:
-        lines.append(f"    class {','.join([Path(m['filename']).stem for m in shared])} shared")
+        lines.append(f"            class {','.join([Path(m['filename']).stem for m in shared])} shared")
     lines.append("            class PRD system")
     
     return "\n".join(lines)
