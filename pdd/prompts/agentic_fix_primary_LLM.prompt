@@ -1,48 +1,57 @@
-%  Your should fix a bug in {code_abs} that fails the test in {test_abs}. You must read the prompt content which descripes the functionality of {code_abs}, search for relevent file and read them, and come up with a fix. Your solution should modify {code_abs} and/or other files. Your goal is to let {code_abs} pass all tests in {test_abs}, while strictly following the prompt. Your ONLY task is to output fully corrected contents of one or more changed files, and optionally one shell command to run the tests.
+% TASK
+You must fix a bug in {code_abs} that causes the test in {test_abs} to fail.
+Read the functional prompt and error log, inspect any relevant files, and produce a minimal, correct fix.
+You MAY edit files directly on disk if your tool supports it, but you MUST also emit the final file contents in markers (see Output).
 
 <inputs>
-    <paths>
-        <code_file>{code_abs}</code_file>
-        <test_file>{test_abs}</test_file>
-        <begin_marker>{begin}</begin_marker>
-        <end_marker>{end}</end_marker>
-    </paths>
+  <paths>
+    <code_file>{code_abs}</code_file>
+    <test_file>{test_abs}</test_file>
+    <begin_marker>{begin}</begin_marker>
+    <end_marker>{end}</end_marker>
+  </paths>
 
-    <context>
-        <original_prompt>
-            {prompt_content}
-        </original_prompt>
-        <error_log>
-            {error_content}
-        </error_log>
-    </context>
+  <context>
+    <original_prompt>
+      {prompt_content}
+    </original_prompt>
+    <error_log>
+      {error_content}
+    </error_log>
+  </context>
 </inputs>
 
-% Edit policy:
-    • You MAY modify:
-        - The target source file at {code_abs}
-        - The test file at {test_abs}
-        - Additional supporting files in the same project when necessary
-    • Keep changes minimal and directly related to the failure.
-    • Prefer fixing implementation over weakening tests.
+% EDIT POLICY
+  • You MAY modify:
+      - The target source file at {code_abs}
+      - The test file at {test_abs}
+      - Additional supporting files in the same project when necessary
+  • Keep changes minimal and directly related to the failure.
+  • Prefer fixing implementation over weakening tests.
+  • Preserve existing public APIs/behavior unless the prompt requires otherwise.
 
-% Follow these instructions:
+% EXECUTION MODEL (IMPORTANT)
+  • You MAY edit files in-place (directly on disk) if your environment supports it.
+  • You CANNOT execute shell commands yourself. The host runs tests.
+  • If tests must be run, EMIT exactly one TESTCMD block with the precise shell command(s)
+    that will run the tests and exit 0 on success (pytest, npm test, mvn/gradle test, etc.).
+  • Regardless of any in-place edits, the host will treat your marker output as the source of truth.
 
-PRIMARY PATH (if you CAN run commands):
-  1) Run the tests for the project (focus on {test_abs}, or the whole suite if easier).
-  2) If any test fails:
-       - Edit only the files needed per policy, then re-run tests.
-       - Repeat until all tests pass.
-  3) When done, save all changed files and exit successfully.
-
-FALLBACK PATH (if you CANNOT run commands):
-  A) Produce the ENTIRE corrected contents for every file you changed.
-  B) For EACH changed file, print ONE block using this exact wrapping:
+% OUTPUT (STRICT)
+  1) For EACH file you changed, output ONE block with this exact wrapping:
        <<<BEGIN_FILE:/absolute/or/relative/path/to/file>>>
        <FULL CORRECTED FILE CONTENT HERE>
        <<<END_FILE:/absolute/or/relative/path/to/file>>>
-  C) If you cannot run tests locally, ALSO output a single block with the exact shell command to run the tests:
+
+  2) Optionally, output ONE (and only one) TESTCMD block if tests need a specific command:
        <<<BEGIN_TESTCMD>>>
-       <single-line or multi-line shell command to run the tests and return 0 on success>
+       <single-line or multi-line shell command that returns 0 on success>
        <<<END_TESTCMD>>>
-  D) Print nothing else.
+
+  3) Print NOTHING ELSE. No prose, no code fences, no comments outside the specified blocks.
+
+% PROCEDURE (guidance; do NOT print)
+  • Read {original_prompt} and {error_log} to identify the minimal fix.
+  • Search/inspect any relevant files (helpers, config, small support files).
+  • Apply the fix (you may edit in-place), then emit final versions in markers.
+  • Ensure the TESTCMD (if provided) runs the suite focusing on {test_abs} or the project’s standard runner and returns 0 on success.
