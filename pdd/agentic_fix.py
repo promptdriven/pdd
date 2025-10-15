@@ -1,4 +1,3 @@
-# pdd/agentic_fix.py
 from __future__ import annotations
 
 import os
@@ -7,23 +6,20 @@ import shutil
 import subprocess
 import difflib
 from pathlib import Path
-import typing
-from typing import List, Optional, Dict, Tuple
-
+from typing import Tuple, List, Optional, Dict
 from rich.console import Console
 
-# Internal imports
-from .get_language import get_language
-from .llm_invoke import _load_model_data
-from .load_prompt_template import load_prompt_template
-from .agentic_langtest import default_verify_cmd_for
+from .get_language import get_language            # Detects language from file extension (e.g., ".py" -> "python")
+from .llm_invoke import _load_model_data          # Loads provider/model metadata from llm_model.csv
+from .load_prompt_template import load_prompt_template  # Loads prompt templates by name
+from .agentic_langtest import default_verify_cmd_for    # Provides a default verify command (per language)
 
-# Module Constants and Globals
+console = Console()
+
+# Provider selection order. The code will try agents in this sequence if keys/CLIs are present.
 AGENT_PROVIDER_PREFERENCE = ["anthropic", "google", "openai"]
 
-console = Console(stderr=True)
-
-# Logging level detection
+# Logging level selection; defaults to "quiet" under pytest, else "normal"
 _env_level = os.getenv("PDD_AGENTIC_LOGLEVEL")
 if _env_level is None and os.getenv("PYTEST_CURRENT_TEST"):
     _env_level = "quiet"
@@ -31,444 +27,510 @@ _LOGLEVEL = (_env_level or "normal").strip().lower()
 _IS_QUIET = _LOGLEVEL == "quiet"
 _IS_VERBOSE = _LOGLEVEL == "verbose"
 
-# Environment-tunable constants
-_AGENT_COST_PER_CALL = float(os.getenv("PDD_AGENTIC_COST_PER_CALL", "0.02"))
-_AGENT_CALL_TIMEOUT = int(os.getenv("PDD_AGENTIC_TIMEOUT", "240"))
-_VERIFY_TIMEOUT = int(os.getenv("PDD_AGENTIC_VERIFY_TIMEOUT", "120"))
-_MAX_LOG_LINES = int(os.getenv("PDD_AGENTIC_MAX_LOG_LINES", "200"))
+# Tunable knobs via env
+_AGENT_COST_PER_CALL = float(os.getenv("PDD_AGENTIC_COST_PER_CALL", "0.02"))  # estimated cost accounting
+_AGENT_CALL_TIMEOUT = int(os.getenv("PDD_AGENTIC_TIMEOUT", "240"))            # timeout (s) for each agent call
+_VERIFY_TIMEOUT = int(os.getenv("PDD_AGENTIC_VERIFY_TIMEOUT", "120"))         # timeout (s) for local verification step
+_MAX_LOG_LINES = int(os.getenv("PDD_AGENTIC_MAX_LOG_LINES", "200"))           # preview head truncation for logs
+
+# When verification mode is "auto", we may run agent-supplied TESTCMD blocks (if emitted)
 _AGENT_TESTCMD_ALLOWED = os.getenv("PDD_AGENTIC_AGENT_TESTCMD", "1") != "0"
 
-# Regex constants
-_COMMON_FIXED_SUFFIXES = ("_fixed", ".fixed", "-fixed")
-
-
-# Helper Functions
 def _print(msg: str, *, force: bool = False) -> None:
-    """Rich print via console; suppressed if _IS_QUIET unless force=True."""
+    """Centralized print helper using Rich; suppressed in quiet mode unless force=True."""
     if not _IS_QUIET or force:
         console.print(msg)
 
-
 def _info(msg: str) -> None:
-    """Calls _print."""
+    """Informational log (respects quiet mode)."""
     _print(msg)
-
 
 def _always(msg: str) -> None:
-    """Calls _print (do not force)."""
+    """Always print (respects quiet mode toggle via _print)."""
     _print(msg)
 
-
 def _verbose(msg: str) -> None:
-    """Only prints when _IS_VERBOSE is True."""
+    """Verbose-only print (print only when _IS_VERBOSE is True)."""
     if _IS_VERBOSE:
-        _print(msg)
-
+        console.print(msg)
 
 def _begin_marker(path: Path) -> str:
-    """Returns the begin marker for a file block."""
+    """Marker that must wrap the BEGIN of a corrected file block emitted by the agent."""
     return f"<<<BEGIN_FILE:{path}>>>"
 
-
 def _end_marker(path: Path) -> str:
-    """Returns the end marker for a file block."""
+    """Marker that must wrap the END of a corrected file block emitted by the agent."""
     return f"<<<END_FILE:{path}>>>"
 
-
 def get_agent_command(provider: str, instruction_file: Path) -> List[str]:
-    """Gets the base command for a given agent provider."""
-    if provider == "openai":
-        return ["codex", "exec", "--skip-git-repo-check"]
-    elif provider in ("anthropic", "google"):
+    """
+    Return a base CLI command for a provider when using the generic runner.
+    Note: Anthropic/Google are handled by specialized variant runners, so this often returns [].
+    """
+    p = provider.lower()
+    if p == "anthropic":
         return []
+    if p == "google":
+        return []
+    if p == "openai":
+        return ["codex", "exec", "--skip-git-repo-check"]
     return []
 
-
 def find_llm_csv_path() -> Optional[Path]:
-    """Return the first existing among standard paths; else None."""
-    home = Path.home()
-    potential_paths = [
-        home / ".pdd" / "llm_model.csv",
-        home / ".llm" / "llm_model.csv",
-        Path.cwd() / ".pdd" / "llm_model.csv",
-    ]
-    for path in potential_paths:
-        if path.exists():
-            return path
+    """Look for .pdd/llm_model.csv in $HOME first, then in project cwd."""
+    home_path = Path.home() / ".pdd" / "llm_model.csv"
+    project_path = Path.cwd() / ".pdd" / "llm_model.csv"
+    if home_path.is_file():
+        return home_path
+    if project_path.is_file():
+        return project_path
     return None
-
 
 def _print_head(label: str, text: str, max_lines: int = _MAX_LOG_LINES) -> None:
-    """Verbose-only: print first max_lines and note truncation."""
+    """
+    Print only the first N lines of a long blob with a label.
+    Active in verbose mode; keeps console noise manageable.
+    """
     if not _IS_VERBOSE:
         return
-    lines = text.splitlines()
-    truncated = len(lines) > max_lines
-    _verbose(f"[dim]--- BEGIN {label} ---[/dim]")
-    _verbose("\n".join(lines[:max_lines]))
-    if truncated:
-        _verbose(f"[dim]... ({len(lines) - max_lines} more lines truncated) ...[/dim]")
-    _verbose(f"[dim]--- END {label} ---[/dim]")
-
+    lines = (text or "").splitlines()
+    head = "\n".join(lines[:max_lines])
+    tail = "" if len(lines) <= max_lines else f"\n... (truncated, total {len(lines)} lines)"
+    console.print(f"[bold cyan]{label}[/bold cyan]\n{head}{tail}")
 
 def _print_diff(old: str, new: str, path: Path) -> None:
-    """Verbose-only unified diff; if empty, print a message."""
+    """Show unified diff for a changed file (verbose mode only)."""
     if not _IS_VERBOSE:
         return
-    diff = list(
-        difflib.unified_diff(
-            old.splitlines(keepends=True),
-            new.splitlines(keepends=True),
-            fromfile=f"a/{path.name}",
-            tofile=f"b/{path.name}",
-        )
-    )
+    old_lines = old.splitlines(keepends=True)
+    new_lines = new.splitlines(keepends=True)
+    diff = list(difflib.unified_diff(old_lines, new_lines, fromfile=f"{path} (before)", tofile=f"{path} (after)"))
     if not diff:
-        _verbose(f"[yellow]No diff in code file after this agent attempt.[/yellow]")
-    else:
-        _verbose(f"[dim]Diff for {path}:[/dim]")
-        for line in diff:
-            if line.startswith("+"):
-                _verbose(f"[green]{line.rstrip()}[/green]")
-            elif line.startswith("-"):
-                _verbose(f"[red]{line.rstrip()}[/red]")
-            elif line.startswith("^"):
-                _verbose(f"[blue]{line.rstrip()}[/blue]")
-            else:
-                _verbose(f"[dim]{line.rstrip()}[/dim]")
-
+        console.print("[yellow]No diff in code file after this agent attempt.[/yellow]")
+        return
+    text = "".join(diff)
+    _print_head("Unified diff (first lines)", text)
 
 def _normalize_code_text(body: str) -> str:
-    """Remove one leading newline if present; ensure exactly one trailing newline."""
+    """
+    Normalize agent-emitted file content:
+    - remove a single leading newline if present
+    - ensure exactly one trailing newline
+    """
     if body.startswith("\n"):
         body = body[1:]
-    return body.rstrip() + "\n"
+    body = body.rstrip("\n") + "\n"
+    return body
 
+# Regex for many <<<BEGIN_FILE:path>>> ... <<<END_FILE:path>>> blocks in a single output
+_MULTI_FILE_BLOCK_RE = re.compile(
+    r"<<<BEGIN_FILE:(.*?)>>>(.*?)<<<END_FILE:\1>>>",
+    re.DOTALL,
+)
 
 def _extract_files_from_output(*blobs: str) -> Dict[str, str]:
-    """Extracts file blocks from agent output using markers."""
-    extracted: Dict[str, str] = {}
-    pattern = re.compile(r"<<<BEGIN_FILE:(.*?)>>>(.*?)<<<END_FILE:\1>>>", re.DOTALL)
+    """
+    Parse stdout/stderr blobs and collect all emitted file blocks into {path: content}.
+    Returns an empty dict if none found.
+    """
+    out: Dict[str, str] = {}
     for blob in blobs:
         if not blob:
             continue
-        for match in pattern.finditer(blob):
-            path_str, content = match.groups()
-            extracted[path_str.strip()] = content
-    return extracted
+        for m in _MULTI_FILE_BLOCK_RE.finditer(blob):
+            path = (m.group(1) or "").strip()
+            body = m.group(2) or ""
+            if path and body != "":
+                out[path] = body
+    return out
 
+# Regex for an optional agent-supplied test command block
+_TESTCMD_RE = re.compile(
+    r"<<<BEGIN_TESTCMD>>>\s*(.*?)\s*<<<END_TESTCMD>>>",
+    re.DOTALL,
+)
 
 def _extract_testcmd(*blobs: str) -> Optional[str]:
-    """Detect one block between <<<BEGIN_TESTCMD>>> and <<<END_TESTCMD>>>."""
-    pattern = re.compile(r"<<<BEGIN_TESTCMD>>>(.*?)<<<END_TESTCMD>>>", re.DOTALL)
+    """Return the single agent-supplied TESTCMD (if present), else None."""
     for blob in blobs:
         if not blob:
             continue
-        match = pattern.search(blob)
-        if match:
-            return match.group(1).strip()
+        m = _TESTCMD_RE.search(blob)
+        if m:
+            cmd = (m.group(1) or "").strip()
+            if cmd:
+                return cmd
     return None
 
-
 def _extract_corrected_from_output(stdout: str, stderr: str, code_path: Path) -> Optional[str]:
-    """Match LAST block for the primary file among various path forms."""
-    content = stdout + "\n" + stderr
+    """
+    Single-file fallback extraction: search for the corrected content block that
+    specifically targets the primary code file, using various path forms
+    (absolute path, real path, relative path, basename).
+    Returns the last match, or None if not found.
+    """
+    resolved = code_path.resolve()
+    abs_path = str(resolved)
+    real_path = str(Path(abs_path).resolve())
+    rel_path = str(code_path)
+    just_name = code_path.name
 
-    paths_to_check = {
-        str(code_path.resolve()),
-        str(code_path.resolve().absolute()),
-        os.path.relpath(code_path.resolve(), Path.cwd()),
-        code_path.name,
-    }
-    try:
-        paths_to_check.add(str(code_path.resolve().realpath()))
-    except (OSError, FileNotFoundError):
-        pass
+    def _pattern_for(path_str: str) -> re.Pattern:
+        begin = re.escape(f"<<<BEGIN_FILE:{path_str}>>>")
+        end = re.escape(f"<<<END_FILE:{path_str}>>>")
+        return re.compile(begin + r"(.*?)" + end, re.DOTALL)
 
-    path_pattern = "|".join(re.escape(p) for p in sorted(paths_to_check, key=len, reverse=True))
-    pattern = re.compile(fr"<<<BEGIN_FILE:({path_pattern})>>>(.*?)<<<END_FILE:\1>>>", re.DOTALL)
+    candidates = [
+        _pattern_for(abs_path),
+        _pattern_for(real_path),
+        _pattern_for(rel_path),
+        _pattern_for(just_name),
+    ]
 
-    matches = list(pattern.finditer(content))
+    matches: List[str] = []
+    for blob in [stdout or "", stderr or ""]:
+        for pat in candidates:
+            for m in pat.finditer(blob):
+                body = m.group(1) or ""
+                if body != "":
+                    matches.append(body)
+
     if not matches:
         return None
 
-    for match in reversed(matches):
-        body = match.group(2)
-        if "FULL CORRECTED FILE CONTENT HERE" not in body.upper():
-            return body
+    # Filter out obvious placeholder template mistakes
+    placeholder_token = "FULL CORRECTED FILE CONTENT HERE"
+    filtered = [b for b in matches if placeholder_token.lower() not in b.lower()]
+    return filtered[-1] if filtered else matches[-1]
 
-    return None
-
+# Code fence (```python ... ```) fallback for providers that sometimes omit markers (e.g., Gemini)
+_CODE_FENCE_RE = re.compile(r"```(?:python)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 
 def _extract_python_code_block(*blobs: str) -> Optional[str]:
-    """Fallback for Gemini: last fenced block from ``` or ```python."""
-    all_content = "\n".join(b for b in blobs if b)
-    pattern = re.compile(r"```(?:python\n)?(.*?)```", re.DOTALL)
-    matches = pattern.findall(all_content)
-    if matches:
-        return matches[-1].strip() + "\n"
-    return None
-
+    """Return the last fenced Python code block found in given blobs, or None."""
+    candidates: List[str] = []
+    for blob in blobs:
+        if not blob:
+            continue
+        for match in _CODE_FENCE_RE.findall(blob):
+            block = match or ""
+            if block != "":
+                candidates.append(block)
+    if not candidates:
+        return None
+    block = candidates[-1]
+    return block if block.endswith("\n") else (block + "\n")
 
 def _sanitized_env_common() -> dict:
-    """Returns a sanitized environment dictionary for CLI tools."""
+    """
+    Build a deterministic, non-interactive env for subprocess calls:
+    - disable colors/TTY features
+    - provide small default terminal size
+    - mark as CI
+    """
     env = os.environ.copy()
-    env.update(
-        {
-            "TERM": "dumb",
-            "CI": "1",
-            "NO_COLOR": "1",
-            "CLICOLOR": "0",
-            "CLICOLOR_FORCE": "0",
-            "FORCE_COLOR": "0",
-            "SHELL": "/bin/sh",
-        }
-    )
-    if "COLUMNS" not in env:
-        env["COLUMNS"] = "80"
-    if "LINES" not in env:
-        env["LINES"] = "40"
+    env["TERM"] = "dumb"
+    env["CI"] = "1"
+    env["NO_COLOR"] = "1"
+    env["CLICOLOR"] = "0"
+    env["CLICOLOR_FORCE"] = "0"
+    env["FORCE_COLOR"] = "0"
+    env["SHELL"] = "/bin/sh"
+    env["COLUMNS"] = env.get("COLUMNS", "80")
+    env["LINES"] = env.get("LINES", "40")
     return env
-
 
 def _sanitized_env_for_openai() -> dict:
-    """Returns a sanitized environment specifically for the OpenAI CLI."""
+    """
+    Like _sanitized_env_common, plus:
+    - strip completion-related env vars that can affect behavior
+    - set OpenAI CLI no-tty/no-color flags
+    """
     env = _sanitized_env_common()
-    for key in list(env.keys()):
-        if key.startswith("COMP_") or key in (
-            "BASH_COMPLETION",
-            "BASH_COMPLETION_COMPAT_DIR",
-            "BASH_VERSION",
-            "BASH",
-            "ZDOTDIR",
-            "ZSH_NAME",
-            "ZSH_VERSION",
-        ):
-            del env[key]
-    env.update({"DISABLE_AUTO_COMPLETE": "1", "OPENAI_CLI_NO_TTY": "1", "OPENAI_CLI_NO_COLOR": "1"})
+    for k in list(env.keys()):
+        if k.startswith("COMP_") or k in ("BASH_COMPLETION", "BASH_COMPLETION_COMPAT_DIR", "BASH_VERSION", "BASH", "ZDOTDIR", "ZSH_NAME", "ZSH_VERSION"):
+            env.pop(k, None)
+    env["DISABLE_AUTO_COMPLETE"] = "1"
+    env["OPENAI_CLI_NO_TTY"] = "1"
+    env["OPENAI_CLI_NO_COLOR"] = "1"
     return env
 
-
-def _run_cli(
-    cmd: List[str], cwd: Path, timeout: int, env: Optional[Dict[str, str]] = None
-) -> subprocess.CompletedProcess:
-    """Generic runner; capture stdout/stderr; no exception on non-zero."""
+def _run_cli(cmd: List[str], cwd: Path, timeout: int) -> subprocess.CompletedProcess:
+    """
+    Generic subprocess runner for arbitrary CLI commands.
+    Captures stdout/stderr, returns CompletedProcess without raising on non-zero exit.
+    """
     return subprocess.run(
         cmd,
-        cwd=cwd,
-        timeout=timeout,
         capture_output=True,
         text=True,
-        encoding="utf-8",
-        errors="replace",
         check=False,
-        env=env,
+        timeout=timeout,
+        cwd=str(cwd),
     )
 
+def _run_cli_args_openai(args: List[str], cwd: Path, timeout: int) -> subprocess.CompletedProcess:
+    """Subprocess runner for OpenAI commands with OpenAI-specific sanitized env."""
+    return subprocess.run(
+        args,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=timeout,
+        cwd=str(cwd),
+        env=_sanitized_env_for_openai(),
+    )
 
-def _run_openai_variants(
-    prompt_text: str, cwd: Path, total_timeout: int, label: str
-) -> subprocess.CompletedProcess:
-    """Tries several OpenAI CLI variants and returns the first successful one."""
+def _run_openai_variants(prompt_text: str, cwd: Path, total_timeout: int, label: str) -> subprocess.CompletedProcess:
+    """
+    Try several OpenAI CLI variants (including read-only sandbox) to improve robustness.
+    Returns the first attempt that yields output or succeeds.
+    """
     wrapper = (
-        "You are an expert software engineer. Your sole task is to fix the code provided. "
-        "Output ONLY the corrected file content, wrapped in the specified markers. "
-        "Do not add any commentary, explanations, or apologies.\n\n"
+        "You must ONLY output corrected file content wrapped EXACTLY between "
+        "the markers I provide. No commentary. "
     )
-    full_prompt = wrapper + prompt_text
+    full = wrapper + "\n\n" + prompt_text
 
     variants = [
-        ["codex", "exec", full_prompt],
-        ["codex", "exec", "--skip-git-repo-check", full_prompt],
-        ["codex", "exec", "--skip-git-repo-check", "--sandbox", "read-only", full_prompt],
+        ["codex", "exec", full],
+        ["codex", "exec", "--skip-git-repo-check", full],
+        ["codex", "exec", "--skip-git-repo-check", "--sandbox", "read-only", full],
     ]
-
-    per_attempt_timeout = max(12, min(45, total_timeout // 2))
-    env = _sanitized_env_for_openai()
-
-    last_result = None
-    for i, cmd in enumerate(variants):
-        _verbose(f"[dim]Attempting {label} with OpenAI variant {i+1}: {' '.join(cmd[:4])}...[/dim]")
+    per_attempt = max(12, min(45, total_timeout // 2))
+    last = None
+    for args in variants:
         try:
-            result = _run_cli(cmd, cwd, per_attempt_timeout, env=env)
-            last_result = result
-            if result.returncode == 0 or result.stdout.strip() or result.stderr.strip():
-                return result
+            _verbose(f"[cyan]OpenAI variant ({label}): {' '.join(args[:-1])} ...[/cyan]")
+            last = _run_cli_args_openai(args, cwd, per_attempt)
+            if (last.stdout or last.stderr) or last.returncode == 0:
+                return last
         except subprocess.TimeoutExpired:
-            _info(f"[yellow]Agent call ({label}, OpenAI variant {i+1}) timed out after {per_attempt_timeout}s.[/yellow]")
-            last_result = subprocess.CompletedProcess(
-                args=cmd, returncode=124, stdout="", stderr=f"Timeout after {per_attempt_timeout}s"
-            )
+            _info(f"[yellow]OpenAI variant timed out: {' '.join(args[:-1])} ...[/yellow]")
+            continue
+    if last is None:
+        return subprocess.CompletedProcess(variants[-1], 124, stdout="", stderr="timeout")
+    return last
 
-    return last_result or subprocess.CompletedProcess(
-        args=[], returncode=1, stdout="", stderr="All OpenAI variants failed."
+def _run_cli_args_anthropic(args: List[str], cwd: Path, timeout: int) -> subprocess.CompletedProcess:
+    """Subprocess runner for Anthropic commands with common sanitized env."""
+    return subprocess.run(
+        args,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=timeout,
+        cwd=str(cwd),
+        env=_sanitized_env_common(),
     )
 
-
-def _run_anthropic_variants(
-    prompt_text: str, cwd: Path, total_timeout: int, label: str
-) -> subprocess.CompletedProcess:
-    """Runs the Anthropic (claude) CLI."""
+def _run_anthropic_variants(prompt_text: str, cwd: Path, total_timeout: int, label: str) -> subprocess.CompletedProcess:
+    """
+    Anthropic CLI runner (single-variant). Keeps interface uniform with OpenAI/Google.
+    """
     wrapper = (
-        "You are an expert software engineer. Your sole task is to fix the code provided. "
-        "Output ONLY the corrected file content, wrapped in the specified markers. "
-        "Do not add any commentary, explanations, or apologies.\n\n"
+        "IMPORTANT: You must ONLY output corrected file content wrapped EXACTLY "
+        "between the two markers below. NO commentary, NO extra text.\n"
     )
-    full_prompt = wrapper + prompt_text
-    cmd = ["claude", "-p", full_prompt]
-    _verbose(f"[dim]Attempting {label} with Anthropic...[/dim]")
-    try:
-        return _run_cli(cmd, cwd, total_timeout, env=_sanitized_env_common())
-    except subprocess.TimeoutExpired:
-        _info(f"[yellow]Agent call ({label}, Anthropic) timed out after {total_timeout}s.[/yellow]")
-        return subprocess.CompletedProcess(
-            args=cmd, returncode=124, stdout="", stderr=f"Timeout after {total_timeout}s"
-        )
+    full = wrapper + "\n" + prompt_text
 
+    variants = [
+        ["claude", "-p", full],
+    ]
+    per_attempt = max(8, min(30, total_timeout // 2))
+    last: Optional[subprocess.CompletedProcess] = None
+    for args in variants:
+        try:
+            _verbose(f"[cyan]Anthropic variant ({label}): {' '.join(args[:-1])} ...[/cyan]")
+            last = _run_cli_args_anthropic(args, cwd, per_attempt)
+            if last.stdout or last.stderr or last.returncode == 0:
+                return last
+        except subprocess.TimeoutExpired:
+            _info(f"[yellow]Anthropic variant timed out: {' '.join(args[:-1])} ...[/yellow]")
+            continue
+    if last is None:
+        return subprocess.CompletedProcess(variants[-1], 124, stdout="", stderr="timeout")
+    return last
 
-def _run_google_variants(
-    prompt_text: str, cwd: Path, total_timeout: int, label: str
-) -> subprocess.CompletedProcess:
-    """Runs the Google (gemini) CLI."""
+def _run_cli_args_google(args: List[str], cwd: Path, timeout: int) -> subprocess.CompletedProcess:
+    """Subprocess runner for Google commands with common sanitized env."""
+    return subprocess.run(
+        args,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=timeout,
+        cwd=str(cwd),
+        env=_sanitized_env_common(),
+    )
+
+def _run_google_variants(prompt_text: str, cwd: Path, total_timeout: int, label: str) -> subprocess.CompletedProcess:
+    """
+    Google CLI runner (single-variant). Accepts prompt text via "-p".
+    """
     wrapper = (
-        "You are an expert software engineer. Your sole task is to fix the code provided. "
-        "Output ONLY the corrected file content, wrapped in the specified markers. "
-        "Do not add any commentary, explanations, or apologies.\n\n"
+        "IMPORTANT: ONLY output corrected file content wrapped EXACTLY between "
+        "the two markers below. No commentary. No extra text.\n"
     )
-    full_prompt = wrapper + prompt_text
-    cmd = ["gemini", "-p", full_prompt]
-    _verbose(f"[dim]Attempting {label} with Google...[/dim]")
-    try:
-        return _run_cli(cmd, cwd, total_timeout, env=_sanitized_env_common())
-    except subprocess.TimeoutExpired:
-        _info(f"[yellow]Agent call ({label}, Google) timed out after {total_timeout}s.[/yellow]")
-        return subprocess.CompletedProcess(
-            args=cmd, returncode=124, stdout="", stderr=f"Timeout after {total_timeout}s"
-        )
+    full = wrapper + "\n" + prompt_text
 
+    variants = [
+        ["gemini", "-p", full],
+    ]
+    per_attempt = max(12, min(45, total_timeout // 2))
+    last = None
+    for args in variants:
+        try:
+            _verbose(f"[cyan]Google variant ({label}): {' '.join(args)} ...[/cyan]")
+            last = _run_cli_args_google(args, cwd, per_attempt)
+            if (last.stdout or last.stderr) or last.returncode == 0:
+                return last
+        except subprocess.TimeoutExpired:
+            _info(f"[yellow]Google variant timed out: {' '.join(args)} ...[/yellow]")
+            continue
+    if last is None:
+        return subprocess.CompletedProcess(variants[-1], 124, stdout="", stderr="timeout")
+    return last
 
 def _run_testcmd(cmd: str, cwd: Path) -> bool:
-    """Run a command via bash -lc; return True if it succeeds."""
-    _verbose(f"[dim]Running test command: {cmd}[/dim]")
-    try:
-        result = _run_cli(["bash", "-lc", cmd], cwd, _VERIFY_TIMEOUT)
-        _print_head(f"TESTCMD STDOUT (rc={result.returncode})", result.stdout)
-        _print_head("TESTCMD STDERR", result.stderr)
-        return result.returncode == 0
-    except subprocess.TimeoutExpired:
-        _info(f"[yellow]Verification command timed out after {_VERIFY_TIMEOUT}s.[/yellow]")
-        return False
+    """
+    Execute an agent-supplied TESTCMD locally via bash -lc "<cmd>".
+    Return True on exit code 0, else False. Captures and previews output (verbose).
+    """
+    _info(f"[cyan]Executing agent-supplied test command:[/cyan] {cmd}")
+    proc = subprocess.run(
+        ["bash", "-lc", cmd],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=_VERIFY_TIMEOUT,
+        cwd=str(cwd),
+    )
+    _print_head("testcmd stdout", proc.stdout or "")
+    _print_head("testcmd stderr", proc.stderr or "")
+    return proc.returncode == 0
 
-
-def _verify_and_log(
-    unit_test_file: str, cwd: Path, *, verify_cmd: Optional[str], enabled: bool
-) -> bool:
-    """Runs verification command or pytest, logs output, returns success."""
+def _verify_and_log(unit_test_file: str, cwd: Path, *, verify_cmd: Optional[str], enabled: bool) -> bool:
+    """
+    Standard local verification gate:
+    - If disabled, return True immediately (skip verification).
+    - If verify_cmd exists: format placeholders and run it via _run_testcmd.
+    - Else: run pytest for the given test file.
+    Returns True iff the executed command exits 0.
+    """
     if not enabled:
-        _verbose("[dim]Verification is disabled, skipping.[/dim]")
         return True
-
-    _info("[cyan]Running verification...[/cyan]")
-
     if verify_cmd:
-        cmd_str = verify_cmd.format(test=os.path.abspath(unit_test_file), cwd=str(cwd))
-        return _run_testcmd(cmd_str, cwd)
-    else:
-        cmd = [os.sys.executable, "-m", "pytest", unit_test_file, "-q"]
-        _verbose(f"[dim]Running verification: {' '.join(cmd)}[/dim]")
-        try:
-            result = _run_cli(cmd, cwd, _VERIFY_TIMEOUT)
-            _print_head(f"VERIFY STDOUT (rc={result.returncode})", result.stdout)
-            _print_head("VERIFY STDERR", result.stderr)
-            return result.returncode == 0
-        except subprocess.TimeoutExpired:
-            _info(f"[yellow]Verification (pytest) timed out after {_VERIFY_TIMEOUT}s.[/yellow]")
-            return False
-
+        cmd = verify_cmd.replace("{test}", str(Path(unit_test_file).resolve())).replace("{cwd}", str(cwd))
+        return _run_testcmd(cmd, cwd)
+    verify = subprocess.run(
+        [os.sys.executable, "-m", "pytest", unit_test_file, "-q"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=_VERIFY_TIMEOUT,
+        cwd=str(cwd),
+    )
+    _print_head("verify stdout", verify.stdout or "")
+    _print_head("verify stderr", verify.stderr or "")
+    return verify.returncode == 0
 
 def _safe_is_subpath(child: Path, parent: Path) -> bool:
-    """True iff child.resolve() is under parent.resolve()."""
+    """
+    True if 'child' resolves under 'parent' (prevents writes outside project root).
+    """
     try:
-        return child.resolve().is_relative_to(parent.resolve())
-    except (ValueError, AttributeError):
-        return str(child.resolve()).startswith(str(parent.resolve()))
+        child.resolve().relative_to(parent.resolve())
+        return True
+    except Exception:
+        return False
 
+# Suffixes we strip when mapping "foo_fixed.py" -> "foo.py"
+_COMMON_FIXED_SUFFIXES = ("_fixed", ".fixed", "-fixed")
 
 def _strip_common_suffixes(name: str) -> str:
-    """Remove one of _COMMON_FIXED_SUFFIXES before extension; return base+ext."""
+    """Remove a known fixed-suffix from a basename (before extension), if present."""
     base, ext = os.path.splitext(name)
-    for suffix in _COMMON_FIXED_SUFFIXES:
-        if base.endswith(suffix):
-            return base[: -len(suffix)] + ext
-    return name
-
+    for suf in _COMMON_FIXED_SUFFIXES:
+        if base.endswith(suf):
+            base = base[: -len(suf)]
+            break
+    return base + ext
 
 def _find_existing_by_basename(project_root: Path, basename: str) -> Optional[Path]:
-    """First rglob match resolved, else None."""
+    """Search the project tree for the first file whose name matches 'basename'."""
     try:
-        return next(project_root.rglob(basename)).resolve()
-    except StopIteration:
+        for p in project_root.rglob(basename):
+            if p.is_file():
+                return p.resolve()
+    except Exception:
         return None
-
+    return None
 
 def _normalize_target_path(
-    emitted_path: str, project_root: Path, primary_code_path: Path, allow_new: bool
+    emitted_path: str,
+    project_root: Path,
+    primary_code_path: Path,
+    allow_new: bool,
 ) -> Optional[Path]:
-    """Resolve to absolute inside project root; map variants; check existence."""
-    if ".." in emitted_path or emitted_path.startswith("/"):
-        _verbose(f"[yellow]Skipping potentially unsafe emitted path: {emitted_path}[/yellow]")
+    """
+    Resolve an emitted path to a safe file path we should write:
+    - make path absolute under project root
+    - allow direct match, primary-file match (with/without _fixed), or basename search
+    - create new files only if allow_new is True
+    """
+    p = Path(emitted_path)
+    if not p.is_absolute():
+        p = (project_root / emitted_path).resolve()
+    if not _safe_is_subpath(p, project_root):
+        _info(f"[yellow]Skipping write outside project root: {p}[/yellow]")
         return None
-
-    target_path = (project_root / emitted_path).resolve()
-
-    if not _safe_is_subpath(target_path, project_root):
-        _verbose(f"[yellow]Skipping emitted path outside project root: {target_path}[/yellow]")
-        return None
-
-    if target_path == primary_code_path:
-        return target_path
-
-    stripped_emitted_basename = _strip_common_suffixes(Path(emitted_path).name)
-    if stripped_emitted_basename == primary_code_path.name:
-        _verbose(f"[dim]Mapping emitted path '{emitted_path}' to primary file '{primary_code_path.name}'[/dim]")
+    if p.exists():
+        return p
+    emitted_base = Path(emitted_path).name
+    primary_base = primary_code_path.name
+    if emitted_base == primary_base:
         return primary_code_path
-
-    if not target_path.exists():
-        if not allow_new:
-            _verbose(f"[yellow]Skipping new file creation as it's not allowed in this context: {target_path}[/yellow]")
-            return None
-
-    return target_path
-
+    if _strip_common_suffixes(emitted_base) == primary_base:
+        return primary_code_path
+    existing = _find_existing_by_basename(project_root, emitted_base)
+    if existing:
+        return existing
+    if not allow_new:
+        _info(f"[yellow]Skipping creation of new file (in-place only): {p}[/yellow]")
+        return None
+    return p
 
 def _apply_file_map(
-    file_map: Dict[str, str], project_root: Path, primary_code_path: Path, allow_new: bool
+    file_map: Dict[str, str],
+    project_root: Path,
+    primary_code_path: Path,
+    allow_new: bool,
 ) -> List[Path]:
-    """Normalize, write, mkdir parents, show diff; return list of written Paths."""
-    written_paths: List[Path] = []
-    for emitted_path, content in file_map.items():
-        target_path = _normalize_target_path(emitted_path, project_root, primary_code_path, allow_new)
-        if not target_path:
+    """
+    Apply a {emitted_path -> content} mapping to disk:
+    - resolve a safe target path
+    - normalize content
+    - write file and print unified diff (verbose)
+    Returns a list of the written Paths.
+    """
+    applied: List[Path] = []
+    for emitted, body in file_map.items():
+        target = _normalize_target_path(emitted, project_root, primary_code_path, allow_new)
+        if target is None:
             continue
-
-        try:
-            original_content = target_path.read_text(encoding="utf-8") if target_path.exists() else ""
-            normalized_content = _normalize_code_text(content)
-
-            if normalized_content != original_content:
-                _verbose(f"[dim]Applying changes to {target_path}[/dim]")
-                target_path.parent.mkdir(parents=True, exist_ok=True)
-                target_path.write_text(normalized_content, encoding="utf-8")
-                _print_diff(original_content, normalized_content, target_path)
-                written_paths.append(target_path)
-            else:
-                _verbose(f"[dim]No changes to apply for {target_path}[/dim]")
-
-        except Exception as e:
-            _info(f"[red]Error writing to file {target_path}: {e}[/red]")
-
-    return written_paths
-
+        body_to_write = _normalize_code_text(body)
+        old = ""
+        if target.exists():
+            try:
+                old = target.read_text(encoding="utf-8")
+            except Exception:
+                old = ""
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(body_to_write, encoding="utf-8")
+        _print_diff(old, body_to_write, target)
+        applied.append(target)
+    return applied
 
 def _post_apply_verify_or_testcmd(
     provider: str,
@@ -480,23 +542,20 @@ def _post_apply_verify_or_testcmd(
     stdout: str,
     stderr: str,
 ) -> bool:
-    """Run verification; if it fails, try TESTCMD. Return True on any pass."""
+    """
+    After applying changes, run standard verification.
+    If it fails and TESTCMDs are allowed, try running the agent-supplied TESTCMD.
+    Return True iff any verification path succeeds.
+    """
+    # 1) If standard verification is enabled, use it
     if _verify_and_log(unit_test_file, cwd, verify_cmd=verify_cmd, enabled=verify_enabled):
-        _info(f"[bold green]Verification passed after applying fix from {provider.capitalize()}.[/bold green]")
         return True
-
+    # 2) Otherwise (or if disabled/failed) try agent-supplied TESTCMD if allowed
     if _AGENT_TESTCMD_ALLOWED:
-        agent_testcmd = _extract_testcmd(stdout, stderr)
-        if agent_testcmd:
-            _info(f"[cyan]Standard verification failed. Trying agent-provided test command...[/cyan]")
-            if _run_testcmd(agent_testcmd, cwd):
-                _info(f"[bold green]Agent-provided test command passed for {provider.capitalize()}.[/bold green]")
-                return True
-            else:
-                _info(f"[yellow]Agent-provided test command failed.[/yellow]")
-
+        testcmd = _extract_testcmd(stdout or "", stderr or "")
+        if testcmd:
+            return _run_testcmd(testcmd, cwd)
     return False
-
 
 def _try_harvest_then_verify(
     provider: str,
@@ -511,72 +570,115 @@ def _try_harvest_then_verify(
     verify_cmd: Optional[str],
     verify_enabled: bool,
 ) -> bool:
-    """First-pass attempt: use a simpler prompt to just get the code."""
-    _info(f"[cyan]Attempting fix with {provider.capitalize()} (Pass 1: Harvest-only)...[/cyan]")
-
-    template = load_prompt_template("agentic_fix_harvest_only_LLM")
-    if not template:
-        _info("[yellow]Could not load harvest-only prompt template, skipping pass 1.[/yellow]")
+    """
+    Strict, fast path:
+    - Ask agent to ONLY emit corrected file blocks (and optionally TESTCMD).
+    - Apply emitted results deterministically.
+    - Verify locally.
+    """
+    harvest_prompt_template = load_prompt_template("agentic_fix_harvest_only_LLM")
+    if not harvest_prompt_template:
+        _info("[yellow]Failed to load harvest-only agent prompt template.[/yellow]")
         return False
 
-    instruction_text = template.format(
-        code_abs=str(code_path.resolve()),
+    harvest_instr = harvest_prompt_template.format(
+        code_abs=str(code_path),
         test_abs=str(Path(unit_test_file).resolve()),
-        begin=_begin_marker(code_path.resolve()),
-        end=_end_marker(code_path.resolve()),
-        prompt_content=prompt_content,
+        begin=_begin_marker(code_path),
+        end=_end_marker(code_path),
         code_content=code_snapshot,
+        prompt_content=prompt_content,
         test_content=test_content,
         error_content=error_content,
-        verify_cmd=verify_cmd or "pytest",
+        verify_cmd=verify_cmd or "No verification command provided.",
     )
+    harvest_file = Path("agentic_fix_harvest.txt")
+    harvest_file.write_text(harvest_instr, encoding="utf-8")
+    _info(f"[cyan]Executing {provider.capitalize()} with harvest-only instructions: {harvest_file.resolve()}[/cyan]")
+    _print_head("Harvest-only instruction preview", harvest_instr)
 
-    temp_prompt_path = cwd / "agentic_fix_harvest.txt"
-    temp_prompt_path.write_text(instruction_text, encoding="utf-8")
-    _print_head("HARVEST PROMPT", instruction_text)
-
-    timeout = max(60, _AGENT_CALL_TIMEOUT // 3)
-    run_variants = {
-        "openai": _run_openai_variants,
-        "anthropic": _run_anthropic_variants,
-        "google": _run_google_variants,
-    }
-    result = run_variants[provider](instruction_text, cwd, timeout, "Harvest")
-    temp_prompt_path.unlink(missing_ok=True)
-
-    _print_head("HARVEST AGENT STDOUT", result.stdout)
-    _print_head("HARVEST AGENT STDERR", result.stderr)
-
-    applied_paths = []
-    file_map = _extract_files_from_output(result.stdout, result.stderr)
-    if file_map:
-        _verbose("[dim]Harvest: Found multi-file output.[/dim]")
-        applied_paths = _apply_file_map(file_map, cwd, code_path, allow_new=False)
-    else:
-        corrected_code = _extract_corrected_from_output(result.stdout, result.stderr, code_path)
-        if corrected_code:
-            _verbose("[dim]Harvest: Found single-file output.[/dim]")
-            applied_paths = _apply_file_map({str(code_path): corrected_code}, cwd, code_path, allow_new=False)
+    try:
+        # Provider-specific variant runners with shorter time budgets
+        if provider == "openai":
+            res = _run_openai_variants(harvest_instr, cwd, max(60, _AGENT_CALL_TIMEOUT // 3), "harvest")
+        elif provider == "anthropic":
+            res = _run_anthropic_variants(harvest_instr, cwd, max(60, _AGENT_CALL_TIMEOUT // 3), "harvest")
         elif provider == "google":
-            fenced_code = _extract_python_code_block(result.stdout, result.stderr)
-            if fenced_code:
-                _verbose("[dim]Harvest: Found fenced code block (Google fallback).[/dim]")
-                applied_paths = _apply_file_map({str(code_path): fenced_code}, cwd, code_path, allow_new=False)
-
-    if not applied_paths:
-        _verbose("[dim]Harvest pass did not yield any applicable code changes.[/dim]")
+            res = _run_google_variants(harvest_instr, cwd, max(60, _AGENT_CALL_TIMEOUT // 3), "harvest")
+        else:
+            res = _run_cli(get_agent_command(provider, harvest_file), cwd, max(60, _AGENT_CALL_TIMEOUT // 2))
+    except subprocess.TimeoutExpired:
+        _info(f"[yellow]{provider.capitalize()} harvest-only attempt timed out.[/yellow]")
+        try:
+            harvest_file.unlink()
+        except Exception:
+            pass
         return False
 
-    return _post_apply_verify_or_testcmd(
-        provider,
-        unit_test_file,
-        cwd,
-        verify_cmd=verify_cmd,
-        verify_enabled=verify_enabled,
-        stdout=result.stdout,
-        stderr=result.stderr,
-    )
+    _print_head(f"{provider.capitalize()} harvest stdout", res.stdout or "")
+    _print_head(f"{provider.capitalize()} harvest stderr", res.stderr or "")
 
+    allow_new = True
+
+    # Prefer multi-file blocks; else try single-file; else Gemini code-fence fallback
+    multi = _extract_files_from_output(res.stdout or "", res.stderr or "")
+    if multi:
+        _info("[cyan]Applying multi-file harvest from agent output...[/cyan]")
+        _apply_file_map(multi, cwd, code_path, allow_new)
+        ok = _post_apply_verify_or_testcmd(
+            provider, unit_test_file, cwd,
+            verify_cmd=verify_cmd, verify_enabled=verify_enabled,
+            stdout=res.stdout or "", stderr=res.stderr or ""
+        )
+        try:
+            harvest_file.unlink()
+        except Exception:
+            pass
+        return ok
+
+    harvested_single = _extract_corrected_from_output(res.stdout or "", res.stderr or "", code_path.resolve())
+    if harvested_single is None:
+        if provider == "google":
+            code_block = _extract_python_code_block(res.stdout or "", res.stderr or "")
+            if code_block:
+                _info("[cyan]No markers found, but detected a Python code block from Google. Applying it...[/cyan]")
+                body_to_write = _normalize_code_text(code_block)
+                code_path.write_text(body_to_write, encoding="utf-8")
+                newest = code_path.read_text(encoding="utf-8")
+                _print_diff(code_snapshot, newest, code_path)
+                ok = _post_apply_verify_or_testcmd(
+                    provider, unit_test_file, cwd,
+                    verify_cmd=verify_cmd, verify_enabled=verify_enabled,
+                    stdout=res.stdout or "", stderr=res.stderr or ""
+                )
+                try:
+                    harvest_file.unlink()
+                except Exception:
+                    pass
+                return ok
+        _info("[yellow]Harvest-only attempt did not include the required markers.[/yellow]")
+        try:
+            harvest_file.unlink()
+        except Exception:
+            pass
+        return False
+
+    _info("[cyan]Applying harvested corrected file (single)...[/cyan]")
+    body_to_write = _normalize_code_text(harvested_single)
+    code_path.write_text(body_to_write, encoding="utf-8")
+    newest = code_path.read_text(encoding="utf-8")
+    _print_diff(code_snapshot, newest, code_path)
+
+    ok = _post_apply_verify_or_testcmd(
+        provider, unit_test_file, cwd,
+        verify_cmd=verify_cmd, verify_enabled=verify_enabled,
+        stdout=res.stdout or "", stderr=res.stderr or ""
+    )
+    try:
+        harvest_file.unlink()
+    except Exception:
+        pass
+    return ok
 
 def run_agentic_fix(
     prompt_file: str,
@@ -585,179 +687,271 @@ def run_agentic_fix(
     error_log_file: str,
 ) -> Tuple[bool, str, float, str]:
     """
-    Orchestrates a multi-agent, two-pass fallback mechanism to fix code.
+    Main entrypoint for agentic fallback:
+    - Prepares inputs and prompt (with code/tests/error log)
+    - Optionally preflight-populates error log if empty (so agent sees failures)
+    - Tries providers in preference order: harvest-first, then primary attempt
+    - Applies changes locally and verifies locally
+    - Returns (success, message, est_cost, used_model)
     """
-    est_cost = 0.0
-    used_model = "agentic-cli"
+    _always("[bold yellow]Standard fix failed. Initiating agentic fallback (AGENT-ONLY)...[/bold yellow]")
+
+    instruction_file: Optional[Path] = None
+    est_cost: float = 0.0
+    used_model: str = "agentic-cli"
 
     try:
-        csv_path = find_llm_csv_path()
-        if not csv_path:
-            return (False, "Could not find llm_models.csv in ~/.pdd/ or ~/.llm/", est_cost, used_model)
+        cwd = Path.cwd()
+        _info(f"[cyan]Project root (cwd): {cwd}[/cyan]")
 
+        # Load provider table and filter to those with API keys present in the environment
+        csv_path = find_llm_csv_path()
         model_df = _load_model_data(csv_path)
+
         available_agents: List[str] = []
         present_keys: List[str] = []
-        seen: set[str] = set()
+        seen = set()
 
         for provider in AGENT_PROVIDER_PREFERENCE:
             provider_df = model_df[model_df["provider"].str.lower() == provider]
             if provider_df.empty:
                 continue
+            api_key_name = provider_df.iloc[0]["api_key"]
+            if not api_key_name:
+                continue
+            if os.getenv(api_key_name) or (provider == "google" and os.getenv("GEMINI_API_KEY")):
+                present_keys.append(api_key_name or ("GEMINI_API_KEY" if provider == "google" else ""))
+                if provider not in seen:
+                    available_agents.append(provider)
+                    seen.add(provider)
 
-            api_key_name = provider_df["api_key"].iloc[0]
-            found = os.getenv(api_key_name) or (os.getenv("GEMINI_API_KEY") if provider == "google" else None)
-
-            if found and provider not in seen:
-                key_to_add = api_key_name if provider != "google" or os.getenv(api_key_name) else "GEMINI_API_KEY"
-                present_keys.append(key_to_add)
-                available_agents.append(provider)
-                seen.add(provider)
-
+        _info(f"[cyan]Env API keys present (names only): {', '.join([k for k in present_keys if k]) or 'none'}[/cyan]")
         if not available_agents:
-            return (False, "No configured agent API keys found in environment.", est_cost, used_model)
+            return False, "No configured agent API keys found in environment.", est_cost, used_model
 
-        _print("[bold yellow]PDD Agentic Fix[/bold yellow]")
-        cwd = Path.cwd()
-        _print(f"[cyan]Project root: {cwd}[/cyan]")
-        _print(f"[cyan]Available agents: {', '.join(p.capitalize() for p in available_agents)}[/cyan]")
+        _info(f"[cyan]Available agents found: {', '.join(available_agents)}[/cyan]")
 
+        # Read input artifacts that feed into the prompt
         prompt_content = Path(prompt_file).read_text(encoding="utf-8")
         code_path = Path(code_file).resolve()
         orig_code = code_path.read_text(encoding="utf-8")
         test_content = Path(unit_test_file).read_text(encoding="utf-8")
         error_content = Path(error_log_file).read_text(encoding="utf-8")
 
-        if not error_content.strip():
-            _info("[yellow]Error log is empty. Running tests to generate initial error...[/yellow]")
-            lang = get_language(code_path.suffix)
-            pre_cmd_str = os.getenv("PDD_AGENTIC_VERIFY_CMD") or default_verify_cmd_for(lang, unit_test_file)
+        # --- Preflight: populate error_content if empty so the agent sees fresh failures ---
+        # This makes run_agentic_fix self-sufficient even if the caller forgot to write the error log.
+        if not (error_content or "").strip():
+            try:
+                lang = get_language(os.path.splitext(code_path)[1])
+                pre_cmd = os.getenv("PDD_AGENTIC_VERIFY_CMD") or default_verify_cmd_for(lang, unit_test_file)
+                if pre_cmd:
+                    pre_cmd = pre_cmd.replace("{test}", str(Path(unit_test_file).resolve())).replace("{cwd}", str(cwd))
+                    pre = subprocess.run(
+                        ["bash", "-lc", pre_cmd],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        timeout=_VERIFY_TIMEOUT,
+                        cwd=str(cwd),
+                    )
+                else:
+                    # Fallback to pytest if we have no language-specific verify command
+                    pre = subprocess.run(
+                        [os.sys.executable, "-m", "pytest", unit_test_file, "-q"],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        timeout=_VERIFY_TIMEOUT,
+                        cwd=str(cwd),
+                    )
+                error_content = (pre.stdout or "") + "\n" + (pre.stderr or "")
+                try:
+                    Path(error_log_file).write_text(error_content, encoding="utf-8")
+                except Exception:
+                    pass
+                _print_head("preflight verify stdout", pre.stdout or "")
+                _print_head("preflight verify stderr", pre.stderr or "")
+            except Exception as e:
+                _info(f"[yellow]Preflight verification failed: {e}. Proceeding with empty error log.[/yellow]")
+        # --- End preflight ---
 
-            if pre_cmd_str:
-                cmd_str = pre_cmd_str.format(test=os.path.abspath(unit_test_file), cwd=str(cwd))
-                result = _run_cli(["bash", "-lc", cmd_str], cwd, _VERIFY_TIMEOUT)
-            else:
-                cmd = [os.sys.executable, "-m", "pytest", unit_test_file, "-q"]
-                result = _run_cli(cmd, cwd, _VERIFY_TIMEOUT)
+        # Compute verification policy and command
+        ext = code_path.suffix.lower()
+        is_python = ext == ".py"
 
-            error_content = result.stdout + "\n" + result.stderr
-            Path(error_log_file).write_text(error_content, encoding="utf-8")
-            _print_head("INITIAL TEST STDOUT", result.stdout)
-            _print_head("INITIAL TEST STDERR", result.stderr)
+        env_verify = os.getenv("PDD_AGENTIC_VERIFY", None)               # "auto"/"0"/"1"/None
+        verify_force = os.getenv("PDD_AGENTIC_VERIFY_FORCE", "0") == "1"
+        verify_cmd = os.getenv("PDD_AGENTIC_VERIFY_CMD", None) or default_verify_cmd_for(get_language(os.path.splitext(code_path)[1]), unit_test_file)
 
-        env_verify = os.getenv("PDD_AGENTIC_VERIFY")
-        verify_force = os.getenv("PDD_AGENTIC_VERIFY_FORCE") == "1"
-        lang = get_language(code_path.suffix)
-        verify_cmd = os.getenv("PDD_AGENTIC_VERIFY_CMD") or default_verify_cmd_for(lang, unit_test_file)
-
-        verify_enabled = (
-            True
-            if verify_force or verify_cmd
-            else (False if (env_verify and env_verify.lower() == "auto") else (env_verify != "0" if env_verify is not None else True))
-        )
-        _info(f"[cyan]Verification after fix: {'Enabled' if verify_enabled else 'Disabled'}[/cyan]")
-
+        # Load primary prompt template
         primary_prompt_template = load_prompt_template("agentic_fix_primary_LLM")
         if not primary_prompt_template:
-            return (False, "Failed to load primary agent prompt template.", est_cost, used_model)
+            return False, "Failed to load primary agent prompt template.", est_cost, used_model
 
-        primary_instruction_text = primary_prompt_template.format(
-            code_abs=str(code_path.resolve()),
+        # Fill primary instruction (includes code/tests/error/markers/verify_cmd hint)
+        primary_instr = primary_prompt_template.format(
+            code_abs=str(code_path),
             test_abs=str(Path(unit_test_file).resolve()),
-            begin=_begin_marker(code_path.resolve()),
-            end=_end_marker(code_path.resolve()),
+            begin=_begin_marker(code_path),
+            end=_end_marker(code_path),
             prompt_content=prompt_content,
             code_content=orig_code,
             test_content=test_content,
             error_content=error_content,
-            verify_cmd=verify_cmd or "pytest",
+            verify_cmd=verify_cmd or "No verification command provided.",
         )
+        instruction_file = Path("agentic_fix_instructions.txt")
+        instruction_file.write_text(primary_instr, encoding="utf-8")
+        _info(f"[cyan]Instruction file: {instruction_file.resolve()} ({instruction_file.stat().st_size} bytes)[/cyan]")
+        _print_head("Instruction preview", primary_instr)
 
-        instruction_file = cwd / "agentic_fix_instructions.txt"
-        instruction_file.write_text(primary_instruction_text, encoding="utf-8")
-        _print_head("PRIMARY INSTRUCTION", primary_instruction_text)
+        # Decide verification enablement
+        if verify_force:
+            verify_enabled = True
+        # If a verification command is present (from user or defaults), ALWAYS enable verification.
+        elif verify_cmd:
+            verify_enabled = True
+        else:
+            if env_verify is None:
+                # AUTO mode: if not explicitly disabled, allow agent-supplied TESTCMD
+                verify_enabled = True
+            elif env_verify.lower() == "auto":
+                verify_enabled = False
+            else:
+                verify_enabled = (env_verify != "0")
 
-        run_variants = {
-            "openai": _run_openai_variants,
-            "anthropic": _run_anthropic_variants,
-            "google": _run_google_variants,
-        }
+        allow_new = True  # allow creating new support files when the agent emits them
 
+        # Try each available agent in order
         for provider in available_agents:
             used_model = f"agentic-{provider}"
-            binary = {"anthropic": "claude", "google": "gemini", "openai": "codex"}[provider]
-            if not shutil.which(binary):
-                _info(f"[yellow]Agent CLI '{binary}' not found in PATH, skipping {provider.capitalize()}.[/yellow]")
+            cmd = get_agent_command(provider, instruction_file)
+            binary = (cmd[0] if cmd else {"anthropic": "claude", "google": "gemini", "openai": "codex"}.get(provider, ""))
+            cli_path = shutil.which(binary) or "NOT-IN-PATH"
+            _info(f"[cyan]Attempting fix with {provider.capitalize()} agent...[/cyan]")
+            if _IS_VERBOSE:
+                _verbose(f"[cyan]CLI binary: {binary} -> {cli_path}[/cyan]")
+                if cmd:
+                    _verbose(f"Executing (cwd={cwd}): {' '.join(cmd)}")
+
+            # Skip if the provider CLI is not available on PATH
+            if cli_path == "NOT-IN-PATH":
+                _info(f"[yellow]Skipping {provider.capitalize()} (CLI '{binary}' not found in PATH).[/yellow]")
                 continue
 
+            # First, the strict/fast "harvest-only" attempt for the three main providers
+            if provider in ("google", "openai", "anthropic"):
+                est_cost += _AGENT_COST_PER_CALL
+                try:
+                    if try_harvest_then_verify(
+                        provider,
+                        code_path,
+                        unit_test_file,
+                        orig_code,
+                        prompt_content,
+                        test_content,
+                        error_content,
+                        cwd,
+                        verify_cmd=verify_cmd,
+                        verify_enabled=verify_enabled,
+                    ):
+                        try:
+                            instruction_file.unlink()
+                        except Exception:
+                            pass
+                        return True, f"Agentic fix successful with {provider.capitalize()}.", est_cost, used_model
+                except subprocess.TimeoutExpired:
+                    _info(f"[yellow]{provider.capitalize()} harvest attempt timed out, moving on...[/yellow]")
+                _info("[yellow]Harvest-first attempt did not pass; trying primary instruction path...[/yellow]")
+
+            # Primary attempt (more permissive)
             est_cost += _AGENT_COST_PER_CALL
-            if _try_harvest_then_verify(
-                provider,
-                code_path,
-                unit_test_file,
-                orig_code,
-                prompt_content,
-                test_content,
-                error_content,
-                cwd,
-                verify_cmd=verify_cmd,
-                verify_enabled=verify_enabled,
-            ):
-                instruction_file.unlink(missing_ok=True)
-                return (True, f"Agentic fix successful with {provider.capitalize()}.", est_cost, used_model)
-
-            code_path.write_text(orig_code, encoding="utf-8")
-
-            _info(f"[cyan]Attempting fix with {provider.capitalize()} (Pass 2: Primary)...[/cyan]")
-            est_cost += _AGENT_COST_PER_CALL
-            result = run_variants[provider](primary_instruction_text, cwd, _AGENT_CALL_TIMEOUT, "Primary")
-
-            _print_head(f"PRIMARY AGENT STDOUT ({provider})", result.stdout)
-            _print_head(f"PRIMARY AGENT STDERR ({provider})", result.stderr)
-
-            applied_paths = []
-            file_map = _extract_files_from_output(result.stdout, result.stderr)
-            if file_map:
-                _verbose("[dim]Primary: Found multi-file output.[/dim]")
-                applied_paths = _apply_file_map(file_map, cwd, code_path, allow_new=True)
-            else:
-                corrected_code = _extract_corrected_from_output(result.stdout, result.stderr, code_path)
-                if corrected_code:
-                    _verbose("[dim]Primary: Found single-file output.[/dim]")
-                    applied_paths = _apply_file_map({str(code_path): corrected_code}, cwd, code_path, allow_new=True)
+            try:
+                if provider == "openai":
+                    res = _run_openai_variants(primary_instr, cwd, max(30, _AGENT_CALL_TIMEOUT // 2), "primary")
+                elif provider == "anthropic":
+                    res = _run_anthropic_variants(primary_instr, cwd, max(30, _AGENT_CALL_TIMEOUT // 2), "primary")
                 elif provider == "google":
-                    fenced_code = _extract_python_code_block(result.stdout, result.stderr)
-                    if fenced_code:
-                        _verbose("[dim]Primary: Found fenced code block (Google fallback).[/dim]")
-                        applied_paths = _apply_file_map({str(code_path): fenced_code}, cwd, code_path, allow_new=True)
+                    res = _run_google_variants(primary_instr, cwd, max(30, _AGENT_CALL_TIMEOUT // 2), "primary")
+                else:
+                    res = _run_cli(cmd, cwd, _AGENT_CALL_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                _info(f"[yellow]{provider.capitalize()} agent timed out after {_AGENT_CALL_TIMEOUT}s. Trying next...[/yellow]")
+                continue
 
-            if result.returncode == 0 or applied_paths or file_map:
-                if _post_apply_verify_or_testcmd(
-                    provider,
-                    unit_test_file,
-                    cwd,
-                    verify_cmd=verify_cmd,
-                    verify_enabled=verify_enabled,
-                    stdout=result.stdout,
-                    stderr=result.stderr,
-                ):
-                    instruction_file.unlink(missing_ok=True)
-                    return (True, f"Agentic fix successful with {provider.capitalize()}.", est_cost, used_model)
+            _print_head(f"{provider.capitalize()} stdout", res.stdout or "")
+            _print_head(f"{provider.capitalize()} stderr", res.stderr or "")
 
-            orig_code = code_path.read_text(encoding="utf-8")
-            _info(f"[yellow]{provider.capitalize()} failed to produce a passing fix. Trying next agent...[/yellow]")
+            # Parse emitted changes (multi-file preferred)
+            multi = _extract_files_from_output(res.stdout or "", res.stderr or "")
+            if multi:
+                _info("[cyan]Detected multi-file corrected content (primary attempt). Applying...[/cyan]")
+                _apply_file_map(multi, cwd, code_path, allow_new)
+            else:
+                # Single-file fallback or Gemini code fence
+                harvested = _extract_corrected_from_output(res.stdout or "", res.stderr or "", code_path.resolve())
+                if harvested is not None:
+                    _info("[cyan]Detected corrected file content in agent output (primary attempt). Applying patch...[/cyan]")
+                    body_to_write = _normalize_code_text(harvested)
+                    code_path.write_text(body_to_write, encoding="utf-8")
+                elif provider == "google":
+                    code_block = _extract_python_code_block(res.stdout or "", res.stderr or "")
+                    if code_block:
+                        _info("[cyan]Detected a Python code block from Google (no markers). Applying patch...[/cyan]")
+                        body_to_write = _normalize_code_text(code_block)
+                        code_path.write_text(body_to_write, encoding="utf-8")
 
-        instruction_file.unlink(missing_ok=True)
-        return (False, "All agents failed to produce a passing fix (no local fallback).", est_cost, used_model)
+            # Show diff (verbose) and decide whether to verify
+            new_code = code_path.read_text(encoding="utf-8")
+            _print_diff(orig_code, new_code, code_path)
+
+            proceed_to_verify = (res.returncode == 0) or (new_code != orig_code) or bool(multi)
+            if proceed_to_verify:
+                ok = _post_apply_verify_or_testcmd(
+                    provider, unit_test_file, cwd,
+                    verify_cmd=verify_cmd, verify_enabled=verify_enabled,
+                    stdout=res.stdout or "", stderr=res.stderr or ""
+                )
+                if ok:
+                    _always(f"[bold green]{provider.capitalize()} agent completed successfully and tests passed.[/bold green]")
+                    try:
+                        instruction_file.unlink()
+                    except Exception:
+                        pass
+                    return True, f"Agentic fix successful with {provider.capitalize()}.", est_cost, used_model
+
+            # Prepare for next iteration/provider: update baseline code snapshot
+            orig_code = new_code
+            _info(f"[yellow]{provider.capitalize()} attempt did not yield a passing test. Trying next...[/yellow]")
+
+        # No providers managed to pass verification
+        try:
+            if instruction_file and instruction_file.exists():
+                instruction_file.unlink()
+        except Exception:
+            pass
+        return False, "All agents failed to produce a passing fix (no local fallback).", est_cost, used_model
 
     except FileNotFoundError as e:
+        # Common failure: provider CLI not installed/in PATH, or missing input files
         msg = f"A required file or command was not found: {e}. Is the agent CLI installed and in your PATH?"
-        _print(f"[bold red]Error: {msg}[/bold red]", force=True)
-        return (False, msg, 0.0, "agentic-cli")
+        _always(f"[bold red]Error:[/bold red] {msg}")
+        try:
+            if instruction_file and instruction_file.exists():
+                instruction_file.unlink()
+        except Exception:
+            pass
+        return False, msg, 0.0, "agentic-cli"
     except Exception as e:
-        _print(f"[bold red]An unexpected error occurred: {e}[/bold red]", force=True)
-        return (False, str(e), 0.0, "agentic-cli")
+        # Safety net for any unexpected runtime error
+        _always(f"[bold red]An unexpected error occurred during agentic fix:[/bold red] {e}")
+        try:
+            if instruction_file and instruction_file.exists():
+                instruction_file.unlink()
+        except Exception:
+            pass
+        return False, str(e), 0.0, "agentic-cli"
 
-
-# Test Compatibility Aliases
+# Back-compat public alias for tests/consumers
+# Expose the harvest function under a stable name used by earlier code/tests.
 try_harvest_then_verify = _try_harvest_then_verify
