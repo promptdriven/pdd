@@ -44,3 +44,21 @@ A utility module responsible for generating language-specific test commands and 
             -   If no build system is found, return `None`.
         -   **C++**: Include a commented-out section as a placeholder for potential C++ support. Do not implement it.
         -   If the language is not supported, return `None`.
+
+4.  **Implement `missing_tool_hints(lang: str, verify_cmd: str | None, project_root: Path) -> str | None`**:
+    -   **Purpose**: Check for missing CLI tools and provide user-friendly installation guidance.
+    -   **Logic**:
+        -   If `verify_cmd` is `None`, return `None`.
+        -   Create an empty list `need`.
+        -   **JavaScript/TypeScript**: If `_which("npm")` is false, append `"npm (Node.js)"` to `need`.
+        -   **Java**:
+            -   If `_which("javac")` or `_which("java")` is false, append `"Java JDK (javac, java)"`.
+            -   Check if any `.jar` file in the project root contains both "junit" and "console" in its name. If not, append `"JUnit ConsoleLauncher jar (e.g. junit-platform-console-standalone.jar)"`.
+        -   **C++**: If `_which("g++")` is false, append `"g++"` to `need`.
+        -   If `need` is empty, return `None`.
+        -   Construct a formatted string containing installation instructions for macOS (`brew`) and Ubuntu (`apt-get`) for each item in `need`. The string should use Rich-style tags like `[yellow]` and `[dim]`.
+
+% Dependencies
+<pdd>This module is standalone and has no internal PDD dependencies.</pdd>
+% Deliverables
+- Code: `pdd/agentic_langtest.py` containing the exact functions and logic described above.
