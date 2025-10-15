@@ -13,7 +13,7 @@ A module that provides a robust, multi-agent, two-pass fallback mechanism for fi
 
 ### Module Imports
 - Import exactly these standard modules (names must match): os, re, shutil, subprocess, difflib, pathlib (Path), typing (Tuple, List, Optional, Dict), rich.console (Console).
-- Perform these internal imports verbatim:
+- Perform these internal imports verbatim (names MUST match):
   - from .get_language import get_language
   - from .llm_invoke import _load_model_data
   - from .load_prompt_template import load_prompt_template
@@ -23,14 +23,16 @@ A module that provides a robust, multi-agent, two-pass fallback mechanism for fi
 - Define console = Console().
 - Define provider preference list exactly: AGENT_PROVIDER_PREFERENCE = ["anthropic", "google", "openai"].
 - Implement logging level detection exactly:
-  - Read PDD_AGENTIC_LOGLEVEL into _env_level. If _env_level is None and PYTEST_CURRENT_TEST is set, set _env_level = "quiet". Otherwise default "normal".
-  - Normalize: _LOGLEVEL = (_env_level or "normal").strip().lower(); _IS_QUIET = (_LOGLEVEL == "quiet"); _IS_VERBOSE = (_LOGLEVEL == "verbose").
+  - _env_level = os.getenv("PDD_AGENTIC_LOGLEVEL")
+  - If _env_level is None AND os.getenv("PYTEST_CURRENT_TEST") is set, set _env_level = "quiet". Otherwise leave as-is.
+  - _LOGLEVEL = (_env_level or "normal").strip().lower()
+  - _IS_QUIET = (_LOGLEVEL == "quiet"); _IS_VERBOSE = (_LOGLEVEL == "verbose").
 - Define environment-tunable constants with these names and defaults:
   - _AGENT_COST_PER_CALL = float(os.getenv("PDD_AGENTIC_COST_PER_CALL", "0.02"))
   - _AGENT_CALL_TIMEOUT  = int(os.getenv("PDD_AGENTIC_TIMEOUT", "240"))
   - _VERIFY_TIMEOUT      = int(os.getenv("PDD_AGENTIC_VERIFY_TIMEOUT", "120"))
   - _MAX_LOG_LINES       = int(os.getenv("PDD_AGENTIC_MAX_LOG_LINES", "200"))
-  - _AGENT_TESTCMD_ALLOWED is enabled unless PDD_AGENTIC_AGENT_TESTCMD == "0".
+  - _AGENT_TESTCMD_ALLOWED = (os.getenv("PDD_AGENTIC_AGENT_TESTCMD", "1") != "0")
 - Define suffix tuple for mapping *_fixed back to originals: _COMMON_FIXED_SUFFIXES = ("_fixed", ".fixed", "-fixed").
 
 ### Helper Functions (implement EXACT behavior & signatures; fully type-hinted)
@@ -39,7 +41,7 @@ A module that provides a robust, multi-agent, two-pass fallback mechanism for fi
 - _info(msg: str) -> None
   - Calls _print.
 - _always(msg: str) -> None
-  - Calls _print(..., force=True).
+  - Calls _print; do not force (matches original behavior).
 - _verbose(msg: str) -> None
   - Print only if _IS_VERBOSE.
 - _begin_marker(path: Path) -> str  ==> returns "<<<BEGIN_FILE:{path}>>>".
@@ -47,7 +49,7 @@ A module that provides a robust, multi-agent, two-pass fallback mechanism for fi
 - get_agent_command(provider: str, instruction_file: Path) -> List[str]
   - Return base CLI for generic runner: "openai" -> ["codex", "exec", "--skip-git-repo-check"]; "anthropic"/"google" -> []; unknown -> [].
 - find_llm_csv_path() -> Optional[Path]
-  - Return first existing among: ~/.pdd/llm_model.csv, ~/.llm/llm_model.csv, ./.pdd/llm_model.csv; else None.
+  - Return first existing among (in this order): ~/.pdd/llm_model.csv, ~/.llm/llm_model.csv, ./.pdd/llm_model.csv; else None.
 - _print_head(label: str, text: str, max_lines: int = _MAX_LOG_LINES) -> None
   - Verbose-only: print first max_lines and note truncation.
 - _print_diff(old: str, new: str, path: Path) -> None
@@ -99,21 +101,23 @@ A module that provides a robust, multi-agent, two-pass fallback mechanism for fi
 - _try_harvest_then_verify(provider: str, code_path: Path, unit_test_file: str, code_snapshot: str, prompt_content: str, test_content: str, error_content: str, cwd: Path, *, verify_cmd: Optional[str], verify_enabled: bool) -> bool
   - Load template "agentic_fix_harvest_only_LLM". Format with the exact keys in Prompt Formatting Logic. Write agentic_fix_harvest.txt. Run the provider-specific harvest variant with a shorter timeout. Prefer multi-file application; else single-file; for Google allow fenced-code fallback. After applying, call _post_apply_verify_or_testcmd. Delete temp file. Return pass/fail.
 
-### Main Entry Point (must match exactly)
+### Main Entry Point (must match EXACTLY)
 Signature:
 def run_agentic_fix(prompt_file: str, code_file: str, unit_test_file: str, error_log_file: str) -> Tuple[bool, str, float, str]:
 
 Agent discovery logic (EXACT and ordered):
 1) csv_path = find_llm_csv_path().
-2) If not found, return exactly: (False, "Could not find llm_models.csv in ~/.pdd/ or ~/.llm/", est_cost, used_model).
+2) CRITICAL: Immediately check the result. If not found, return EXACTLY: (False, "Could not find llm_models.csv in ~/.pdd/ or ~/.llm/", est_cost, used_model).
 3) model_df = _load_model_data(csv_path).    # pass csv_path
-4) Initialize: available_models: List[str] = [], present_keys: List[str] = [], seen_models = set().
+4) Initialize: available_agents: List[str] = [], present_keys: List[str] = [], seen = set().
 5) For provider in AGENT_PROVIDER_PREFERENCE:
    - provider_df = model_df[model_df["provider"].str.lower() == provider]; continue if empty.
-   - api_key_name = provider_df["api_key"].iloc[0].   # CRITICAL
-   - Key presence: os.getenv(api_key_name); if provider == "google" also accept os.getenv("GEMINI_API_KEY") and record "GEMINI_API_KEY".
-   - If present: append each string model_id from provider_df["model_id"] to available_models in order (dedupe with seen_models). Record the present key name.
-6) If available_models is empty, return exactly: (False, "No configured agent API keys found in environment.", est_cost, used_model).
+   - CRITICAL: api_key_name = provider_df["api_key"].iloc[0]    # use this exact column access pattern
+   - Check key presence: os.getenv(api_key_name). For provider == "google", ALSO accept os.getenv("GEMINI_API_KEY") as an alias.
+   - If a key is present:
+       * Iterate provider_df["model_id"] in order and append each model_id (string) to available_agents (deduplicate via 'seen').
+       * Append the present key name to present_keys (use "GEMINI_API_KEY" when the alias was used).
+6) CRITICAL: After the loop, if available_agents is empty, return EXACTLY: (False, "No configured agent API keys found in environment.", est_cost, used_model).
 
 Read inputs & preflight:
 - Print yellow banner starting fallback.
@@ -139,28 +143,32 @@ Primary instruction:
 - Load "agentic_fix_primary_LLM". If missing, return (False, "Failed to load primary agent prompt template.", est_cost, used_model).
 - Format with exact keys (see Prompt Formatting Logic) and write agentic_fix_instructions.txt. Preview head in verbose.
 
-Model/provider loop (two-pass per model):
-- Build model_id -> provider dict from model_df for logging and CLI selection.
+Two-pass loop (must use PRIVATE helper name):
 - allow_new = True.
-- For each model_id in available_models:
-  - provider = lookup; used_model = f"{provider}:{model_id}".
-  - binary by provider: anthropic -> "claude"; google -> "gemini"; openai -> "codex". If not on PATH, log yellow skip and continue.
-  - Pass 1 (harvest-only): est_cost += _AGENT_COST_PER_CALL; call _try_harvest_then_verify(...) directly.
-    - On success: delete temp instruction file and return (True, f"Agentic fix successful with {ProviderName}.", est_cost, used_model).
-  - Pass 2 (primary): est_cost += _AGENT_COST_PER_CALL; run provider variant with primary instruction.
-    - Prefer multi-file application via _extract_files_from_output + _apply_file_map.
-    - Else single-file via _extract_corrected_from_output; for Google allow fenced-code fallback.
-    - Show diff in verbose.
-    - If res.returncode == 0 or any file changed or multi-file emitted: run _post_apply_verify_or_testcmd.
-    - On verification success: print bold green success, clean up file, return success tuple (include used_model).
-  - Update orig_code to current code before next iteration.
+- Iterate providers IN THE ORDER discovered in available_agents (these are model_ids, but you will run by their provider mapping).
+- Determine provider from model_df row for the current model_id; set used_model = f"{provider}:{model_id}".
+- Decide CLI binary: anthropic->"claude", google->"gemini", openai->"codex". If binary not on PATH, log yellow and continue.
 
-Exit behavior:
-- If all candidates fail: clean up temp file if any and return (False, "All agents failed to produce a passing fix (no local fallback).", est_cost, used_model).
+Pass 1 — Harvest-only (STRICT):
+- est_cost += _AGENT_COST_PER_CALL.
+- Call the private function directly (CRITICAL): if _try_harvest_then_verify(...): clean up instruction file and return (True, f"Agentic fix successful with {ProviderName}.", est_cost, used_model).
+
+Pass 2 — Primary (PERMISSIVE):
+- est_cost += _AGENT_COST_PER_CALL.
+- Run the provider variant runner with the prepared primary instruction.
+- Prefer multi-file application via _extract_files_from_output + _apply_file_map; else single-file via _extract_corrected_from_output; for Google allow fenced-code fallback.
+- Show diff in verbose.
+- Proceed to verification if (returncode == 0) OR (any file changed) OR (multi-file emitted).
+- If verification passes via _post_apply_verify_or_testcmd, print success and return as above.
+
+After all candidates:
+- If nothing passes, clean up temp instruction file and return (False, "All agents failed to produce a passing fix (no local fallback).", est_cost, used_model).
+
+Exceptions:
 - FileNotFoundError: print bold red message and return (False, <message>, 0.0, "agentic-cli").
-- Generic Exception: print bold red message and return (False, str(e), 0.0, "agentic-cli").
+- Generic Exception: print bold red and return (False, str(e), 0.0, "agentic-cli").
 
-### Prompt Formatting Logic (must use these keys for BOTH harvest & primary templates)
+### Prompt Formatting Logic (use these keys for BOTH templates)
 - code_abs: absolute path to code_file.
 - test_abs: absolute path to unit_test_file.
 - begin: _begin_marker(code_path).
@@ -186,24 +194,7 @@ Exit behavior:
 - Cyan for progress, yellow for warnings/timeouts/skips, bold green for success.
 - _print_head previews only in verbose mode, truncated to _MAX_LOG_LINES lines.
 
-% Dependencies
-<pdd>This module relies on several internal helper modules.</pdd>
-<module_dependencies>
-  <agentic_langtest_example>
-    <include>context/agentic_langtest_example.py</include>
-  </agentic_langtest_example>
-  <get_language_example>
-    <include>context/get_language_example.py</include>
-  </get_language_example>
-  <load_prompt_template_example>
-    <include>context/load_prompt_template_example.py</include>
-  </load_prompt_template_example>
-</module_dependencies>
-<file_dependencies>
-  <pdd>Reads .pdd/llm_model.csv to discover available agents and API keys.</pdd>
-</file_dependencies>
-
 % Deliverables
 - Code: pdd/agentic_fix.py implementing the exact behavior above.
-- Test Compatibility Alias: at the very end of the file include exactly:
+- Test Compatibility Alias: the very last line of the file MUST be exactly:
 try_harvest_then_verify = _try_harvest_then_verify
