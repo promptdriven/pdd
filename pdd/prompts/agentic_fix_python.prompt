@@ -194,7 +194,27 @@ Exceptions:
 - Cyan for progress, yellow for warnings/timeouts/skips, bold green for success.
 - _print_head previews only in verbose mode, truncated to _MAX_LOG_LINES lines.
 
+
+% Dependencies
+<pdd>...</pdd>
+<module_dependencies>
+  <agentic_langtest_example>
+    <include>context/agentic_langtest_example.py</include>
+  </agentic_langtest_example>
+  <get_language_example>
+    <include>context/get_language_example.py</include>
+  </get_language_example>
+  <load_prompt_template_example>
+    <include>context/load_prompt_template_example.py</include>
+  </load_prompt_template_example>
+</module_dependencies>
+<file_dependencies>
+  <pdd>Reads .pdd/llm_model.csv to discover available agents and API keys.</pdd>
+</file_dependencies>
+
+
 % Deliverables
 - Code: pdd/agentic_fix.py implementing the exact behavior above.
 - Test Compatibility Alias: the very last line of the file MUST be exactly:
 try_harvest_then_verify = _try_harvest_then_verify
+
