@@ -13,7 +13,7 @@ from pathlib import Path
 
 # Import the render_mermaid functions
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from render_mermaid import generate_mermaid_code, generate_html
+from pdd.render_mermaid import generate_mermaid_code, generate_html
 
 
 def create_sample_architecture():

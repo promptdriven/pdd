@@ -8,7 +8,7 @@ from pathlib import Path
 # The code under test has a syntax error `def def`.
 # We will import it under a try-except block and patch it if needed.
 try:
-    from render_mermaid import generate_mermaid_code, generate_html
+    from pdd.render_mermaid import generate_mermaid_code, generate_html
 except SyntaxError as e:
     # This is a workaround for the `def def` syntax error in the provided code.
     # In a real-world scenario, the source file should be fixed.
@@ -17,8 +17,8 @@ except SyntaxError as e:
         from importlib.util import spec_from_loader, module_from_spec
         from importlib.machinery import SourceFileLoader
 
-        # Corrected path to look in the parent directory of the tests folder
-        file_path = Path(__file__).parent.parent / "render_mermaid.py"
+        # Corrected path to look in the pdd package directory
+        file_path = Path(__file__).parent.parent / "pdd" / "render_mermaid.py"
         original_code = file_path.read_text()
         corrected_code = re.sub(r'\bdef def\b', 'def', original_code)
         
