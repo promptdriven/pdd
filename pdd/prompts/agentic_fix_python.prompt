@@ -1,44 +1,52 @@
-% You are an expert Python engineer. Your goal is to write the `agentic_fix` module.
+% You are an expert Python engineer. Your goal is to write the `pdd/agentic_fix.py` module, matching the original implementation exactly to ensure compatibility with the existing test suite.
 
 % Role & Scope
-A module that provides a robust, multi-agent, two-pass fallback mechanism for fixing code when automated attempts fail. It orchestrates local CLI-based agents (like Gemini, Claude, Codex) to analyze and repair code based on a detailed problem description.
+A module that provides a robust, multi-agent, two-pass fallback mechanism for fixing code. It orchestrates local CLI-based agents to repair code based on a detailed problem description.
 
 % Requirements
-1.  **Entry Point**: The main function `run_agentic_fix` will orchestrate the entire process.
-2.  **Agent Discovery**:
-    -   Dynamically discover available CLI agents by checking for API keys (e.g., `ANTHROPIC_API_KEY`) defined in the environment and configured in `.pdd/llm_model.csv`.
-    -   If no agents are available, exit gracefully with an informative error message.
-3.  **Input Preparation**:
-    -   Accept paths to a prompt file, a code file, a unit test file, and an error log.
-    -   **Pre-flight Check**: If the provided error log is empty, execute a default verification command for the target language to generate fresh error output, ensuring the agent always has context.
-4.  **Two-Attempt Strategy**: For each available agent, perform the following two attempts in order:
-    -   **Attempt 1: Harvest-Only (Strict & Fast)**:
-        -   Use a concise prompt (`agentic_fix_harvest_only_LLM`) that instructs the agent to *only* output corrected file blocks.
-        -   Invoke the agent with a short timeout.
-        -   Parse the output strictly for file blocks (`<<<BEGIN_FILE...>>>`) and apply them.
-        -   Verify the fix. If successful, terminate and report success.
-    -   **Attempt 2: Primary (Permissive)**:
-        -   If the first attempt fails, use a more detailed primary prompt (`agentic_fix_primary_LLM`) that allows for more comprehensive changes.
-        -   Invoke the agent with a longer, full timeout.
-        -   Parse the output for file blocks and an optional `<<<BEGIN_TESTCMD>>>` block.
-        -   Apply file changes.
-        -   Verify the fix using the standard command. If it fails, and the agent provided a custom test command, use that as a fallback verification.
-        -   If successful, terminate and report success.
-5.  **Output Parsing**: Implement robust regex-based parsing to extract content from `<<<BEGIN_FILE:path>>>...<<<END_FILE:path>>>` blocks and `<<<BEGIN_TESTCMD>>>...<<<END_TESTCMD>>>` blocks. Include a fallback to parse Python code fences for Gemini.
-6.  **File Application**:
-    -   Safely write changes to disk, normalizing paths to ensure they match existing project files (e.g., stripping `_fixed` suffixes).
-    -   Do not write outside the project root directory.
-7.  **Configuration**: Control behavior via environment variables (e.g., `PDD_AGENTIC_TIMEOUT`, `PDD_AGENTIC_VERIFY`).
-8.  **Error Handling & Cleanup**: Handle `FileNotFoundError` for missing CLI tools and ensure temporary instruction files are always deleted.
+- The file must start with `from __future__ import annotations`.
+- All functions must be fully type-hinted.
+- Use `rich.console.Console` for all printing.
+
+% Instructions
+
+### Module Imports
+- Import all necessary modules: `os`, `re`, `shutil`, `subprocess`, `difflib`, `pathlib`, `typing`, `rich.console`.
+- Perform the following specific internal imports:
+  - `from .get_language import get_language`
+  - `from .llm_invoke import _load_model_data`
+  - `from .load_prompt_template import load_prompt_template`
+  - `from .agentic_langtest import default_verify_cmd_for`
+
+### Module Constants and Globals
+- Define `AGENT_PROVIDER_PREFERENCE` as `["anthropic", "google", "openai"]`.
+- Implement the exact logging level detection logic based on `PDD_AGENTIC_LOGLEVEL` and `PYTEST_CURRENT_TEST`.
+- Define all environment-tunable constants and regex constants exactly as they appear in the original, correct source file.
+
+### Core Functions
+- Implement all private helper functions (`_print`, `_info`, `_begin_marker`, `get_agent_command`, `find_llm_csv_path`, `_extract_files_from_output`, `_run_cli`, `_run_openai_variants`, `_verify_and_log`, `_safe_is_subpath`, etc.) with the exact logic of the original file.
+
+### Main Entry Point: `run_agentic_fix`
+1.  **Exact Signature**: The function signature must be `def run_agentic_fix(prompt_file: str, code_file: str, unit_test_file: str, error_log_file: str) -> Tuple[bool, str, float, str]:`.
+2.  **Agent Discovery Logic**:
+    -   Inside `run_agentic_fix`, you must implement the agent discovery logic exactly as follows:
+    -   First, call `csv_path = find_llm_csv_path()`.
+    -   **CRITICAL**: Immediately after, check if the path was found. If not, you MUST return this exact tuple: `(False, "Could not find llm_models.csv in ~/.pdd/ or ~/.llm/", est_cost, used_model)`.
+    -   Next, call `model_df = _load_model_data(csv_path)`. You **must** pass the `csv_path` argument.
+    -   Initialize `available_agents: List[str] = []`, `present_keys: List[str] = []`, `seen = set()`.
+    -   Loop through each `provider` in `AGENT_PROVIDER_PREFERENCE`.
+    -   Filter the `model_df` for that provider.
+    -   **CRITICAL**: Get the API key name by accessing the `api_key` column. The line must be `api_key_name = provider_df["api_key"].iloc[0]`.
+    -   Check if `os.getenv(api_key_name)` is present. For the "google" provider, you must also check for `os.getenv("GEMINI_API_KEY")` as an alias.
+    -   If a key is found, iterate through the `model_id` column of the `provider_df` and append each `model_id` to `available_agents`.
+    -   **CRITICAL Error Message**: If `available_agents` is empty after the loop, you must return the exact tuple: `(False, "No configured agent API keys found in environment.", est_cost, used_model)`.
+3.  **Main Loop Logic**:
+    -   The function must have two main loops for the two passes. Inside both loops, the call to the verification function **must be** `if _try_harvest_then_verify(...)`, calling the private function directly.
+4.  **Prompt Formatting Logic**:
+    -   When formatting the prompt templates, the `.format()` call must provide these exact keys: `code_abs`, `test_abs`, `begin`, `end`, `prompt_content`, `code_content`, `test_content`, `error_content`, and `verify_cmd`.
 
 % Dependencies
-<pdd>This module relies on several internal prompts and helper modules. Per the prompting guide, we include the minimal, token-efficient examples of its direct dependencies to provide context and define their interfaces.</pdd>
-
-<prompt_dependencies>
-    <include>prompts/agentic_fix_primary_LLM.prompt</include>
-    <include>prompts/agentic_fix_harvest_only_LLM.prompt</include>
-</prompt_dependencies>
-
+<pdd>This module relies on several internal helper modules.</pdd>
 <module_dependencies>
     <agentic_langtest_example>
       <include>context/agentic_langtest_example.py</include>
@@ -46,23 +54,18 @@ A module that provides a robust, multi-agent, two-pass fallback mechanism for fi
     <get_language_example>
       <include>context/get_language_example.py</include>
     </get_language_example>
-    <llm_invoke_example>
-      <include>context/llm_invoke_example.py</include>
-    </llm_invoke_example>
     <load_prompt_template_example>
       <include>context/load_prompt_template_example.py</include>
     </load_prompt_template_example>
 </module_dependencies>
-
 <file_dependencies>
     <pdd>Reads .pdd/llm_model.csv to discover available agents and API keys.</pdd>
 </file_dependencies>
 
-% Instructions
-- The module should be implemented in `pdd/agentic_fix.py`.
-- Use the `rich` library for styled console output.
-- Use helper functions for subprocess execution in a sanitized, non-interactive environment.
-- Specialized "variant runner" functions (e.g., `_run_google_variants`) should handle the specifics of invoking each agent's CLI, including adding wrappers to enforce the output format.
-
 % Deliverables
-- Code: `pdd/agentic_fix.py` containing the `run_agentic_fix` function and its helpers.
+- Code: `pdd/agentic_fix.py` containing the exact implementation as specified.
+- **Test Compatibility Aliases**: At the very end of the file, after all other code, you **must** include the following lines to create public aliases for testing:
+```python
+# Back-compat public alias for tests/consumers
+# Expose the harvest function under a stable name used by earlier code/tests.
+try_harvest_then_verify = _try_harvest_then_verify

@@ -1,42 +1,46 @@
-% You are an expert Python engineer. Your goal is to write the `agentic_langtest` module.
+% You are an expert Python engineer. Your goal is to write the `pdd/agentic_langtest.py` module.
 
 % Role & Scope
-A utility module responsible for generating language-specific test commands and providing helpful hints for missing toolchains. This module abstracts away the testing and environment-checking logic for different programming languages supported by the agentic framework.
+A utility module responsible for generating language-specific test commands and providing helpful hints for missing toolchains. This module must be standalone with no internal project imports. It abstracts away the testing and environment-checking logic for different programming languages.
 
 % Requirements
-1.  **`default_verify_cmd_for(lang: str, unit_test_file: str) -> str | None`**:
-    -   This function must return the default shell command required to compile and run tests for a given language.
-    -   **Python**: Return a `pytest` command for the given test file.
-    -   **JavaScript/TypeScript**:
-        -   Find the project root (containing `package.json`).
-        -   Return a command to run `npm install && npm test`.
-        -   If `package.json` is not found, fall back to running the test file with `node`.
-        -   The command must first check if `npm` is installed.
-    -   **Java**:
-        -   Find the project root.
-        -   Detect the build system (`pom.xml` for Maven, `build.gradle[.kts]` for Gradle).
-        -   Return the appropriate command (`mvn test` or `./gradlew test` or `gradle test`).
-2.  **`missing_tool_hints(lang: str, verify_cmd: str | None, project_root: Path) -> str | None`**:
-    -   This function must check for missing command-line tools essential for the given language's test process.
-    -   It should return a user-friendly, formatted string with installation instructions for macOS (Homebrew) and Ubuntu (apt-get).
-    -   **JavaScript/TypeScript**: Check for `npm`.
-    -   **Java**: Check for `javac`, `java`, and the JUnit ConsoleLauncher JAR.
-    -   **C++**: Check for `g++`.
-3.  **Helper Functions**:
-    -   Implement `_which(cmd: str) -> bool` using `shutil.which` to check if a command exists.
-    -   Implement `_find_project_root(start_path: str) -> Path` to locate the root of a project by searching for marker files (`pom.xml`, `package.json`, etc.).
-
-% Dependencies
-<pdd>This module is standalone and has no internal PDD dependencies.</pdd>
-<self_example>
-  <pdd>To ground the model in its expected usage, we include its own example.</pdd>
-  <include>context/agentic_langtest_example.py</include>
-</self_example>
+- All functions must be fully type-hinted.
+- Use `pathlib.Path` for path manipulations.
+- The file must start with `from __future__ import annotations`.
 
 % Instructions
-- The module should be implemented in `pdd/agentic_langtest.py`.
-- The `missing_tool_hints` function should format its output for a terminal that supports color, using tags like `[yellow]` and `[dim]`.
-- Ensure functions are well-documented and type-hinted.
 
-% Deliverables
-- Code: `pdd/agentic_langtest.py` containing the functions specified above.
+1.  **Implement `_which(cmd: str) -> bool`**:
+    -   **Purpose**: A private helper to check if a command exists in the system's PATH.
+    -   **Implementation**: Use `shutil.which(cmd) is not None`.
+
+2.  **Implement `_find_project_root(start_path: str) -> Path`**:
+    -   **Purpose**: A private helper to find the project root by searching upwards for common marker files.
+    -   **Logic**:
+        -   Start from `Path(start_path).resolve()`.
+        -   Loop upwards (`p = p.parent`) until the root is reached (`p == p.parent`).
+        -   In each directory, check for the existence of any of these files: `"build.gradle"`, `"build.gradle.kts"`, `"pom.xml"`, `"package.json"`, `"jest.config.js"`.
+        -   If a marker is found, return the current directory path `p`.
+        -   If no marker is found, return the parent of the original resolved start path.
+
+3.  **Implement `default_verify_cmd_for(lang: str, unit_test_file: str) -> str | None`**:
+    -   **Purpose**: Return a conservative, runnable shell command to compile and run tests for a given language.
+    -   **Logic**:
+        -   Handle `lang` case-insensitively.
+        -   **Python**: Return the command `f'{os.sys.executable} -m pytest "{unit_test_file}" -q'`.
+        -   **JavaScript/TypeScript**:
+            -   Find the project root using `_find_project_root(unit_test_file)`.
+            -   Construct a multi-line bash command string starting with `set -e`.
+            -   The command must `cd` into the project root.
+            -   It must check if `npm` exists using `command -v npm`.
+            -   If `package.json` exists, it must run `npm install && npm test`.
+            -   Otherwise, it must fall back to running the test file directly with `node`, wrapping the `require` in a `try...catch` block.
+        -   **Java**:
+            -   Find the project root.
+            -   If `pom.xml` exists, return a command to `cd` to the root and run `mvn test`.
+            -   Else if `build.gradle` or `build.gradle.kts` exists:
+                -   If `gradlew` exists, return a command to `cd` to the root and run `./gradlew test`.
+                -   Otherwise, return a command to `cd` to the root and run `gradle test`.
+            -   If no build system is found, return `None`.
+        -   **C++**: Include a commented-out section as a placeholder for potential C++ support. Do not implement it.
+        -   If the language is not supported, return `None`.
