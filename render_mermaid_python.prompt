@@ -24,3 +24,10 @@ Requirements:
 
 The script should be production-ready with proper error handling.
 
+
+Example/Usage Generation Rules (when used with `pdd example`):
+- Do NOT re-implement any functions from the main script.
+- Import from `render_mermaid.py` (e.g., `from render_mermaid import generate_mermaid_code, generate_html`).
+- Produce a small usage script that parses an input JSON, calls the imported functions, and writes HTML.
+- NEVER define functions named `generate_mermaid_code` or `generate_html` in the example.
+- Ensure the output is syntactically valid Python; avoid duplicated tokens like `def def`.
