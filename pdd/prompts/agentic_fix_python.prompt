@@ -227,9 +227,6 @@ try_harvest_then_verify = _try_harvest_then_verify
     <include>context/load_prompt_template_example.py</include>
   </load_prompt_template_example>
 </module_dependencies>
-<file_dependencies>
-  <pdd>Reads .pdd/llm_model.csv to discover available agents and API keys.</pdd>
-</file_dependencies>
 
 % Deliverables
 - Code: pdd/agentic_fix.py containing the exact implementation as specified.
