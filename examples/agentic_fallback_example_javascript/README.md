@@ -20,7 +20,7 @@ Agentic fallback is a feature that allows the debugging agent to read files acro
 To fix the error in `main.js` using agentic fallback, you would typically run a command that invokes a CLI agent. The exact command depends on the tool you are using. For example, with `pdd`, the command would look something like this:
 
 ```bash
-pdd fix examples/agentic_fallback_example_javascript/main_js.prompt \
+pdd fix examples/agentic_fallback_example_javascript/main_javascript.prompt \
         examples/agentic_fallback_example_javascript/src/main.js \
         examples/agentic_fallback_example_javascript/tests/test_main.js \
         examples/agentic_fallback_example_javascript/error.log \

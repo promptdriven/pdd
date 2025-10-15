@@ -20,7 +20,7 @@ Agentic fallback is a feature that allows the debugging agent to read files acro
 To fix the error in `main.ts` using agentic fallback, you would typically run a command that invokes a CLI agent. The exact command depends on the tool you are using. For example, with `pdd`, the command would look something like this:
 
 ```bash
-pdd fix examples/agentic_fallback_example_typescript/main_ts.prompt \
+pdd fix examples/agentic_fallback_example_typescript/main_typescript.prompt \
         examples/agentic_fallback_example_typescript/src/main.ts \
         examples/agentic_fallback_example_typescript/tests/test_main.ts \
         examples/agentic_fallback_example_typescript/error.log \
