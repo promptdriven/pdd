@@ -1,0 +1,30 @@
+Create a Python script that converts architecture.json files into interactive HTML Mermaid diagrams.
+Requirements:
+- Parse architecture.json file (array of module objects with filename, priority, dependencies, tags)
+- Generate Mermaid flowchart code with:
+  - Top node for application name
+  - Frontend subgraph (tags: frontend, react, nextjs, ui, page, component)
+  - Backend subgraph (tags: backend, api, database, sqlalchemy, fastapi)
+  - Shared subgraph (tags: utils, shared, common)
+  - Module nodes labeled as: module_name (priority)
+  - Dependency arrows labeled with "uses"
+  - Color classes: frontend=#FFF3E0, backend=#E3F2FD, shared=#E8F5E9, system=#E0E0E0
+- Generate self-contained HTML with:
+  - Mermaid.js from CDN
+  - Minimal black and white styling
+  - Title with app name
+  - Diagram in bordered box
+  - Module table with: Priority, Module, Tags, Dependencies
+- Command line interface:
+  - First arg: architecture.json file path
+  - Second arg (optional): app name
+  - Third arg (optional): output HTML filename
+- Output success message with module count and filename
+The script should be production-ready with proper error handling.
+Example/Usage Generation Rules (when used with `pdd example`):
+- Do NOT re-implement any functions from the main script.
+- Import from `render_mermaid.py` (e.g., `from render_mermaid import generate_mermaid_code, generate_html`).
+- Produce a small usage script that parses an input JSON, calls the imported functions, and writes HTML.
+- NEVER define functions named `generate_mermaid_code` or `generate_html` in the example.
+- Ensure the output is syntactically valid Python; avoid duplicated tokens like `def def`.
+
