@@ -15,24 +15,6 @@ import sys
 import html
 from pathlib import Path
 
-# Indentation constants for better maintainability
-INDENT = '    '  # 4 spaces per level
-LEVELS = {
-    'root': 0,
-    'subgraph': 1, 
-    'node': 2,
-    'connection': 1,
-    'style': 1
-}
-
-def write_pretty_architecture_json(arch_file, architecture):
-    """Rewrite architecture JSON with consistent formatting so diffs stay stable."""
-    path = Path(arch_file)
-    formatted = json.dumps(architecture, indent=2)
-    if not formatted.endswith("\n"):
-        formatted += "\n"
-    path.write_text(formatted, encoding="utf-8")
-
 
 def generate_mermaid_code(architecture, app_name="System"):
     """Generate Mermaid flowchart code from architecture JSON."""
@@ -41,10 +23,14 @@ def generate_mermaid_code(architecture, app_name="System"):
     # Match test expectation: add a trailing space only if quotes were present
     prd_label = f'{escaped_app_name} ' if "&quot;" in escaped_app_name else escaped_app_name
 
-    lines = ["flowchart TB", f'{INDENT * LEVELS["node"]}PRD["{prd_label}"]', INDENT]
+    lines = [
+        "flowchart TB",
+        f'            PRD["{prd_label}"]',
+        "    ",
+    ]
 
     if not architecture:
-        lines.append(INDENT)
+        lines.append("    ")
 
     # Categorize modules by tags (frontend takes priority over backend)
     frontend = [
@@ -63,19 +49,19 @@ def generate_mermaid_code(architecture, app_name="System"):
     # Generate subgraphs
     for group_name, modules in [("Frontend", frontend), ("Backend", backend), ("Shared", shared)]:
         if modules:
-            lines.append(f"{INDENT * LEVELS['subgraph']}subgraph {group_name}")
+            lines.append(f"            subgraph {group_name}")
             for m in modules:
                 name = Path(m['filename']).stem
                 pri = m.get('priority', 0)
-                lines.append(f'{INDENT * LEVELS["node"]}{name}["{name} ({pri})"]')
-            lines.append(f"{INDENT * LEVELS['subgraph']}end")
-            lines.append(INDENT)
+                lines.append(f'                {name}["{name} ({pri})"]')
+            lines.append("            end")
+            lines.append("            ")
 
     # PRD connections
     if frontend:
-        lines.append(f"{INDENT * LEVELS['connection']}PRD --> Frontend")
+        lines.append("            PRD --> Frontend")
     if backend:
-        lines.append(f"{INDENT * LEVELS['connection']}PRD --> Backend")
+        lines.append("            PRD --> Backend")
 
     # Add newline between PRD connections and dependencies
     if frontend or backend:
@@ -86,26 +72,29 @@ def generate_mermaid_code(architecture, app_name="System"):
         src = Path(m['filename']).stem
         for dep in m.get('dependencies', []):
             dst = Path(dep).stem
-            lines.append(f'{INDENT * LEVELS["connection"]}{src} -->|uses| {dst}')
+            lines.append(f'            {src} -->|uses| {dst}')
 
     # Add newline after dependencies
     if any(m.get('dependencies', []) for m in architecture):
-        lines.append(INDENT)
+        lines.append("    ")
 
     # Styles
-    lines.extend([f"{INDENT * LEVELS['style']}classDef frontend fill:#FFF3E0,stroke:#F57C00,stroke-width:2px",
-                  f"{INDENT * LEVELS['style']}classDef backend fill:#E3F2FD,stroke:#1976D2,stroke-width:2px",
-                  f"{INDENT * LEVELS['style']}classDef shared fill:#E8F5E9,stroke:#388E3C,stroke-width:2px",
-                  f"{INDENT * LEVELS['style']}classDef system fill:#E0E0E0,stroke:#616161,stroke-width:3px", INDENT])
+    lines.extend([
+        "            classDef frontend fill:#FFF3E0,stroke:#F57C00,stroke-width:2px",
+        "            classDef backend fill:#E3F2FD,stroke:#1976D2,stroke-width:2px",
+        "            classDef shared fill:#E8F5E9,stroke:#388E3C,stroke-width:2px",
+        "            classDef system fill:#E0E0E0,stroke:#616161,stroke-width:3px",
+        "    ",
+    ])
 
     # Apply classes
     if frontend:
-        lines.append(f"{INDENT * LEVELS['style']}class {','.join([Path(m['filename']).stem for m in frontend])} frontend")
+        lines.append(f"            class {','.join([Path(m['filename']).stem for m in frontend])} frontend")
     if backend:
-        lines.append(f"{INDENT * LEVELS['style']}class {','.join([Path(m['filename']).stem for m in backend])} backend")
+        lines.append(f"            class {','.join([Path(m['filename']).stem for m in backend])} backend")
     if shared:
-        lines.append(f"{INDENT * LEVELS['style']}class {','.join([Path(m['filename']).stem for m in shared])} shared")
-    lines.append(f"{INDENT * LEVELS['style']}class PRD system")
+        lines.append(f"            class {','.join([Path(m['filename']).stem for m in shared])} shared")
+    lines.append("            class PRD system")
 
     return "\n".join(lines)
 
@@ -223,7 +212,6 @@ if __name__ == "__main__":
     
     with open(arch_file) as f:
         architecture = json.load(f)
-    write_pretty_architecture_json(arch_file, architecture)
     
     mermaid_code = generate_mermaid_code(architecture, app_name)
     html_content = generate_html(mermaid_code, architecture, app_name)
@@ -234,3 +222,4 @@ if __name__ == "__main__":
     print(f"✅ Generated: {output_file}")
     print(f"📊 Modules: {len(architecture)}")
     print(f"🌐 Open {output_file} in your browser!")
+
