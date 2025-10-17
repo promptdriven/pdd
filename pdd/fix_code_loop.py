@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Tuple, Optional, Union
 from . import DEFAULT_TIME # Added DEFAULT_TIME
 from .agentic_fix import run_agentic_fix
+from .get_language import get_language
+from .agentic_langtest import default_verify_cmd_for
 
 def _normalize_agentic_result(result):
     """
@@ -109,6 +111,55 @@ def fix_code_loop(
         rprint(f"[bold red]Error: Verification program not found: {verification_program}[/bold red]")
         return False, "", "", 0, 0.0, None
     # --- End: Modified File Checks ---
+
+    is_python = str(code_file).lower().endswith(".py")
+    if not is_python:
+        # For non-Python files, run the verification program to get an initial error state
+        rprint(f"[cyan]Non-Python target detected. Running verification program to get initial state...[/cyan]")
+        lang = get_language(os.path.splitext(code_file)[1])
+        verify_cmd = default_verify_cmd_for(lang, verification_program)
+        if not verify_cmd:
+            raise ValueError(f"No default verification command for language: {lang}")
+        
+        verify_result = subprocess.run(verify_cmd, capture_output=True, text=True, shell=True)
+        pytest_output = (verify_result.stdout or "") + "\n" + (verify_result.stderr or "")
+        if verify_result.returncode != 0:
+            rprint("[cyan]Non-Python target failed initial verification. Triggering agentic fallback...[/cyan]")
+            with open(error_log_file, "w") as f:
+                f.write(pytest_output)
+            
+            success, _msg, agent_cost, agent_model = _safe_run_agentic_fix(
+                prompt_file=prompt_file,
+                code_file=code_file,
+                unit_test_file=verification_program,
+                error_log_file=error_log_file,
+            )
+            final_program = ""
+            final_code = ""
+            try:
+                with open(verification_program, "r") as f:
+                    final_program = f.read()
+            except Exception:
+                pass
+            try:
+                with open(code_file, "r") as f:
+                    final_code = f.read()
+            except Exception:
+                pass
+            return success, final_program, final_code, 1, agent_cost, agent_model
+        else:
+            # Non-python tests passed, so we are successful.
+            rprint("[green]Non-Python tests passed. No fix needed.[/green]")
+            try:
+                final_program = ""
+                final_code = ""
+                with open(verification_program, "r") as f:
+                    final_program = f.read()
+                with open(code_file, "r") as f:
+                    final_code = f.read()
+            except Exception as e:
+                rprint(f"[yellow]Warning: Could not read final files: {e}[/yellow]")
+            return True, final_program, final_code, 0, 0.0, "N/A"
 
     # Step 1: Remove existing error log file
     try:
