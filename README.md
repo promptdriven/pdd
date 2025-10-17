@@ -1713,6 +1713,7 @@ Options:
 - `--output-program LOCATION`: Specify where to save the final program file after verification attempts (even if verification doesn't fully succeed). The default file name is `<program_basename>_verified.<language_extension>`. If an environment variable `PDD_VERIFY_PROGRAM_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--max-attempts INT`: Set the maximum number of fix attempts within the verification loop before giving up (default is 3).
 - `--budget FLOAT`: Set the maximum cost allowed for the entire verification and iterative fixing process (default is $5.0).
+- `--agentic-fallback / --no-agentic-fallback`: Enable or disable the agentic fallback mode (default: enabled).
 
 The command operates iteratively if the initial run of `PROGRAM_FILE` produces output judged incorrect by the LLM based on the `PROMPT_FILE`. After each fix attempt on `CODE_FILE`, `PROGRAM_FILE` is re-run, and its output is re-evaluated. This continues until the output is judged correct, `--max-attempts` is reached, or the `--budget` is exhausted. Intermediate code files may be generated during the loop, similar to the `fix` command.
 

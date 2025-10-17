@@ -42,7 +42,15 @@ ts-node examples/agentic_fallback_example_typescript/src/main.ts 2> examples/age
 Then, run the following command:
 
 ```bash
-pdd crash --loop examples/agentic_fallback_example_typescript/utils_typescript.prompt examples/agentic_fallback_example_typescript/src/utils.ts examples/agentic_fallback_example_typescript/src/main.ts examples/agentic_fallback_example_typescript/crash_error.log
+pdd crash --loop examples/agentic_fallback_example_typescript/main_typescript.prompt examples/agentic_fallback_example_typescript/src/main.ts examples/agentic_fallback_example_typescript/src/main.ts examples/agentic_fallback_example_typescript/crash_error.log
 ```
 
 This command will also invoke a CLI agent to fix the error.
+
+### Using the `verify` command
+
+You can also use the `verify` command to check the code against the prompt and fix it if there are issues.
+
+```bash
+pdd verify examples/agentic_fallback_example_typescript/main_typescript.prompt examples/agentic_fallback_example_typescript/src/main.ts examples/agentic_fallback_example_typescript/src/main.ts
+```

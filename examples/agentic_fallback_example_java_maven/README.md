@@ -42,7 +42,17 @@ cd examples/agentic_fallback_example_java_maven && mvn -q exec:java -Dexec.mainC
 Then, run the following command:
 
 ```bash
-pdd crash --loop examples/agentic_fallback_example_java_maven/util_java.prompt examples/agentic_fallback_example_java_maven/src/main/java/Util.java examples/agentic_fallback_example_java_maven/src/main/java/Main.java examples/agentic_fallback_example_java_maven/crash_error.log
+pdd crash --loop examples/agentic_fallback_example_java_maven/main_java.prompt examples/agentic_fallback_example_java_maven/src/main/java/Main.java examples/agentic_fallback_example_java_maven/src/main/java/Main.java examples/agentic_fallback_example_java_maven/crash_error.log
 ```
 
 This command will also invoke a CLI agent to fix the error.
+
+### Using the `verify` command
+
+You can also use the `verify` command to check the code against the prompt and attempt to fix it.
+
+```bash
+pdd verify examples/agentic_fallback_example_java_maven/main_java.prompt examples/agentic_fallback_example_java_maven/src/main/java/Main.java examples/agentic_fallback_example_java_maven/src/main/java/Main.java
+```
+
+**Note:** The `verify` command's automated loop may not work correctly for this Java project because it requires a Maven build step. After running the command, you should manually run `mvn exec:java -Dexec.mainClass="Main"` from within the `examples/agentic_fallback_example_java_maven` directory to confirm that the fix was successful.
