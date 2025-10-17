@@ -17,6 +17,7 @@ Agentic fallback is a feature that allows the debugging agent to read files acro
 
 ## Running the Example
 
+### Using the `fix` command
 To fix the error in `main.ts` using agentic fallback, you would typically run a command that invokes a CLI agent. The exact command depends on the tool you are using. For example, with `pdd`, the command would look something like this:
 
 ```bash
@@ -29,3 +30,19 @@ pdd fix examples/agentic_fallback_example_typescript/main_typescript.prompt \
 ```
 
 This command will invoke a CLI agent that will use agentic fallback to read `utils.ts`, understand the dependency, and fix the error in `main.ts`.
+
+### Using the `crash` command
+
+Alternatively, you can use the `crash` command. First, run the program to generate an error log:
+
+```bash
+ts-node examples/agentic_fallback_example_typescript/src/main.ts 2> examples/agentic_fallback_example_typescript/crash_error.log
+```
+
+Then, run the following command:
+
+```bash
+pdd crash --loop examples/agentic_fallback_example_typescript/utils_typescript.prompt examples/agentic_fallback_example_typescript/src/utils.ts examples/agentic_fallback_example_typescript/src/main.ts examples/agentic_fallback_example_typescript/crash_error.log
+```
+
+This command will also invoke a CLI agent to fix the error.
