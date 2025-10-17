@@ -5,6 +5,39 @@ import sys
 from pathlib import Path
 from typing import Tuple, Optional, Union
 from . import DEFAULT_TIME # Added DEFAULT_TIME
+from .agentic_fix import run_agentic_fix
+
+def _normalize_agentic_result(result):
+    """
+    Normalize run_agentic_fix result into: (success: bool, msg: str, cost: float, model: str)
+    Handles older 2/3-tuple shapes used by tests/monkeypatches.
+    """
+    if isinstance(result, tuple):
+        if len(result) == 4:
+            ok, msg, cost, model = result
+            return bool(ok), str(msg), float(cost), str(model or "agentic-cli")
+        if len(result) == 3:
+            ok, msg, cost = result
+            return bool(ok), str(msg), float(cost), "agentic-cli"
+        if len(result) == 2:
+            ok, msg = result
+            return bool(ok), str(msg), 0.0, "agentic-cli"
+    # Fallback (shouldn't happen)
+    return False, "Invalid agentic result shape", 0.0, "agentic-cli"
+
+def _safe_run_agentic_fix(*, prompt_file, code_file, unit_test_file, error_log_file):
+    """
+    Call (possibly monkeypatched) run_agentic_fix and normalize its return.
+    """
+    if not prompt_file:
+        return False, "Agentic fix requires a valid prompt file.", 0.0, "agentic-cli"
+    res = run_agentic_fix(
+        prompt_file=prompt_file,
+        code_file=code_file,
+        unit_test_file=unit_test_file,
+        error_log_file=error_log_file,
+    )
+    return _normalize_agentic_result(res)
 
 # Use Rich for pretty printing to the console
 from rich.console import Console
@@ -38,6 +71,8 @@ def fix_code_loop(
     error_log_file: str,
     verbose: bool = False,
     time: float = DEFAULT_TIME,
+    prompt_file: str = "",
+    agentic_fallback: bool = True,
 ) -> Tuple[bool, str, str, int, float, Optional[str]]:
     """
     Attempts to fix errors in a code module through multiple iterations.
@@ -53,6 +88,8 @@ def fix_code_loop(
         error_log_file: Path to the error log file.
         verbose: Enable detailed logging (default: False).
         time: Time limit for the LLM calls (default: DEFAULT_TIME).
+        prompt_file: Path to the prompt file.
+        agentic_fallback: Enable agentic fallback if the primary fix mechanism fails.
 
     Returns:
         Tuple containing the following in order:
@@ -385,6 +422,22 @@ def fix_code_loop(
              if attempts < max_attempts:
                  final_attempts_reported += 1
 
+    if not success and agentic_fallback:
+        agent_success, _msg, agent_cost, agent_model = _safe_run_agentic_fix(
+            prompt_file=prompt_file,
+            code_file=code_file,
+            unit_test_file=verification_program,
+            error_log_file=error_log_file,
+        )
+        total_cost += agent_cost
+        if agent_success:
+            model_name = agent_model or model_name
+            try:
+                final_code_content = Path(code_file).read_text(encoding='utf-8')
+                final_program_content = Path(verification_program).read_text(encoding='utf-8')
+            except Exception as e:
+                rprint(f"[yellow]Warning: Could not read files after successful agentic fix: {e}[/yellow]")
+            success = True
 
     return (
         success,

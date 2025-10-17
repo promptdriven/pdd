@@ -456,7 +456,7 @@ Here is a brief overview of the main commands provided by PDD. Click the command
 - **[`update`](#9-update)**: Updates the original prompt file based on modified code.
 - **[`detect`](#10-detect)**: Analyzes prompts to determine which ones need changes based on a description.
 - **[`conflicts`](#11-conflicts)**: Finds and suggests resolutions for conflicts between two prompt files.
-- **[`crash`](#12-crash)**: Fixes errors in a code module and its calling program that caused a crash.
+- **[`crash`](#12-crash)**: Fixes errors in a code module and its calling program that caused a crash. Includes an agentic fallback mode for complex errors.
 - **[`trace`](#13-trace)**: Finds the corresponding line number in a prompt file for a given code line.
 - **[`bug`](#14-bug)**: Generates a unit test based on observed vs. desired program outputs.
 - **[`auto-deps`](#15-auto-deps)**: Analyzes and inserts needed dependencies into a prompt file.
@@ -1481,6 +1481,8 @@ pdd [GLOBAL OPTIONS] update factorial_calculator_python.prompt src/modified_fact
 
 #### Agentic Fallback Mode
 
+(This feature is also available for the `crash` command.)
+
 For particularly difficult bugs that the standard iterative fix process cannot resolve, `pdd fix` offers a powerful agentic fallback mode. When activated, it invokes a project-aware CLI agent to attempt a fix with a much broader context.
 
 **How it Works:**
@@ -1595,8 +1597,11 @@ Options:
 - `--loop`: Enable iterative fixing process.
   - `--max-attempts INT`: Set the maximum number of fix attempts before giving up (default is 3).
   - `--budget FLOAT`: Set the maximum cost allowed for the fixing process (default is $5.0).
+- `--agentic-fallback / --no-agentic-fallback`: Enable or disable the agentic fallback mode (default: enabled).
 
 When the `--loop` option is used, the crash command will attempt to fix errors through multiple iterations. It will use the program to check if the code runs correctly after each fix attempt. The process will continue until either the errors are fixed, the maximum number of attempts is reached, or the budget is exhausted.
+
+If the iterative process fails, the agentic fallback mode will be triggered (unless disabled with `--no-agentic-fallback`). This mode uses a project-aware CLI agent to attempt a fix with a broader context. For this to work, you need to have at least one of the supported agent CLIs (Claude, Gemini, or Codex) installed and the corresponding API key configured in your environment.
 
 Example:
 ```
