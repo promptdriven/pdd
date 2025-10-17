@@ -38,7 +38,15 @@ python examples/agentic_fallback_example/src/main.py 2> examples/agentic_fallbac
 Then, run the following command:
 
 ```bash
-pdd crash --loop examples/agentic_fallback_example/utils_python.prompt examples/agentic_fallback_example/src/utils.py examples/agentic_fallback_example/src/main.py examples/agentic_fallback_example/crash_error.log
+pdd crash --loop examples/agentic_fallback_example/main_python.prompt examples/agentic_fallback_example/src/main.py examples/agentic_fallback_example/src/main.py examples/agentic_fallback_example/crash_error.log
 ```
 
 This command will also invoke a CLI agent to fix the error.
+
+### Using the `verify` command
+
+You can also use the `verify` command to check the code against the prompt and fix it if there are issues.
+
+```bash
+pdd verify examples/agentic_fallback_example/main_python.prompt examples/agentic_fallback_example/src/main.py examples/agentic_fallback_example/src/main.py
+```

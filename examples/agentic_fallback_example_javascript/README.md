@@ -42,7 +42,15 @@ node examples/agentic_fallback_example_javascript/src/main.js 2> examples/agenti
 Then, run the following command:
 
 ```bash
-pdd crash --loop examples/agentic_fallback_example_javascript/utils_javascript.prompt examples/agentic_fallback_example_javascript/src/utils.js examples/agentic_fallback_example_javascript/src/main.js examples/agentic_fallback_example_javascript/crash_error.log
+pdd crash --loop examples/agentic_fallback_example_javascript/main_javascript.prompt examples/agentic_fallback_example_javascript/src/main.js examples/agentic_fallback_example_javascript/src/main.js examples/agentic_fallback_example_javascript/crash_error.log
 ```
 
 This command will also invoke a CLI agent to fix the error.
+
+### Using the `verify` command
+
+You can also use the `verify` command to check the code against the prompt and fix it if there are issues.
+
+```bash
+pdd verify examples/agentic_fallback_example_javascript/main_javascript.prompt examples/agentic_fallback_example_javascript/src/main.js examples/agentic_fallback_example_javascript/src/main.js
+```
