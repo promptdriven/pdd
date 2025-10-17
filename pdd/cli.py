@@ -1581,46 +1581,7 @@ def verify(
         return None # Return None on failure
 
 
-@cli.command("render-architecture")
-@click.argument("architecture_json", type=click.Path(exists=True, dir_okay=False))
-@click.argument("app_name", required=False)
-@click.argument("output_html", required=False)
-def render_architecture(architecture_json: str, app_name: Optional[str], output_html: Optional[str]) -> None:
-    """Render interactive HTML diagram from an architecture.json file.
-
-    Usage:
-        pdd render-architecture architecture.json "My App" output.html
-    """
-    try:
-        arch_path = Path(architecture_json)
-        if not arch_path.is_file():
-            raise FileNotFoundError(str(arch_path))
-
-        with arch_path.open("r", encoding="utf-8") as f:
-            architecture = __import__("json").load(f)
-
-        app = app_name if app_name else "System Architecture"
-        out = output_html if output_html else f"{arch_path.stem}_diagram.html"
-
-        mermaid_code = generate_mermaid_code(architecture, app)
-        html_doc = generate_html(mermaid_code, architecture, app)
-
-        out_path = Path(out)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(html_doc, encoding="utf-8")
-
-        print(f"✅ Generated: {out_path}")
-        print(f"📊 Modules: {len(architecture)}")
-        print(f"🌐 Open {out_path} in your browser!")
-    except FileNotFoundError as e:
-        console.print(f"Error: Input file not found: {e}", style="error")
-        raise SystemExit(1)
-    except __import__("json").JSONDecodeError as e:
-        console.print(f"Error: Failed to decode JSON from {architecture_json}. Please check for syntax errors.", style="error")
-        raise SystemExit(1)
-    except Exception as e:
-        handle_error(e, "render-architecture", False)
-        raise SystemExit(1)
+## Removed 'render-architecture' command per review preference to avoid adding top-level commands.
 
 @cli.command("sync")
 @click.argument("basename", type=str)
