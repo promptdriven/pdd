@@ -17,6 +17,8 @@ Agentic fallback is a feature that allows the debugging agent to read files acro
 
 ## Running the Example
 
+### Using the `fix` command
+
 To fix the error in `main.py` using agentic fallback, run the following command:
 
 ```bash
@@ -24,3 +26,19 @@ pdd fix examples/agentic_fallback_example/main_python.prompt examples/agentic_fa
 ```
 
 This command will invoke a CLI agent (such as Claude, Gemini, or Codex) that will use agentic fallback to read `utils.py`, understand the dependency, and fix the error in `main.py`.
+
+### Using the `crash` command
+
+Alternatively, you can use the `crash` command. First, run the program to generate an error log:
+
+```bash
+python examples/agentic_fallback_example/src/main.py 2> examples/agentic_fallback_example/crash_error.log
+```
+
+Then, run the following command:
+
+```bash
+pdd crash --loop examples/agentic_fallback_example/utils_python.prompt examples/agentic_fallback_example/src/utils.py examples/agentic_fallback_example/src/main.py examples/agentic_fallback_example/crash_error.log
+```
+
+This command will also invoke a CLI agent to fix the error.
