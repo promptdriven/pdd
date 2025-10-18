@@ -20,14 +20,15 @@
 ## Extension Features
 
 ### PDD CLI Integration
-* **Smart Installation System**: Detects existing installations across uv tools, conda environments, and pip
-* **User Choice**: Offers uv (recommended) or pip installation
+* **uv-Only Installation**: Simple, reliable installation using uv (the modern Python package manager)
+* **Smart Detection**: Detects existing installations across uv tools and common paths
+* **Automatic uv Setup**: Installs uv automatically if not present
 * **Cross-Platform**: Works on macOS, Linux, and Windows
 * **Command Palette Integration**: 
-  - `PDD: Install PDD CLI` - Smart installation with user choice
+  - `PDD: Install PDD CLI` - Install PDD CLI using uv
   - `PDD: Check PDD CLI Installation` - Verify installation status
   - `PDD: Run PDD Setup` - Configure API keys and settings
-  - `PDD: Upgrade PDD to uv Installation` - Migrate from pip to uv
+  - `PDD: Upgrade PDD to uv Installation` - Ensure using latest uv-based installation
 
 ## Make changes
 

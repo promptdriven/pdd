@@ -10,8 +10,8 @@ Why this matters: AI agents can draft code in seconds, but teams often spend hou
 
 - Syntax highlighting for `.prompt` files
 - Language configuration for predictable editing (comments, brackets)
-- PDD CLI installation with user choice between uv (recommended) and pip
-- Automatic detection across multiple installation methods (uv tools, conda environments, pip)
+- PDD CLI installation using uv (the modern Python package manager)
+- Automatic detection across multiple installation methods (uv tools and common paths)
 - Works alongside `pdd` CLI to turn prompts into code
 
 Learn more:
@@ -60,38 +60,29 @@ New in v0.0.3: The extension now provides an intelligent installation system tha
 #### Automatic Detection
 The extension automatically detects if PDD CLI is installed via:
 - uv tools (recommended method)
-- Conda environments
-- pip installations
 - Direct PATH installations
+- Common installation paths (including base anaconda/miniconda environments)
 
-#### Installation Options
-When PDD CLI is not found, you'll see a friendly prompt with options:
+#### Installation
+When PDD CLI is not found, the extension will prompt to install it using uv (the modern Python package manager). If uv isn't installed, the extension will install it first with your permission.
 
-1. Install with uv (recommended) - Modern Python package manager
-   - Latest PDD CLI version with all features
-   - Faster installation and updates
-   - Isolated tool environment
-   - If uv isn't installed, the extension will install it first with your permission
-
-2. Install with pip - Traditional fallback method
-   - Works with existing Python installations
-   - May install older versions
-   - Compatible with conda and virtual environments
-
-3. Manual installation - For other platforms or custom setups
+Benefits of uv:
+- Latest PDD CLI version with all features
+- Faster installation and updates
+- Isolated tool environment
+- Modern Python package management
 
 #### Available Commands
-- `PDD: Install PDD CLI` - installation with user choice
+- `PDD: Install PDD CLI` - Install PDD CLI using uv
 - `PDD: Check PDD CLI Installation` - Verify current installation
 - `PDD: Run PDD Setup` - Configure API keys and settings
-- `PDD: Upgrade PDD to uv Installation` - Migrate from pip to uv
+- `PDD: Upgrade PDD to uv Installation` - Ensure using latest uv-based installation
 
 ### Manual Installation
 
 For custom setups or manual installation:
 - Getting started with PDD CLI: https://github.com/promptdriven/pdd#readme
 - uv installation: `uv tool install pdd-cli`
-- pip installation: `pip install pdd-cli`
 
 ## Get Started
 
@@ -103,11 +94,11 @@ Extension contributes:
 
 - Custom language support for `.prompt`
 - File association and syntax highlighting
-- PDD CLI installation with multiple installation methods
+- PDD CLI installation using uv
 - Cross-platform support (macOS, Linux, Windows)
-- User choice between uv (recommended) and pip installation
-- Automatic environment detection (uv tools, conda, pip)
+- Automatic environment detection (uv tools, common paths)
 - Command palette integration for PDD operations
+- Toast notifications for better user experience
 - Optional setup - users can configure when ready
 
 ## Release Notes
@@ -115,13 +106,14 @@ Extension contributes:
 ### 0.0.3
 
 - New Installation System
-  - Detection across multiple installation methods (uv tools, conda environments, pip)
-  - User choice between uv (recommended) and pip installation
+  - uv-only installation: Removed pip support for simpler, more reliable installation
+  - Detection across multiple installation methods (uv tools, common paths)
   - Automatic uv installation with user consent
   - Cross-platform support (macOS, Linux, Windows)
-  - Friendly installation prompts without warnings
+  - Toast notifications instead of modal dialogs for better UX
   - Optional setup - no longer automatically runs after installation
-  - New "Upgrade to uv Installation" command for pip users
+  - New "Upgrade to uv Installation" command to ensure latest installation
+  - Comprehensive test suite (34 passing tests)
   - Error handling and fallback options
 
 ### 0.0.2

@@ -12,12 +12,18 @@
 //   • User cancels selection -> should return and show cancellation message
 //   • User selects uv, uv available -> install via uv
 //   • User selects uv, uv not available, uv installation succeeds -> install via uv full or PATH
-//   • User selects uv, uv install fails -> installation fails and user is notified
+//   • User selects uv, uv install fails -> fallback to pip
+//   • User selects pip -> use fallback command and succeed
 //   • Proper success messages and actionable buttons handled
 // - runPddSetup flows:
-//   • uv tool path exists -> use full path to uv tool
+//   • Conda environment exists -> activates conda and runs setup
+//   • Conda env not found, uv tool path exists -> use full path
 //   • uv tool path not found, uv exists -> use uv tool run
 //   • Neither found -> fallback to pdd in PATH
+// - getFallbackInstallCommand:
+//   • Conda present with pdd env -> returns conda run pip
+//   • Conda present without pdd env, valid python found -> returns python -m pip
+//   • No python compatible -> throws
 // - upgradeToUvInstallation:
 //   • PDD not installed -> shows warning and returns
 //   • PDD installed, uv available and pdd-cli already via uv -> shows info and returns
