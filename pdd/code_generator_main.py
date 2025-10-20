@@ -6,6 +6,8 @@ import pathlib
 import shlex
 import subprocess
 import requests
+import tempfile
+import sys
 from typing import Optional, Tuple, Dict, Any, List
 
 import click
@@ -20,6 +22,7 @@ from .preprocess import preprocess as pdd_preprocess
 from .code_generator import code_generator as local_code_generator_func
 from .incremental_code_generator import incremental_code_generator as incremental_code_generator_func
 from .get_jwt_token import get_jwt_token, AuthError, NetworkError, TokenError, UserCancelledError, RateLimitError
+from .python_env_detector import detect_host_python_executable
 
 # Environment variable names for Firebase/GitHub auth
 FIREBASE_API_KEY_ENV_VAR = "NEXT_PUBLIC_FIREBASE_API_KEY" 
@@ -463,7 +466,122 @@ def code_generator_main(
         can_attempt_incremental = False
 
     try:
-        if can_attempt_incremental and existing_code_content is not None and original_prompt_content_for_incremental is not None:
+        # Determine template-driven switches
+        llm_enabled: bool = True
+        post_process_script: Optional[str] = None
+        prompt_body_for_script: str = prompt_content
+
+        # Allow environment override for LLM toggle when front matter omits it
+        env_llm_raw = None
+        try:
+            if env_vars and 'llm' in env_vars:
+                env_llm_raw = str(env_vars.get('llm'))
+            elif os.environ.get('llm') is not None:
+                env_llm_raw = os.environ.get('llm')
+            elif os.environ.get('LLM') is not None:
+                env_llm_raw = os.environ.get('LLM')
+        except Exception:
+            env_llm_raw = None
+
+        if fm_meta and isinstance(fm_meta, dict):
+            try:
+                if 'llm' in fm_meta:
+                    llm_enabled = bool(fm_meta.get('llm', True))
+                elif env_llm_raw is not None:
+                    llm_enabled = str(env_llm_raw).strip().lower() in {"1", "true", "yes", "on"}
+            except Exception:
+                llm_enabled = True
+        elif env_llm_raw is not None:
+            try:
+                llm_enabled = str(env_llm_raw).strip().lower() in {"1", "true", "yes", "on"}
+            except Exception:
+                llm_enabled = True
+        # Resolve post-process script from env/CLI override, then front matter, then sensible default per template
+        try:
+            post_process_script = None
+            script_override = None
+            if env_vars:
+                script_override = env_vars.get('POST_PROCESS_PYTHON') or env_vars.get('post_process_python')
+            if not script_override:
+                script_override = os.environ.get('POST_PROCESS_PYTHON') or os.environ.get('post_process_python')
+
+            if script_override and str(script_override).strip():
+                expanded = _expand_vars(str(script_override), env_vars)
+                pkg_dir = pathlib.Path(__file__).parent.resolve()
+                repo_root = pathlib.Path.cwd().resolve()
+                repo_pdd_dir = (repo_root / 'pdd').resolve()
+                candidate = pathlib.Path(expanded)
+                if not candidate.is_absolute():
+                    # 1) As provided, relative to CWD
+                    as_is = (repo_root / candidate)
+                    # 2) Under repo pdd/
+                    under_repo_pdd = (repo_pdd_dir / candidate.name) if not as_is.exists() else as_is
+                    # 3) Under installed package dir
+                    under_pkg = (pkg_dir / candidate.name) if not as_is.exists() and not under_repo_pdd.exists() else as_is
+                    if as_is.exists():
+                        candidate = as_is
+                    elif under_repo_pdd.exists():
+                        candidate = under_repo_pdd
+                    elif under_pkg.exists():
+                        candidate = under_pkg
+                    else:
+                        candidate = as_is  # will fail later with not found
+                post_process_script = str(candidate.resolve())
+            elif fm_meta and isinstance(fm_meta, dict):
+                raw_script = fm_meta.get('post_process_python')
+                if isinstance(raw_script, str) and raw_script.strip():
+                    # Expand variables like $VAR and ${VAR}
+                    expanded = _expand_vars(raw_script, env_vars)
+                    pkg_dir = pathlib.Path(__file__).parent.resolve()
+                    repo_root = pathlib.Path.cwd().resolve()
+                    repo_pdd_dir = (repo_root / 'pdd').resolve()
+                    candidate = pathlib.Path(expanded)
+                    if not candidate.is_absolute():
+                        as_is = (repo_root / candidate)
+                        under_repo_pdd = (repo_pdd_dir / candidate.name) if not as_is.exists() else as_is
+                        under_pkg = (pkg_dir / candidate.name) if not as_is.exists() and not under_repo_pdd.exists() else as_is
+                        if as_is.exists():
+                            candidate = as_is
+                        elif under_repo_pdd.exists():
+                            candidate = under_repo_pdd
+                        elif under_pkg.exists():
+                            candidate = under_pkg
+                        else:
+                            candidate = as_is
+                    post_process_script = str(candidate.resolve())
+            # Fallback default: for architecture template, use built-in render_mermaid.py
+            if not post_process_script:
+                try:
+                    prompt_str = str(prompt_file)
+                    looks_like_arch_template = (
+                        (isinstance(prompt_file, str) and (
+                            prompt_str.endswith("architecture/architecture_json.prompt") or
+                            prompt_str.endswith("architecture/architecture_json") or
+                            "architecture_json.prompt" in prompt_str or
+                            "architecture/architecture_json" in prompt_str
+                        ))
+                    )
+                    looks_like_arch_output = (
+                        bool(output_path) and pathlib.Path(str(output_path)).name == 'architecture.json'
+                    )
+                    if looks_like_arch_template or looks_like_arch_output:
+                        pkg_dir = pathlib.Path(__file__).parent
+                        repo_pdd_dir = pathlib.Path.cwd() / 'pdd'
+                        if (pkg_dir / 'render_mermaid.py').exists():
+                            post_process_script = str((pkg_dir / 'render_mermaid.py').resolve())
+                        elif (repo_pdd_dir / 'render_mermaid.py').exists():
+                            post_process_script = str((repo_pdd_dir / 'render_mermaid.py').resolve())
+                except Exception:
+                    post_process_script = None
+            if verbose:
+                console.print(f"[blue]Post-process script resolved to:[/blue] {post_process_script if post_process_script else 'None'}")
+        except Exception:
+            post_process_script = None
+        # If LLM is disabled but no post-process script is provided, surface a helpful error
+        if not llm_enabled and not post_process_script:
+            console.print("[red]Error: llm: false requires 'post_process_python' to be specified in front matter.[/red]")
+            return "", was_incremental_operation, total_cost, "error"
+        if llm_enabled and can_attempt_incremental and existing_code_content is not None and original_prompt_content_for_incremental is not None:
             if verbose:
                 console.print(Panel("Attempting incremental code generation...", title="[blue]Mode[/blue]", expand=False))
 
@@ -514,7 +632,7 @@ def code_generator_main(
             elif verbose:
                 console.print(Panel(f"Incremental update successful. Model: {model_name}, Cost: ${total_cost:.6f}", title="[green]Incremental Success[/green]", expand=False))
 
-        if not was_incremental_operation: # Full generation path
+        if llm_enabled and not was_incremental_operation: # Full generation path
             if verbose:
                 console.print(Panel("Performing full code generation...", title="[blue]Mode[/blue]", expand=False))
             
@@ -600,6 +718,144 @@ def code_generator_main(
                 if verbose:
                     console.print(Panel(f"Full generation successful. Model: {model_name}, Cost: ${total_cost:.6f}", title="[green]Local Success[/green]", expand=False))
         
+        # Optional post-process Python hook (runs after LLM when enabled, or standalone when LLM is disabled)
+        if post_process_script:
+            try:
+                python_executable = detect_host_python_executable()
+                # Choose stdin for the script: LLM output if available and enabled, else prompt body
+                stdin_payload = generated_code_content if (llm_enabled and generated_code_content is not None) else prompt_body_for_script
+                env = os.environ.copy()
+                env['PDD_LANGUAGE'] = str(language or '')
+                env['PDD_OUTPUT_PATH'] = str(output_path or '')
+                env['PDD_PROMPT_FILE'] = str(pathlib.Path(prompt_file).resolve())
+                env['PDD_LLM'] = '1' if llm_enabled else '0'
+                try:
+                    env['PDD_ENV_VARS'] = json.dumps(env_vars or {})
+                except Exception:
+                    env['PDD_ENV_VARS'] = '{}'
+                # If front matter provides args, run in argv mode with a temp input file
+                fm_args = None
+                try:
+                    # Env/CLI override for args (comma-separated or JSON list)
+                    raw_args_env = None
+                    if env_vars:
+                        raw_args_env = env_vars.get('POST_PROCESS_ARGS') or env_vars.get('post_process_args')
+                    if not raw_args_env:
+                        raw_args_env = os.environ.get('POST_PROCESS_ARGS') or os.environ.get('post_process_args')
+
+                    if raw_args_env:
+                        s = str(raw_args_env).strip()
+                        parsed_list = None
+                        if s.startswith('[') and s.endswith(']'):
+                            try:
+                                parsed = json.loads(s)
+                                if isinstance(parsed, list):
+                                    parsed_list = [str(a) for a in parsed]
+                            except Exception:
+                                parsed_list = None
+                        if parsed_list is None:
+                            if ',' in s:
+                                parsed_list = [part.strip() for part in s.split(',') if part.strip()]
+                            else:
+                                parsed_list = [part for part in s.split() if part]
+                        fm_args = parsed_list or None
+                    if fm_args is None:
+                        raw_args = fm_meta.get('post_process_args') if isinstance(fm_meta, dict) else None
+                        if isinstance(raw_args, list):
+                            fm_args = [str(a) for a in raw_args]
+                except Exception:
+                    fm_args = None
+
+                proc = None
+                temp_input_path = None
+                try:
+                    if fm_args is None:
+                        # Provide sensible default args for architecture template with render_mermaid.py
+                        try:
+                            if post_process_script and pathlib.Path(post_process_script).name == 'render_mermaid.py':
+                                if isinstance(prompt_file, str) and prompt_file.endswith('architecture/architecture_json.prompt'):
+                                    fm_args = ["{INPUT_FILE}", "{APP_NAME}", "{OUTPUT_HTML}"]
+                        except Exception:
+                            pass
+
+                    if fm_args:
+                        # Write payload to a temp file for scripts expecting a file path input
+                        suffix = '.json' if (isinstance(language, str) and str(language).lower().strip() == 'json') or (output_path and str(output_path).lower().endswith('.json')) else '.txt'
+                        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=suffix, encoding='utf-8') as tf:
+                            tf.write(stdin_payload or '')
+                            temp_input_path = tf.name
+                        env['PDD_POSTPROCESS_INPUT_FILE'] = temp_input_path
+
+                        # Compute placeholder values
+                        app_name_val = (env_vars or {}).get('APP_NAME') if env_vars else None
+                        if not app_name_val:
+                            app_name_val = 'System Architecture'
+                        output_html_default = None
+                        if output_path and str(output_path).lower().endswith('.json'):
+                            output_html_default = str(pathlib.Path(output_path).with_name(f"{pathlib.Path(output_path).stem}_diagram.html").resolve())
+
+                        placeholder_map = {
+                            'INPUT_FILE': temp_input_path or '',
+                            'OUTPUT': str(output_path or ''),
+                            'PROMPT_FILE': str(pathlib.Path(prompt_file).resolve()),
+                            'APP_NAME': str(app_name_val),
+                            'OUTPUT_HTML': str(output_html_default or ''),
+                        }
+
+                        def _subst_arg(arg: str) -> str:
+                            # First expand $VARS using existing helper, then {TOKENS}
+                            expanded = _expand_vars(arg, env_vars)
+                            for key, val in placeholder_map.items():
+                                expanded = expanded.replace('{' + key + '}', val)
+                            return expanded
+
+                        args_list = [_subst_arg(a) for a in fm_args]
+                        if verbose:
+                            console.print(Panel(f"Post-process hook (argv)\nScript: {post_process_script}\nArgs: {args_list}", title="[blue]Post-process[/blue]", expand=False))
+                        proc = subprocess.run(
+                            [python_executable, post_process_script] + args_list,
+                            text=True,
+                            capture_output=True,
+                            timeout=300,
+                            cwd=str(pathlib.Path(post_process_script).parent),
+                            env=env
+                        )
+                    else:
+                        # Run the script with stdin payload, capture stdout as final content
+                        if verbose:
+                            console.print(Panel(f"Post-process hook (stdin)\nScript: {post_process_script}", title="[blue]Post-process[/blue]", expand=False))
+                        proc = subprocess.run(
+                            [python_executable, post_process_script],
+                            input=stdin_payload or '',
+                            text=True,
+                            capture_output=True,
+                            timeout=300,
+                            cwd=str(pathlib.Path(post_process_script).parent),
+                            env=env
+                        )
+                finally:
+                    if temp_input_path:
+                        try:
+                            os.unlink(temp_input_path)
+                        except Exception:
+                            pass
+                if proc and proc.returncode == 0:
+                    if verbose:
+                        console.print(Panel(f"Post-process success (rc=0)\nstdout: {proc.stdout[:150]}\nstderr: {proc.stderr[:150]}", title="[green]Post-process[/green]", expand=False))
+                    # Do not modify generated_code_content to preserve architecture.json
+                else:
+                    rc = getattr(proc, 'returncode', 'N/A')
+                    err = getattr(proc, 'stderr', '')
+                    console.print(f"[yellow]Post-process failed (rc={rc}). Stderr:\n{err[:500]}[/yellow]")
+            except FileNotFoundError:
+                console.print(f"[yellow]Post-process script not found: {post_process_script}. Skipping.[/yellow]")
+            except FileNotFoundError:
+                console.print(f"[yellow]Post-process script not found: {post_process_script}. Skipping.[/yellow]")
+            except subprocess.TimeoutExpired:
+                console.print("[yellow]Post-process script timed out. Skipping.[/yellow]")
+            except Exception as e:
+                console.print(f"[yellow]Post-process script error: {e}. Skipping.[/yellow]")
+
         if generated_code_content is not None:
             # Optional output_schema JSON validation before writing
             try:
@@ -628,6 +884,39 @@ def code_generator_main(
                 p_output.write_text(generated_code_content, encoding="utf-8")
                 if verbose or not quiet:
                     console.print(f"Generated code saved to: [green]{p_output.resolve()}[/green]")
+                # Safety net: ensure architecture HTML is generated post-write if applicable
+                try:
+                    # Prefer resolved script if available; else default for architecture outputs
+                    script_path2 = post_process_script
+                    if not script_path2:
+                        looks_like_arch_output2 = pathlib.Path(str(p_output)).name == 'architecture.json'
+                        if looks_like_arch_output2:
+                            pkg_dir2 = pathlib.Path(__file__).parent
+                            repo_pdd_dir2 = pathlib.Path.cwd() / 'pdd'
+                            if (pkg_dir2 / 'render_mermaid.py').exists():
+                                script_path2 = str((pkg_dir2 / 'render_mermaid.py').resolve())
+                            elif (repo_pdd_dir2 / 'render_mermaid.py').exists():
+                                script_path2 = str((repo_pdd_dir2 / 'render_mermaid.py').resolve())
+                    if script_path2 and pathlib.Path(script_path2).exists():
+                        app_name2 = os.environ.get('APP_NAME') or (env_vars or {}).get('APP_NAME') or 'System Architecture'
+                        out_html2 = os.environ.get('POST_PROCESS_OUTPUT') or str(p_output.with_name(f"{p_output.stem}_diagram.html").resolve())
+                        # Only run if HTML not present yet
+                        if not pathlib.Path(out_html2).exists():
+                            try:
+                                py_exec2 = detect_host_python_executable()
+                            except Exception:
+                                py_exec2 = sys.executable
+                            if verbose:
+                                console.print(Panel(f"Safety net post-process\nScript: {script_path2}\nArgs: {[str(p_output.resolve()), app_name2, out_html2]}", title="[blue]Post-process[/blue]", expand=False))
+                            sp2 = subprocess.run([py_exec2, script_path2, str(p_output.resolve()), app_name2, out_html2],
+                                                 capture_output=True, text=True, cwd=str(pathlib.Path(script_path2).parent))
+                            if sp2.returncode == 0 and not quiet:
+                                print(f"✅ Generated: {out_html2}")
+                            elif verbose:
+                                console.print(f"[yellow]Safety net failed (rc={sp2.returncode}). stderr:\n{sp2.stderr[:300]}[/yellow]")
+                except Exception:
+                    pass
+                # Post-step now runs regardless of LLM value via the general post-process hook above.
             elif not quiet:
                 # No destination resolved; surface the generated code directly to the console.
                 console.print(Panel(Text(generated_code_content, overflow="fold"), title="[cyan]Generated Code[/cyan]", expand=False))
