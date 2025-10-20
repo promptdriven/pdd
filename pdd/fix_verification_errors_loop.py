@@ -187,59 +187,37 @@ def fix_verification_errors_loop(
         
         verify_result = subprocess.run(verify_cmd, capture_output=True, text=True, shell=True)
         pytest_output = (verify_result.stdout or "") + "\n" + (verify_result.stderr or "")
-        if verify_result.returncode != 0:
-            console.print("[cyan]Non-Python target failed initial verification. Triggering agentic fallback...[/cyan]")
-            with open(verification_log_file, "w") as f:
-                f.write(pytest_output)
-            
-            success, _msg, agent_cost, agent_model = _safe_run_agentic_fix(
-                prompt_file=prompt_file,
-                code_file=code_file,
-                unit_test_file=verification_program,
-                error_log_file=verification_log_file,
-            )
-            final_program = ""
-            final_code = ""
-            try:
-                with open(verification_program, "r") as f:
-                    final_program = f.read()
-            except Exception:
-                pass
-            try:
-                with open(code_file, "r") as f:
-                    final_code = f.read()
-            except Exception:
-                pass
-            return {
-                "success": success,
-                "final_program": final_program,
-                "final_code": final_code,
-                "total_attempts": 1,
-                "total_cost": agent_cost,
-                "model_name": agent_model,
-                "statistics": {},
-            }
-        else:
-            # Non-python tests passed, so we are successful.
-            console.print("[green]Non-Python tests passed. No fix needed.[/green]")
-            try:
-                final_program = ""
-                final_code = ""
-                with open(verification_program, "r") as f:
-                    final_program = f.read()
-                with open(code_file, "r") as f:
-                    final_code = f.read()
-            except Exception as e:
-                console.print(f"[yellow]Warning: Could not read final files: {e}[/yellow]")
-            return {
-                "success": True,
-                "final_program": final_program,
-                "final_code": final_code,
-                "total_attempts": 0,
-                "total_cost": 0.0,
-                "model_name": "N/A",
-                "statistics": {},
-            }
+        console.print("[cyan]Non-Python target detected. Triggering agentic fallback...[/cyan]")
+        with open(verification_log_file, "w") as f:
+            f.write(pytest_output)
+        
+        success, _msg, agent_cost, agent_model = _safe_run_agentic_fix(
+            prompt_file=prompt_file,
+            code_file=code_file,
+            unit_test_file=verification_program,
+            error_log_file=verification_log_file,
+        )
+        final_program = ""
+        final_code = ""
+        try:
+            with open(verification_program, "r") as f:
+                final_program = f.read()
+        except Exception:
+            pass
+        try:
+            with open(code_file, "r") as f:
+                final_code = f.read()
+        except Exception:
+            pass
+        return {
+            "success": success,
+            "final_program": final_program,
+            "final_code": final_code,
+            "total_attempts": 1,
+            "total_cost": agent_cost,
+            "model_name": agent_model,
+            "statistics": {},
+        }
 
     program_path = Path(program_file).resolve()
     code_path = Path(code_file).resolve()
