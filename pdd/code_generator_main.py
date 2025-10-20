@@ -857,9 +857,24 @@ def code_generator_main(
                 console.print(f"[yellow]Post-process script error: {e}. Skipping.[/yellow]")
 
         if generated_code_content is not None:
-            # Optional output_schema JSON validation before writing
+            # Optional output_schema JSON validation before writing (opt-in)
             try:
-                if fm_meta and isinstance(fm_meta.get("output_schema"), dict):
+                should_validate_schema = False
+                # Front-matter toggle takes precedence if provided
+                try:
+                    if fm_meta and isinstance(fm_meta.get("validate_output_schema"), bool):
+                        should_validate_schema = bool(fm_meta.get("validate_output_schema"))
+                except Exception:
+                    should_validate_schema = False
+                # Environment override (if set) supersedes front-matter
+                try:
+                    env_validate = os.environ.get("PDD_VALIDATE_OUTPUT_SCHEMA")
+                    if env_validate is not None:
+                        should_validate_schema = str(env_validate).strip().lower() in {"1", "true", "yes", "on"}
+                except Exception:
+                    pass
+
+                if should_validate_schema and fm_meta and isinstance(fm_meta.get("output_schema"), dict):
                     is_json_output = False
                     if isinstance(language, str) and str(language).lower().strip() == "json":
                         is_json_output = True
