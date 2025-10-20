@@ -874,26 +874,27 @@ def code_generator_main(
                 console.print(f"[yellow]Post-process script error: {e}. Skipping.[/yellow]")
 
         if generated_code_content is not None:
-            # Optional output_schema JSON validation before writing
-            try:
-                if fm_meta and isinstance(fm_meta.get("output_schema"), dict):
-                    is_json_output = False
-                    if isinstance(language, str) and str(language).lower().strip() == "json":
-                        is_json_output = True
-                    elif output_path and str(output_path).lower().endswith(".json"):
-                        is_json_output = True
-                    if is_json_output:
-                        parsed = json.loads(generated_code_content)
-                        try:
-                            import jsonschema  # type: ignore
-                            jsonschema.validate(instance=parsed, schema=fm_meta.get("output_schema"))
-                        except ModuleNotFoundError:
-                            if verbose and not quiet:
-                                console.print("[yellow]jsonschema not installed; skipping schema validation.[/yellow]")
-                        except Exception as ve:
-                            raise click.UsageError(f"Generated JSON does not match output_schema: {ve}")
-            except json.JSONDecodeError as jde:
-                raise click.UsageError(f"Generated output is not valid JSON: {jde}")
+            # Optional output_schema JSON validation before writing (only when LLM ran)
+            if llm_enabled:
+                try:
+                    if fm_meta and isinstance(fm_meta.get("output_schema"), dict):
+                        is_json_output = False
+                        if isinstance(language, str) and str(language).lower().strip() == "json":
+                            is_json_output = True
+                        elif output_path and str(output_path).endswith(".json"):
+                            is_json_output = True
+                        if is_json_output:
+                            parsed = json.loads(generated_code_content)
+                            try:
+                                import jsonschema  # type: ignore
+                                jsonschema.validate(instance=parsed, schema=fm_meta.get("output_schema"))
+                            except ModuleNotFoundError:
+                                if verbose and not quiet:
+                                    console.print("[yellow]jsonschema not installed; skipping schema validation.[/yellow]")
+                            except Exception as ve:
+                                raise click.UsageError(f"Generated JSON does not match output_schema: {ve}")
+                except json.JSONDecodeError as jde:
+                    raise click.UsageError(f"Generated output is not valid JSON: {jde}")
 
             if output_path:
                 p_output = pathlib.Path(output_path)
