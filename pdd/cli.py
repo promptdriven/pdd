@@ -949,6 +949,12 @@ def preprocess(
     default=False,
     help="Automatically submit the example if all unit tests pass.",
 )
+@click.option( 
+    "--agentic-fallback/--no-agentic-fallback",
+    is_flag=True,
+    default=True,
+    help="Enable agentic fallback if the primary fix mechanism fails.",
+)
 @click.pass_context
 @track_cost
 def fix(
@@ -965,6 +971,7 @@ def fix(
     max_attempts: int,
     budget: float,
     auto_submit: bool,
+    agentic_fallback: bool,
 ) -> Optional[Tuple[Dict[str, Any], float, str]]:
     """Fix code based on a prompt and unit test errors."""
     try:
@@ -983,6 +990,7 @@ def fix(
             max_attempts=max_attempts,
             budget=budget,
             auto_submit=auto_submit,
+            agentic_fallback=agentic_fallback,
         )
         result = {
             "success": success,
@@ -1260,6 +1268,12 @@ def conflicts(
     show_default=True,
     help="Maximum cost allowed for the fixing process.",
 )
+@click.option( 
+    "--agentic-fallback/--no-agentic-fallback",
+    is_flag=True,
+    default=True,
+    help="Enable agentic fallback if the primary fix mechanism fails.",
+)
 @click.pass_context
 @track_cost
 def crash(
@@ -1273,6 +1287,7 @@ def crash(
     loop: bool,
     max_attempts: int,
     budget: float,
+    agentic_fallback: bool,
 ) -> Optional[Tuple[Dict[str, Any], float, str]]: # Modified return type
     """Fix errors in a code module and calling program that caused a crash."""
     quiet = ctx.obj.get("quiet", False)
@@ -1289,6 +1304,7 @@ def crash(
             loop=loop,
             max_attempts=max_attempts,
             budget=budget,
+            agentic_fallback=agentic_fallback,
         )
         result_data = {
             "success": success,
@@ -1486,6 +1502,12 @@ def auto_deps(
     show_default=True,
     help="Maximum cost allowed for the verification and fixing process.",
 )
+@click.option(
+    "--agentic-fallback/--no-agentic-fallback",
+    is_flag=True,
+    default=True,
+    help="Enable agentic fallback if the primary fix mechanism fails.",
+)
 @click.pass_context
 @track_cost
 def verify(
@@ -1498,6 +1520,7 @@ def verify(
     output_program: Optional[str],
     max_attempts: int,
     budget: float,
+    agentic_fallback: bool,
 ) -> Optional[Tuple[Dict[str, Any], float, str]]: # Modified return type
     """Verify code correctness against prompt using LLM judgment."""
     quiet = ctx.obj.get("quiet", False)
@@ -1515,6 +1538,7 @@ def verify(
             verification_program=program_file,
             max_attempts=max_attempts,
             budget=budget,
+            agentic_fallback=agentic_fallback,
         )
         result_data = {
             "success": success,

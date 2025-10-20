@@ -1,0 +1,3 @@
+Create a Python project with the following file in a 'src' directory.
+
+ **`src/main.py`**: This file should import `get_greeting` from `utils.py`. It should contain a function `create_user_greeting` that calls `get_greeting` to create a greeting for a user with the name John Doe.

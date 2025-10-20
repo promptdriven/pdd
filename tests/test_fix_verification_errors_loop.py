@@ -80,6 +80,7 @@ sys.exit(0)
         "program_file": str(program_file),
         "code_file": str(code_file),
         "prompt": "Make the code return 'EXPECTED_OK'",
+        "prompt_file": str(tmp_path / "prompt.txt"),
         "verification_program": str(verification_file),
         "strength": 0.5,
         "temperature": 0.1,
