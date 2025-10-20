@@ -488,14 +488,26 @@ def code_generator_main(
                 if 'llm' in fm_meta:
                     llm_enabled = bool(fm_meta.get('llm', True))
                 elif env_llm_raw is not None:
-                    llm_enabled = str(env_llm_raw).strip().lower() in {"1", "true", "yes", "on"}
+                    llm_str = str(env_llm_raw).strip().lower()
+                    if llm_str in {"0", "false", "no", "off"}:
+                        llm_enabled = False
+                    else:
+                        llm_enabled = llm_str in {"1", "true", "yes", "on"}
             except Exception:
                 llm_enabled = True
         elif env_llm_raw is not None:
             try:
-                llm_enabled = str(env_llm_raw).strip().lower() in {"1", "true", "yes", "on"}
+                llm_str = str(env_llm_raw).strip().lower()
+                if llm_str in {"0", "false", "no", "off"}:
+                    llm_enabled = False
+                else:
+                    llm_enabled = llm_str in {"1", "true", "yes", "on"}
             except Exception:
                 llm_enabled = True
+        
+        if verbose:
+            console.print(f"[blue]LLM enabled:[/blue] {llm_enabled}")
+        
         # Resolve post-process script from env/CLI override, then front matter, then sensible default per template
         try:
             post_process_script = None
@@ -779,12 +791,17 @@ def code_generator_main(
                             pass
 
                     if fm_args:
-                        # Write payload to a temp file for scripts expecting a file path input
-                        suffix = '.json' if (isinstance(language, str) and str(language).lower().strip() == 'json') or (output_path and str(output_path).lower().endswith('.json')) else '.txt'
-                        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=suffix, encoding='utf-8') as tf:
-                            tf.write(stdin_payload or '')
-                            temp_input_path = tf.name
-                        env['PDD_POSTPROCESS_INPUT_FILE'] = temp_input_path
+                        # When LLM is disabled, use the existing output file instead of creating a temp file
+                        if not llm_enabled and output_path and pathlib.Path(output_path).exists():
+                            temp_input_path = str(pathlib.Path(output_path).resolve())
+                            env['PDD_POSTPROCESS_INPUT_FILE'] = temp_input_path
+                        else:
+                            # Write payload to a temp file for scripts expecting a file path input
+                            suffix = '.json' if (isinstance(language, str) and str(language).lower().strip() == 'json') or (output_path and str(output_path).lower().endswith('.json')) else '.txt'
+                            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=suffix, encoding='utf-8') as tf:
+                                tf.write(stdin_payload or '')
+                                temp_input_path = tf.name
+                            env['PDD_POSTPROCESS_INPUT_FILE'] = temp_input_path
 
                         # Compute placeholder values
                         app_name_val = (env_vars or {}).get('APP_NAME') if env_vars else None
@@ -922,8 +939,13 @@ def code_generator_main(
                 console.print(Panel(Text(generated_code_content, overflow="fold"), title="[cyan]Generated Code[/cyan]", expand=False))
                 console.print("[yellow]No output path resolved; skipping file write and stdout print.[/yellow]")
         else:
-            console.print("[red]Error: Code generation failed. No code was produced.[/red]")
-            return "", was_incremental_operation, total_cost, model_name or "error"
+            # If LLM was disabled and post-process ran, that's a success (no error)
+            if not llm_enabled and post_process_script:
+                if verbose or not quiet:
+                    console.print("[green]Post-process completed successfully (LLM was disabled).[/green]")
+            else:
+                console.print("[red]Error: Code generation failed. No code was produced.[/red]")
+                return "", was_incremental_operation, total_cost, model_name or "error"
 
     except Exception as e:
         console.print(f"[red]An unexpected error occurred: {e}[/red]")
