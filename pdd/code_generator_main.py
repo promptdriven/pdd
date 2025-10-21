@@ -853,7 +853,9 @@ def code_generator_main(
                 finally:
                     if temp_input_path:
                         try:
-                            os.unlink(temp_input_path)
+                            # Only delete temp files, not the actual output file when llm=false
+                            if llm_enabled or not (output_path and pathlib.Path(output_path).exists() and temp_input_path == str(pathlib.Path(output_path).resolve())):
+                                os.unlink(temp_input_path)
                         except Exception:
                             pass
                 if proc and proc.returncode == 0:

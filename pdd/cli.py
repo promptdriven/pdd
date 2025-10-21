@@ -50,7 +50,6 @@ from .trace_main import trace_main
 from .track_cost import track_cost
 from .update_main import update_main
 from . import template_registry
-from .render_mermaid import generate_mermaid_code, generate_html
 
 
 # --- Initialize Rich Console ---
@@ -664,24 +663,6 @@ class GenerateCommand(click.Command):
     default=None,
     help="Use a packaged/project template by name (e.g., architecture/architecture_json)",
 )
-@click.option(
-    "--post-render-architecture",
-    is_flag=True,
-    default=False,
-    help="After generating JSON, also render interactive HTML from it (uses pdd's renderer).",
-)
-@click.option(
-    "--post-render-output",
-    type=click.Path(writable=True),
-    default=None,
-    help="Output HTML path for --post-render-architecture (default: <json_stem>_diagram.html).",
-)
-@click.option(
-    "--post-render-app-name",
-    type=str,
-    default=None,
-    help="App name for the rendered diagram (default: APP_NAME from -e or 'System Architecture').",
-)
 @click.pass_context
 @track_cost
 def generate(
@@ -692,9 +673,6 @@ def generate(
     incremental_flag: bool,
     env_kv: Tuple[str, ...],
     template_name: Optional[str],
-    post_render_architecture: bool,
-    post_render_output: Optional[str],
-    post_render_app_name: Optional[str],
 ) -> Optional[Tuple[str, float, str]]:
     """Generate code from a prompt file."""
     try:
@@ -738,36 +716,6 @@ def generate(
             force_incremental_flag=incremental_flag,
             env_vars=env_vars or None,
         )
-        # Optional post-step: render HTML from a generated JSON artifact
-        try:
-            if post_render_architecture and output and str(output).lower().endswith(".json"):
-                json_path = Path(output)
-                if json_path.is_file():
-                    import json as _json
-                    from .render_mermaid import generate_mermaid_code, generate_html
-                    architecture = _json.loads(json_path.read_text(encoding="utf-8"))
-                    # Determine app name priority: CLI flag > APP_NAME from -e > default
-                    app_name_for_render = (
-                        (post_render_app_name or "").strip()
-                        or (env_vars.get("APP_NAME", "").strip() if env_vars else "")
-                        or "System Architecture"
-                    )
-                    mermaid_code = generate_mermaid_code(architecture, app_name_for_render)
-                    html_doc = generate_html(mermaid_code, architecture, app_name_for_render)
-
-                    out_html = (
-                        Path(post_render_output)
-                        if post_render_output else Path(f"{json_path.stem}_diagram.html")
-                    )
-                    out_html.parent.mkdir(parents=True, exist_ok=True)
-                    out_html.write_text(html_doc, encoding="utf-8")
-                    if not ctx.obj.get("quiet"):
-                        print(f"✅ Generated: {out_html}")
-                        print(f"📊 Modules: {len(architecture)}")
-                        print(f"🌐 Open {out_html} in your browser!")
-        except Exception as _e:  # Non-fatal; report and continue
-            handle_error(_e, "generate-post-render", ctx.obj.get("quiet", False))
-
         return generated_code, total_cost, model_name
     except Exception as exception:
         handle_error(exception, "generate", ctx.obj.get("quiet", False))
@@ -1580,8 +1528,6 @@ def verify(
         handle_error(e, command_name, quiet)
         return None # Return None on failure
 
-
-## Removed 'render-architecture' command per review preference to avoid adding top-level commands.
 
 @cli.command("sync")
 @click.argument("basename", type=str)
