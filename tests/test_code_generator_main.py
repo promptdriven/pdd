@@ -1259,6 +1259,18 @@ def test_architecture_template_datasource_object_passes_schema(
                     "page": {
                         "route": "/inventory",
                         "dataSources": [
+                {
+                    "reason": "Replication",
+                    "description": "Expose dataSources schema mismatch",
+                    "dependencies": [],
+                    "priority": 1,
+                    "filename": "architecture.prompt",
+                    "filepath": "frontend/app/inventory/page.tsx",
+                    "interface": {
+                        "type": "page",
+                        "page": {
+                            "route": "/inventory",
+                            "dataSources": [
                             {
                                 "kind": "api",
                                 "source": "/api/inventory",

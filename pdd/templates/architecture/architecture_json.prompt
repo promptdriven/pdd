@@ -135,7 +135,7 @@ INSTRUCTIONS:
 - Use only the facts from the included documents and files. Do not invent technologies or filenames.
 - If TECH_STACK_FILE is absent, infer a reasonable tech stack from the PRD and included files; state key assumptions within each item's description.
 - Output a single top-level JSON array of items. Each item must include:
-  - reason, description, dependencies (filenames), priority (1 = highest), filename, filepath, optional tags.
+  - reason (briefly explain why this code module needs to exist), description, dependencies (filenames), priority (1 = highest), filename, filepath, optional tags.
   - interface: include only the applicable sub-object (component, page, module, api, graphql, cli, job, message, or config). Omit all non-applicable sub-objects entirely.
   - When interface.type is "page", each entry in `dataSources` must be an object with at least `kind` (e.g., api/query) and `source` (e.g., URL or identifier). Provide `method`, `description`, and any other useful metadata when known.
 - Valid JSON only. No comments or trailing commas.
