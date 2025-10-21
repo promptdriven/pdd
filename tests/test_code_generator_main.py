@@ -1253,6 +1253,7 @@ def test_architecture_template_datasource_object_passes_schema(
                 "dependencies": [],
                 "priority": 1,
                 "filename": "architecture.prompt",
+                "filepath": "src/architecture.prompt",
                 "interface": {
                     "type": "page",
                     "page": {
@@ -1327,6 +1328,7 @@ def test_architecture_template_datasource_string_rejected(
                 "dependencies": [],
                 "priority": 1,
                 "filename": "architecture.prompt",
+                "filepath": "src/architecture.prompt",
                 "interface": {
                     "type": "page",
                     "page": {

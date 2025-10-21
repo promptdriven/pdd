@@ -948,7 +948,7 @@ def code_generator_main(
                     console.print("[green]Post-process completed successfully (LLM was disabled).[/green]")
             else:
                 console.print("[red]Error: Code generation failed. No code was produced.[/red]")
-                return "", was_incremental_operation, total_cost, model_name or "error"
+                return "", was_incremental_operation, total_cost, model_name
 
     except Exception as e:
         console.print(f"[red]An unexpected error occurred: {e}[/red]")
