@@ -1252,8 +1252,8 @@ def test_architecture_template_datasource_object_passes_schema(
                 "description": "Expose dataSources schema mismatch",
                 "dependencies": [],
                 "priority": 1,
-                "filename": "architecture.prompt",
-                "filepath": "src/architecture.prompt",
+                "filename": "architecture_json.prompt",
+                "filepath": "src/architecture.json",
                 "interface": {
                     "type": "page",
                     "page": {
