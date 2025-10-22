@@ -4,35 +4,7 @@ import json
 import html
 from pathlib import Path
 
-# The code under test has a syntax error `def def`.
-# We will import it under a try-except block and patch it if needed.
-try:
-    from pdd.render_mermaid import generate_mermaid_code, generate_html
-except SyntaxError as e:
-    # This is a workaround for the `def def` syntax error in the provided code.
-    # In a real-world scenario, the source file should be fixed.
-    if "invalid syntax" in str(e):
-        import re
-        from importlib.util import spec_from_loader, module_from_spec
-        from importlib.machinery import SourceFileLoader
-
-        # Corrected path to look in the pdd package directory
-        file_path = Path(__file__).parent.parent / "pdd" / "render_mermaid.py"
-        original_code = file_path.read_text()
-        corrected_code = re.sub(r'\bdef def\b', 'def', original_code)
-        
-        # Create a loader with the corrected code
-        class PatchedLoader(SourceFileLoader):
-            def get_source(self, fullname):
-                return corrected_code
-
-        spec = spec_from_loader("render_mermaid", PatchedLoader("render_mermaid", str(file_path)))
-        render_mermaid = module_from_spec(spec)
-        spec.loader.exec_module(render_mermaid)
-        generate_mermaid_code = render_mermaid.generate_mermaid_code
-        generate_html = render_mermaid.generate_html
-    else:
-        raise
+from pdd.render_mermaid import generate_mermaid_code, generate_html
 
 
 # Test Plan
