@@ -18,6 +18,15 @@ import sys
 import html
 from pathlib import Path
 
+# Indentation constants for better maintainability
+INDENT = '    '  # 4 spaces per level
+LEVELS = {
+    'root': 0,
+    'subgraph': 1, 
+    'node': 2,
+    'connection': 1,
+    'style': 1
+}
 
 def generate_mermaid_code(architecture, app_name="System"):
     """Generate Mermaid flowchart code from architecture JSON."""
@@ -25,9 +34,9 @@ def generate_mermaid_code(architecture, app_name="System"):
     escaped_app_name = app_name.replace('"', '&quot;')
     # Match test expectation: add a trailing space only if quotes were present
     prd_label = f'{escaped_app_name} ' if "&quot;" in escaped_app_name else escaped_app_name
-    lines = ["flowchart TB", f'            PRD["{prd_label}"]', "    "]
+    lines = ["flowchart TB", f'{INDENT * LEVELS["node"]}PRD["{prd_label}"]', INDENT]
     if not architecture:
-        lines.append("    ")
+        lines.append(INDENT)
     
     # Categorize modules by tags (frontend takes priority over backend)
     frontend = [m for m in architecture if any(t in m.get('tags', []) for t in ['frontend', 'react', 'nextjs', 'ui', 'page', 'component'])]
@@ -37,19 +46,19 @@ def generate_mermaid_code(architecture, app_name="System"):
     # Generate subgraphs
     for group_name, modules in [("Frontend", frontend), ("Backend", backend), ("Shared", shared)]:
         if modules:
-            lines.append(f"            subgraph {group_name}")
+            lines.append(f"{INDENT * LEVELS['subgraph']}subgraph {group_name}")
             for m in modules:
                 name = Path(m['filename']).stem
                 pri = m.get('priority', 0)
-                lines.append(f'                {name}["{name} ({pri})"]')
-            lines.append("            end")
-            lines.append("    ")
+                lines.append(f'{INDENT * LEVELS["node"]}{name}["{name} ({pri})"]')
+            lines.append(f"{INDENT * LEVELS['subgraph']}end")
+            lines.append(INDENT)
     
     # PRD connections
     if frontend:
-        lines.append("            PRD --> Frontend")
+        lines.append(f"{INDENT * LEVELS['connection']}PRD --> Frontend")
     if backend:
-        lines.append("            PRD --> Backend")
+        lines.append(f"{INDENT * LEVELS['connection']}PRD --> Backend")
     
     # Add newline between PRD connections and dependencies
     if frontend or backend:
@@ -60,26 +69,26 @@ def generate_mermaid_code(architecture, app_name="System"):
         src = Path(m['filename']).stem
         for dep in m.get('dependencies', []):
             dst = Path(dep).stem
-            lines.append(f'            {src} -->|uses| {dst}')
+            lines.append(f'{INDENT * LEVELS["connection"]}{src} -->|uses| {dst}')
     
     # Add newline after dependencies
     if any(m.get('dependencies', []) for m in architecture):
-        lines.append("    ")
+        lines.append(INDENT)
     
     # Styles
-    lines.extend(["            classDef frontend fill:#FFF3E0,stroke:#F57C00,stroke-width:2px",
-                  "            classDef backend fill:#E3F2FD,stroke:#1976D2,stroke-width:2px",
-                  "            classDef shared fill:#E8F5E9,stroke:#388E3C,stroke-width:2px",
-                  "            classDef system fill:#E0E0E0,stroke:#616161,stroke-width:3px", "    "])
+    lines.extend([f"{INDENT * LEVELS['style']}classDef frontend fill:#FFF3E0,stroke:#F57C00,stroke-width:2px",
+                  f"{INDENT * LEVELS['style']}classDef backend fill:#E3F2FD,stroke:#1976D2,stroke-width:2px",
+                  f"{INDENT * LEVELS['style']}classDef shared fill:#E8F5E9,stroke:#388E3C,stroke-width:2px",
+                  f"{INDENT * LEVELS['style']}classDef system fill:#E0E0E0,stroke:#616161,stroke-width:3px", INDENT])
     
     # Apply classes
     if frontend:
-        lines.append(f"            class {','.join([Path(m['filename']).stem for m in frontend])} frontend")
+        lines.append(f"{INDENT * LEVELS['style']}class {','.join([Path(m['filename']).stem for m in frontend])} frontend")
     if backend:
-        lines.append(f"            class {','.join([Path(m['filename']).stem for m in backend])} backend")
+        lines.append(f"{INDENT * LEVELS['style']}class {','.join([Path(m['filename']).stem for m in backend])} backend")
     if shared:
-        lines.append(f"            class {','.join([Path(m['filename']).stem for m in shared])} shared")
-    lines.append("            class PRD system")
+        lines.append(f"{INDENT * LEVELS['style']}class {','.join([Path(m['filename']).stem for m in shared])} shared")
+    lines.append(f"{INDENT * LEVELS['style']}class PRD system")
     
     return "\n".join(lines)
 
