@@ -878,15 +878,68 @@ Templates: Commands
 
 #### Built-In Templates
 
-PDD can distribute a curated set of popular templates as part of the package to help you get started quickly (e.g., frontend/Next.js, backend/Flask, data/ETL).
+PDD includes a curated set of templates to help you get started quickly. Use `pdd templates list` to see all available templates.
+
+**Available Templates:**
+
+- **`architecture/architecture_json`** (v1.0.0) - Unified architecture template for multiple tech stacks
+  - **Purpose**: Generates structured JSON architecture documentation from PRD and tech stack files
+  - **Tags**: architecture, template, json
+  - **Output**: `architecture.json` with module definitions, dependencies, and interfaces
+  - **Post-processing**: Automatically generates interactive Mermaid diagrams
+
+- **`architecture/mermaid_diagram`** (v1.0.0) - Convert architecture.json to Mermaid UML component diagram
+  - **Purpose**: Visualization template for architecture documentation
+  - **Tags**: architecture, visualization, mermaid, diagram
+  - **Output**: Mermaid diagram code
+
+- **`examples/bank_app_python`** (v1.0.0) - Simple CLI banking application in Python
+  - **Purpose**: Complete example application with account management, transactions, and CLI interface
+  - **Tags**: example, bank, python, cli
+  - **Output**: Full banking application code
+
+- **`generic/generate_prompt`** (v1.0.0) - Generate module prompts for any tech stack
+  - **Purpose**: Creates new prompt templates for backend, frontend, CLI, or job modules
+  - **Tags**: template, prompt, generic
+  - **Output**: New `.prompt` files
+
+**LLM Toggle Functionality:**
+
+All templates support the `llm` parameter to control whether LLM generation runs:
+
+- **`llm=true`** (default): Full generation with LLM + post-processing
+- **`llm=false`**: Skip LLM generation, run only post-processing
+
+**Example Commands:**
+
+```bash
+# List all available templates
+pdd templates list
+
+# Show template details
+pdd templates show architecture/architecture_json
+
+# Full generation (LLM + post-processing)
+pdd generate --template architecture/architecture_json \
+  -e PRD_FILE=docs/specs.md \
+  -e APP_NAME="MyApp" \
+  --output architecture.json
+
+# Post-processing only (skip LLM, generate HTML from existing JSON)
+pdd generate --template architecture/architecture_json \
+  -e PRD_FILE=docs/specs.md \
+  -e APP_NAME="MyApp" \
+  -e llm=false \
+  --output architecture.json
+
+# Bank app example
+pdd generate --template examples/bank_app_python \
+  --output src/bank_app.py
+```
 
 Where built-ins live (packaged)
 
 - Under the installed package at `pdd/templates/<category>/**/*.prompt` (plus optional README/index files). When installed from PyPI, these are included as package data.
-
-Included starter templates
-
-- `architecture/architecture_json.prompt`: Universal architecture generator (requires `-e PRD_FILE=...`; supports optional `TECH_STACK_FILE`, `DOC_FILES`, `INCLUDE_FILES`).
 
 Front Matter (YAML) metadata
 
