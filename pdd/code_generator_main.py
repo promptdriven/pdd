@@ -881,7 +881,7 @@ def code_generator_main(
                         is_json_output = False
                         if isinstance(language, str) and str(language).lower().strip() == "json":
                             is_json_output = True
-                        elif output_path and str(output_path).endswith(".json"):
+                        elif output_path and str(output_path).lower().endswith(".json"):
                             is_json_output = True
                         if is_json_output:
                             parsed = json.loads(generated_code_content)
