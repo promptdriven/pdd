@@ -868,8 +868,6 @@ def code_generator_main(
                     console.print(f"[yellow]Post-process failed (rc={rc}). Stderr:\n{err[:500]}[/yellow]")
             except FileNotFoundError:
                 console.print(f"[yellow]Post-process script not found: {post_process_script}. Skipping.[/yellow]")
-            except FileNotFoundError:
-                console.print(f"[yellow]Post-process script not found: {post_process_script}. Skipping.[/yellow]")
             except subprocess.TimeoutExpired:
                 console.print("[yellow]Post-process script timed out. Skipping.[/yellow]")
             except Exception as e:
