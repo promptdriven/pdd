@@ -35,6 +35,17 @@ CLOUD_REQUEST_TIMEOUT = 400  # seconds
 
 console = Console()
 
+# --- Helper Functions ---
+def _parse_llm_bool(value: str) -> bool:
+    """Parse LLM boolean value from string."""
+    if not value:
+        return True
+    llm_str = str(value).strip().lower()
+    if llm_str in {"0", "false", "no", "off"}:
+        return False
+    else:
+        return llm_str in {"1", "true", "yes", "on"}
+
 # --- Git Helper Functions ---
 def _run_git_command(command: List[str], cwd: Optional[str] = None) -> Tuple[int, str, str]:
     """Runs a git command and returns (return_code, stdout, stderr)."""
@@ -202,18 +213,21 @@ def code_generator_main(
     command_options: Dict[str, Any] = {"output": output}
 
     try:
-        # Read prompt content first to determine LLM state before construct_paths
-        with open(prompt_file, 'r', encoding='utf-8') as f:
-            raw_prompt_content = f.read()
-        
+        resolved_config, input_strings, output_file_paths, language = construct_paths(
+            input_file_paths=input_file_paths_dict,
+            force=force_overwrite,
+            quiet=quiet,
+            command="generate",
+            command_options=command_options,
+            context_override=ctx.obj.get('context')
+        )
+        prompt_content = input_strings["prompt_file"]
         # Phase-2 templates: parse front matter metadata
-        fm_meta, body = _parse_front_matter(raw_prompt_content)
+        fm_meta, body = _parse_front_matter(prompt_content)
         if fm_meta:
             prompt_content = body
-        else:
-            prompt_content = raw_prompt_content
         
-        # Determine LLM state early to avoid unnecessary overwrite prompts
+        # Determine LLM state after front matter is processed
         llm_enabled: bool = True
         env_llm_raw = None
         try:
@@ -226,39 +240,13 @@ def code_generator_main(
         except Exception:
             env_llm_raw = None
 
-        if fm_meta and isinstance(fm_meta, dict):
-            try:
-                if 'llm' in fm_meta:
-                    llm_enabled = bool(fm_meta.get('llm', True))
-                elif env_llm_raw is not None:
-                    llm_str = str(env_llm_raw).strip().lower()
-                    if llm_str in {"0", "false", "no", "off"}:
-                        llm_enabled = False
-                    else:
-                        llm_enabled = llm_str in {"1", "true", "yes", "on"}
-            except Exception:
-                llm_enabled = True
-        elif env_llm_raw is not None:
-            try:
-                llm_str = str(env_llm_raw).strip().lower()
-                if llm_str in {"0", "false", "no", "off"}:
-                    llm_enabled = False
-                else:
-                    llm_enabled = llm_str in {"1", "true", "yes", "on"}
-            except Exception:
-                llm_enabled = True
+        # Environment variables should override front matter
+        if env_llm_raw is not None:
+            llm_enabled = _parse_llm_bool(env_llm_raw)
+        elif fm_meta and isinstance(fm_meta, dict) and 'llm' in fm_meta:
+            llm_enabled = bool(fm_meta.get('llm', True))
+        # else: keep default True
         
-        # If LLM is disabled, we're only doing post-processing, so skip overwrite confirmation
-        effective_force = force_overwrite or not llm_enabled
-        
-        resolved_config, input_strings, output_file_paths, language = construct_paths(
-            input_file_paths=input_file_paths_dict,
-            force=effective_force,
-            quiet=quiet,
-            command="generate",
-            command_options=command_options,
-            context_override=ctx.obj.get('context')
-        )
         # Determine final output path: if user passed a directory, use resolved file path
         resolved_output = output_file_paths.get("output")
         if output is None:
@@ -293,10 +281,12 @@ def code_generator_main(
                 if k not in env_vars and "default" in spec:
                     env_vars[k] = str(spec["default"])
             # if scalar default allowed, ignore for now
-        missing = [k for k, spec in fm_meta["variables"].items() if isinstance(spec, dict) and spec.get("required") and k not in env_vars]
-        if missing:
-            console.print(f"[error]Missing required variables: {', '.join(missing)}")
-            return "", False, 0.0, "error"
+        # Only validate required variables when LLM is enabled (not doing post-processing only)
+        if llm_enabled:
+            missing = [k for k, spec in fm_meta["variables"].items() if isinstance(spec, dict) and spec.get("required") and k not in env_vars]
+            if missing:
+                console.print(f"[error]Missing required variables: {', '.join(missing)}")
+                return "", False, 0.0, "error"
 
     # Execute optional discovery from front matter to populate env_vars without overriding explicit -e values
     def _run_discovery(discover_cfg: Dict[str, Any]) -> Dict[str, str]:
