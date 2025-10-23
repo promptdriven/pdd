@@ -119,7 +119,7 @@
 
    % Required imports for the new functionality:
    <required_imports>
-   <include>context/code_generator_main_imports.py</include>
+   <include>context/detect_host_python_example.py</include>
    </required_imports>
 
    % Here is how to call the cloud version of the code generator when not using the `--local` flag.
