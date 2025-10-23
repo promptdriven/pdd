@@ -35,6 +35,17 @@ CLOUD_REQUEST_TIMEOUT = 400  # seconds
 
 console = Console()
 
+# --- Helper Functions ---
+def _parse_llm_bool(value: str) -> bool:
+    """Parse LLM boolean value from string."""
+    if not value:
+        return True
+    llm_str = str(value).strip().lower()
+    if llm_str in {"0", "false", "no", "off"}:
+        return False
+    else:
+        return llm_str in {"1", "true", "yes", "on"}
+
 # --- Git Helper Functions ---
 def _run_git_command(command: List[str], cwd: Optional[str] = None) -> Tuple[int, str, str]:
     """Runs a git command and returns (return_code, stdout, stderr)."""
@@ -225,27 +236,13 @@ def code_generator_main(
                 env_llm_raw = os.environ.get('LLM')
         except Exception:
             env_llm_raw = None
-        if fm_meta and isinstance(fm_meta, dict):
-            try:
-                if 'llm' in fm_meta:
-                    llm_enabled = bool(fm_meta.get('llm', True))
-                elif env_llm_raw is not None:
-                    llm_str = str(env_llm_raw).strip().lower()
-                    if llm_str in {"0", "false", "no", "off"}:
-                        llm_enabled = False
-                    else:
-                        llm_enabled = llm_str in {"1", "true", "yes", "on"}
-            except Exception:
-                llm_enabled = True
-        elif env_llm_raw is not None:
-            try:
-                llm_str = str(env_llm_raw).strip().lower()
-                if llm_str in {"0", "false", "no", "off"}:
-                    llm_enabled = False
-                else:
-                    llm_enabled = llm_str in {"1", "true", "yes", "on"}
-            except Exception:
-                llm_enabled = True
+
+        # Environment variables should override front matter
+        if env_llm_raw is not None:
+            llm_enabled = _parse_llm_bool(env_llm_raw)
+        elif fm_meta and isinstance(fm_meta, dict) and 'llm' in fm_meta:
+            llm_enabled = bool(fm_meta.get('llm', True))
+        # else: keep default True
         
         # If LLM is disabled, we're only doing post-processing, so skip overwrite confirmation
         effective_force = force_overwrite or not llm_enabled
@@ -513,9 +510,9 @@ def code_generator_main(
         post_process_script: Optional[str] = None
         prompt_body_for_script: str = prompt_content
         
+        if verbose:
+            console.print(f"[blue]LLM enabled:[/blue] {llm_enabled}")
         try:
-            if verbose:
-                console.print(f"[blue]LLM enabled:[/blue] {llm_enabled}")
             post_process_script = None
             script_override = None
             if env_vars:
@@ -866,8 +863,6 @@ def code_generator_main(
                     console.print(f"[yellow]Post-process failed (rc={rc}). Stderr:\n{err[:500]}[/yellow]")
             except FileNotFoundError:
                 console.print(f"[yellow]Post-process script not found: {post_process_script}. Skipping.[/yellow]")
-            except FileNotFoundError:
-                console.print(f"[yellow]Post-process script not found: {post_process_script}. Skipping.[/yellow]")
             except subprocess.TimeoutExpired:
                 console.print("[yellow]Post-process script timed out. Skipping.[/yellow]")
             except Exception as e:
@@ -880,7 +875,7 @@ def code_generator_main(
                         is_json_output = False
                         if isinstance(language, str) and str(language).lower().strip() == "json":
                             is_json_output = True
-                        elif output_path and str(output_path).endswith(".json"):
+                        elif output_path and str(output_path).lower().endswith(".json"):
                             is_json_output = True
                         if is_json_output:
                             parsed = json.loads(generated_code_content)
