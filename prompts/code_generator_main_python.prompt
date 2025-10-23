@@ -110,17 +110,10 @@
       <include>context/preprocess_example.py</include>
       </preprocess_example>
 
-      - Here is an example of how to use the `detect_host_python_executable` function:
-      <detect_host_python_example>
-      <include>context/detect_host_python_example.py</include>
-      </detect_host_python_example>
+      - The `detect_host_python_executable` function is used to get the appropriate Python executable
+        for subprocess calls, ensuring compatibility with the host shell's environment (conda, venv, poetry, etc.)
 
    </internal_example_modules>
-
-   % Required imports for the new functionality:
-   <required_imports>
-   <include>context/detect_host_python_example.py</include>
-   </required_imports>
 
    % Here is how to call the cloud version of the code generator when not using the `--local` flag.
    % Note: The API documentation (represented by the included api-documentation.md) should reflect that
