@@ -212,8 +212,11 @@
     3. Determine the language with clear precedence and context support:
        - If YAML front matter specifies `language`, use it.
        - Otherwise, determine the language using `construct_paths` (may infer from file extension, special cases, or filename suffix).
-       - When calling `construct_paths`, pass `context_override=ctx.obj.get('context')` so a global `--context` is honored.
-    4. Determine whether to use incremental generation or full generation:
+       - When calling `construct_paths`, pass `force=effective_force` and `context_override=ctx.obj.get('context')` so a global `--context` is honored.
+    4. Determine LLM state and whether to use incremental generation or full generation:
+       - Parse front matter to check for `llm` field (boolean, defaults to true)
+       - Check environment variables `llm` or `LLM` for override
+       - If LLM is disabled, we're only doing post-processing, so skip overwrite confirmation (`effective_force = force_overwrite or not llm_enabled`)
        - Check if output is specified and file exists
        - If original_prompt is specified, use it; otherwise try to get last committed version from git
        - If both conditions met, try incremental generation
@@ -243,6 +246,7 @@
        - Handle temporary file creation for argv mode when LLM is enabled.
        - Use `detect_host_python_executable()` to find the appropriate Python interpreter.
        - Handle subprocess execution with proper error handling and timeout (300 seconds).
+       - If LLM is disabled and post-process ran successfully, that's a success (no error).
     9. Safety net for architecture HTML generation:
        - After writing architecture.json files, automatically run `render_mermaid.py` if HTML doesn't exist.
        - Use appropriate Python executable and pass correct arguments.

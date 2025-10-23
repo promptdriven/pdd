@@ -202,19 +202,62 @@ def code_generator_main(
     command_options: Dict[str, Any] = {"output": output}
 
     try:
+        # Read prompt content first to determine LLM state before construct_paths
+        with open(prompt_file, 'r', encoding='utf-8') as f:
+            raw_prompt_content = f.read()
+        
+        # Phase-2 templates: parse front matter metadata
+        fm_meta, body = _parse_front_matter(raw_prompt_content)
+        if fm_meta:
+            prompt_content = body
+        else:
+            prompt_content = raw_prompt_content
+        
+        # Determine LLM state early to avoid unnecessary overwrite prompts
+        llm_enabled: bool = True
+        env_llm_raw = None
+        try:
+            if env_vars and 'llm' in env_vars:
+                env_llm_raw = str(env_vars.get('llm'))
+            elif os.environ.get('llm') is not None:
+                env_llm_raw = os.environ.get('llm')
+            elif os.environ.get('LLM') is not None:
+                env_llm_raw = os.environ.get('LLM')
+        except Exception:
+            env_llm_raw = None
+        if fm_meta and isinstance(fm_meta, dict):
+            try:
+                if 'llm' in fm_meta:
+                    llm_enabled = bool(fm_meta.get('llm', True))
+                elif env_llm_raw is not None:
+                    llm_str = str(env_llm_raw).strip().lower()
+                    if llm_str in {"0", "false", "no", "off"}:
+                        llm_enabled = False
+                    else:
+                        llm_enabled = llm_str in {"1", "true", "yes", "on"}
+            except Exception:
+                llm_enabled = True
+        elif env_llm_raw is not None:
+            try:
+                llm_str = str(env_llm_raw).strip().lower()
+                if llm_str in {"0", "false", "no", "off"}:
+                    llm_enabled = False
+                else:
+                    llm_enabled = llm_str in {"1", "true", "yes", "on"}
+            except Exception:
+                llm_enabled = True
+        
+        # If LLM is disabled, we're only doing post-processing, so skip overwrite confirmation
+        effective_force = force_overwrite or not llm_enabled
+        
         resolved_config, input_strings, output_file_paths, language = construct_paths(
             input_file_paths=input_file_paths_dict,
-            force=force_overwrite,
+            force=effective_force,
             quiet=quiet,
             command="generate",
             command_options=command_options,
             context_override=ctx.obj.get('context')
         )
-        prompt_content = input_strings["prompt_file"]
-        # Phase-2 templates: parse front matter metadata
-        fm_meta, body = _parse_front_matter(prompt_content)
-        if fm_meta:
-            prompt_content = body
         # Determine final output path: if user passed a directory, use resolved file path
         resolved_output = output_file_paths.get("output")
         if output is None:
@@ -466,48 +509,13 @@ def code_generator_main(
         can_attempt_incremental = False
 
     try:
-        # Determine template-driven switches
-        llm_enabled: bool = True
+        # Resolve post-process script from env/CLI override, then front matter, then sensible default per template
         post_process_script: Optional[str] = None
         prompt_body_for_script: str = prompt_content
-        # Allow environment override for LLM toggle when front matter omits it
-        env_llm_raw = None
-        try:
-            if env_vars and 'llm' in env_vars:
-                env_llm_raw = str(env_vars.get('llm'))
-            elif os.environ.get('llm') is not None:
-                env_llm_raw = os.environ.get('llm')
-            elif os.environ.get('LLM') is not None:
-                env_llm_raw = os.environ.get('LLM')
-        except Exception:
-            env_llm_raw = None
-        if fm_meta and isinstance(fm_meta, dict):
-            try:
-                if 'llm' in fm_meta:
-                    llm_enabled = bool(fm_meta.get('llm', True))
-                elif env_llm_raw is not None:
-                    llm_str = str(env_llm_raw).strip().lower()
-                    if llm_str in {"0", "false", "no", "off"}:
-                        llm_enabled = False
-                    else:
-                        llm_enabled = llm_str in {"1", "true", "yes", "on"}
-            except Exception:
-                llm_enabled = True
-        elif env_llm_raw is not None:
-            try:
-                llm_str = str(env_llm_raw).strip().lower()
-                if llm_str in {"0", "false", "no", "off"}:
-                    llm_enabled = False
-                else:
-                    llm_enabled = llm_str in {"1", "true", "yes", "on"}
-            except Exception:
-                llm_enabled = True
         
-        if verbose:
-            console.print(f"[blue]LLM enabled:[/blue] {llm_enabled}")
-        
-        # Resolve post-process script from env/CLI override, then front matter, then sensible default per template
         try:
+            if verbose:
+                console.print(f"[blue]LLM enabled:[/blue] {llm_enabled}")
             post_process_script = None
             script_override = None
             if env_vars:
