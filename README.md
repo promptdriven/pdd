@@ -912,7 +912,6 @@ pdd generate --template architecture/architecture_json \
 
 # Post-processing only (skip LLM, generate HTML from existing JSON)
 pdd generate --template architecture/architecture_json \
-  -e PRD_FILE=docs/specs.md \
   -e APP_NAME="MyApp" \
   -e llm=false \
   --output architecture.json
