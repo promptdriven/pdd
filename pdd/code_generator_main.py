@@ -202,7 +202,7 @@ def code_generator_main(
     command_options: Dict[str, Any] = {"output": output}
 
     try:
-        # Read prompt content first to determine LLM state before construct_paths
+        # Read prompt content once to determine LLM state and for construct_paths
         with open(prompt_file, 'r', encoding='utf-8') as f:
             raw_prompt_content = f.read()
         
