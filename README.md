@@ -888,6 +888,38 @@ Included starter templates
 
 - `architecture/architecture_json.prompt`: Universal architecture generator (requires `-e PRD_FILE=...`; supports optional `TECH_STACK_FILE`, `DOC_FILES`, `INCLUDE_FILES`).
 
+**LLM Toggle Functionality:**
+All templates support the `llm` parameter to control whether LLM generation runs:
+- **`llm=true`** (default): Full generation with LLM + post-processing
+- **`llm=false`**: Skip LLM generation, run only post-processing
+
+**Architecture JSON Template Features:**
+The `architecture/architecture_json` template includes automatic **Mermaid diagram generation**:
+- **Post-processing**: Automatically converts the generated JSON into an interactive HTML Mermaid diagram
+- **Visualization**: Creates `architecture_diagram.html` with color-coded modules (frontend/backend/shared)
+- **Interactive**: Hover tooltips show module details, dependencies, and descriptions
+- **Self-contained**: HTML file works offline with embedded Mermaid library
+
+**Example Commands:**
+```bash
+# Full generation (LLM + post-processing + Mermaid HTML)
+pdd generate --template architecture/architecture_json \
+  -e PRD_FILE=docs/specs.md \
+  -e APP_NAME="MyApp" \
+  --output architecture.json
+
+# Results in: architecture.json + architecture_diagram.html
+
+# Post-processing only (skip LLM, generate HTML from existing JSON)
+pdd generate --template architecture/architecture_json \
+  -e PRD_FILE=docs/specs.md \
+  -e APP_NAME="MyApp" \
+  -e llm=false \
+  --output architecture.json
+
+# Results in: architecture_diagram.html (from existing architecture.json)
+```
+
 Front Matter (YAML) metadata
 
 - Templates include YAML front matter with human-readable metadata:
