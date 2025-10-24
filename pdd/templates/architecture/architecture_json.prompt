@@ -5,6 +5,11 @@ version: 1.0.0
 tags: [architecture, template, json]
 language: json
 output: architecture.json
+post_process_python: ./pdd/render_mermaid.py
+post_process_args:
+  - "{INPUT_FILE}"
+  - "{APP_NAME}"
+  - "{OUTPUT_HTML}"
 variables:
   APP_NAME:
     required: false
