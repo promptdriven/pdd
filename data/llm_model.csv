@@ -18,3 +18,4 @@ OpenAI,groq/moonshotai/kimi-k2-instruct,1.0,3.0,1330,,GROQ_API_KEY,0,True,none
 Anthropic,anthropic/claude-sonnet-4-5-20250929,3.0,15.0,1356,,ANTHROPIC_API_KEY,64000,True,budget
 Anthropic,anthropic/claude-opus-4-1-20250805,3.0,15.0,1474,,ANTHROPIC_API_KEY,32000,True,budget
 Anthropic,anthropic/claude-3-5-haiku-20241022,3.0,15.0,1133,,ANTHROPIC_API_KEY,8192,True,budget
+OpenAI,openai/claude-sonnet-4-5,0,0,1354,https://DRUGBEY-DU61012.snowflakecomputing.com/api/v2/cortex/openai,SNOWFLAKE_PAT,64000,True,budget
