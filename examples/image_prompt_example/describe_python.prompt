@@ -7,4 +7,4 @@ Your task is to generate a Python script that, when run, prints a detailed descr
 - Your script should **only** contain a `print()` statement with a multi-line string that describes the image.
 - Analyze the shapes, colors, and content of the image you have been given and put that description inside the `print()` statement.
 
-<include>examples/image_prompt_example/image.heic</include>
+<include>examples/image_prompt_example/image.jpeg</include>
