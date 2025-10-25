@@ -827,7 +827,7 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
              return False
 
 
-def _format_messages(prompt: str, input_data: Union[Dict[str, Any], List[Dict[str, Any]]], use_batch_mode: bool) -> Union[List[Dict[str, str]], List[List[Dict[str, str]]]]:
+def _format_messages(prompt: str, input_data: Union[Dict[str, Any], List[Dict[str, Any]]], use_batch_mode: bool) -> Union[List[Dict[str, Any]], List[List[Dict[str, Any]]]]:
     """Formats prompt and input into LiteLLM message format."""
     try:
         prompt_template = PromptTemplate.from_template(prompt)
@@ -905,7 +905,7 @@ def llm_invoke(
     output_pydantic: Optional[Type[BaseModel]] = None,
     time: float = 0.25,
     use_batch_mode: bool = False,
-    messages: Optional[Union[List[Dict[str, str]], List[List[Dict[str, str]]]]] = None,
+    messages: Optional[Union[List[Dict[str, Any]], List[List[Dict[str, Any]]]]] = None,
 ) -> Dict[str, Any]:
     """
     Runs a prompt with given input using LiteLLM, handling model selection,

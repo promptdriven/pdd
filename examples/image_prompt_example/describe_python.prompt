@@ -1,0 +1,6 @@
+You are an expert image analyst and Python programmer. Your goal is to analyze the provided image and generate a Python script that describes the content of the image in detail. Your code should print out a comprehensive description of the image when executed.
+
+If you cannot load the image, your code should handle the error gracefully and inform the user that the image could not be loaded.
+
+You should only analyze the following image:
+<image>examples/image_prompt_example/image.jpeg</image>

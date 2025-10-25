@@ -82,9 +82,9 @@ These patterns are used across prompts in this repo:
 
 Tip: Prefer small, named sections using XML‑style tags to make context scannable and deterministic.
 
-### Special XML Tags: pdd, shell, web
+### Special XML Tags: pdd, shell, web, image
 
-The PDD preprocessor supports additional XML‑style tags to keep prompts clean, reproducible, and self‑contained. Processing order (per spec) is: `pdd` → `include`/`include-many` → `shell` → `web`. When `recursive=True`, `<shell>` and `<web>` are deferred until a non‑recursive pass.
+The PDD preprocessor supports additional XML‑style tags to keep prompts clean, reproducible, and self‑contained. Processing order (per spec) is: `pdd` → `include`/`include-many` → `shell` → `web` → `image`. When `recursive=True`, `<shell>`, `<web>`, and `<image>` are deferred until a non‑recursive pass.
 
 - `<pdd>…</pdd>`
   - Purpose: human‑only comment. Removed entirely during preprocessing.
@@ -100,6 +100,11 @@ The PDD preprocessor supports additional XML‑style tags to keep prompts clean,
   - Purpose: fetch the page (via Firecrawl) and inline the markdown content.
   - Behavior: executes during non‑recursive preprocessing; on failure, inserts a bracketed error note.
   - Example: `<web>https://docs.litellm.ai/docs/completion/json_mode</web>`
+
+- `<image>path/to/image.ext</image>`
+  - Purpose: embed an image directly into the prompt for multimodal models.
+  - Behavior: reads the image file at the specified path, base64-encodes it, and embeds it as a data URI. This allows the model to "see" the image. Supported formats are PNG, JPEG, GIF, and WEBP.
+  - Example: `<image>path/to/my-diagram.png</image>`
 
 Guidance: Use these tags sparingly to keep prompts deterministic. Prefer stable inputs and short outputs (e.g., `head -n 20` in `<shell>`) so that regenerated prompts remain consistent across runs.
 

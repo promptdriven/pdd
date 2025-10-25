@@ -158,6 +158,7 @@ def process_xml_tags(text: str, recursive: bool) -> str:
     text = process_include_many_tags(text, recursive)
     text = process_shell_tags(text, recursive)
     text = process_web_tags(text, recursive)
+    text = process_image_tags(text, recursive)
     return text
 
 def process_include_tags(text: str, recursive: bool) -> str:
@@ -287,6 +288,37 @@ def process_include_many_tags(text: str, recursive: bool) -> str:
                 contents.append(f"[Error processing include: {p}]")
         return "\n".join(contents)
     return re.sub(pattern, replace_many, text, flags=re.DOTALL)
+
+def process_image_tags(text: str, recursive: bool) -> str:
+    pattern = r'<image>(.*?)</image>'
+    def replace_image(match):
+        file_path = match.group(1).strip()
+        try:
+            full_path = get_file_path(file_path)
+            console.print(f"Processing image include: [cyan]{full_path}[/cyan]")
+            import base64
+            with open(full_path, 'rb') as file:
+                content = file.read()
+                encoded_string = base64.b64encode(content).decode('utf-8')
+                # Determine image type from extension
+                ext = os.path.splitext(file_path)[1].lower()
+                mime_type = {
+                    '.png': 'image/png',
+                    '.jpg': 'image/jpeg',
+                    '.jpeg': 'image/jpeg',
+                    '.gif': 'image/gif',
+                    '.webp': 'image/webp',
+                }.get(ext, 'image/png') # Default to png
+                return f"data:{mime_type};base64,{encoded_string}"
+        except FileNotFoundError:
+            console.print(f"[bold red]Warning:[/bold red] File not found: {file_path}")
+            _dbg(f"Missing image include: {file_path}")
+            return match.group(0) if recursive else f"[File not found: {file_path}]"
+        except Exception as e:
+            console.print(f"[bold red]Error processing image include:[/bold red] {str(e)}")
+            _dbg(f"Error processing image include {file_path}: {e}")
+            return f"[Error processing image include: {file_path}]"
+    return re.sub(pattern, replace_image, text, flags=re.DOTALL)
 
 def double_curly(text: str, exclude_keys: Optional[List[str]] = None) -> str:
     if exclude_keys is None:
