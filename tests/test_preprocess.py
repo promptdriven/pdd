@@ -1477,6 +1477,22 @@ def test_issue_74_include_many_with_missing_optional_variable():
     assert len(matches) == 0
 
 
+def test_process_include_tag_with_image() -> None:
+    """Test processing of <include> tags with image files."""
+    # Create a dummy image file for testing
+    dummy_image_content = b"dummy image data"
+    image_path = "dummy_image.png"
+    prompt = f"This is a test with an image: <include>{image_path}</include>"
+    
+    import base64
+    encoded_string = base64.b64encode(dummy_image_content).decode('utf-8')
+    expected_output = f"This is a test with an image: data:image/png;base64,{encoded_string}"
+
+    with patch('builtins.open', mock_open(read_data=dummy_image_content)):
+        # Mock os.path.splitext to control the extension
+        with patch('os.path.splitext', return_value=('dummy_image', '.png')):
+            assert preprocess(prompt, recursive=False, double_curly_brackets=False) == expected_output
+
 def test_issue_74_mixed_required_and_optional_variables():
     """
     Test template with both required and optional variables.

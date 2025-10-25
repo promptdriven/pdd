@@ -166,18 +166,34 @@ def process_include_tags(text: str, recursive: bool) -> str:
         file_path = match.group(1).strip()
         try:
             full_path = get_file_path(file_path)
-            console.print(f"Processing XML include: [cyan]{full_path}[/cyan]")
-            with open(full_path, 'r', encoding='utf-8') as file:
-                content = file.read()
-                if recursive:
-                    content = preprocess(content, recursive=True, double_curly_brackets=False)
-                _dbg(f"Included via XML tag: {file_path} (len={len(content)})")
-                return content
+            ext = os.path.splitext(file_path)[1].lower()
+            image_extensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp']
+            
+            if ext in image_extensions:
+                console.print(f"Processing image include: [cyan]{full_path}[/cyan]")
+                import base64
+                with open(full_path, 'rb') as file:
+                    content = file.read()
+                    encoded_string = base64.b64encode(content).decode('utf-8')
+                    mime_type = {
+                        '.png': 'image/png',
+                        '.jpg': 'image/jpeg',
+                        '.jpeg': 'image/jpeg',
+                        '.gif': 'image/gif',
+                        '.webp': 'image/webp',
+                    }.get(ext, 'image/png')
+                    return f"data:{mime_type};base64,{encoded_string}"
+            else:
+                console.print(f"Processing XML include: [cyan]{full_path}[/cyan]")
+                with open(full_path, 'r', encoding='utf-8') as file:
+                    content = file.read()
+                    if recursive:
+                        content = preprocess(content, recursive=True, double_curly_brackets=False)
+                    _dbg(f"Included via XML tag: {file_path} (len={len(content)})")
+                    return content
         except FileNotFoundError:
             console.print(f"[bold red]Warning:[/bold red] File not found: {file_path}")
             _dbg(f"Missing XML include: {file_path}")
-            # First pass (recursive=True): leave the tag so a later env expansion can resolve it
-            # Second pass (recursive=False): replace with a visible placeholder
             return match.group(0) if recursive else f"[File not found: {file_path}]"
         except Exception as e:
             console.print(f"[bold red]Error processing include:[/bold red] {str(e)}")
