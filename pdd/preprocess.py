@@ -194,6 +194,8 @@ def process_include_tags(text: str, recursive: bool) -> str:
         except FileNotFoundError:
             console.print(f"[bold red]Warning:[/bold red] File not found: {file_path}")
             _dbg(f"Missing XML include: {file_path}")
+            # First pass (recursive=True): leave the tag so a later env expansion can resolve it
+            # Second pass (recursive=False): replace with a visible placeholder
             return match.group(0) if recursive else f"[File not found: {file_path}]"
         except Exception as e:
             console.print(f"[bold red]Error processing include:[/bold red] {str(e)}")
