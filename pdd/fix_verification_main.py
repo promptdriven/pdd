@@ -116,6 +116,7 @@ def fix_verification_main(
     verification_program: Optional[str],  # Only used if loop=True
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     budget: float = DEFAULT_BUDGET,
+    agentic_fallback: bool = True,
 ) -> Tuple[bool, str, str, int, float, str]:
     """
     CLI wrapper for the 'verify' command. Verifies code correctness by running
@@ -274,6 +275,7 @@ def fix_verification_main(
                     program_file=program_file,                  # Changed to pass the program_file path
                     code_file=code_file,                        # Changed to pass the code_file path
                     prompt=input_strings["prompt_file"],        # Correctly passing prompt content
+                    prompt_file=prompt_file,
                     verification_program=verification_program,      # Path to the verifier program
                     strength=strength,
                     temperature=temperature,
@@ -284,7 +286,8 @@ def fix_verification_main(
                     # output_code_path should not be passed here
                     # output_program_path should not be passed here
                     verbose=verbose,
-                    program_args=[] # Pass an empty list for program_args
+                    program_args=[], # Pass an empty list for program_args
+                    agentic_fallback=agentic_fallback,
                 )
                 success = loop_results.get('success', False)
                 final_program = loop_results.get('final_program', "") # Use .get for safety

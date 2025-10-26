@@ -25,6 +25,14 @@ source ~/.zshrc  # or source ~/.bashrc / fish equivalent
 
 ## Available Examples
 
+### Agentic Fallback
+The agentic fallback example demonstrates using agentic fallback to resolve cross-file dependencies during automated debugging.  
+The example has two files — `src/main.py` and `src/utils.py` — where `main.py` fails without reading `utils.py`.  
+With agentic fallback enabled, the CLI agent (Claude/Gemini/Codex) can read `utils.py`, understand the dependency, and fix `main.py`.
+Users may intentionally introduce errors in `src/utils.py` to test the agentic fix functionality.
+
+Additional examples demonstrating the use of agentic fallback are provided for Java, TypeScript, and JavaScript.
+
 ### Edit File Tool
 The edit_file_tool_example walks through generating a complete Python tool using PDD's streamlined `pdd --force sync` workflow. This example shows:
 - How to drive end-to-end project generation (code, tests, docs) from component prompts (complete dev units)
