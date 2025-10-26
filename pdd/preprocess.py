@@ -172,7 +172,6 @@ def process_include_tags(text: str, recursive: bool) -> str:
             
             if ext in image_extensions:
                 console.print(f"Processing image include: [cyan]{full_path}[/cyan]")
-                import base64
                 from PIL import Image
                 import io
                 import pillow_heif
