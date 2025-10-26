@@ -345,7 +345,7 @@ def test_code_generator_with_image(
     assert isinstance(content, list)
     assert len(content) == 2
     assert content[0]['type'] == 'text'
-    assert content[0]['text'] == 'Generate code based on this image:'
+    assert content[0]['text'] == 'Generate code based on this image: '
     assert content[1]['type'] == 'image_url'
     assert content[1]['image_url']['url'] == image_data
 

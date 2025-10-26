@@ -2,6 +2,7 @@ import os
 import io
 import sys
 import pytest
+import base64
 from unittest.mock import patch, mock_open
 from pdd.preprocess import preprocess
 import subprocess
@@ -1479,16 +1480,28 @@ def test_issue_74_include_many_with_missing_optional_variable():
 
 def test_process_include_tag_with_image() -> None:
     """Test processing of <include> tags with image files."""
-    # Create a dummy image file for testing
-    dummy_image_content = b"dummy image data"
+    import base64
+    from PIL import Image
+    import io
+
+    # Create a real 1x1 pixel PNG in memory
+    img = Image.new('RGB', (1, 1))
+    buffer = io.BytesIO()
+    img.save(buffer, format='PNG')
+    dummy_image_content = buffer.getvalue()
+
     image_path = "dummy_image.png"
     prompt = f"This is a test with an image: <include>{image_path}</include>"
     
-    import base64
     encoded_string = base64.b64encode(dummy_image_content).decode('utf-8')
     expected_output = f"This is a test with an image: data:image/png;base64,{encoded_string}"
 
-    with patch('builtins.open', mock_open(read_data=dummy_image_content)):
+    # Use a more robust mock for open that returns a real file-like object
+    mock_file = io.BytesIO(dummy_image_content)
+    mock_opener = mock_open(read_data=dummy_image_content)
+    mock_opener.return_value.__enter__.return_value = mock_file
+
+    with patch('builtins.open', mock_opener):
         # Mock os.path.splitext to control the extension
         with patch('os.path.splitext', return_value=('dummy_image', '.png')):
             assert preprocess(prompt, recursive=False, double_curly_brackets=False) == expected_output
