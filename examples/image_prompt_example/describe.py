@@ -1,13 +1,59 @@
-"""Print a detailed, multi-line portrait description of a cat to stdout.
+import io
+from contextlib import redirect_stdout
 
-This module simply stores the description in a string variable and prints it.
-"""
 
-cat_description = """A close-up, head-and-shoulders portrait of a cat, likely an Abyssinian, set against a plain white background. The cat is looking directly at the camera with a surprised or alert expression.
+def generate_scene_text() -> str:
+    """Return a detailed description of a Christmas-themed shelf display.
 
-Its large, almond-shaped eyes are wide open, showcasing a striking yellow-amber color. The cat's mouth is slightly open, revealing its small lower teeth and black gums. Its ears are large, pointed, and perked up, contributing to its attentive look.
+    This function encapsulates the multi-line string so the printed output can be
+    captured programmatically.
+    """
+    return (
+        "A detailed, eye-level shot of a Christmas-themed retail or home display "
+        "featuring two light-colored wooden shelves mounted against a dark, matte "
+        "black wall.\n\n"
+        "The top shelf is arranged with a variety of festive gift bags and "
+        "decorative cutouts. From left to right, there is a gift bag with a green "
+        "and red plaid pattern, followed by a dark blue bag with a repeating "
+        "pattern of small, light-colored Christmas trees. Centrally placed is a "
+        "stylized, light grey felt or wooden Christmas tree cutout with a wooden "
+        "trunk and a star on top. Next to it are several more gift bags: one "
+        "white with a delicate green and red foliage pattern, a prominent red "
+        "bag with three nutcracker figures, and another white bag with foliage. "
+        "To the right of these is a light grey, stylized reindeer cutout. The "
+        "shelf ends with another dark blue gift bag with the tree pattern.\n\n"
+        "The bottom shelf continues the festive theme. On the far left, there are "
+        "two plush gnome-like figures (gonks). One is stout, dressed in red with "
+        "a large white beard. The other is taller and slimmer, wearing a grey "
+        "patterned sweater and a red and white patterned hat. Next to them are "
+        "two small, decorative houses resembling gingerbread houses, a small "
+        "scroll tied with a red ribbon, and two white pillar candles in glass "
+        "holders. Further to the right is a larger glass container holding a "
+        "bundle of red and white taper candles. The shelf is completed by a red "
+        "gift bag with nutcracker figures and another plaid-patterned gift bag "
+        "leaning against it.\n\n"
+        "The overall color palette is a classic Christmas combination of red, "
+        "green, and white, which stands out against the dark background and the "
+        "natural wood of the shelves."
+    )
 
-The cat's coat is short and has a warm, reddish-brown or tawny coloration with darker ticking, especially noticeable around the eyes and on the forehead. The fur around its muzzle and on its chin is a lighter, off-white shade. The nose is a dark, terracotta color, and fine white whiskers extend from its muzzle. The lighting is bright and even, highlighting the details of the cat's expressive face.
-"""
 
-print(cat_description)
+def main() -> None:
+    """Capture the printed scene text and output the captured string.
+
+    Using redirect_stdout ensures no intermediate console output aside from the
+    final captured text. This is equivalent in behavior to the original script
+    while being clearer and more robust.
+    """
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        # Print the description; this output goes into the buffer
+        print(generate_scene_text())
+
+    # Retrieve and print the captured output to the actual stdout
+    script_output = buffer.getvalue().strip()
+    print(script_output)
+
+
+if __name__ == "__main__":
+    main()

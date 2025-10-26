@@ -17,6 +17,7 @@ The supported image formats are:
 *   `.jpeg`
 *   `.gif`
 *   `.webp`
+*   `.heic`
 
 ## How to Run This Example
 
