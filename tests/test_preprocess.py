@@ -3,6 +3,8 @@ import io
 import sys
 import pytest
 import base64
+from PIL import Image
+import io
 from unittest.mock import patch, mock_open
 from pdd.preprocess import preprocess
 import subprocess
@@ -1480,9 +1482,6 @@ def test_issue_74_include_many_with_missing_optional_variable():
 
 def test_process_include_tag_with_image() -> None:
     """Test processing of <include> tags with image files."""
-    import base64
-    from PIL import Image
-    import io
 
     # Create a real 1x1 pixel PNG in memory
     img = Image.new('RGB', (1, 1))
