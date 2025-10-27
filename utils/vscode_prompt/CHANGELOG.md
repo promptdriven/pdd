@@ -20,7 +20,7 @@ This project follows the guidelines from [Keep a Changelog](https://keepachangel
     - `PDD: Upgrade to uv Installation` - Ensure using latest uv-based installation
   - Setup is optional
   - Toast notifications instead of modal dialogs for better UX
-  - Comprehensive test suite with 34 passing tests
+  - Comprehensive test suite with 31 passing tests
 
 ### Changed
 - Simplified installation architecture by removing conda environment support
