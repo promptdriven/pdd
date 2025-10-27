@@ -19,10 +19,6 @@
 //   • uv tool path exists -> use full path to uv tool
 //   • uv tool path not found, uv exists -> use uv tool run
 //   • Neither found -> fallback to pdd in PATH
-// - getFallbackInstallCommand:
-//   • Conda present with pdd env -> returns conda run pip
-//   • Conda present without pdd env, valid python found -> returns python -m pip
-//   • No python compatible -> throws
 // - upgradeToUvInstallation:
 //   • PDD not installed -> shows warning and returns
 //   • PDD installed, uv available and pdd-cli already via uv -> shows info and returns
