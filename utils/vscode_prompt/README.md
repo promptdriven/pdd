@@ -113,7 +113,7 @@ Extension contributes:
   - Toast notifications instead of modal dialogs for better UX
   - Optional setup - no longer automatically runs after installation
   - New "Upgrade to uv Installation" command to ensure latest installation
-  - Comprehensive test suite (34 passing tests)
+  - Comprehensive test suite (31 passing tests)
   - Error handling and fallback options
 
 ### 0.0.2
