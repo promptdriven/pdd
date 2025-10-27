@@ -227,16 +227,16 @@ class TestRunner:
         """Generate a formatted GitHub comment from test results."""
         summary = self.results["summary"]
         
-        # Determine overall status emoji
-        status_emoji = "✅" if summary["all_passed"] else "❌"
+        # Determine overall status
+        status = "PASS" if summary["all_passed"] else "FAIL"
         
-        comment = f"""## {status_emoji} Test Results
+        comment = f"""## Test Results - {status}
 
 **Overall Summary:**
-- ✅ Passed: {summary['total_passed']}
-- ❌ Failed: {summary['total_failed']}
-- ⏭️ Skipped: {summary['total_skipped']}
-- ⏱️ Duration: {summary['duration_seconds']:.1f}s
+- Passed: {summary['total_passed']}
+- Failed: {summary['total_failed']}
+- Skipped: {summary['total_skipped']}
+- Duration: {summary['duration_seconds']:.1f}s
 
 ---
 
@@ -244,9 +244,9 @@ class TestRunner:
         
         # Add details for each test suite
         for suite_name, suite_data in self.results["test_suites"].items():
-            suite_status = "✅" if suite_data["exit_code"] == 0 else "❌"
+            suite_status = "PASS" if suite_data["exit_code"] == 0 else "FAIL"
             
-            comment += f"""### {suite_status} {suite_data['name']}
+            comment += f"""### {suite_data['name']} - {suite_status}
 
 **Results:**
 - Passed: {suite_data.get('passed', 0)}
@@ -288,14 +288,14 @@ Test run completed at: {self.results['timestamp']}
         """Save detailed results to JSON file."""
         with open(output_file, 'w') as f:
             json.dump(self.results, f, indent=2)
-        print(f"\n✅ Detailed results saved to: {output_file}")
+        print(f"\nDetailed results saved to: {output_file}")
         
     def save_github_comment(self, output_file: Path):
         """Save GitHub comment to file."""
         comment = self.generate_github_comment()
         with open(output_file, 'w') as f:
             f.write(comment)
-        print(f"✅ GitHub comment saved to: {output_file}")
+        print(f"GitHub comment saved to: {output_file}")
 
 
 def main():
@@ -309,17 +309,17 @@ def main():
     try:
         runner.run_unit_tests()
     except Exception as e:
-        print(f"❌ Error running unit tests: {e}")
+        print(f"ERROR: Failed running unit tests: {e}")
         
     try:
         runner.run_regression_tests()
     except Exception as e:
-        print(f"❌ Error running regression tests: {e}")
+        print(f"ERROR: Failed running regression tests: {e}")
         
     try:
         runner.run_sync_regression_tests()
     except Exception as e:
-        print(f"❌ Error running sync regression tests: {e}")
+        print(f"ERROR: Failed running sync regression tests: {e}")
         
     # Calculate summary
     runner.calculate_summary()
