@@ -110,8 +110,10 @@
       <include>context/preprocess_example.py</include>
       </preprocess_example>
 
-      - The `detect_host_python_executable` function is used to get the appropriate Python executable
-        for subprocess calls, ensuring compatibility with the host shell's environment (conda, venv, poetry, etc.)
+      - Here is an example of how to use the `detect_host_python_executable` function:
+      <python_env_detector_example>
+      <include>context/python_env_detector_example.py</include>
+      </python_env_detector_example>
 
    </internal_example_modules>
 
