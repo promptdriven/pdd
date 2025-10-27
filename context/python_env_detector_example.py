@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
 Example usage of the python_env_detector module.
+
 This script demonstrates how to detect the host Python environment
 and retrieve environment information using the module's functions.
 """
+
 from pdd.python_env_detector import (
     detect_host_python_executable,
     get_environment_info,
@@ -35,4 +37,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
