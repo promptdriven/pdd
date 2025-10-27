@@ -256,7 +256,7 @@ export class PddInstaller {
             await this.runWithShellLogging(`"${uvFullPath}" tool install pdd-cli`, 'uv fullpath tool install pdd-cli');
           }
 
-          report(10, 'Upgrade complete!');
+          report(70, 'Upgrade complete!');
         }
       );
 
