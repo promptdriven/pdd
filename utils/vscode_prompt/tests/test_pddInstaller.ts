@@ -16,8 +16,7 @@
 //   • User selects pip -> use fallback command and succeed
 //   • Proper success messages and actionable buttons handled
 // - runPddSetup flows:
-//   • Conda environment exists -> activates conda and runs setup
-//   • Conda env not found, uv tool path exists -> use full path
+//   • uv tool path exists -> use full path to uv tool
 //   • uv tool path not found, uv exists -> use uv tool run
 //   • Neither found -> fallback to pdd in PATH
 // - getFallbackInstallCommand:
