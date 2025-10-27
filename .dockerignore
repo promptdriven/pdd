@@ -1,0 +1,70 @@
+# Git files
+.git
+.gitignore
+.github
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+.DS_Store
+
+# Test outputs
+test_results/
+staging/
+*.log
+*.out
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Examples and demos
+examples/
+demos/
+example_workspace/
+example_prompts/
+
+# Distribution
+dist/
+build/
+*.egg-info/
+
+# Local development
+.env
+.env.local
+test_debug/
+test_debug2/
+test_sync/
+test_sync_debug/
+
+# Large files
+*.mov
+*.mp4
+*.gif
+

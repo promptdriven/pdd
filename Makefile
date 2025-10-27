@@ -23,6 +23,8 @@ help:
 	@echo "  make regression [TEST_NUM=n] - Run regression tests (optionally specific test number)"
 	@echo "  make sync-regression [TEST_NUM=n] - Run sync regression tests (optionally specific test number)"
 	@echo "  make all-regression 		  - Run all regression test suites"
+	@echo "  make test-all-ci             - Run all tests with result capture (for CI/CD)"
+	@echo "  make test-all-with-infisical - Run all tests with Infisical secrets"
 	@echo "  make analysis                - Run regression analysis"
 	@echo "  make verify MODULE=name      - Verify code functionality against prompt intent"
 	@echo "  make lint                    - Run pylint for static code analysis"
@@ -412,6 +414,25 @@ endif
 
 all-regression: regression sync-regression
 	@echo "All regression test suites completed."
+
+# Automated test runner with Infisical for CI/CD
+.PHONY: test-all-ci
+test-all-ci:
+	@echo "Running all test suites with result capture for CI/CD"
+	@mkdir -p test_results
+	@conda run -n pdd --no-capture-output python scripts/run_all_tests_with_results.py
+
+# Run all tests with Infisical (for local development and CI)
+.PHONY: test-all-with-infisical
+test-all-with-infisical:
+	@echo "Running all test suites with Infisical"
+	@if ! command -v infisical &> /dev/null; then \
+		echo "Error: Infisical CLI not found. Please install it:"; \
+		echo "npm install -g @infisical/cli"; \
+		exit 1; \
+	fi
+	@mkdir -p test_results
+	@infisical run -- conda run -n pdd --no-capture-output python scripts/run_all_tests_with_results.py
 
 install:
 	@echo "Installing pdd"
