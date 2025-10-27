@@ -9,9 +9,14 @@ on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: 'PR number to test'
-        required: true
+        description: 'PR number to test (optional - leave empty for branch)'
+        required: false
         type: string
+      branch:
+        description: 'Branch to test (optional - leave empty for main)'
+        required: false
+        type: string
+        default: 'main'
 
 env:
   PYTHON_VERSION: '3.12'
@@ -33,7 +38,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || inputs.branch || github.sha }}
           fetch-depth: 0
           
       - name: Set up Python
