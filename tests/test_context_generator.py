@@ -1,4 +1,5 @@
 import pytest
+from unittest.mock import patch
 from pdd.context_generator import context_generator
 from rich import print
 
@@ -100,6 +101,10 @@ def test_context_generator_postprocessing():
     assert isinstance(example_code, str), "Example code should be a string"
     assert total_cost >= 0, "Total cost should be a non-negative float"
     assert isinstance(model_name, str), "Model name should be a string"
+
+
+# Enhanced tests moved to test_enhanced_pdd_example.py for better organization
+
 
 if __name__ == "__main__":
     pytest.main()

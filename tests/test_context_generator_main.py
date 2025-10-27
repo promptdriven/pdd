@@ -1,7 +1,9 @@
 import pytest
 import click
+import tempfile
 from click.testing import CliRunner
 from unittest.mock import patch, mock_open
+from pathlib import Path
 from pdd.context_generator_main import context_generator_main
 
 # Mock data for testing
@@ -178,3 +180,6 @@ def test_context_generator_main_output_directory_path_uses_resolved_file(mock_ct
         m_open.assert_called_once_with(str(resolved_file), 'w')
         handle = m_open()
         handle.write.assert_called_once_with(MOCK_EXAMPLE_CODE)
+
+
+# Enhanced tests moved to test_enhanced_pdd_example.py for better organization

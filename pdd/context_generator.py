@@ -16,6 +16,9 @@ def context_generator(
     temperature: float = 0,
     time: Optional[float] = DEFAULT_TIME,
     verbose: bool = False,
+    source_file_path: str = None,
+    example_file_path: str = None,
+    module_name: str = None,
 ) -> tuple:
     """
     Generates a concise example on how to use a given code module properly.
@@ -79,7 +82,10 @@ def context_generator(
             input_json={
                 "code_module": code_module,
                 "processed_prompt": processed_prompt,
-                "language": language
+                "language": language,
+                "source_file_path": source_file_path or "",
+                "example_file_path": example_file_path or "",
+                "module_name": module_name or ""
             },
             strength=strength,
             temperature=temperature,
