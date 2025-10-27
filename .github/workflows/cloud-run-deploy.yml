@@ -73,5 +73,5 @@ jobs:
             --region ${{ env.GCP_REGION }} \
             --format 'value(status.url)')
           echo "service_url=$SERVICE_URL" >> $GITHUB_OUTPUT
-          echo "✅ Deployed to: $SERVICE_URL"
+          echo "Deployed to: $SERVICE_URL"
 

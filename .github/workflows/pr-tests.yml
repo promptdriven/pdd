@@ -117,7 +117,7 @@ jobs:
             echo "EOF" >> $GITHUB_OUTPUT
           else
             echo "results_available=false" >> $GITHUB_OUTPUT
-            echo "comment_body=❌ Test execution failed - no results generated" >> $GITHUB_OUTPUT
+            echo "comment_body=FAILED: Test execution failed - no results generated" >> $GITHUB_OUTPUT
           fi
           
       - name: Comment PR with results
@@ -169,10 +169,10 @@ jobs:
         if: always()
         run: |
           if [ "${{ steps.run_tests.outcome }}" == "success" ]; then
-            echo "✅ All tests passed"
+            echo "PASS: All tests passed"
             exit 0
           else
-            echo "❌ Some tests failed"
+            echo "FAIL: Some tests failed"
             exit 1
           fi
 
@@ -212,8 +212,8 @@ jobs:
           if [ -n "$BUCKET_NAME" ] && [ -n "$PR_NUMBER" ]; then
             gsutil -m cp -r test_results/* \
               "gs://${BUCKET_NAME}/pr-${PR_NUMBER}/${TIMESTAMP}/"
-            echo "✅ Test results uploaded to GCS"
+            echo "Test results uploaded to GCS"
           else
-            echo "⏭️ Skipping GCS upload (bucket or PR number not configured)"
+            echo "Skipping GCS upload (bucket or PR number not configured)"
           fi
 

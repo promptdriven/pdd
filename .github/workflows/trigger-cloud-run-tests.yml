@@ -139,9 +139,9 @@ except Exception as e:
             commentBody += `**Region:** \`${{ env.GCP_REGION }}\`\n\n`;
             
             if ('${{ steps.execute_job.outcome }}' === 'success') {
-              commentBody += '✅ Tests completed successfully\n\n';
+              commentBody += 'PASS: Tests completed successfully\n\n';
             } else {
-              commentBody += '❌ Tests failed or timed out\n\n';
+              commentBody += 'FAIL: Tests failed or timed out\n\n';
             }
             
             commentBody += '**View logs:**\n';
