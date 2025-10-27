@@ -1,0 +1,14 @@
+name: pdd
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - pip
+  - pytest
+  - pytest-cov
+  - pytest-asyncio
+  - pylint
+  - pip:
+    - -r requirements.txt
+
