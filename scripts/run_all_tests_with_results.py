@@ -171,18 +171,41 @@ class TestRunner:
         if match := re.search(skip_pattern, output):
             skipped = int(match.group(1))
             
-        # Extract failure details
+        # Extract failure details with more comprehensive patterns
+        # Pattern 1: FAILED test_file.py::test_name - error
         failure_sections = re.findall(
-            r'FAILED\s+([\w/]+\.py::[\w_]+)\s+-\s+(.*?)(?=FAILED|$)',
+            r'FAILED\s+([\w/]+\.py::[\w_\[\]]+)(?:\s+-\s+(.+?))?(?=FAILED|\n\n|$)',
             output,
             re.DOTALL
         )
         
         for test_name, error_msg in failure_sections:
-            failures.append({
+            # Extract test number if present in test name (e.g., test_regression[5])
+            test_num_match = re.search(r'\[(\d+)\]', test_name)
+            test_number = test_num_match.group(1) if test_num_match else None
+            
+            failure_info = {
                 "test": test_name.strip(),
-                "error": error_msg.strip()[:500]  # Limit error length
-            })
+                "test_number": test_number,
+                "error": error_msg.strip()[:500] if error_msg else "No error message captured"
+            }
+            failures.append(failure_info)
+        
+        # Also look for FAILED lines in verbose output (test_file.py::test_name FAILED)
+        if not failures:
+            verbose_failures = re.findall(
+                r'([\w/]+\.py::[\w_\[\]]+)\s+FAILED',
+                output
+            )
+            for test_name in verbose_failures:
+                test_num_match = re.search(r'\[(\d+)\]', test_name)
+                test_number = test_num_match.group(1) if test_num_match else None
+                
+                failures.append({
+                    "test": test_name.strip(),
+                    "test_number": test_number,
+                    "error": "Failed (see logs for details)"
+                })
             
         return passed, failed, skipped, failures
         
@@ -237,10 +260,21 @@ class TestRunner:
 - Failed: {summary['total_failed']}
 - Skipped: {summary['total_skipped']}
 - Duration: {summary['duration_seconds']:.1f}s
-
----
-
 """
+        
+        # Collect all failed test numbers across all suites
+        all_failed_test_numbers = []
+        for suite_name, suite_data in self.results["test_suites"].items():
+            if "failures" in suite_data and suite_data["failures"]:
+                for failure in suite_data["failures"]:
+                    if failure.get("test_number"):
+                        all_failed_test_numbers.append(failure["test_number"])
+        
+        # Show failed test numbers prominently if any exist
+        if all_failed_test_numbers:
+            comment += f"\n**FAILED TEST NUMBERS:** {', '.join(sorted(set(all_failed_test_numbers)))}\n"
+        
+        comment += "\n---\n\n"
         
         # Add details for each test suite
         for suite_name, suite_data in self.results["test_suites"].items():
@@ -260,10 +294,25 @@ class TestRunner:
             
             # Add failure details for unit tests
             if "failures" in suite_data and suite_data["failures"]:
-                comment += "\n**Failures:**\n"
-                for failure in suite_data["failures"][:10]:  # Limit to 10 failures
-                    comment += f"- `{failure['test']}`\n"
-                    comment += f"  ```\n  {failure['error'][:200]}...\n  ```\n"
+                comment += "\n**Failed Tests:**\n"
+                
+                # Group by test number if available
+                numbered_failures = [f for f in suite_data["failures"] if f.get("test_number")]
+                unnumbered_failures = [f for f in suite_data["failures"] if not f.get("test_number")]
+                
+                if numbered_failures:
+                    test_numbers = [f["test_number"] for f in numbered_failures]
+                    comment += f"\n**Failed Test Numbers:** {', '.join(test_numbers)}\n\n"
+                
+                # Show details (limit to 10)
+                for failure in suite_data["failures"][:10]:
+                    if failure.get("test_number"):
+                        comment += f"- Test #{failure['test_number']}: `{failure['test']}`\n"
+                    else:
+                        comment += f"- `{failure['test']}`\n"
+                    if failure.get('error'):
+                        error_preview = failure['error'][:200].replace('\n', ' ')
+                        comment += f"  ```\n  {error_preview}...\n  ```\n"
                     
             # Add error details for regression tests
             if "errors" in suite_data and suite_data["errors"]:
@@ -345,6 +394,23 @@ def main():
     print(f"Total Failed: {runner.results['summary']['total_failed']}")
     print(f"Total Skipped: {runner.results['summary']['total_skipped']}")
     print(f"Duration: {runner.results['summary']['duration_seconds']:.1f}s")
+    
+    # Show failed test numbers if any
+    failed_test_numbers = []
+    for suite_name, suite_data in runner.results["test_suites"].items():
+        if "failures" in suite_data and suite_data["failures"]:
+            for failure in suite_data["failures"]:
+                if failure.get("test_number"):
+                    failed_test_numbers.append(failure["test_number"])
+    
+    if failed_test_numbers:
+        print("\n" + "=" * 60)
+        print("FAILED TEST NUMBERS")
+        print("=" * 60)
+        print(f"Test Numbers: {', '.join(sorted(set(failed_test_numbers)))}")
+        print("\nTo rerun specific tests:")
+        for num in sorted(set(failed_test_numbers)):
+            print(f"  make regression TEST_NUM={num}")
     
     # Exit with appropriate code
     sys.exit(0 if runner.results['summary']['all_passed'] else 1)
