@@ -8,57 +8,37 @@ A utility module responsible for generating language-specific test commands and 
 - Use `pathlib.Path` for path manipulations.
 - The file must start with `from __future__ import annotations`.
 
-% Instructions
+% Core Logic
 
-1.  **Implement `_which(cmd: str) -> bool`**:
-    -   **Purpose**: A private helper to check if a command exists in the system's PATH.
-    -   **Implementation**: Use `shutil.which(cmd) is not None`.
+The module provides two main functions: `default_verify_cmd_for` and `missing_tool_hints`.
 
-2.  **Implement `_find_project_root(start_path: str) -> Path`**:
-    -   **Purpose**: A private helper to find the project root by searching upwards for common marker files.
-    -   **Logic**:
-        -   Start from `Path(start_path).resolve()`.
-        -   Loop upwards (`p = p.parent`) until the root is reached (`p == p.parent`).
-        -   In each directory, check for the existence of any of these files: `"build.gradle"`, `"build.gradle.kts"`, `"pom.xml"`, `"package.json"`, `"jest.config.js"`.
-        -   If a marker is found, return the current directory path `p`.
-        -   If no marker is found, return the parent of the original resolved start path.
+### `default_verify_cmd_for(lang: str, unit_test_file: str) -> str | None`
 
-3.  **Implement `default_verify_cmd_for(lang: str, unit_test_file: str) -> str | None`**:
-    -   **Purpose**: Return a conservative, runnable shell command to compile and run tests for a given language.
-    -   **Logic**:
-        -   Handle `lang` case-insensitively.
-        -   **Python**: Return the command `f'{os.sys.executable} -m pytest "{unit_test_file}" -q'`.
-        -   **JavaScript/TypeScript**:
-            -   Find the project root using `_find_project_root(unit_test_file)`.
-            -   Construct a multi-line bash command string starting with `set -e`.
-            -   The command must `cd` into the project root.
-            -   It must check if `npm` exists using `command -v npm`.
-            -   If `package.json` exists, it must run `npm install && npm test`.
-            -   Otherwise, it must fall back to running the test file directly with `node`, wrapping the `require` in a `try...catch` block.
-        -   **Java**:
-            -   Find the project root.
-            -   If `pom.xml` exists, return a command to `cd` to the root and run `mvn test`.
-            -   Else if `build.gradle` or `build.gradle.kts` exists:
-                -   If `gradlew` exists, return a command to `cd` to the root and run `./gradlew test`.
-                -   Otherwise, return a command to `cd` to the root and run `gradle test`.
-            -   If no build system is found, return `None`.
-        -   **C++**: Include a commented-out section as a placeholder for potential C++ support. Do not implement it.
-        -   If the language is not supported, return `None`.
+This function generates a default verification command for a given programming language.
 
-4.  **Implement `missing_tool_hints(lang: str, verify_cmd: str | None, project_root: Path) -> str | None`**:
-    -   **Purpose**: Check for missing CLI tools and provide user-friendly installation guidance.
-    -   **Logic**:
-        -   If `verify_cmd` is `None`, return `None`.
-        -   Create an empty list `need`.
-        -   **JavaScript/TypeScript**: If `_which("npm")` is false, append `"npm (Node.js)"` to `need`.
-        -   **Java**:
-            -   If `_which("javac")` or `_which("java")` is false, append `"Java JDK (javac, java)"`.
-            -   Check if any `.jar` file in the project root contains both "junit" and "console" in its name. If not, append `"JUnit ConsoleLauncher jar (e.g. junit-platform-console-standalone.jar)"`.
-        -   **C++**: If `_which("g++")` is false, append `"g++"` to `need`.
-        -   If `need` is empty, return `None`.
-        -   Construct a formatted string containing installation instructions for macOS (`brew`) and Ubuntu (`apt-get`) for each item in `need`. The string should use Rich-style tags like `[yellow]` and `[dim]`.
+-   **Python**: It returns a `pytest` command to run the specified test file.
+-   **JavaScript/TypeScript**: It detects the project root and generates a command to run `npm install && npm test` if a `package.json` is present. Otherwise, it falls back to running the test file with `node`.
+-   **Java**: It detects the project root and generates the appropriate command for Maven (`mvn test`) or Gradle (`./gradlew test` or `gradle test`), depending on the build files found.
+-   **C++**: This is a placeholder and should not be implemented.
+-   For unsupported languages, it returns `None`.
+
+### `missing_tool_hints(lang: str, verify_cmd: str | None, project_root: Path) -> str | None`
+
+This function checks for missing command-line tools required by the verification command and provides user-friendly installation hints.
+
+-   It checks for the presence of `npm` for JavaScript/TypeScript, `javac`/`java` and JUnit for Java, and `g++` for C++.
+-   If any tools are missing, it returns a formatted string with installation instructions for macOS (Homebrew) and Ubuntu (apt-get).
+-   If all required tools are present, it returns `None`.
+
+% Helper Functions
+
+The module uses the following private helper functions:
+
+-   `_which(cmd: str) -> bool`: Checks if a command exists in the system's PATH.
+-   `_find_project_root(start_path: str) -> Path`: Finds the project root by searching upwards for common marker files like `package.json`, `pom.xml`, or `build.gradle`.
 
 % Dependencies
 <pdd>This module is standalone and has no internal PDD dependencies.</pdd>
+
 % Deliverables
-- Code: `pdd/agentic_langtest.py` containing the exact functions and logic described above.
+- Code: `pdd/agentic_langtest.py` containing the functions and logic described above.
