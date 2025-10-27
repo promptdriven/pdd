@@ -7,3 +7,5 @@ test-fixtures/**
 **/*.log
 node_modules/**
 *.vsix
+src/**
+tsconfig.json
