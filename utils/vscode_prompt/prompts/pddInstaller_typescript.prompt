@@ -49,7 +49,6 @@ Install PDD CLI using uv (the modern Python package manager):
 2. If uv exists:
    - Use command: `uv tool install pdd-cli`
    - Mark installation method as 'uv'
-   - Mark installation method as 'uv'
 3. If uv doesn't exist:
    - Install uv first using platform-specific command:
      - Windows: `powershell -c "irm https://astral.sh/uv/install.ps1 | iex"`
