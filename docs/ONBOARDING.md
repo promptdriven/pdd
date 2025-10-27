@@ -267,11 +267,274 @@ This allows you to quickly identify which cases are failing and why, so you can 
 - Review example projects in the `examples/` directory
 - Start with the basic tutorials in the [Tutorials](./TUTORIALS.md) documentation
 
+## Understanding PDD's File Structure
+
+Before troubleshooting, it's helpful to understand where PDD stores different types of files:
+
+### Directory Layout
+```
+pdd/                          # Main project directory
+├── prompts/                  # Prompt templates (root level)
+├── data/                     # CSV configuration files (root level)
+├── pdd/                      # Source code directory
+│   ├── prompts -> ../prompts/  # Symbolic link (must exist!)
+│   └── data -> ../data/        # Symbolic link (must exist!)
+├── context/                  # Generated examples and context
+├── output/                   # Command outputs
+├── staging/                  # Regression test logs
+│   └── regression_YYYYMMDD_HHMMSS/
+├── tests/                    # Test files
+└── examples/                 # Example projects
+```
+
+### Cache Files (Can Be Safely Deleted)
+PDD caches LLM responses to save costs and improve performance:
+- `litellm_cache.sqlite/` - LLM response cache (root level)
+- `pdd/litellm_cache.sqlite/` - LLM response cache (pdd directory)
+- `__pycache__/` - Python bytecode cache
+- `*.pyc` - Compiled Python files
+
+**To clear all caches:**
+```bash
+rm -rf litellm_cache.sqlite pdd/litellm_cache.sqlite
+find . -name "*.pyc" -delete && find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+rm -rf staging/regression_*
+```
+
+---
+
 ## Troubleshooting
 
-If you encounter any issues during setup:
+This section helps you diagnose and fix common setup issues. Start by identifying your symptoms below.
 
-1. Re-read the instructions carefully.
-2. Check the [README](https://github.com/gltanaka/pdd/blob/main/README.md) for additional details.
-3. Search existing issues on GitHub.
-4. Join the [Discord](https://discord.gg/Q7Ts5Qt3) community for support.
+### Quick Diagnostic Checklist
+
+Run these commands to check your setup:
+
+```bash
+# 1. Check if you're in the right environment
+conda env list
+# Look for * next to 'pdd'
+
+# 2. Verify PDD is installed and accessible
+pdd --version
+
+# 3. Check symbolic links exist
+ls -la pdd/prompts pdd/data
+# Should show: prompts -> ../prompts and data -> ../data
+
+# 4. Verify PDD_PATH is set
+echo $PDD_PATH
+# Should show: /absolute/path/to/your/pdd
+
+# 5. Test Python can import PDD
+python -c "import pdd; print('PDD imports correctly')"
+```
+
+---
+
+### "Command not found: pdd"
+
+**What this means:** Your terminal can't find the PDD command.
+
+**Quick fix:**
+```bash
+# Activate the conda environment
+conda activate pdd
+
+# Verify it worked
+pdd --version
+```
+
+**If still not working:**
+- Make sure you completed step 2 in Installation (`uv tool install pdd-cli`)
+- Try restarting your terminal
+- Check if UV is installed: `uv --version`
+
+---
+
+### "ModuleNotFoundError" or "Failed to load prompt template"
+
+**What this means:** PDD can't find its configuration files or prompts.
+
+**Root cause:** Missing or broken symbolic links in the `pdd/` directory.
+
+**Fix it:** Re-run the symbolic link creation steps from **"Final Project Configuration → Step 1: Create Symbolic Links"** above.
+
+**Verify the fix:**
+```bash
+ls -la pdd/prompts pdd/data
+# Should show: lrwxr-xr-x prompts -> ../prompts
+#              lrwxr-xr-x data -> ../data
+```
+
+---
+
+### Import Errors or "Cannot import name X from pdd"
+
+**What this means:** Python can't find the PDD modules or is using the wrong version.
+
+**Common causes:**
+1. `PDD_PATH` environment variable not set
+2. Conflicting PYTHONPATH settings
+3. Running from wrong directory
+
+**Fix:** Follow the `PDD_PATH` setup steps from **"Final Project Configuration → Step 2 or Step 3"** above. Choose either:
+- **Step 2**: Set `PDD_PATH` in a `.env` file
+- **Step 3**: Set `PDD_PATH` in Conda environment (recommended for WSL)
+
+**Verify the fix:**
+```bash
+echo $PDD_PATH
+python -c "import pdd; print('Success!')"
+```
+
+---
+
+### "API key not found" or "Quota exceeded"
+
+**What this means:** PDD can't access your LLM provider API keys, or you're hitting rate limits.
+
+**Understanding API key priority:**
+PDD checks for API keys in this order (highest priority first):
+1. **Infisical secrets** (when using `infisical run --`)
+2. **`~/.pdd/llm_model.csv`** (user-specific model registry)
+3. **`.env` file** (project root)
+4. **Shell environment variables**
+
+**Fix for "quota exceeded":**
+```bash
+# Check if you have a user-specific model file that might be using a rate-limited model
+ls -la ~/.pdd/llm_model.csv
+
+# If it exists, remove it to use project defaults
+rm -f ~/.pdd/llm_model.csv
+```
+
+**Fix for "API key not found":**
+- If using **Infisical**: Follow **"Step 7: Set Up Infisical for Secrets Management"** above to configure your API keys
+- If using **.env file**: Ensure your `.env` file in the project root contains your API keys (e.g., `OPENAI_API_KEY=sk-...`)
+
+**Verify keys are loaded:**
+```bash
+infisical run -- env | grep API_KEY  # If using Infisical
+# OR
+env | grep API_KEY  # If using .env
+```
+
+---
+
+### Tests Fail with "[Errno 2] No such file or directory" (WSL Users)
+
+**What this means:** Windows Subsystem for Linux has path translation issues.
+
+**Quick fix:**
+```bash
+# Set this environment variable before running tests
+export TEST_LOCAL=true
+./tests/regression.sh
+
+# Or with Infisical:
+export TEST_LOCAL=true
+infisical run -- make regression
+```
+
+**Why this happens:** WSL paths like `/mnt/c/...` sometimes don't translate correctly between Windows and Linux.
+
+---
+
+### "Validation errors for CodeFix" (Advanced Issue)
+
+**What this means:** The LLM returned a response that doesn't match the expected format.
+
+**Full error example:**
+```
+ValueError: 4 validation errors for CodeFix
+  update_program: Field required
+  update_code: Field required
+  fixed_program: Field required
+  fixed_code: Field required
+```
+
+**When this occurs:**
+- Using the `pdd crash` command
+- With models that have `structured_output: False` in `data/llm_model.csv`
+- Examples: DeepSeek R1, Qwen3 Coder, local MLX models
+
+**Fix:**
+Use a model with better structured output support:
+```bash
+# Check which models have structured_output: True
+cat data/llm_model.csv | grep "True"
+
+# Recommended models:
+# - GPT-5
+# - Claude Sonnet 4.5
+# - Gemini 2.5 Pro
+```
+
+**Technical details (for developers):**
+- File: `pdd/fix_code_module_errors.py` (lines 131-135)
+- Prompt: `prompts/extract_program_code_fix_LLM.prompt`
+- The LLM must return valid JSON with specific required fields
+
+---
+
+### General Troubleshooting Steps
+
+If you're still having issues after trying the specific fixes above:
+
+1. **Re-run the installation and configuration steps** from the beginning of this guide
+
+2. **Clear all caches** (see **"Understanding PDD's File Structure → Cache Files"** above)
+
+3. **Check documentation:**
+   - [README](https://github.com/gltanaka/pdd/blob/main/README.md) - Detailed setup instructions
+   - [Whitepaper](./whitepaper.md) - Core concepts and architecture
+   - [Prompting Guide](./prompting_guide.md) - How to write effective prompts
+
+4. **Get help:**
+   - [GitHub Issues](https://github.com/gltanaka/pdd/issues) - Search existing issues
+   - [Discord Community](https://discord.gg/Q7Ts5Qt3) - Ask questions and get support
+
+---
+
+### Verify Your Setup Is Complete
+
+Run this comprehensive check:
+
+```bash
+#!/bin/bash
+echo "PDD Setup Verification"
+echo "========================="
+echo ""
+
+echo "1. Conda Environment:"
+conda env list | grep pdd && echo "[PASS] pdd environment exists" || echo "[FAIL] pdd environment not found"
+echo ""
+
+echo "2. PDD Command:"
+pdd --version && echo "[PASS] PDD command works" || echo "[FAIL] PDD command not found"
+echo ""
+
+echo "3. Symbolic Links:"
+ls -la pdd/prompts pdd/data 2>/dev/null && echo "[PASS] Symbolic links exist" || echo "[FAIL] Symbolic links missing"
+echo ""
+
+echo "4. PDD_PATH:"
+[ -n "$PDD_PATH" ] && echo "[PASS] PDD_PATH is set: $PDD_PATH" || echo "[FAIL] PDD_PATH not set"
+echo ""
+
+echo "5. Python Import:"
+python -c "import pdd" 2>/dev/null && echo "[PASS] Python can import pdd" || echo "[FAIL] Import failed"
+echo ""
+
+echo "6. API Keys (Infisical):"
+infisical run -- env | grep -q API_KEY && echo "[PASS] API keys available" || echo "[WARN] API keys not detected (may be in .env)"
+echo ""
+
+echo "========================="
+echo "Setup verification complete!"
+```
+
+Save this as `verify_setup.sh`, make it executable with `chmod +x verify_setup.sh`, and run it with `./verify_setup.sh`.
