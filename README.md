@@ -483,6 +483,7 @@ These options can be used with any command:
 - `--local`: Run commands locally instead of in the cloud.
 - `--context CONTEXT_NAME`: Override automatic context detection and use the specified context from `.pddrc`.
 - `--list-contexts`: List all available contexts defined in `.pddrc` and exit.
+- `--exclude-tests`: Exclude test scenarios from code coverage generation. (WIP)
 
 ### Context Selection Flags
 
