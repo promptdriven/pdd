@@ -58,9 +58,9 @@ variables:
 usage:
   generate:
     - name: Minimal (PRD only)
-      command: pdd generate --template architecture/architecture_json -e PRD_FILE=docs/specs.md --output architecture.json
+      command: pdd generate -e PRD_FILE=docs/specs.md --output architecture.json pdd/templates/architecture/architecture_json.prompt
     - name: With tech stack overview
-      command: pdd generate --template architecture/architecture_json -e PRD_FILE=docs/specs.md -e TECH_STACK_FILE=docs/tech_stack.md --output architecture.json
+      command: pdd generate -e PRD_FILE=docs/specs.md -e TECH_STACK_FILE=docs/tech_stack.md --output architecture.json pdd/templates/architecture/architecture_json.prompt
 
 discover:
   enabled: false

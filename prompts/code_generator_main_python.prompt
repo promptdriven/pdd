@@ -111,11 +111,52 @@
       </preprocess_example>
 
       - Here is an example of how to use the `detect_host_python_executable` function:
-      <python_env_detector_example>
-      <include>context/python_env_detector_example.py</include>
-      </python_env_detector_example>
+      <detect_host_python_example>
+      ```python
+      from pdd.python_env_detector import detect_host_python_executable
+      
+      # Get the appropriate Python executable for the current environment
+      python_executable = detect_host_python_executable()
+      print(f"Using Python executable: {python_executable}")
+      ```
+      </detect_host_python_example>
 
    </internal_example_modules>
+
+   % Required imports for the new functionality:
+   <required_imports>
+   ```python
+   import tempfile
+   import sys
+   from typing import Optional, Tuple, Dict, Any, List
+   from .python_env_detector import detect_host_python_executable
+   ```
+   </required_imports>
+
+   % Example of LLM toggle and post-process functionality:
+   <llm_toggle_example>
+   ```python
+   # Example prompt file with LLM toggle and post-process configuration:
+   # ---
+   # name: architecture/architecture_json
+   # language: json
+   # output: architecture.json
+   # llm: true  # or false to disable LLM
+   # post_process_python: ./pdd/render_mermaid.py
+   # post_process_args:
+   #   - "{INPUT_FILE}"
+   #   - "{APP_NAME}"
+   #   - "{OUTPUT_HTML}"
+   # ---
+   
+   # The function should:
+   # 1. Check if llm is enabled (from front matter or env vars)
+   # 2. If llm is false, require post_process_python to be specified
+   # 3. Run the post-process script with appropriate arguments
+   # 4. Handle placeholder substitution in arguments
+   # 5. Support both stdin and argv modes for post-process scripts
+   ```
+   </llm_toggle_example>
 
    % Here is how to call the cloud version of the code generator when not using the `--local` flag.
    % Note: The API documentation (represented by the included api-documentation.md) should reflect that
@@ -130,18 +171,6 @@
    <cli_command_readme>
       <include>./README.md</include>
    </cli_command_readme>
-
-% LLM Toggle and Post-Process Functionality
-   The function must support LLM toggle functionality to enable/disable LLM generation while still allowing post-processing:
-   1. Parse YAML front matter to check for `llm` field (boolean, defaults to true)
-   2. Check environment variables `llm` or `LLM` for override
-   3. When `llm=false`, skip LLM generation and run post-processing only
-   4. Implement force flag logic: `effective_force = force_overwrite or not llm_enabled`
-   5. Support post-process Python scripts via `post_process_python` and `post_process_args` in front matter
-   6. Handle placeholder substitution in post-process arguments (`{INPUT_FILE}`, `{APP_NAME}`, `{OUTPUT_HTML}`)
-   7. Support both stdin and argv modes for post-process scripts
-   8. Use `detect_host_python_executable()` for subprocess execution
-   9. Set environment variables for post-process scripts: `PDD_LANGUAGE`, `PDD_OUTPUT_PATH`, `PDD_PROMPT_FILE`, `PDD_LLM`, `PDD_ENV_VARS`
 
 % Cloud vs Local Execution Strategy (with parameter substitution):
    1. If the `--local` flag is explicitly provided, use local execution directly.
@@ -184,10 +213,7 @@
        - If YAML front matter specifies `language`, use it.
        - Otherwise, determine the language using `construct_paths` (may infer from file extension, special cases, or filename suffix).
        - When calling `construct_paths`, pass `context_override=ctx.obj.get('context')` so a global `--context` is honored.
-    4. Determine LLM state and whether to use incremental generation or full generation:
-       - Parse front matter to check for `llm` field (boolean, defaults to true)
-       - Check environment variables `llm` or `LLM` for override
-       - If LLM is disabled, we're only doing post-processing, so skip overwrite confirmation (`effective_force = force_overwrite or not llm_enabled`)
+    4. Determine whether to use incremental generation or full generation:
        - Check if output is specified and file exists
        - If original_prompt is specified, use it; otherwise try to get last committed version from git
        - If both conditions met, try incremental generation
