@@ -50,8 +50,7 @@ def test_run_pytest_and_capture_output_successful_run() -> None:
     assert result["test_results"][0]["passed"] == 1
     assert result["test_results"][0]["failures"] == 0
     assert result["test_results"][0]["errors"] == 0
-    # Warnings count may be non-zero due to pytest configuration warnings (unrelated to test)
-    assert isinstance(result["test_results"][0]["warnings"], int)
+    assert result["test_results"][0]["warnings"] == 0
     os.remove(test_file)
 
 
@@ -67,8 +66,7 @@ def test_run_pytest_and_capture_output_failed_test() -> None:
     assert result["test_results"][0]["failures"] == 1
     assert result["test_results"][0]["passed"] == 0
     assert result["test_results"][0]["errors"] == 0
-    # Warnings count may be non-zero due to pytest configuration warnings (unrelated to test)
-    assert isinstance(result["test_results"][0]["warnings"], int)
+    assert result["test_results"][0]["warnings"] == 0
     os.remove(test_file)
 
 
@@ -86,8 +84,7 @@ def test_run_pytest_and_capture_output_error_test() -> None:
     assert result["test_results"][0]["errors"] == 0
     
     assert result["test_results"][0]["passed"] == 0
-    # Warnings count may be non-zero due to pytest configuration warnings (unrelated to test)
-    assert isinstance(result["test_results"][0]["warnings"], int)
+    assert result["test_results"][0]["warnings"] == 0
 
 
 def test_run_pytest_and_capture_output_with_warnings() -> None:
