@@ -8,7 +8,7 @@ The test automation is **fully manual** - you control when tests run via the Git
 
 1. **Go to Actions Tab**
    ```
-   https://github.com/promptdriven/pdd_cloud/actions
+   https://github.com/gltanaka/pdd/actions
    ```
 
 2. **Select Workflow**
@@ -45,7 +45,7 @@ The test automation is **fully manual** - you control when tests run via the Git
 ### Example 1: Test PR #45
 
 ```
-Go to: https://github.com/promptdriven/pdd_cloud/actions
+Go to: https://github.com/gltanaka/pdd/actions
 Click: "Manual Test Execution" → "Run workflow"
 
 Fill in:
@@ -64,7 +64,7 @@ Click: "Run workflow"
 ### Example 2: Test Feature Branch
 
 ```
-Go to: https://github.com/promptdriven/pdd_cloud/actions
+Go to: https://github.com/gltanaka/pdd/actions
 Click: "Manual Test Execution" → "Run workflow"
 
 Fill in:
@@ -83,13 +83,13 @@ Click: "Run workflow"
 ### Example 3: Test with Custom PR URL
 
 ```
-Go to: https://github.com/promptdriven/pdd_cloud/actions
+Go to: https://github.com/gltanaka/pdd/actions
 Click: "Manual Test Execution" → "Run workflow"
 
 Fill in:
   PR number: 45
   Branch: feat/my-feature
-  PR URL: https://github.com/promptdriven/pdd_cloud/pull/45
+  PR URL: https://github.com/gltanaka/pdd/pull/45
 
 Click: "Run workflow"
 ```
@@ -103,7 +103,7 @@ Click: "Run workflow"
 
 ### 1. In the Actions Tab
 
-Go to: `https://github.com/promptdriven/pdd_cloud/actions`
+Go to: `https://github.com/gltanaka/pdd/actions`
 
 - See all workflow runs
 - Click on a run to view logs
@@ -121,7 +121,7 @@ Example comment:
 ```markdown
 ## Test Results - PASS
 
-**Pull Request:** https://github.com/promptdriven/pdd_cloud/pull/45
+**Pull Request:** https://github.com/gltanaka/pdd/pull/45
 
 **Overall Summary:**
 - Passed: 150
@@ -172,14 +172,14 @@ export GITHUB_TOKEN="your_token_here"
 curl -X POST \
   -H "Authorization: token $GITHUB_TOKEN" \
   -H "Accept: application/vnd.github.v3+json" \
-  https://api.github.com/repos/promptdriven/pdd_cloud/actions/workflows/pr-tests.yml/dispatches \
+  https://api.github.com/repos/gltanaka/pdd/actions/workflows/pr-tests.yml/dispatches \
   -d '{"ref":"main","inputs":{"branch":"feat/my-feature"}}'
 
 # Trigger workflow for a PR
 curl -X POST \
   -H "Authorization: token $GITHUB_TOKEN" \
   -H "Accept: application/vnd.github.v3+json" \
-  https://api.github.com/repos/promptdriven/pdd_cloud/actions/workflows/pr-tests.yml/dispatches \
+  https://api.github.com/repos/gltanaka/pdd/actions/workflows/pr-tests.yml/dispatches \
   -d '{"ref":"main","inputs":{"pr_number":"45","branch":"feat/my-feature"}}'
 ```
 
@@ -282,7 +282,7 @@ Result: Debug with full logs in artifacts
 - ✅ Artifacts always saved
 
 **To Run Tests:**
-1. Go to: https://github.com/promptdriven/pdd_cloud/actions
+1. Go to: https://github.com/gltanaka/pdd/actions
 2. Click: "Manual Test Execution" → "Run workflow"
 3. Enter: PR number or branch name
 4. Click: "Run workflow"
