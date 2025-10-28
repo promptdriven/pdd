@@ -1,21 +1,21 @@
-name: Manual Test Execution
+name: Test Public PR
 
 on:
   workflow_dispatch:
     inputs:
-      pr_number:
-        description: 'PR number to test (optional - leave empty for branch)'
+      public_pr_number:
+        description: 'PR number from public repo (promptdriven/pdd) to test'
+        required: true
+        type: string
+      public_pr_url:
+        description: 'PR URL from public repo (auto-filled by Makefile)'
         required: false
         type: string
       branch:
-        description: 'Branch to test (required if no PR number)'
+        description: 'Base branch in private repo to test against'
         required: false
         type: string
         default: 'main'
-      pr_url:
-        description: 'PR URL (optional - auto-generated if PR number provided)'
-        required: false
-        type: string
 
 env:
   PYTHON_VERSION: '3.12'
@@ -34,11 +34,27 @@ jobs:
       pull-requests: write
       
     steps:
-      - name: Checkout code
+      - name: Checkout private repo
         uses: actions/checkout@v4
         with:
+          repository: gltanaka/pdd
           ref: ${{ inputs.branch || 'main' }}
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Fetch PR from public repo
+        run: |
+          echo "Fetching PR #${{ inputs.public_pr_number }} from public repo..."
+          git remote add public https://github.com/promptdriven/pdd.git
+          git fetch public pull/${{ inputs.public_pr_number }}/head:pr-${{ inputs.public_pr_number }}
+          
+          echo "Current branch:"
+          git branch -v
+          
+          echo "Merging PR locally (not pushing)..."
+          git merge --no-ff pr-${{ inputs.public_pr_number }} -m "Test merge of public PR #${{ inputs.public_pr_number }}"
+          
+          echo "Merge complete. Running tests on merged code..."
           
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -99,26 +115,19 @@ jobs:
           # Export Infisical secrets to environment
           export $(infisical export --format=dotenv | xargs)
           
-          # Construct PR URL from inputs
-          PR_NUMBER="${{ inputs.pr_number }}"
-          PR_URL="${{ inputs.pr_url }}"
+          # Use public PR information
+          PR_NUMBER="${{ inputs.public_pr_number }}"
+          PR_URL="${{ inputs.public_pr_url }}"
           
-          # If no PR URL but we have PR number, construct it
+          # If no PR URL but we have PR number, construct it for public repo
           if [ -z "$PR_URL" ] && [ -n "$PR_NUMBER" ]; then
-            PR_URL="https://github.com/${{ github.repository }}/pull/${PR_NUMBER}"
+            PR_URL="https://github.com/promptdriven/pdd/pull/${PR_NUMBER}"
           fi
           
-          # Run the test suite with PR information
-          if [ -n "$PR_URL" ]; then
-            echo "Running tests for PR: $PR_URL"
-            python scripts/run_all_tests_with_results.py --pr-number "$PR_NUMBER" --pr-url "$PR_URL"
-          elif [ -n "$PR_NUMBER" ]; then
-            echo "Running tests for PR #$PR_NUMBER"
-            python scripts/run_all_tests_with_results.py --pr-number "$PR_NUMBER"
-          else
-            echo "Running tests for branch: ${{ inputs.branch }}"
-            python scripts/run_all_tests_with_results.py
-          fi
+          # Run the test suite with public PR information
+          echo "Running tests for public PR #$PR_NUMBER: $PR_URL"
+          echo "Testing merged code: private repo (gltanaka/pdd) + public PR"
+          python scripts/run_all_tests_with_results.py --pr-number "$PR_NUMBER" --pr-url "$PR_URL"
           
       - name: Read test results
         id: test_results
@@ -137,19 +146,24 @@ jobs:
             echo "comment_body=FAILED: Test execution failed - no results generated" >> $GITHUB_OUTPUT
           fi
           
-      - name: Comment PR with results
-        if: always() && inputs.pr_number != ''
+      - name: Comment on public repo PR
+        if: always() && steps.test_results.outputs.results_available == 'true'
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.PUBLIC_REPO_TOKEN }}
           script: |
             const commentBody = `${{ steps.test_results.outputs.comment_body }}`;
+            const publicPrNumber = ${{ inputs.public_pr_number }};
             
-            // Find existing comment
+            // Post to public repo (promptdriven/pdd)
+            const owner = 'promptdriven';
+            const repo = 'pdd';
+            
+            // Find existing comment from this workflow
             const comments = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
+              owner: owner,
+              repo: repo,
+              issue_number: publicPrNumber,
             });
             
             const botComment = comments.data.find(comment => 
@@ -160,25 +174,27 @@ jobs:
             // Update or create comment
             if (botComment) {
               await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
+                owner: owner,
+                repo: repo,
                 comment_id: botComment.id,
                 body: commentBody
               });
+              console.log('Updated existing comment on public PR');
             } else {
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: ${{ inputs.pr_number }},
-              body: commentBody
-            });
+              await github.rest.issues.createComment({
+                owner: owner,
+                repo: repo,
+                issue_number: publicPrNumber,
+                body: commentBody
+              });
+              console.log('Created new comment on public PR');
             }
             
       - name: Upload test results as artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results-${{ inputs.pr_number || github.run_number }}
+          name: test-results-public-pr-${{ inputs.public_pr_number }}
           path: test_results/
           retention-days: 30
           

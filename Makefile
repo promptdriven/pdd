@@ -25,6 +25,7 @@ help:
 	@echo "  make all-regression 		  - Run all regression test suites"
 	@echo "  make test-all-ci [PR_NUMBER=n] [PR_URL=url] - Run all tests with result capture"
 	@echo "  make test-all-with-infisical [PR_NUMBER=n] [PR_URL=url] - Run all tests with Infisical"
+	@echo "  make pr-test pr-num=N        - Test PR from public repo (promptdriven/pdd) on GitHub Actions"
 	@echo "  make analysis                - Run regression analysis"
 	@echo "  make verify MODULE=name      - Verify code functionality against prompt intent"
 	@echo "  make lint                    - Run pylint for static code analysis"
@@ -449,6 +450,29 @@ endif
 else
 	@infisical run -- conda run -n pdd --no-capture-output python scripts/run_all_tests_with_results.py
 endif
+
+# Test a PR from the public repo (promptdriven/pdd) by triggering GitHub Actions
+.PHONY: pr-test
+pr-test:
+	@if [ -z "$(pr-num)" ]; then \
+		echo "Error: pr-num is required"; \
+		echo "Usage: make pr-test pr-num=123"; \
+		exit 1; \
+	fi
+	@echo "Triggering GitHub Actions to test public PR #$(pr-num)..."
+	@if ! command -v gh &> /dev/null; then \
+		echo "Error: GitHub CLI (gh) not found. Please install it:"; \
+		echo "  macOS: brew install gh"; \
+		echo "  Linux: https://github.com/cli/cli/blob/trunk/docs/install_linux.md"; \
+		exit 1; \
+	fi
+	@gh workflow run pr-tests.yml \
+		--repo gltanaka/pdd \
+		--field public_pr_number=$(pr-num) \
+		--field public_pr_url=https://github.com/promptdriven/pdd/pull/$(pr-num)
+	@echo "Workflow triggered successfully!"
+	@echo "View progress: https://github.com/gltanaka/pdd/actions"
+	@echo "Results will be posted to: https://github.com/promptdriven/pdd/pull/$(pr-num)"
 
 install:
 	@echo "Installing pdd"
