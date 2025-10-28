@@ -100,8 +100,21 @@ jobs:
           # Export Infisical secrets to environment
           export $(infisical export --format=dotenv | xargs)
           
-          # Run the test suite with result capture
-          python scripts/run_all_tests_with_results.py
+          # Construct PR URL
+          PR_NUMBER="${{ github.event.pull_request.number || inputs.pr_number }}"
+          PR_URL="${{ github.event.pull_request.html_url }}"
+          
+          # If no PR URL but we have PR number, construct it
+          if [ -z "$PR_URL" ] && [ -n "$PR_NUMBER" ]; then
+            PR_URL="https://github.com/${{ github.repository }}/pull/${PR_NUMBER}"
+          fi
+          
+          # Run the test suite with PR information
+          if [ -n "$PR_URL" ]; then
+            python scripts/run_all_tests_with_results.py --pr-number "$PR_NUMBER" --pr-url "$PR_URL"
+          else
+            python scripts/run_all_tests_with_results.py
+          fi
           
       - name: Read test results
         id: test_results

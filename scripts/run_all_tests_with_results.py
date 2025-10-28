@@ -17,10 +17,14 @@ from typing import Dict, List, Tuple
 class TestRunner:
     """Orchestrates test execution and result collection."""
     
-    def __init__(self, project_root: Path):
+    def __init__(self, project_root: Path, pr_number: str = None, pr_url: str = None):
         self.project_root = project_root
+        self.pr_number = pr_number
+        self.pr_url = pr_url
         self.results = {
             "timestamp": datetime.now().isoformat(),
+            "pr_number": pr_number,
+            "pr_url": pr_url,
             "test_suites": {},
             "summary": {
                 "total_passed": 0,
@@ -254,7 +258,16 @@ class TestRunner:
         status = "PASS" if summary["all_passed"] else "FAIL"
         
         comment = f"""## Test Results - {status}
-
+"""
+        
+        # Add PR link if available
+        if self.pr_url:
+            comment += f"\n**Pull Request:** {self.pr_url}\n"
+        elif self.pr_number:
+            # Construct URL from PR number (assumes GitHub)
+            comment += f"\n**Pull Request:** #{self.pr_number}\n"
+        
+        comment += f"""
 **Overall Summary:**
 - Passed: {summary['total_passed']}
 - Failed: {summary['total_failed']}
@@ -349,10 +362,17 @@ Test run completed at: {self.results['timestamp']}
 
 def main():
     """Main entry point for test runner."""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Run all PDD test suites and capture results')
+    parser.add_argument('--pr-number', type=str, help='GitHub PR number')
+    parser.add_argument('--pr-url', type=str, help='GitHub PR URL')
+    args = parser.parse_args()
+    
     project_root = Path(__file__).parent.parent
     
-    # Initialize runner
-    runner = TestRunner(project_root)
+    # Initialize runner with PR information
+    runner = TestRunner(project_root, pr_number=args.pr_number, pr_url=args.pr_url)
     
     # Run all test suites
     try:

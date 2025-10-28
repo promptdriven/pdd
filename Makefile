@@ -23,8 +23,8 @@ help:
 	@echo "  make regression [TEST_NUM=n] - Run regression tests (optionally specific test number)"
 	@echo "  make sync-regression [TEST_NUM=n] - Run sync regression tests (optionally specific test number)"
 	@echo "  make all-regression 		  - Run all regression test suites"
-	@echo "  make test-all-ci             - Run all tests with result capture (for CI/CD)"
-	@echo "  make test-all-with-infisical - Run all tests with Infisical secrets"
+	@echo "  make test-all-ci [PR_NUMBER=n] [PR_URL=url] - Run all tests with result capture"
+	@echo "  make test-all-with-infisical [PR_NUMBER=n] [PR_URL=url] - Run all tests with Infisical"
 	@echo "  make analysis                - Run regression analysis"
 	@echo "  make verify MODULE=name      - Verify code functionality against prompt intent"
 	@echo "  make lint                    - Run pylint for static code analysis"
@@ -420,7 +420,15 @@ all-regression: regression sync-regression
 test-all-ci:
 	@echo "Running all test suites with result capture for CI/CD"
 	@mkdir -p test_results
+ifdef PR_NUMBER
+ifdef PR_URL
+	@conda run -n pdd --no-capture-output python scripts/run_all_tests_with_results.py --pr-number $(PR_NUMBER) --pr-url $(PR_URL)
+else
+	@conda run -n pdd --no-capture-output python scripts/run_all_tests_with_results.py --pr-number $(PR_NUMBER)
+endif
+else
 	@conda run -n pdd --no-capture-output python scripts/run_all_tests_with_results.py
+endif
 
 # Run all tests with Infisical (for local development and CI)
 .PHONY: test-all-with-infisical
@@ -432,7 +440,15 @@ test-all-with-infisical:
 		exit 1; \
 	fi
 	@mkdir -p test_results
+ifdef PR_NUMBER
+ifdef PR_URL
+	@infisical run -- conda run -n pdd --no-capture-output python scripts/run_all_tests_with_results.py --pr-number $(PR_NUMBER) --pr-url $(PR_URL)
+else
+	@infisical run -- conda run -n pdd --no-capture-output python scripts/run_all_tests_with_results.py --pr-number $(PR_NUMBER)
+endif
+else
 	@infisical run -- conda run -n pdd --no-capture-output python scripts/run_all_tests_with_results.py
+endif
 
 install:
 	@echo "Installing pdd"
