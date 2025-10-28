@@ -1,11 +1,6 @@
-name: PR Test Automation
+name: Manual Test Execution
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-    branches:
-      - main
-      - develop
   workflow_dispatch:
     inputs:
       pr_number:
@@ -13,10 +8,14 @@ on:
         required: false
         type: string
       branch:
-        description: 'Branch to test (optional - leave empty for main)'
+        description: 'Branch to test (required if no PR number)'
         required: false
         type: string
         default: 'main'
+      pr_url:
+        description: 'PR URL (optional - auto-generated if PR number provided)'
+        required: false
+        type: string
 
 env:
   PYTHON_VERSION: '3.12'
@@ -38,7 +37,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || inputs.branch || github.sha }}
+          ref: ${{ inputs.branch || 'main' }}
           fetch-depth: 0
           
       - name: Set up Python
@@ -100,9 +99,9 @@ jobs:
           # Export Infisical secrets to environment
           export $(infisical export --format=dotenv | xargs)
           
-          # Construct PR URL
-          PR_NUMBER="${{ github.event.pull_request.number || inputs.pr_number }}"
-          PR_URL="${{ github.event.pull_request.html_url }}"
+          # Construct PR URL from inputs
+          PR_NUMBER="${{ inputs.pr_number }}"
+          PR_URL="${{ inputs.pr_url }}"
           
           # If no PR URL but we have PR number, construct it
           if [ -z "$PR_URL" ] && [ -n "$PR_NUMBER" ]; then
@@ -111,8 +110,13 @@ jobs:
           
           # Run the test suite with PR information
           if [ -n "$PR_URL" ]; then
+            echo "Running tests for PR: $PR_URL"
             python scripts/run_all_tests_with_results.py --pr-number "$PR_NUMBER" --pr-url "$PR_URL"
+          elif [ -n "$PR_NUMBER" ]; then
+            echo "Running tests for PR #$PR_NUMBER"
+            python scripts/run_all_tests_with_results.py --pr-number "$PR_NUMBER"
           else
+            echo "Running tests for branch: ${{ inputs.branch }}"
             python scripts/run_all_tests_with_results.py
           fi
           
@@ -134,7 +138,7 @@ jobs:
           fi
           
       - name: Comment PR with results
-        if: always() && github.event_name == 'pull_request'
+        if: always() && inputs.pr_number != ''
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -162,19 +166,19 @@ jobs:
                 body: commentBody
               });
             } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body: commentBody
-              });
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ inputs.pr_number }},
+              body: commentBody
+            });
             }
             
       - name: Upload test results as artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results-${{ github.event.pull_request.number || github.run_number }}
+          name: test-results-${{ inputs.pr_number || github.run_number }}
           path: test_results/
           retention-days: 30
           
@@ -188,45 +192,3 @@ jobs:
             echo "FAIL: Some tests failed"
             exit 1
           fi
-
-  # Optional: Deploy results to Google Cloud Storage for historical tracking
-  upload-to-gcs:
-    name: Upload Results to GCS
-    runs-on: ubuntu-latest
-    needs: run-tests
-    if: always() && github.event_name == 'pull_request'
-    
-    permissions:
-      contents: read
-      id-token: write
-      
-    steps:
-      - name: Download test results
-        uses: actions/download-artifact@v4
-        with:
-          name: test-results-${{ github.event.pull_request.number || github.run_number }}
-          path: test_results/
-          
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-          
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-        
-      - name: Upload to GCS
-        run: |
-          BUCKET_NAME="${{ secrets.GCS_TEST_RESULTS_BUCKET }}"
-          PR_NUMBER="${{ github.event.pull_request.number }}"
-          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-          
-          if [ -n "$BUCKET_NAME" ] && [ -n "$PR_NUMBER" ]; then
-            gsutil -m cp -r test_results/* \
-              "gs://${BUCKET_NAME}/pr-${PR_NUMBER}/${TIMESTAMP}/"
-            echo "Test results uploaded to GCS"
-          else
-            echo "Skipping GCS upload (bucket or PR number not configured)"
-          fi
-
