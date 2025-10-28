@@ -747,7 +747,7 @@ def test_incremental_with_env_vars_substitution(
         str(output_file_path),
         None,
         True,
-        env_vars={"NAME": "Alice", "llm": "true"},
+        env_vars={"NAME": "Alice"},
     )
 
     call_kwargs = mock_incremental_generator_fixture.call_args.kwargs
@@ -957,7 +957,7 @@ Say hi to the user.
         "python",
     )
 
-    code_generator_main(mock_ctx, str(prompt_file_path), None, None, False, env_vars={"llm": "true"})
+    code_generator_main(mock_ctx, str(prompt_file_path), None, None, False)
 
     called_kwargs = mock_local_generator_fixture.call_args.kwargs
     assert called_kwargs["language"] == "json"
@@ -998,7 +998,7 @@ Generate module for $NAME.
         None,
         None,
         False,
-        env_vars={"NAME": "Widget", "llm": "true"},
+        env_vars={"NAME": "Widget"},
     )
 
     expected_path = pathlib.Path(str(output_template_path).replace("${NAME}", "Widget")).resolve()
@@ -1044,7 +1044,7 @@ Name: $NAME | Color: $COLOR | Style: $STYLE | Override: $OVERRIDE
         str(temp_dir_setup["output_dir"] / "defaults.py"),
         None,
         False,
-        env_vars={"NAME": "Ada", "OVERRIDE": "custom", "llm": "true"},
+        env_vars={"NAME": "Ada", "OVERRIDE": "custom"},
     )
 
     called_prompt = mock_local_generator_fixture.call_args.kwargs["prompt"]
@@ -1086,7 +1086,7 @@ Hello $NAME
         str(temp_dir_setup["output_dir"] / "missing.py"),
         None,
         False,
-        env_vars={"llm": "true"},
+        env_vars={},
     )
 
     assert code == ""
@@ -1146,7 +1146,7 @@ Docs included: $DOC_FILES
         str(temp_dir_setup["output_dir"] / "discover.py"),
         None,
         False,
-        env_vars={"llm": "true"},
+        env_vars={},
     )
 
     called_prompt = mock_local_generator_fixture.call_args.kwargs["prompt"]
@@ -1203,7 +1203,7 @@ Return JSON for the spec.
         None,
         None,
         False,
-        env_vars={"llm": "true"},
+        env_vars={},
     )
 
     assert calls["count"] == 1
@@ -1247,18 +1247,18 @@ def test_architecture_template_datasource_object_passes_schema(
 
     generated_json = json.dumps(
         [
-            {
-                "reason": "Replication",
-                "description": "Expose dataSources schema mismatch",
-                "dependencies": [],
-                "priority": 1,
-                "filename": "architecture_json.prompt",
-                "filepath": "src/architecture.json",
-                "interface": {
-                    "type": "page",
-                    "page": {
-                        "route": "/inventory",
-                        "dataSources": [
+                {
+                    "reason": "Replication",
+                    "description": "Expose dataSources schema mismatch",
+                    "dependencies": [],
+                    "priority": 1,
+                    "filename": "architecture.prompt",
+                    "filepath": "frontend/app/inventory/page.tsx",
+                    "interface": {
+                        "type": "page",
+                        "page": {
+                            "route": "/inventory",
+                            "dataSources": [
                             {
                                 "kind": "api",
                                 "source": "/api/inventory",
@@ -1351,7 +1351,7 @@ def test_architecture_template_datasource_string_rejected(
         str(output_path),
         None,
         False,
-        env_vars={"PRD_FILE": str(prd_path), "llm": "true"},
+        env_vars={"PRD_FILE": str(prd_path)},
     )
 
     observed = [
