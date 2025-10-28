@@ -1,20 +1,20 @@
 # Automated Testing System for PDD
 
-[![Tests](https://github.com/YOUR_ORG/pdd-11/actions/workflows/pr-tests.yml/badge.svg)](https://github.com/YOUR_ORG/pdd-11/actions/workflows/pr-tests.yml)
+[![Tests](https://github.com/gltanaka/pdd/actions/workflows/pr-tests.yml/badge.svg)](https://github.com/gltanaka/pdd/actions/workflows/pr-tests.yml)
 
-Automated test execution system that runs unit tests, regression tests, and sync regression tests on every PR, posting results as comments.
+Automated test execution system that runs unit tests, regression tests, and sync regression tests on every PR using GitHub Actions, posting results as comments.
 
-## 🎯 Features
+## Features
 
 - ✅ **Automatic PR Testing** - Tests run automatically on PR creation/updates
 - ✅ **Comprehensive Coverage** - Unit tests, regression tests, sync regression tests
 - ✅ **Secure Secrets** - Infisical integration for credential management
-- ✅ **Cloud Execution** - Optional Google Cloud Run for consistent environment
-- ✅ **Detailed Results** - Pass/fail counts, error messages, execution time
+- ✅ **GitHub Actions** - Runs on free GitHub cloud runners
+- ✅ **Detailed Results** - Pass/fail counts, test numbers, error messages, execution time
 - ✅ **PR Comments** - Results posted directly to PR with formatting
 - ✅ **Artifact Upload** - Full logs saved as GitHub Actions artifacts
 
-## 🚀 Quick Start
+## Quick Start
 
 ### For Developers
 
@@ -38,11 +38,10 @@ git push origin feature/my-feature
 
 See [docs/CI_CD_SETUP.md](docs/CI_CD_SETUP.md) for complete setup instructions including:
 - GitHub Actions secrets configuration
-- Google Cloud setup
 - Infisical project setup
-- Service account creation
+- Service token creation
 
-## 📋 What Gets Tested
+## What Gets Tested
 
 ### Unit Tests (pytest)
 - Location: `tests/test_*.py`
@@ -59,39 +58,37 @@ See [docs/CI_CD_SETUP.md](docs/CI_CD_SETUP.md) for complete setup instructions i
 - Duration: ~5-10 minutes  
 - Coverage: Sync functionality, state management, multi-language support
 
-## 💬 PR Comment Format
+## PR Comment Format
 
 After tests complete, a comment is automatically posted:
 
 ```markdown
-## ✅ Test Results
+## Test Results - PASS
 
 **Overall Summary:**
-- ✅ Passed: 150
-- ❌ Failed: 2
-- ⏭️ Skipped: 5
-- ⏱️ Duration: 245.3s
+- Passed: 150
+- Failed: 0
+- Skipped: 5
+- Duration: 245.3s
+
+**FAILED TEST NUMBERS:** (none)
 
 ---
 
-### ✅ Unit Tests (pytest)
+### Unit Tests (pytest) - PASS
 **Results:**
 - Passed: 120
 - Failed: 0
 - Duration: 45.2s
 
-### ❌ Regression Tests  
+### Regression Tests - PASS
 **Results:**
 - Passed: 28
-- Failed: 2
+- Failed: 0
 - Duration: 180.5s
-
-**Errors:**
-- Validation failed: Complex example execution failed
-- Validation failed: Cost file row count insufficient
 ```
 
-## 🛠️ Local Development
+## Local Development
 
 ### Run All Tests
 
@@ -129,7 +126,7 @@ cat test_results/latest_results.json
 jq '.summary' test_results/latest_results.json
 ```
 
-## 🔧 Configuration
+## Configuration
 
 ### Makefile Targets
 
@@ -147,39 +144,27 @@ jq '.summary' test_results/latest_results.json
 Set in Infisical or `.env`:
 - `ANTHROPIC_API_KEY` - Claude API key
 - `OPENAI_API_KEY` - OpenAI API key
-- `GOOGLE_API_KEY` - Google/Vertex AI key
-- `VERTEX_AI_PROJECT` - GCP project ID
-- `VERTEX_AI_LOCATION` - Vertex AI region
+- `GOOGLE_API_KEY` - Google/Vertex AI key (optional)
+- `VERTEX_AI_PROJECT` - GCP project ID (optional)
+- `VERTEX_AI_LOCATION` - Vertex AI region (optional)
 
-## 📊 GitHub Actions Workflows
+## GitHub Actions Workflow
 
-### PR Test Automation (`.github/workflows/pr-tests.yml`)
-- Triggers: PR opened, synchronized, reopened
+### Main PR Testing (`.github/workflows/pr-tests.yml`)
+- Triggers: PR opened, synchronized, reopened, manual dispatch
 - Runs: All test suites
 - Posts: Results as PR comment
 - Uploads: Test artifacts
 
-### Cloud Run Deployment (`.github/workflows/cloud-run-deploy.yml`)
-- Triggers: Push to main, manual dispatch
-- Deploys: Test runner to Google Cloud Run
-- Updates: Docker image in Artifact Registry
-
-### Manual Test Trigger (`.github/workflows/trigger-cloud-run-tests.yml`)
-- Triggers: Workflow call, manual dispatch
-- Executes: Tests on Cloud Run
-- Posts: Results to PR
-
-## 📂 Project Structure
+## Project Structure
 
 ```
 pdd-11/
-├── .github/
-│   └── workflows/
-│       ├── pr-tests.yml              # Main PR testing workflow
-│       ├── cloud-run-deploy.yml      # Deploy to Cloud Run
-│       └── trigger-cloud-run-tests.yml # Cloud Run test trigger
+├── .github/workflows/
+│   └── pr-tests.yml              # Main PR testing workflow
 ├── scripts/
-│   └── run_all_tests_with_results.py # Test orchestration script
+│   ├── run_all_tests_with_results.py # Test orchestration script
+│   └── test_failed_numbers_demo.py   # Demo for test number extraction
 ├── tests/
 │   ├── test_*.py                     # Unit tests
 │   ├── regression.sh                 # Regression test suite
@@ -187,13 +172,13 @@ pdd-11/
 ├── docs/
 │   ├── CI_CD_SETUP.md                # Detailed setup guide
 │   ├── QUICK_START_CI.md             # Quick start guide
+│   ├── MANUAL_TEST_TRIGGER.md        # Manual trigger guide
 │   └── README_CI.md                  # This file
-├── Dockerfile.cloud-test             # Cloud Run container
 ├── environment.yml                   # Conda environment
 └── Makefile                          # Build targets
 ```
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### Tests Not Running on PR
 
@@ -215,48 +200,40 @@ infisical secrets
 make test-all-with-infisical
 ```
 
-### Cloud Run Deployment Issues
+### PR Comment Not Appearing
 
-```bash
-# Check Cloud Run logs
-gcloud run services logs read pdd-test-runner --region=us-central1
+- Check GitHub Actions logs
+- Verify GITHUB_TOKEN permissions (automatically provided)
+- Ensure workflow has `pull-requests: write` permission
 
-# Rebuild and deploy manually
-docker build -f Dockerfile.cloud-test -t test-runner .
-gcloud run deploy pdd-test-runner --image test-runner --region us-central1
-```
-
-## 🔐 Security
+## Security
 
 - ✅ Secrets managed via Infisical
 - ✅ No credentials in code or environment files
 - ✅ GitHub Actions uses service tokens
-- ✅ Cloud Run uses Secret Manager
-- ✅ Workload Identity for GCP authentication
+- ✅ Automatic token provided by GitHub
 - ✅ Least privilege access controls
 
-## 📈 Monitoring
+## Monitoring
 
 ### View Test History
 
 ```bash
 # GitHub Actions runs
-https://github.com/YOUR_ORG/pdd-11/actions
+https://github.com/gltanaka/pdd/actions
 
 # Download artifacts
 gh run download <run-id> -n test-results-<pr-number>
-
-# Cloud Run logs
-gcloud run jobs executions logs read <execution-id>
 ```
 
 ### Track Costs
 
 - **GitHub Actions**: Repository Settings → Billing → Actions usage
-- **Google Cloud Run**: Cloud Console → Billing → Reports
+  - Free tier: 2000 minutes/month (private repos)
+  - Overage: $0.008/minute
 - **Infisical**: Free for unlimited secrets
 
-## 🤝 Contributing
+## Contributing
 
 When contributing code that affects tests:
 
@@ -267,14 +244,14 @@ When contributing code that affects tests:
 5. Fix any failures before requesting review
 6. Tests must pass before merging
 
-## 📚 Documentation
+## Documentation
 
 - [Quick Start Guide](docs/QUICK_START_CI.md) - Get started in 5 minutes
 - [Complete Setup Guide](docs/CI_CD_SETUP.md) - Full configuration details
-- [Test Writing Guide](docs/TESTING.md) - How to write effective tests
+- [Manual Trigger Guide](docs/MANUAL_TEST_TRIGGER.md) - How to trigger tests manually
 - [Infisical Setup](examples/edit_file_tool_example/INFISICAL_SETUP.md) - Secrets management
 
-## 🆘 Support
+## Support
 
 - **Issues**: Create GitHub issue with `ci-cd` label
 - **Questions**: Use GitHub Discussions
@@ -283,6 +260,5 @@ When contributing code that affects tests:
 ---
 
 **Status**: ✅ Automated testing enabled
-**Last Updated**: 2025-01-15
+**Last Updated**: 2025-10-28
 **Maintainer**: DevOps Team
-

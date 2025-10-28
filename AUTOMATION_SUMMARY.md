@@ -36,67 +36,26 @@ Both targets:
 - Call the test orchestration script
 - Can be run locally or in CI
 
-### 3. GitHub Actions Workflows
+### 3. GitHub Actions Workflow
 
 #### Main PR Testing Workflow
 **File**: `.github/workflows/pr-tests.yml`
 
 Features:
-- Triggers on PR open, sync, reopen
+- Triggers on PR open, sync, reopen, and manual dispatch
 - Sets up Python 3.12 and Conda environment
 - Installs Infisical CLI for secret management
 - Runs all test suites with proper dependencies
 - Posts formatted results as PR comments
 - Uploads test artifacts for 30 days
 - Updates existing comments instead of creating duplicates
+- Supports manual workflow dispatch for testing any branch
 
 Permissions:
 - `contents: read` - Read repository code
 - `pull-requests: write` - Post comments to PRs
 
-#### Cloud Run Deployment
-**File**: `.github/workflows/cloud-run-deploy.yml`
-
-Features:
-- Deploys test runner to Google Cloud Run
-- Builds and pushes Docker images to Artifact Registry
-- Updates service with latest code changes
-- Configures memory, CPU, and timeout limits
-- Integrates with Secret Manager for credentials
-
-#### Cloud Run Test Trigger  
-**File**: `.github/workflows/trigger-cloud-run-tests.yml`
-
-Features:
-- Executes tests on Google Cloud Run
-- Reusable workflow for manual triggers
-- Fetches logs from Cloud Logging
-- Posts execution status to PR
-
-### 4. Docker Configuration
-
-#### Dockerfile for Cloud Run
-**File**: `Dockerfile.cloud-test`
-
-Features:
-- Based on Miniconda for conda environment support
-- Installs Infisical CLI
-- Sets up PDD conda environment
-- Copies project files
-- Creates entrypoint script with Infisical authentication
-- Supports both test execution and HTTP server modes
-
-#### Docker Ignore
-**File**: `.dockerignore`
-
-Excludes unnecessary files from Docker build:
-- Git files and history
-- Python cache and build artifacts
-- Test outputs and logs
-- Documentation and examples
-- IDE configurations
-
-### 5. Environment Configuration
+### 4. Environment Configuration
 
 #### Conda Environment
 **File**: `environment.yml`
@@ -107,7 +66,7 @@ Defines the PDD conda environment:
 - pylint for linting
 - All requirements from requirements.txt
 
-### 6. Comprehensive Documentation
+### 5. Comprehensive Documentation
 
 #### Quick Start Guide
 **File**: `docs/QUICK_START_CI.md`
@@ -124,9 +83,6 @@ Provides:
 Covers:
 - Detailed Infisical setup
 - GitHub secrets configuration
-- Google Cloud project setup
-- Workload Identity Federation
-- Secret Manager configuration
 - Architecture diagrams
 - Cost considerations
 - Security best practices
@@ -171,11 +127,11 @@ Includes:
 - ✅ Easy to debug with artifacts
 - ✅ Comprehensive documentation
 
-### Cloud Integration
-- ✅ Optional Google Cloud Run execution
-- ✅ Containerized test environment
-- ✅ Historical result storage in GCS
-- ✅ Scalable infrastructure
+### GitHub Actions Integration
+- ✅ Free GitHub cloud runners
+- ✅ Consistent test environment
+- ✅ Artifact storage (30 days)
+- ✅ Scalable execution
 
 ## 📊 Test Coverage
 
@@ -205,21 +161,16 @@ Required for PR testing:
 - `INFISICAL_TOKEN` - Service token from Infisical
 - `INFISICAL_PROJECT_ID` - Infisical project identifier
 
-Optional for Cloud Run:
-- `GCP_PROJECT_ID` - Google Cloud project ID
-- `GCP_REGION` - Cloud Run region
-- `GCP_WORKLOAD_IDENTITY_PROVIDER` - For authentication
-- `GCP_SERVICE_ACCOUNT` - Service account email
-- `GCS_TEST_RESULTS_BUCKET` - For historical storage
+That's it! Only two GitHub secrets needed.
 
 ### Infisical Secrets
 
 Required in Infisical project:
 - `ANTHROPIC_API_KEY` - For Claude models
 - `OPENAI_API_KEY` - For OpenAI models
-- `GOOGLE_API_KEY` - For Google/Vertex AI
-- `VERTEX_AI_PROJECT` - GCP project for Vertex
-- `VERTEX_AI_LOCATION` - Vertex AI region
+- `GOOGLE_API_KEY` - For Google/Vertex AI (optional)
+- `VERTEX_AI_PROJECT` - GCP project for Vertex (optional)
+- `VERTEX_AI_LOCATION` - Vertex AI region (optional)
 
 Optional API keys:
 - `GROQ_API_KEY`, `TOGETHER_API_KEY`, `DEEPSEEK_API_KEY`, etc.
@@ -257,14 +208,11 @@ infisical run -- make sync-regression
 #### Initial Setup
 1. Set up Infisical project with required secrets
 2. Add GitHub repository secrets
-3. (Optional) Configure Google Cloud project
-4. (Optional) Deploy to Cloud Run
-5. Test with a sample PR
+3. Test with a sample PR
 
 #### Maintenance
 - Update secrets in Infisical (no code changes needed)
 - Monitor GitHub Actions usage
-- Review Cloud Run logs if deployed
 - Update dependencies in environment.yml as needed
 
 ## 📈 Results Format
@@ -323,8 +271,7 @@ infisical run -- make sync-regression
 - All API keys managed through Infisical
 - No credentials in repository code
 - Service tokens with limited scopes
-- Workload Identity for Cloud Run
-- Secret Manager for persistent storage
+- GitHub automatic token for PR comments
 - Regular secret rotation recommended
 
 ## 💰 Cost Estimates
@@ -333,15 +280,12 @@ infisical run -- make sync-regression
 - 2000 minutes/month for private repos
 - ~30 minutes per PR (all tests)
 - ~65 PRs per month on free tier
-
-### Google Cloud Run (If Used)
-- Free tier: 2M requests, 360K GiB-seconds
-- Estimated: $5-10/month for moderate usage
-- Set budget alerts at $20
+- Overage: $0.008/minute beyond free tier
 
 ### Infisical
 - Free tier: Unlimited secrets
 - Sufficient for this use case
+- Team plan: $18/user/month (optional advanced features)
 
 ## 🎓 Next Steps
 
@@ -349,13 +293,13 @@ infisical run -- make sync-regression
 2. ⏭️ Set up Infisical project
 3. ⏭️ Add GitHub secrets
 4. ⏭️ Test with a sample PR
-5. ⏭️ (Optional) Set up Cloud Run
-6. ⏭️ Train team on usage
+5. ⏭️ Train team on usage
 
 ## 📚 Documentation Index
 
 - [Quick Start](docs/QUICK_START_CI.md) - 5-minute setup
 - [Complete Setup](docs/CI_CD_SETUP.md) - Full configuration guide
+- [Manual Trigger](docs/MANUAL_TEST_TRIGGER.md) - How to trigger tests manually
 - [CI/CD Overview](README_CI.md) - Feature reference
 - [Infisical Setup](examples/edit_file_tool_example/INFISICAL_SETUP.md) - Secret management
 
@@ -370,12 +314,12 @@ infisical run -- make sync-regression
 
 ### After Automation
 - ✅ Automatic test execution on every PR
-- ✅ Consistent test environment via Docker
-- ✅ Test results saved as artifacts
-- ✅ Secure credential management
+- ✅ Consistent test environment via GitHub Actions
+- ✅ Test results saved as artifacts (30 days)
+- ✅ Secure credential management via Infisical
 - ✅ Results visible in PR comments
 - ✅ Easy to debug with detailed logs
-- ✅ Scalable infrastructure
+- ✅ Free execution (within GitHub limits)
 
 ## 🆘 Support
 
