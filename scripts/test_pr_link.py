@@ -17,7 +17,7 @@ def test_pr_link_in_comment():
     runner = TestRunner(
         Path.cwd(),
         pr_number="123",
-        pr_url="https://github.com/promptdriven/pdd/pull/123"
+        pr_url="https://github.com/promptdriven/pdd_cloud/pull/123"
     )
     
     # Set up mock test results

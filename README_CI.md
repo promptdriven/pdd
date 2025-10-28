@@ -1,6 +1,6 @@
 # Automated Testing System for PDD
 
-[![Tests](https://github.com/promptdriven/pdd/actions/workflows/pr-tests.yml/badge.svg)](https://github.com/promptdriven/pdd/actions/workflows/pr-tests.yml)
+[![Tests](https://github.com/promptdriven/pdd_cloud/actions/workflows/pr-tests.yml/badge.svg)](https://github.com/promptdriven/pdd_cloud/actions/workflows/pr-tests.yml)
 
 Automated test execution system that runs unit tests, regression tests, and sync regression tests on every PR using GitHub Actions, posting results as comments.
 
@@ -220,7 +220,7 @@ make test-all-with-infisical
 
 ```bash
 # GitHub Actions runs
-https://github.com/promptdriven/pdd/actions
+https://github.com/promptdriven/pdd_cloud/actions
 
 # Download artifacts
 gh run download <run-id> -n test-results-<pr-number>

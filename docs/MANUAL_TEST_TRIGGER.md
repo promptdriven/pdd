@@ -47,7 +47,7 @@ export GITHUB_TOKEN="your_token_here"
 curl -X POST \
   -H "Authorization: token $GITHUB_TOKEN" \
   -H "Accept: application/vnd.github.v3+json" \
-  https://api.github.com/repos/promptdriven/pdd/actions/workflows/pr-tests.yml/dispatches \
+  https://api.github.com/repos/promptdriven/pdd_cloud/actions/workflows/pr-tests.yml/dispatches \
   -d '{"ref":"main","inputs":{"branch":"feat/my-feature"}}'
 ```
 
