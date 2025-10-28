@@ -62,19 +62,28 @@ conda activate pdd\n\
 \n\
 # If INFISICAL_TOKEN is set, use it to export secrets\n\
 if [ -n "$INFISICAL_TOKEN" ]; then\n\
-    echo "Fetching secrets from Infisical..."\n\
-    export $(infisical export --format=dotenv | xargs)\n\
+    echo "Fetching secrets from Infisical using token..."\n\
+    # Export secrets without needing interactive login\n\
+    export $(infisical export --token="$INFISICAL_TOKEN" --format=dotenv | xargs)\n\
+    echo "Secrets loaded successfully"\n\
 elif [ -n "$INFISICAL_CLIENT_ID" ] && [ -n "$INFISICAL_CLIENT_SECRET" ]; then\n\
     echo "Authenticating with Infisical using client credentials..."\n\
     infisical login --method=universal-auth \\\n\
         --client-id="$INFISICAL_CLIENT_ID" \\\n\
         --client-secret="$INFISICAL_CLIENT_SECRET"\n\
     export $(infisical export --format=dotenv | xargs)\n\
+    echo "Secrets loaded successfully"\n\
+else\n\
+    echo "WARNING: No Infisical credentials found. Tests may fail."\n\
 fi\n\
 \n\
 # Run test suite or web server based on arguments\n\
 if [ "$1" = "test" ]; then\n\
+    echo "Starting test execution..."\n\
     python scripts/run_all_tests_with_results.py\n\
+    TEST_EXIT_CODE=$?\n\
+    echo "Tests completed with exit code: $TEST_EXIT_CODE"\n\
+    exit $TEST_EXIT_CODE\n\
 elif [ "$1" = "server" ]; then\n\
     # Simple HTTP server for Cloud Run health checks and triggering\n\
     python -m http.server 8080\n\
