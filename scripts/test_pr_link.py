@@ -17,14 +17,14 @@ def test_pr_link_in_comment():
     runner = TestRunner(
         Path.cwd(),
         pr_number="123",
-        pr_url="https://github.com/gltanaka/pdd/pull/123"
+        pr_url="https://github.com/promptdriven/pdd/pull/123"
     )
     
     # Set up mock test results
     runner.results = {
         "timestamp": "2025-01-15T10:00:00",
         "pr_number": "123",
-        "pr_url": "https://github.com/gltanaka/pdd/pull/123",
+        "pr_url": "https://github.com/promptdriven/pdd/pull/123",
         "test_suites": {
             "unit_tests": {
                 "name": "Unit Tests",
@@ -54,7 +54,7 @@ def test_pr_link_in_comment():
     print("=" * 60)
     
     # Verify PR link is in the comment
-    assert "https://github.com/gltanaka/pdd/pull/123" in comment, \
+    assert "https://github.com/promptdriven/pdd/pull/123" in comment, \
         "PR URL not found in comment"
     
     assert "Pull Request:" in comment, \
