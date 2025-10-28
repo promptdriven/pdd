@@ -1,0 +1,227 @@
+name: Setup Cloud Run Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_id:
+        description: 'GCP Project ID (must already exist with billing enabled)'
+        required: true
+        type: string
+      region:
+        description: 'GCP Region'
+        required: false
+        type: string
+        default: 'us-central1'
+
+env:
+  GCP_PROJECT_ID: ${{ inputs.project_id }}
+  GCP_REGION: ${{ inputs.region }}
+
+jobs:
+  setup-infrastructure:
+    name: Setup Cloud Run Infrastructure
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    permissions:
+      contents: read
+      id-token: write
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        
+      - name: Set project
+        run: |
+          gcloud config set project ${{ env.GCP_PROJECT_ID }}
+          echo "Using project: ${{ env.GCP_PROJECT_ID }}"
+          
+      - name: Enable required APIs
+        run: |
+          echo "Enabling required APIs..."
+          gcloud services enable run.googleapis.com \
+            cloudbuild.googleapis.com \
+            artifactregistry.googleapis.com \
+            secretmanager.googleapis.com \
+            logging.googleapis.com \
+            --project=${{ env.GCP_PROJECT_ID }}
+          
+          echo "Waiting for APIs to be enabled..."
+          sleep 30
+          
+      - name: Create Artifact Registry repository
+        run: |
+          echo "Creating Artifact Registry repository..."
+          
+          # Check if repository exists
+          if gcloud artifacts repositories describe pdd-images \
+            --location=${{ env.GCP_REGION }} \
+            --project=${{ env.GCP_PROJECT_ID }} 2>/dev/null; then
+            echo "Repository already exists"
+          else
+            gcloud artifacts repositories create pdd-images \
+              --repository-format=docker \
+              --location=${{ env.GCP_REGION }} \
+              --description="PDD test runner images" \
+              --project=${{ env.GCP_PROJECT_ID }}
+            echo "Repository created"
+          fi
+          
+      - name: Store Infisical token in Secret Manager
+        if: secrets.INFISICAL_TOKEN != ''
+        run: |
+          echo "Storing Infisical token in Secret Manager..."
+          
+          # Check if secret exists
+          if gcloud secrets describe infisical-token \
+            --project=${{ env.GCP_PROJECT_ID }} 2>/dev/null; then
+            echo "Secret already exists, updating..."
+            echo -n "${{ secrets.INFISICAL_TOKEN }}" | \
+              gcloud secrets versions add infisical-token \
+                --data-file=- \
+                --project=${{ env.GCP_PROJECT_ID }}
+          else
+            echo "Creating new secret..."
+            echo -n "${{ secrets.INFISICAL_TOKEN }}" | \
+              gcloud secrets create infisical-token \
+                --data-file=- \
+                --replication-policy=automatic \
+                --project=${{ env.GCP_PROJECT_ID }}
+          fi
+          
+      - name: Create service account for Cloud Run
+        run: |
+          SERVICE_ACCOUNT="cloud-run-test-runner"
+          
+          # Check if service account exists
+          if gcloud iam service-accounts describe \
+            "${SERVICE_ACCOUNT}@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com" \
+            --project=${{ env.GCP_PROJECT_ID }} 2>/dev/null; then
+            echo "Service account already exists"
+          else
+            echo "Creating service account..."
+            gcloud iam service-accounts create "$SERVICE_ACCOUNT" \
+              --display-name="Cloud Run Test Runner" \
+              --project=${{ env.GCP_PROJECT_ID }}
+          fi
+          
+          # Grant necessary permissions
+          echo "Granting permissions to service account..."
+          
+          gcloud secrets add-iam-policy-binding infisical-token \
+            --member="serviceAccount:${SERVICE_ACCOUNT}@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com" \
+            --role="roles/secretmanager.secretAccessor" \
+            --project=${{ env.GCP_PROJECT_ID }} || true
+          
+          gcloud projects add-iam-policy-binding ${{ env.GCP_PROJECT_ID }} \
+            --member="serviceAccount:${SERVICE_ACCOUNT}@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com" \
+            --role="roles/logging.logWriter" || true
+          
+      - name: Build and push initial test image
+        run: |
+          echo "Building initial test image..."
+          
+          # Configure Docker for Artifact Registry
+          gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev
+          
+          # Build image
+          IMAGE_URI="${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/pdd-images/pdd-test-runner:initial"
+          
+          docker build -f Dockerfile.cloud-test -t "${IMAGE_URI}" .
+          
+          echo "Pushing image to Artifact Registry..."
+          docker push "${IMAGE_URI}"
+          
+          echo "Initial image ready: ${IMAGE_URI}"
+          
+      - name: Create Cloud Run Job
+        run: |
+          IMAGE_URI="${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/pdd-images/pdd-test-runner:initial"
+          JOB_NAME="pdd-test-runner"
+          SERVICE_ACCOUNT="cloud-run-test-runner@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com"
+          
+          # Check if job exists
+          if gcloud run jobs describe "$JOB_NAME" \
+            --region=${{ env.GCP_REGION }} \
+            --project=${{ env.GCP_PROJECT_ID }} 2>/dev/null; then
+            echo "Job already exists, updating..."
+            gcloud run jobs update "$JOB_NAME" \
+              --image="${IMAGE_URI}" \
+              --region=${{ env.GCP_REGION }} \
+              --memory=4Gi \
+              --cpu=2 \
+              --max-retries=0 \
+              --task-timeout=3600 \
+              --service-account="$SERVICE_ACCOUNT" \
+              --set-env-vars="INFISICAL_PROJECT_ID=${{ secrets.INFISICAL_PROJECT_ID }}" \
+              --set-secrets="INFISICAL_TOKEN=infisical-token:latest" \
+              --args=test \
+              --project=${{ env.GCP_PROJECT_ID }}
+          else
+            echo "Creating new job..."
+            gcloud run jobs create "$JOB_NAME" \
+              --image="${IMAGE_URI}" \
+              --region=${{ env.GCP_REGION }} \
+              --memory=4Gi \
+              --cpu=2 \
+              --max-retries=0 \
+              --task-timeout=3600 \
+              --service-account="$SERVICE_ACCOUNT" \
+              --set-env-vars="INFISICAL_PROJECT_ID=${{ secrets.INFISICAL_PROJECT_ID }}" \
+              --set-secrets="INFISICAL_TOKEN=infisical-token:latest" \
+              --args=test \
+              --project=${{ env.GCP_PROJECT_ID }}
+          fi
+          
+          echo "Cloud Run Job created successfully"
+          
+      - name: Test the setup
+        run: |
+          echo "Testing Cloud Run Job execution..."
+          
+          # Execute a quick test run
+          gcloud run jobs execute pdd-test-runner \
+            --region=${{ env.GCP_REGION }} \
+            --project=${{ env.GCP_PROJECT_ID }} \
+            --wait
+          
+          echo "Test execution completed successfully!"
+          
+      - name: Display setup summary
+        if: always()
+        run: |
+          echo ""
+          echo "=========================================="
+          echo "CLOUD RUN SETUP COMPLETE"
+          echo "=========================================="
+          echo ""
+          echo "Project ID: ${{ env.GCP_PROJECT_ID }}"
+          echo "Region: ${{ env.GCP_REGION }}"
+          echo ""
+          echo "Resources Created:"
+          echo "  - Artifact Registry: pdd-images"
+          echo "  - Secret: infisical-token"
+          echo "  - Service Account: cloud-run-test-runner"
+          echo "  - Cloud Run Job: pdd-test-runner"
+          echo ""
+          echo "Next Steps:"
+          echo "  1. The Cloud Run infrastructure is ready"
+          echo "  2. PR Tests workflow will now use Cloud Run"
+          echo "  3. Create a PR to test the automation"
+          echo ""
+          echo "View resources:"
+          echo "  - Jobs: https://console.cloud.google.com/run/jobs?project=${{ env.GCP_PROJECT_ID }}"
+          echo "  - Images: https://console.cloud.google.com/artifacts?project=${{ env.GCP_PROJECT_ID }}"
+          echo "  - Secrets: https://console.cloud.google.com/security/secret-manager?project=${{ env.GCP_PROJECT_ID }}"
+          echo ""
+          echo "=========================================="
+

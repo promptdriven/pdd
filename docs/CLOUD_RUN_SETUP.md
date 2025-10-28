@@ -14,11 +14,44 @@ This guide shows how to set up tests to run on Google Cloud Run instead of GitHu
 | **Timeout** | 6 hours max | Configurable (up to 24h) |
 | **Resources** | 2 CPU, 7GB RAM | 1-8 CPU, up to 32GB RAM |
 
-## Quick Setup (30 Minutes)
+## Quick Setup Options
 
-### 1. Create GCP Project
+### Option A: Automated Setup with GitHub Actions (Easiest - 10 Minutes)
+
+**No `gcloud` installation needed!** Let GitHub Actions set up everything:
+
+1. **Create GCP Project** (in browser):
+   - Go to: https://console.cloud.google.com/projectcreate
+   - Create project: `pdd-testing`
+   - Enable billing: https://console.cloud.google.com/billing
+   - Note your project ID
+
+2. **Set up Workload Identity** (one-time, see section below)
+
+3. **Add GitHub Secrets**:
+   - `GCP_PROJECT_ID` = your project ID
+   - `GCP_REGION` = `us-central1`
+   - `GCP_WORKLOAD_IDENTITY_PROVIDER` = (from workload identity setup)
+   - `GCP_SERVICE_ACCOUNT` = (from workload identity setup)
+   - `INFISICAL_TOKEN` = your Infisical service token
+   - `INFISICAL_PROJECT_ID` = your Infisical project ID
+
+4. **Run the Setup Workflow**:
+   - Go to: Actions → Setup Cloud Run Infrastructure → Run workflow
+   - Enter your project ID
+   - Click "Run workflow"
+   - Wait ~10 minutes for automated setup
+
+5. **Done!** All infrastructure is created automatically.
+
+### Option B: Manual Setup with gcloud CLI (30 Minutes)
+
+If you prefer manual control or need to debug:
 
 ```bash
+# Install gcloud CLI first
+brew install --cask google-cloud-sdk
+
 # Create project
 gcloud projects create pdd-testing --name="PDD Testing"
 gcloud config set project pdd-testing
