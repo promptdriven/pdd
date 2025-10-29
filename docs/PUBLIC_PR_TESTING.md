@@ -7,11 +7,11 @@ This system allows you to test pull requests from the **public repository** (`pr
 ## Architecture
 
 ```
-┌──────────────────────────┐
-│   You (Local Machine)    │
-│                          │
-│  $ make pr-test pr-num=123│
-└────────────┬─────────────┘
+┌──────────────────────────────────────────────────────┐
+│   You (Local Machine)                                │
+│                                                      │
+│  $ make pr-test pr-url=https://github.com/..../123  │
+└────────────┬─────────────────────────────────────────┘
              │
              │ Triggers GitHub Actions
              │ (via gh workflow run)
@@ -108,10 +108,10 @@ The workflow file `.github/workflows/pr-tests.yml` must be on the **main branch*
 ### Basic Command
 
 ```bash
-make pr-test pr-num=123
+make pr-test pr-url=https://github.com/promptdriven/pdd/pull/123
 ```
 
-Where `123` is the PR number from `promptdriven/pdd`.
+Where `123` is the PR number from `promptdriven/pdd`. You can use any GitHub PR URL.
 
 ### What Happens
 
@@ -420,7 +420,7 @@ Consider:
 
 3. **Trigger Tests** from your machine:
    ```bash
-   make pr-test pr-num=456
+   make pr-test pr-url=https://github.com/promptdriven/pdd/pull/456
    ```
 
 4. **GitHub Actions Runs** (5-10 minutes):
@@ -473,7 +473,7 @@ git branch -D test-pr-123
 
 **Now:**
 ```bash
-make pr-test pr-num=123
+make pr-test pr-url=https://github.com/promptdriven/pdd/pull/123
 ```
 
 ### Alternative 2: Separate CI on Public Repo
