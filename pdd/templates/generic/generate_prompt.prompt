@@ -76,15 +76,15 @@ variables:
 usage:
   generate:
     - name: Minimal (architecture only)
-      command: pdd generate -e MODULE=orders -e LANG_OR_FRAMEWORK=Python -e ARCHITECTURE_FILE=architecture.json --output 'prompts/${MODULE}_${LANG_OR_FRAMEWORK}.prompt' pdd/templates/generic/generate_prompt.prompt
+      command: pdd generate --template generic/generate_prompt -e MODULE=orders -e LANG_OR_FRAMEWORK=Python -e ARCHITECTURE_FILE=architecture.json --output 'prompts/${MODULE}_${LANG_OR_FRAMEWORK}.prompt'
     - name: With project docs
-      command: pdd generate -e MODULE=orders -e LANG_OR_FRAMEWORK=Python -e ARCHITECTURE_FILE=architecture.json -e PRD_FILE=docs/PRD.md -e API_DOC_FILE=docs/api-documentation.md -e DB_SCHEMA_FILE=context/database-schema.md --output 'prompts/${MODULE}_${LANG_OR_FRAMEWORK}.prompt' pdd/templates/generic/generate_prompt.prompt
+      command: pdd generate --template generic/generate_prompt -e MODULE=orders -e LANG_OR_FRAMEWORK=Python -e ARCHITECTURE_FILE=architecture.json -e PRD_FILE=docs/PRD.md -e API_DOC_FILE=docs/api-documentation.md -e DB_SCHEMA_FILE=context/database-schema.md --output 'prompts/${MODULE}_${LANG_OR_FRAMEWORK}.prompt'
     - name: With CSVs and references (backend/Python)
-      command: pdd generate -e MODULE=orders -e LANG_OR_FRAMEWORK=Python -e ARCHITECTURE_FILE=architecture.json -e PRD_FILE=docs/PRD.md -e API_DOC_FILE=docs/api-documentation.md -e DB_SCHEMA_FILE=context/database-schema.md -e BACKEND_FILES_CSV=prompts/backend/python_architecture.csv -e IO_DEPENDENCIES_CSV=prompts/backend/io_dependencies.csv -e CODE_GENERATOR_PROMPT=prompts/code_generator_python.prompt --output 'prompts/${MODULE}_${LANG_OR_FRAMEWORK}.prompt' pdd/templates/generic/generate_prompt.prompt
+      command: pdd generate --template generic/generate_prompt -e MODULE=orders -e LANG_OR_FRAMEWORK=Python -e ARCHITECTURE_FILE=architecture.json -e PRD_FILE=docs/PRD.md -e API_DOC_FILE=docs/api-documentation.md -e DB_SCHEMA_FILE=context/database-schema.md -e BACKEND_FILES_CSV=prompts/backend/python_architecture.csv -e IO_DEPENDENCIES_CSV=prompts/backend/io_dependencies.csv -e CODE_GENERATOR_PROMPT=prompts/code_generator_python.prompt --output 'prompts/${MODULE}_${LANG_OR_FRAMEWORK}.prompt'
     - name: Frontend (TypeScriptReact) variant
-      command: pdd generate -e MODULE=profile_page -e LANG_OR_FRAMEWORK=TypeScriptReact -e LAYER=frontend -e ARCHITECTURE_FILE=architecture.json -e PRD_FILE=docs/PRD.md --output 'prompts/${MODULE}_${LANG_OR_FRAMEWORK}.prompt' pdd/templates/generic/generate_prompt.prompt
+      command: pdd generate --template generic/generate_prompt -e MODULE=profile_page -e LANG_OR_FRAMEWORK=TypeScriptReact -e LAYER=frontend -e ARCHITECTURE_FILE=architecture.json -e PRD_FILE=docs/PRD.md --output 'prompts/${MODULE}_${LANG_OR_FRAMEWORK}.prompt'
     - name: From architecture.json
-      command: pdd generate -e MODULE=orders_api -e LANG_OR_FRAMEWORK=Python -e LAYER=api -e ARCHITECTURE_FILE=architecture.json --output 'prompts/${MODULE}_${LANG_OR_FRAMEWORK}.prompt' pdd/templates/generic/generate_prompt.prompt
+      command: pdd generate --template generic/generate_prompt -e MODULE=orders_api -e LANG_OR_FRAMEWORK=Python -e LAYER=api -e ARCHITECTURE_FILE=architecture.json --output 'prompts/${MODULE}_${LANG_OR_FRAMEWORK}.prompt'
 
 discover:
   enabled: false

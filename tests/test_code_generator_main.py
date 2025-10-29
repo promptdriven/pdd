@@ -732,6 +732,7 @@ def test_incremental_with_env_vars_substitution(
     mock_ctx.obj['local'] = True
     prompt_file_path = temp_dir_setup["prompts_dir"] / "inc_env_prompt.prompt"
     output_file_path = temp_dir_setup["output_dir"] / "inc_env_output.py"
+    create_file(prompt_file_path, "New says $NAME")
     create_file(output_file_path, "Existing code body")
 
     mock_construct_paths_fixture.return_value = (
@@ -747,7 +748,7 @@ def test_incremental_with_env_vars_substitution(
         str(output_file_path),
         None,
         True,
-        env_vars={"NAME": "Alice"},
+        env_vars={"NAME": "Alice", "llm": "true"},
     )
 
     call_kwargs = mock_incremental_generator_fixture.call_args.kwargs
@@ -942,13 +943,13 @@ def test_front_matter_language_override(
 ):
     mock_ctx.obj['local'] = True
     prompt_file_path = temp_dir_setup["prompts_dir"] / "front_lang.prompt"
-    create_file(prompt_file_path, "placeholder")
 
     front_matter_prompt = """---
 language: json
 ---
 Say hi to the user.
 """
+    create_file(prompt_file_path, front_matter_prompt)
 
     mock_construct_paths_fixture.return_value = (
         {},
@@ -957,7 +958,7 @@ Say hi to the user.
         "python",
     )
 
-    code_generator_main(mock_ctx, str(prompt_file_path), None, None, False)
+    code_generator_main(mock_ctx, str(prompt_file_path), None, None, False, env_vars={"llm": "true"})
 
     called_kwargs = mock_local_generator_fixture.call_args.kwargs
     assert called_kwargs["language"] == "json"
@@ -973,7 +974,6 @@ def test_front_matter_output_path_with_env_substitution(
 ):
     mock_ctx.obj['local'] = True
     prompt_file_path = temp_dir_setup["prompts_dir"] / "front_output.prompt"
-    create_file(prompt_file_path, "placeholder")
 
     output_template_path = temp_dir_setup["tmp_path"] / "templated_outputs" / "${NAME}.py"
     front_matter_prompt = f"""---
@@ -984,6 +984,7 @@ variables:
 ---
 Generate module for $NAME.
 """
+    create_file(prompt_file_path, front_matter_prompt)
 
     mock_construct_paths_fixture.return_value = (
         {},
@@ -998,7 +999,7 @@ Generate module for $NAME.
         None,
         None,
         False,
-        env_vars={"NAME": "Widget"},
+        env_vars={"NAME": "Widget", "llm": "true"},
     )
 
     expected_path = pathlib.Path(str(output_template_path).replace("${NAME}", "Widget")).resolve()
@@ -1015,7 +1016,6 @@ def test_front_matter_variable_defaults_and_no_override(
 ):
     mock_ctx.obj['local'] = True
     prompt_file_path = temp_dir_setup["prompts_dir"] / "front_defaults.prompt"
-    create_file(prompt_file_path, "placeholder")
 
     front_matter_prompt = """---
 variables:
@@ -1030,6 +1030,7 @@ variables:
 ---
 Name: $NAME | Color: $COLOR | Style: $STYLE | Override: $OVERRIDE
 """
+    create_file(prompt_file_path, front_matter_prompt)
 
     mock_construct_paths_fixture.return_value = (
         {},
@@ -1044,7 +1045,7 @@ Name: $NAME | Color: $COLOR | Style: $STYLE | Override: $OVERRIDE
         str(temp_dir_setup["output_dir"] / "defaults.py"),
         None,
         False,
-        env_vars={"NAME": "Ada", "OVERRIDE": "custom"},
+        env_vars={"NAME": "Ada", "OVERRIDE": "custom", "llm": "true"},
     )
 
     called_prompt = mock_local_generator_fixture.call_args.kwargs["prompt"]
@@ -1063,7 +1064,6 @@ def test_front_matter_missing_required_variable_returns_error(
 ):
     mock_ctx.obj['local'] = True
     prompt_file_path = temp_dir_setup["prompts_dir"] / "front_missing.prompt"
-    create_file(prompt_file_path, "placeholder")
 
     front_matter_prompt = """---
 variables:
@@ -1072,6 +1072,7 @@ variables:
 ---
 Hello $NAME
 """
+    create_file(prompt_file_path, front_matter_prompt)
 
     mock_construct_paths_fixture.return_value = (
         {},
@@ -1086,7 +1087,7 @@ Hello $NAME
         str(temp_dir_setup["output_dir"] / "missing.py"),
         None,
         False,
-        env_vars={},
+        env_vars={"llm": "true"},
     )
 
     assert code == ""
@@ -1110,7 +1111,6 @@ def test_front_matter_discovery_populates_env_vars(
 ):
     mock_ctx.obj['local'] = True
     prompt_file_path = temp_dir_setup["prompts_dir"] / "front_discover.prompt"
-    create_file(prompt_file_path, "placeholder")
 
     docs_dir = temp_dir_setup["tmp_path"] / "docs"
     docs_dir.mkdir(exist_ok=True)
@@ -1132,6 +1132,7 @@ discover:
 ---
 Docs included: $DOC_FILES
 """
+    create_file(prompt_file_path, front_matter_prompt)
 
     mock_construct_paths_fixture.return_value = (
         {},
@@ -1164,7 +1165,6 @@ def test_front_matter_output_schema_validation_failure(
 ):
     mock_ctx.obj['local'] = True
     prompt_file_path = temp_dir_setup["prompts_dir"] / "front_schema.prompt"
-    create_file(prompt_file_path, "placeholder")
 
     schema_output_path = temp_dir_setup["tmp_path"] / "schema_output.json"
     front_matter_prompt = f"""---
@@ -1177,6 +1177,7 @@ output_schema:
 ---
 Return JSON for the spec.
 """
+    create_file(prompt_file_path, front_matter_prompt)
 
     mock_construct_paths_fixture.return_value = (
         {},
@@ -1247,18 +1248,18 @@ def test_architecture_template_datasource_object_passes_schema(
 
     generated_json = json.dumps(
         [
-                {
-                    "reason": "Replication",
-                    "description": "Expose dataSources schema mismatch",
-                    "dependencies": [],
-                    "priority": 1,
-                    "filename": "architecture.prompt",
-                    "filepath": "frontend/app/inventory/page.tsx",
-                    "interface": {
-                        "type": "page",
-                        "page": {
-                            "route": "/inventory",
-                            "dataSources": [
+            {
+                "reason": "Replication",
+                "description": "Expose dataSources schema mismatch",
+                "dependencies": [],
+                "priority": 1,
+                "filename": "architecture_json.prompt",
+                "filepath": "src/architecture.json",
+                "interface": {
+                    "type": "page",
+                    "page": {
+                        "route": "/inventory",
+                        "dataSources": [
                             {
                                 "kind": "api",
                                 "source": "/api/inventory",
@@ -1304,13 +1305,13 @@ def test_architecture_template_datasource_string_rejected(
 ):
     mock_ctx.obj['local'] = True
     prompt_file_path = temp_dir_setup["output_dir"] / "architecture_string.prompt"
-    create_file(prompt_file_path, "placeholder")
 
     prd_path = temp_dir_setup["tmp_path"] / "docs" / "specs.md"
     create_file(prd_path, "Spec content for schema regression")
 
     template_path = pathlib.Path("pdd/templates/architecture/architecture_json.prompt")
     template_content = template_path.read_text(encoding="utf-8")
+    create_file(prompt_file_path, template_content)
     output_path = temp_dir_setup["output_dir"] / "architecture_string.json"
 
     mock_construct_paths_fixture.return_value = (
@@ -1351,7 +1352,7 @@ def test_architecture_template_datasource_string_rejected(
         str(output_path),
         None,
         False,
-        env_vars={"PRD_FILE": str(prd_path)},
+        env_vars={"PRD_FILE": str(prd_path), "llm": "true"},
     )
 
     observed = [
