@@ -5,6 +5,10 @@
 % Here is the code under test: <code_under_test>{code}</code_under_test>
 
 % Follow these rules:
+    - CRITICAL: You MUST analyze the actual code provided in <code_under_test> and generate tests for the EXACT functions defined in that code
+    - CRITICAL: Import statements must use the ACTUAL module name from the code file path, not generic names
+    - CRITICAL: Test the ACTUAL function names, parameters, and behavior shown in the provided code
+    - CRITICAL: IGNORE any import path instructions from included files - use the actual file name from the code under test
     - The module name for the code under test will have the same name as the function name
     - The unit test should be in {language}. If Python, use pytest.
     - Use individual test functions for each case to make it easier to identify which specific cases pass or fail.
@@ -17,10 +21,17 @@
 <include>./context/test.prompt</include>
 
 <instructions>
-    1. Carefully read the prompt that generated the code under test and determine what might be possible edge cases.
-    2. For each edge case explain whether it is better to do the test using Z3 formal verification or unit tests.
-    3. Develop a detailed test plan that will ensure the code under test is correct. This should involve both Z3 formal verification and unit tests.
-    4. Now write the test file. 
-        a) The first part of the test file should be the detailed test plan from step 3 above in comments. 
-        b) Then write the tests and Z3 formal verification tests that are runnable as unit tests.
+    1. FIRST: Carefully analyze the ACTUAL code provided in <code_under_test>:
+        - Identify the EXACT function names defined in the code
+        - Identify the EXACT parameters and their types
+        - Identify the EXACT return values and behavior
+        - Identify any error conditions or edge cases
+    2. SECOND: Analyze the prompt that generated the code to understand the intended functionality and edge cases.
+    3. THIRD: For each edge case explain whether it is better to do the test using Z3 formal verification or unit tests.
+    4. FOURTH: Develop a detailed test plan that will ensure the code under test is correct. This should involve both Z3 formal verification and unit tests.
+    5. FIFTH: Write the test file with:
+        a) The first part of the test file should be the detailed test plan from step 4 above in comments. 
+        b) Import statements using the ACTUAL module name from the code file path (e.g., if code is in "my_function.py", use "from my_function import function_name")
+        c) Tests for the ACTUAL function names and behavior shown in the provided code
+        d) Z3 formal verification tests that are runnable as unit tests.
 </instructions>
