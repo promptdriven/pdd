@@ -267,6 +267,219 @@ This allows you to quickly identify which cases are failing and why, so you can 
 - Review example projects in the `examples/` directory
 - Start with the basic tutorials in the [Tutorials](./TUTORIALS.md) documentation
 
+---
+
+## Developer Setup (Contributing to PDD)
+
+If you're contributing to the PDD project, follow these additional setup steps to install development dependencies and run tests efficiently.
+
+### 1. Install Development Dependencies
+
+The project uses optional development dependencies defined in `pyproject.toml` for testing, code quality, and build tools.
+
+**Install all development dependencies:**
+```bash
+# Make sure you're in the project root and pdd conda environment is active
+conda activate pdd
+
+# Install the package in editable mode with dev dependencies
+pip install -e ".[dev]"
+```
+
+**What this installs:**
+- **pytest-cov**: Code coverage reporting
+- **pytest-testmon**: Smart test selection (only runs tests affected by changes)
+- **pytest-xdist**: Parallel test execution for faster runs
+- **pytest-mock**: Mocking utilities for unit tests
+- **pytest-asyncio**: Support for async test functions
+- **z3-solver**: Formal verification tools
+- **commitizen**: Conventional commits and versioning
+- **build, twine**: Package building and publishing tools
+
+### 2. Enable Test Caching and Smart Execution
+
+**Use testmon for incremental testing:**
+```bash
+# First run (creates cache)
+pytest --testmon
+
+# Subsequent runs (only tests affected by changes)
+pytest --testmon
+```
+
+**Use xdist for parallel execution:**
+```bash
+# Run tests in parallel (auto-detect CPU cores)
+pytest -n auto
+
+# Run with specific number of workers
+pytest -n 4
+
+# Combine with coverage
+pytest -n auto --cov=pdd --cov-report=html
+```
+
+**Combine both for maximum efficiency:**
+```bash
+# Smart selection + parallel execution
+pytest --testmon -n auto
+```
+
+### 3. Run Tests with Coverage
+
+**Generate coverage reports:**
+```bash
+# Run tests with coverage
+make coverage
+
+# Or manually
+pytest --cov=pdd --cov-report=term --cov-report=html
+
+# View HTML report
+open htmlcov/index.html  # macOS
+xdg-open htmlcov/index.html  # Linux
+```
+
+### 4. Run Regression Tests
+
+**Local regression tests:**
+```bash
+# Set local execution mode
+export TEST_LOCAL=true
+
+# Run regression suite
+make regression
+
+# Or with specific test number
+make regression TEST_NUM=42
+
+# With Infisical for API keys
+infisical run -- make regression
+```
+
+**Sync regression tests:**
+```bash
+make sync-regression
+
+# Or run directly
+./tests/sync_regression.sh
+```
+
+### 5. Lint and Code Quality
+
+**Run linting:**
+```bash
+# Run pylint on all pdd modules
+make lint
+
+# Or on specific module
+pylint pdd/code_generator.py
+```
+
+### 6. Build and Install Locally
+
+**Build the package:**
+```bash
+make build
+# Creates wheel in dist/
+```
+
+**Install locally for testing:**
+```bash
+make install
+# Installs the local build
+```
+
+### 7. Developer Workflow Tips
+
+**Efficient test workflow:**
+```bash
+# 1. During development - fast feedback loop
+pytest -k test_my_feature --testmon
+
+# 2. Before committing - run affected tests in parallel
+pytest --testmon -n auto
+
+# 3. Before pushing - full test suite with coverage
+make test
+make coverage
+
+# 4. Final check - regression tests
+make regression
+```
+
+**Clear test caches if needed:**
+```bash
+# Remove pytest cache
+rm -rf .pytest_cache
+
+# Remove testmon cache
+rm -rf .testmondata
+
+# Remove coverage data
+rm -rf .coverage htmlcov/
+```
+
+### 8. Git Workflow with Commitizen
+
+**Make commits following conventional commits:**
+```bash
+# Stage your changes
+git add .
+
+# Use commitizen for structured commits
+cz commit
+
+# Or use git commit with conventional format
+git commit -m "feat: add new feature"
+git commit -m "fix: resolve bug in module"
+git commit -m "docs: update documentation"
+```
+
+**Bump version (maintainers only):**
+```bash
+# Automatically bump version and update CHANGELOG
+cz bump
+
+# Push with tags
+git push --follow-tags
+```
+
+### 9. Troubleshooting Development Setup
+
+**"pytest: command not found":**
+```bash
+# Reinstall dev dependencies
+pip install -e ".[dev]"
+```
+
+**"ModuleNotFoundError" during tests:**
+```bash
+# Verify PDD_PATH is set
+echo $PDD_PATH
+
+# Reinstall in editable mode
+pip install -e .
+```
+
+**Tests are slow:**
+```bash
+# Use parallel execution
+pytest -n auto
+
+# Use testmon for smart test selection
+pytest --testmon -n auto
+```
+
+**Coverage reports missing:**
+```bash
+# Install coverage dependencies
+pip install pytest-cov
+
+# Run with coverage flags
+pytest --cov=pdd --cov-report=html
+```
+
 ## Understanding PDD's File Structure
 
 Before troubleshooting, it's helpful to understand where PDD stores different types of files:
