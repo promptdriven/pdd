@@ -1,11 +1,13 @@
 ## v0.0.65 (2025-10-24)
 
-### Feat
+### Architecture Visualization
 
-- **data**: add OpenAI model entry and ensure newline consistency in llm_model.csv
-- add architecture JSON to HTML visualization pipeline
-- **viz**: add Architecture JSON → Mermaid diagram tooling, examples, and tests
-- expand language format support in CSV data
+- Shipped `pdd/render_mermaid.py`, a turnkey helper plus `examples/tictactoe` assets for turning architecture JSON specs into Mermaid diagrams and interactive HTML, backed by regression coverage in `tests/test_render_mermaid.py`.
+- Wired the architecture JSON generator's post-process hook so `pdd/code_generator_main.py` can toggle Mermaid rendering after each run, letting templates emit diagrams automatically.
+
+### Data & Models
+
+- Documented the Snowflake-hosted `openai/claude-sonnet-4-5` endpoint in `data/llm_model.csv`, including credentials, context limits, and billing metadata.
 
 ## v0.0.64 (2025-10-12)
 
@@ -77,7 +79,6 @@ Thanks Sai Vathsavayi for altering me that this was missing!
 - VS Code extension quickstart: add installation guidance for VSCodium, Kiro, Windsurf, and other OpenVSX‑compatible IDEs.
 
 Thanks Shrenya Mathur for your contributions on OpenVSX compatibility!
-
 
 ## v0.0.60 (2025-09-23)
 
