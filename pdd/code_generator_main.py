@@ -797,9 +797,15 @@ def code_generator_main(
                         else:
                             # Write payload to a temp file for scripts expecting a file path input
                             suffix = '.json' if (isinstance(language, str) and str(language).lower().strip() == 'json') or (output_path and str(output_path).lower().endswith('.json')) else '.txt'
-                            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=suffix, encoding='utf-8') as tf:
-                                tf.write(stdin_payload or '')
-                                temp_input_path = tf.name
+                            if output_path and llm_enabled:
+                                temp_input_path = output_path
+                                pathlib.Path(temp_input_path).parent.mkdir(parents=True, exist_ok=True)
+                                with open(temp_input_path, 'w', encoding='utf-8') as f:
+                                    f.write(stdin_payload or '')
+                            else:
+                                with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=suffix, encoding='utf-8') as tf:
+                                    tf.write(stdin_payload or '')
+                                    temp_input_path = tf.name
                             env['PDD_POSTPROCESS_INPUT_FILE'] = temp_input_path
                         # Compute placeholder values
                         app_name_val = (env_vars or {}).get('APP_NAME') if env_vars else None

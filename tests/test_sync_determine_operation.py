@@ -1040,7 +1040,11 @@ class TestIntegrationScenarios:
         
         prompt_hash = create_file(prompts_dir / f"{basename}_{language}.prompt", prompt_content)
         code_hash = create_file(Path(f"{basename}.py"), code_content)
+        # Create example in both default current dir and new examples/ dir default
         example_hash = create_file(Path(f"{basename}_example.py"), example_content)
+        examples_dir = Path("examples")
+        examples_dir.mkdir(exist_ok=True)
+        create_file(examples_dir / f"{basename}_example.py", example_content)
         test_hash = create_file(Path(f"test_{basename}.py"), test_content)
         
         # Create matching fingerprint
