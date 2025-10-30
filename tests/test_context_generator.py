@@ -77,6 +77,11 @@ def test_context_generator_incomplete_generation():
     Test the context_generator function with an incomplete generation scenario.
     This test ensures that the function correctly identifies and handles incomplete generation.
     """
+    import os
+    # Ensure included context file exists for preprocessing
+    os.makedirs("context", exist_ok=True)
+    with open("context/example.prompt", "w", encoding="utf-8") as f:
+        f.write("Example import guidance for tests.")
     code_module = "numpy"
     prompt = "Generate a concise example of how to use numpy to create an array."
     # Mocking an incomplete generation by returning a truncated response
