@@ -1370,3 +1370,52 @@ def test_architecture_template_datasource_string_rejected(
         "Generated JSON does not match output_schema" in message and "/api/inventory" in message
         for message in observed
     )
+
+
+def test_postprocess_uses_output_path_as_input_when_llm_enabled(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_subprocess_run_fixture,
+    mock_env_vars,
+):
+    """When LLM is enabled and an output path is resolved, the post-process input file should be the output path."""
+    mock_ctx.obj['local'] = True
+
+    # Build a prompt with front matter enabling a post-process script
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "postprocess_prompt_python.prompt"
+    output_file_path = temp_dir_setup["output_dir"] / "pp_output.py"
+
+    front_matter_prompt = """---
+language: python
+post_process_python: "./dummy_post_process.py"
+---
+Generate a simple module.
+"""
+    create_file(prompt_file_path, front_matter_prompt)
+
+    # construct_paths should return our prompt content and resolved output
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": front_matter_prompt},
+        {"output": str(output_file_path)},
+        "python",
+    )
+
+    # Run generation with llm enabled (default); a post-process will be attempted
+    code, incremental, cost, model = code_generator_main(
+        mock_ctx,
+        str(prompt_file_path),
+        str(output_file_path),
+        None,
+        False,
+        env_vars={"llm": "true"},
+    )
+
+    # Output should be written prior to post-process and match generated code
+    assert output_file_path.exists()
+    assert output_file_path.read_text(encoding="utf-8") == DEFAULT_MOCK_GENERATED_CODE
+
+    # Post-process should be invoked
+    assert mock_subprocess_run_fixture.called
