@@ -8,6 +8,41 @@ from pathlib import Path
 from . import DEFAULT_STRENGTH, DEFAULT_TIME
 from .construct_paths import construct_paths
 from .bug_to_unit_test import bug_to_unit_test
+from .llm_invoke import llm_invoke
+from .load_prompt_template import load_prompt_template
+from .preprocess import preprocess
+
+def _merge_with_existing_test(
+    existing_test: str,
+    new_test_case: str,
+    language: str,
+    strength: float,
+    temperature: float,
+    time_budget: float,
+    verbose: bool = False
+) -> Tuple[str, float, str]:
+    """
+    Merges a new test case into an existing test file using an LLM.
+    """
+    template = load_prompt_template("merge_tests_LLM")
+    processed_template = preprocess(template, recursive=False, double_curly_brackets=False)
+    
+    input_json = {
+        "existing_test_file": existing_test,
+        "new_test_case": new_test_case,
+        "language": language
+    }
+    
+    response = llm_invoke(
+        prompt=processed_template,
+        input_json=input_json,
+        strength=strength,
+        temperature=temperature,
+        time=time_budget,
+        verbose=verbose
+    )
+    
+    return response['result'], response['cost'], response['model_name']
 
 def bug_main(
     ctx: click.Context,
@@ -81,23 +116,34 @@ def bug_main(
             language
         )
 
-        # Save results if output path is provided
+            # Save results if output path is provided
         if output_file_paths.get("output"):
-            output_path = output_file_paths["output"]
-            # Additional check to ensure the path is not empty
-            if not output_path or output_path.strip() == '':
-                # Use a default output path in the current directory
-                output_path = f"test_{Path(code_file).stem}_bug.{language.lower()}"
+            output_path = Path(output_file_paths["output"])
+            if not output_path.name or output_path.name.strip() == '':
+                output_path = output_path.parent / f"test_{Path(code_file).stem}_bug.{language.lower()}"
                 if not ctx.obj.get('quiet', False):
-                    rprint(f"[yellow]Warning: Empty output path detected. Using default: {output_path}[/yellow]")
-                output_file_paths["output"] = output_path
+                    rprint(f"[yellow]Warning: Empty output filename detected. Using default: {output_path}[/yellow]")
+                output_file_paths["output"] = str(output_path)
+
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+
+            if output_path.exists():
+                if not ctx.obj.get('quiet', False):
+                    rprint(f"[yellow]Test file {output_path} already exists. Merging new test case.[/yellow]")
+                existing_test_content = output_path.read_text()
+                merged_test, merge_cost, merge_model = _merge_with_existing_test(
+                    existing_test=existing_test_content,
+                    new_test_case=unit_test,
+                    language=language,
+                    strength=strength,
+                    temperature=temperature,
+                    time_budget=time_budget,
+                    verbose=ctx.obj.get('verbose', False)
+                )
+                unit_test = merged_test
+                total_cost += merge_cost
+                model_name = f"{model_name} (test generation), {merge_model} (merge)"
             
-            # Create directory if it doesn't exist
-            dir_path = os.path.dirname(output_path)
-            if dir_path:  # Only create directory if there's a directory part in the path
-                os.makedirs(dir_path, exist_ok=True)
-            
-            # Write the file
             with open(output_path, 'w') as f:
                 f.write(unit_test)
 

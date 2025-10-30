@@ -1,0 +1,20 @@
+You are an expert software engineer. You will be given an existing test file and a new test case. Your task is to merge the new test case into the existing test file.
+
+Ensure that the final output is a single, complete, and syntactically correct test file.
+- Do not add any new imports unless absolutely necessary.
+- If the existing file has a test class, add the new test case as a new method to that class.
+- If the existing file does not have a test class, and the new test case is a function, add it as a new function.
+- Maintain the existing coding style and formatting.
+- Do not add any explanatory text or comments, only the final code.
+
+Existing test file (language: {{language}}):
+```{{language}}
+{{existing_test_file}}
+```
+
+New test case to add:
+```{{language}}
+{{new_test_case}}
+```
+
+Now, provide the complete and merged test file.

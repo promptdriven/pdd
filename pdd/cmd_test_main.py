@@ -4,13 +4,49 @@ Main entry point for the 'test' command.
 from __future__ import annotations
 import click
 from pathlib import Path
+from typing import Tuple
 # pylint: disable=redefined-builtin
 from rich import print
 
 from .construct_paths import construct_paths
 from .generate_test import generate_test
 from .increase_tests import increase_tests
+from .llm_invoke import llm_invoke
+from .load_prompt_template import load_prompt_template
+from .preprocess import preprocess
 
+
+def _merge_with_existing_test(
+    existing_test: str,
+    new_test_case: str,
+    language: str,
+    strength: float,
+    temperature: float,
+    time_budget: float,
+    verbose: bool = False
+) -> Tuple[str, float, str]:
+    """
+    Merges a new test case into an existing test file using an LLM.
+    """
+    template = load_prompt_template("merge_tests_LLM")
+    processed_template = preprocess(template, recursive=False, double_curly_brackets=False)
+    
+    input_json = {
+        "existing_test_file": existing_test,
+        "new_test_case": new_test_case,
+        "language": language
+    }
+    
+    response = llm_invoke(
+        prompt=processed_template,
+        input_json=input_json,
+        strength=strength,
+        temperature=temperature,
+        time=time_budget,
+        verbose=verbose
+    )
+    
+    return response['result'], response['cost'], response['model_name']
 
 # pylint: disable=too-many-arguments, too-many-locals, too-many-return-statements, too-many-branches, too-many-statements, broad-except
 def cmd_test_main(
@@ -179,10 +215,26 @@ def cmd_test_main(
         return "", 0.0, ""
     
     try:
-        # Ensure parent directory exists
         output_path = Path(output_file)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
+        if output_path.exists():
+            if verbose:
+                print(f"[bold yellow]Test file {output_path} already exists. Merging new test case.[/bold yellow]")
+            existing_test_content = output_path.read_text(encoding="utf-8")
+            merged_test, merge_cost, merge_model = _merge_with_existing_test(
+                existing_test=existing_test_content,
+                new_test_case=unit_test,
+                language=language,
+                strength=strength,
+                temperature=temperature,
+                time_budget=time,
+                verbose=verbose
+            )
+            unit_test = merged_test
+            total_cost += merge_cost
+            model_name = f"{model_name} (test generation), {merge_model} (merge)"
+
         with open(output_file, "w", encoding="utf-8") as file_handle:
             file_handle.write(unit_test)
         print(f"[bold green]Unit tests saved to:[/bold green] {output_file}")
