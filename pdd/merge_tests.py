@@ -7,8 +7,8 @@ from .preprocess import preprocess
 from .postprocess import postprocess
 
 def merge_with_existing_test(
-    existing_test_cases: str,
-    new_test_case: str,
+    existing_tests: str,
+    new_tests: str,
     language: str,
     strength: float,
     temperature: float,
@@ -19,8 +19,8 @@ def merge_with_existing_test(
     Merges a new test case into an existing test file using an LLM.
 
     Args:
-        existing_test (str): The content of the existing test file.
-        new_test_case (str): The new test case to be merged.
+        existing_tests (str): The content of the existing test file.
+        new_tests (str): The new test case to be merged.
         language (str): The programming language of the tests.
         strength (float): LLM model strength (0.0 to 1.0).
         temperature (float): LLM model temperature.
@@ -34,15 +34,15 @@ def merge_with_existing_test(
     console = Console()
 
     # 1. Input Validation
-    if not all([existing_test_cases, new_test_case, language]):
-        raise ValueError("existing_test, new_test_case, and language must be non-empty strings.")
+    if not all([existing_tests, new_tests, language]):
+        raise ValueError("existing_tests, new_tests, and language must be non-empty strings.")
     if not (0.0 <= strength <= 1.0):
         raise ValueError("Strength must be between 0.0 and 1.0.")
     if not (0.0 <= temperature <= 2.0):
         raise ValueError("Temperature must be between 0.0 and 2.0.")
 
     try:
-        # 2. Load the prompt template
+        # 2. Load and preprocess the prompt template
         template = load_prompt_template("merge_tests_LLM")
         if not template:
             raise ValueError("Failed to load 'merge_tests' prompt template.")
@@ -50,8 +50,8 @@ def merge_with_existing_test(
 
         # 3. Prepare the input for the LLM
         input_json = {
-            "existing_test_cases": existing_test_cases,
-            "new_test_case": new_test_case,
+            "existing_tests": existing_tests,
+            "new_tests": new_tests,
             "language": language
         }
 

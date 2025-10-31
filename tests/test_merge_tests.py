@@ -14,8 +14,8 @@ class TestMergeWithExistingTest:
     @pytest.fixture
     def valid_inputs(self):
         return {
-            "existing_test": "def test_one(): assert 1 == 1",
-            "new_test_case": "def test_two(): assert 2 == 2",
+            "existing_tests": "def test_one(): assert 1 == 1",
+            "new_tests": "def test_two(): assert 2 == 2",
             "language": "python",
             "strength": 0.5,
             "temperature": 0.1,
@@ -49,16 +49,15 @@ class TestMergeWithExistingTest:
         assert cost == 0.01 + 0.005  # Total cost should be sum of llm_invoke and postprocess
         assert model_name == 'test-merge-model' # The original model name should be returned
 
-        mock_load_prompt.assert_called_once_with("merge_tests")
-        mock_preprocess.assert_called_once_with("merge_template", recursive=False, double_curly_brackets=False)
+        mock_load_prompt.assert_called_once_with("merge_tests_LLM")
         
         expected_input_json = {
-            "existing_test_file": valid_inputs["existing_test"],
-            "new_test_case": valid_inputs["new_test_case"],
+            "existing_tests": valid_inputs["existing_tests"],
+            "new_tests": valid_inputs["new_tests"],
             "language": valid_inputs["language"]
         }
         mock_llm_invoke.assert_called_once_with(
-            prompt="processed_merge_template",
+            prompt="merge_template",
             input_json=expected_input_json,
             strength=valid_inputs["strength"],
             temperature=valid_inputs["temperature"],
@@ -78,7 +77,7 @@ class TestMergeWithExistingTest:
         """
         Test that the function raises ValueError for empty string inputs.
         """
-        for key in ["existing_test", "new_test_case", "language"]:
+        for key in ["existing_tests", "new_tests", "language"]:
             with pytest.raises(ValueError, match="must be non-empty strings"):
                 invalid_inputs = valid_inputs.copy()
                 invalid_inputs[key] = ""

@@ -98,8 +98,8 @@ def bug_main(
                     rprint(f"[yellow]Test file {output_path} already exists. Merging new test case.[/yellow]")
                 existing_test_content = output_path.read_text()
                 merged_test, merge_cost, merge_model = merge_with_existing_test(
-                    existing_test_cases=existing_test_content,
-                    new_test_case=unit_test,
+                    existing_tests=existing_test_content,
+                    new_tests=unit_test,
                     language=language,
                     strength=strength,
                     temperature=temperature,

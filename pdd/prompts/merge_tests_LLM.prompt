@@ -8,11 +8,11 @@
 
 % Existing test file (language: {language}):
 ```
-{existing_test_cases}
+{existing_tests}
 ```
 
 % New test case to add  (language: {language}):
-{new_test_case}
+{new_tests}
 ```
 
 % Now, provide the complete and merged test file.

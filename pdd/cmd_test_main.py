@@ -108,6 +108,14 @@ def cmd_test_main(
     if verbose:
         print(f"[bold blue]Language detected:[/bold blue] {language}")
 
+    if coverage_report and not existing_tests:
+        print(
+            "[bold red]Error: --existing-tests is required "
+            "when using --coverage-report[/bold red]"
+        )
+        ctx.exit(1)
+        return "", 0.0, ""
+
     # Generate or enhance unit tests
     if not existing_tests:
         try:
@@ -180,8 +188,8 @@ def cmd_test_main(
                 print(f"[bold yellow]Test file {output_path} already exists. Merging new test case.[/bold yellow]")
             existing_test_content = output_path.read_text(encoding="utf-8")
             merged_test, merge_cost, merge_model = merge_with_existing_test(
-                existing_test_cases=existing_test_content,
-                new_test_case=unit_test,
+                existing_tests=existing_test_content,
+                new_tests=unit_test,
                 language=language,
                 strength=strength,
                 temperature=temperature,
