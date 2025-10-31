@@ -8,41 +8,7 @@ from pathlib import Path
 from . import DEFAULT_STRENGTH, DEFAULT_TIME
 from .construct_paths import construct_paths
 from .bug_to_unit_test import bug_to_unit_test
-from .llm_invoke import llm_invoke
-from .load_prompt_template import load_prompt_template
-from .preprocess import preprocess
-
-def _merge_with_existing_test(
-    existing_test: str,
-    new_test_case: str,
-    language: str,
-    strength: float,
-    temperature: float,
-    time_budget: float,
-    verbose: bool = False
-) -> Tuple[str, float, str]:
-    """
-    Merges a new test case into an existing test file using an LLM.
-    """
-    template = load_prompt_template("merge_tests_LLM")
-    processed_template = preprocess(template, recursive=False, double_curly_brackets=False)
-    
-    input_json = {
-        "existing_test_file": existing_test,
-        "new_test_case": new_test_case,
-        "language": language
-    }
-    
-    response = llm_invoke(
-        prompt=processed_template,
-        input_json=input_json,
-        strength=strength,
-        temperature=temperature,
-        time=time_budget,
-        verbose=verbose
-    )
-    
-    return response['result'], response['cost'], response['model_name']
+from .merge_tests import merge_with_existing_test
 
 def bug_main(
     ctx: click.Context,
@@ -131,8 +97,8 @@ def bug_main(
                 if not ctx.obj.get('quiet', False):
                     rprint(f"[yellow]Test file {output_path} already exists. Merging new test case.[/yellow]")
                 existing_test_content = output_path.read_text()
-                merged_test, merge_cost, merge_model = _merge_with_existing_test(
-                    existing_test=existing_test_content,
+                merged_test, merge_cost, merge_model = merge_with_existing_test(
+                    existing_test_cases=existing_test_content,
                     new_test_case=unit_test,
                     language=language,
                     strength=strength,
