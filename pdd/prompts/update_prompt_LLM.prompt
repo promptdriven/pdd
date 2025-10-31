@@ -37,6 +37,6 @@
     <include>context/orders_service_example.py</include>
   </orders_service>
   </pdd>
-- Prefer real example files available in the provided context (use <include-many> when listing multiple). If examples are not provided, assume dependency examples live under context/ using the pattern context/[dependency_name]_example.
+- Prefer real example files available in the provided context (use <include-many> when listing multiple). If examples are not provided, assume dependency examples live under context/ using the pattern context/[dependency_name]_example. You should always try to include example files when possible.
 - Include all necessary dependencies for the module/component (based on the provided context and references).
 </pdd_prompting_guide>
