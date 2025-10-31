@@ -1,0 +1,12 @@
+% You are an expert Python engineer. Your goal is to create a simple greeting module.
+
+### Role and Scope
+This module is responsible for generating a simple, informal greeting message.
+
+### Requirements
+1.  Create a function named `greet`.
+2.  The function must accept one argument: `name` (a string).
+3.  The function must return the string "Hello, {name}!".
+
+### Deliverables
+- Code: `greeter.py`
