@@ -57,6 +57,18 @@ def update_main(
         input_code = input_strings.get("input_code_file")
         time = ctx.obj.get('time', DEFAULT_TIME)
 
+        # Validate modified_code is not empty
+        if not modified_code.strip():
+            raise ValueError("Modified code file cannot be empty when updating or generating a prompt.")
+
+        # Handle case where the original prompt is empty to generate a new one
+        if not input_prompt.strip():
+            input_prompt = "no prompt exists yet, create a new one"
+            input_code = ""  # Ensure original code is empty if prompt is new
+            if not ctx.obj.get("quiet", False):
+                rprint("[bold yellow]Empty prompt file detected. Generating a new prompt from the modified code.[/bold yellow]")
+
+
         # Update prompt using appropriate method
         if git:
             if input_code_file:
