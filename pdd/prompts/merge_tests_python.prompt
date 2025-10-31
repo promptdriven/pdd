@@ -1,0 +1,42 @@
+% You are an expert Python developer specializing in building tools for LLM-based code generation. Your task is to write the complete Python code for a module named `merge_tests.py`. This module will be responsible for intelligently merging new test cases into an existing test file.
+
+% The module must contain a single function, `merge_with_existing_test`, that orchestrates this process by calling other internal modules like `llm_invoke` and `postprocess`.
+
+Requirements
+1.  **Function Signature**: The module must define one primary function with the exact signature: `def merge_with_existing_test(existing_tests: str, new_test_case: str, language: str, strength: float, temperature: float, time_budget: Optional[float] = DEFAULT_TIME, verbose: bool = False) -> Tuple[str, float, str]:`.
+2.  **Input Validation**: The function must validate its inputs. It should raise a `ValueError` if `existing_tests`, `new_test_case`, or `language` are empty strings. It must also validate that `strength` is between 0.0 and 1.0, and `temperature` is between 0.0 and 2.0.
+3.  **Error Handling**: The entire logic should be wrapped in a `try...except` block to catch and report any exceptions gracefully using `rich.console.Console`.
+4.  **Logging**: Use `rich.console.Console` for logging. If the `verbose` flag is `True`, print informative messages at each step (e.g., "Loading prompt...", "Invoking LLM...", "Post-processing...").
+5.  **LLM Integration**: The function must use other PDD modules to interact with the LLM. The sequence of operations is:
+    - Load a prompt template named `merge_tests_LLM` using the `load_prompt_template` function.
+    - Preprocess the template using the `preprocess` function.
+    - Prepare an `input_json` dictionary with the keys `existing_test_file`, `new_test_case`, and `language`.
+    - Call the `llm_invoke` function with the processed prompt and input JSON.
+    - Post-process the raw result from the LLM using the `postprocess` function to extract and clean the final code.
+6.  **Cost Calculation**: The total cost must be the sum of the costs from both the `llm_invoke` and `postprocess` steps.
+7.  **Return Value**: The function must return a tuple containing the final merged code (a string), the total cost (a float), and the model name returned by the initial `llm_invoke` call (a string).
+
+Dependencies
+<llm_invoke_module>
+  <include>context/llm_invoke_example.py</include>
+</llm_invoke_module>
+<postprocess_module>
+  <include>context/postprocess_example.py</include>
+</postprocess_module>
+<prompt_utils>
+  <include>context/load_prompt_template_example.py</include>
+  <include>context/preprocess_example.py</include>
+</prompt_utils>
+
+Instructions
+- Begin by importing all necessary modules: `Tuple`, `Optional` from `typing`, `Console` from `rich.console`, and the required PDD modules (`llm_invoke`, `load_prompt_template`, `preprocess`, `postprocess`, `EXTRACTION_STRENGTH`, `DEFAULT_TIME`).
+- Implement the input validation checks at the beginning of the function.
+- Inside the `try` block, follow the LLM integration steps exactly as described in the requirements.
+- Ensure the `postprocess` function is called with the correct `EXTRACTION_STRENGTH`.
+- Sum the costs from `llm_invoke` and `postprocess` to get the `total_cost`.
+- If any step fails, the `except` block should catch the exception, print an error message using the `console`, and then re-raise the exception.
+
+Deliverable
+- A single, complete Python file named `merge_tests.py`.
+- The file must contain the `merge_with_existing_test` function, implemented according to all requirements and instructions.
+- The code should be well-formatted, include type hints, and have a clear docstring explaining its purpose, arguments, and return value.
