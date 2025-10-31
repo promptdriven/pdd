@@ -85,7 +85,7 @@ def test_successful_update_prompt(valid_inputs, mock_llm_invoke, mock_load_promp
 
 def test_empty_input_strings():
     """Test handling of empty input strings"""
-    with pytest.raises(ValueError, match="All input strings .* must be non-empty"):
+    with pytest.raises(ValueError, match="For updating an existing prompt, input_prompt and input_code must be non-empty."):
         update_prompt("", "code", "modified", 0.5, 0.5)
 
 def test_invalid_strength():
