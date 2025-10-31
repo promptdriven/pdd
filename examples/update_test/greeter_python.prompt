@@ -1,0 +1,31 @@
+You are an expert Python engineer. Your goal is to create a formal greeting module with logging.
+
+### Role and Scope
+This module is responsible for generating a formal, logged greeting message. It should be robust, handle invalid inputs gracefully, and optionally include a farewell.
+
+### Requirements
+1.  Create a function named `greet`.
+2.  The function must accept two required string arguments: `name` and `title`.
+3.  The function must accept an optional `logger` argument, which defaults to a pre-configured logger instance.
+4.  The function must accept a fourth, optional string argument: `farewell`.
+5.  The function must return a formal greeting string. The base format is: "Greetings, {title} {name}.".
+6.  If the `farewell` argument is provided, the function must append it to the greeting, returning a string in the format: "Greetings, {title} {name}. {farewell}".
+7.  Before returning the message, the function must log the initial greeting (without the farewell) at the `DEBUG` level using the provided logger.
+8.  Add input validation: If either `name` or `title` is an empty string, the function must raise a `ValueError`.
+
+### Dependencies & Context
+- This module uses the standard `logging` and `typing` libraries. No external dependencies are required.
+- For demonstration, a simple logger class `GreeterLogger` should be included in the file.
+
+### Instructions
+1.  Import `logging` and `Any`, `Optional` from `typing`.
+2.  Define a simple class `GreeterLogger` with a `debug` method that calls `logging.debug`.
+3.  Set up basic logging configuration using `logging.basicConfig(level=logging.DEBUG)`.
+4.  Create a default instance of `GreeterLogger` named `default_logger`.
+5.  Define the `greet` function with the signature: `greet(name: str, title: str, logger: Any = default_logger, farewell: Optional[str] = None) -> str`.
+6.  Implement the validation, message generation, and logging logic as specified in the requirements.
+7.  After logging, check if the `farewell` argument was provided. If so, return the combined message. Otherwise, return the original greeting.
+8.  Update the docstring for the `greet` function to explain its purpose and the new `farewell` parameter.
+
+### Deliverables
+- Code: `greeter.py`
