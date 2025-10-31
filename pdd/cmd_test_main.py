@@ -92,6 +92,12 @@ def cmd_test_main(
     temperature = ctx.obj["temperature"]
     time = ctx.obj.get("time")
 
+    # Validate merge flag and existing_tests
+    if merge and not existing_tests:
+        print("[bold red]Error: --existing-tests is required when using --merge.[/bold red]")
+        ctx.exit(1)
+        return "", 0.0, ""
+
     if verbose:
         print(f"[bold blue]Prompt file:[/bold blue] {prompt_file}")
         print(f"[bold blue]Code file:[/bold blue] {code_file}")
@@ -138,7 +144,7 @@ def cmd_test_main(
         print(f"[bold blue]Language detected:[/bold blue] {language}")
 
     # Generate or enhance unit tests
-    if not coverage_report:
+    if not existing_tests:
         try:
             unit_test, total_cost, model_name = generate_test(
                 input_strings["prompt_file"],
@@ -150,24 +156,14 @@ def cmd_test_main(
                 verbose=verbose,
             )
         except Exception as exception:
-            # A general exception is caught to handle various errors that can occur
-            # during the test generation process, which involves external model
-            # interactions and complex logic.
             print(f"[bold red]Error generating tests: {exception}[/bold red]")
             ctx.exit(1)
             return "", 0.0, ""
     else:
-        if not existing_tests:
-            print(
-                "[bold red]Error: --existing-tests is required "
-                "when using --coverage-report[/bold red]"
-            )
-            ctx.exit(1)
-            return "", 0.0, ""
         try:
             unit_test, total_cost, model_name = increase_tests(
                 existing_unit_tests=input_strings["existing_tests"],
-                coverage_report=input_strings["coverage_report"],
+                coverage_report=input_strings.get("coverage_report"),
                 code=input_strings["code_file"],
                 prompt_that_generated_code=input_strings["prompt_file"],
                 language=language,
@@ -177,9 +173,6 @@ def cmd_test_main(
                 verbose=verbose,
             )
         except Exception as exception:
-            # This broad exception is used to catch any issue that might arise
-            # while increasing test coverage, including problems with parsing
-            # reports or interacting with the language model.
             print(f"[bold red]Error increasing test coverage: {exception}[/bold red]")
             ctx.exit(1)
             return "", 0.0, ""
@@ -217,8 +210,7 @@ def cmd_test_main(
     try:
         output_path = Path(output_file)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        if output_path.exists():
+        if merge:
             if verbose:
                 print(f"[bold yellow]Test file {output_path} already exists. Merging new test case.[/bold yellow]")
             existing_test_content = output_path.read_text(encoding="utf-8")

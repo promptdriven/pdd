@@ -7,9 +7,9 @@ from .postprocess import postprocess
 
 def increase_tests(
     existing_unit_tests: str, 
-    coverage_report: str, 
     code: str, 
     prompt_that_generated_code: str,
+    coverage_report: Optional[str] = None, 
     language: str = "python",
     strength: float = 0.5,
     temperature: float = 0.0,
@@ -21,9 +21,9 @@ def increase_tests(
 
     Args:
         existing_unit_tests (str): Current unit tests for the code
-        coverage_report (str): Coverage report for the code
         code (str): Code under test
         prompt_that_generated_code (str): Original prompt used to generate the code
+        coverage_report (str, optional): Coverage report for the code. Defaults to None.
         language (str, optional): Programming language. Defaults to "python".
         strength (float, optional): LLM model strength. Defaults to 0.5.
         temperature (float, optional): LLM model temperature. Defaults to 0.0.
@@ -39,8 +39,8 @@ def increase_tests(
     console = Console()
 
     # Validate inputs
-    if not all([existing_unit_tests, coverage_report, code, prompt_that_generated_code]):
-        raise ValueError("All input parameters must be non-empty strings")
+    if not all([existing_unit_tests, code, prompt_that_generated_code]):
+        raise ValueError("All input parameters except coverage_report must be non-empty strings")
 
     # Validate strength and temperature
     if not (0 <= strength <= 1):
@@ -50,7 +50,24 @@ def increase_tests(
 
     try:
         # Step 1: Load prompt template
-        prompt_name = "increase_tests_LLM"
+        if coverage_report:
+            prompt_name = "increase_tests_LLM"
+            input_json = {
+                "existing_unit_tests": existing_unit_tests,
+                "coverage_report": coverage_report,
+                "code": code,
+                "prompt_that_generated_code": prompt_that_generated_code,
+                "language": language
+            }
+        else:
+            prompt_name = "increase_tests_no_coverage_LLM"
+            input_json = {
+                "existing_unit_tests": existing_unit_tests,
+                "code": code,
+                "prompt_that_generated_code": prompt_that_generated_code,
+                "language": language
+            }
+        
         prompt_template = load_prompt_template(prompt_name)
         
         # Check if prompt template was loaded successfully
@@ -61,15 +78,6 @@ def increase_tests(
             console.print(f"[blue]Loaded Prompt Template:[/blue]\n{prompt_template}")
 
         # Step 2: Prepare input for LLM invoke
-        input_json = {
-            "existing_unit_tests": existing_unit_tests,
-            "coverage_report": coverage_report,
-            "code": code,
-            "prompt_that_generated_code": prompt_that_generated_code,
-            "language": language
-        }
-
-        # Invoke LLM with the prompt
         llm_response = llm_invoke(
             prompt=prompt_template,
             input_json=input_json,

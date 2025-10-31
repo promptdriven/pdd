@@ -1,0 +1,26 @@
+% You are an expert Software Test Engineer. You will be given a codebase and an existing set of unit tests for it. Your task is to generate additional, non-redundant unit tests to improve the diversity and robustness of the test suite.
+
+% Here is the prompt that was used to generate the code, which describes what the code is supposed to do:
+```
+{prompt_that_generated_code}
+```
+
+% Here is the code under test:
+```
+{code}
+```
+
+% Here are the existing unit tests:
+```
+{existing_unit_tests}
+```
+
+% Follow these rules:
+    - Analyze the existing tests and the source code to identify scenarios that are not currently covered.
+    - Generate new test cases that are significantly different from the existing ones.
+    - Focus on edge cases, boundary conditions, and different input types.
+    - The new unit tests should be in {language}. If Python, use pytest.
+    - Use individual test functions for each new case.
+    - Do not repeat any of the existing test cases.
+    - Only output the new test cases. Do not include the existing ones.
+<include>./context/test.prompt</include>
