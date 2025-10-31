@@ -24,16 +24,14 @@ class TestMergeWithExistingTest:
         }
 
     @patch('pdd.merge_tests.load_prompt_template')
-    @patch('pdd.merge_tests.preprocess')
     @patch('pdd.merge_tests.llm_invoke')
     @patch('pdd.merge_tests.postprocess')
-    def test_successful_merge(self, mock_postprocess, mock_llm_invoke, mock_preprocess, mock_load_prompt, valid_inputs):
+    def test_successful_merge(self, mock_postprocess, mock_llm_invoke, mock_load_prompt, valid_inputs):
         """
         Test the successful execution path of merge_with_existing_test.
         """
         # --- Arrange ---
         mock_load_prompt.return_value = "merge_template"
-        mock_preprocess.return_value = "processed_merge_template"
         mock_llm_invoke.return_value = {
             'result': 'raw_merged_code',
             'cost': 0.01,
@@ -116,13 +114,12 @@ class TestMergeWithExistingTest:
         """
         Test that a ValueError is raised if the prompt template fails to load.
         """
-        with pytest.raises(ValueError, match="Failed to load 'merge_tests' prompt template."):
+        with pytest.raises(ValueError, match="Failed to load 'merge_tests_LLM' prompt template."):
             merge_with_existing_test(**valid_inputs)
 
     @patch('pdd.merge_tests.load_prompt_template', return_value="template")
-    @patch('pdd.merge_tests.preprocess', return_value="processed")
     @patch('pdd.merge_tests.llm_invoke', return_value={'result': ' ', 'cost': 0, 'model_name': 'm'})
-    def test_llm_empty_result_failure(self, mock_llm, mock_preprocess, mock_load, valid_inputs):
+    def test_llm_empty_result_failure(self, mock_llm, mock_load, valid_inputs):
         """
         Test that a ValueError is raised if the LLM returns an empty or whitespace-only result.
         """

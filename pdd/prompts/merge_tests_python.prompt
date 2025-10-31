@@ -3,14 +3,14 @@
 % The module must contain a single function, `merge_with_existing_test`, that orchestrates this process by calling other internal modules like `llm_invoke` and `postprocess`.
 
 Requirements
-1.  **Function Signature**: The module must define one primary function with the exact signature: `def merge_with_existing_test(existing_tests: str, new_test_case: str, language: str, strength: float, temperature: float, time_budget: Optional[float] = DEFAULT_TIME, verbose: bool = False) -> Tuple[str, float, str]:`.
-2.  **Input Validation**: The function must validate its inputs. It should raise a `ValueError` if `existing_tests`, `new_test_case`, or `language` are empty strings. It must also validate that `strength` is between 0.0 and 1.0, and `temperature` is between 0.0 and 2.0.
+1.  **Function Signature**: The module must define one primary function with the exact signature: `def merge_with_existing_test(existing_tests: str, new_tests: str, language: str, strength: float, temperature: float, time_budget: Optional[float] = DEFAULT_TIME, verbose: bool = False) -> Tuple[str, float, str]:`.
+2.  **Input Validation**: The function must validate its inputs. It should raise a `ValueError` if `existing_tests`, `new_tests`, or `language` are empty strings. It must also validate that `strength` is between 0.0 and 1.0, and `temperature` is between 0.0 and 2.0.
 3.  **Error Handling**: The entire logic should be wrapped in a `try...except` block to catch and report any exceptions gracefully using `rich.console.Console`.
 4.  **Logging**: Use `rich.console.Console` for logging. If the `verbose` flag is `True`, print informative messages at each step (e.g., "Loading prompt...", "Invoking LLM...", "Post-processing...").
 5.  **LLM Integration**: The function must use other PDD modules to interact with the LLM. The sequence of operations is:
     - Load a prompt template named `merge_tests_LLM` using the `load_prompt_template` function.
     - Preprocess the template using the `preprocess` function.
-    - Prepare an `input_json` dictionary with the keys `existing_test_file`, `new_test_case`, and `language`.
+    - Prepare an `input_json` dictionary with the keys `existing_tests`, `new_tests`, and `language`.
     - Call the `llm_invoke` function with the processed prompt and input JSON.
     - Post-process the raw result from the LLM using the `postprocess` function to extract and clean the final code.
 6.  **Cost Calculation**: The total cost must be the sum of the costs from both the `llm_invoke` and `postprocess` steps.

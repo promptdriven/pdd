@@ -45,7 +45,7 @@ def merge_with_existing_test(
         # 2. Load and preprocess the prompt template
         template = load_prompt_template("merge_tests_LLM")
         if not template:
-            raise ValueError("Failed to load 'merge_tests' prompt template.")
+            raise ValueError("Failed to load 'merge_tests_LLM' prompt template.")
         
 
         # 3. Prepare the input for the LLM
