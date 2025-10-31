@@ -1,0 +1,2 @@
+Addition: 8
+Subtraction: 6

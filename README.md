@@ -1222,7 +1222,7 @@ Arguments:
 - `CODE_FILE`: The filename of the code file to be tested.
 
 Options:
-- `--output LOCATION`: Specify where to save the generated test file. The default file name is `test_<basename>.<language_file_extension>`.
+- `--output LOCATION`: Specify where to save the generated test file. The default file name is `test_<basename>.<language_file_extension>`. **Note: When `--existing-tests` and `--merge` are used, new tests are appended to the file specified by `--existing-tests` (or `--output` if it points to the existing test file).**
 - `--language`: Specify the programming language. Defaults to the language specified by the prompt file name.
 - `--coverage-report PATH`: Path to the coverage report file for existing tests. When provided, generates additional tests to improve coverage.
 - `--existing-tests PATH`: Path to the existing unit test file. Required when using --coverage-report.
@@ -1590,7 +1590,7 @@ This will print out the line number in the prompt file for the associated the co
 
 ### 14. bug
 
-Generate a unit test based on observed and desired outputs, given the original prompt and code.
+Generate a unit test based on observed and desired outputs, given the original prompt and code. The generated unit test is appended to the target test file, allowing for incremental test suite expansion.
 
 ```
 pdd [GLOBAL OPTIONS] bug [OPTIONS] PROMPT_FILE CODE_FILE PROGRAM_FILE CURRENT_OUTPUT_FILE DESIRED_OUTPUT_FILE
@@ -1604,7 +1604,7 @@ Arguments:
 - `DESIRED_OUTPUT_FILE`: File containing the desired (correct) output of the program.
 
 Options:
-- `--output LOCATION`: Specify where to save the generated unit test. The default file name is `test_<basename>_bug.<language_extension>`.
+- `--output LOCATION`: Specify where to save the generated unit test. The default file name is `test_<basename>_bug.<language_extension>`. **The generated unit test is appended to this file if it already exists.**
 - `--language`: Specify the programming language for the unit test (default is "Python").
 
 Example:

@@ -1,0 +1,18 @@
+% You are an expert Software Test Engineer. You will be given an existing test file and a new test case. Your task is to merge the new test case into the existing test file.
+
+% Ensure that the final output is a single, complete, and syntactically correct test file.
+- **Crucially, maintain the existing structure.** If the existing tests are within a class (e.g., `class TestSomething:`), integrate new test methods into that class. If they are standalone functions, add new functions at the module level.
+- Do not add any new imports unless absolutely necessary.
+- Maintain the existing coding style and formatting (indentation, spacing).
+- Do not add any explanatory text or comments, only the final, merged code.
+
+% Existing test file (language: {language}):
+```
+{existing_tests}
+```
+
+% New test case to add  (language: {language}):
+{new_tests}
+```
+
+% Now, provide the complete and merged test file.

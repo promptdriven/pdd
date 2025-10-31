@@ -1,0 +1,15 @@
+Create a Python module named `calculator.py` that provides functions for basic arithmetic operations: `add` and `subtract`.
+
+Each function should take two numbers as input and return the result of the operation.
+
+Example usage:
+
+```python
+import calculator
+
+result_add = calculator.add(5, 3)
+print(f"Addition: {result_add}")
+
+result_subtract = calculator.subtract(10, 4)
+print(f"Subtraction: {result_subtract}")
+```

@@ -8,6 +8,7 @@ from pathlib import Path
 from . import DEFAULT_STRENGTH, DEFAULT_TIME
 from .construct_paths import construct_paths
 from .bug_to_unit_test import bug_to_unit_test
+from .merge_tests import merge_with_existing_test
 
 def bug_main(
     ctx: click.Context,
@@ -81,23 +82,34 @@ def bug_main(
             language
         )
 
-        # Save results if output path is provided
+            # Save results if output path is provided
         if output_file_paths.get("output"):
-            output_path = output_file_paths["output"]
-            # Additional check to ensure the path is not empty
-            if not output_path or output_path.strip() == '':
-                # Use a default output path in the current directory
-                output_path = f"test_{Path(code_file).stem}_bug.{language.lower()}"
+            output_path = Path(output_file_paths["output"])
+            if not output_path.name or output_path.name.strip() == '':
+                output_path = output_path.parent / f"test_{Path(code_file).stem}_bug.{language.lower()}"
                 if not ctx.obj.get('quiet', False):
-                    rprint(f"[yellow]Warning: Empty output path detected. Using default: {output_path}[/yellow]")
-                output_file_paths["output"] = output_path
+                    rprint(f"[yellow]Warning: Empty output filename detected. Using default: {output_path}[/yellow]")
+                output_file_paths["output"] = str(output_path)
+
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+
+            if output_path.exists():
+                if not ctx.obj.get('quiet', False):
+                    rprint(f"[yellow]Test file {output_path} already exists. Merging new test case.[/yellow]")
+                existing_test_content = output_path.read_text()
+                merged_test, merge_cost, merge_model = merge_with_existing_test(
+                    existing_tests=existing_test_content,
+                    new_tests=unit_test,
+                    language=language,
+                    strength=strength,
+                    temperature=temperature,
+                    time_budget=time_budget,
+                    verbose=ctx.obj.get('verbose', False)
+                )
+                unit_test = merged_test
+                total_cost += merge_cost
+                model_name = f"{model_name} (test generation), {merge_model} (merge)"
             
-            # Create directory if it doesn't exist
-            dir_path = os.path.dirname(output_path)
-            if dir_path:  # Only create directory if there's a directory part in the path
-                os.makedirs(dir_path, exist_ok=True)
-            
-            # Write the file
             with open(output_path, 'w') as f:
                 f.write(unit_test)
 

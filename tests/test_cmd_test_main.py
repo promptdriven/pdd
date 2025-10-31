@@ -318,8 +318,15 @@ def test_cmd_test_main_merge_existing_tests(mock_ctx_fixture, mock_files_fixture
     Tests that when 'merge' is True, the output file is the 'existing_tests' path.
     """
     with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
-         patch("pdd.cmd_test_main.generate_test") as mock_generate_test, \
-         patch("builtins.open", mock_open()) as m_file:
+         patch("pdd.cmd_test_main.increase_tests") as mock_increase_tests, \
+         patch("pdd.cmd_test_main.merge_with_existing_test") as mock_merge_with_existing_test, \
+         patch("builtins.open", mock_open()) as m_file, \
+         patch("pdd.cmd_test_main.Path") as mock_path:
+
+        # Mock Path object to simulate file existence
+        mock_path.return_value.exists.return_value = True
+        mock_path.return_value.parent.mkdir.return_value = None
+        mock_path.return_value.read_text.return_value = "existing_content"
 
         # Ensure 'existing_tests' is in the output path from construct_paths
         mock_construct_paths.return_value = (
@@ -328,13 +335,14 @@ def test_cmd_test_main_merge_existing_tests(mock_ctx_fixture, mock_files_fixture
             {"output": mock_files_fixture["output"]},
             "python"
         )
-        mock_generate_test.return_value = ("merged_code", 0.15, "model_v3")
+        mock_increase_tests.return_value = ("new_code", 0.15, "model_v3")
+        mock_merge_with_existing_test.return_value = ("merged_code", 0.05, "merge_model")
 
         cmd_test_main(
             ctx=mock_ctx_fixture,
             prompt_file=mock_files_fixture["prompt_file"],
             code_file=mock_files_fixture["code_file"],
-            output=None,
+            output=mock_files_fixture["existing_tests"],
             language=None,
             coverage_report=None,
             existing_tests=mock_files_fixture["existing_tests"],
@@ -346,6 +354,7 @@ def test_cmd_test_main_merge_existing_tests(mock_ctx_fixture, mock_files_fixture
         m_file.assert_called_once_with(mock_files_fixture["existing_tests"], "w", encoding="utf-8")
         handle = m_file()
         handle.write.assert_called_once_with("merged_code")
+        mock_merge_with_existing_test.assert_called_once()
 
 
 def test_cmd_test_main_output_directory_path_uses_resolved_file(mock_ctx_fixture, mock_files_fixture, tmp_path):

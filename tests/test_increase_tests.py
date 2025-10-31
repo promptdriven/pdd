@@ -63,11 +63,14 @@ class TestIncreaseTests:
     def test_empty_inputs(self, mock_load_prompt):
         """Test that empty inputs raise appropriate ValueError."""
         # Test with each required parameter being empty
-        for param in ['existing_unit_tests', 'coverage_report', 'code', 'prompt_that_generated_code']:
+        for param in ["existing_unit_tests", "code", "prompt_that_generated_code"]:
             invalid_data = self.valid_test_data.copy()
             invalid_data[param] = ""
-            
-            with pytest.raises(ValueError, match="All input parameters must be non-empty strings"):
+
+            with pytest.raises(
+                ValueError,
+                match="All input parameters except coverage_report must be non-empty strings",
+            ):
                 increase_tests(**invalid_data)
 
     def test_invalid_strength(self):
@@ -162,6 +165,7 @@ class TestIncreaseTests:
         # Check 'verbose' as the 5th positional argument (index 4)
         assert mock_postprocess.call_args[0][4] is True
 
+
 def test_z3_parameter_constraints():
     """
     Use Z3 to formally verify the parameter validation logic works correctly
@@ -169,18 +173,18 @@ def test_z3_parameter_constraints():
     """
     # Create solver
     solver = Solver()
-    
+
     # Define symbolic variables for strength and temperature
-    strength = Real('strength')
-    temperature = Real('temperature')
-    
+    strength = Real("strength")
+    temperature = Real("temperature")
+
     # Define the valid range conditions
     valid_strength = And(0 <= strength, strength <= 1)
     valid_temperature = And(0 <= temperature, temperature <= 1)
-    
+
     # Define the function's validation logic
     function_accepts = And(valid_strength, valid_temperature)
-    
+
     # Verify that invalid strength values are always rejected
     # Check strength < 0
     solver.push()
@@ -188,14 +192,14 @@ def test_z3_parameter_constraints():
     solver.add(function_accepts)
     assert solver.check() == unsat  # Should be unsatisfiable
     solver.pop()
-    
+
     # Check strength > 1
     solver.push()
     solver.add(strength > 1)
     solver.add(function_accepts)
     assert solver.check() == unsat  # Should be unsatisfiable
     solver.pop()
-    
+
     # Verify that invalid temperature values are always rejected
     # Check temperature < 0
     solver.push()
@@ -203,18 +207,95 @@ def test_z3_parameter_constraints():
     solver.add(function_accepts)
     assert solver.check() == unsat  # Should be unsatisfiable
     solver.pop()
-    
+
     # Check temperature > 1
     solver.push()
     solver.add(temperature > 1)
     solver.add(function_accepts)
     assert solver.check() == unsat  # Should be unsatisfiable
     solver.pop()
-    
+
     # Verify that valid values are accepted
     solver.push()
     solver.add(valid_strength)
     solver.add(valid_temperature)
     solver.add(Not(function_accepts))
-    assert solver.check() == unsat  # Should be unsatisfiable (meaning function always accepts valid inputs)
+    assert (
+        solver.check() == unsat
+    )  # Should be unsatisfiable (meaning function always accepts valid inputs)
     solver.pop()
+
+    @patch("pdd.increase_tests.load_prompt_template")
+    @patch("pdd.increase_tests.llm_invoke")
+    @patch("pdd.increase_tests.postprocess")
+    def test_increase_tests_no_coverage_report(
+        self, mock_postprocess, mock_llm_invoke, mock_load_prompt
+    ):
+        """
+        Test that increase_tests correctly calls the LLM with the 'no coverage report'
+        prompt when coverage_report is None.
+        """
+        # Hardcoded valid_test_data for this specific test
+        test_data_no_coverage = {
+            "existing_unit_tests": "def test_existing_calc(): assert 1+1==2",
+            "code": "def add(a, b): return a + b",
+            "prompt_that_generated_code": "A function to add numbers.",
+            "coverage_report": None,  # This is the key difference
+            "language": "python",
+            "strength": 0.5,
+            "temperature": 0.0,
+            "time": 0.25,
+            "verbose": False,
+        }
+
+        # Setup mocks
+        mock_load_prompt.return_value = "Prompt for no coverage"
+        mock_llm_invoke.return_value = {
+            "result": "Generated new test code without coverage",
+            "cost": 0.03,
+            "model_name": "test-model-no-coverage",
+        }
+        mock_postprocess.return_value = (
+            "Processed new test code",
+            0.04,
+            "test-model-no-coverage",
+        )
+
+        # Call the function under test
+        result, total_cost, model_name = increase_tests(
+            existing_unit_tests=test_data_no_coverage["existing_unit_tests"],
+            code=test_data_no_coverage["code"],
+            prompt_that_generated_code=test_data_no_coverage["prompt_that_generated_code"],
+            coverage_report=test_data_no_coverage["coverage_report"],
+            language=test_data_no_coverage["language"],
+            strength=test_data_no_coverage["strength"],
+            temperature=test_data_no_coverage["temperature"],
+            time=test_data_no_coverage["time"],
+            verbose=test_data_no_coverage["verbose"],
+        )
+        # Assertions
+        assert result == "Processed new test code"
+        assert total_cost == 0.04
+        assert model_name == "test-model-no-coverage"
+
+        # Verify that the correct prompt template was loaded
+        mock_load_prompt.assert_called_once_with("increase_tests_no_coverage_LLM")
+
+        # Verify llm_invoke was called with the correct input_json (without coverage_report)
+        expected_input_json = {
+            "existing_unit_tests": test_data_no_coverage["existing_unit_tests"],
+            "code": test_data_no_coverage["code"],
+            "prompt_that_generated_code": test_data_no_coverage[
+                "prompt_that_generated_code"
+            ],
+            "language": test_data_no_coverage["language"],
+        }
+        mock_llm_invoke.assert_called_once_with(
+            prompt="Prompt for no coverage",
+            input_json=expected_input_json,
+            strength=test_data_no_coverage["strength"],
+            temperature=test_data_no_coverage["temperature"],
+            time=test_data_no_coverage["time"],
+            verbose=test_data_no_coverage["verbose"],
+        )
+        mock_postprocess.assert_called_once()

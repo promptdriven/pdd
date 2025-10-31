@@ -4,13 +4,14 @@ Main entry point for the 'test' command.
 from __future__ import annotations
 import click
 from pathlib import Path
+from typing import Tuple
 # pylint: disable=redefined-builtin
 from rich import print
 
 from .construct_paths import construct_paths
 from .generate_test import generate_test
 from .increase_tests import increase_tests
-
+from .merge_tests import merge_with_existing_test
 
 # pylint: disable=too-many-arguments, too-many-locals, too-many-return-statements, too-many-branches, too-many-statements, broad-except
 def cmd_test_main(
@@ -55,6 +56,12 @@ def cmd_test_main(
     strength = ctx.obj["strength"]
     temperature = ctx.obj["temperature"]
     time = ctx.obj.get("time")
+
+    # Validate merge flag and existing_tests
+    if merge and not existing_tests:
+        print("[bold red]Error: --existing-tests is required when using --merge.[/bold red]")
+        ctx.exit(1)
+        return "", 0.0, ""
 
     if verbose:
         print(f"[bold blue]Prompt file:[/bold blue] {prompt_file}")
@@ -101,8 +108,16 @@ def cmd_test_main(
     if verbose:
         print(f"[bold blue]Language detected:[/bold blue] {language}")
 
+    if coverage_report and not existing_tests:
+        print(
+            "[bold red]Error: --existing-tests is required "
+            "when using --coverage-report[/bold red]"
+        )
+        ctx.exit(1)
+        return "", 0.0, ""
+
     # Generate or enhance unit tests
-    if not coverage_report:
+    if not existing_tests:
         try:
             unit_test, total_cost, model_name = generate_test(
                 input_strings["prompt_file"],
@@ -114,24 +129,14 @@ def cmd_test_main(
                 verbose=verbose,
             )
         except Exception as exception:
-            # A general exception is caught to handle various errors that can occur
-            # during the test generation process, which involves external model
-            # interactions and complex logic.
             print(f"[bold red]Error generating tests: {exception}[/bold red]")
             ctx.exit(1)
             return "", 0.0, ""
     else:
-        if not existing_tests:
-            print(
-                "[bold red]Error: --existing-tests is required "
-                "when using --coverage-report[/bold red]"
-            )
-            ctx.exit(1)
-            return "", 0.0, ""
         try:
             unit_test, total_cost, model_name = increase_tests(
                 existing_unit_tests=input_strings["existing_tests"],
-                coverage_report=input_strings["coverage_report"],
+                coverage_report=input_strings.get("coverage_report"),
                 code=input_strings["code_file"],
                 prompt_that_generated_code=input_strings["prompt_file"],
                 language=language,
@@ -141,9 +146,6 @@ def cmd_test_main(
                 verbose=verbose,
             )
         except Exception as exception:
-            # This broad exception is used to catch any issue that might arise
-            # while increasing test coverage, including problems with parsing
-            # reports or interacting with the language model.
             print(f"[bold red]Error increasing test coverage: {exception}[/bold red]")
             ctx.exit(1)
             return "", 0.0, ""
@@ -179,10 +181,25 @@ def cmd_test_main(
         return "", 0.0, ""
     
     try:
-        # Ensure parent directory exists
         output_path = Path(output_file)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        
+        if merge:
+            if verbose:
+                print(f"[bold yellow]Test file {output_path} already exists. Merging new test case.[/bold yellow]")
+            existing_test_content = output_path.read_text(encoding="utf-8")
+            merged_test, merge_cost, merge_model = merge_with_existing_test(
+                existing_tests=existing_test_content,
+                new_tests=unit_test,
+                language=language,
+                strength=strength,
+                temperature=temperature,
+                time_budget=time,
+                verbose=verbose
+            )
+            unit_test = merged_test
+            total_cost += merge_cost
+            model_name = f"{model_name} (test generation), {merge_model} (merge)"
+
         with open(output_file, "w", encoding="utf-8") as file_handle:
             file_handle.write(unit_test)
         print(f"[bold green]Unit tests saved to:[/bold green] {output_file}")
