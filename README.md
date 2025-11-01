@@ -1456,38 +1456,44 @@ pdd [GLOBAL OPTIONS] change --csv --output modified_prompts/ changes_batch.csv s
 
 ### 9. update
 
-Update the original prompt file based on the modified code and optionally the original code.
+Update prompts based on code changes. This command can operate on a single file or an entire repository.
 
+**Single-File Mode:**
 ```
 pdd [GLOBAL OPTIONS] update [OPTIONS] INPUT_PROMPT_FILE MODIFIED_CODE_FILE [INPUT_CODE_FILE]
 ```
 
-Arguments:
-- `INPUT_PROMPT_FILE`: The filename of the prompt file that generated the original code.
-- `MODIFIED_CODE_FILE`: The filename of the code that was modified by the user.
-- `INPUT_CODE_FILE`: (Optional) The filename of the original code that was generated from the input prompt file. This argument is not required when using the `--git` option.
-
-**Important**: The `update` command has special behavior compared to other PDD commands. By default, it overwrites the original prompt file to maintain the core PDD principle of "prompts as source of truth." This ensures prompts remain in their canonical location and continue to serve as the authoritative specification.
-
-Options:
-- `--output LOCATION`: Specify where to save the updated prompt file. **If not specified, the original prompt file is overwritten to maintain it as the authoritative source of truth.** If an environment variable `PDD_UPDATE_OUTPUT_PATH` is set, it will be used only when `--output` is explicitly omitted and you want a different default location.
-- `--git`: Use git history to find the original code file, eliminating the need for the `INPUT_CODE_FILE` argument.
-
-Example (overwrite original prompt - default behavior):
+**Repository-Wide Mode:**
 ```
-pdd [GLOBAL OPTIONS] update factorial_calculator_python.prompt src/modified_factorial_calculator.py src/original_factorial_calculator.py
-# This overwrites factorial_calculator_python.prompt in place
+pdd [GLOBAL OPTIONS] update --repo
 ```
 
-Example (save to different location):
+**Arguments (Single-File Mode):**
+- `INPUT_PROMPT_FILE`: The path to the prompt file. To generate a new prompt from an existing code file, you can provide an empty file.
+- `MODIFIED_CODE_FILE`: The path to the code file that contains the latest changes. This file cannot be empty.
+- `INPUT_CODE_FILE`: (Optional) The path to the original code file that corresponds to the `INPUT_PROMPT_FILE`. This is required if you are *not* using the `--git` flag and the `INPUT_PROMPT_FILE` is *not* empty.
+
+**Important**: By default, this command overwrites the `INPUT_PROMPT_FILE` to maintain it as the single source of truth. Use the `--output` option to save the result to a different file.
+
+**Options:**
+- `--output LOCATION`: Specify a different path to save the updated prompt file.
+- `--git`: Use git history to find the original code file. When using this flag, `INPUT_CODE_FILE` should not be provided.
+- `--repo`: Run the update process on the entire repository. This will scan for all code files, create any missing prompt files, and update all existing prompts based on code changes. When using `--repo`, no other file path arguments should be provided.
+
+**Example (Updating an existing prompt):**
 ```
-pdd [GLOBAL OPTIONS] update --output updated_factorial_calculator_python.prompt factorial_calculator_python.prompt src/modified_factorial_calculator.py src/original_factorial_calculator.py
+pdd update my_prompt.prompt my_code_modified.py my_code_original.py
 ```
 
-Example using the `--git` option:
+**Example (Generating a new prompt from code):**
 ```
-pdd [GLOBAL OPTIONS] update --git factorial_calculator_python.prompt src/modified_factorial_calculator.py
-# This overwrites factorial_calculator_python.prompt in place using git history
+touch empty.prompt
+pdd update empty.prompt my_code.py my_code.py --output new_prompt.prompt
+```
+
+**Example (Repository-wide update):**
+```
+pdd update --repo
 ```
 
 ### 10. detect
