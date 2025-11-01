@@ -1111,8 +1111,8 @@ def change(
 
 
 @cli.command("update")
-@click.argument("input_prompt_file", type=click.Path(exists=True, dir_okay=False))
-@click.argument("modified_code_file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("input_prompt_file", type=click.Path(exists=True, dir_okay=False), required=False)
+@click.argument("modified_code_file", type=click.Path(exists=True, dir_okay=False), required=False)
 @click.argument("input_code_file", type=click.Path(exists=True, dir_okay=False), required=False)
 @click.option(
     "--output",
@@ -1122,28 +1122,37 @@ def change(
 )
 @click.option(
     "--git",
+    "use_git",
     is_flag=True,
     default=False,
     help="Use git history to find the original code file.",
+)
+@click.option(
+    "--repo",
+    is_flag=True,
+    default=False,
+    help="Run update on all scannable code files in the repository, creating missing prompts.",
 )
 @click.pass_context
 @track_cost
 def update(
     ctx: click.Context,
-    input_prompt_file: str,
-    modified_code_file: str,
+    input_prompt_file: Optional[str],
+    modified_code_file: Optional[str],
     input_code_file: Optional[str],
     output: Optional[str],
-    git: bool,
+    use_git: bool,
+    repo: bool,
 ) -> Optional[Tuple[str, float, str]]: # Modified return type
-    """Update the original prompt file based on modified code."""
+    """Update prompts based on code changes, either for a single file or a whole repository."""
     quiet = ctx.obj.get("quiet", False)
     command_name = "update"
     try:
-        if git and input_code_file:
-            raise click.UsageError("Cannot use --git and specify an INPUT_CODE_FILE simultaneously.")
-        if not git and not input_code_file:
-            raise click.UsageError("INPUT_CODE_FILE is required when not using --git.")
+        if repo:
+            if any([input_prompt_file, modified_code_file, input_code_file, output, use_git]):
+                raise click.UsageError("Cannot use --repo with other file-specific arguments or flags like --git or --output.")
+        elif not all([input_prompt_file, modified_code_file]):
+             raise click.UsageError("INPUT_PROMPT_FILE and MODIFIED_CODE_FILE are required when not using --repo.")
 
         updated_prompt, total_cost, model_name = update_main(
             ctx=ctx,
@@ -1151,7 +1160,8 @@ def update(
             modified_code_file=modified_code_file,
             input_code_file=input_code_file,
             output=output,
-            git=git,
+            use_git=use_git,
+            repo=repo,
         )
         return updated_prompt, total_cost, model_name
     except (click.UsageError, Exception) as e: # Catch specific and general exceptions
