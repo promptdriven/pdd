@@ -1127,12 +1127,6 @@ def change(
     default=False,
     help="Use git history to find the original code file.",
 )
-@click.option(
-    "--repo",
-    is_flag=True,
-    default=False,
-    help="Run update on all scannable code files in the repository, creating missing prompts.",
-)
 @click.pass_context
 @track_cost
 def update(
@@ -1142,17 +1136,35 @@ def update(
     input_code_file: Optional[str],
     output: Optional[str],
     use_git: bool,
-    repo: bool,
-) -> Optional[Tuple[str, float, str]]: # Modified return type
-    """Update prompts based on code changes, either for a single file or a whole repository."""
+) -> Optional[Tuple[str, float, str]]:
+    """
+    Update prompts based on code changes.
+
+    This command operates in two modes:
+
+    1.  **Single-File Mode:** When you provide INPUT_PROMPT_FILE and
+        MODIFIED_CODE_FILE, it updates a single prompt based on code changes.
+
+    2.  **Repository-Wide Mode:** When you provide no file arguments, it scans the
+        entire repository, finds all code/prompt pairs, creates missing prompts,
+        and updates them all based on the latest git changes.
+    """
     quiet = ctx.obj.get("quiet", False)
     command_name = "update"
     try:
-        if repo:
-            if any([input_prompt_file, modified_code_file, input_code_file, output, use_git]):
-                raise click.UsageError("Cannot use --repo with other file-specific arguments or flags like --git or --output.")
-        elif not all([input_prompt_file, modified_code_file]):
-             raise click.UsageError("INPUT_PROMPT_FILE and MODIFIED_CODE_FILE are required when not using --repo.")
+        is_repo_mode = not input_prompt_file and not modified_code_file
+
+        if is_repo_mode:
+            if any([input_code_file, output, use_git]):
+                raise click.UsageError(
+                    "Cannot use file-specific arguments or flags like --git or --output in repository-wide mode (when no files are provided)."
+                )
+        else:
+            if not all([input_prompt_file, modified_code_file]):
+                raise click.UsageError(
+                    "INPUT_PROMPT_FILE and MODIFIED_CODE_FILE are required for single-file update. "
+                    "For a repository-wide update, provide no file arguments."
+                )
 
         updated_prompt, total_cost, model_name = update_main(
             ctx=ctx,
@@ -1161,12 +1173,12 @@ def update(
             input_code_file=input_code_file,
             output=output,
             use_git=use_git,
-            repo=repo,
+            repo=is_repo_mode,
         )
         return updated_prompt, total_cost, model_name
-    except (click.UsageError, Exception) as e: # Catch specific and general exceptions
+    except (click.UsageError, Exception) as e:
         handle_error(e, command_name, quiet)
-        return None # Return None on failure
+        return None
 
 
 @cli.command("detect")
