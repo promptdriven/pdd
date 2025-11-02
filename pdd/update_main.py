@@ -72,24 +72,44 @@ def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False) -> List[Tupl
         
     return pairs
 
-def update_file_pair(prompt_file: str, code_file: str, ctx: click.Context) -> Dict[str, Any]:
-    """Wrapper to call git_update for a single file pair and return a result dict."""
+def update_file_pair(prompt_file: str, code_file: str, ctx: click.Context, repo: git.Repo) -> Dict[str, Any]:
+    """
+    Wrapper to update a single file pair, choosing the correct method based on Git status.
+    """
     try:
         with open(prompt_file, 'r') as f:
             input_prompt = f.read()
 
-        # Handle empty prompt for generation
-        if not input_prompt.strip():
-            input_prompt = "no prompt exists yet, create a new one"
+        relative_code_path = os.path.relpath(code_file, repo.working_tree_dir)
+        is_untracked = relative_code_path in repo.untracked_files
 
-        modified_prompt, total_cost, model_name = git_update(
-            input_prompt=input_prompt,
-            modified_code_file=code_file,
-            strength=ctx.obj.get("strength", 0.5),
-            temperature=ctx.obj.get("temperature", 0),
-            verbose=ctx.obj.get("verbose", False),
-            time=ctx.obj.get("time"),
-        )
+        if is_untracked:
+            # This is a new, untracked file. Generate a prompt from scratch.
+            if not ctx.obj.get("quiet", False):
+                console.print(f"[info]New untracked file detected, generating new prompt for:[/info] [path]{relative_code_path}[/path]")
+            
+            with open(code_file, 'r') as f:
+                modified_code = f.read()
+
+            modified_prompt, total_cost, model_name = update_prompt(
+                input_prompt="no prompt exists yet, create a new one",
+                input_code="",  # No previous version
+                modified_code=modified_code,
+                strength=ctx.obj.get("strength", 0.5),
+                temperature=ctx.obj.get("temperature", 0),
+                verbose=ctx.obj.get("verbose", False),
+                time=ctx.obj.get("time"),
+            )
+        else:
+            # This is an existing, tracked file. Use git_update to compare with HEAD.
+            modified_prompt, total_cost, model_name = git_update(
+                input_prompt=input_prompt,
+                modified_code_file=code_file,
+                strength=ctx.obj.get("strength", 0.5),
+                temperature=ctx.obj.get("temperature", 0),
+                verbose=ctx.obj.get("verbose", False),
+                time=ctx.obj.get("time"),
+            )
         
         if modified_prompt is not None:
             # Overwrite the original prompt file
@@ -143,11 +163,12 @@ def update_main(
     """
     quiet = ctx.obj.get("quiet", False)
     if repo:
-        repo_root = os.getcwd()
         try:
-            git.Repo(repo_root, search_parent_directories=True)
+            # Find the repo root by searching up from the current directory
+            repo_obj = git.Repo(os.getcwd(), search_parent_directories=True)
+            repo_root = repo_obj.working_tree_dir
         except git.InvalidGitRepositoryError:
-            rprint("[bold red]Error:[/bold red] Repository-wide mode requires the current directory to be a Git repository.")
+            rprint("[bold red]Error:[/bold red] Repository-wide mode requires the current directory to be within a Git repository.")
             sys.exit(1)
 
         pairs = find_and_resolve_all_pairs(repo_root, quiet)
@@ -163,7 +184,7 @@ def update_main(
             task = progress.add_task("[cyan]Updating prompts...", total=len(pairs))
             
             for prompt_path, code_path in pairs:
-                result = update_file_pair(prompt_path, code_path, ctx)
+                result = update_file_pair(prompt_path, code_path, ctx, repo_obj)
                 results.append(result)
                 progress.update(task, advance=1)
 
