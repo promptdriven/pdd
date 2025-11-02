@@ -384,7 +384,7 @@ def test_update_main_repo_mode_orchestration(mock_update_file_pair, temp_git_rep
     Test the main orchestration logic of update_main in --repo mode.
     """
     # Use a side_effect to return dynamic values based on input
-    def mock_update_logic(prompt_file, code_file, ctx):
+    def mock_update_logic(prompt_file, code_file, ctx, repo):
         return {
             "prompt_file": prompt_file,
             "status": "✅ Success",
