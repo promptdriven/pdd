@@ -1456,45 +1456,61 @@ pdd [GLOBAL OPTIONS] change --csv --output modified_prompts/ changes_batch.csv s
 
 ### 9. update
 
-Update the original prompt file based on the modified code and optionally the original code.
+Update prompts based on code changes. This command operates in two modes:
 
-```
+1.  **Repository-Wide Mode (Default)**: When run with no file arguments, `pdd update` scans the entire repository. It finds all code/prompt pairs, creates any missing prompt files, and updates all of them based on the latest git changes. This is the easiest way to keep your entire project in sync.
+
+2.  **Single-File Mode**: When you provide file arguments, you can update an existing prompt or generate a new one for a specific code file.
+    -   **Update Existing Prompt**: Provide the prompt file and the modified code file.
+    -   **Generate New Prompt**: Provide only the code file for which you want to generate a prompt.
+
+```bash
+# Repository-Wide Mode (no arguments)
+pdd [GLOBAL OPTIONS] update
+
+# Single-File Mode: Update an existing prompt
 pdd [GLOBAL OPTIONS] update [OPTIONS] INPUT_PROMPT_FILE MODIFIED_CODE_FILE [INPUT_CODE_FILE]
+
+# Single-File Mode: Generate a new prompt for a code file
+pdd [GLOBAL OPTIONS] update [OPTIONS] MODIFIED_CODE_FILE
 ```
 
 Arguments:
-- `INPUT_PROMPT_FILE`: The filename of the prompt file that generated the original code.
-- `MODIFIED_CODE_FILE`: The filename of the code that was modified by the user.
-- `INPUT_CODE_FILE`: (Optional) The filename of the original code that was generated from the input prompt file. This argument is not required when using the `--use-git` option.
+- `MODIFIED_CODE_FILE`: The filename of the code that was modified or for which a prompt should be generated.
+- `INPUT_PROMPT_FILE`: (Optional) The filename of the prompt file that generated the original code.
+- `INPUT_CODE_FILE`: (Optional) The filename of the original code. Not required when using `--git` or generating a new prompt.
 
-**Important**: The `update` command has special behavior compared to other PDD commands. By default, it overwrites the original prompt file to maintain the core PDD principle of "prompts as source of truth." This ensures prompts remain in their canonical location and continue to serve as the authoritative specification.
+**Important**: By default, this command overwrites the original prompt file to maintain the core PDD principle of "prompts as source of truth."
 
 Options:
-- `--output LOCATION`: Specify where to save the updated prompt file. **If not specified, the original prompt file is overwritten to maintain it as the authoritative source of truth.** If an environment variable `PDD_UPDATE_OUTPUT_PATH` is set, it will be used only when `--output` is explicitly omitted and you want a different default location.
-- `--use-git`: Use git history to find the original code file, eliminating the need for the `INPUT_CODE_FILE` argument.
-- `--repo`: Run the update process on the entire repository. In this mode, `pdd` will scan for all code files, create any missing prompt files, and update all existing prompts based on code changes. When using `--repo`, no other file path arguments should be provided.
-
-**Example (overwrite original prompt - default behavior):**
-```
-pdd [GLOBAL OPTIONS] update factorial_calculator_python.prompt src/modified_factorial_calculator.py src/original_factorial_calculator.py
-# This overwrites factorial_calculator_python.prompt in place
-```
-
-**Example (save to different location):**
-```
-pdd [GLOBAL OPTIONS] update --output updated_factorial_calculator_python.prompt factorial_calculator_python.prompt src/modified_factorial_calculator.py src/original_factorial_calculator.py
-```
-
-**Example using the `--use-git` option:**
-```
-pdd [GLOBAL OPTIONS] update --use-git factorial_calculator_python.prompt src/modified_factorial_calculator.py
-# This overwrites factorial_calculator_python.prompt in place using git history
-```
+- `--output LOCATION`: Specify where to save the updated prompt file. **If not specified, the original prompt file is overwritten.**
+- `--git`: Use git history to find the original code file, eliminating the need for the `INPUT_CODE_FILE` argument.
 
 **Example (Repository-wide update):**
+```bash
+# Scans the entire repository, creates missing prompts, and updates all existing ones.
+pdd [GLOBAL OPTIONS] update
 ```
-pdd [GLOBAL OPTIONS] update --repo
-# This scans the entire repository, creates missing prompts, and updates all existing ones.
+
+**Example (Generate a new prompt):**
+```bash
+# Generates a new prompt for the specified code file.
+pdd [GLOBAL OPTIONS] update src/my_new_module.py
+```
+
+**Example (Update an existing prompt, overwriting original):**
+```bash
+pdd [GLOBAL OPTIONS] update factorial_calculator_python.prompt src/modified_factorial_calculator.py
+```
+
+**Example (Update and save to a different location):**
+```bash
+pdd [GLOBAL OPTIONS] update --output updated_prompt.prompt factorial_calculator_python.prompt src/modified_factorial_calculator.py
+```
+
+**Example (Update using git history):**
+```bash
+pdd [GLOBAL OPTIONS] update --git factorial_calculator_python.prompt src/modified_factorial_calculator.py
 ```
 
 ### 10. detect
