@@ -64,7 +64,15 @@ def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False) -> List[Tupl
         for file in files:
             all_files.append(os.path.join(root, file))
 
-    code_files = [f for f in all_files if get_language(f) is not None and not f.endswith('.prompt')]
+    code_files = [
+        f for f in all_files
+        if (
+            get_language(f) is not None and
+            not f.endswith('.prompt') and
+            not os.path.splitext(os.path.basename(f))[0].startswith('test_') and
+            not os.path.splitext(os.path.basename(f))[0].endswith('_example')
+        )
+    ]
     
     for file_path in code_files:
         prompt_path, code_path = resolve_prompt_code_pair(file_path, quiet)
