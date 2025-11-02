@@ -215,32 +215,62 @@ def test_update_main_with_both_git_and_input_code_raises_valueerror(
     assert e.type == SystemExit
     assert e.value.code == 1  # usage error
 
-def test_update_main_no_git_no_input_code_raises_valueerror(
+def test_update_main_no_git_no_input_code_generates_prompt(
     mock_ctx,
     mock_construct_paths,
     mock_update_prompt,
-    mock_git_update
+    mock_git_update,
+    mock_open_file,
+    monkeypatch
 ):
     """
-    Test that not specifying --git and leaving input_code_file=None raises ValueError.
+    Test that not specifying --git and leaving input_code_file=None
+    (and input_prompt_file=None) correctly triggers prompt generation.
     """
     # Arrange
-    mock_ctx.params["quiet"] = True
+    mock_ctx.params["quiet"] = False
     git = False
 
-    with pytest.raises(SystemExit) as exit_info:
-        update_main(
-            ctx=mock_ctx,
-            input_prompt_file="some_prompt_file.prompt",
-            modified_code_file="modified_code.py",
-            input_code_file=None,
-            output=None,
-            use_git=git
-        )
+    # Mock get_language to return a predictable language
+    monkeypatch.setattr('pdd.update_main.get_language', lambda x: "python")
+
+    # Mock construct_paths to simulate an empty (or non-existent) prompt file
+    # and a modified code file, with no original code file.
+    mock_construct_paths.return_value = (
+        {},  # resolved_config
+        {
+            "input_prompt_file": "", # Simulate empty prompt file
+            "modified_code_file": "def new_function(): pass",
+        },
+        {"output": "modified_code_python.prompt"},
+        None
+    )
+
+    # Act
+    result = update_main(
+        ctx=mock_ctx,
+        input_prompt_file=None, # Not provided
+        modified_code_file="modified_code.py",
+        input_code_file=None, # Not provided
+        output=None,
+        use_git=git
+    )
 
     # Assert
-    assert exit_info.type == SystemExit
-    assert exit_info.value.code == 1
+    mock_construct_paths.assert_called_once()
+    mock_update_prompt.assert_called_once_with(
+        input_prompt="no prompt exists yet, create a new one",
+        input_code="", # Should be empty for generation
+        modified_code="def new_function(): pass",
+        strength=0.5,
+        temperature=0.0,
+        verbose=False,
+        time=0.25
+    )
+    mock_git_update.assert_not_called()
+
+    assert result == ("updated prompt text", 0.123456, "test-model")
+    mock_open_file.assert_called_once_with("modified_code_python.prompt", "w")
 
 def test_update_main_handles_unexpected_exception_gracefully(
     mock_ctx,
@@ -277,7 +307,7 @@ def test_update_main_handles_unexpected_exception_gracefully(
 import os
 from pathlib import Path
 import git
-from pdd.update_main import create_and_find_prompt_code_pairs
+from pdd.update_main import find_and_resolve_all_pairs
 
 @pytest.fixture
 def mock_get_language_for_repo(monkeypatch):
@@ -331,7 +361,7 @@ def test_create_and_find_prompt_code_pairs(temp_git_repo):
     assert not module2_prompt_path.exists()
 
     # Run the function
-    pairs = create_and_find_prompt_code_pairs(repo_path_str)
+    pairs = find_and_resolve_all_pairs(repo_path_str)
 
     # Assert that missing prompts were created
     assert module1_prompt_path.exists()
