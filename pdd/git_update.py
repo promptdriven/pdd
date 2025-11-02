@@ -37,18 +37,18 @@ def git_update(
         if not os.path.exists(modified_code_file):
             raise FileNotFoundError(f"Modified code file not found: {modified_code_file}")
 
-        # Initialize git repository
-        repo = git.Repo(search_parent_directories=True)
+        # Initialize git repository object once
+        repo = git.Repo(modified_code_file, search_parent_directories=True)
+        repo_root = repo.working_tree_dir
 
         # Get the file's relative path to the repo root
-        repo_root = repo.git.rev_parse("--show-toplevel")
         relative_path = os.path.relpath(modified_code_file, repo_root)
 
         # Read the modified code
         with open(modified_code_file, 'r') as file:
             modified_code = file.read()
 
-        # Restore the prior checked-in version
+        # Restore the prior checked-in version using the relative path
         repo.git.checkout('HEAD', '--', relative_path)
 
         # Read the original input code
