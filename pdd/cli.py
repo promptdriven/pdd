@@ -216,6 +216,13 @@ def _run_setup_utility() -> None:
     help="Review and optionally exclude few-shot examples before command execution.",
 )
 @click.option(
+    "--exclude-tests",
+    "exclude_tests",
+    is_flag=True,
+    default=False,
+    help="Exclude test scenarios from code coverage generation. (WIP)",
+)
+@click.option(
     "--local",
     is_flag=True,
     default=False,
@@ -246,6 +253,7 @@ def cli(
     quiet: bool,
     output_cost: Optional[str],
     review_examples: bool,
+    exclude_tests: bool,
     local: bool,
     time: Optional[float], # Type hint is Optional[float]
     context_override: Optional[str],
@@ -265,6 +273,7 @@ def cli(
     ctx.obj["quiet"] = quiet
     ctx.obj["output_cost"] = output_cost
     ctx.obj["review_examples"] = review_examples
+    ctx.obj["exclude_tests"] = exclude_tests
     ctx.obj["local"] = local
     # Use DEFAULT_TIME if time is not provided
     ctx.obj["time"] = time if time is not None else DEFAULT_TIME
