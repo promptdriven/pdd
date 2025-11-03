@@ -10,6 +10,7 @@ description: >
     - Parse 'date' column as datetime in YYYY-MM-DD format (error if invalid)
     - Set 'category' to lowercase, strip leading/trailing whitespace
     - Only retain rows where 'amount' > 0 and 'category' is non-empty after cleaning
+- When writing the 'amount' field to 'output.csv', always format it as a string with two decimal places (e.g., 250.00, 19.99), even for whole numbers.
 - Output: Write cleaned data to 'output.csv', preserving original column order
 - Handle missing, malformed, and invalid data gracefully (skip bad rows, print helpful warnings)
 - Script and all examples must always assume these filenames: 'input.csv' for input, 'output.csv' for output

@@ -121,7 +121,11 @@ def load_data(cleaned_data, output_filepath, headers):
         with open(output_filepath, mode='w', newline='', encoding='utf-8') as outfile:
             writer = csv.writer(outfile)
             writer.writerow(headers)
-            writer.writerows(cleaned_data)
+            # Format the amount column to a string with two decimal places before writing
+            formatted_data = [
+                [row[0], row[1], f"{row[2]:.2f}", row[3]] for row in cleaned_data
+            ]
+            writer.writerows(formatted_data)
         print(f"Successfully wrote {len(cleaned_data)} rows to '{output_filepath}'")
     except IOError as e:
         print(f"Error: Could not write to file '{output_filepath}'. Reason: {e}", file=sys.stderr)
@@ -189,7 +193,8 @@ class TestEtlPipeline(unittest.TestCase):
             ['4', '2023-09-15', '120.75', '  Groceries  '],  # Valid: needs cleaning
             ['5', '202X-09-15', '150.00', 'Other'],          # Error: bad date format
             ['6', '2023-08-20', 'abc', 'Software'],          # Error: non-numeric amount
-            ['7', '2023-07-11', '25.50', 'Gifts']            # Valid row
+            ['7', '2023-07-11', '25.50', 'Gifts'],           # Valid row
+            ['8', '2023-06-01', '50', 'Food']                # Valid row with whole number amount
         ]
 
         # Expected output after ETL process
@@ -197,7 +202,8 @@ class TestEtlPipeline(unittest.TestCase):
             ['id', 'date', 'amount', 'category'],
             ['1', '2023-12-10', '100.25', 'books'],
             ['4', '2023-09-15', '120.75', 'groceries'],
-            ['7', '2023-07-11', '25.50', 'gifts']
+            ['7', '2023-07-11', '25.50', 'gifts'],
+            ['8', '2023-06-01', '50.00', 'food']
         ]
 
         # Create the dummy input.csv file
@@ -240,7 +246,8 @@ class TestEtlPipeline(unittest.TestCase):
         expected_transformed = [
             ['1', '2023-12-10', 100.25, 'books'],
             ['4', '2023-09-15', 120.75, 'groceries'],
-            ['7', '2023-07-11', 25.50, 'gifts']
+            ['7', '2023-07-11', 25.50, 'gifts'],
+            ['8', '2023-06-01', 50.0, 'food']
         ]
         self.assertEqual(cleaned_data, expected_transformed)
 
