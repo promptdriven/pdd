@@ -216,6 +216,34 @@ def code_generator_main(
             context_override=ctx.obj.get('context')
         )
         prompt_content = input_strings["prompt_file"]
+
+
+        # Phase-2 templates: parse front matter metadata
+        fm_meta, body = _parse_front_matter(prompt_content)
+        if fm_meta:
+            prompt_content = body
+        # Determine final output path: if user passed a directory, use resolved file path
+        resolved_output = output_file_paths.get("output")
+        if output is None:
+            output_path = resolved_output
+        else:
+            try:
+                is_dir_hint = output.endswith(os.path.sep) or output.endswith("/")
+            except Exception:
+                is_dir_hint = False
+            if is_dir_hint or os.path.isdir(output):
+                output_path = resolved_output
+            else:
+                output_path = output
+                
+    except FileNotFoundError as e:
+        console.print(f"[red]Error: Input file not found: {e.filename}[/red]")
+        return "", False, 0.0, "error"
+    except Exception as e:
+        console.print(f"[red]Error during path construction: {e}[/red]")
+        return "", False, 0.0, "error"
+        
+    if not exclude_tests_flag:
         # Precompute test filename and include directive so we always produce
         # a companion `ut_<basename>.prompt` that references the test file even
         # when explicit unit test content isn't provided.
@@ -325,24 +353,6 @@ def code_generator_main(
         except Exception:
             # Best-effort; continue if something goes wrong
             pass
-
-        # Phase-2 templates: parse front matter metadata
-        fm_meta, body = _parse_front_matter(prompt_content)
-        if fm_meta:
-            prompt_content = body
-        # Determine final output path: if user passed a directory, use resolved file path
-        resolved_output = output_file_paths.get("output")
-        if output is None:
-            output_path = resolved_output
-        else:
-            try:
-                is_dir_hint = output.endswith(os.path.sep) or output.endswith("/")
-            except Exception:
-                is_dir_hint = False
-            if is_dir_hint or os.path.isdir(output):
-                output_path = resolved_output
-            else:
-                output_path = output
 
 
         # Create a companion `ut_<basename>.prompt` that includes the main prompt
@@ -464,13 +474,6 @@ def code_generator_main(
             except Exception:
                 # Best-effort: do not fail generation if this substitution errors.
                 pass
-
-    except FileNotFoundError as e:
-        console.print(f"[red]Error: Input file not found: {e.filename}[/red]")
-        return "", False, 0.0, "error"
-    except Exception as e:
-        console.print(f"[red]Error during path construction: {e}[/red]")
-        return "", False, 0.0, "error"
 
     can_attempt_incremental = False
     existing_code_content: Optional[str] = None
