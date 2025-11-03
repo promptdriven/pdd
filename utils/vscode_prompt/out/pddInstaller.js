@@ -132,9 +132,21 @@ class PddInstaller {
             catch (eUv) {
                 console.warn('PDD: uv install via PATH failed. Trying full path.', eUv);
                 const uvFullPath = this.getUvFullPath();
-                await this.runWithShellLogging(`"${uvFullPath}" tool install pdd-cli`, 'uv fullpath tool install pdd-cli');
-                if (installMethod !== 'uv-installed')
-                    installMethod = 'uv';
+                try {
+                    await this.runWithShellLogging(`"${uvFullPath}" tool install pdd-cli`, 'uv fullpath tool install pdd-cli');
+                    if (installMethod !== 'uv-installed')
+                        installMethod = 'uv';
+                }
+                catch (installError) {
+                    // Check for Windows build tools error
+                    const errorMsg = installError?.stderr || installError?.message || String(installError);
+                    if (errorMsg.includes('Microsoft Visual C++') || errorMsg.includes('Build Tools')) {
+                        throw new Error('PDD CLI installation requires Microsoft C++ Build Tools on Windows. ' +
+                            'Please install them from https://visualstudio.microsoft.com/visual-cpp-build-tools/ ' +
+                            'and try again, or install PDD CLI manually with: pip install pdd-cli');
+                    }
+                    throw installError;
+                }
             }
             report(100, 'PDD CLI installed successfully!');
         });
@@ -328,8 +340,9 @@ class PddInstaller {
     getUvFullPath() {
         const isWin = process.platform === 'win32';
         if (isWin) {
+            // On Windows, uv installs to %USERPROFILE%\.local\bin\uv.exe
             const userProfile = process.env.USERPROFILE || '';
-            return `${userProfile}\\.cargo\\bin\\uv`;
+            return `${userProfile}\\.local\\bin\\uv.exe`;
         }
         const home = process.env.HOME || '';
         return `${home}/.cargo/bin/uv`;
