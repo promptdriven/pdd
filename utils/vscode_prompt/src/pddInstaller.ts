@@ -31,21 +31,26 @@ export class PddInstaller {
     // 1) Standard PATH
     if (await tryCommand('pdd --version', 'PATH pdd')) return true;
 
-    // 2) uv tool path
-    const uvPddPath = `${home}/.local/share/uv/tools/pdd-cli/bin/pdd`;
-    if (await tryCommand(`"${this.expandPath(uvPddPath)}" --version`, 'uv tool path pdd')) return true;
+    // 2) uv tool path (platform-specific)
+    const uvPddPath = this.getUvToolPddPath();
+    if (await tryCommand(`"${uvPddPath}" --version`, 'uv tool path pdd')) return true;
 
     // 3) uv tool run
     if (await tryCommand('uv tool run pdd-cli --version', 'uv tool run pdd-cli')) return true;
 
     // 4) common paths
-    const candidates = [
-      `${home}/.local/bin/pdd`,
-      '/opt/anaconda3/bin/pdd',
-      '/opt/miniconda3/bin/pdd',
-      `${home}/anaconda3/bin/pdd`,
-      `${home}/miniconda3/bin/pdd`,
-    ];
+    const candidates = isWin
+      ? [
+          `${home}\\.local\\bin\\pdd.exe`,
+          `${home}\\AppData\\Local\\Programs\\Python\\Scripts\\pdd.exe`,
+        ]
+      : [
+          `${home}/.local/bin/pdd`,
+          '/opt/anaconda3/bin/pdd',
+          '/opt/miniconda3/bin/pdd',
+          `${home}/anaconda3/bin/pdd`,
+          `${home}/miniconda3/bin/pdd`,
+        ];
     for (const p of candidates) {
       if (await tryCommand(`"${this.expandPath(p)}" --version`, `common path ${p}`)) return true;
     }
@@ -173,7 +178,7 @@ export class PddInstaller {
           progress.report({ increment: 30, message: 'Detecting PDD CLI installation...' });
 
           // Try known uv tool path then uv tool run, else pdd in PATH
-          const uvPddPath = this.expandPath(`${process.env.HOME || ''}/.local/share/uv/tools/pdd-cli/bin/pdd`);
+          const uvPddPath = this.getUvToolPddPath();
           const uvPathCheck = await this.commandExists(`"${uvPddPath}" --version`);
           
           progress.report({ increment: 50, message: 'Launching setup command...' });
@@ -364,7 +369,7 @@ export class PddInstaller {
   private async installUv(): Promise<void> {
     const isWin = process.platform === 'win32';
     const cmd = isWin
-      ? 'powershell -c "irm https://astral.sh/uv/install.ps1 | iex"'
+      ? 'powershell -ExecutionPolicy Bypass -Command "irm https://astral.sh/uv/install.ps1 | iex"'
       : 'curl -LsSf https://astral.sh/uv/install.sh | sh';
     console.log(`PDD: Installing uv with: ${cmd}`);
     await this.runWithShellLogging(cmd, 'install uv');
@@ -378,6 +383,17 @@ export class PddInstaller {
     }
     const home = process.env.HOME || '';
     return `${home}/.cargo/bin/uv`;
+  }
+
+  private getUvToolPddPath(): string {
+    const isWin = process.platform === 'win32';
+    if (isWin) {
+      // On Windows, uv installs tools to %LOCALAPPDATA%\uv\tools or %USERPROFILE%\.local\share\uv\tools
+      const localAppData = process.env.LOCALAPPDATA || `${process.env.USERPROFILE}\\AppData\\Local`;
+      return `${localAppData}\\uv\\tools\\pdd-cli\\Scripts\\pdd.exe`;
+    }
+    const home = process.env.HOME || '';
+    return `${home}/.local/share/uv/tools/pdd-cli/bin/pdd`;
   }
 
   private async runWithShellLogging(command: string, label?: string): Promise<{ stdout: string; stderr: string }> {
