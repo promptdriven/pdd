@@ -18,7 +18,9 @@ description: Build a Python script that ingests an input CSV file with columns [
 - Example: test with dummy input row containing invalid date, negative amount, empty category.
 
 # Example Usage:
-python etl_pipeline.py input.csv output.csv
+# To run the script, use:
+python etlpipeline.py input.csv output.csv
+
 
 # Example Input:
 id,date,amount,category

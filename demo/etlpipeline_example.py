@@ -1,1 +1,0 @@
-python etl_pipeline.py transactions.csv cleaned_transactions.csv
