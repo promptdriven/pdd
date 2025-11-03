@@ -43,9 +43,9 @@ def update_prompt(
     is_new_prompt_generation = (input_prompt.strip() == "no prompt exists yet, create a new one")
 
     if not is_new_prompt_generation:
-        # For updating an existing prompt, input_prompt and input_code must be non-empty.
-        if not input_prompt.strip() or not input_code.strip():
-            raise ValueError("For updating an existing prompt, input_prompt and input_code must be non-empty.")
+        # For updating an existing prompt, input_code must be non-empty.
+        if not input_code.strip():
+            raise ValueError("For updating an existing prompt, input_code must be non-empty.")
 
     if not (0 <= strength <= 1 and 0 <= temperature <= 1):
         raise ValueError("Strength and temperature must be between 0 and 1")
