@@ -1,13 +1,23 @@
+# example_usage.py
+
 import os
 import etlpipeline
+from typing import List, Dict, Optional
 
-# Define filenames for clarity
-INPUT_FILENAME = 'input.csv'
-OUTPUT_FILENAME = 'output.csv'
+def run_pipeline_example() -> None:
+    """
+    Demonstrates the modular usage of the etlpipeline script.
+    1. Creates a sample input CSV file.
+    2. Runs the ETL process step-by-step.
+    3. Prints the final output for verification.
+    4. Cleans up the created files.
+    """
+    input_filename: str = 'input.csv'
+    output_filename: str = 'output.csv'
 
-# 1. SETUP: Create a sample input CSV file for the demonstration.
-# This data includes valid rows, rows to be filtered, and rows with errors.
-sample_data_content = """id,date,amount,category
+    # Define sample data that covers valid, invalid, and filterable cases.
+    # This data will be written to a temporary input.csv file.
+    sample_csv_content: str = """id,date,amount,category
 1,2023-12-10,100.25,Books
 2,2023-11-01,-80.00,Electronics
 3,2023-10-05,50.00, 
@@ -17,47 +27,57 @@ sample_data_content = """id,date,amount,category
 7,2023-07-11,25.50,Gifts
 """
 
-try:
-    print(f"--- Creating sample file: {INPUT_FILENAME} ---")
-    with open(INPUT_FILENAME, 'w', encoding='utf-8') as f:
-        f.write(sample_data_content)
-    print("Sample file created successfully.")
-    print("-" * 40)
+    # --- Setup: Create the input file for the demonstration ---
+    print(f"1. SETUP: Creating sample '{input_filename}'...")
+    with open(input_filename, 'w', encoding='utf-8') as f:
+        f.write(sample_csv_content)
+    print("   ...Done.\n")
 
-    # 2. EXTRACT: Use the module to extract data from the input file.
-    print(f"Step 1: Extracting data from '{INPUT_FILENAME}'...")
-    raw_data, headers = etlpipeline.extract_data(INPUT_FILENAME)
-    
+    # --- ETL Process using the imported module ---
+    print("2. ETL PROCESS: Running the pipeline functions...")
+
+    # Step 1: EXTRACT data from the source file.
+    print("   - Step (E): Extracting data...")
+    # Assuming etlpipeline.extract_data returns (List[Dict], List[str]) or (None, List[str])
+    raw_data: Optional[List[Dict[str, str]]]
+    headers: List[str]
+    raw_data, headers = etlpipeline.extract_data(input_filename)
     if raw_data is None:
-        raise SystemExit("Extraction failed. Aborting.")
-        
-    print(f"Extracted {len(raw_data)} rows with headers: {headers}")
-    print("-" * 40)
+        print("   Extraction failed. Exiting.")
+        return
+    print(f"     -> Extracted {len(raw_data)} rows with headers: {headers}")
 
-    # 3. TRANSFORM: Use the module to clean, validate, and filter the raw data.
-    # The module will print warnings to stderr for rows it skips.
-    print("Step 2: Transforming and filtering data...")
-    cleaned_data = etlpipeline.transform_and_filter_data(raw_data)
-    print(f"Transformation complete. {len(cleaned_data)} rows are valid.")
-    # Note: The 'amount' is a float at this stage.
-    print(f"Cleaned data in memory: {cleaned_data}")
-    print("-" * 40)
+    # Step 2: TRANSFORM and filter the extracted data.
+    # The function will print warnings to stderr for invalid rows.
+    print("   - Step (T): Transforming and filtering data...")
+    cleaned_data: List[Dict[str, str]] = etlpipeline.transform_and_filter_data(raw_data)
+    print(f"     -> Transformation resulted in {len(cleaned_data)} valid rows.")
 
-    # 4. LOAD: Use the module to write the cleaned data to the output file.
-    print(f"Step 3: Loading cleaned data into '{OUTPUT_FILENAME}'...")
-    etlpipeline.load_data(cleaned_data, OUTPUT_FILENAME, headers)
-    print("-" * 40)
+    # Step 3: LOAD the cleaned data into the destination file.
+    print("   - Step (L): Loading data into output file...")
+    etlpipeline.load_data(cleaned_data, output_filename, headers)
+    print("   ...Done.\n")
 
-    # 5. VERIFY: Read and print the content of the output file to confirm the result.
-    print(f"--- Final Content of {OUTPUT_FILENAME} ---")
-    if os.path.exists(OUTPUT_FILENAME):
-        with open(OUTPUT_FILENAME, 'r', encoding='utf-8') as f:
+    # --- Verification: Display the content of the output file ---
+    print(f"3. VERIFICATION: Contents of '{output_filename}':")
+    try:
+        with open(output_filename, 'r', encoding='utf-8') as f:
+            print("-----------------------------------------")
             print(f.read().strip())
-    else:
-        print("Output file was not created.")
-    print("--- End of Content ---")
+            print("-----------------------------------------")
+    except FileNotFoundError:
+        print(f"Error: Output file '{output_filename}' was not found.")
+    finally:
+        # --- Cleanup: Remove the created files ---
+        print("\n4. CLEANUP: Removing temporary files...")
+        if os.path.exists(input_filename):
+            os.remove(input_filename)
+        if os.path.exists(output_filename):
+            os.remove(output_filename)
+        print("   ...Done.")
 
-finally:
-    # 6. CLEANUP: Remove the created files to keep the directory clean.
-    print("\n--- Cleaning up created files ---")
 
+if __name__ == "__main__":
+    # To run this example, save it as 'example_usage.py' in the same
+    # directory as 'etlpipeline.py' and execute: python example_usage.py
+    run_pipeline_example()

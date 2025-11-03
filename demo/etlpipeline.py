@@ -174,6 +174,7 @@ import os
 import csv
 import sys
 from io import StringIO
+import tempfile
 import etlpipeline
 
 class TestEtlPipeline(unittest.TestCase):
@@ -181,8 +182,12 @@ class TestEtlPipeline(unittest.TestCase):
 
     def setUp(self):
         """Set up test environment before each test."""
-        self.input_filename = 'input.csv'
-        self.output_filename = 'output.csv'
+        # Create a temporary directory to hold test files
+        self.test_dir_obj = tempfile.TemporaryDirectory()
+        
+        # Define file paths within the temporary directory
+        self.input_filename = os.path.join(self.test_dir_obj.name, 'input.csv')
+        self.output_filename = os.path.join(self.test_dir_obj.name, 'output.csv')
         
         # Sample data covering all required cases
         self.test_csv_data = [
@@ -206,17 +211,15 @@ class TestEtlPipeline(unittest.TestCase):
             ['8', '2023-06-01', '50.00', 'food']
         ]
 
-        # Create the dummy input.csv file
+        # Create the dummy input.csv file in the temporary directory
         with open(self.input_filename, 'w', newline='') as f:
             writer = csv.writer(f)
             writer.writerows(self.test_csv_data)
 
     def tearDown(self):
         """Clean up test files after each test."""
-        if os.path.exists(self.input_filename):
-            os.remove(self.input_filename)
-        if os.path.exists(self.output_filename):
-            os.remove(self.output_filename)
+        # Automatically cleans up the directory and all its contents
+        self.test_dir_obj.cleanup()
 
     def test_extract_data(self):
         """Test the data extraction function."""
