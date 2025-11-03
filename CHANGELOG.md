@@ -1,3 +1,12 @@
+## v0.0.65 (2025-10-24)
+
+### Feat
+
+- **data**: add OpenAI model entry and ensure newline consistency in llm_model.csv
+- add architecture JSON to HTML visualization pipeline
+- **viz**: add Architecture JSON → Mermaid diagram tooling, examples, and tests
+- expand language format support in CSV data
+
 ## v0.0.64 (2025-10-12)
 
 ### Data & Formats
