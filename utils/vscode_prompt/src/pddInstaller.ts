@@ -38,7 +38,10 @@ export class PddInstaller {
     // 3) uv tool run
     if (await tryCommand('uv tool run pdd-cli --version', 'uv tool run pdd-cli')) return true;
 
-    // 4) common paths
+    // 4) conda run fallback
+    if (await tryCommand('conda run -n pdd pdd --version', 'conda run fallback')) return true;
+
+    // 5) common paths
     const candidates = [
       `${home}/.local/bin/pdd`,
       '/opt/anaconda3/bin/pdd',
