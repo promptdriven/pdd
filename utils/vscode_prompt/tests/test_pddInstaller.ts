@@ -13,7 +13,6 @@
 //   • User selects uv, uv available -> install via uv
 //   • User selects uv, uv not available, uv installation succeeds -> install via uv full or PATH
 //   • User selects uv, uv install fails -> installation fails and user is notified
-//   • User selects pip -> use fallback command and succeed
 //   • Proper success messages and actionable buttons handled
 // - runPddSetup flows:
 //   • uv tool path exists -> use full path to uv tool
