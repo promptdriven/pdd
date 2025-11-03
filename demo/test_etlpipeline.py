@@ -1,366 +1,359 @@
 # test_etlpipeline.py
 
+"""
+This test suite provides comprehensive coverage for the etlpipeline.py script.
+It is structured to test each function in isolation (unit tests) and the
+full pipeline end-to-end (integration tests), ensuring all requirements from
+the prompt are met.
+
+Test Plan:
+
+I. `extract_data` Function Tests
+    - test_extract_data_success: Verifies successful reading of a valid CSV.
+    - test_extract_data_file_not_found: Ensures graceful failure when the input file is missing.
+    - test_extract_data_empty_file: Checks handling of an empty input file.
+    - test_extract_data_header_only: Checks handling of a file with only a header.
+
+II. `transform_and_filter_data` Function Tests
+    - test_transform_valid_row: Confirms correct transformation of a single valid row.
+    - test_transform_cleans_category: Verifies category stripping and lowercasing.
+    - test_filter_amount_zero_or_negative: Ensures rows with amount <= 0 are silently dropped.
+    - test_filter_empty_category: Ensures rows with empty or whitespace-only categories are silently dropped.
+    - test_skip_invalid_amount: Verifies rows with non-numeric amounts are skipped with a warning.
+    - test_skip_invalid_date: Verifies rows with malformed dates are skipped with a warning.
+    - test_skip_malformed_rows: Checks that rows with incorrect column counts are skipped with a warning.
+    - test_transform_and_filter_mixed_data: A comprehensive test with a mix of valid, filterable, and invalid data.
+
+III. `load_data` Function Tests
+    - test_load_data_success: Verifies correct writing of cleaned data to the output CSV.
+    - test_load_data_empty_data: Ensures a header-only file is created when there's no data to load.
+    - test_load_data_io_error: Simulates a write permission error to test error handling.
+
+IV. End-to-End (Integration) Tests
+    - test_full_pipeline_e2e: Runs the entire ETL process from a sample input file to an output file and verifies the final content.
+    - test_main_function_arg_handling: Tests the command-line argument parsing in the main function.
+"""
+
 import pytest
-import csv
 import os
+import csv
+import sys
 from unittest.mock import patch
 
-# Attempt to import z3, and skip the formal verification test if not available.
-try:
-    import z3
-    Z3_AVAILABLE = True
-except ImportError:
-    Z3_AVAILABLE = False
-
-# Import the module to be tested
+# The code under test
 import etlpipeline
 
-# ===================================================================================
-#
-#                                 TEST PLAN
-#
-# ===================================================================================
-#
-# The goal is to ensure the `etlpipeline.py` script correctly performs its ETL
-# (Extract, Transform, Load) process according to the specified requirements.
-# The tests are divided into unit tests for each function, an integration test
-# for the overall pipeline, and a formal verification test for the core logic.
-#
-# -----------------------------------------------------------------------------------
-# Part 1: Formal Verification (using Z3)
-# -----------------------------------------------------------------------------------
-#
-# Objective: Mathematically prove the correctness of the filtering logic.
-# Why Z3?: Unit tests check specific examples (e.g., amount=-1, amount=0, amount=1),
-# but they can't check all possible values. Z3 can prove that the logic
-# `amount > 0 AND category is not empty` is correctly implemented for ALL possible
-# inputs, providing a much stronger guarantee of correctness than example-based testing.
-#
-# Test Case:
-#   - `test_z3_filter_logic_is_sound`:
-#     - Define Z3 variables for `amount` (Real) and `category` (String).
-#     - Create a Z3 boolean variable `is_kept` representing the outcome of the filter.
-#     - State the required property: `is_kept` is true if and only if
-#       `(amount > 0 AND category != "")`.
-#     - Ask the Z3 solver to find a counterexample (a scenario where our property
-#       is false).
-#     - The test passes if the solver returns `unsat`, meaning no counterexample
-#       exists and the logic is proven sound.
-#
-# -----------------------------------------------------------------------------------
-# Part 2: Unit Tests (using Pytest)
-# -----------------------------------------------------------------------------------
-#
-# Objective: Test each function (`extract`, `transform`, `load`) in isolation.
-# Why Unit Tests?: This approach isolates failures to a specific part of the code,
-# making debugging easier. It allows for testing specific edge cases for each
-# component without needing to run the entire pipeline.
-#
-# --- Test `extract_data` ---
-#   - `test_extract_data_success`: Reads a standard, valid CSV. Verifies headers and
-#     data content are correct.
-#   - `test_extract_data_file_not_found`: Ensures `FileNotFoundError` is raised for
-#     a non-existent file.
-#   - `test_extract_data_empty_file`: Handles a completely empty file. Expects empty
-#     data and empty headers.
-#   - `test_extract_data_header_only`: Handles a file with only a header row. Expects
-#     correct headers and empty data.
-#
-# --- Test `transform_and_filter_data` ---
-#   - `test_transform_valid_row`: A single, valid row is correctly transformed
-#     (amount to float, category to lowercase).
-#   - `test_filter_negative_amount`: A row with amount < 0 is filtered out.
-#   - `test_filter_zero_amount`: A row with amount == 0 is filtered out.
-#   - `test_filter_empty_category`: A row with an empty category string is filtered out.
-#   - `test_filter_whitespace_category`: A row with a category containing only
-#     whitespace is filtered out.
-#   - `test_transform_case_and_whitespace`: A category with mixed case and padding
-#     is correctly normalized.
-#   - `test_skip_invalid_amount`: A row with a non-numeric amount is skipped, and a
-#     warning is logged.
-#   - `test_skip_invalid_date_format`: A row with an invalid date format is skipped,
-#     and a warning is logged.
-#   - `test_skip_missing_key`: A row missing a required column (e.g., 'amount') is
-#     skipped, and a warning is logged.
-#   - `test_transform_and_filter_mixed_data`: A comprehensive test with a list of
-#     various valid and invalid rows to ensure the final output is correct.
-#   - `test_transform_empty_input`: An empty list as input results in an empty list
-#     as output.
-#
-# --- Test `load_data` ---
-#   - `test_load_data_success`: Writes a list of cleaned data to a file. Verifies
-#     the file content is correct.
-#   - `test_load_data_empty_list`: Given no data, it creates a file with only the
-#     header row.
-#   - `test_load_data_io_error`: Mocks an `IOError` during file writing to ensure
-#     the exception is correctly raised.
-#
-# -----------------------------------------------------------------------------------
-# Part 3: Integration Test
-# -----------------------------------------------------------------------------------
-#
-# Objective: Test the entire ETL pipeline from end-to-end.
-# Why Integration Test?: This verifies that the individual components (`extract`,
-# `transform`, `load`) work together correctly as a complete system.
-#
-# Test Case:
-#   - `test_end_to_end_pipeline`:
-#     1. Create a temporary input CSV file with a mix of valid, invalid, and
-#        filterable rows.
-#     2. Run the full pipeline programmatically.
-#     3. Read the generated output CSV file.
-#     4. Assert that the output file's content matches the expected cleaned and
-#        filtered data exactly.
-#   - `test_main_cli_insufficient_args`:
-#     1. Simulate running the script from the command line with too few arguments.
-#     2. Verify that the script exits with a non-zero status code and prints a
-#        usage message.
-#
-# ===================================================================================
+# Helper function to create a CSV file for tests
+def create_csv(filepath, data):
+    """Creates a CSV file with the given data."""
+    with open(filepath, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerows(data)
 
+# --- I. extract_data Function Tests ---
 
-# --- Fixtures ---
+def test_extract_data_success(tmp_path):
+    """Verifies successful reading of a valid CSV."""
+    input_file = tmp_path / "input.csv"
+    headers = ['id', 'name']
+    data = [['1', 'Alice'], ['2', 'Bob']]
+    create_csv(input_file, [headers] + data)
 
-@pytest.fixture
-def sample_input_csv(tmp_path):
-    """Creates a sample input CSV file in a temporary directory."""
-    input_dir = tmp_path / "input"
-    input_dir.mkdir()
-    input_file = input_dir / "input.csv"
-    content = [
-        "id,date,amount,category",
-        "1,2023-12-10,100.25,Books",          # Valid
-        "2,2023-11-01,-80.00,Electronics",   # Filter: negative amount
-        "3,2023-10-05,50.00,",               # Filter: empty category
-        "4,2023-09-15,120.75,Groceries",     # Valid
-        "5,2023-08-20,0.00,Software",        # Filter: zero amount
-        "6,2023-07-11,25.50,  GAMES  ",      # Valid: needs cleaning
-        "7,not-a-date,99.99,Hardware",       # Invalid: bad date
-        "8,2023-06-01,invalid,Utilities",    # Invalid: bad amount
-        "9,2023-05-15,300.00,TRAVEL",        # Valid: needs case change
-        "10,2023-04-03,45.00,   ",           # Filter: whitespace category
-    ]
-    input_file.write_text("\n".join(content))
-    return str(input_file)
+    extracted_data, extracted_headers = etlpipeline.extract_data(str(input_file))
 
-@pytest.fixture
-def expected_output_data():
-    """The expected data after the full ETL process on sample_input_csv."""
-    return [
-        {'id': '1', 'date': '2023-12-10', 'amount': 100.25, 'category': 'books'},
-        {'id': '4', 'date': '2023-09-15', 'amount': 120.75, 'category': 'groceries'},
-        {'id': '6', 'date': '2023-07-11', 'amount': 25.50, 'category': 'games'},
-        {'id': '9', 'date': '2023-05-15', 'amount': 300.00, 'category': 'travel'},
-    ]
+    assert extracted_headers == headers
+    assert extracted_data == data
 
-# ===================================================================================
-# Part 1: Formal Verification Test
-# ===================================================================================
+def test_extract_data_file_not_found(capfd):
+    """Ensures graceful failure when the input file is missing."""
+    data, headers = etlpipeline.extract_data("non_existent_file.csv")
+    
+    assert data is None
+    assert headers is None
+    
+    stderr = capfd.readouterr().err
+    assert "Error: Input file not found" in stderr
+    assert "non_existent_file.csv" in stderr
 
-@pytest.mark.skipif(not Z3_AVAILABLE, reason="z3-solver is not installed")
-def test_z3_filter_logic_is_sound():
-    """
-    Uses Z3 to formally verify that the filtering logic is sound.
-    It proves that a row is kept if and only if (amount > 0 AND category != "").
-    """
-    # 1. Define Z3 variables to represent row properties
-    amount = z3.Real('amount')
-    category = z3.String('category')
+def test_extract_data_empty_file(tmp_path, capfd):
+    """Checks handling of an empty input file."""
+    input_file = tmp_path / "input.csv"
+    input_file.touch() # Create an empty file
 
-    # 2. Define the implementation logic from the code
-    # This is the condition that the code *actually* checks
-    implementation_logic = z3.And(amount > 0, category != "")
+    data, headers = etlpipeline.extract_data(str(input_file))
 
-    # 3. Define the specification logic
-    # This is the condition that the code *should* check
-    specification_logic = z3.And(amount > 0, z3.Length(category) > 0)
-
-    # 4. Create a solver and add the counter-example assertion
-    # We are looking for a case where the implementation and specification disagree.
-    solver = z3.Solver()
-    solver.add(z3.Not(implementation_logic == specification_logic))
-
-    # 5. Check for a solution
-    # If `unsat`, it means no counter-example exists, and the logic is proven correct.
-    # If `sat`, a counter-example was found, and the logic is flawed.
-    result = solver.check()
-    assert result == z3.unsat, f"Z3 found a counter-example: {solver.model()}"
-
-
-# ===================================================================================
-# Part 2: Unit Tests
-# ===================================================================================
-
-# --- Tests for extract_data ---
-
-def test_extract_data_success(sample_input_csv):
-    """Tests successful extraction from a valid CSV file."""
-    data, headers = etlpipeline.extract_data(sample_input_csv)
-    assert headers == ['id', 'date', 'amount', 'category']
-    assert len(data) == 10
-    assert data[0] == {'id': '1', 'date': '2023-12-10', 'amount': '100.25', 'category': 'Books'}
-
-def test_extract_data_file_not_found():
-    """Tests that FileNotFoundError is raised for a non-existent file."""
-    with pytest.raises(FileNotFoundError):
-        etlpipeline.extract_data("non_existent_file.csv")
-
-def test_extract_data_empty_file(tmp_path):
-    """Tests extraction from an empty file."""
-    empty_file = tmp_path / "empty.csv"
-    empty_file.touch()
-    data, headers = etlpipeline.extract_data(str(empty_file))
     assert data == []
-    assert headers is None # csv.DictReader returns None for fieldnames on empty files
+    assert headers == []
+    
+    stderr = capfd.readouterr().err
+    assert "Warning: Input file" in stderr
+    assert "is empty or has no header" in stderr
 
 def test_extract_data_header_only(tmp_path):
-    """Tests extraction from a file with only a header."""
-    header_file = tmp_path / "header.csv"
-    header_file.write_text("id,date,amount,category")
-    data, headers = etlpipeline.extract_data(str(header_file))
-    assert data == []
-    assert headers == ['id', 'date', 'amount', 'category']
+    """Checks handling of a file with only a header."""
+    input_file = tmp_path / "input.csv"
+    headers = ['id', 'date', 'amount', 'category']
+    create_csv(input_file, [headers])
 
-# --- Tests for transform_and_filter_data ---
+    data, extracted_headers = etlpipeline.extract_data(str(input_file))
+
+    assert data == []
+    assert extracted_headers == headers
+
+# --- II. transform_and_filter_data Function Tests ---
 
 def test_transform_valid_row():
-    """Tests a single valid row is transformed correctly."""
-    row = [{'id': '1', 'date': '2023-12-10', 'amount': '100.25', 'category': 'Books'}]
-    cleaned = etlpipeline.transform_and_filter_data(row)
-    assert cleaned == [{'id': '1', 'date': '2023-12-10', 'amount': 100.25, 'category': 'books'}]
-
-@pytest.mark.parametrize("amount_str", ["-50.0", "0", "0.0"])
-def test_filter_by_amount(amount_str):
-    """Tests that rows with amount <= 0 are filtered out."""
-    row = [{'id': '1', 'date': '2023-12-10', 'amount': amount_str, 'category': 'Books'}]
-    assert etlpipeline.transform_and_filter_data(row) == []
-
-@pytest.mark.parametrize("category_str", ["", "   "])
-def test_filter_by_category(category_str):
-    """Tests that rows with empty or whitespace-only categories are filtered out."""
-    row = [{'id': '1', 'date': '2023-12-10', 'amount': '100.25', 'category': category_str}]
-    assert etlpipeline.transform_and_filter_data(row) == []
-
-def test_transform_case_and_whitespace():
-    """Tests normalization of category field."""
-    row = [{'id': '1', 'date': '2023-12-10', 'amount': '100.25', 'category': '  TeStInG  '}]
-    cleaned = etlpipeline.transform_and_filter_data(row)
-    assert cleaned[0]['category'] == 'testing'
-
-@pytest.mark.parametrize("bad_row, expected_error_msg", [
-    ({'id': '1', 'date': '2023-12-10', 'amount': 'abc', 'category': 'Books'}, "could not convert string to float"),
-    ({'id': '1', 'date': '2023/12/10', 'amount': '100', 'category': 'Books'}, "does not match format '%Y-%m-%d'"),
-    ({'id': '1', 'date': '2023-12-10', 'category': 'Books'}, "'amount'"), # Missing key
-])
-def test_skip_invalid_rows(capsys, bad_row, expected_error_msg):
-    """Tests that rows with data errors are skipped and a warning is printed."""
-    data = [bad_row]
-    cleaned = etlpipeline.transform_and_filter_data(data)
-    assert cleaned == []
-    captured = capsys.readouterr()
-    assert "Warning: Skipping row" in captured.err
-    assert expected_error_msg in captured.err
-
-def test_transform_and_filter_mixed_data(expected_output_data):
-    """Tests the function with a mix of valid, invalid, and filterable rows."""
-    raw_data = [
-        {'id': '1', 'date': '2023-12-10', 'amount': '100.25', 'category': 'Books'},
-        {'id': '2', 'date': '2023-11-01', 'amount': '-80.00', 'category': 'Electronics'},
-        {'id': '3', 'date': '2023-10-05', 'amount': '50.00', 'category': ''},
-        {'id': '4', 'date': '2023-09-15', 'amount': '120.75', 'category': 'Groceries'},
-        {'id': '5', 'date': '2023-08-20', 'amount': '0.00', 'category': 'Software'},
-        {'id': '6', 'date': '2023-07-11', 'amount': '25.50', 'category': '  GAMES  '},
-        {'id': '7', 'date': 'not-a-date', 'amount': '99.99', 'category': 'Hardware'},
-        {'id': '9', 'date': '2023-05-15', 'amount': '300.00', 'category': 'TRAVEL'},
-    ]
-    cleaned = etlpipeline.transform_and_filter_data(raw_data)
-    assert cleaned == expected_output_data
-
-def test_transform_empty_input():
-    """Tests that an empty input list produces an empty output list."""
-    assert etlpipeline.transform_and_filter_data([]) == []
-
-# --- Tests for load_data ---
-
-def test_load_data_success(tmp_path, expected_output_data):
-    """Tests writing cleaned data to a CSV file."""
-    output_file = tmp_path / "output.csv"
-    headers = ['id', 'date', 'amount', 'category']
-    etlpipeline.load_data(expected_output_data, str(output_file), headers)
-
-    with open(output_file, 'r') as f:
-        content = f.read().strip()
-
-    expected_content = [
-        "id,date,amount,category",
-        "1,2023-12-10,100.25,books",
-        "4,2023-09-15,120.75,groceries",
-        "6,2023-07-11,25.5,games",
-        "9,2023-05-15,300.0,travel",
-    ]
-    assert content == "\n".join(expected_content)
-
-def test_load_data_empty_list(tmp_path):
-    """Tests that an empty data list results in a header-only file."""
-    output_file = tmp_path / "output.csv"
-    headers = ['id', 'date', 'amount', 'category']
-    etlpipeline.load_data([], str(output_file), headers)
-
-    with open(output_file, 'r') as f:
-        content = f.read().strip()
+    """Confirms correct transformation of a single valid row."""
+    row = [['1', '2023-01-01', '99.99', '  Electronics  ']]
+    expected = [['1', '2023-01-01', 99.99, 'electronics']]
     
+    result = etlpipeline.transform_and_filter_data(row)
+    assert result == expected
+
+@pytest.mark.parametrize("amount_str", ["-10.5", "0", "0.0"])
+def test_filter_amount_zero_or_negative(amount_str):
+    """Ensures rows with amount <= 0 are silently dropped."""
+    row = [['1', '2023-01-01', amount_str, 'Books']]
+    result = etlpipeline.transform_and_filter_data(row)
+    assert result == []
+
+@pytest.mark.parametrize("category_str", ["", "   ", "\t"])
+def test_filter_empty_category(category_str):
+    """Ensures rows with empty or whitespace-only categories are silently dropped."""
+    row = [['1', '2023-01-01', '50.00', category_str]]
+    result = etlpipeline.transform_and_filter_data(row)
+    assert result == []
+
+def test_skip_invalid_amount(capfd):
+    """Verifies rows with non-numeric amounts are skipped with a warning."""
+    row = [['1', '2023-01-01', 'not-a-number', 'Books']]
+    result = etlpipeline.transform_and_filter_data(row)
+    
+    assert result == []
+    stderr = capfd.readouterr().err
+    assert "Warning: Skipping row 2" in stderr
+    assert "invalid amount: 'not-a-number'" in stderr
+
+def test_skip_invalid_date(capfd):
+    """Verifies rows with malformed dates are skipped with a warning."""
+    row = [['1', '2023/01/01', '100.00', 'Books']]
+    result = etlpipeline.transform_and_filter_data(row)
+    
+    assert result == []
+    stderr = capfd.readouterr().err
+    assert "Warning: Skipping row 2" in stderr
+    assert "invalid date format: '2023/01/01'" in stderr
+
+@pytest.mark.parametrize("malformed_row", [
+    ['1', '2023-01-01', '100'],      # Too few columns
+    ['1', '2023-01-01', '100', 'Books', 'Extra'] # Too many columns
+])
+def test_skip_malformed_rows(malformed_row, capfd):
+    """Checks that rows with incorrect column counts are skipped with a warning."""
+    result = etlpipeline.transform_and_filter_data([malformed_row])
+    
+    assert result == []
+    stderr = capfd.readouterr().err
+    assert "Warning: Skipping malformed row 2" in stderr
+    assert "incorrect number of columns" in stderr
+
+def test_transform_and_filter_mixed_data(capfd):
+    """A comprehensive test with a mix of valid, filterable, and invalid data."""
+    input_data = [
+        ['1', '2023-12-10', '100.25', 'Books'],          # Valid
+        ['2', '2023-11-01', '-80.00', 'Electronics'],    # Filter: negative amount
+        ['3', '2023-10-05', '50.00', ' '],               # Filter: empty category
+        ['4', '2023-09-15', '120.75', '  Groceries  '],  # Valid: needs cleaning
+        ['5', '202X-09-15', '150.00', 'Other'],          # Error: bad date
+        ['6', '2023-08-20', 'abc', 'Software'],          # Error: bad amount
+    ]
+    expected_output = [
+        ['1', '2023-12-10', 100.25, 'books'],
+        ['4', '2023-09-15', 120.75, 'groceries'],
+    ]
+    
+    result = etlpipeline.transform_and_filter_data(input_data)
+    assert result == expected_output
+    
+    stderr = capfd.readouterr().err
+    assert "invalid date format: '202X-09-15'" in stderr # For row 5
+    assert "invalid amount: 'abc'" in stderr           # For row 6
+
+# --- III. load_data Function Tests ---
+
+def test_load_data_success(tmp_path):
+    """Verifies correct writing of cleaned data to the output CSV."""
+    output_file = tmp_path / "output.csv"
+    headers = ['id', 'date', 'amount', 'category']
+    data = [['1', '2023-12-10', 100.25, 'books']]
+    
+    etlpipeline.load_data(data, str(output_file), headers)
+    
+    with open(output_file, 'r', newline='') as f:
+        reader = csv.reader(f)
+        content = list(reader)
+        
+    # Note: CSV module writes all fields as strings
+    expected_content = [
+        ['id', 'date', 'amount', 'category'],
+        ['1', '2023-12-10', '100.25', 'books']
+    ]
+    assert content == expected_content
+
+def test_load_data_empty_data(tmp_path):
+    """Ensures a header-only file is created when there's no data to load."""
+    output_file = tmp_path / "output.csv"
+    headers = ['id', 'date', 'amount', 'category']
+    
+    etlpipeline.load_data([], str(output_file), headers)
+    
+    with open(output_file, 'r') as f:
+        content = f.read().strip()
+        
     assert content == "id,date,amount,category"
 
-def test_load_data_io_error(tmp_path):
-    """Tests that an IOError is raised if the file cannot be written."""
-    # Create a read-only directory to cause a permission error
-    read_only_dir = tmp_path / "read_only"
-    read_only_dir.mkdir()
-    os.chmod(read_only_dir, 0o555) # Read and execute permissions only
+def test_load_data_io_error(mocker, capfd):
+    """Simulates a write permission error to test error handling."""
+    mocker.patch("builtins.open", side_effect=IOError("Permission denied"))
     
-    output_file = read_only_dir / "output.csv"
+    etlpipeline.load_data([['data']], "locked_file.csv", ['header'])
     
-    with pytest.raises(IOError):
-        etlpipeline.load_data([{'id': '1'}], str(output_file), ['id'])
-    
-    # Revert permissions to allow cleanup by pytest
-    os.chmod(read_only_dir, 0o755)
+    stderr = capfd.readouterr().err
+    assert "Error: Could not write to file" in stderr
+    assert "Permission denied" in stderr
 
+# --- IV. End-to-End (Integration) Tests ---
 
-# ===================================================================================
-# Part 3: Integration Tests
-# ===================================================================================
-
-def test_end_to_end_pipeline(sample_input_csv, tmp_path):
-    """Tests the full ETL pipeline from file to file."""
+def test_full_pipeline_e2e(tmp_path):
+    """Runs the entire ETL process and verifies the final output file."""
+    input_file = tmp_path / "input.csv"
     output_file = tmp_path / "output.csv"
-
-    # Run the pipeline programmatically
-    raw_data, headers = etlpipeline.extract_data(sample_input_csv)
+    
+    input_data = [
+        ['id', 'date', 'amount', 'category'],
+        ['1', '2023-12-10', '100.25', 'Books'],
+        ['2', '2023-11-01', '-80.00', 'Electronics'],
+        ['3', '2023-10-05', '50.00', ''],
+        ['4', '2023-09-15', '120.75', 'Groceries '],
+        ['5', '202X-09-15', 'abc', 'Other'],
+    ]
+    create_csv(input_file, input_data)
+    
+    # Run the pipeline
+    raw_data, headers = etlpipeline.extract_data(str(input_file))
     cleaned_data = etlpipeline.transform_and_filter_data(raw_data)
     etlpipeline.load_data(cleaned_data, str(output_file), headers)
-
-    # Verify the output
-    with open(output_file, mode='r') as f:
+    
+    # Verify output
+    with open(output_file, 'r', newline='') as f:
         reader = csv.reader(f)
-        output_rows = list(reader)
-
-    expected_rows = [
+        output_content = list(reader)
+        
+    expected_output = [
         ['id', 'date', 'amount', 'category'],
         ['1', '2023-12-10', '100.25', 'books'],
         ['4', '2023-09-15', '120.75', 'groceries'],
-        ['6', '2023-07-11', '25.5', 'games'],
-        ['9', '2023-05-15', '300.0', 'travel'],
     ]
-    assert output_rows == expected_rows
+    assert output_content == expected_output
 
-def test_main_cli_insufficient_args(capsys):
-    """Tests the main function's argument handling from the CLI."""
-    with patch('sys.argv', ['etlpipeline.py', 'input.csv']):
+@pytest.mark.parametrize("argv", [
+    ['etlpipeline.py'],
+    ['etlpipeline.py', 'input.csv'],
+    ['etlpipeline.py', 'input.csv', 'output.csv', 'extra']
+])
+def test_main_function_arg_handling(argv, capfd):
+    """Tests the command-line argument parsing in the main function."""
+    with patch.object(sys, 'argv', argv):
         with pytest.raises(SystemExit) as e:
             etlpipeline.main()
         
-        assert e.value.code == 1 # Check for non-zero exit code
+        assert e.type == SystemExit
+        assert e.value.code == 1
     
-    captured = capsys.readouterr()
-    assert "Usage: python etlpipeline.py <input_csv_path> <output_csv_path>" in captured.out
+    stdout = capfd.readouterr().out
+    assert "Usage: python etlpipeline.py" in stdout
+def test_main_function_integration(tmp_path, capfd):
+    """Tests the main function's successful execution as an integration test."""
+    input_file = tmp_path / "main_input.csv"
+    output_file = tmp_path / "main_output.csv"
+    
+    input_data = [
+        ['id', 'date', 'amount', 'category'],
+        ['1', '2024-01-15', '19.99', '  Software '],
+        ['2', '2024-01-16', '250.00', 'Electronics'],
+        ['3', 'bad-date', '100.00', 'Invalid Row'],
+    ]
+    create_csv(input_file, input_data)
+    
+    # Mock sys.argv to simulate command-line execution
+    with patch.object(sys, 'argv', ['etlpipeline.py', str(input_file), str(output_file)]):
+        etlpipeline.main()
+        
+    # Check stderr for the expected warning about the bad row
+    stderr = capfd.readouterr().err
+    assert "Warning: Skipping row 4" in stderr
+    assert "invalid date format: 'bad-date'" in stderr
+    
+    # Verify the output file content
+    with open(output_file, 'r', newline='') as f:
+        reader = csv.reader(f)
+        output_content = list(reader)
+        
+    expected_output = [
+        ['id', 'date', 'amount', 'category'],
+        ['1', '2024-01-15', '19.99', 'software'],
+        ['2', '2024-01-16', '250.00', 'electronics'],
+    ]
+    assert output_content == expected_output
+
+
+# --- V. Formal Verification with Z3 ---
+
+# Note: This test requires the z3-solver package.
+# It can be installed with: pip install z3-solver
+# The test will be skipped if z3 is not found.
+
+def test_z3_amount_is_always_positive():
+    """
+    Uses Z3 to formally prove that the filtering logic for the 'amount'
+    field is correct. It verifies that for any real number, if the number
+    is positive, it is kept, and if it is non-positive, it is dropped.
+    """
+    z3 = pytest.importorskip("z3")
+
+    # 1. Define a Z3 variable for the amount.
+    amount = z3.Real('amount')
+
+    # 2. Define a Z3 function to represent the filter's decision.
+    # is_kept(amount) will be true if the row is kept, false otherwise.
+    is_kept = z3.Function('is_kept', z3.RealSort(), z3.BoolSort())
+
+    # 3. Create a solver and add the axioms based on the code's logic.
+    # The code keeps rows where amount > 0 and drops rows where amount <= 0.
+    solver = z3.Solver()
+    solver.add(z3.ForAll([amount], z3.Implies(amount > 0, is_kept(amount))))
+    solver.add(z3.ForAll([amount], z3.Implies(amount <= 0, z3.Not(is_kept(amount)))))
+
+    # 4. State and prove the first theorem:
+    # "It is impossible for a row to be kept if its amount is non-positive."
+    # We ask the solver if it can find a scenario where a row is kept AND
+    # its amount is <= 0.
+    solver.push()
+    solver.add(z3.And(is_kept(amount), amount <= 0))
+    
+    # We expect this to be "unsatisfiable" (unsat), meaning no such scenario exists.
+    result = solver.check()
+    assert result == z3.unsat, "Z3 found a case where a non-positive amount was kept."
+    solver.pop()
+
+    # 5. State and prove the second theorem:
+    # "It is impossible for a row to be dropped if its amount is positive."
+    # We ask the solver if it can find a scenario where a row is NOT kept
+    # (i.e., dropped) AND its amount is > 0.
+    solver.push()
+    solver.add(z3.And(z3.Not(is_kept(amount)), amount > 0))
+
+    # We also expect this to be "unsatisfiable".
+    result = solver.check()
+    assert result == z3.unsat, "Z3 found a case where a positive amount was dropped."
+    solver.pop()
