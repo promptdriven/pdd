@@ -233,12 +233,10 @@ def update_main(
 
     # --- Single file logic ---
     try:
-        if modified_code_file is None:
-            raise ValueError("MODIFIED_CODE_FILE is required for single-file update.")
-
         # If the user doesn't specify a prompt file, derive it from the code file.
         # Otherwise, use the one they provided.
         if input_prompt_file is None:
+            # modified_code_file is guaranteed to be not None here by cli.py's validation
             actual_input_prompt_file, _ = resolve_prompt_code_pair(modified_code_file, quiet)
         else:
             actual_input_prompt_file = input_prompt_file
