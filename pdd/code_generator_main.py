@@ -22,6 +22,7 @@ from .preprocess import preprocess as pdd_preprocess
 from .code_generator import code_generator as local_code_generator_func
 from .incremental_code_generator import incremental_code_generator as incremental_code_generator_func
 from .get_jwt_token import get_jwt_token, AuthError, NetworkError, TokenError, UserCancelledError, RateLimitError
+from .get_extension import get_extension
 from .python_env_detector import detect_host_python_executable
 
 # Environment variable names for Firebase/GitHub auth
@@ -189,6 +190,10 @@ def code_generator_main(
     verbose = cli_params.get('verbose', False)
     force_overwrite = cli_params.get('force', False)
     quiet = cli_params.get('quiet', False)
+    # If the user passes --exclude-tests, prefer executing the original
+    # prompt file as authored by the user instead of the generated
+    # ut_<prompt>.prompt that includes unit tests.
+    exclude_tests_flag = cli_params.get('exclude_tests', False)
 
     generated_code_content: Optional[str] = None
     was_incremental_operation = False
@@ -211,6 +216,8 @@ def code_generator_main(
             context_override=ctx.obj.get('context')
         )
         prompt_content = input_strings["prompt_file"]
+
+
         # Phase-2 templates: parse front matter metadata
         fm_meta, body = _parse_front_matter(prompt_content)
         if fm_meta:
@@ -228,13 +235,294 @@ def code_generator_main(
                 output_path = resolved_output
             else:
                 output_path = output
-
+                
     except FileNotFoundError as e:
         console.print(f"[red]Error: Input file not found: {e.filename}[/red]")
         return "", False, 0.0, "error"
     except Exception as e:
         console.print(f"[red]Error during path construction: {e}[/red]")
         return "", False, 0.0, "error"
+        
+    if not exclude_tests_flag:
+        # Precompute test filename and include directive so we always produce
+        # a companion `ut_<basename>.prompt` that references the test file even
+        # when explicit unit test content isn't provided.
+        try:
+            candidate_out = output_file_paths.get("output") if isinstance(output_file_paths, dict) else None
+        except Exception:
+            candidate_out = None
+
+        if candidate_out:
+            try:
+                basename = pathlib.Path(candidate_out).stem
+            except Exception:
+                basename = pathlib.Path(prompt_file).stem
+        else:
+            basename = pathlib.Path(prompt_file).stem
+
+        # Attempt to locate an existing test file under the project's tests
+        # directory (resolved_config['tests_dir']) or a sibling `tests/` dir.
+        test_filename = None
+        try:
+            # resolved_config is returned by construct_paths earlier
+            tests_dir_candidate = None
+            if isinstance(resolved_config, dict):
+                tests_dir_candidate = resolved_config.get("tests_dir")
+            if tests_dir_candidate:
+                tests_path = pathlib.Path(tests_dir_candidate)
+            else:
+                tests_path = pathlib.Path(prompt_file).parent / "tests"
+
+            chosen_test_path: Optional[pathlib.Path] = None
+            if tests_path.exists() and tests_path.is_dir():
+                candidates = sorted(tests_path.glob("test_*.py"))
+                # Prefer a file that matches the prompt basename: test_{basename}.py
+                for c in candidates:
+                    if c.stem == f"test_{basename}":
+                        chosen_test_path = c
+                        break
+                if not chosen_test_path and candidates:
+                    chosen_test_path = candidates[0]
+
+            if chosen_test_path:
+                test_filename = chosen_test_path.name
+            else:
+                # Fallback to deriving extension from language
+                try:
+                    ext_from_get = get_extension(language or "python")
+                    if ext_from_get:
+                        test_ext = ext_from_get if ext_from_get.startswith(".") else f".{ext_from_get}"
+                    else:
+                        test_ext = ".py"
+                except Exception:
+                    _fallback_ext = {
+                        'python': '.py', 'javascript': '.js', 'typescript': '.ts', 'java': '.java',
+                    }
+                    test_ext = _fallback_ext.get((language or "python").lower(), '.py')
+                test_filename = f"test_{basename}{test_ext}"
+        except Exception:
+            # If anything goes wrong, fallback to a simple default
+            test_filename = f"test_{basename}.py"
+
+        # Create a semantic grouping tag name derived from the test filename
+        # and make the <include> reference a path that the preprocessor can
+        # resolve relative to the prompt file. Example: test_calculator.py ->
+        # tag 'test_calculator' and include 'tests/test_calculator.py'.
+        try:
+            raw_tag = pathlib.Path(test_filename).stem
+            # Sanitize to XML-like tag name: allow letters, digits and underscore
+            tag_name = re.sub(r"[^A-Za-z0-9_]", "_", raw_tag)
+            # Ensure tag does not start with a digit
+            if re.match(r"^[0-9]", tag_name):
+                tag_name = f"f_{tag_name}"
+
+            # Compute a plausible test file path so the <include> points to a
+            # file location the preprocessor can find. Prefer resolved_config
+            # tests_dir if provided, else a sibling 'tests/' directory.
+            try:
+                tests_dir_candidate = None
+                if isinstance(resolved_config, dict):
+                    tests_dir_candidate = resolved_config.get("tests_dir")
+                if tests_dir_candidate:
+                    test_file_path = pathlib.Path(tests_dir_candidate) / test_filename
+                else:
+                    test_file_path = pathlib.Path(prompt_file).parent / "tests" / test_filename
+                # Compute include target relative to the prompt file parent so
+                # preprocessing that resolves relative includes will work.
+                try:
+                    include_target_rel = os.path.relpath(str(test_file_path), start=str(pathlib.Path(prompt_file).parent))
+                except Exception:
+                    include_target_rel = str(test_file_path)
+
+                # Normalize to POSIX-style path for include tags
+                include_target_rel = pathlib.Path(include_target_rel).as_posix()
+
+                # Verify the relative path resolves from the prompt directory; if
+                # not, fall back to an absolute path so the preprocessor can
+                # locate the file regardless of working directory behavior.
+                try:
+                    candidate_resolved = (pathlib.Path(prompt_file).parent / include_target_rel).resolve()
+                    if candidate_resolved.exists():
+                        include_target = include_target_rel
+                    else:
+                        include_target = str(test_file_path.resolve())
+                except Exception:
+                    include_target = str(test_file_path)
+
+            except Exception:
+                include_target = test_filename
+
+            _pdd_unit_include_line = (
+                f"\n\n<{tag_name}>\n  <include>{include_target}</include>\n</{tag_name}>\n\n"
+            )
+            # Verbose diagnostics to help users understand include resolution
+            try:
+                if verbose:
+                    console.print(Panel(f"Computed test file path: {test_file_path}\nInclude target: {include_target}\nExists on disk: {test_file_path.exists()}", title="[blue]UT Include Diagnostic[/blue]", expand=False))
+            except Exception:
+                pass
+        except Exception:
+            # Fallback: simple tests grouping
+            _pdd_unit_include_line = f"\n\n<tests>\n  <include>{test_filename}</include>\n</tests>\n\n"
+        # If the caller provided an accompanying unit-test / testcase file in the
+        # inputs (common keys: unit_test, unit_test_file, test_file, tests),
+        # append it to the prompt so generators receive both the main prompt and
+        # the unit-test specification together.
+        unit_test_keys = [
+            "unit_test",
+            "unit_test_file",
+            "unit_tests",
+            "test_file",
+            "tests",
+            "test",
+        ]
+        unit_tests_content = None
+        for k in unit_test_keys:
+            if k in input_strings and input_strings.get(k):
+                unit_tests_content = input_strings.get(k)
+                break
+
+        if unit_tests_content:
+            # Attach a clear separator so downstream preprocessors and LLM
+            # templates can identify the test section.
+            prompt_content = (
+                f"{prompt_content}\n\n--- UNIT TESTS BEGIN ---\n{unit_tests_content}\n--- UNIT TESTS END ---"
+            )
+
+        # Always append the include directive (once) so downstream preprocessing
+        # can reference the test file via PDD's <include> semantics.
+        try:
+            if _pdd_unit_include_line and _pdd_unit_include_line not in prompt_content:
+                prompt_content = prompt_content + _pdd_unit_include_line
+                #prompt_content = prompt_content + _pdd_unit_include_line
+        except Exception:
+            # Best-effort; continue if something goes wrong
+            pass
+
+
+        # Create a companion `ut_<basename>.prompt` that includes the main prompt
+        # plus a PDD <include> directive for the unit-test filename. Also write
+        # the unit-test file (if we have its content) next to the prompt so
+        # `<include>` can resolve it during preprocessing. Perform operations
+        # with localized try/except blocks so errors here don't break generation.
+        # Read prompt raw content (best-effort).
+        try:
+            raw_prompt_on_disk = pathlib.Path(prompt_file).read_text(encoding="utf-8")
+        except Exception:
+            raw_prompt_on_disk = input_strings.get("prompt_file", "")
+
+        # Prefer front-matter-stripped body for the ut prompt when available
+        try:
+            _fm_raw, _body_raw = _parse_front_matter(raw_prompt_on_disk)
+            base_prompt_body = _body_raw if _fm_raw else raw_prompt_on_disk
+        except Exception:
+            base_prompt_body = raw_prompt_on_disk
+
+        # Determine basename and test filename (use earlier computed test_filename if present)
+        try:
+            basename_for_ut = basename if 'basename' in locals() else pathlib.Path(prompt_file).stem
+        except Exception:
+            basename_for_ut = pathlib.Path(prompt_file).stem
+
+        try:
+            test_fname = test_filename
+        except Exception:
+            # Derive a default test filename
+            try:
+                _ext = get_extension(language or "python") or ".py"
+                _ext = _ext if _ext.startswith('.') else f".{_ext}"
+            except Exception:
+                _ext = '.py'
+            test_fname = f"test_{basename_for_ut}{_ext}"
+
+        # Only create companion UT prompt and test files when tests are not
+        # excluded via the --exclude-tests flag. When excluded, we will use the
+        # original prompt file as authored by the user.
+        if not exclude_tests_flag:
+            # Compose ut prompt content
+            ut_prompt_text = (
+                f"{base_prompt_body}\n\n# Instruction: Also generate code to Pass all the unit tests covering all scenarios in {test_fname}\n"
+                f"Make sure that the generated code passes all the unit tests in {test_fname}."
+            )
+            # Append include directive if we created one earlier
+            if '_pdd_unit_include_line' in locals():
+                #ut_prompt_text = ut_prompt_text + _pdd_unit_include_line
+                ut_prompt_text = _pdd_unit_include_line + ut_prompt_text 
+
+            # Write the ut.prompt file next to the original prompt (best-effort)
+            try:
+                ##Uncomment below
+                #ut_prompt_path = pathlib.Path(prompt_file).with_name(f"{pathlib.Path(prompt_file).stem}_ut.prompt")
+                #ut_prompt_path = pathlib.Path(prompt_file).with_name(f"{pathlib.Path(prompt_file).stem}_ut.prompt")
+                ut_prompt_path = pathlib.Path(prompt_file).with_name(f"ut_{pathlib.Path(prompt_file).stem}.prompt")
+                ut_prompt_path.parent.mkdir(parents=True, exist_ok=True)
+                ut_prompt_path.write_text(ut_prompt_text, encoding="utf-8")
+                if verbose:
+                    console.print(f"Unit Test Prompt is added to the prompt file")
+                    console.print(f"Created companion UT prompt: [cyan]{ut_prompt_path}[/cyan]")
+            except Exception as e:
+                # Non-fatal; continue but surface verbose warning
+                if verbose:
+                    console.print(f"[yellow]Warning: could not write companion UT prompt file: {e}[/yellow]")
+
+            # Ensure a resolvable test file exists so the <include> can be expanded
+            try:
+                # Prefer the project's tests directory if available; otherwise create a local tests/ next to the prompt
+                tests_dir_candidate = None
+                if isinstance(resolved_config, dict):
+                    tests_dir_candidate = resolved_config.get("tests_dir")
+                if tests_dir_candidate:
+                    tests_dir = pathlib.Path(tests_dir_candidate)
+                else:
+                    tests_dir = pathlib.Path(prompt_file).parent / "tests"
+
+                tests_dir.mkdir(parents=True, exist_ok=True)
+                test_file_path = tests_dir / test_filename
+
+                if unit_tests_content:
+                    # Write the provided unit tests to the file (overwrite intentionally)
+                    try:
+                        test_file_path.write_text(unit_tests_content, encoding="utf-8")
+                        if verbose:
+                            console.print(f"Wrote unit tests to: [cyan]{test_file_path}[/cyan]")
+                            try:
+                                console.print(f"Verify exists: {test_file_path.exists()} (resolved: {test_file_path.resolve()})")
+                            except Exception:
+                                pass
+                    except Exception as e:
+                        if verbose:
+                            console.print(f"[yellow]Warning: could not write unit test file {test_file_path}: {e}[/yellow]")
+                else:
+                    # If no unit test content was provided, ensure a non-destructive placeholder exists
+                    if not test_file_path.exists():
+                        placeholder = f"# Placeholder test file: {test_filename}\n# Add unit tests for the prompt's expected behavior here.\n"
+                        try:
+                            test_file_path.write_text(placeholder, encoding="utf-8")
+                            if verbose:
+                                console.print(f"Created placeholder test file: [cyan]{test_file_path}[/cyan]")
+                        except Exception as e:
+                            if verbose:
+                                console.print(f"[yellow]Warning: could not create placeholder test file {test_file_path}: {e}[/yellow]")
+            except Exception as e:
+                if verbose:
+                    console.print(f"[yellow]Warning: could not ensure test file for include: {e}[/yellow]")
+            # If generating Python, prefer the on-disk UT prompt content (if present)
+            # so the generator receives the test-focused instructions directly.
+            try:
+                if isinstance(language, str) and language.lower().strip().startswith("python"):
+                    # Prefer on-disk UT prompt when available; fall back to the in-memory text
+                    try:
+                        if ut_prompt_path.exists():
+                            prompt_content = ut_prompt_path.read_text(encoding="utf-8")
+                        else:
+                            prompt_content = ut_prompt_text
+                    except Exception:
+                        prompt_content = ut_prompt_text
+                    if verbose:
+                        console.print(f"[info]Using UT prompt content for Python generation: {ut_prompt_path}")
+            except Exception:
+                # Best-effort: do not fail generation if this substitution errors.
+                pass
 
     can_attempt_incremental = False
     existing_code_content: Optional[str] = None
@@ -352,6 +640,10 @@ def code_generator_main(
         if existing_code_content is not None:
             if "original_prompt_file" in input_strings:
                 original_prompt_content_for_incremental = input_strings["original_prompt_file"]
+                if unit_tests_content and original_prompt_content_for_incremental:
+                    original_prompt_content_for_incremental = (
+                        f"{original_prompt_content_for_incremental}\n\n--- UNIT TESTS BEGIN ---\n{unit_tests_content}\n--- UNIT TESTS END ---"
+                    )
                 can_attempt_incremental = True
                 if verbose:
                     console.print(f"Using specified original prompt: [cyan]{original_prompt_file_path}[/cyan]")
@@ -364,6 +656,10 @@ def code_generator_main(
                     if prompt_content.strip() != head_prompt_content.strip():
                         # Uncommitted changes exist. Original is HEAD, new is on-disk.
                         original_prompt_content_for_incremental = head_prompt_content
+                        if unit_tests_content and original_prompt_content_for_incremental:
+                            original_prompt_content_for_incremental = (
+                                f"{original_prompt_content_for_incremental}\n\n--- UNIT TESTS BEGIN ---\n{unit_tests_content}\n--- UNIT TESTS END ---"
+                            )
                         can_attempt_incremental = True
                         if verbose:
                             console.print(f"On-disk [cyan]{prompt_file}[/cyan] has uncommitted changes. Using HEAD version as original prompt.")
@@ -420,6 +716,10 @@ def code_generator_main(
                                         if prior_content is not None:
                                             if prior_content.strip() != new_prompt_candidate.strip():
                                                 original_prompt_content_for_incremental = prior_content
+                                                if unit_tests_content and original_prompt_content_for_incremental:
+                                                    original_prompt_content_for_incremental = (
+                                                        f"{original_prompt_content_for_incremental}\n\n--- UNIT TESTS BEGIN ---\n{unit_tests_content}\n--- UNIT TESTS END ---"
+                                                    )
                                                 can_attempt_incremental = True
                                                 found_different_prior = True
                                                 if verbose:
@@ -437,6 +737,10 @@ def code_generator_main(
                         
                         if not found_different_prior:
                             original_prompt_content_for_incremental = new_prompt_candidate 
+                            if unit_tests_content and original_prompt_content_for_incremental:
+                                original_prompt_content_for_incremental = (
+                                    f"{original_prompt_content_for_incremental}\n\n--- UNIT TESTS BEGIN ---\n{unit_tests_content}\n--- UNIT TESTS END ---"
+                                )
                             can_attempt_incremental = True 
                             if verbose:
                                 console.print(
